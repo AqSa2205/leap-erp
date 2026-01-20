@@ -1,0 +1,55 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Login - Leap Networks ERP{% endblock %}
+
+{% block auth_content %}
+<div class="min-vh-100 d-flex align-items-center justify-content-center" style="background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);">
+    <div class="card shadow-lg" style="width: 420px; border-radius: 12px; overflow: hidden;">
+        <div class="card-body p-0">
+            <!-- Logo Header -->
+            <div class="text-center py-4 px-4" style="background: #fff; border-bottom: 3px solid #C41E3A;">
+                <img src="{% static 'images/logo.jpg' %}" alt="Leap Networks" style="max-width: 200px; height: auto;">
+            </div>
+
+            <!-- Login Form -->
+            <div class="p-4 pt-4">
+                <h5 class="text-center mb-1 fw-bold text-dark">Sales Pipeline ERP</h5>
+                <p class="text-center text-muted mb-4 small">Sign in to your account</p>
+
+                {% if form.errors %}
+                <div class="alert alert-danger py-2">
+                    <i class="bi bi-exclamation-circle me-2"></i>Invalid username or password.
+                </div>
+                {% endif %}
+
+                <form method="post">
+                    {% csrf_token %}
+                    <div class="mb-3">
+                        <label class="form-label small text-muted fw-medium">Username</label>
+                        <div class="input-group">
+                            <span class="input-group-text bg-light border-end-0"><i class="bi bi-person text-danger"></i></span>
+                            <input type="text" name="username" class="form-control border-start-0 ps-0" placeholder="Enter username" required>
+                        </div>
+                    </div>
+                    <div class="mb-4">
+                        <label class="form-label small text-muted fw-medium">Password</label>
+                        <div class="input-group">
+                            <span class="input-group-text bg-light border-end-0"><i class="bi bi-lock text-danger"></i></span>
+                            <input type="password" name="password" class="form-control border-start-0 ps-0" placeholder="Enter password" required>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn w-100 py-2 fw-medium" style="background: #C41E3A; color: #fff;">
+                        <i class="bi bi-box-arrow-in-right me-2"></i>Sign In
+                    </button>
+                </form>
+            </div>
+
+            <!-- Footer -->
+            <div class="text-center py-3 px-4" style="background: #f8f9fa; border-top: 1px solid #eee;">
+                <small class="text-muted">&copy; 2025 Leap Networks. All rights reserved.</small>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,118 @@
+{% extends 'base.html' %}
+
+{% block title %}Reports - Leap Networks ERP{% endblock %}
+{% block page_title %}Reports{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-file-earmark-bar-graph me-2"></i>Report Center</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted mb-4">Generate and download sales pipeline reports in various formats.</p>
+
+                <div class="row">
+                    <!-- Export Section -->
+                    <div class="col-md-6 mb-4">
+                        <div class="card h-100 border-primary">
+                            <div class="card-header bg-primary text-white">
+                                <h6 class="mb-0"><i class="bi bi-download me-2"></i>Export Reports</h6>
+                            </div>
+                            <div class="card-body">
+                                <p class="small text-muted mb-3">Download project data in Excel format.</p>
+
+                                <h6 class="mb-2">Quick Export</h6>
+                                <div class="d-flex flex-wrap gap-2 mb-4">
+                                    <a href="{% url 'reports:export' %}" class="btn btn-outline-primary">
+                                        <i class="bi bi-file-earmark-excel me-1"></i>All Projects
+                                    </a>
+                                    <a href="{% url 'reports:export' %}?category=active" class="btn btn-outline-primary">
+                                        Active Only
+                                    </a>
+                                    <a href="{% url 'reports:export' %}?category=won" class="btn btn-outline-success">
+                                        Won Only
+                                    </a>
+                                </div>
+
+                                <h6 class="mb-2">Export by Region</h6>
+                                <div class="d-flex flex-wrap gap-2">
+                                    <a href="{% url 'reports:export' %}?region=1" class="btn btn-sm btn-outline-secondary">UK</a>
+                                    <a href="{% url 'reports:export' %}?region=2" class="btn btn-sm btn-outline-secondary">LNA</a>
+                                    <a href="{% url 'reports:export' %}?region=3" class="btn btn-sm btn-outline-secondary">PA</a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Import Section -->
+                    {% if user.can_import_excel %}
+                    <div class="col-md-6 mb-4">
+                        <div class="card h-100 border-success">
+                            <div class="card-header bg-success text-white">
+                                <h6 class="mb-0"><i class="bi bi-upload me-2"></i>Import Data</h6>
+                            </div>
+                            <div class="card-body">
+                                <p class="small text-muted mb-3">Upload Excel files to import or update project data.</p>
+
+                                <a href="{% url 'reports:import' %}" class="btn btn-success">
+                                    <i class="bi bi-file-earmark-arrow-up me-2"></i>Import Excel File
+                                </a>
+
+                                <div class="mt-3">
+                                    <small class="text-muted">
+                                        <i class="bi bi-info-circle me-1"></i>
+                                        Supports the standard Leap Networks Excel format.
+                                    </small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Current Stats -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-graph-up me-2"></i>Current Pipeline Summary</h6>
+            </div>
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col">
+                        <h3 class="text-primary mb-0">{{ stats.total }}</h3>
+                        <small class="text-muted">Total Projects</small>
+                    </div>
+                    <div class="col">
+                        <h3 class="text-info mb-0">{{ stats.active }}</h3>
+                        <small class="text-muted">Active</small>
+                    </div>
+                    <div class="col">
+                        <h3 class="text-warning mb-0">{{ stats.hot_leads }}</h3>
+                        <small class="text-muted">Hot Leads</small>
+                    </div>
+                    <div class="col">
+                        <h3 class="text-success mb-0">{{ stats.won }}</h3>
+                        <small class="text-muted">Won</small>
+                    </div>
+                    <div class="col">
+                        <h3 class="text-danger mb-0">{{ stats.lost }}</h3>
+                        <small class="text-muted">Lost</small>
+                    </div>
+                </div>
+            </div>
+            <div class="card-footer">
+                <a href="{% url 'reports:summary' %}" class="btn btn-outline-primary btn-sm">
+                    <i class="bi bi-bar-chart me-1"></i>View Detailed Summary
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

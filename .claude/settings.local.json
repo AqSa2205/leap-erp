@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(copy \"C:\\\\Users\\\\aqsa2\\\\Desktop\\\\Leap_Uk\\\\Leap Logos\\\\cropped logo.jpg\" \"C:\\\\Users\\\\aqsa2\\\\Desktop\\\\ERP-Leap\\\\static\\\\images\\\\logo-icon.jpg\")",
+      "Bash(copy \"C:\\\\Users\\\\aqsa2\\\\Desktop\\\\Leap_Uk\\\\Leap Logos\\\\cropped logo.jpg\" \"C:\\\\Users\\\\aqsa2\\\\Desktop\\\\ERP-Leap\\\\static\\\\images\\\\favicon.jpg\")",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(timeout:*)",
+      "Bash(del \"\\\\?\\\\C:\\\\Users\\\\aqsa2\\\\Desktop\\\\ERP-Leap\\\\nul\")"
+    ]
+  }
+}

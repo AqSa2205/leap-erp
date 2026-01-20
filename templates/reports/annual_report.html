@@ -1,0 +1,606 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Annual Report - Leap Networks ERP{% endblock %}
+{% block page_title %}Annual Report{% endblock %}
+
+{% block extra_css %}
+<style>
+    .section-card {
+        border-radius: 12px;
+        border: none;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        overflow: hidden;
+        margin-bottom: 1.5rem;
+    }
+    .section-card .card-header {
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+        color: #fff;
+        padding: 1rem 1.25rem;
+        border: none;
+    }
+    .section-card .card-header h5 {
+        color: #fff;
+        margin-bottom: 0;
+    }
+    .section-card .card-header i {
+        color: #C41E3A;
+    }
+
+    .stat-mini {
+        text-align: center;
+        padding: 1rem;
+        border-radius: 8px;
+        background: #f8f9fa;
+        transition: all 0.3s ease;
+    }
+    .stat-mini:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    .stat-mini h3 {
+        font-size: 1.75rem;
+        font-weight: 800;
+        margin-bottom: 0.25rem;
+    }
+    .stat-mini small {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        font-weight: 600;
+    }
+
+    .pipeline-card {
+        border-radius: 12px;
+        padding: 1.5rem;
+        background: #fff;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.06);
+        border-left: 4px solid;
+    }
+    .pipeline-card.lnuk { border-color: #1a1a1a; }
+    .pipeline-card.lna { border-color: #C41E3A; }
+    .pipeline-card.pa { border-color: #fd7e14; }
+
+    .pipeline-card h5 {
+        font-weight: 700;
+        margin-bottom: 1rem;
+    }
+    .pipeline-stat {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.5rem 0;
+        border-bottom: 1px solid #f0f0f0;
+    }
+    .pipeline-stat:last-child {
+        border-bottom: none;
+    }
+
+    .data-table {
+        border-radius: 8px;
+        overflow: hidden;
+    }
+    .data-table .table {
+        margin-bottom: 0;
+    }
+    .data-table .table thead th {
+        background: #f8f9fa;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        font-weight: 700;
+        color: #6c757d;
+        border-bottom: 2px solid #eee;
+        padding: 0.75rem 1rem;
+    }
+    .data-table .table tbody td {
+        padding: 0.75rem 1rem;
+        vertical-align: middle;
+    }
+    .data-table .table tbody tr:hover {
+        background: #fafafa;
+    }
+
+    .badge-type {
+        font-size: 0.7rem;
+        padding: 0.35rem 0.65rem;
+        font-weight: 600;
+    }
+    .badge-vendor { background: #1a1a1a; }
+    .badge-distributor { background: #C41E3A; }
+    .badge-partner { background: #198754; }
+    .badge-oem { background: #fd7e14; }
+
+    .badge-free { background: #198754; }
+    .badge-freemium { background: #fd7e14; }
+    .badge-paid { background: #C41E3A; }
+
+    .badge-obtained { background: #198754; }
+    .badge-in_progress { background: #fd7e14; }
+    .badge-pending { background: #6c757d; }
+    .badge-expired { background: #C41E3A; }
+
+    .empty-state {
+        text-align: center;
+        padding: 3rem;
+        color: #6c757d;
+    }
+    .empty-state i {
+        font-size: 3rem;
+        margin-bottom: 1rem;
+        opacity: 0.5;
+    }
+
+    .nav-pills-custom .nav-link {
+        color: #6c757d;
+        font-weight: 600;
+        padding: 0.75rem 1.5rem;
+        border-radius: 8px;
+        margin-right: 0.5rem;
+    }
+    .nav-pills-custom .nav-link.active {
+        background: linear-gradient(135deg, #C41E3A 0%, #a01830 100%);
+        color: #fff;
+    }
+    .nav-pills-custom .nav-link:hover:not(.active) {
+        background: rgba(196,30,58,0.1);
+        color: #C41E3A;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Navigation Pills -->
+<ul class="nav nav-pills nav-pills-custom mb-4">
+    <li class="nav-item">
+        <a class="nav-link active" data-bs-toggle="pill" href="#overview">
+            <i class="bi bi-grid-fill me-2"></i>Overview
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link" data-bs-toggle="pill" href="#vendors">
+            <i class="bi bi-building me-2"></i>Vendors & Partners
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link" data-bs-toggle="pill" href="#epcs">
+            <i class="bi bi-gear me-2"></i>EPC Contractors
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link" data-bs-toggle="pill" href="#exhibitions">
+            <i class="bi bi-calendar-event me-2"></i>Exhibitions
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link" data-bs-toggle="pill" href="#portals">
+            <i class="bi bi-globe me-2"></i>Procurement Portals
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link" data-bs-toggle="pill" href="#certifications">
+            <i class="bi bi-award me-2"></i>Certifications
+        </a>
+    </li>
+</ul>
+
+<div class="tab-content">
+    <!-- Overview Tab -->
+    <div class="tab-pane fade show active" id="overview">
+        <!-- Pipeline Summary -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <h5 class="mb-3 fw-bold"><i class="bi bi-bar-chart-fill me-2" style="color: #C41E3A;"></i>Project Pipeline Summary</h5>
+            </div>
+            <div class="col-lg-4 mb-3">
+                <div class="pipeline-card lnuk">
+                    <h5><span class="badge bg-dark me-2">LNUK</span>UK & Global</h5>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Active Bids</span>
+                        <span class="fw-bold">{{ pipeline_stats.lnuk.active }}</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Hot Leads</span>
+                        <span class="fw-bold text-warning">{{ pipeline_stats.lnuk.hot_leads }}</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Won</span>
+                        <span class="fw-bold text-success">{{ pipeline_stats.lnuk.won }}</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Lost</span>
+                        <span class="fw-bold text-danger">{{ pipeline_stats.lnuk.lost }}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-4 mb-3">
+                <div class="pipeline-card lna">
+                    <h5><span class="badge" style="background: #C41E3A;">LNA</span> Leap Networks Arabia</h5>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Active Bids</span>
+                        <span class="fw-bold">{{ pipeline_stats.lna.active }}</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Hot Leads</span>
+                        <span class="fw-bold text-warning">{{ pipeline_stats.lna.hot_leads }}</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Won</span>
+                        <span class="fw-bold text-success">{{ pipeline_stats.lna.won }}</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Lost</span>
+                        <span class="fw-bold text-danger">{{ pipeline_stats.lna.lost }}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-4 mb-3">
+                <div class="pipeline-card pa">
+                    <h5><span class="badge" style="background: #fd7e14;">PA</span> Pace Arabia</h5>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Active Bids</span>
+                        <span class="fw-bold">{{ pipeline_stats.pa.active }}</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Hot Leads</span>
+                        <span class="fw-bold text-warning">{{ pipeline_stats.pa.hot_leads }}</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Won</span>
+                        <span class="fw-bold text-success">{{ pipeline_stats.pa.won }}</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Lost</span>
+                        <span class="fw-bold text-danger">{{ pipeline_stats.pa.lost }}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Stats -->
+        <div class="row mb-4">
+            <div class="col-lg-3 col-md-6 mb-3">
+                <div class="stat-mini">
+                    <h3 style="color: #1a1a1a;">{{ vendor_stats.total }}</h3>
+                    <small class="text-muted">Vendors & Partners</small>
+                </div>
+            </div>
+            <div class="col-lg-3 col-md-6 mb-3">
+                <div class="stat-mini">
+                    <h3 style="color: #C41E3A;">{{ epcs|length }}</h3>
+                    <small class="text-muted">EPC Contractors</small>
+                </div>
+            </div>
+            <div class="col-lg-3 col-md-6 mb-3">
+                <div class="stat-mini">
+                    <h3 style="color: #fd7e14;">{{ exhibitions|length }}</h3>
+                    <small class="text-muted">Exhibitions</small>
+                </div>
+            </div>
+            <div class="col-lg-3 col-md-6 mb-3">
+                <div class="stat-mini">
+                    <h3 style="color: #198754;">{{ cert_stats.obtained }}</h3>
+                    <small class="text-muted">Certifications Obtained</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- Procurement Portals Quick View -->
+        <div class="row">
+            <div class="col-lg-6 mb-3">
+                <div class="section-card">
+                    <div class="card-header">
+                        <h5><i class="bi bi-globe me-2"></i>Procurement Portals</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-4 text-center">
+                                <h4 class="text-success fw-bold">{{ portal_stats.free }}</h4>
+                                <small class="text-muted">Free</small>
+                            </div>
+                            <div class="col-4 text-center">
+                                <h4 class="text-warning fw-bold">{{ portal_stats.freemium }}</h4>
+                                <small class="text-muted">Freemium</small>
+                            </div>
+                            <div class="col-4 text-center">
+                                <h4 style="color: #C41E3A;" class="fw-bold">{{ portal_stats.paid }}</h4>
+                                <small class="text-muted">Paid</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-6 mb-3">
+                <div class="section-card">
+                    <div class="card-header">
+                        <h5><i class="bi bi-award me-2"></i>Certifications Status</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-4 text-center">
+                                <h4 class="text-success fw-bold">{{ cert_stats.obtained }}</h4>
+                                <small class="text-muted">Obtained</small>
+                            </div>
+                            <div class="col-4 text-center">
+                                <h4 class="text-warning fw-bold">{{ cert_stats.in_progress }}</h4>
+                                <small class="text-muted">In Progress</small>
+                            </div>
+                            <div class="col-4 text-center">
+                                <h4 class="text-muted fw-bold">{{ cert_stats.pending }}</h4>
+                                <small class="text-muted">Pending</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Vendors Tab -->
+    <div class="tab-pane fade" id="vendors">
+        <div class="section-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5><i class="bi bi-building me-2"></i>Partner, Distributor & Vendors</h5>
+                <span class="badge bg-light text-dark">{{ vendor_stats.total }} Total</span>
+            </div>
+            <div class="card-body p-0">
+                {% if vendors %}
+                <div class="data-table">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Company Name</th>
+                                <th>Type</th>
+                                <th>Products/Services</th>
+                                <th>Contact</th>
+                                <th>Website</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for vendor in vendors %}
+                            <tr>
+                                <td class="fw-bold">{{ vendor.name }}</td>
+                                <td>
+                                    <span class="badge badge-type badge-{{ vendor.vendor_type }}">
+                                        {{ vendor.get_vendor_type_display }}
+                                    </span>
+                                </td>
+                                <td>{{ vendor.products_services|truncatewords:10|default:'-' }}</td>
+                                <td>{{ vendor.contact_person|default:'-' }}</td>
+                                <td>
+                                    {% if vendor.website %}
+                                    <a href="{{ vendor.website }}" target="_blank" class="btn btn-sm btn-outline-dark">
+                                        <i class="bi bi-link-45deg"></i>
+                                    </a>
+                                    {% else %}-{% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="empty-state">
+                    <i class="bi bi-building d-block"></i>
+                    <p>No vendors or partners added yet.</p>
+                    <small class="text-muted">Add vendors through the admin panel.</small>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- EPC Tab -->
+    <div class="tab-pane fade" id="epcs">
+        <div class="section-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5><i class="bi bi-gear me-2"></i>EPC Contractors</h5>
+                <span class="badge bg-light text-dark">{{ epcs|length }} Total</span>
+            </div>
+            <div class="card-body p-0">
+                {% if epcs %}
+                <div class="data-table">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Company Name</th>
+                                <th>Region</th>
+                                <th>Specialization</th>
+                                <th>Contact</th>
+                                <th>Website</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for epc in epcs %}
+                            <tr>
+                                <td class="fw-bold">{{ epc.name }}</td>
+                                <td>{{ epc.region|default:'-' }}</td>
+                                <td>{{ epc.specialization|truncatewords:10|default:'-' }}</td>
+                                <td>{{ epc.contact_person|default:'-' }}</td>
+                                <td>
+                                    {% if epc.website %}
+                                    <a href="{{ epc.website }}" target="_blank" class="btn btn-sm btn-outline-dark">
+                                        <i class="bi bi-link-45deg"></i>
+                                    </a>
+                                    {% else %}-{% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="empty-state">
+                    <i class="bi bi-gear d-block"></i>
+                    <p>No EPC contractors added yet.</p>
+                    <small class="text-muted">Add EPC contractors through the admin panel.</small>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Exhibitions Tab -->
+    <div class="tab-pane fade" id="exhibitions">
+        <div class="section-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5><i class="bi bi-calendar-event me-2"></i>Exhibitions & Trade Shows</h5>
+                <span class="badge bg-light text-dark">{{ exhibitions|length }} Total</span>
+            </div>
+            <div class="card-body p-0">
+                {% if exhibitions %}
+                <div class="data-table">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Exhibition Name</th>
+                                <th>Year</th>
+                                <th>Location</th>
+                                <th>Leads Generated</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for exhibition in exhibitions %}
+                            <tr>
+                                <td class="fw-bold">{{ exhibition.name }}</td>
+                                <td><span class="badge bg-dark">{{ exhibition.year|default:'-' }}</span></td>
+                                <td>{{ exhibition.location|default:'-' }}</td>
+                                <td>
+                                    {% if exhibition.leads_generated %}
+                                    <span class="text-success fw-bold">{{ exhibition.leads_generated }}</span>
+                                    {% else %}-{% endif %}
+                                </td>
+                                <td>
+                                    {% if exhibition.is_attended %}
+                                    <span class="badge bg-success">Attended</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">Planned</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="empty-state">
+                    <i class="bi bi-calendar-event d-block"></i>
+                    <p>No exhibitions added yet.</p>
+                    <small class="text-muted">Add exhibitions through the admin panel.</small>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Portals Tab -->
+    <div class="tab-pane fade" id="portals">
+        <div class="section-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5><i class="bi bi-globe me-2"></i>Procurement Portals</h5>
+                <span class="badge bg-light text-dark">{{ portal_stats.total }} Total</span>
+            </div>
+            <div class="card-body p-0">
+                {% if portals %}
+                <div class="data-table">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Portal Name</th>
+                                <th>Type</th>
+                                <th>Registration Date</th>
+                                <th>Expiry Date</th>
+                                <th>Annual Cost</th>
+                                <th>Website</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for portal in portals %}
+                            <tr>
+                                <td class="fw-bold">{{ portal.name }}</td>
+                                <td>
+                                    <span class="badge badge-type badge-{{ portal.registration_type }}">
+                                        {{ portal.get_registration_type_display }}
+                                    </span>
+                                </td>
+                                <td>{{ portal.registration_date|date:"d M Y"|default:'-' }}</td>
+                                <td>{{ portal.expiry_date|date:"d M Y"|default:'-' }}</td>
+                                <td>
+                                    {% if portal.annual_cost %}
+                                    {{ portal.annual_cost|intcomma }}
+                                    {% else %}-{% endif %}
+                                </td>
+                                <td>
+                                    {% if portal.website %}
+                                    <a href="{{ portal.website }}" target="_blank" class="btn btn-sm btn-outline-dark">
+                                        <i class="bi bi-link-45deg"></i>
+                                    </a>
+                                    {% else %}-{% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="empty-state">
+                    <i class="bi bi-globe d-block"></i>
+                    <p>No procurement portals added yet.</p>
+                    <small class="text-muted">Add portals through the admin panel.</small>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Certifications Tab -->
+    <div class="tab-pane fade" id="certifications">
+        <div class="section-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5><i class="bi bi-award me-2"></i>Certifications & Accreditations</h5>
+                <span class="badge bg-light text-dark">{{ cert_stats.total }} Total</span>
+            </div>
+            <div class="card-body p-0">
+                {% if certifications %}
+                <div class="data-table">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Certification</th>
+                                <th>Issuing Body</th>
+                                <th>Status</th>
+                                <th>Issue Date</th>
+                                <th>Expiry Date</th>
+                                <th>Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for cert in certifications %}
+                            <tr>
+                                <td class="fw-bold">{{ cert.name }}</td>
+                                <td>{{ cert.issuing_body|default:'-' }}</td>
+                                <td>
+                                    <span class="badge badge-type badge-{{ cert.status }}">
+                                        {{ cert.get_status_display }}
+                                    </span>
+                                </td>
+                                <td>{{ cert.issue_date|date:"d M Y"|default:'-' }}</td>
+                                <td>{{ cert.expiry_date|date:"d M Y"|default:'-' }}</td>
+                                <td>{{ cert.notes|truncatewords:10|default:'-' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="empty-state">
+                    <i class="bi bi-award d-block"></i>
+                    <p>No certifications added yet.</p>
+                    <small class="text-muted">Add certifications through the admin panel.</small>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

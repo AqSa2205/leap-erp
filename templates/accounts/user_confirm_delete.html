@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+
+{% block title %}Delete User - Leap Networks ERP{% endblock %}
+{% block page_title %}Delete User{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card border-danger">
+            <div class="card-header bg-danger text-white">
+                <h5 class="mb-0"><i class="bi bi-exclamation-triangle me-2"></i>Confirm Deletion</h5>
+            </div>
+            <div class="card-body">
+                <p class="mb-4">Are you sure you want to delete the user <strong>{{ object.username }}</strong>?</p>
+                <p class="text-muted small">This action cannot be undone.</p>
+
+                <form method="post">
+                    {% csrf_token %}
+                    <div class="d-flex gap-2">
+                        <button type="submit" class="btn btn-danger">
+                            <i class="bi bi-trash me-1"></i>Delete
+                        </button>
+                        <a href="{% url 'accounts:user_list' %}" class="btn btn-secondary">
+                            <i class="bi bi-x-lg me-1"></i>Cancel
+                        </a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,21 @@
+# Django and Core
+Django>=5.0,<6.0
+gunicorn==21.2.0
+whitenoise==6.6.0
+
+# Database
+psycopg2-binary==2.9.9
+dj-database-url==2.1.0
+
+# Forms and Filtering
+django-crispy-forms==2.1
+crispy-bootstrap5==2024.2
+django-filter==23.5
+
+# Excel Processing
+openpyxl==3.1.2
+pandas==2.1.4
+
+# Utilities
+python-dateutil==2.8.2
+python-dotenv==1.0.0

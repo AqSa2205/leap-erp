@@ -1,0 +1,314 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}{{ project.proposal_reference }} - Leap Networks ERP{% endblock %}
+{% block page_title %}Project Details{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Main Info -->
+    <div class="col-lg-8">
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="bi bi-folder me-2"></i>{{ project.proposal_reference }}
+                </h5>
+                <span class="badge fs-6" style="background-color: {{ project.status.color }}">
+                    {{ project.status.name }}
+                </span>
+            </div>
+            <div class="card-body">
+                <h4 class="mb-4">{{ project.project_name }}</h4>
+
+                <div class="row mb-4">
+                    <div class="col-md-6">
+                        <table class="table table-sm">
+                            <tr>
+                                <th class="text-muted" style="width: 40%">Client RFQ Ref</th>
+                                <td>{{ project.client_rfq_reference|default:'-' }}</td>
+                            </tr>
+                            <tr>
+                                <th class="text-muted">PO Number</th>
+                                <td>{{ project.po_number|default:'-' }}</td>
+                            </tr>
+                            <tr>
+                                <th class="text-muted">Region</th>
+                                <td>
+                                    {% if project.region.code == 'UK' or project.region.code == 'GLB' %}
+                                    <span class="badge" style="background: #1a1a1a;">LNUK</span>
+                                    {% elif project.region.code == 'LNA' %}
+                                    <span class="badge" style="background: #C41E3A;">LNA</span>
+                                    {% elif project.region.code == 'PA' %}
+                                    <span class="badge" style="background: #fd7e14;">PA</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">{{ project.region.code }}</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            <tr>
+                                <th class="text-muted">Owner</th>
+                                <td>{{ project.owner|default:'-' }}</td>
+                            </tr>
+                            <tr>
+                                <th class="text-muted">EPC</th>
+                                <td>{{ project.epc|default:'-' }}</td>
+                            </tr>
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <table class="table table-sm">
+                            <tr>
+                                <th class="text-muted" style="width: 40%">Submission Date</th>
+                                <td>{{ project.submission_deadline|date:"d M Y"|default:'-' }}</td>
+                            </tr>
+                            <tr>
+                                <th class="text-muted">Est. PO Date</th>
+                                <td>{{ project.estimated_po_date|date:"d M Y"|default:'-' }}</td>
+                            </tr>
+                            <tr>
+                                <th class="text-muted">Year</th>
+                                <td>
+                                    {% if project.year %}
+                                    <span class="badge bg-dark">{{ project.year }}</span>
+                                    {% else %}
+                                    -
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            <tr>
+                                <th class="text-muted">PO Award Quarter</th>
+                                <td>{{ project.po_award_quarter|default:'-' }}</td>
+                            </tr>
+                            <tr>
+                                <th class="text-muted">Contact With</th>
+                                <td>{{ project.contact_with|default:'-' }}</td>
+                            </tr>
+                            <tr>
+                                <th class="text-muted">Success Quotient</th>
+                                <td>{{ project.success_quotient }}</td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+
+                {% if project.remarks %}
+                <div class="mb-3">
+                    <h6 class="text-muted">Remarks</h6>
+                    <p class="mb-0">{{ project.remarks|linebreaks }}</p>
+                </div>
+                {% endif %}
+
+                {% if project.notes %}
+                <div class="mb-3">
+                    <h6 class="text-muted">Notes</h6>
+                    <p class="mb-0">{{ project.notes|linebreaks }}</p>
+                </div>
+                {% endif %}
+
+                {% if project.portal_url %}
+                <div class="mb-3">
+                    <h6 class="text-muted">Portal URL</h6>
+                    <a href="{{ project.portal_url }}" target="_blank">{{ project.portal_url }}</a>
+                </div>
+                {% endif %}
+            </div>
+            <div class="card-footer">
+                <div class="d-flex gap-2">
+                    {% if user.can_edit_project %}
+                    <a href="{% url 'projects:edit' project.pk %}" class="btn btn-primary">
+                        <i class="bi bi-pencil me-1"></i>Edit
+                    </a>
+                    {% endif %}
+                    <a href="{% url 'projects:list' %}" class="btn btn-secondary">
+                        <i class="bi bi-arrow-left me-1"></i>Back to List
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Documents -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center" style="background: linear-gradient(135deg, #198754 0%, #20c997 100%); color: #fff;">
+                <h6 class="mb-0"><i class="bi bi-file-earmark-text me-2"></i>Project Documents</h6>
+                <a href="{% url 'projects:add_document' project.pk %}" class="btn btn-light btn-sm">
+                    <i class="bi bi-upload me-1"></i>Upload Document
+                </a>
+            </div>
+            <div class="card-body p-0">
+                {% if project.documents.exists %}
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Document</th>
+                                <th>Type</th>
+                                <th>Uploaded</th>
+                                <th class="text-center">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for doc in project.documents.all %}
+                            <tr>
+                                <td>
+                                    <a href="{% url 'projects:document_detail' doc.pk %}" class="text-decoration-none fw-semibold" style="color: #C41E3A;">
+                                        {{ doc.name }}
+                                    </a>
+                                    <div class="small text-muted">{{ doc.file_size_display }}</div>
+                                </td>
+                                <td>
+                                    <span class="badge bg-secondary">{{ doc.get_document_type_display }}</span>
+                                </td>
+                                <td class="small">{{ doc.uploaded_at|date:"d M Y" }}</td>
+                                <td class="text-center">
+                                    <div class="btn-group btn-group-sm">
+                                        <a href="{{ doc.file.url }}" class="btn btn-outline-success btn-sm" title="Download" target="_blank">
+                                            <i class="bi bi-download"></i>
+                                        </a>
+                                        <a href="{% url 'projects:document_detail' doc.pk %}" class="btn btn-outline-dark btn-sm" title="View">
+                                            <i class="bi bi-eye"></i>
+                                        </a>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-center text-muted py-4">
+                    <i class="bi bi-file-earmark-x fs-2 d-block mb-2"></i>
+                    <p class="mb-2">No documents attached to this project</p>
+                    <a href="{% url 'projects:add_document' project.pk %}" class="btn btn-outline-primary btn-sm">
+                        <i class="bi bi-upload me-1"></i>Upload First Document
+                    </a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- History -->
+        {% if history %}
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-clock-history me-2"></i>Status History</h6>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Date</th>
+                                <th>From</th>
+                                <th>To</th>
+                                <th>Changed By</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for h in history %}
+                            <tr>
+                                <td>{{ h.changed_at|date:"d M Y H:i" }}</td>
+                                <td>
+                                    {% if h.old_status %}
+                                    <span class="badge" style="background-color: {{ h.old_status.color }}">
+                                        {{ h.old_status.name }}
+                                    </span>
+                                    {% else %}-{% endif %}
+                                </td>
+                                <td>
+                                    {% if h.new_status %}
+                                    <span class="badge" style="background-color: {{ h.new_status.color }}">
+                                        {{ h.new_status.name }}
+                                    </span>
+                                    {% else %}-{% endif %}
+                                </td>
+                                <td>{{ h.changed_by|default:'-' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Side Panel -->
+    <div class="col-lg-4">
+        <div class="card mb-4">
+            <div class="card-header" style="background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%); color: #fff;">
+                <h6 class="mb-0"><i class="bi bi-cash-stack me-2"></i>Financial</h6>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <small class="text-muted d-block">Estimated Value</small>
+                    <h3 class="mb-0" style="color: #C41E3A;">
+                        {% if project.region.code == 'UK' or project.region.code == 'GLB' %}
+                        £{{ project.estimated_value|floatformat:2|intcomma }}
+                        {% else %}
+                        SAR {{ project.estimated_value|floatformat:2|intcomma }}
+                        {% endif %}
+                    </h3>
+                </div>
+                <div class="mb-3">
+                    <small class="text-muted d-block">Weighted Value</small>
+                    <h5 class="mb-0">
+                        {% if project.region.code == 'UK' or project.region.code == 'GLB' %}
+                        £{{ project.weighted_value|floatformat:2|intcomma }}
+                        {% else %}
+                        SAR {{ project.weighted_value|floatformat:2|intcomma }}
+                        {% endif %}
+                    </h5>
+                </div>
+                <div class="mb-3">
+                    <small class="text-muted d-block">Actual Sales</small>
+                    <h4 class="mb-0 text-success">
+                        {% if project.actual_sales and project.actual_sales > 0 %}
+                            {% if project.region.code == 'UK' or project.region.code == 'GLB' %}
+                            £{{ project.actual_sales|floatformat:2|intcomma }}
+                            {% else %}
+                            SAR {{ project.actual_sales|floatformat:2|intcomma }}
+                            {% endif %}
+                        {% else %}
+                        <span class="text-muted">Not recorded</span>
+                        {% endif %}
+                    </h4>
+                </div>
+                {% if project.minimum_achievement %}
+                <div>
+                    <small class="text-muted d-block">Minimum Achievement</small>
+                    <h5 class="mb-0">
+                        {% if project.region.code == 'UK' or project.region.code == 'GLB' %}
+                        £{{ project.minimum_achievement|floatformat:2|intcomma }}
+                        {% else %}
+                        SAR {{ project.minimum_achievement|floatformat:2|intcomma }}
+                        {% endif %}
+                    </h5>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-info-circle me-2"></i>Meta</h6>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm mb-0">
+                    <tr>
+                        <th class="text-muted">Created</th>
+                        <td>{{ project.created_at|date:"d M Y H:i" }}</td>
+                    </tr>
+                    <tr>
+                        <th class="text-muted">Created By</th>
+                        <td>{{ project.created_by|default:'-' }}</td>
+                    </tr>
+                    <tr>
+                        <th class="text-muted">Updated</th>
+                        <td>{{ project.updated_at|date:"d M Y H:i" }}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

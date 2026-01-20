@@ -1,0 +1,130 @@
+{% extends 'base.html' %}
+
+{% block title %}{% if object %}Edit{% else %}Create{% endif %} Project - Leap Networks ERP{% endblock %}
+{% block page_title %}{% if object %}Edit{% else %}Create{% endif %} Project{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0">
+            <i class="bi bi-{% if object %}pencil{% else %}plus{% endif %} me-2"></i>
+            {% if object %}Edit Project: {{ object.proposal_reference }}{% else %}New Project{% endif %}
+        </h5>
+    </div>
+    <div class="card-body">
+        <form method="post">
+            {% csrf_token %}
+
+            <!-- Basic Information -->
+            <h6 class="text-muted mb-3 border-bottom pb-2">Basic Information</h6>
+            <div class="row mb-4">
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Project Name *</label>
+                    {{ form.project_name }}
+                    {% if form.project_name.errors %}<div class="text-danger small">{{ form.project_name.errors.0 }}</div>{% endif %}
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Proposal Reference *</label>
+                    {{ form.proposal_reference }}
+                    {% if form.proposal_reference.errors %}<div class="text-danger small">{{ form.proposal_reference.errors.0 }}</div>{% endif %}
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Client RFQ Reference</label>
+                    {{ form.client_rfq_reference }}
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">PO Number</label>
+                    {{ form.po_number }}
+                </div>
+            </div>
+
+            <!-- Status & Region -->
+            <h6 class="text-muted mb-3 border-bottom pb-2">Status & Assignment</h6>
+            <div class="row mb-4">
+                <div class="col-md-4 mb-3">
+                    <label class="form-label">Status *</label>
+                    {{ form.status }}
+                    {% if form.status.errors %}<div class="text-danger small">{{ form.status.errors.0 }}</div>{% endif %}
+                </div>
+                <div class="col-md-4 mb-3">
+                    <label class="form-label">Region *</label>
+                    {{ form.region }}
+                    {% if form.region.errors %}<div class="text-danger small">{{ form.region.errors.0 }}</div>{% endif %}
+                </div>
+                <div class="col-md-4 mb-3">
+                    <label class="form-label">Owner</label>
+                    {{ form.owner }}
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">EPC Contractor</label>
+                    {{ form.epc }}
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Contact With</label>
+                    {{ form.contact_with }}
+                </div>
+            </div>
+
+            <!-- Dates -->
+            <h6 class="text-muted mb-3 border-bottom pb-2">Dates</h6>
+            <div class="row mb-4">
+                <div class="col-md-4 mb-3">
+                    <label class="form-label">Submission Deadline</label>
+                    {{ form.submission_deadline }}
+                </div>
+                <div class="col-md-4 mb-3">
+                    <label class="form-label">Estimated PO Date</label>
+                    {{ form.estimated_po_date }}
+                </div>
+                <div class="col-md-4 mb-3">
+                    <label class="form-label">PO Award Quarter</label>
+                    {{ form.po_award_quarter }}
+                </div>
+            </div>
+
+            <!-- Financial -->
+            <h6 class="text-muted mb-3 border-bottom pb-2">Financial</h6>
+            <div class="row mb-4">
+                <div class="col-md-4 mb-3">
+                    <label class="form-label">Estimated Value</label>
+                    {{ form.estimated_value }}
+                </div>
+                <div class="col-md-4 mb-3">
+                    <label class="form-label">Success Quotient (0-1)</label>
+                    {{ form.success_quotient }}
+                </div>
+                <div class="col-md-4 mb-3">
+                    <label class="form-label">Minimum Achievement</label>
+                    {{ form.minimum_achievement }}
+                </div>
+            </div>
+
+            <!-- Additional Info -->
+            <h6 class="text-muted mb-3 border-bottom pb-2">Additional Information</h6>
+            <div class="row mb-4">
+                <div class="col-md-12 mb-3">
+                    <label class="form-label">Portal URL</label>
+                    {{ form.portal_url }}
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Remarks</label>
+                    {{ form.remarks }}
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Notes</label>
+                    {{ form.notes }}
+                </div>
+            </div>
+
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check-lg me-1"></i>{% if object %}Update{% else %}Create{% endif %}
+                </button>
+                <a href="{% url 'projects:list' %}" class="btn btn-secondary">
+                    <i class="bi bi-x-lg me-1"></i>Cancel
+                </a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

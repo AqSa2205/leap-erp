@@ -1,0 +1,902 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Dashboard - Leap Networks ERP{% endblock %}
+{% block page_title %}Sales Pipeline Dashboard{% endblock %}
+
+{% block extra_css %}
+<style>
+    .hero-stat {
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+        border-radius: 16px;
+        padding: 2rem;
+        color: #fff;
+        position: relative;
+        overflow: hidden;
+    }
+    .hero-stat::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -50%;
+        width: 100%;
+        height: 100%;
+        background: radial-gradient(circle, rgba(196,30,58,0.15) 0%, transparent 70%);
+    }
+    .hero-stat .display-value {
+        font-size: 2.5rem;
+        font-weight: 800;
+        letter-spacing: -1px;
+    }
+    .hero-stat .stat-icon {
+        font-size: 4rem;
+        opacity: 0.15;
+        position: absolute;
+        right: 1.5rem;
+        top: 50%;
+        transform: translateY(-50%);
+    }
+
+    .summary-strip {
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+        padding: 0;
+        overflow: hidden;
+    }
+    .summary-item {
+        padding: 1.25rem 1.5rem;
+        text-align: center;
+        border-right: 1px solid #f0f0f0;
+        transition: all 0.3s ease;
+    }
+    .summary-item:last-child {
+        border-right: none;
+    }
+    .summary-item:hover {
+        background: #fafafa;
+    }
+    .summary-item h2 {
+        font-size: 2rem;
+        font-weight: 800;
+        margin-bottom: 0.25rem;
+    }
+    .summary-item small {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        font-weight: 600;
+    }
+
+    .nav-tabs {
+        border: none;
+        background: #fff;
+        border-radius: 12px 12px 0 0;
+        padding: 0.5rem 0.5rem 0;
+    }
+    .nav-tabs .nav-link {
+        color: #6c757d;
+        font-weight: 700;
+        font-size: 1rem;
+        border: none;
+        padding: 1rem 2rem;
+        border-radius: 8px 8px 0 0;
+        transition: all 0.3s ease;
+        position: relative;
+    }
+    .nav-tabs .nav-link.active {
+        color: #fff;
+        background: linear-gradient(135deg, #C41E3A 0%, #a01830 100%);
+        box-shadow: 0 -4px 15px rgba(196,30,58,0.3);
+    }
+    .nav-tabs .nav-link:hover:not(.active) {
+        color: #C41E3A;
+        background: rgba(196,30,58,0.08);
+    }
+    .currency-tag {
+        background: rgba(255,255,255,0.25);
+        color: inherit;
+        font-size: 0.65rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 4px;
+        margin-left: 0.5rem;
+        font-weight: 600;
+    }
+    .nav-tabs .nav-link:not(.active) .currency-tag {
+        background: #1a1a1a;
+        color: #fff;
+    }
+
+    .region-header {
+        background: linear-gradient(135deg, #f8f9fa 0%, #fff 100%);
+        border-radius: 12px;
+        padding: 1.5rem 2rem;
+        margin-bottom: 1.5rem;
+        border-left: 5px solid #C41E3A;
+        box-shadow: 0 2px 15px rgba(0,0,0,0.05);
+    }
+    .region-header .region-value {
+        font-size: 2.5rem;
+        font-weight: 800;
+        color: #C41E3A;
+        letter-spacing: -1px;
+    }
+
+    .stat-card {
+        border-radius: 12px;
+        overflow: hidden;
+        transition: all 0.3s ease;
+        border: none;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.06);
+    }
+    .stat-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.12);
+    }
+    .stat-card .card-body {
+        padding: 1.5rem 1rem;
+    }
+    .stat-card .stat-number {
+        font-size: 2rem;
+        font-weight: 800;
+        line-height: 1;
+        margin-bottom: 0.5rem;
+    }
+    .stat-card .stat-label {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+    }
+    .stat-card .stat-value {
+        font-size: 0.85rem;
+        font-weight: 600;
+        padding: 0.35rem 0.75rem;
+        border-radius: 20px;
+        display: inline-block;
+    }
+
+    .stat-active { border-top: 4px solid #1a1a1a; }
+    .stat-active .stat-number { color: #1a1a1a; }
+    .stat-active .stat-value { background: rgba(26,26,26,0.1); color: #1a1a1a; }
+
+    .stat-hotleads { border-top: 4px solid #fd7e14; }
+    .stat-hotleads .stat-number { color: #fd7e14; }
+    .stat-hotleads .stat-value { background: rgba(253,126,20,0.15); color: #e06b00; }
+
+    .stat-won { border-top: 4px solid #198754; }
+    .stat-won .stat-number { color: #198754; }
+    .stat-won .stat-value { background: rgba(25,135,84,0.15); color: #146c43; }
+
+    .stat-lost { border-top: 4px solid #C41E3A; }
+    .stat-lost .stat-number { color: #C41E3A; }
+    .stat-lost .stat-value { background: rgba(196,30,58,0.15); color: #C41E3A; }
+
+    .stat-ongoing { border-top: 4px solid #6c757d; }
+    .stat-ongoing .stat-number { color: #6c757d; }
+    .stat-ongoing .stat-value { background: rgba(108,117,125,0.15); color: #5c636a; }
+
+    .stat-total {
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+        color: #fff;
+    }
+    .stat-total .stat-number { color: #fff; }
+    .stat-total .stat-label { color: rgba(255,255,255,0.7); }
+    .stat-total .stat-value { background: rgba(255,255,255,0.2); color: #fff; }
+
+    .chart-card {
+        border-radius: 12px;
+        border: none;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.06);
+        overflow: hidden;
+    }
+    .chart-card .card-header {
+        background: linear-gradient(135deg, #f8f9fa 0%, #fff 100%);
+        border-bottom: 2px solid #f0f0f0;
+        padding: 1rem 1.25rem;
+    }
+    .chart-card .card-header h6 {
+        font-weight: 700;
+        font-size: 0.9rem;
+    }
+    .chart-container {
+        height: 300px;
+        padding: 1rem;
+    }
+
+    .projects-table {
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.06);
+    }
+    .projects-table .card-header {
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+        color: #fff;
+        padding: 1rem 1.25rem;
+    }
+    .projects-table .card-header h6 {
+        color: #fff;
+        font-weight: 700;
+    }
+    .projects-table .btn-outline-light:hover {
+        background: #C41E3A;
+        border-color: #C41E3A;
+    }
+    .projects-table .table {
+        margin-bottom: 0;
+    }
+    .projects-table .table thead {
+        background: #f8f9fa;
+    }
+    .projects-table .table thead th {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        font-weight: 700;
+        color: #6c757d;
+        border-bottom: 2px solid #eee;
+        padding: 1rem;
+    }
+    .projects-table .table tbody td {
+        padding: 1rem;
+        vertical-align: middle;
+    }
+    .projects-table .table tbody tr:hover {
+        background: #fafafa;
+    }
+
+    .tab-content {
+        background: #fff;
+        border-radius: 0 0 12px 12px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    }
+    .tab-pane {
+        padding: 2rem;
+    }
+
+    @keyframes fadeInUp {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    .tab-pane.active {
+        animation: fadeInUp 0.4s ease-out;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Overall Summary Strip -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="summary-strip">
+            <div class="row g-0">
+                <div class="col summary-item">
+                    <h2 class="text-dark">{{ overall_stats.total.count|intcomma }}</h2>
+                    <small class="text-muted">Total Projects</small>
+                </div>
+                <div class="col summary-item">
+                    <h2 style="color: #1a1a1a;">{{ overall_stats.active.count|intcomma }}</h2>
+                    <small class="text-muted">Active Bids</small>
+                </div>
+                <div class="col summary-item">
+                    <h2 style="color: #fd7e14;">{{ overall_stats.hot_leads.count|intcomma }}</h2>
+                    <small class="text-muted">Hot Leads</small>
+                </div>
+                <div class="col summary-item">
+                    <h2 class="text-success">{{ overall_stats.won.count|intcomma }}</h2>
+                    <small class="text-muted">Won</small>
+                </div>
+                <div class="col summary-item">
+                    <h2 style="color: #C41E3A;">{{ overall_stats.lost.count|intcomma }}</h2>
+                    <small class="text-muted">Lost</small>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Regional Tabs -->
+<div class="mb-4">
+    <ul class="nav nav-tabs" id="regionTabs" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="lnuk-tab" data-bs-toggle="tab" data-bs-target="#lnuk" type="button" role="tab">
+                <i class="bi bi-globe-europe-africa me-2"></i>LNUK
+                <span class="currency-tag">GBP</span>
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="lna-tab" data-bs-toggle="tab" data-bs-target="#lna" type="button" role="tab">
+                <i class="bi bi-building me-2"></i>LNA
+                <span class="currency-tag">SAR</span>
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="pa-tab" data-bs-toggle="tab" data-bs-target="#pa" type="button" role="tab">
+                <i class="bi bi-globe-asia-australia me-2"></i>Pace Arabia
+                <span class="currency-tag">SAR</span>
+            </button>
+        </li>
+    </ul>
+
+    <div class="tab-content" id="regionTabsContent">
+        <!-- LNUK Tab -->
+        <div class="tab-pane fade show active" id="lnuk" role="tabpanel">
+            <!-- Region Header -->
+            <div class="region-header">
+                <div class="row align-items-center">
+                    <div class="col">
+                        <h4 class="mb-1 fw-bold">{{ lnuk.full_name }}</h4>
+                        <p class="text-muted mb-0">UK & Global Operations Pipeline</p>
+                    </div>
+                    <div class="col-auto text-end">
+                        <div class="region-value">£{{ lnuk.total.value|floatformat:2|intcomma }}</div>
+                        <small class="text-muted fw-semibold">Total Pipeline Value</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LNUK Stats -->
+            <div class="row mb-4">
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-active h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ lnuk.active.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Active</div>
+                            <div class="stat-value">£{{ lnuk.active.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-hotleads h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ lnuk.hot_leads.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Hot Leads</div>
+                            <div class="stat-value">£{{ lnuk.hot_leads.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-won h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ lnuk.won.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Won</div>
+                            <div class="stat-value">£{{ lnuk.won.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-lost h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ lnuk.lost.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Lost</div>
+                            <div class="stat-value">£{{ lnuk.lost.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-ongoing h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ lnuk.ongoing.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Ongoing</div>
+                            <div class="stat-value">£{{ lnuk.ongoing.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-total h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ lnuk.total.count|intcomma }}</div>
+                            <div class="stat-label">Total</div>
+                            <div class="stat-value">All Projects</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LNUK Charts -->
+            <div class="row mb-4">
+                <div class="col-md-6 mb-3">
+                    <div class="card chart-card h-100">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="bi bi-pie-chart-fill me-2" style="color: #C41E3A;"></i>Projects Distribution</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="chart-container">
+                                <canvas id="lnukPieChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <div class="card chart-card h-100">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="bi bi-bar-chart-fill me-2" style="color: #C41E3A;"></i>Value by Status (GBP)</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="chart-container">
+                                <canvas id="lnukBarChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LNUK Recent Projects -->
+            <div class="card projects-table">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0"><i class="bi bi-clock-history me-2"></i>Recent Projects</h6>
+                    <a href="{% url 'projects:list' %}?region=LNUK" class="btn btn-sm btn-outline-light">View All <i class="bi bi-arrow-right ms-1"></i></a>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Reference</th>
+                                    <th>Project Name</th>
+                                    <th>Status</th>
+                                    <th class="text-end">Value (GBP)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for project in lnuk.projects %}
+                                <tr>
+                                    <td><a href="{% url 'projects:detail' project.pk %}" class="text-decoration-none fw-bold" style="color: #C41E3A;">{{ project.proposal_reference }}</a></td>
+                                    <td class="text-truncate" style="max-width: 350px;">{{ project.project_name }}</td>
+                                    <td><span class="badge px-3 py-2" style="background-color: {{ project.status.color }}">{{ project.status.name }}</span></td>
+                                    <td class="text-end fw-bold">£{{ project.estimated_value|floatformat:2|intcomma }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr><td colspan="4" class="text-center text-muted py-5"><i class="bi bi-inbox fs-1 d-block mb-2"></i>No projects found</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- LNA Tab -->
+        <div class="tab-pane fade" id="lna" role="tabpanel">
+            <!-- Region Header -->
+            <div class="region-header">
+                <div class="row align-items-center">
+                    <div class="col">
+                        <h4 class="mb-1 fw-bold">{{ lna.full_name }}</h4>
+                        <p class="text-muted mb-0">Saudi Arabia Operations Pipeline</p>
+                    </div>
+                    <div class="col-auto text-end">
+                        <div class="region-value">SAR {{ lna.total.value|floatformat:2|intcomma }}</div>
+                        <small class="text-muted fw-semibold">Total Pipeline Value</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LNA Stats -->
+            <div class="row mb-4">
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-active h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ lna.active.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Active</div>
+                            <div class="stat-value">SAR {{ lna.active.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-hotleads h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ lna.hot_leads.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Hot Leads</div>
+                            <div class="stat-value">SAR {{ lna.hot_leads.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-won h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ lna.won.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Won</div>
+                            <div class="stat-value">SAR {{ lna.won.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-lost h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ lna.lost.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Lost</div>
+                            <div class="stat-value">SAR {{ lna.lost.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-ongoing h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ lna.ongoing.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Ongoing</div>
+                            <div class="stat-value">SAR {{ lna.ongoing.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-total h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ lna.total.count|intcomma }}</div>
+                            <div class="stat-label">Total</div>
+                            <div class="stat-value">All Projects</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LNA Charts -->
+            <div class="row mb-4">
+                <div class="col-md-6 mb-3">
+                    <div class="card chart-card h-100">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="bi bi-pie-chart-fill me-2" style="color: #C41E3A;"></i>Projects Distribution</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="chart-container">
+                                <canvas id="lnaPieChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <div class="card chart-card h-100">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="bi bi-bar-chart-fill me-2" style="color: #C41E3A;"></i>Value by Status (SAR)</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="chart-container">
+                                <canvas id="lnaBarChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LNA Recent Projects -->
+            <div class="card projects-table">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0"><i class="bi bi-clock-history me-2"></i>Recent Projects</h6>
+                    <a href="{% url 'projects:list' %}?region=LNA" class="btn btn-sm btn-outline-light">View All <i class="bi bi-arrow-right ms-1"></i></a>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Reference</th>
+                                    <th>Project Name</th>
+                                    <th>Status</th>
+                                    <th class="text-end">Value (SAR)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for project in lna.projects %}
+                                <tr>
+                                    <td><a href="{% url 'projects:detail' project.pk %}" class="text-decoration-none fw-bold" style="color: #C41E3A;">{{ project.proposal_reference }}</a></td>
+                                    <td class="text-truncate" style="max-width: 350px;">{{ project.project_name }}</td>
+                                    <td><span class="badge px-3 py-2" style="background-color: {{ project.status.color }}">{{ project.status.name }}</span></td>
+                                    <td class="text-end fw-bold">SAR {{ project.estimated_value|floatformat:2|intcomma }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr><td colspan="4" class="text-center text-muted py-5"><i class="bi bi-inbox fs-1 d-block mb-2"></i>No projects found</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- PA Tab -->
+        <div class="tab-pane fade" id="pa" role="tabpanel">
+            <!-- Region Header -->
+            <div class="region-header">
+                <div class="row align-items-center">
+                    <div class="col">
+                        <h4 class="mb-1 fw-bold">{{ pa.full_name }}</h4>
+                        <p class="text-muted mb-0">Pace Arabia Operations Pipeline</p>
+                    </div>
+                    <div class="col-auto text-end">
+                        <div class="region-value">SAR {{ pa.total.value|floatformat:2|intcomma }}</div>
+                        <small class="text-muted fw-semibold">Total Pipeline Value</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PA Stats -->
+            <div class="row mb-4">
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-active h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ pa.active.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Active</div>
+                            <div class="stat-value">SAR {{ pa.active.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-hotleads h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ pa.hot_leads.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Hot Leads</div>
+                            <div class="stat-value">SAR {{ pa.hot_leads.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-won h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ pa.won.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Won</div>
+                            <div class="stat-value">SAR {{ pa.won.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-lost h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ pa.lost.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Lost</div>
+                            <div class="stat-value">SAR {{ pa.lost.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-ongoing h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ pa.ongoing.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Ongoing</div>
+                            <div class="stat-value">SAR {{ pa.ongoing.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-total h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ pa.total.count|intcomma }}</div>
+                            <div class="stat-label">Total</div>
+                            <div class="stat-value">All Projects</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PA Charts -->
+            <div class="row mb-4">
+                <div class="col-md-6 mb-3">
+                    <div class="card chart-card h-100">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="bi bi-pie-chart-fill me-2" style="color: #C41E3A;"></i>Projects Distribution</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="chart-container">
+                                <canvas id="paPieChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <div class="card chart-card h-100">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="bi bi-bar-chart-fill me-2" style="color: #C41E3A;"></i>Value by Status (SAR)</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="chart-container">
+                                <canvas id="paBarChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PA Recent Projects -->
+            <div class="card projects-table">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0"><i class="bi bi-clock-history me-2"></i>Recent Projects</h6>
+                    <a href="{% url 'projects:list' %}?region=PA" class="btn btn-sm btn-outline-light">View All <i class="bi bi-arrow-right ms-1"></i></a>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Reference</th>
+                                    <th>Project Name</th>
+                                    <th>Status</th>
+                                    <th class="text-end">Value (SAR)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for project in pa.projects %}
+                                <tr>
+                                    <td><a href="{% url 'projects:detail' project.pk %}" class="text-decoration-none fw-bold" style="color: #C41E3A;">{{ project.proposal_reference }}</a></td>
+                                    <td class="text-truncate" style="max-width: 350px;">{{ project.project_name }}</td>
+                                    <td><span class="badge px-3 py-2" style="background-color: {{ project.status.color }}">{{ project.status.name }}</span></td>
+                                    <td class="text-end fw-bold">SAR {{ project.estimated_value|floatformat:2|intcomma }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr><td colspan="4" class="text-center text-muted py-5"><i class="bi bi-inbox fs-1 d-block mb-2"></i>No projects found</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    const chartData = {{ chart_data|safe }};
+    const chartColors = {
+        active: '#1a1a1a',
+        hotLeads: '#fd7e14',
+        won: '#198754',
+        lost: '#C41E3A',
+        ongoing: '#6c757d'
+    };
+    const labels = ['Active', 'Hot Leads', 'Won', 'Lost', 'Ongoing'];
+    const bgColors = [chartColors.active, chartColors.hotLeads, chartColors.won, chartColors.lost, chartColors.ongoing];
+
+    // Chart options
+    const pieOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '60%',
+        plugins: {
+            legend: {
+                position: 'bottom',
+                labels: {
+                    padding: 20,
+                    usePointStyle: true,
+                    pointStyle: 'circle',
+                    font: { size: 12, weight: '600' }
+                }
+            },
+            tooltip: {
+                backgroundColor: '#1a1a1a',
+                titleFont: { size: 14, weight: '700' },
+                bodyFont: { size: 13 },
+                padding: 12,
+                cornerRadius: 8
+            }
+        }
+    };
+
+    const barOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: { display: false },
+            tooltip: {
+                backgroundColor: '#1a1a1a',
+                titleFont: { size: 14, weight: '700' },
+                bodyFont: { size: 13 },
+                padding: 12,
+                cornerRadius: 8,
+                callbacks: {
+                    label: function(context) {
+                        return context.parsed.y.toLocaleString();
+                    }
+                }
+            }
+        },
+        scales: {
+            y: {
+                beginAtZero: true,
+                grid: { color: 'rgba(0,0,0,0.05)' },
+                ticks: {
+                    font: { size: 11, weight: '600' },
+                    callback: function(value) { return value.toLocaleString(); }
+                }
+            },
+            x: {
+                grid: { display: false },
+                ticks: { font: { size: 11, weight: '600' } }
+            }
+        },
+        barThickness: 40,
+        borderRadius: 6
+    };
+
+    // LNUK Charts
+    new Chart(document.getElementById('lnukPieChart'), {
+        type: 'doughnut',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: [chartData.lnuk.active, chartData.lnuk.hot_leads, chartData.lnuk.won, chartData.lnuk.lost, chartData.lnuk.ongoing],
+                backgroundColor: bgColors,
+                borderWidth: 0,
+                hoverOffset: 10
+            }]
+        },
+        options: pieOptions
+    });
+
+    new Chart(document.getElementById('lnukBarChart'), {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: [chartData.lnuk.active_value, chartData.lnuk.hot_leads_value, chartData.lnuk.won_value, chartData.lnuk.lost_value, 0],
+                backgroundColor: bgColors,
+                borderRadius: 6
+            }]
+        },
+        options: barOptions
+    });
+
+    // LNA Charts
+    new Chart(document.getElementById('lnaPieChart'), {
+        type: 'doughnut',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: [chartData.lna.active, chartData.lna.hot_leads, chartData.lna.won, chartData.lna.lost, chartData.lna.ongoing],
+                backgroundColor: bgColors,
+                borderWidth: 0,
+                hoverOffset: 10
+            }]
+        },
+        options: pieOptions
+    });
+
+    new Chart(document.getElementById('lnaBarChart'), {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: [chartData.lna.active_value, chartData.lna.hot_leads_value, chartData.lna.won_value, chartData.lna.lost_value, 0],
+                backgroundColor: bgColors,
+                borderRadius: 6
+            }]
+        },
+        options: barOptions
+    });
+
+    // PA Charts
+    new Chart(document.getElementById('paPieChart'), {
+        type: 'doughnut',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: [chartData.pa.active, chartData.pa.hot_leads, chartData.pa.won, chartData.pa.lost, chartData.pa.ongoing],
+                backgroundColor: bgColors,
+                borderWidth: 0,
+                hoverOffset: 10
+            }]
+        },
+        options: pieOptions
+    });
+
+    new Chart(document.getElementById('paBarChart'), {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: [chartData.pa.active_value, chartData.pa.hot_leads_value, chartData.pa.won_value, chartData.pa.lost_value, 0],
+                backgroundColor: bgColors,
+                borderRadius: 6
+            }]
+        },
+        options: barOptions
+    });
+</script>
+{% endblock %}

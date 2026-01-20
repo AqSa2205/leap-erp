@@ -1,0 +1,460 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Leap Networks ERP{% endblock %}</title>
+    <link rel="icon" type="image/jpeg" href="{% static 'images/favicon.jpg' %}">
+    <link rel="shortcut icon" type="image/jpeg" href="{% static 'images/favicon.jpg' %}">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        :root {
+            --sidebar-width: 260px;
+            --sidebar-collapsed-width: 70px;
+            --leap-red: #C41E3A;
+            --leap-red-dark: #a01830;
+            --leap-black: #1a1a1a;
+            --leap-dark: #2d2d2d;
+            --leap-grey: #6c757d;
+            --leap-light-grey: #f5f5f5;
+        }
+        body {
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .sidebar {
+            width: var(--sidebar-width);
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 100vh;
+            background: #fff;
+            padding-top: 0;
+            z-index: 1000;
+            transition: all 0.3s ease;
+            overflow-x: hidden;
+            overflow-y: auto;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.08);
+            border-right: 1px solid #eee;
+        }
+        .sidebar.collapsed {
+            width: var(--sidebar-collapsed-width);
+        }
+        .sidebar.collapsed .brand-logo-full {
+            display: none;
+        }
+        .sidebar .brand-logo-icon {
+            display: none;
+            max-width: 40px;
+            height: auto;
+        }
+        .sidebar.collapsed .brand-logo-icon {
+            display: block;
+        }
+        .sidebar.collapsed .nav-link span,
+        .sidebar.collapsed .nav-section {
+            opacity: 0;
+            visibility: hidden;
+            width: 0;
+        }
+        .sidebar.collapsed .nav-link {
+            padding: 0.75rem;
+            justify-content: center;
+        }
+        .sidebar.collapsed .nav-link i {
+            margin-right: 0;
+            font-size: 1.25rem;
+        }
+        .sidebar.collapsed .brand-section {
+            padding: 1rem 0.75rem;
+            text-align: center;
+        }
+        .sidebar .nav-link {
+            color: var(--leap-dark);
+            padding: 0.75rem 1.5rem;
+            border-radius: 0;
+            transition: all 0.2s;
+            border-left: 3px solid transparent;
+            display: flex;
+            align-items: center;
+            white-space: nowrap;
+        }
+        .sidebar .nav-link:hover {
+            background: rgba(196, 30, 58, 0.08);
+            color: var(--leap-black);
+            border-left-color: var(--leap-red);
+        }
+        .sidebar .nav-link.active {
+            background: rgba(196, 30, 58, 0.12);
+            color: var(--leap-red);
+            border-left-color: var(--leap-red);
+            font-weight: 600;
+        }
+        .sidebar .nav-link i {
+            margin-right: 0.75rem;
+            width: 20px;
+            text-align: center;
+            color: var(--leap-red);
+            flex-shrink: 0;
+        }
+        .sidebar .nav-link span {
+            transition: all 0.3s ease;
+        }
+        .main-content {
+            margin-left: var(--sidebar-width);
+            min-height: 100vh;
+            background: var(--leap-light-grey);
+            transition: all 0.3s ease;
+        }
+        .main-content.expanded {
+            margin-left: var(--sidebar-collapsed-width);
+        }
+        .top-navbar {
+            background: #fff;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            padding: 0.75rem 1.5rem;
+            border-bottom: 1px solid #eee;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .brand-section {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid #eee;
+            margin-bottom: 0.5rem;
+            background: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .brand-logo-img {
+            max-width: 160px;
+            height: auto;
+            transition: all 0.3s ease;
+        }
+        .sidebar-toggle-btn {
+            background: transparent;
+            border: none;
+            color: var(--leap-grey);
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+        .sidebar-toggle-btn:hover {
+            color: var(--leap-red);
+            background: rgba(196, 30, 58, 0.08);
+        }
+        .nav-section {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            color: var(--leap-red);
+            padding: 1rem 1.5rem 0.5rem;
+            letter-spacing: 1px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+        }
+        .card {
+            border: none;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            border-radius: 8px;
+        }
+        .card-header {
+            background: #fff;
+            border-bottom: 1px solid #eee;
+            font-weight: 600;
+        }
+        .stat-card {
+            border-left: 4px solid;
+        }
+        .stat-card.primary { border-color: var(--leap-black); }
+        .stat-card.success { border-color: #198754; }
+        .stat-card.warning { border-color: #ffc107; }
+        .stat-card.danger { border-color: var(--leap-red); }
+
+        /* Button overrides */
+        .btn-primary {
+            background-color: var(--leap-red);
+            border-color: var(--leap-red);
+        }
+        .btn-primary:hover, .btn-primary:focus {
+            background-color: var(--leap-red-dark);
+            border-color: var(--leap-red-dark);
+        }
+        .btn-outline-primary {
+            color: var(--leap-red);
+            border-color: var(--leap-red);
+        }
+        .btn-outline-primary:hover {
+            background-color: var(--leap-red);
+            border-color: var(--leap-red);
+            color: #fff;
+        }
+
+        /* Badge overrides */
+        .bg-primary {
+            background-color: var(--leap-red) !important;
+        }
+
+        /* Text overrides */
+        .text-primary {
+            color: var(--leap-red) !important;
+        }
+
+        /* Table styling */
+        .table thead {
+            background: var(--leap-light-grey);
+        }
+
+        /* Dropdown */
+        .dropdown-item:active, .dropdown-item:focus {
+            background-color: var(--leap-red);
+        }
+
+        /* User badge in navbar */
+        .user-role-badge {
+            background-color: var(--leap-dark) !important;
+            font-size: 0.7rem;
+        }
+
+        /* Tooltip for collapsed sidebar */
+        .sidebar.collapsed .nav-link {
+            position: relative;
+        }
+        .sidebar.collapsed .nav-link::after {
+            content: attr(data-title);
+            position: absolute;
+            left: 100%;
+            top: 50%;
+            transform: translateY(-50%);
+            background: var(--leap-red);
+            color: #fff;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            white-space: nowrap;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.2s;
+            margin-left: 10px;
+            z-index: 1001;
+            box-shadow: 0 2px 8px rgba(196, 30, 58, 0.3);
+        }
+        .sidebar.collapsed .nav-link:hover::after {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        @media (max-width: 991px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+            .sidebar.show {
+                transform: translateX(0);
+            }
+            .main-content {
+                margin-left: 0;
+            }
+            .main-content.expanded {
+                margin-left: 0;
+            }
+            .sidebar-overlay {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0,0,0,0.5);
+                z-index: 999;
+            }
+            .sidebar-overlay.show {
+                display: block;
+            }
+        }
+    </style>
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    {% if user.is_authenticated %}
+    <!-- Sidebar Overlay for mobile -->
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <!-- Sidebar -->
+    <nav class="sidebar" id="sidebar">
+        <div class="brand-section">
+            <a href="{% url 'dashboard:index' %}">
+                <img src="{% static 'images/logo.jpg' %}" alt="Leap Networks" class="brand-logo-full brand-logo-img">
+                <img src="{% static 'images/logo-icon.jpg' %}" alt="Leap" class="brand-logo-icon">
+            </a>
+            <button class="sidebar-toggle-btn d-none d-lg-block" id="sidebarCollapseBtn" title="Toggle Sidebar">
+                <i class="bi bi-chevron-left" id="collapseIcon"></i>
+            </button>
+        </div>
+
+        <div class="nav-section">Main</div>
+        <ul class="nav flex-column">
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'index' and request.resolver_match.app_name == 'dashboard' %}active{% endif %}" href="{% url 'dashboard:index' %}" data-title="Dashboard">
+                    <i class="bi bi-speedometer2"></i> <span>Dashboard</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'projects' and 'document' not in request.resolver_match.url_name %}active{% endif %}" href="{% url 'projects:list' %}" data-title="Projects">
+                    <i class="bi bi-folder"></i> <span>Projects</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if 'document' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'projects:document_list' %}" data-title="Documents">
+                    <i class="bi bi-file-earmark-text"></i> <span>Documents</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'annual_report' %}active{% endif %}" href="{% url 'reports:annual_report' %}" data-title="Annual Report">
+                    <i class="bi bi-journal-text"></i> <span>Annual Report</span>
+                </a>
+            </li>
+        </ul>
+
+        <div class="nav-section">Reports</div>
+        <ul class="nav flex-column">
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'index' and request.resolver_match.app_name == 'reports' %}active{% endif %}" href="{% url 'reports:index' %}" data-title="Reports">
+                    <i class="bi bi-file-earmark-bar-graph"></i> <span>Reports</span>
+                </a>
+            </li>
+            {% if user.can_import_excel %}
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'import' %}active{% endif %}" href="{% url 'reports:import' %}" data-title="Import Excel">
+                    <i class="bi bi-upload"></i> <span>Import Excel</span>
+                </a>
+            </li>
+            {% endif %}
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'export' %}active{% endif %}" href="{% url 'reports:export' %}" data-title="Export Excel">
+                    <i class="bi bi-download"></i> <span>Export Excel</span>
+                </a>
+            </li>
+        </ul>
+
+        {% if user.is_admin_user %}
+        <div class="nav-section">Administration</div>
+        <ul class="nav flex-column">
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'user_list' %}active{% endif %}" href="{% url 'accounts:user_list' %}" data-title="Users">
+                    <i class="bi bi-people"></i> <span>Users</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="/admin/" data-title="Admin Panel">
+                    <i class="bi bi-gear"></i> <span>Admin Panel</span>
+                </a>
+            </li>
+        </ul>
+        {% endif %}
+    </nav>
+
+    <!-- Main Content -->
+    <div class="main-content" id="mainContent">
+        <!-- Top Navbar -->
+        <nav class="top-navbar d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center">
+                <button class="btn btn-link d-lg-none text-dark me-2" id="sidebarToggle">
+                    <i class="bi bi-list fs-4"></i>
+                </button>
+                <h5 class="mb-0 text-dark">{% block page_title %}{% endblock %}</h5>
+            </div>
+            <div class="dropdown">
+                <button class="btn btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                    <i class="bi bi-person-circle text-danger"></i>
+                    <span class="d-none d-sm-inline">{{ user.get_full_name|default:user.username }}</span>
+                    {% if user.role %}
+                    <span class="badge user-role-badge ms-1 d-none d-sm-inline">{{ user.role }}</span>
+                    {% endif %}
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                    <li><a class="dropdown-item" href="{% url 'accounts:profile' %}"><i class="bi bi-person me-2"></i>Profile</a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li>
+                        <form method="post" action="{% url 'accounts:logout' %}" class="d-inline">
+                            {% csrf_token %}
+                            <button type="submit" class="dropdown-item text-danger">
+                                <i class="bi bi-box-arrow-right me-2"></i>Logout
+                            </button>
+                        </form>
+                    </li>
+                </ul>
+            </div>
+        </nav>
+
+        <!-- Page Content -->
+        <div class="container-fluid p-4">
+            {% if messages %}
+            {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+            {% endfor %}
+            {% endif %}
+
+            {% block content %}{% endblock %}
+        </div>
+    </div>
+    {% else %}
+    <!-- Non-authenticated content -->
+    <div class="container">
+        {% block auth_content %}{% endblock %}
+    </div>
+    {% endif %}
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Sidebar toggle for mobile
+        const sidebar = document.getElementById('sidebar');
+        const mainContent = document.getElementById('mainContent');
+        const sidebarOverlay = document.getElementById('sidebarOverlay');
+        const collapseIcon = document.getElementById('collapseIcon');
+
+        document.getElementById('sidebarToggle')?.addEventListener('click', function() {
+            sidebar.classList.toggle('show');
+            sidebarOverlay?.classList.toggle('show');
+        });
+
+        sidebarOverlay?.addEventListener('click', function() {
+            sidebar.classList.remove('show');
+            sidebarOverlay.classList.remove('show');
+        });
+
+        // Sidebar collapse for desktop
+        document.getElementById('sidebarCollapseBtn')?.addEventListener('click', function() {
+            sidebar.classList.toggle('collapsed');
+            mainContent?.classList.toggle('expanded');
+
+            if (sidebar.classList.contains('collapsed')) {
+                collapseIcon.classList.remove('bi-chevron-left');
+                collapseIcon.classList.add('bi-chevron-right');
+                localStorage.setItem('sidebarCollapsed', 'true');
+            } else {
+                collapseIcon.classList.remove('bi-chevron-right');
+                collapseIcon.classList.add('bi-chevron-left');
+                localStorage.setItem('sidebarCollapsed', 'false');
+            }
+        });
+
+        // Restore sidebar state from localStorage
+        if (localStorage.getItem('sidebarCollapsed') === 'true') {
+            sidebar?.classList.add('collapsed');
+            mainContent?.classList.add('expanded');
+            if (collapseIcon) {
+                collapseIcon.classList.remove('bi-chevron-left');
+                collapseIcon.classList.add('bi-chevron-right');
+            }
+        }
+    </script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

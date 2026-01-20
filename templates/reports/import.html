@@ -1,0 +1,100 @@
+{% extends 'base.html' %}
+
+{% block title %}Import Excel - Leap Networks ERP{% endblock %}
+{% block page_title %}Import Excel{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-file-earmark-arrow-up me-2"></i>Import Projects from Excel</h5>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <h6><i class="bi bi-info-circle me-2"></i>Import Guidelines</h6>
+                    <ul class="mb-0 small">
+                        <li>Upload Excel files (.xlsx) in the standard Leap Networks format</li>
+                        <li>The system will automatically detect regions from sheet names (UK, LNA, PA)</li>
+                        <li>Status categories are determined from sheet names (Active, Hot Leads, Won, Lost)</li>
+                        <li>Existing projects (matched by Proposal Reference) will be updated</li>
+                        <li>New projects will be created</li>
+                    </ul>
+                </div>
+
+                <form method="post" enctype="multipart/form-data" class="mt-4">
+                    {% csrf_token %}
+
+                    <div class="mb-4">
+                        <label class="form-label">Select Excel File</label>
+                        <input type="file" name="excel_file" class="form-control" accept=".xlsx,.xls" required>
+                        <div class="form-text">Accepted formats: .xlsx, .xls</div>
+                    </div>
+
+                    <div class="d-flex gap-2">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-upload me-2"></i>Import
+                        </button>
+                        <a href="{% url 'reports:index' %}" class="btn btn-secondary">
+                            <i class="bi bi-x-lg me-1"></i>Cancel
+                        </a>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="card mt-4">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-question-circle me-2"></i>Expected Format</h6>
+            </div>
+            <div class="card-body">
+                <p class="small text-muted mb-3">Your Excel file should have sheets with the following structure:</p>
+
+                <div class="table-responsive">
+                    <table class="table table-sm table-bordered">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Column</th>
+                                <th>Description</th>
+                                <th>Required</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Project Name</td>
+                                <td>Name of the project</td>
+                                <td><span class="badge bg-danger">Yes</span></td>
+                            </tr>
+                            <tr>
+                                <td>Leap Proposal Reference</td>
+                                <td>Unique reference (e.g., LNUK-P02125038)</td>
+                                <td><span class="badge bg-danger">Yes</span></td>
+                            </tr>
+                            <tr>
+                                <td>Client RFQ Ref Number</td>
+                                <td>Client's reference number</td>
+                                <td><span class="badge bg-secondary">No</span></td>
+                            </tr>
+                            <tr>
+                                <td>Est. Value (GBP)</td>
+                                <td>Estimated project value</td>
+                                <td><span class="badge bg-secondary">No</span></td>
+                            </tr>
+                            <tr>
+                                <td>Submission Date/Deadline</td>
+                                <td>Project submission date</td>
+                                <td><span class="badge bg-secondary">No</span></td>
+                            </tr>
+                            <tr>
+                                <td>Bid Status</td>
+                                <td>Current status</td>
+                                <td><span class="badge bg-secondary">No</span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

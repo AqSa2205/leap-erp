@@ -1,0 +1,299 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Documents - Leap Networks ERP{% endblock %}
+{% block page_title %}Documents{% endblock %}
+
+{% block extra_css %}
+<style>
+    .summary-card {
+        border-radius: 12px;
+        border: none;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        overflow: hidden;
+    }
+    .summary-card.total-card {
+        border-left: 5px solid #1a1a1a;
+    }
+    .summary-card.quotation-card {
+        border-left: 5px solid #C41E3A;
+    }
+    .summary-card.proposal-card {
+        border-left: 5px solid #198754;
+    }
+    .summary-card.technical-card {
+        border-left: 5px solid #0d6efd;
+    }
+    .summary-card h3 {
+        font-size: 2rem;
+        font-weight: 800;
+    }
+    .filter-card {
+        border-radius: 12px;
+        border: none;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.06);
+    }
+    .documents-table-card {
+        border-radius: 12px;
+        border: none;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        overflow: hidden;
+    }
+    .documents-table-card .card-header {
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+        color: #fff;
+        padding: 1rem 1.25rem;
+    }
+    .documents-table-card .card-header h5 {
+        color: #fff;
+    }
+    .type-badge {
+        font-weight: 600;
+        padding: 0.35rem 0.65rem;
+    }
+    .type-vendor_quotation { background: #C41E3A !important; }
+    .type-proposal { background: #198754 !important; }
+    .type-customer_document { background: #fd7e14 !important; }
+    .type-technical_document { background: #0d6efd !important; }
+    .type-po_document { background: #6610f2 !important; }
+    .type-contract { background: #20c997 !important; }
+    .type-other { background: #6c757d !important; }
+    .file-icon {
+        width: 40px;
+        height: 40px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.25rem;
+    }
+    .file-icon.pdf { background: #fee2e2; color: #dc2626; }
+    .file-icon.excel { background: #dcfce7; color: #16a34a; }
+    .file-icon.word { background: #dbeafe; color: #2563eb; }
+    .file-icon.image { background: #fef3c7; color: #d97706; }
+    .file-icon.other { background: #f3f4f6; color: #6b7280; }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Summary Cards -->
+<div class="row mb-4">
+    <div class="col-lg-3 col-md-6 mb-3 mb-lg-0">
+        <div class="card summary-card total-card">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-1">Total Documents</h6>
+                        <h3 class="mb-0" style="color: #1a1a1a;">{{ total_count|intcomma }}</h3>
+                    </div>
+                    <i class="bi bi-file-earmark-fill fs-1 opacity-25" style="color: #1a1a1a;"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-3 mb-lg-0">
+        <div class="card summary-card quotation-card">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-1">Vendor Quotations</h6>
+                        <h3 class="mb-0" style="color: #C41E3A;">{{ type_counts.vendor_quotation|default:0|intcomma }}</h3>
+                    </div>
+                    <i class="bi bi-receipt fs-1 opacity-25" style="color: #C41E3A;"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-3 mb-md-0">
+        <div class="card summary-card proposal-card">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-1">Proposals</h6>
+                        <h3 class="mb-0" style="color: #198754;">{{ type_counts.proposal|default:0|intcomma }}</h3>
+                    </div>
+                    <i class="bi bi-file-earmark-text fs-1 opacity-25" style="color: #198754;"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+        <div class="card summary-card technical-card">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-1">Technical Docs</h6>
+                        <h3 class="mb-0" style="color: #0d6efd;">{{ type_counts.technical_document|default:0|intcomma }}</h3>
+                    </div>
+                    <i class="bi bi-file-earmark-code fs-1 opacity-25" style="color: #0d6efd;"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filter Card -->
+<div class="card filter-card mb-4">
+    <div class="card-body">
+        <form method="get" class="row g-3 align-items-end">
+            <div class="col-lg-4 col-md-6">
+                <label class="form-label small text-muted fw-semibold">Search</label>
+                {{ filter_form.search }}
+            </div>
+            <div class="col-lg-3 col-md-6">
+                <label class="form-label small text-muted fw-semibold">Document Type</label>
+                {{ filter_form.document_type }}
+            </div>
+            <div class="col-lg-3 col-md-6">
+                <label class="form-label small text-muted fw-semibold">Project</label>
+                {{ filter_form.project }}
+            </div>
+            <div class="col-lg-2 col-md-6">
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-primary flex-grow-1">
+                        <i class="bi bi-search me-1"></i>Filter
+                    </button>
+                    <a href="{% url 'projects:document_list' %}" class="btn btn-outline-secondary">
+                        <i class="bi bi-x-lg"></i>
+                    </a>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Documents Table -->
+<div class="card documents-table-card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-file-earmark-fill me-2"></i>Documents</h5>
+        <a href="{% url 'projects:document_create' %}" class="btn btn-light btn-sm">
+            <i class="bi bi-upload me-1"></i>Upload Document
+        </a>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width: 60px;"></th>
+                        <th>Document Name</th>
+                        <th>Type</th>
+                        <th>Project</th>
+                        <th>Vendor/Reference</th>
+                        <th>Uploaded</th>
+                        <th class="text-center">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for document in documents %}
+                    <tr>
+                        <td>
+                            {% if document.file_extension == 'pdf' %}
+                            <div class="file-icon pdf"><i class="bi bi-file-earmark-pdf"></i></div>
+                            {% elif document.file_extension in 'xls,xlsx,csv' %}
+                            <div class="file-icon excel"><i class="bi bi-file-earmark-excel"></i></div>
+                            {% elif document.file_extension in 'doc,docx' %}
+                            <div class="file-icon word"><i class="bi bi-file-earmark-word"></i></div>
+                            {% elif document.file_extension in 'jpg,jpeg,png,gif' %}
+                            <div class="file-icon image"><i class="bi bi-file-earmark-image"></i></div>
+                            {% else %}
+                            <div class="file-icon other"><i class="bi bi-file-earmark"></i></div>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="{% url 'projects:document_detail' document.pk %}" class="text-decoration-none fw-bold" style="color: #C41E3A;">
+                                {{ document.name }}
+                            </a>
+                            <div class="small text-muted">{{ document.file_size_display }}</div>
+                        </td>
+                        <td>
+                            <span class="badge type-badge type-{{ document.document_type }}">
+                                {{ document.get_document_type_display }}
+                            </span>
+                        </td>
+                        <td>
+                            {% if document.project %}
+                            <a href="{% url 'projects:detail' document.project.pk %}" class="text-decoration-none small">
+                                {{ document.project.proposal_reference }}
+                            </a>
+                            {% else %}
+                            <span class="text-muted small">-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if document.vendor_name %}
+                            <span class="small">{{ document.vendor_name }}</span>
+                            {% elif document.reference_number %}
+                            <span class="small text-muted">{{ document.reference_number }}</span>
+                            {% else %}
+                            <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="small">{{ document.uploaded_at|date:"M d, Y" }}</span>
+                            {% if document.uploaded_by %}
+                            <div class="small text-muted">by {{ document.uploaded_by }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="text-center">
+                            <div class="btn-group btn-group-sm">
+                                <a href="{{ document.file.url }}" class="btn btn-outline-success" title="Download" target="_blank">
+                                    <i class="bi bi-download"></i>
+                                </a>
+                                <a href="{% url 'projects:document_detail' document.pk %}" class="btn btn-outline-dark" title="View Details">
+                                    <i class="bi bi-eye"></i>
+                                </a>
+                                {% if user.is_admin_user or document.uploaded_by == user %}
+                                <a href="{% url 'projects:document_delete' document.pk %}" class="btn btn-outline-danger" title="Delete">
+                                    <i class="bi bi-trash"></i>
+                                </a>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="7" class="text-center text-muted py-5">
+                            <i class="bi bi-file-earmark-x fs-1 d-block mb-2"></i>
+                            No documents found.
+                            <div class="mt-3">
+                                <a href="{% url 'projects:document_create' %}" class="btn btn-primary btn-sm">
+                                    <i class="bi bi-upload me-1"></i>Upload First Document
+                                </a>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% if is_paginated %}
+    <div class="card-footer">
+        <nav>
+            <ul class="pagination justify-content-center mb-0">
+                {% if page_obj.has_previous %}
+                <li class="page-item">
+                    <a class="page-link" href="?page=1">&laquo; First</a>
+                </li>
+                <li class="page-item">
+                    <a class="page-link" href="?page={{ page_obj.previous_page_number }}">Previous</a>
+                </li>
+                {% endif %}
+                <li class="page-item active">
+                    <span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+                </li>
+                {% if page_obj.has_next %}
+                <li class="page-item">
+                    <a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a>
+                </li>
+                <li class="page-item">
+                    <a class="page-link" href="?page={{ page_obj.paginator.num_pages }}">Last &raquo;</a>
+                </li>
+                {% endif %}
+            </ul>
+        </nav>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

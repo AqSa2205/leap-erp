@@ -1,0 +1,260 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Projects - Leap Networks ERP{% endblock %}
+{% block page_title %}Projects{% endblock %}
+
+{% block extra_css %}
+<style>
+    .summary-card {
+        border-radius: 12px;
+        border: none;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        overflow: hidden;
+    }
+    .summary-card.projects-card {
+        border-left: 5px solid #1a1a1a;
+    }
+    .summary-card.value-card {
+        border-left: 5px solid #C41E3A;
+    }
+    .summary-card h3 {
+        font-size: 2rem;
+        font-weight: 800;
+    }
+    .filter-card {
+        border-radius: 12px;
+        border: none;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.06);
+    }
+    .projects-table-card {
+        border-radius: 12px;
+        border: none;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        overflow: hidden;
+    }
+    .projects-table-card .card-header {
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+        color: #fff;
+        padding: 1rem 1.25rem;
+    }
+    .projects-table-card .card-header h5 {
+        color: #fff;
+    }
+    .region-badge {
+        font-weight: 600;
+        padding: 0.35rem 0.65rem;
+    }
+    .region-lnuk { background: #1a1a1a !important; }
+    .region-lna { background: #C41E3A !important; }
+    .region-pa { background: #fd7e14 !important; }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Summary Cards -->
+<div class="row mb-4">
+    <div class="col-md-6 mb-3 mb-md-0">
+        <div class="card summary-card projects-card">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-1">Total Projects</h6>
+                        <h3 class="mb-0" style="color: #1a1a1a;">{{ total_count|intcomma }}</h3>
+                    </div>
+                    <i class="bi bi-folder-fill fs-1 opacity-25" style="color: #1a1a1a;"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card summary-card value-card">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-1">Total Value</h6>
+                        <h3 class="mb-0" style="color: #C41E3A;">{{ total_value|floatformat:2|intcomma }}</h3>
+                    </div>
+                    <i class="bi bi-cash-stack fs-1 opacity-25" style="color: #C41E3A;"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filter Card -->
+<div class="card filter-card mb-4">
+    <div class="card-body">
+        <form method="get" class="row g-3 align-items-end">
+            <div class="col-lg-3 col-md-6">
+                <label class="form-label small text-muted fw-semibold">Search</label>
+                {{ filter_form.search }}
+            </div>
+            <div class="col-lg-2 col-md-3 col-6">
+                <label class="form-label small text-muted fw-semibold">Region</label>
+                {{ filter_form.region }}
+            </div>
+            <div class="col-lg-1 col-md-3 col-6">
+                <label class="form-label small text-muted fw-semibold">Year</label>
+                {{ filter_form.year }}
+            </div>
+            <div class="col-lg-2 col-md-3 col-6">
+                <label class="form-label small text-muted fw-semibold">Status</label>
+                {{ filter_form.status }}
+            </div>
+            <div class="col-lg-2 col-md-3 col-6">
+                <label class="form-label small text-muted fw-semibold">Category</label>
+                {{ filter_form.category }}
+            </div>
+            <div class="col-lg-2 col-md-6">
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-primary flex-grow-1">
+                        <i class="bi bi-search me-1"></i>Filter
+                    </button>
+                    <a href="{% url 'projects:list' %}" class="btn btn-outline-secondary">
+                        <i class="bi bi-x-lg"></i>
+                    </a>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Projects Table -->
+<div class="card projects-table-card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-folder-fill me-2"></i>Projects</h5>
+        <a href="{% url 'projects:create' %}" class="btn btn-light btn-sm">
+            <i class="bi bi-plus-lg me-1"></i>New Project
+        </a>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Reference</th>
+                        <th>Project Name</th>
+                        <th>Region</th>
+                        <th>Year</th>
+                        <th>Status</th>
+                        <th class="text-end">Est. Value</th>
+                        <th class="text-end">Actual Sales</th>
+                        <th>Owner</th>
+                        <th class="text-center">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for project in projects %}
+                    <tr>
+                        <td>
+                            <a href="{% url 'projects:detail' project.pk %}" class="text-decoration-none fw-bold" style="color: #C41E3A;">
+                                {{ project.proposal_reference }}
+                            </a>
+                        </td>
+                        <td>
+                            <span class="text-truncate d-inline-block" style="max-width: 280px;" title="{{ project.project_name }}">
+                                {{ project.project_name }}
+                            </span>
+                        </td>
+                        <td>
+                            {% if project.region.code == 'UK' or project.region.code == 'GLB' %}
+                            <span class="badge region-badge region-lnuk">LNUK</span>
+                            {% elif project.region.code == 'LNA' %}
+                            <span class="badge region-badge region-lna">LNA</span>
+                            {% elif project.region.code == 'PA' %}
+                            <span class="badge region-badge region-pa">PA</span>
+                            {% else %}
+                            <span class="badge region-badge bg-secondary">{{ project.region.code }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if project.year %}
+                            <span class="badge bg-dark">{{ project.year }}</span>
+                            {% else %}
+                            <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="badge px-2 py-1" style="background-color: {{ project.status.color }}">
+                                {{ project.status.name }}
+                            </span>
+                        </td>
+                        <td class="text-end fw-semibold">
+                            {% if project.region.code == 'UK' or project.region.code == 'GLB' %}
+                            £{{ project.estimated_value|floatformat:2|intcomma }}
+                            {% else %}
+                            SAR {{ project.estimated_value|floatformat:2|intcomma }}
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            {% if project.actual_sales and project.actual_sales > 0 %}
+                                {% if project.region.code == 'UK' or project.region.code == 'GLB' %}
+                                <span class="text-success fw-bold">£{{ project.actual_sales|floatformat:2|intcomma }}</span>
+                                {% else %}
+                                <span class="text-success fw-bold">SAR {{ project.actual_sales|floatformat:2|intcomma }}</span>
+                                {% endif %}
+                            {% else %}
+                            <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ project.owner|default:'-' }}</td>
+                        <td class="text-center">
+                            <div class="btn-group btn-group-sm">
+                                <a href="{% url 'projects:detail' project.pk %}" class="btn btn-outline-dark" title="View">
+                                    <i class="bi bi-eye"></i>
+                                </a>
+                                {% if user.can_edit_project %}
+                                <a href="{% url 'projects:edit' project.pk %}" class="btn btn-outline-secondary" title="Edit">
+                                    <i class="bi bi-pencil"></i>
+                                </a>
+                                {% endif %}
+                                {% if user.can_delete_project %}
+                                <a href="{% url 'projects:delete' project.pk %}" class="btn btn-outline-danger" title="Delete">
+                                    <i class="bi bi-trash"></i>
+                                </a>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="9" class="text-center text-muted py-5">
+                            <i class="bi bi-folder-x fs-1 d-block mb-2"></i>
+                            No projects found.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% if is_paginated %}
+    <div class="card-footer">
+        <nav>
+            <ul class="pagination justify-content-center mb-0">
+                {% if page_obj.has_previous %}
+                <li class="page-item">
+                    <a class="page-link" href="?page=1">&laquo; First</a>
+                </li>
+                <li class="page-item">
+                    <a class="page-link" href="?page={{ page_obj.previous_page_number }}">Previous</a>
+                </li>
+                {% endif %}
+                <li class="page-item active">
+                    <span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+                </li>
+                {% if page_obj.has_next %}
+                <li class="page-item">
+                    <a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a>
+                </li>
+                <li class="page-item">
+                    <a class="page-link" href="?page={{ page_obj.paginator.num_pages }}">Last &raquo;</a>
+                </li>
+                {% endif %}
+            </ul>
+        </nav>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

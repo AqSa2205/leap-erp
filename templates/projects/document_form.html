@@ -1,0 +1,200 @@
+{% extends 'base.html' %}
+
+{% block title %}{% if title %}{{ title }}{% elif object %}Edit Document{% else %}Upload Document{% endif %} - Leap Networks ERP{% endblock %}
+{% block page_title %}{% if title %}{{ title }}{% elif object %}Edit Document{% else %}Upload Document{% endif %}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .form-card {
+        border-radius: 12px;
+        border: none;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        overflow: hidden;
+    }
+    .form-card .card-header {
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+        color: #fff;
+        padding: 1rem 1.25rem;
+    }
+    .form-card .card-header h5 {
+        color: #fff;
+    }
+    .upload-area {
+        border: 2px dashed #dee2e6;
+        border-radius: 12px;
+        padding: 2rem;
+        text-align: center;
+        background: #f8f9fa;
+        transition: all 0.3s ease;
+    }
+    .upload-area:hover {
+        border-color: #C41E3A;
+        background: rgba(196, 30, 58, 0.05);
+    }
+    .upload-area i {
+        font-size: 3rem;
+        color: #C41E3A;
+        margin-bottom: 1rem;
+    }
+    .section-title {
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: #C41E3A;
+        font-weight: 600;
+        margin-bottom: 1rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid #f0f0f0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card form-card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="bi bi-upload me-2"></i>
+                    {% if title %}{{ title }}{% elif object %}Edit Document{% else %}Upload New Document{% endif %}
+                </h5>
+            </div>
+            <div class="card-body p-4">
+                <form method="post" enctype="multipart/form-data">
+                    {% csrf_token %}
+
+                    <!-- File Upload Section -->
+                    <div class="section-title">
+                        <i class="bi bi-file-earmark-arrow-up me-1"></i>File Upload
+                    </div>
+                    <div class="mb-4">
+                        <div class="upload-area mb-3">
+                            <i class="bi bi-cloud-arrow-up d-block"></i>
+                            <p class="mb-2">Drag and drop your file here or click to browse</p>
+                            <small class="text-muted">Supported formats: PDF, Excel, Word, Images</small>
+                            <div class="mt-3">
+                                {{ form.file }}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Document Details -->
+                    <div class="section-title">
+                        <i class="bi bi-info-circle me-1"></i>Document Details
+                    </div>
+                    <div class="row mb-4">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-semibold">Document Name <span class="text-danger">*</span></label>
+                            {{ form.name }}
+                            {% if form.name.errors %}
+                            <div class="text-danger small mt-1">{{ form.name.errors.0 }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-semibold">Document Type <span class="text-danger">*</span></label>
+                            {{ form.document_type }}
+                            {% if form.document_type.errors %}
+                            <div class="text-danger small mt-1">{{ form.document_type.errors.0 }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="col-12 mb-3">
+                            <label class="form-label fw-semibold">Description</label>
+                            {{ form.description }}
+                            {% if form.description.errors %}
+                            <div class="text-danger small mt-1">{{ form.description.errors.0 }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <!-- Project Association -->
+                    <div class="section-title">
+                        <i class="bi bi-folder me-1"></i>Project Association
+                    </div>
+                    <div class="row mb-4">
+                        <div class="col-12 mb-3">
+                            <label class="form-label fw-semibold">Link to Project</label>
+                            {{ form.project }}
+                            <div class="form-text">Leave empty for standalone documents</div>
+                            {% if form.project.errors %}
+                            <div class="text-danger small mt-1">{{ form.project.errors.0 }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <!-- Additional Metadata -->
+                    <div class="section-title">
+                        <i class="bi bi-tag me-1"></i>Additional Information
+                    </div>
+                    <div class="row mb-4">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-semibold">Reference Number</label>
+                            {{ form.reference_number }}
+                            {% if form.reference_number.errors %}
+                            <div class="text-danger small mt-1">{{ form.reference_number.errors.0 }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-semibold">Vendor Name</label>
+                            {{ form.vendor_name }}
+                            <div class="form-text">For vendor quotations</div>
+                            {% if form.vendor_name.errors %}
+                            <div class="text-danger small mt-1">{{ form.vendor_name.errors.0 }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-semibold">Document Date</label>
+                            {{ form.document_date }}
+                            {% if form.document_date.errors %}
+                            <div class="text-danger small mt-1">{{ form.document_date.errors.0 }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-semibold">Expiry Date</label>
+                            {{ form.expiry_date }}
+                            <div class="form-text">For quotations with validity period</div>
+                            {% if form.expiry_date.errors %}
+                            <div class="text-danger small mt-1">{{ form.expiry_date.errors.0 }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <!-- Form Actions -->
+                    <div class="d-flex justify-content-between pt-3 border-top">
+                        <a href="{% if project %}{% url 'projects:detail' project.pk %}{% else %}{% url 'projects:document_list' %}{% endif %}" class="btn btn-outline-secondary">
+                            <i class="bi bi-arrow-left me-1"></i>Cancel
+                        </a>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-upload me-1"></i>Upload Document
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // File input preview
+    const fileInput = document.querySelector('input[type="file"]');
+    const uploadArea = document.querySelector('.upload-area');
+
+    if (fileInput && uploadArea) {
+        fileInput.addEventListener('change', function() {
+            if (this.files && this.files[0]) {
+                const fileName = this.files[0].name;
+                const fileSize = (this.files[0].size / 1024 / 1024).toFixed(2);
+                uploadArea.innerHTML = `
+                    <i class="bi bi-file-earmark-check d-block text-success"></i>
+                    <p class="mb-1 fw-bold">${fileName}</p>
+                    <small class="text-muted">${fileSize} MB</small>
+                    <div class="mt-3">${fileInput.outerHTML}</div>
+                `;
+                // Re-attach event listener after replacing HTML
+                document.querySelector('input[type="file"]').addEventListener('change', arguments.callee);
+            }
+        });
+    }
+</script>
+{% endblock %}
