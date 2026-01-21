@@ -1,0 +1,197 @@
+[
+{
+  "model": "accounts.role",
+  "pk": 1,
+  "fields": {
+    "name": "admin",
+    "description": "Full system access",
+    "created_at": "2026-01-14T13:21:25.148Z"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 2,
+  "fields": {
+    "name": "manager",
+    "description": "Regional management access",
+    "created_at": "2026-01-14T13:21:25.153Z"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 3,
+  "fields": {
+    "name": "sales_rep",
+    "description": "Sales representative access",
+    "created_at": "2026-01-14T13:21:25.159Z"
+  }
+},
+{
+  "model": "projects.region",
+  "pk": 1,
+  "fields": {
+    "name": "United Kingdom",
+    "code": "UK",
+    "currency": "GBP",
+    "description": "",
+    "is_active": true,
+    "created_at": "2026-01-14T13:21:25.164Z"
+  }
+},
+{
+  "model": "projects.region",
+  "pk": 2,
+  "fields": {
+    "name": "Leap Networks Arabia",
+    "code": "LNA",
+    "currency": "SAR",
+    "description": "",
+    "is_active": true,
+    "created_at": "2026-01-14T13:21:25.168Z"
+  }
+},
+{
+  "model": "projects.region",
+  "pk": 3,
+  "fields": {
+    "name": "Pacific Asia",
+    "code": "PA",
+    "currency": "USD",
+    "description": "",
+    "is_active": true,
+    "created_at": "2026-01-14T13:21:25.171Z"
+  }
+},
+{
+  "model": "projects.region",
+  "pk": 4,
+  "fields": {
+    "name": "Global",
+    "code": "GLB",
+    "currency": "USD",
+    "description": "",
+    "is_active": true,
+    "created_at": "2026-01-14T13:21:25.175Z"
+  }
+},
+{
+  "model": "projects.projectstatus",
+  "pk": 1,
+  "fields": {
+    "name": "IP",
+    "category": "active",
+    "description": "",
+    "color": "#0d6efd",
+    "order": 1,
+    "is_active": true
+  }
+},
+{
+  "model": "projects.projectstatus",
+  "pk": 2,
+  "fields": {
+    "name": "Open",
+    "category": "active",
+    "description": "",
+    "color": "#0dcaf0",
+    "order": 2,
+    "is_active": true
+  }
+},
+{
+  "model": "projects.projectstatus",
+  "pk": 3,
+  "fields": {
+    "name": "Submitted",
+    "category": "active",
+    "description": "",
+    "color": "#6f42c1",
+    "order": 3,
+    "is_active": true
+  }
+},
+{
+  "model": "projects.projectstatus",
+  "pk": 4,
+  "fields": {
+    "name": "Hold",
+    "category": "active",
+    "description": "",
+    "color": "#ffc107",
+    "order": 4,
+    "is_active": true
+  }
+},
+{
+  "model": "projects.projectstatus",
+  "pk": 5,
+  "fields": {
+    "name": "Hot Lead",
+    "category": "hot_lead",
+    "description": "",
+    "color": "#fd7e14",
+    "order": 5,
+    "is_active": true
+  }
+},
+{
+  "model": "projects.projectstatus",
+  "pk": 6,
+  "fields": {
+    "name": "Won",
+    "category": "won",
+    "description": "",
+    "color": "#198754",
+    "order": 6,
+    "is_active": true
+  }
+},
+{
+  "model": "projects.projectstatus",
+  "pk": 7,
+  "fields": {
+    "name": "Closed",
+    "category": "won",
+    "description": "",
+    "color": "#20c997",
+    "order": 7,
+    "is_active": true
+  }
+},
+{
+  "model": "projects.projectstatus",
+  "pk": 8,
+  "fields": {
+    "name": "Lost",
+    "category": "lost",
+    "description": "",
+    "color": "#dc3545",
+    "order": 8,
+    "is_active": true
+  }
+},
+{
+  "model": "projects.projectstatus",
+  "pk": 9,
+  "fields": {
+    "name": "Awarded",
+    "category": "ongoing",
+    "description": "",
+    "color": "#198754",
+    "order": 9,
+    "is_active": true
+  }
+},
+{
+  "model": "projects.projectstatus",
+  "pk": 10,
+  "fields": {
+    "name": "Ongoing",
+    "category": "ongoing",
+    "description": "",
+    "color": "#0d6efd",
+    "order": 10,
+    "is_active": true
+  }
+}
+]
