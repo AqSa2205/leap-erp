@@ -10,5 +10,18 @@ python manage.py migrate
 # Load initial data (roles, regions, statuses)
 python manage.py loaddata initial_data.json || python manage.py load_initial_data
 
-# Create superuser if it doesn't exist
+# Create superuser and assign admin role
 python manage.py createsuperuser --noinput --username admin --email admin@leapnetworks.com || true
+
+python manage.py shell -c "
+from accounts.models import User, Role
+try:
+    admin_user = User.objects.get(username='admin')
+    admin_role = Role.objects.get(name='admin')
+    admin_user.role = admin_role
+    admin_user.is_staff = True
+    admin_user.save()
+    print('Admin role assigned')
+except Exception as e:
+    print(f'Could not assign role: {e}')
+"
