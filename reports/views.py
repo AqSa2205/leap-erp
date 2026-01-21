@@ -3,12 +3,11 @@ from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.http import HttpResponse
 from django.db.models import Sum, Count
-import pandas as pd
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils.dataframe import dataframe_to_rows
 from io import BytesIO
 from datetime import datetime
+from dateutil.parser import parse as parse_date
 
 from projects.models import Project, Region, ProjectStatus
 from accounts.decorators import manager_or_admin_required
@@ -150,52 +149,45 @@ def import_excel(request):
         excel_file = request.FILES['excel_file']
 
         try:
-            # Read Excel file
-            df = pd.read_excel(excel_file, sheet_name=None)
+            # Read Excel file with openpyxl
+            wb = load_workbook(excel_file, data_only=True)
 
-            # Process each sheet
             imported = 0
             errors = []
 
-            for sheet_name, sheet_df in df.items():
-                # Skip sheets that don't look like project data
-                if sheet_df.empty:
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+
+                # Skip empty sheets
+                if ws.max_row < 2:
                     continue
 
-                # Find the header row (look for 'Project Name' or 'Proposal Reference')
+                # Find header row
                 header_row = None
-                for idx, row in sheet_df.iterrows():
-                    row_str = ' '.join([str(v) for v in row.values if pd.notna(v)])
+                headers = {}
+                for row_idx, row in enumerate(ws.iter_rows(min_row=1, max_row=20, values_only=True), 1):
+                    row_str = ' '.join([str(v) for v in row if v])
                     if 'Project Name' in row_str or 'Proposal Reference' in row_str:
-                        header_row = idx
+                        header_row = row_idx
+                        for col_idx, cell in enumerate(row):
+                            if cell:
+                                headers[str(cell).strip()] = col_idx
                         break
 
-                if header_row is None:
+                if not header_row:
                     continue
 
-                # Set headers and get data rows
-                sheet_df.columns = sheet_df.iloc[header_row]
-                sheet_df = sheet_df.iloc[header_row + 1:].reset_index(drop=True)
-
-                # Map column names (handle variations)
-                column_mapping = {
-                    'Project Name': 'project_name',
-                    'Leap Proposal Reference': 'proposal_reference',
-                    'Client RFQ Ref Number': 'client_rfq_reference',
-                    'Submission Date/Deadline': 'submission_deadline',
-                    'Owner': 'owner_name',
-                    'EPC': 'epc',
-                    'Bid Status': 'status_name',
-                    'Est. Value (GBP)': 'estimated_value',
-                    'Est. Value (SAR)': 'estimated_value',
-                    'PO Award - Q': 'po_award_quarter',
-                    'Success Quotient': 'success_quotient',
-                    'Remarks': 'remarks',
-                    'Notes': 'notes',
+                # Column mapping
+                col_map = {
+                    'project_name': headers.get('Project Name'),
+                    'proposal_reference': headers.get('Leap Proposal Reference'),
+                    'client_rfq_reference': headers.get('Client RFQ Ref Number'),
+                    'epc': headers.get('EPC'),
+                    'estimated_value': headers.get('Est. Value (GBP)') or headers.get('Est. Value (SAR)'),
+                    'po_award_quarter': headers.get('PO Award - Q'),
+                    'remarks': headers.get('Remarks'),
+                    'notes': headers.get('Notes'),
                 }
-
-                # Rename columns
-                sheet_df = sheet_df.rename(columns=column_mapping)
 
                 # Determine region from sheet name
                 region_code = 'UK'
@@ -206,11 +198,9 @@ def import_excel(request):
                 elif 'GLOBAL' in sheet_name.upper():
                     region_code = 'GLB'
 
-                region = Region.objects.filter(code=region_code).first()
-                if not region:
-                    region = Region.objects.first()
+                region = Region.objects.filter(code=region_code).first() or Region.objects.first()
 
-                # Determine status category from sheet name
+                # Determine status category
                 status_category = 'active'
                 if 'HOT' in sheet_name.upper():
                     status_category = 'hot_lead'
@@ -219,64 +209,47 @@ def import_excel(request):
                 elif 'LOST' in sheet_name.upper():
                     status_category = 'lost'
 
-                default_status = ProjectStatus.objects.filter(category=status_category).first()
-                if not default_status:
-                    default_status = ProjectStatus.objects.first()
+                default_status = ProjectStatus.objects.filter(category=status_category).first() or ProjectStatus.objects.first()
 
-                # Process rows
-                for idx, row in sheet_df.iterrows():
+                # Process data rows
+                for row_idx, row in enumerate(ws.iter_rows(min_row=header_row + 1, values_only=True), header_row + 1):
                     try:
-                        # Skip rows without proposal reference or project name
-                        proposal_ref = row.get('proposal_reference', '')
-                        project_name = row.get('project_name', '')
+                        def get_val(key):
+                            idx = col_map.get(key)
+                            return row[idx] if idx is not None and idx < len(row) else None
 
-                        if pd.isna(proposal_ref) or pd.isna(project_name):
-                            continue
-                        if not str(proposal_ref).strip() or not str(project_name).strip():
+                        proposal_ref = get_val('proposal_reference')
+                        project_name = get_val('project_name')
+
+                        if not proposal_ref or not project_name:
                             continue
 
                         # Parse estimated value
-                        est_value = row.get('estimated_value', 0)
-                        if pd.isna(est_value):
+                        est_value = get_val('estimated_value') or 0
+                        try:
+                            est_value = float(str(est_value).replace(',', '').replace('£', '').replace('$', ''))
+                        except (ValueError, TypeError):
                             est_value = 0
-                        else:
-                            try:
-                                est_value = float(str(est_value).replace(',', '').replace('£', '').replace('$', ''))
-                            except ValueError:
-                                est_value = 0
 
-                        # Parse dates
-                        sub_date = row.get('submission_deadline')
-                        if pd.notna(sub_date):
-                            try:
-                                sub_date = pd.to_datetime(sub_date).date()
-                            except:
-                                sub_date = None
-                        else:
-                            sub_date = None
-
-                        # Get or create project
-                        project, created = Project.objects.update_or_create(
+                        Project.objects.update_or_create(
                             proposal_reference=str(proposal_ref).strip(),
                             defaults={
                                 'project_name': str(project_name).strip()[:500],
-                                'client_rfq_reference': str(row.get('client_rfq_reference', '') or '')[:255],
+                                'client_rfq_reference': str(get_val('client_rfq_reference') or '')[:255],
                                 'region': region,
                                 'status': default_status,
-                                'epc': str(row.get('epc', '') or '')[:200],
+                                'epc': str(get_val('epc') or '')[:200],
                                 'estimated_value': est_value,
-                                'po_award_quarter': str(row.get('po_award_quarter', '') or '')[:5],
-                                'success_quotient': float(row.get('success_quotient', 0) or 0) if not pd.isna(row.get('success_quotient')) else 0,
-                                'submission_deadline': sub_date,
-                                'remarks': str(row.get('remarks', '') or '')[:1000] if not pd.isna(row.get('remarks')) else '',
-                                'notes': str(row.get('notes', '') or '')[:1000] if not pd.isna(row.get('notes')) else '',
+                                'po_award_quarter': str(get_val('po_award_quarter') or '')[:5],
+                                'remarks': str(get_val('remarks') or '')[:1000],
+                                'notes': str(get_val('notes') or '')[:1000],
                                 'created_by': request.user,
                             }
                         )
                         imported += 1
 
                     except Exception as e:
-                        errors.append(f"Row {idx + 1} in {sheet_name}: {str(e)}")
+                        errors.append(f"Row {row_idx} in {sheet_name}: {str(e)}")
 
             if imported > 0:
                 messages.success(request, f'Successfully imported {imported} projects.')

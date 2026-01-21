@@ -14,7 +14,6 @@ django-filter==23.5
 
 # Excel Processing
 openpyxl==3.1.2
-pandas==2.1.4
 
 # Utilities
 python-dateutil==2.8.2

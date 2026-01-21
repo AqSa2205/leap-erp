@@ -9,7 +9,12 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(timeout:*)",
-      "Bash(del \"\\\\?\\\\C:\\\\Users\\\\aqsa2\\\\Desktop\\\\ERP-Leap\\\\nul\")"
+      "Bash(del \"\\\\?\\\\C:\\\\Users\\\\aqsa2\\\\Desktop\\\\ERP-Leap\\\\nul\")",
+      "Bash(git branch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git merge:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)"
     ]
   }
 }
