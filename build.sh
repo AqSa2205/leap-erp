@@ -4,6 +4,27 @@ set -o errexit
 echo "=== Installing dependencies ==="
 pip install -r requirements.txt
 
+echo "=== Checking DATABASE_URL ==="
+if [ -z "$DATABASE_URL" ]; then
+    echo "ERROR: DATABASE_URL is not set!"
+    exit 1
+else
+    echo "DATABASE_URL is set: ${DATABASE_URL:0:30}..."
+fi
+
+echo "=== Testing database connection ==="
+python -c "
+import os
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'erp_leap.settings')
+import django
+django.setup()
+from django.db import connection
+cursor = connection.cursor()
+cursor.execute('SELECT 1')
+print('Database connection successful!')
+print(f'Database engine: {connection.vendor}')
+"
+
 echo "=== Collecting static files ==="
 python manage.py collectstatic --no-input
 
