@@ -1,0 +1,229 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}{{ contact.organisation_name }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <!-- Header -->
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">{{ contact.organisation_name }}</h1>
+                    <p class="text-muted mb-0">
+                        <span class="badge bg-secondary">{{ contact.get_category_display }}</span>
+                        {% if contact.status == 'awarded' %}
+                        <span class="badge bg-success ms-1">Awarded</span>
+                        {% elif contact.status == 'open' %}
+                        <span class="badge bg-primary ms-1">Open</span>
+                        {% elif contact.status == 'closed' %}
+                        <span class="badge bg-secondary ms-1">Closed</span>
+                        {% elif contact.status == 'pending' %}
+                        <span class="badge bg-warning text-dark ms-1">Pending</span>
+                        {% endif %}
+                    </p>
+                </div>
+                <div>
+                    <a href="{% url 'contacts:contact_list' %}" class="btn btn-outline-secondary me-2">
+                        <i class="bi bi-arrow-left"></i> Back
+                    </a>
+                    <a href="{% url 'contacts:contact_update' contact.pk %}" class="btn btn-primary me-2">
+                        <i class="bi bi-pencil"></i> Edit
+                    </a>
+                    <a href="{% url 'contacts:contact_delete' contact.pk %}" class="btn btn-danger">
+                        <i class="bi bi-trash"></i> Delete
+                    </a>
+                </div>
+            </div>
+
+            <div class="row">
+                <!-- Main Info -->
+                <div class="col-md-8">
+                    <!-- Organisation Information -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-building"></i> Organisation Information</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Organisation Name</label>
+                                    <p class="mb-0"><strong>{{ contact.organisation_name }}</strong></p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Category</label>
+                                    <p class="mb-0"><span class="badge bg-secondary">{{ contact.get_category_display }}</span></p>
+                                </div>
+                                {% if contact.title %}
+                                <div class="col-12 mb-3">
+                                    <label class="text-muted small">Title/Project</label>
+                                    <p class="mb-0">{{ contact.title }}</p>
+                                </div>
+                                {% endif %}
+                                {% if contact.description %}
+                                <div class="col-12">
+                                    <label class="text-muted small">Description</label>
+                                    <p class="mb-0">{{ contact.description|linebreaks }}</p>
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Contact Person -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-person"></i> Contact Details</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Contact Name</label>
+                                    <p class="mb-0"><strong>{{ contact.contact_name|default:"-" }}</strong></p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Email</label>
+                                    <p class="mb-0">
+                                        {% if contact.contact_email %}
+                                        <a href="mailto:{{ contact.contact_email }}">{{ contact.contact_email }}</a>
+                                        {% else %}-{% endif %}
+                                    </p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Telephone</label>
+                                    <p class="mb-0">
+                                        {% if contact.contact_telephone %}
+                                        <a href="tel:{{ contact.contact_telephone }}">{{ contact.contact_telephone }}</a>
+                                        {% else %}-{% endif %}
+                                    </p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Website</label>
+                                    <p class="mb-0">
+                                        {% if contact.contact_website %}
+                                        <a href="{{ contact.contact_website }}" target="_blank">{{ contact.contact_website|truncatechars:40 }}</a>
+                                        {% else %}-{% endif %}
+                                    </p>
+                                </div>
+                                {% if contact.contact_address %}
+                                <div class="col-12">
+                                    <label class="text-muted small">Address</label>
+                                    <p class="mb-0">{{ contact.contact_address|linebreaks }}</p>
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Comments -->
+                    {% if contact.comments %}
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-chat-dots"></i> Comments</h5>
+                        </div>
+                        <div class="card-body">
+                            <p class="mb-0">{{ contact.comments|linebreaks }}</p>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- Sidebar -->
+                <div class="col-md-4">
+                    <!-- Notice Information -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-file-text"></i> Notice Information</h5>
+                        </div>
+                        <div class="card-body">
+                            {% if contact.notice_identifier %}
+                            <p class="mb-2">
+                                <strong>Notice ID:</strong><br>
+                                <small>{{ contact.notice_identifier }}</small>
+                            </p>
+                            {% endif %}
+                            <p class="mb-2">
+                                <strong>Notice Type:</strong><br>
+                                {{ contact.get_notice_type_display }}
+                            </p>
+                            {% if contact.serial_number %}
+                            <p class="mb-2">
+                                <strong>SR#:</strong><br>
+                                {{ contact.serial_number }}
+                            </p>
+                            {% endif %}
+                            <p class="mb-2">
+                                <strong>Status:</strong><br>
+                                {% if contact.status == 'awarded' %}
+                                <span class="badge bg-success">Awarded</span>
+                                {% elif contact.status == 'open' %}
+                                <span class="badge bg-primary">Open</span>
+                                {% elif contact.status == 'closed' %}
+                                <span class="badge bg-secondary">Closed</span>
+                                {% elif contact.status == 'pending' %}
+                                <span class="badge bg-warning text-dark">Pending</span>
+                                {% else %}
+                                <span class="badge bg-light text-dark">Unknown</span>
+                                {% endif %}
+                            </p>
+                            {% if contact.published_date %}
+                            <p class="mb-0">
+                                <strong>Published Date:</strong><br>
+                                {{ contact.published_date|date:"d F Y" }}
+                            </p>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <!-- Location -->
+                    {% if contact.region or contact.postcode %}
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-geo-alt"></i> Location</h5>
+                        </div>
+                        <div class="card-body">
+                            {% if contact.region %}
+                            <p class="mb-2">
+                                <strong>Region:</strong><br>
+                                {{ contact.region }}
+                            </p>
+                            {% endif %}
+                            {% if contact.postcode %}
+                            <p class="mb-0">
+                                <strong>Postcode:</strong><br>
+                                {{ contact.postcode }}
+                            </p>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- Metadata -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-info-circle"></i> Record Info</h5>
+                        </div>
+                        <div class="card-body">
+                            <p class="mb-2">
+                                <strong>Created:</strong><br>
+                                {{ contact.created_at|date:"d M Y, H:i" }}
+                            </p>
+                            <p class="mb-2">
+                                <strong>Last Updated:</strong><br>
+                                {{ contact.updated_at|date:"d M Y, H:i" }}
+                            </p>
+                            {% if contact.created_by %}
+                            <p class="mb-0">
+                                <strong>Created By:</strong><br>
+                                {{ contact.created_by }}
+                            </p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

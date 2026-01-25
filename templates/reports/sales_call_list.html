@@ -1,0 +1,202 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Sales Call Reports{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Sales Call Reports</h1>
+            <p class="text-muted mb-0">Daily sales activities and contacts</p>
+        </div>
+        <div>
+            <a href="{% url 'reports:sales_call_export' %}?{{ request.GET.urlencode }}" class="btn btn-outline-secondary me-2">
+                <i class="bi bi-download"></i> Export
+            </a>
+            <a href="{% url 'reports:sales_call_create' %}" class="btn btn-primary">
+                <i class="bi bi-plus-lg"></i> Add Report
+            </a>
+        </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="row mb-4">
+        <div class="col-md-4">
+            <div class="card bg-primary text-white">
+                <div class="card-body">
+                    <h6 class="card-title">Total Reports</h6>
+                    <h2 class="mb-0">{{ total_count }}</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card bg-success text-white">
+                <div class="card-body">
+                    <h6 class="card-title">Today</h6>
+                    <h2 class="mb-0">{{ today_count }}</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card bg-info text-white">
+                <div class="card-body">
+                    <h6 class="card-title">This Week</h6>
+                    <h2 class="mb-0">{{ this_week_count }}</h2>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <form method="get" class="row g-3">
+                <div class="col-md-3">
+                    {{ filter_form.search }}
+                </div>
+                <div class="col-md-2">
+                    {{ filter_form.date_from }}
+                    <small class="text-muted">From</small>
+                </div>
+                <div class="col-md-2">
+                    {{ filter_form.date_to }}
+                    <small class="text-muted">To</small>
+                </div>
+                <div class="col-md-2">
+                    {{ filter_form.system_category }}
+                </div>
+                <div class="col-md-2">
+                    {{ filter_form.action_type }}
+                </div>
+                <div class="col-md-1">
+                    <button type="submit" class="btn btn-primary w-100">Filter</button>
+                </div>
+            </form>
+            {% if request.GET %}
+            <div class="mt-2">
+                <a href="{% url 'reports:sales_call_list' %}" class="btn btn-sm btn-outline-secondary">Clear Filters</a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Reports Table -->
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Date</th>
+                            <th>Company</th>
+                            <th>Contact</th>
+                            <th>System</th>
+                            <th>Action</th>
+                            <th>Goal</th>
+                            {% if request.user.is_admin_user or request.user.is_manager_user %}
+                            <th>Sales Rep</th>
+                            {% endif %}
+                            <th>Next Action</th>
+                            <th width="100">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for report in reports %}
+                        <tr>
+                            <td>
+                                <strong>{{ report.call_date|date:"d M Y" }}</strong>
+                            </td>
+                            <td>
+                                <a href="{% url 'reports:sales_call_detail' report.pk %}" class="text-decoration-none">
+                                    {{ report.company_name|truncatechars:30 }}
+                                </a>
+                            </td>
+                            <td>
+                                {{ report.contact_name|truncatechars:25 }}
+                                {% if report.email %}
+                                <br><small class="text-muted">{{ report.email|truncatechars:25 }}</small>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% for cat in report.get_system_categories_display %}
+                                <span class="badge bg-secondary me-1">{{ cat }}</span>
+                                {% endfor %}
+                            </td>
+                            <td>{{ report.get_action_type_display }}</td>
+                            <td>{{ report.get_goal_display }}</td>
+                            {% if request.user.is_admin_user or request.user.is_manager_user %}
+                            <td>
+                                <strong>{{ report.sales_rep.get_full_name|default:report.sales_rep.username }}</strong>
+                            </td>
+                            {% endif %}
+                            <td>
+                                {% if report.next_action_date %}
+                                <small>{{ report.next_action_date|date:"d M" }}</small><br>
+                                <small class="text-muted">{{ report.get_next_action_type_display }}</small>
+                                {% else %}
+                                <span class="text-muted">-</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="btn-group btn-group-sm">
+                                    <a href="{% url 'reports:sales_call_detail' report.pk %}" class="btn btn-outline-primary" title="View">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
+                                    <a href="{% url 'reports:sales_call_update' report.pk %}" class="btn btn-outline-secondary" title="Edit">
+                                        <i class="bi bi-pencil"></i>
+                                    </a>
+                                    {% if request.user.is_admin_user or request.user.is_manager_user or report.sales_rep == request.user %}
+                                    <a href="{% url 'reports:sales_call_delete' report.pk %}" class="btn btn-outline-danger" title="Delete">
+                                        <i class="bi bi-trash"></i>
+                                    </a>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="{% if request.user.is_admin_user or request.user.is_manager_user %}9{% else %}8{% endif %}" class="text-center py-5">
+                                <i class="bi bi-telephone-x display-4 text-muted"></i>
+                                <p class="text-muted mt-3">No sales call reports found.</p>
+                                <a href="{% url 'reports:sales_call_create' %}" class="btn btn-primary">
+                                    <i class="bi bi-plus-lg"></i> Add Your First Report
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pagination -->
+    {% if page_obj.has_other_pages %}
+    <nav class="mt-4">
+        <ul class="pagination justify-content-center">
+            {% if page_obj.has_previous %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page_obj.previous_page_number }}&{{ request.GET.urlencode }}">Previous</a>
+            </li>
+            {% endif %}
+
+            {% for num in page_obj.paginator.page_range %}
+                {% if page_obj.number == num %}
+                <li class="page-item active"><span class="page-link">{{ num }}</span></li>
+                {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                <li class="page-item"><a class="page-link" href="?page={{ num }}&{{ request.GET.urlencode }}">{{ num }}</a></li>
+                {% endif %}
+            {% endfor %}
+
+            {% if page_obj.has_next %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page_obj.next_page_number }}&{{ request.GET.urlencode }}">Next</a>
+            </li>
+            {% endif %}
+        </ul>
+    </nav>
+    {% endif %}
+</div>
+{% endblock %}

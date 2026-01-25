@@ -1,0 +1,176 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Sales Call Report - {{ report.company_name }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <!-- Header -->
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">{{ report.company_name }}</h1>
+                    <p class="text-muted mb-0">
+                        <i class="bi bi-calendar"></i> {{ report.call_date|date:"d F Y" }}
+                        <span class="mx-2">|</span>
+                        <i class="bi bi-person"></i> Submitted by: <strong>{{ report.sales_rep.get_full_name|default:report.sales_rep.username }}</strong>
+                    </p>
+                </div>
+                <div>
+                    <a href="{% url 'reports:sales_call_list' %}" class="btn btn-outline-secondary me-2">
+                        <i class="bi bi-arrow-left"></i> Back
+                    </a>
+                    <a href="{% url 'reports:sales_call_update' report.pk %}" class="btn btn-primary me-2">
+                        <i class="bi bi-pencil"></i> Edit
+                    </a>
+                    {% if request.user.is_admin_user or request.user.is_manager_user or report.sales_rep == request.user %}
+                    <a href="{% url 'reports:sales_call_delete' report.pk %}" class="btn btn-danger">
+                        <i class="bi bi-trash"></i> Delete
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="row">
+                <!-- Main Info -->
+                <div class="col-md-8">
+                    <!-- Call Information -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-telephone"></i> Call Information</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Action Type</label>
+                                    <p class="mb-0"><strong>{{ report.get_action_type_display }}</strong></p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Contact Type</label>
+                                    <p class="mb-0"><strong>{{ report.get_contact_type_display }}</strong></p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">System Categories</label>
+                                    <p class="mb-0">
+                                        {% for cat in report.get_system_categories_display %}
+                                        <span class="badge bg-secondary me-1">{{ cat }}</span>
+                                        {% endfor %}
+                                    </p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Goal</label>
+                                    <p class="mb-0"><strong>{{ report.get_goal_display }}</strong></p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Contact Person -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-person"></i> Contact Person</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Name</label>
+                                    <p class="mb-0">
+                                        <strong>
+                                            {% if report.title %}{{ report.get_title_display }} {% endif %}
+                                            {{ report.contact_name }}
+                                        </strong>
+                                    </p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Role/Position</label>
+                                    <p class="mb-0">{{ report.role|default:"-" }}</p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Phone</label>
+                                    <p class="mb-0">
+                                        {% if report.phone %}
+                                        <a href="tel:{{ report.phone }}">{{ report.phone }}</a>
+                                        {% else %}-{% endif %}
+                                    </p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Email</label>
+                                    <p class="mb-0">
+                                        {% if report.email %}
+                                        <a href="mailto:{{ report.email }}">{{ report.email }}</a>
+                                        {% else %}-{% endif %}
+                                    </p>
+                                </div>
+                                {% if report.address %}
+                                <div class="col-12">
+                                    <label class="text-muted small">Address</label>
+                                    <p class="mb-0">{{ report.address|linebreaks }}</p>
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Comments -->
+                    {% if report.comments %}
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-chat-dots"></i> Comments/Notes</h5>
+                        </div>
+                        <div class="card-body">
+                            <p class="mb-0">{{ report.comments|linebreaks }}</p>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- Sidebar -->
+                <div class="col-md-4">
+                    <!-- Next Action -->
+                    {% if report.next_action_date or report.next_action_type %}
+                    <div class="card mb-4 border-warning">
+                        <div class="card-header bg-warning text-dark">
+                            <h5 class="mb-0"><i class="bi bi-calendar-event"></i> Scheduled Next Action</h5>
+                        </div>
+                        <div class="card-body">
+                            {% if report.next_action_date %}
+                            <p class="mb-2">
+                                <strong>Date:</strong> {{ report.next_action_date|date:"d F Y" }}
+                            </p>
+                            {% endif %}
+                            {% if report.next_action_type %}
+                            <p class="mb-0">
+                                <strong>Action:</strong> {{ report.get_next_action_type_display }}
+                            </p>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- Metadata -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-info-circle"></i> Report Info</h5>
+                        </div>
+                        <div class="card-body">
+                            <p class="mb-2">
+                                <strong>Created:</strong><br>
+                                {{ report.created_at|date:"d M Y, H:i" }}
+                            </p>
+                            <p class="mb-2">
+                                <strong>Last Updated:</strong><br>
+                                {{ report.updated_at|date:"d M Y, H:i" }}
+                            </p>
+                            <p class="mb-0">
+                                <strong>Submitted By:</strong><br>
+                                <span class="text-primary">{{ report.sales_rep.get_full_name|default:report.sales_rep.username }}</span>
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,135 @@
+{% extends 'base.html' %}
+
+{% block title %}Import Contacts{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <!-- Header -->
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">Import Contacts</h1>
+                    <p class="text-muted mb-0">Import contacts from an Excel file</p>
+                </div>
+                <a href="{% url 'contacts:contact_list' %}" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Back to List
+                </a>
+            </div>
+
+            <!-- Import Form Card -->
+            <div class="card mb-4">
+                <div class="card-body">
+                    <form method="post" enctype="multipart/form-data" novalidate>
+                        {% csrf_token %}
+
+                        <div class="row mb-4">
+                            <div class="col-md-6">
+                                <label class="form-label">Category *</label>
+                                {{ form.category }}
+                                <small class="text-muted">Select the category for imported contacts</small>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Excel File *</label>
+                                {{ form.excel_file }}
+                                <small class="text-muted">Upload .xlsx or .xls file</small>
+                            </div>
+                        </div>
+
+                        <div class="d-flex justify-content-end gap-2">
+                            <a href="{% url 'contacts:contact_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-upload"></i> Import Contacts
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Instructions Card -->
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-info-circle"></i> Import Instructions</h5>
+                </div>
+                <div class="card-body">
+                    <h6>Expected Excel Format</h6>
+                    <p>Your Excel file should have headers in the first row. The following columns are recognized:</p>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Column Name</th>
+                                    <th>Maps To</th>
+                                    <th>Required</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>Organisation Name / Company</td>
+                                    <td>Organisation Name</td>
+                                    <td><span class="badge bg-danger">Required</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Notice Identifier / Notice ID</td>
+                                    <td>Notice Identifier</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Title / Project Title</td>
+                                    <td>Title</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Description</td>
+                                    <td>Description</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Status</td>
+                                    <td>Status (Awarded/Open/Closed/Pending)</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Contact Name / Name</td>
+                                    <td>Contact Name</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Contact Email / Email</td>
+                                    <td>Contact Email</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Contact Telephone / Phone</td>
+                                    <td>Contact Telephone</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Contact Address / Address</td>
+                                    <td>Contact Address</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Region</td>
+                                    <td>Region</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Postcode</td>
+                                    <td>Postcode</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="alert alert-info mt-3 mb-0">
+                        <i class="bi bi-lightbulb"></i> <strong>Tip:</strong> Rows without an Organisation Name will be skipped during import.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

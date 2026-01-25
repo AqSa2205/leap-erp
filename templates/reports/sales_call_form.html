@@ -1,0 +1,170 @@
+{% extends 'base.html' %}
+{% load crispy_forms_tags %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <!-- Header -->
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">{{ title }}</h1>
+                    <p class="text-muted mb-0">Record your daily sales activities</p>
+                </div>
+                <a href="{% url 'reports:sales_call_list' %}" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Back to List
+                </a>
+            </div>
+
+            <!-- Form Card -->
+            <div class="card">
+                <div class="card-body">
+                    <form method="post" novalidate>
+                        {% csrf_token %}
+
+                        <!-- Call Information -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-telephone"></i> Call Information
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-4">
+                                <label class="form-label">Call Date *</label>
+                                {{ form.call_date }}
+                                {% if form.call_date.errors %}
+                                <div class="invalid-feedback d-block">{{ form.call_date.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Action Type *</label>
+                                {{ form.action_type }}
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Contact Type *</label>
+                                {{ form.contact_type }}
+                            </div>
+                        </div>
+
+                        <!-- System Categories -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-cpu"></i> System Categories *
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-12">
+                                <p class="text-muted small mb-2">Select one or more system categories that relate to this call:</p>
+                                <div class="row">
+                                    {% for checkbox in form.system_categories %}
+                                    <div class="col-md-3 col-sm-4 col-6">
+                                        <div class="form-check mb-2">
+                                            {{ checkbox.tag }}
+                                            <label class="form-check-label" for="{{ checkbox.id_for_label }}">
+                                                {{ checkbox.choice_label }}
+                                            </label>
+                                        </div>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                                {% if form.system_categories.errors %}
+                                <div class="invalid-feedback d-block">{{ form.system_categories.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                        </div>
+
+                        <!-- Company Information -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-building"></i> Company Information
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-12">
+                                <label class="form-label">Company Name *</label>
+                                {{ form.company_name }}
+                                {% if form.company_name.errors %}
+                                <div class="invalid-feedback d-block">{{ form.company_name.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                        </div>
+
+                        <!-- Contact Person Details -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-person"></i> Contact Person Details
+                        </h5>
+                        <div class="row mb-3">
+                            <div class="col-md-2">
+                                <label class="form-label">Title</label>
+                                {{ form.title }}
+                            </div>
+                            <div class="col-md-5">
+                                <label class="form-label">Contact Name *</label>
+                                {{ form.contact_name }}
+                                {% if form.contact_name.errors %}
+                                <div class="invalid-feedback d-block">{{ form.contact_name.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-5">
+                                <label class="form-label">Role/Position</label>
+                                {{ form.role }}
+                            </div>
+                        </div>
+                        <div class="row mb-4">
+                            <div class="col-md-4">
+                                <label class="form-label">Phone</label>
+                                {{ form.phone }}
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Email</label>
+                                {{ form.email }}
+                                {% if form.email.errors %}
+                                <div class="invalid-feedback d-block">{{ form.email.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Address</label>
+                                {{ form.address }}
+                            </div>
+                        </div>
+
+                        <!-- Call Details -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-chat-dots"></i> Call Details
+                        </h5>
+                        <div class="row mb-3">
+                            <div class="col-md-4">
+                                <label class="form-label">Goal *</label>
+                                {{ form.goal }}
+                            </div>
+                            <div class="col-md-8">
+                                <label class="form-label">Comments/Notes</label>
+                                {{ form.comments }}
+                            </div>
+                        </div>
+
+                        <!-- Scheduled Next Action -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-calendar-event"></i> Scheduled Next Action
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-4">
+                                <label class="form-label">Next Action Date</label>
+                                {{ form.next_action_date }}
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Next Action Type</label>
+                                {{ form.next_action_type }}
+                            </div>
+                        </div>
+
+                        <!-- Submit Buttons -->
+                        <div class="d-flex justify-content-end gap-2 border-top pt-3">
+                            <a href="{% url 'reports:sales_call_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-check-lg"></i> {{ button_text }}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

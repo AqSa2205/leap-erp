@@ -1,17 +1,22 @@
-from django.shortcuts import render, redirect
+from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.http import HttpResponse
-from django.db.models import Sum, Count
+from django.db.models import Sum, Count, Q
+from django.core.paginator import Paginator
+from django.views.generic import ListView, CreateView, UpdateView, DeleteView, DetailView
+from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.urls import reverse_lazy
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from dateutil.parser import parse as parse_date
 
 from projects.models import Project, Region, ProjectStatus
 from accounts.decorators import manager_or_admin_required
-from .models import Vendor, EPC, Exhibition, ProcurementPortal, Certification, SalesContact
+from .models import Vendor, EPC, Exhibition, ProcurementPortal, Certification, SalesContact, SalesCallReport
+from .forms import SalesCallReportForm, SalesCallReportFilterForm
 
 
 @login_required
@@ -393,3 +398,243 @@ def annual_report(request):
     }
 
     return render(request, 'reports/annual_report.html', context)
+
+
+# ============================================
+# Sales Call Report Views
+# ============================================
+
+class SalesCallReportListView(LoginRequiredMixin, ListView):
+    """List all sales call reports with filtering and role-based access"""
+    model = SalesCallReport
+    template_name = 'reports/sales_call_list.html'
+    context_object_name = 'reports'
+    paginate_by = 25
+
+    def get_queryset(self):
+        user = self.request.user
+
+        # Role-based filtering
+        if user.is_admin_user:
+            queryset = SalesCallReport.objects.all()
+        elif user.is_manager_user:
+            # Managers see reports from all sales reps
+            queryset = SalesCallReport.objects.all()
+        else:
+            # Sales reps only see their own reports
+            queryset = SalesCallReport.objects.filter(sales_rep=user)
+
+        queryset = queryset.select_related('sales_rep')
+
+        # Apply filters
+        search = self.request.GET.get('search')
+        date_from = self.request.GET.get('date_from')
+        date_to = self.request.GET.get('date_to')
+        action_type = self.request.GET.get('action_type')
+        contact_type = self.request.GET.get('contact_type')
+        system_category = self.request.GET.get('system_category')
+        goal = self.request.GET.get('goal')
+        sales_rep_id = self.request.GET.get('sales_rep')
+
+        if search:
+            queryset = queryset.filter(
+                Q(company_name__icontains=search) |
+                Q(contact_name__icontains=search) |
+                Q(email__icontains=search) |
+                Q(comments__icontains=search)
+            )
+
+        if date_from:
+            queryset = queryset.filter(call_date__gte=date_from)
+
+        if date_to:
+            queryset = queryset.filter(call_date__lte=date_to)
+
+        if action_type:
+            queryset = queryset.filter(action_type=action_type)
+
+        if contact_type:
+            queryset = queryset.filter(contact_type=contact_type)
+
+        if system_category:
+            queryset = queryset.filter(system_categories__icontains=system_category)
+
+        if goal:
+            queryset = queryset.filter(goal=goal)
+
+        if sales_rep_id and (user.is_admin_user or user.is_manager_user):
+            queryset = queryset.filter(sales_rep_id=sales_rep_id)
+
+        return queryset.order_by('-call_date', '-created_at')
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['filter_form'] = SalesCallReportFilterForm(
+            self.request.GET,
+            user=self.request.user
+        )
+        context['total_count'] = self.get_queryset().count()
+
+        # Summary stats
+        queryset = self.get_queryset()
+        context['today_count'] = queryset.filter(call_date=date.today()).count()
+        context['this_week_count'] = queryset.filter(
+            call_date__gte=date.today() - timedelta(days=7)
+        ).count()
+
+        return context
+
+
+class SalesCallReportCreateView(LoginRequiredMixin, CreateView):
+    """Create a new sales call report"""
+    model = SalesCallReport
+    form_class = SalesCallReportForm
+    template_name = 'reports/sales_call_form.html'
+    success_url = reverse_lazy('reports:sales_call_list')
+
+    def get_initial(self):
+        initial = super().get_initial()
+        initial['call_date'] = date.today()
+        return initial
+
+    def form_valid(self, form):
+        form.instance.sales_rep = self.request.user
+        messages.success(self.request, 'Sales call report created successfully.')
+        return super().form_valid(form)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['title'] = 'Add Sales Call Report'
+        context['button_text'] = 'Save Report'
+        return context
+
+
+class SalesCallReportUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
+    """Update a sales call report"""
+    model = SalesCallReport
+    form_class = SalesCallReportForm
+    template_name = 'reports/sales_call_form.html'
+    success_url = reverse_lazy('reports:sales_call_list')
+
+    def test_func(self):
+        report = self.get_object()
+        user = self.request.user
+        # Only allow editing own reports or admin/manager
+        return user.is_admin_user or user.is_manager_user or report.sales_rep == user
+
+    def form_valid(self, form):
+        messages.success(self.request, 'Sales call report updated successfully.')
+        return super().form_valid(form)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['title'] = 'Edit Sales Call Report'
+        context['button_text'] = 'Update Report'
+        return context
+
+
+class SalesCallReportDetailView(LoginRequiredMixin, UserPassesTestMixin, DetailView):
+    """View sales call report details"""
+    model = SalesCallReport
+    template_name = 'reports/sales_call_detail.html'
+    context_object_name = 'report'
+
+    def test_func(self):
+        report = self.get_object()
+        user = self.request.user
+        return user.is_admin_user or user.is_manager_user or report.sales_rep == user
+
+
+class SalesCallReportDeleteView(LoginRequiredMixin, UserPassesTestMixin, DeleteView):
+    """Delete a sales call report"""
+    model = SalesCallReport
+    template_name = 'reports/sales_call_confirm_delete.html'
+    success_url = reverse_lazy('reports:sales_call_list')
+
+    def test_func(self):
+        report = self.get_object()
+        user = self.request.user
+        # Admin and Manager can delete any, Sales Rep can only delete their own
+        return user.is_admin_user or user.is_manager_user or report.sales_rep == user
+
+    def form_valid(self, form):
+        messages.success(self.request, 'Sales call report deleted successfully.')
+        return super().form_valid(form)
+
+
+@login_required
+def export_sales_call_reports(request):
+    """Export sales call reports to Excel"""
+    user = request.user
+
+    # Get queryset based on role
+    if user.is_admin_user:
+        queryset = SalesCallReport.objects.all()
+    elif user.is_manager_user:
+        queryset = SalesCallReport.objects.all()
+    else:
+        queryset = SalesCallReport.objects.filter(sales_rep=user)
+
+    # Apply filters from request
+    date_from = request.GET.get('date_from')
+    date_to = request.GET.get('date_to')
+
+    if date_from:
+        queryset = queryset.filter(call_date__gte=date_from)
+    if date_to:
+        queryset = queryset.filter(call_date__lte=date_to)
+
+    queryset = queryset.select_related('sales_rep').order_by('-call_date')
+
+    # Create workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sales Call Reports"
+
+    # Header style
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="1a1c2c", end_color="1a1c2c", fill_type="solid")
+
+    # Headers
+    headers = [
+        'Date', 'Sales Rep', 'Action Type', 'Contact Type', 'System',
+        'Company', 'Contact Name', 'Title', 'Role', 'Phone', 'Email',
+        'Goal', 'Comments', 'Next Action Date', 'Next Action Type'
+    ]
+
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+
+    # Write data
+    for row, report in enumerate(queryset, 2):
+        data = [
+            report.call_date.strftime('%Y-%m-%d'),
+            str(report.sales_rep),
+            report.get_action_type_display(),
+            report.get_contact_type_display(),
+            report.get_system_category_display(),
+            report.company_name,
+            report.contact_name,
+            report.get_title_display() if report.title else '',
+            report.role,
+            report.phone,
+            report.email,
+            report.get_goal_display(),
+            report.comments,
+            report.next_action_date.strftime('%Y-%m-%d') if report.next_action_date else '',
+            report.get_next_action_type_display() if report.next_action_type else ''
+        ]
+        for col, value in enumerate(data, 1):
+            ws.cell(row=row, column=col, value=value)
+
+    # Response
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    filename = f"sales_call_reports_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    wb.save(response)
+
+    return response

@@ -275,6 +275,43 @@
                 display: block;
             }
         }
+
+        /* Clock widget at bottom right */
+        .clock-widget {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: linear-gradient(135deg, var(--leap-red), var(--leap-red-dark));
+            color: #fff;
+            padding: 12px 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(196, 30, 58, 0.3);
+            z-index: 1000;
+            font-family: 'Segoe UI', sans-serif;
+            min-width: 180px;
+            text-align: center;
+        }
+        .clock-widget .greeting {
+            font-size: 0.85rem;
+            opacity: 0.9;
+            margin-bottom: 4px;
+        }
+        .clock-widget .time {
+            font-size: 1.5rem;
+            font-weight: 600;
+            letter-spacing: 1px;
+        }
+        .clock-widget .date {
+            font-size: 0.75rem;
+            opacity: 0.8;
+            margin-top: 4px;
+        }
+
+        /* Welcome greeting in navbar */
+        .welcome-greeting {
+            color: var(--leap-red);
+            font-weight: 500;
+        }
     </style>
     {% block extra_css %}{% endblock %}
 </head>
@@ -326,6 +363,11 @@
                     <i class="bi bi-file-earmark-bar-graph"></i> <span>Reports</span>
                 </a>
             </li>
+            <li class="nav-item">
+                <a class="nav-link {% if 'sales_call' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'reports:sales_call_list' %}" data-title="Sales Call Reports">
+                    <i class="bi bi-telephone"></i> <span>Sales Call Reports</span>
+                </a>
+            </li>
             {% if user.can_import_excel %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'import' %}active{% endif %}" href="{% url 'reports:import' %}" data-title="Import Excel">
@@ -336,6 +378,70 @@
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'export' %}active{% endif %}" href="{% url 'reports:export' %}" data-title="Export Excel">
                     <i class="bi bi-download"></i> <span>Export Excel</span>
+                </a>
+            </li>
+        </ul>
+
+        <div class="nav-section">Database</div>
+        <ul class="nav flex-column">
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'contacts' and request.resolver_match.url_name == 'contact_list' %}active{% endif %}" href="{% url 'contacts:contact_list' %}" data-title="All Contacts">
+                    <i class="bi bi-database"></i> <span>All Contacts</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'cctv' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'cctv' %}" data-title="CCTV">
+                    <i class="bi bi-camera-video"></i> <span>CCTV</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'radios' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'radios' %}" data-title="Radios">
+                    <i class="bi bi-broadcast"></i> <span>Radios</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'acs' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'acs' %}" data-title="ACS">
+                    <i class="bi bi-shield-lock"></i> <span>ACS</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'iot' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'iot' %}" data-title="IoT">
+                    <i class="bi bi-cpu"></i> <span>IoT</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'iiot' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'iiot' %}" data-title="IIoT">
+                    <i class="bi bi-gear-wide-connected"></i> <span>IIoT</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'servers' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'servers' %}" data-title="Servers">
+                    <i class="bi bi-hdd-rack"></i> <span>Servers</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'network_security' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'network_security' %}" data-title="Network & Security">
+                    <i class="bi bi-diagram-3"></i> <span>Network & Security</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'firewall' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'firewall' %}" data-title="Firewall">
+                    <i class="bi bi-bricks"></i> <span>Firewall</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'cyber_security' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'cyber_security' %}" data-title="Cyber Security">
+                    <i class="bi bi-shield-check"></i> <span>Cyber Security</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'windows' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'windows' %}" data-title="Windows">
+                    <i class="bi bi-windows"></i> <span>Windows</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'ot' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'ot' %}" data-title="OT">
+                    <i class="bi bi-tools"></i> <span>OT</span>
                 </a>
             </li>
         </ul>
@@ -365,7 +471,10 @@
                 <button class="btn btn-link d-lg-none text-dark me-2" id="sidebarToggle">
                     <i class="bi bi-list fs-4"></i>
                 </button>
-                <h5 class="mb-0 text-dark">{% block page_title %}{% endblock %}</h5>
+                <div>
+                    <span class="welcome-greeting" id="navbarGreeting">Hello</span>, <strong>{{ user.first_name|default:user.username }}</strong>!
+                    <h5 class="mb-0 text-dark mt-1">{% block page_title %}{% endblock %}</h5>
+                </div>
             </div>
             <div class="dropdown">
                 <button class="btn btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
@@ -403,6 +512,13 @@
 
             {% block content %}{% endblock %}
         </div>
+    </div>
+
+    <!-- Clock Widget -->
+    <div class="clock-widget" id="clockWidget">
+        <div class="greeting" id="clockGreeting">Hello</div>
+        <div class="time" id="clockTime">00:00:00</div>
+        <div class="date" id="clockDate">Loading...</div>
     </div>
     {% else %}
     <!-- Non-authenticated content -->
@@ -454,6 +570,54 @@
                 collapseIcon.classList.add('bi-chevron-right');
             }
         }
+
+        // Clock and Greeting functionality
+        function getGreeting(hour) {
+            if (hour >= 5 && hour < 12) {
+                return 'Good Morning';
+            } else if (hour >= 12 && hour < 16) {
+                return 'Good Afternoon';
+            } else if (hour >= 16 && hour < 19) {
+                return 'Good Evening';
+            } else {
+                return 'Hello';
+            }
+        }
+
+        function updateClock() {
+            const now = new Date();
+            const hours = now.getHours();
+            const minutes = now.getMinutes().toString().padStart(2, '0');
+            const seconds = now.getSeconds().toString().padStart(2, '0');
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            const displayHours = (hours % 12 || 12).toString().padStart(2, '0');
+
+            const greeting = getGreeting(hours);
+
+            // Update clock widget
+            const clockTime = document.getElementById('clockTime');
+            const clockGreeting = document.getElementById('clockGreeting');
+            const clockDate = document.getElementById('clockDate');
+            const navbarGreeting = document.getElementById('navbarGreeting');
+
+            if (clockTime) {
+                clockTime.textContent = `${displayHours}:${minutes}:${seconds} ${ampm}`;
+            }
+            if (clockGreeting) {
+                clockGreeting.textContent = greeting;
+            }
+            if (clockDate) {
+                const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+                clockDate.textContent = now.toLocaleDateString('en-GB', options);
+            }
+            if (navbarGreeting) {
+                navbarGreeting.textContent = greeting;
+            }
+        }
+
+        // Initialize clock and update every second
+        updateClock();
+        setInterval(updateClock, 1000);
     </script>
     {% block extra_js %}{% endblock %}
 </body>

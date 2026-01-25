@@ -157,3 +157,152 @@ class SalesContact(models.Model):
 
     def __str__(self):
         return f"{self.company_name} - {self.contact_name}"
+
+
+class SalesCallReport(models.Model):
+    """Daily Sales Call Reports entered by Sales Representatives"""
+
+    # Action Type choices
+    ACTION_TYPE_CHOICES = [
+        ('email_call', 'Email/Call'),
+        ('meeting', 'Meeting'),
+        ('site_visit', 'Site Visit'),
+        ('presentation', 'Presentation'),
+        ('follow_up', 'Follow Up'),
+        ('proposal_sent', 'Proposal Sent'),
+        ('negotiation', 'Negotiation'),
+        ('other', 'Other'),
+    ]
+
+    # Contact Information/Type choices
+    CONTACT_TYPE_CHOICES = [
+        ('direct', 'Direct'),
+        ('referral', 'Referral'),
+        ('new_customer', 'New Customer'),
+        ('existing_customer', 'Existing Customer'),
+        ('cold_call', 'Cold Call'),
+        ('inbound', 'Inbound Inquiry'),
+        ('trade_show', 'Trade Show Lead'),
+        ('online', 'Online Lead'),
+        ('other', 'Other'),
+    ]
+
+    # Systems/Category choices (based on Excel tabs)
+    SYSTEM_CATEGORY_CHOICES = [
+        ('cctv', 'CCTV'),
+        ('radios', 'Radios'),
+        ('acs', 'Access Control Systems (ACS)'),
+        ('iot', 'IoT'),
+        ('iiot', 'Industrial IoT (IIoT)'),
+        ('servers', 'Servers'),
+        ('network_security', 'Network & Security'),
+        ('firewall', 'Firewall'),
+        ('cyber_security', 'Cyber Security'),
+        ('windows', 'Windows'),
+        ('ot', 'Operational Technology (OT)'),
+        ('solar', 'Solar'),
+        ('energy', 'Energy'),
+        ('council', 'Council'),
+        ('education', 'Education'),
+        ('healthcare', 'Healthcare'),
+        ('manufacturing', 'Manufacturing'),
+        ('oil_gas', 'Oil & Gas'),
+        ('other', 'Other'),
+    ]
+
+    # Title choices
+    TITLE_CHOICES = [
+        ('mr', 'Mr'),
+        ('mrs', 'Mrs'),
+        ('ms', 'Ms'),
+        ('dr', 'Dr'),
+        ('prof', 'Prof'),
+        ('other', 'Other'),
+    ]
+
+    # Goal choices
+    GOAL_CHOICES = [
+        ('company_intro', 'Company Introduction'),
+        ('product_demo', 'Product Demo'),
+        ('requirement_gathering', 'Requirement Gathering'),
+        ('proposal_discussion', 'Proposal Discussion'),
+        ('pricing_negotiation', 'Pricing Negotiation'),
+        ('contract_signing', 'Contract Signing'),
+        ('follow_up', 'Follow Up'),
+        ('relationship_building', 'Relationship Building'),
+        ('technical_discussion', 'Technical Discussion'),
+        ('complaint_resolution', 'Complaint Resolution'),
+        ('other', 'Other'),
+    ]
+
+    # Next Action Type choices
+    NEXT_ACTION_CHOICES = [
+        ('send_email', 'Send Email'),
+        ('make_call', 'Make Call'),
+        ('schedule_meeting', 'Schedule Meeting'),
+        ('send_proposal', 'Send Proposal'),
+        ('follow_up', 'Follow Up'),
+        ('site_visit', 'Site Visit'),
+        ('demo_scheduled', 'Demo Scheduled'),
+        ('waiting_response', 'Waiting for Response'),
+        ('meeting_done', 'Meeting Done/Feedback Received'),
+        ('closed_won', 'Closed - Won'),
+        ('closed_lost', 'Closed - Lost'),
+        ('on_hold', 'On Hold'),
+        ('other', 'Other'),
+    ]
+
+    # Core fields
+    call_date = models.DateField(verbose_name="Call Date")
+    action_type = models.CharField(max_length=30, choices=ACTION_TYPE_CHOICES, default='email_call', verbose_name="Action Type")
+    contact_type = models.CharField(max_length=30, choices=CONTACT_TYPE_CHOICES, default='direct', verbose_name="Contact Information/Type")
+    system_categories = models.TextField(default='other', verbose_name="Systems Relates", help_text="Comma-separated category codes")
+
+    # Company Information
+    company_name = models.CharField(max_length=255, verbose_name="Company")
+
+    # Contact Person Details
+    contact_name = models.CharField(max_length=255, verbose_name="Contact Name")
+    title = models.CharField(max_length=10, choices=TITLE_CHOICES, blank=True, verbose_name="Title")
+    role = models.CharField(max_length=255, blank=True, verbose_name="Role/Position")
+    address = models.TextField(blank=True, verbose_name="Address")
+    phone = models.CharField(max_length=100, blank=True, verbose_name="Phone")
+    email = models.EmailField(blank=True, verbose_name="Email")
+
+    # Call Details
+    goal = models.CharField(max_length=30, choices=GOAL_CHOICES, default='company_intro', verbose_name="Goal")
+    comments = models.TextField(blank=True, verbose_name="Comments/Notes")
+
+    # Scheduled Next Action
+    next_action_date = models.DateField(null=True, blank=True, verbose_name="Next Action Date")
+    next_action_type = models.CharField(max_length=30, choices=NEXT_ACTION_CHOICES, blank=True, verbose_name="Next Action Type")
+
+    # Tracking
+    sales_rep = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='sales_call_reports',
+        verbose_name="Sales Representative"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-call_date', '-created_at']
+        verbose_name = 'Sales Call Report'
+        verbose_name_plural = 'Sales Call Reports'
+
+    def __str__(self):
+        return f"{self.call_date} - {self.company_name} ({self.sales_rep})"
+
+    def get_system_categories_list(self):
+        """Return list of selected category codes."""
+        if self.system_categories:
+            return [cat.strip() for cat in self.system_categories.split(',') if cat.strip()]
+        return []
+
+    def get_system_categories_display(self):
+        """Return display names for selected categories."""
+        category_dict = dict(self.SYSTEM_CATEGORY_CHOICES)
+        selected = self.get_system_categories_list()
+        return [category_dict.get(cat, cat) for cat in selected]

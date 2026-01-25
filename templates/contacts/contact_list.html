@@ -1,0 +1,197 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Contact Database{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Contact Database</h1>
+            <p class="text-muted mb-0">Centralized contact information for all categories</p>
+        </div>
+        <div>
+            <a href="{% url 'contacts:contact_export' %}?{{ request.GET.urlencode }}" class="btn btn-outline-secondary me-2">
+                <i class="bi bi-download"></i> Export
+            </a>
+            <a href="{% url 'contacts:contact_import' %}" class="btn btn-outline-primary me-2">
+                <i class="bi bi-upload"></i> Import
+            </a>
+            <a href="{% url 'contacts:contact_create' %}" class="btn btn-primary">
+                <i class="bi bi-plus-lg"></i> Add Contact
+            </a>
+        </div>
+    </div>
+
+    <!-- Category Cards -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <h6 class="card-title mb-3">Filter by Category</h6>
+                    <div class="d-flex flex-wrap gap-2">
+                        <a href="{% url 'contacts:contact_list' %}" class="btn {% if not current_category %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+                            All <span class="badge bg-light text-dark ms-1">{{ total_count }}</span>
+                        </a>
+                        {% for cat_code, cat_name in category_choices %}
+                        <a href="{% url 'contacts:contact_by_category' cat_code %}"
+                           class="btn {% if current_category == cat_code %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+                            {{ cat_name }}
+                            {% if category_counts %}
+                            <span class="badge bg-light text-dark ms-1">{{ category_counts|default_if_none:"0" }}</span>
+                            {% endif %}
+                        </a>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <form method="get" class="row g-3">
+                <div class="col-md-4">
+                    {{ filter_form.search }}
+                </div>
+                <div class="col-md-2">
+                    {{ filter_form.category }}
+                </div>
+                <div class="col-md-2">
+                    {{ filter_form.status }}
+                </div>
+                <div class="col-md-2">
+                    {{ filter_form.region }}
+                </div>
+                <div class="col-md-2">
+                    <button type="submit" class="btn btn-primary w-100">Filter</button>
+                </div>
+            </form>
+            {% if request.GET %}
+            <div class="mt-2">
+                <a href="{% url 'contacts:contact_list' %}" class="btn btn-sm btn-outline-secondary">Clear Filters</a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Contacts Table -->
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Category</th>
+                            <th>Organisation</th>
+                            <th>Contact</th>
+                            <th>Email</th>
+                            <th>Phone</th>
+                            <th>Region</th>
+                            <th>Status</th>
+                            <th width="100">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for contact in contacts %}
+                        <tr>
+                            <td>
+                                <span class="badge bg-secondary">{{ contact.get_category_display }}</span>
+                            </td>
+                            <td>
+                                <a href="{% url 'contacts:contact_detail' contact.pk %}" class="text-decoration-none">
+                                    <strong>{{ contact.organisation_name|truncatechars:35 }}</strong>
+                                </a>
+                                {% if contact.title %}
+                                <br><small class="text-muted">{{ contact.title|truncatechars:40 }}</small>
+                                {% endif %}
+                            </td>
+                            <td>{{ contact.contact_name|default:"-"|truncatechars:25 }}</td>
+                            <td>
+                                {% if contact.contact_email %}
+                                <a href="mailto:{{ contact.contact_email }}">{{ contact.contact_email|truncatechars:25 }}</a>
+                                {% else %}-{% endif %}
+                            </td>
+                            <td>
+                                {% if contact.contact_telephone %}
+                                <a href="tel:{{ contact.contact_telephone }}">{{ contact.contact_telephone }}</a>
+                                {% else %}-{% endif %}
+                            </td>
+                            <td>{{ contact.region|default:"-"|truncatechars:20 }}</td>
+                            <td>
+                                {% if contact.status == 'awarded' %}
+                                <span class="badge bg-success">Awarded</span>
+                                {% elif contact.status == 'open' %}
+                                <span class="badge bg-primary">Open</span>
+                                {% elif contact.status == 'closed' %}
+                                <span class="badge bg-secondary">Closed</span>
+                                {% elif contact.status == 'pending' %}
+                                <span class="badge bg-warning text-dark">Pending</span>
+                                {% else %}
+                                <span class="badge bg-light text-dark">Unknown</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="btn-group btn-group-sm">
+                                    <a href="{% url 'contacts:contact_detail' contact.pk %}" class="btn btn-outline-primary" title="View">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
+                                    <a href="{% url 'contacts:contact_update' contact.pk %}" class="btn btn-outline-secondary" title="Edit">
+                                        <i class="bi bi-pencil"></i>
+                                    </a>
+                                    <a href="{% url 'contacts:contact_delete' contact.pk %}" class="btn btn-outline-danger" title="Delete">
+                                        <i class="bi bi-trash"></i>
+                                    </a>
+                                </div>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="8" class="text-center py-5">
+                                <i class="bi bi-database-x display-4 text-muted"></i>
+                                <p class="text-muted mt-3">No contacts found in the database.</p>
+                                <a href="{% url 'contacts:contact_create' %}" class="btn btn-primary me-2">
+                                    <i class="bi bi-plus-lg"></i> Add Contact
+                                </a>
+                                <a href="{% url 'contacts:contact_import' %}" class="btn btn-outline-primary">
+                                    <i class="bi bi-upload"></i> Import from Excel
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pagination -->
+    {% if page_obj.has_other_pages %}
+    <nav class="mt-4">
+        <ul class="pagination justify-content-center">
+            {% if page_obj.has_previous %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page_obj.previous_page_number }}&{{ request.GET.urlencode }}">Previous</a>
+            </li>
+            {% endif %}
+
+            {% for num in page_obj.paginator.page_range %}
+                {% if page_obj.number == num %}
+                <li class="page-item active"><span class="page-link">{{ num }}</span></li>
+                {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                <li class="page-item"><a class="page-link" href="?page={{ num }}&{{ request.GET.urlencode }}">{{ num }}</a></li>
+                {% endif %}
+            {% endfor %}
+
+            {% if page_obj.has_next %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page_obj.next_page_number }}&{{ request.GET.urlencode }}">Next</a>
+            </li>
+            {% endif %}
+        </ul>
+    </nav>
+    {% endif %}
+</div>
+{% endblock %}

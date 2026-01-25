@@ -1,0 +1,170 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <!-- Header -->
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">{{ title }}</h1>
+                    <p class="text-muted mb-0">Enter contact information for the database</p>
+                </div>
+                <a href="{% url 'contacts:contact_list' %}" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Back to List
+                </a>
+            </div>
+
+            <!-- Form Card -->
+            <div class="card">
+                <div class="card-body">
+                    <form method="post" novalidate>
+                        {% csrf_token %}
+
+                        <!-- Category & Notice Information -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-tag"></i> Category & Notice Information
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-3">
+                                <label class="form-label">Category *</label>
+                                {{ form.category }}
+                                {% if form.category.errors %}
+                                <div class="invalid-feedback d-block">{{ form.category.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Notice Type</label>
+                                {{ form.notice_type }}
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Status</label>
+                                {{ form.status }}
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">SR#</label>
+                                {{ form.serial_number }}
+                            </div>
+                        </div>
+                        <div class="row mb-4">
+                            <div class="col-md-6">
+                                <label class="form-label">Notice Identifier</label>
+                                {{ form.notice_identifier }}
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Published Date</label>
+                                {{ form.published_date }}
+                            </div>
+                        </div>
+
+                        <!-- Organisation Information -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-building"></i> Organisation Information
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-12 mb-3">
+                                <label class="form-label">Organisation Name *</label>
+                                {{ form.organisation_name }}
+                                {% if form.organisation_name.errors %}
+                                <div class="invalid-feedback d-block">{{ form.organisation_name.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-12 mb-3">
+                                <label class="form-label">Title/Project</label>
+                                {{ form.title }}
+                            </div>
+                            <div class="col-md-12">
+                                <label class="form-label">Description</label>
+                                {{ form.description }}
+                            </div>
+                        </div>
+
+                        <!-- Location Information -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-geo-alt"></i> Location Information
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-2">
+                                <label class="form-label">Nationwide</label>
+                                <div class="form-check mt-2">
+                                    {{ form.nationwide }}
+                                    <label class="form-check-label">Yes</label>
+                                </div>
+                            </div>
+                            <div class="col-md-5">
+                                <label class="form-label">Region</label>
+                                {{ form.region }}
+                            </div>
+                            <div class="col-md-5">
+                                <label class="form-label">Postcode</label>
+                                {{ form.postcode }}
+                            </div>
+                        </div>
+
+                        <!-- Contact Details -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-person"></i> Contact Details
+                        </h5>
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label">Contact Name</label>
+                                {{ form.contact_name }}
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Contact Email</label>
+                                {{ form.contact_email }}
+                                {% if form.contact_email.errors %}
+                                <div class="invalid-feedback d-block">{{ form.contact_email.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="row mb-4">
+                            <div class="col-md-4">
+                                <label class="form-label">Contact Telephone</label>
+                                {{ form.contact_telephone }}
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Contact Website</label>
+                                {{ form.contact_website }}
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Contact Address</label>
+                                {{ form.contact_address }}
+                            </div>
+                        </div>
+
+                        <!-- Additional Information -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-info-circle"></i> Additional Information
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-4">
+                                <label class="form-label">CPV Codes</label>
+                                {{ form.cpv_codes }}
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Last Contact</label>
+                                {{ form.last_contact }}
+                            </div>
+                            <div class="col-md-12 mt-3">
+                                <label class="form-label">Comments/Notes</label>
+                                {{ form.comments }}
+                            </div>
+                        </div>
+
+                        <!-- Submit Buttons -->
+                        <div class="d-flex justify-content-end gap-2 border-top pt-3">
+                            <a href="{% url 'contacts:contact_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-check-lg"></i> {{ button_text }}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
