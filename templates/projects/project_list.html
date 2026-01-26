@@ -94,10 +94,6 @@
                 <label class="form-label small text-muted fw-semibold">Region</label>
                 {{ filter_form.region }}
             </div>
-            <div class="col-lg-1 col-md-3 col-6">
-                <label class="form-label small text-muted fw-semibold">Year</label>
-                {{ filter_form.year }}
-            </div>
             <div class="col-lg-2 col-md-3 col-6">
                 <label class="form-label small text-muted fw-semibold">Status</label>
                 {{ filter_form.status }}
@@ -142,7 +138,6 @@
                         <th>Reference</th>
                         <th>Project Name</th>
                         <th>Region</th>
-                        <th>Year</th>
                         <th>Status</th>
                         <th class="text-end">Est. Value</th>
                         <th class="text-end">Actual Sales</th>
@@ -172,13 +167,6 @@
                             <span class="badge region-badge region-pa">PA</span>
                             {% else %}
                             <span class="badge region-badge bg-secondary">{{ project.region.code }}</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if project.year %}
-                            <span class="badge bg-dark">{{ project.year }}</span>
-                            {% else %}
-                            <span class="text-muted">-</span>
                             {% endif %}
                         </td>
                         <td>
@@ -225,7 +213,7 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="9" class="text-center text-muted py-5">
+                        <td colspan="8" class="text-center text-muted py-5">
                             <i class="bi bi-folder-x fs-1 d-block mb-2"></i>
                             No projects found.
                         </td>
