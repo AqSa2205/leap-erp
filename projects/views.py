@@ -54,6 +54,7 @@ class ProjectListView(ProjectPermissionMixin, ListView):
         status = self.request.GET.get('status')
         category = self.request.GET.get('category')
         quarter = self.request.GET.get('quarter')
+        owner = self.request.GET.get('owner')
 
         if search:
             queryset = queryset.filter(
@@ -74,12 +75,14 @@ class ProjectListView(ProjectPermissionMixin, ListView):
             queryset = queryset.filter(status__category=category)
         if quarter:
             queryset = queryset.filter(po_award_quarter=quarter)
+        if owner:
+            queryset = queryset.filter(owner_id=owner)
 
         return queryset.order_by('-updated_at')
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['filter_form'] = ProjectFilterForm(self.request.GET)
+        context['filter_form'] = ProjectFilterForm(self.request.GET, user=self.request.user)
 
         # Add summary stats
         queryset = self.get_queryset()

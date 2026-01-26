@@ -92,6 +92,28 @@ class ProjectFilterForm(forms.Form):
         required=False,
         widget=forms.Select(attrs={'class': 'form-select'})
     )
+    owner = forms.ChoiceField(
+        required=False,
+        widget=forms.Select(attrs={'class': 'form-select'})
+    )
+
+    def __init__(self, *args, user=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Populate owner choices based on user role
+        from accounts.models import User
+        if user and user.is_admin_user:
+            # Admin sees all users
+            users = User.objects.filter(is_active=True).order_by('first_name', 'last_name')
+        elif user and user.is_manager_user:
+            # Manager sees users in their region
+            users = User.objects.filter(is_active=True, region=user.region).order_by('first_name', 'last_name')
+        else:
+            # Sales rep doesn't need owner filter (sees only their own)
+            users = User.objects.none()
+
+        self.fields['owner'].choices = [('', 'All Owners')] + [
+            (u.id, u.get_full_name() or u.username) for u in users
+        ]
 
 
 class DocumentForm(forms.ModelForm):
