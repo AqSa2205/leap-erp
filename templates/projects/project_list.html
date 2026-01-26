@@ -204,7 +204,7 @@
                             <span class="text-muted">-</span>
                             {% endif %}
                         </td>
-                        <td>{{ project.owner.get_full_name|default:project.owner.username|default:'-' }}</td>
+                        <td>{% if project.owner %}{{ project.owner.get_full_name|default:project.owner.username }}{% else %}-{% endif %}</td>
                         <td class="text-center">
                             <div class="btn-group btn-group-sm">
                                 <a href="{% url 'projects:detail' project.pk %}" class="btn btn-outline-dark" title="View">
