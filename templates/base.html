@@ -290,6 +290,11 @@
             font-family: 'Segoe UI', sans-serif;
             min-width: 180px;
             text-align: center;
+            transition: opacity 0.3s ease;
+        }
+        .clock-widget:hover {
+            opacity: 0;
+            pointer-events: none;
         }
         .clock-widget .greeting {
             font-size: 0.85rem;
