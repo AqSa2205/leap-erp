@@ -276,40 +276,31 @@
             }
         }
 
-        /* Clock widget at bottom right */
+        /* Clock widget in top navbar */
         .clock-widget {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
             background: linear-gradient(135deg, var(--leap-red), var(--leap-red-dark));
             color: #fff;
-            padding: 12px 20px;
-            border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(196, 30, 58, 0.3);
-            z-index: 1000;
+            padding: 6px 16px;
+            border-radius: 10px;
             font-family: 'Segoe UI', sans-serif;
-            min-width: 180px;
             text-align: center;
-            transition: opacity 0.3s ease;
-        }
-        .clock-widget:hover {
-            opacity: 0;
-            pointer-events: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
         .clock-widget .greeting {
-            font-size: 0.85rem;
+            font-size: 0.75rem;
             opacity: 0.9;
-            margin-bottom: 4px;
+            display: none;
         }
         .clock-widget .time {
-            font-size: 1.5rem;
+            font-size: 1.1rem;
             font-weight: 600;
             letter-spacing: 1px;
         }
         .clock-widget .date {
-            font-size: 0.75rem;
-            opacity: 0.8;
-            margin-top: 4px;
+            font-size: 0.7rem;
+            opacity: 0.85;
         }
 
         /* Welcome greeting in navbar */
@@ -481,6 +472,10 @@
                     <h5 class="mb-0 text-dark mt-1">{% block page_title %}{% endblock %}</h5>
                 </div>
             </div>
+            <div class="clock-widget" id="clockWidget">
+                <div class="time" id="clockTime">00:00:00</div>
+                <div class="date" id="clockDate">Loading...</div>
+            </div>
             <div class="dropdown">
                 <button class="btn btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
                     <i class="bi bi-person-circle text-danger"></i>
@@ -519,12 +514,6 @@
         </div>
     </div>
 
-    <!-- Clock Widget -->
-    <div class="clock-widget" id="clockWidget">
-        <div class="greeting" id="clockGreeting">Hello</div>
-        <div class="time" id="clockTime">00:00:00</div>
-        <div class="date" id="clockDate">Loading...</div>
-    </div>
     {% else %}
     <!-- Non-authenticated content -->
     <div class="container">
