@@ -68,8 +68,11 @@
             font-size: 1.25rem;
         }
         .sidebar.collapsed .brand-section {
-            padding: 1rem 0.75rem;
+            padding: 1rem 0.5rem;
             text-align: center;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
         }
         .sidebar .nav-link {
             color: var(--leap-dark);
@@ -142,10 +145,15 @@
             padding: 0.5rem;
             border-radius: 4px;
             transition: all 0.2s;
+            flex-shrink: 0;
         }
         .sidebar-toggle-btn:hover {
             color: var(--leap-red);
             background: rgba(196, 30, 58, 0.08);
+        }
+        .sidebar.collapsed .sidebar-toggle-btn {
+            color: var(--leap-red);
+            font-size: 1.1rem;
         }
         .nav-section {
             font-size: 0.7rem;
