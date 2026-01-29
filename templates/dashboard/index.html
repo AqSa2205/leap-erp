@@ -278,23 +278,23 @@
         <div class="summary-strip">
             <div class="row g-0">
                 <div class="col summary-item">
-                    <h2 class="text-dark">{{ overall_stats.total.count|intcomma }}</h2>
+                    <h2 class="text-dark" id="summary-total">{{ overall_stats.total.count|intcomma }}</h2>
                     <small class="text-muted">Total Projects</small>
                 </div>
                 <div class="col summary-item">
-                    <h2 style="color: #1a1a1a;">{{ overall_stats.active.count|intcomma }}</h2>
+                    <h2 style="color: #1a1a1a;" id="summary-active">{{ overall_stats.active.count|intcomma }}</h2>
                     <small class="text-muted">Active Bids</small>
                 </div>
                 <div class="col summary-item">
-                    <h2 style="color: #fd7e14;">{{ overall_stats.hot_leads.count|intcomma }}</h2>
+                    <h2 style="color: #fd7e14;" id="summary-hotleads">{{ overall_stats.hot_leads.count|intcomma }}</h2>
                     <small class="text-muted">Hot Leads</small>
                 </div>
                 <div class="col summary-item">
-                    <h2 class="text-success">{{ overall_stats.won.count|intcomma }}</h2>
+                    <h2 class="text-success" id="summary-won">{{ overall_stats.won.count|intcomma }}</h2>
                     <small class="text-muted">Won</small>
                 </div>
                 <div class="col summary-item">
-                    <h2 style="color: #C41E3A;">{{ overall_stats.lost.count|intcomma }}</h2>
+                    <h2 style="color: #C41E3A;" id="summary-lost">{{ overall_stats.lost.count|intcomma }}</h2>
                     <small class="text-muted">Lost</small>
                 </div>
             </div>
@@ -898,5 +898,54 @@
         },
         options: barOptions
     });
+
+    // Summary strip data per region
+    const summaryData = {
+        lnuk: {
+            total: {{ lnuk.total.count }},
+            active: {{ lnuk.active.count }},
+            hot_leads: {{ lnuk.hot_leads.count }},
+            won: {{ lnuk.won.count }},
+            lost: {{ lnuk.lost.count }}
+        },
+        lna: {
+            total: {{ lna.total.count }},
+            active: {{ lna.active.count }},
+            hot_leads: {{ lna.hot_leads.count }},
+            won: {{ lna.won.count }},
+            lost: {{ lna.lost.count }}
+        },
+        pa: {
+            total: {{ pa.total.count }},
+            active: {{ pa.active.count }},
+            hot_leads: {{ pa.hot_leads.count }},
+            won: {{ pa.won.count }},
+            lost: {{ pa.lost.count }}
+        }
+    };
+
+    function formatNumber(n) {
+        return n.toLocaleString();
+    }
+
+    function updateSummary(region) {
+        const d = summaryData[region];
+        document.getElementById('summary-total').textContent = formatNumber(d.total);
+        document.getElementById('summary-active').textContent = formatNumber(d.active);
+        document.getElementById('summary-hotleads').textContent = formatNumber(d.hot_leads);
+        document.getElementById('summary-won').textContent = formatNumber(d.won);
+        document.getElementById('summary-lost').textContent = formatNumber(d.lost);
+    }
+
+    // Update summary strip when tab changes
+    document.querySelectorAll('#regionTabs button[data-bs-toggle="tab"]').forEach(function(tab) {
+        tab.addEventListener('shown.bs.tab', function(e) {
+            const region = e.target.getAttribute('data-bs-target').replace('#', '');
+            updateSummary(region);
+        });
+    });
+
+    // Set initial state to match active tab
+    updateSummary('lnuk');
 </script>
 {% endblock %}

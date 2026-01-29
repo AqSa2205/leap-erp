@@ -58,4 +58,7 @@ except Exception as e:
     print(f'Could not assign role: {e}')
 "
 
+echo "=== Loading LNA project data ==="
+python manage.py loaddata fixtures/lna_data.json || echo "LNA data may already exist"
+
 echo "=== Build complete ==="
