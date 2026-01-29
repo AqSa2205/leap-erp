@@ -395,59 +395,69 @@
                 </a>
             </li>
             <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'cctv' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'cctv' %}" data-title="CCTV">
-                    <i class="bi bi-camera-video"></i> <span>CCTV</span>
+                <a class="nav-link d-flex justify-content-between align-items-center" data-bs-toggle="collapse" href="#dbCategories" role="button" aria-expanded="{% if request.resolver_match.url_name == 'contact_by_category' %}true{% else %}false{% endif %}">
+                    <span><i class="bi bi-grid"></i> <span>Categories</span></span>
+                    <i class="bi bi-chevron-down small"></i>
                 </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'radios' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'radios' %}" data-title="Radios">
-                    <i class="bi bi-broadcast"></i> <span>Radios</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'acs' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'acs' %}" data-title="ACS">
-                    <i class="bi bi-shield-lock"></i> <span>ACS</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'iot' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'iot' %}" data-title="IoT">
-                    <i class="bi bi-cpu"></i> <span>IoT</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'iiot' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'iiot' %}" data-title="IIoT">
-                    <i class="bi bi-gear-wide-connected"></i> <span>IIoT</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'servers' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'servers' %}" data-title="Servers">
-                    <i class="bi bi-hdd-rack"></i> <span>Servers</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'network_security' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'network_security' %}" data-title="Network & Security">
-                    <i class="bi bi-diagram-3"></i> <span>Network & Security</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'firewall' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'firewall' %}" data-title="Firewall">
-                    <i class="bi bi-bricks"></i> <span>Firewall</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'cyber_security' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'cyber_security' %}" data-title="Cyber Security">
-                    <i class="bi bi-shield-check"></i> <span>Cyber Security</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'windows' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'windows' %}" data-title="Windows">
-                    <i class="bi bi-windows"></i> <span>Windows</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'ot' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'ot' %}" data-title="OT">
-                    <i class="bi bi-tools"></i> <span>OT</span>
-                </a>
+                <div class="collapse {% if request.resolver_match.url_name == 'contact_by_category' %}show{% endif %}" id="dbCategories">
+                    <ul class="nav flex-column ms-3">
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'cctv' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'cctv' %}">
+                                <i class="bi bi-camera-video"></i> <span>CCTV</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'radios' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'radios' %}">
+                                <i class="bi bi-broadcast"></i> <span>Radios</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'acs' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'acs' %}">
+                                <i class="bi bi-shield-lock"></i> <span>ACS</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'iot' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'iot' %}">
+                                <i class="bi bi-cpu"></i> <span>IoT</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'iiot' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'iiot' %}">
+                                <i class="bi bi-gear-wide-connected"></i> <span>IIoT</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'servers' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'servers' %}">
+                                <i class="bi bi-hdd-rack"></i> <span>Servers</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'network_security' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'network_security' %}">
+                                <i class="bi bi-diagram-3"></i> <span>Network & Security</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'firewall' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'firewall' %}">
+                                <i class="bi bi-bricks"></i> <span>Firewall</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'cyber_security' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'cyber_security' %}">
+                                <i class="bi bi-shield-check"></i> <span>Cyber Security</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'windows' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'windows' %}">
+                                <i class="bi bi-windows"></i> <span>Windows</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'ot' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'ot' %}">
+                                <i class="bi bi-tools"></i> <span>OT</span>
+                            </a>
+                        </li>
+                    </ul>
+                </div>
             </li>
         </ul>
 
