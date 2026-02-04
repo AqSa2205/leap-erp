@@ -120,14 +120,18 @@ class SalesCallReportFilterForm(forms.Form):
         widget=forms.Select(attrs={'class': 'form-select'})
     )
 
-    def __init__(self, *args, user=None, **kwargs):
+    def __init__(self, *args, user=None, region_code=None, **kwargs):
         super().__init__(*args, **kwargs)
         # Populate sales_rep choices based on user role
         from accounts.models import User
         if user and (user.is_admin_user or user.is_manager_user):
-            reps = User.objects.filter(role__name='sales_rep').order_by('first_name', 'last_name')
+            reps = User.objects.select_related('region').order_by(
+                'first_name', 'last_name'
+            )
+            if region_code:
+                reps = reps.filter(region__code=region_code)
             self.fields['sales_rep'].choices = [('', 'All Sales Reps')] + [
-                (rep.id, str(rep)) for rep in reps
+                (rep.id, rep.get_full_name() or rep.username) for rep in reps
             ]
         else:
             # Hide sales_rep filter for regular sales reps

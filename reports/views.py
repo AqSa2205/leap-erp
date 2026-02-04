@@ -418,13 +418,16 @@ class SalesCallReportListView(LoginRequiredMixin, ListView):
         if user.is_admin_user:
             queryset = SalesCallReport.objects.all()
         elif user.is_manager_user:
-            # Managers see reports from all sales reps
             queryset = SalesCallReport.objects.all()
         else:
-            # Sales reps only see their own reports
             queryset = SalesCallReport.objects.filter(sales_rep=user)
 
-        queryset = queryset.select_related('sales_rep')
+        queryset = queryset.select_related('sales_rep', 'sales_rep__region')
+
+        # Region filter
+        region_code = self.request.GET.get('region')
+        if region_code and (user.is_admin_user or user.is_manager_user):
+            queryset = queryset.filter(sales_rep__region__code=region_code)
 
         # Apply filters
         search = self.request.GET.get('search')
@@ -469,14 +472,25 @@ class SalesCallReportListView(LoginRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+
+        user = self.request.user
+        active_region = self.request.GET.get('region', '')
+
+        # Regions for tabs (admin/manager only)
+        if user.is_admin_user or user.is_manager_user:
+            from projects.models import Region
+            context['regions'] = Region.objects.filter(is_active=True).order_by('code')
+
+        context['active_region'] = active_region
+
         context['filter_form'] = SalesCallReportFilterForm(
             self.request.GET,
-            user=self.request.user
+            user=user,
+            region_code=active_region or None,
         )
-        context['total_count'] = self.get_queryset().count()
 
-        # Summary stats
         queryset = self.get_queryset()
+        context['total_count'] = queryset.count()
         context['today_count'] = queryset.filter(call_date=date.today()).count()
         context['this_week_count'] = queryset.filter(
             call_date__gte=date.today() - timedelta(days=7)

@@ -3,6 +3,33 @@
 
 {% block title %}Sales Call Reports{% endblock %}
 
+{% block extra_css %}
+<style>
+    .region-tabs .nav-link {
+        color: #6c757d;
+        font-weight: 600;
+        font-size: 0.85rem;
+        padding: 8px 18px;
+        border: none;
+        border-bottom: 3px solid transparent;
+        background: none;
+    }
+    .region-tabs .nav-link.active {
+        color: var(--leap-red, #c41e3a);
+        border-bottom-color: var(--leap-red, #c41e3a);
+        background: none;
+    }
+    .region-tabs .nav-link:hover:not(.active) {
+        color: #333;
+        border-bottom-color: #ddd;
+    }
+    .region-tabs .badge {
+        font-size: 0.65rem;
+        vertical-align: middle;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container-fluid">
     <!-- Header -->
@@ -20,6 +47,30 @@
             </a>
         </div>
     </div>
+
+    {% if regions %}
+    <!-- Region Tabs -->
+    <div class="card mb-3">
+        <div class="card-body py-0">
+            <ul class="nav region-tabs">
+                <li class="nav-item">
+                    <a class="nav-link {% if not active_region %}active{% endif %}"
+                       href="{% url 'reports:sales_call_list' %}">
+                        All Regions
+                    </a>
+                </li>
+                {% for region in regions %}
+                <li class="nav-item">
+                    <a class="nav-link {% if active_region == region.code %}active{% endif %}"
+                       href="{% url 'reports:sales_call_list' %}?region={{ region.code }}">
+                        {{ region.name }}
+                    </a>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+    {% endif %}
 
     <!-- Stats Cards -->
     <div class="row mb-4">
@@ -53,7 +104,10 @@
     <div class="card mb-4">
         <div class="card-body">
             <form method="get" class="row g-3">
-                <div class="col-md-3">
+                {% if active_region %}
+                <input type="hidden" name="region" value="{{ active_region }}">
+                {% endif %}
+                <div class="col-md-2">
                     {{ filter_form.search }}
                 </div>
                 <div class="col-md-2">
@@ -70,15 +124,18 @@
                 <div class="col-md-2">
                     {{ filter_form.action_type }}
                 </div>
-                <div class="col-md-1">
-                    <button type="submit" class="btn btn-primary w-100">Filter</button>
+                {% if filter_form.sales_rep %}
+                <div class="col-md-2">
+                    {{ filter_form.sales_rep }}
+                </div>
+                {% endif %}
+                <div class="col-md-12 d-flex gap-2">
+                    <button type="submit" class="btn btn-primary">Filter</button>
+                    {% if request.GET %}
+                    <a href="{% url 'reports:sales_call_list' %}{% if active_region %}?region={{ active_region }}{% endif %}" class="btn btn-outline-secondary">Clear Filters</a>
+                    {% endif %}
                 </div>
             </form>
-            {% if request.GET %}
-            <div class="mt-2">
-                <a href="{% url 'reports:sales_call_list' %}" class="btn btn-sm btn-outline-secondary">Clear Filters</a>
-            </div>
-            {% endif %}
         </div>
     </div>
 
@@ -97,6 +154,7 @@
                             <th>Goal</th>
                             {% if request.user.is_admin_user or request.user.is_manager_user %}
                             <th>Sales Rep</th>
+                            <th>Region</th>
                             {% endif %}
                             <th>Next Action</th>
                             <th width="100">Actions</th>
@@ -130,6 +188,13 @@
                             <td>
                                 <strong>{{ report.sales_rep.get_full_name|default:report.sales_rep.username }}</strong>
                             </td>
+                            <td>
+                                {% if report.sales_rep.region %}
+                                <span class="badge bg-outline-secondary border">{{ report.sales_rep.region.code }}</span>
+                                {% else %}
+                                <span class="text-muted">-</span>
+                                {% endif %}
+                            </td>
                             {% endif %}
                             <td>
                                 {% if report.next_action_date %}
@@ -157,7 +222,7 @@
                         </tr>
                         {% empty %}
                         <tr>
-                            <td colspan="{% if request.user.is_admin_user or request.user.is_manager_user %}9{% else %}8{% endif %}" class="text-center py-5">
+                            <td colspan="{% if request.user.is_admin_user or request.user.is_manager_user %}10{% else %}8{% endif %}" class="text-center py-5">
                                 <i class="bi bi-telephone-x display-4 text-muted"></i>
                                 <p class="text-muted mt-3">No sales call reports found.</p>
                                 <a href="{% url 'reports:sales_call_create' %}" class="btn btn-primary">
