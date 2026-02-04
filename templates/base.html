@@ -358,6 +358,11 @@
                     <i class="bi bi-journal-text"></i> <span>Annual Report</span>
                 </a>
             </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'costing' %}active{% endif %}" href="{% url 'costing:list' %}" data-title="Costing">
+                    <i class="bi bi-calculator"></i> <span>Costing</span>
+                </a>
+            </li>
         </ul>
 
         <div class="nav-section">Reports</div>

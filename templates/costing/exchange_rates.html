@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+
+{% block title %}Exchange Rates - Leap Networks ERP{% endblock %}
+{% block page_title %}Exchange Rates{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Rates Table -->
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-currency-exchange me-2"></i> Exchange Rates (to USD)
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Code</th>
+                                <th>Currency Name</th>
+                                <th>Rate to USD</th>
+                                <th>Last Updated</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for rate in rates %}
+                            <tr>
+                                <td><strong>{{ rate.currency_code }}</strong></td>
+                                <td>{{ rate.currency_name }}</td>
+                                <td>{{ rate.rate_to_usd }}</td>
+                                <td>{{ rate.updated_at|date:"d M Y H:i" }}</td>
+                                <td>
+                                    <a href="{% url 'costing:exchange_rate_edit' rate.pk %}" class="btn btn-sm btn-outline-secondary">
+                                        <i class="bi bi-pencil"></i>
+                                    </a>
+                                    <a href="{% url 'costing:exchange_rate_delete' rate.pk %}" class="btn btn-sm btn-outline-danger">
+                                        <i class="bi bi-trash"></i>
+                                    </a>
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="5" class="text-center py-3 text-muted">No exchange rates defined yet.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add New Rate -->
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-plus-lg me-2"></i> Add Exchange Rate
+            </div>
+            <div class="card-body">
+                <form method="post" action="{% url 'costing:exchange_rate_create' %}">
+                    {% csrf_token %}
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Currency Code</label>
+                        {{ form.currency_code }}
+                        <small class="text-muted">e.g. SAR, GBP, EUR</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Currency Name</label>
+                        {{ form.currency_name }}
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Rate to USD</label>
+                        {{ form.rate_to_usd }}
+                        <small class="text-muted">How many units = 1 USD (e.g. SAR=3.75)</small>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-plus-lg me-1"></i> Add Rate
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="mt-3">
+    <a href="{% url 'costing:list' %}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i> Back to Costing
+    </a>
+</div>
+{% endblock %}

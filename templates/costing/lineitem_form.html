@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+
+{% block title %}{% if form.instance.pk %}Edit{% else %}Add{% endif %} Line Item - Leap Networks ERP{% endblock %}
+{% block page_title %}{% if form.instance.pk %}Edit Line Item{% else %}Add Line Item{% endif %}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-list-ol me-2"></i>
+                {% if form.instance.pk %}Edit{% else %}Add{% endif %} Line Item
+                <span class="text-muted">- {{ section.section_number }} {{ section.title }}</span>
+            </div>
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}
+
+                    <div class="row mb-3">
+                        <div class="col-md-3">
+                            <label class="form-label fw-bold">Item Number</label>
+                            {{ form.item_number }}
+                            <small class="text-muted">e.g. 12.1.1</small>
+                        </div>
+                        <div class="col-md-9">
+                            <label class="form-label fw-bold">Description</label>
+                            {{ form.description }}
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-3">
+                            <label class="form-label fw-bold">Make / Manufacturer</label>
+                            {{ form.make }}
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-bold">Model Number</label>
+                            {{ form.model_number }}
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-bold">Vendor Name</label>
+                            {{ form.vendor_name }}
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-bold">System</label>
+                            {{ form.system }}
+                        </div>
+                    </div>
+
+                    <hr>
+                    <h6 class="text-muted mb-3">Quantity & Pricing</h6>
+
+                    <div class="row mb-3">
+                        <div class="col-md-3">
+                            <label class="form-label fw-bold">Quantity</label>
+                            {{ form.quantity }}
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-bold">Unit</label>
+                            {{ form.unit }}
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-bold">Base Price</label>
+                            {{ form.base_price }}
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-bold">Currency</label>
+                            {{ form.supplier_currency }}
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-3">
+                            <label class="form-label fw-bold">Display Order</label>
+                            {{ form.order }}
+                        </div>
+                    </div>
+
+                    <div class="d-flex justify-content-between mt-4">
+                        <a href="{% url 'costing:detail' section.costing_sheet.pk %}" class="btn btn-outline-secondary">Cancel</a>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-lg me-1"></i>
+                            {% if form.instance.pk %}Update{% else %}Add{% endif %} Item
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

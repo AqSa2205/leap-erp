@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+
+{% block title %}Edit Exchange Rate - Leap Networks ERP{% endblock %}
+{% block page_title %}Edit Exchange Rate{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-5">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-currency-exchange me-2"></i> Edit Exchange Rate
+            </div>
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Currency Code</label>
+                        {{ form.currency_code }}
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Currency Name</label>
+                        {{ form.currency_name }}
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Rate to USD</label>
+                        {{ form.rate_to_usd }}
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <a href="{% url 'costing:exchange_rates' %}" class="btn btn-outline-secondary">Cancel</a>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-lg me-1"></i> Update
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

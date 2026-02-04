@@ -1,0 +1,353 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}{{ sheet.title }} - BOM{% endblock %}
+{% block page_title %}Bill of Material - Commercial{% endblock %}
+
+{% block extra_css %}
+<style>
+    .bom-table { font-size: 0.75rem; white-space: nowrap; border-collapse: collapse; }
+    .bom-table th {
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        vertical-align: middle;
+        padding: 4px 6px;
+        text-align: center;
+    }
+    .bom-table td { padding: 4px 6px; vertical-align: middle; }
+    .bom-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .section-header-row { background: #f0f0f0; font-weight: 700; }
+    .subtotal-row { background: #fafafa; font-weight: 600; }
+    .grand-total-row { background: var(--leap-red); color: #fff; font-weight: 700; }
+
+    .grp-supplier { background-color: #fff8e1 !important; }
+    .grp-usd { background-color: #e8f5e9 !important; }
+    .grp-qusd { background-color: #e3f2fd !important; }
+    .grp-local { background-color: #fce4ec !important; }
+
+    .hdr-supplier { background-color: #f9a825 !important; color: #fff !important; }
+    .hdr-usd { background-color: #2e7d32 !important; color: #fff !important; }
+    .hdr-qusd { background-color: #1565c0 !important; color: #fff !important; }
+    .hdr-local { background-color: #b71c1c !important; color: #fff !important; }
+
+    .rate-box { font-size: 0.78rem; }
+    .rate-box td { padding: 1px 8px; }
+
+    /* Inline editable inputs */
+    .inline-edit {
+        background: transparent;
+        border: 1px dashed #ccc;
+        border-radius: 4px;
+        text-align: center;
+        font-weight: 700;
+        color: var(--leap-red);
+        width: 80px;
+        padding: 2px 4px;
+        font-size: 1.1rem;
+        transition: all 0.2s;
+    }
+    .inline-edit:focus {
+        background: #fff;
+        border-color: var(--leap-red);
+        outline: none;
+        box-shadow: 0 0 0 2px rgba(196,30,58,0.2);
+    }
+    .inline-edit.saved {
+        border-color: #198754;
+        background: rgba(25,135,84,0.08);
+    }
+    .rate-edit {
+        background: transparent;
+        border: 1px dashed #ccc;
+        border-radius: 3px;
+        text-align: right;
+        width: 80px;
+        padding: 1px 4px;
+        font-size: 0.78rem;
+    }
+    .rate-edit:focus {
+        background: #fff;
+        border-color: var(--leap-red);
+        outline: none;
+    }
+    .rate-edit.saved {
+        border-color: #198754;
+        background: rgba(25,135,84,0.08);
+    }
+    .param-label { font-size: 0.65rem; text-transform: uppercase; color: #6c757d; }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Header Card -->
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <div class="row">
+            <div class="col-md-5">
+                <h5 class="mb-1">{{ sheet.title }}</h5>
+                <table class="small text-muted mb-0">
+                    {% if sheet.project %}
+                    <tr><td class="pe-2 fw-bold">Project:</td><td>{{ sheet.project.project_name }}</td></tr>
+                    <tr><td class="pe-2 fw-bold">LN Ref:</td><td>{{ sheet.project.proposal_reference }}</td></tr>
+                    {% endif %}
+                    {% if sheet.customer_reference %}
+                    <tr><td class="pe-2 fw-bold">Cust. Ref:</td><td>{{ sheet.customer_reference }}</td></tr>
+                    {% endif %}
+                </table>
+            </div>
+
+            <!-- Editable Parameters -->
+            <div class="col-md-3 text-center">
+                <div class="d-flex justify-content-center gap-3">
+                    <div>
+                        <input type="number" class="inline-edit param-edit" data-field="margin"
+                               value="{{ sheet.margin }}" step="0.01" min="0" max="1">
+                        <div class="param-label">Margin</div>
+                    </div>
+                    <div>
+                        <input type="number" class="inline-edit param-edit" data-field="ddp_rate"
+                               value="{{ sheet.ddp_rate }}" step="0.01" min="0" max="1">
+                        <div class="param-label">DDP</div>
+                    </div>
+                    <div>
+                        <input type="number" class="inline-edit param-edit" data-field="discount_rate"
+                               value="{{ sheet.discount_rate }}" step="0.01" min="0" max="1">
+                        <div class="param-label">Discount</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Editable Exchange Rates -->
+            <div class="col-md-2">
+                <table class="rate-box table table-sm table-bordered mb-0">
+                    <thead><tr class="table-dark"><th colspan="2" class="text-center" style="font-size:0.7rem;">EXCHANGE RATES</th></tr></thead>
+                    <tbody>
+                        {% for rate in exchange_rates %}
+                        <tr>
+                            <td><strong>{{ rate.currency_code }}</strong></td>
+                            <td>
+                                <input type="number" class="rate-edit" data-rate-id="{{ rate.pk }}"
+                                       value="{{ rate.rate_to_usd }}" step="0.0001" min="0">
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Actions -->
+            <div class="col-md-2 text-end">
+                {% if sheet.status == 'draft' %}
+                <span class="badge bg-warning text-dark mb-1">Draft</span>
+                {% else %}
+                <span class="badge bg-success mb-1">Final</span>
+                {% endif %}
+                <div class="btn-group-vertical btn-group-sm">
+                    <a href="{% url 'costing:edit' sheet.pk %}" class="btn btn-outline-secondary"><i class="bi bi-pencil"></i> Edit</a>
+                    <a href="{% url 'costing:export' sheet.pk %}" class="btn btn-outline-primary"><i class="bi bi-download"></i> Excel</a>
+                    <a href="{% url 'costing:delete' sheet.pk %}" class="btn btn-outline-danger"><i class="bi bi-trash"></i> Delete</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Section Button -->
+<div class="mb-2">
+    <a href="{% url 'costing:section_create' sheet.pk %}" class="btn btn-primary btn-sm">
+        <i class="bi bi-plus-lg me-1"></i> Add Section
+    </a>
+</div>
+
+<!-- BOM Table -->
+<div class="card">
+    <div class="card-body p-0">
+        <div class="table-responsive" style="max-height:78vh;">
+            <table class="table table-bordered bom-table mb-0">
+                <thead>
+                    <tr>
+                        <th rowspan="2" class="table-dark">Item No</th>
+                        <th rowspan="2" class="table-dark" style="min-width:180px;">Description</th>
+                        <th rowspan="2" class="table-dark">Make</th>
+                        <th rowspan="2" class="table-dark">Model</th>
+                        <th rowspan="2" class="table-dark">Qty</th>
+                        <th rowspan="2" class="table-dark">Unit</th>
+                        <th rowspan="2" class="table-dark">Unit Price</th>
+                        <th rowspan="2" class="table-dark">Total Price</th>
+                        <th rowspan="2" class="table-dark">Vendor</th>
+                        <th rowspan="2" class="table-dark">System</th>
+                        <th colspan="7" class="hdr-supplier">Information from Suppliers</th>
+                        <th colspan="2" class="hdr-usd">Price in USD</th>
+                        <th colspan="3" class="hdr-qusd">Quoted Price USD</th>
+                        <th colspan="5" class="hdr-local">Quoted Price {{ sheet.output_currency }}</th>
+                        <th rowspan="2" class="table-dark" style="width:60px;">Act</th>
+                    </tr>
+                    <tr>
+                        <th class="hdr-supplier" style="font-size:0.6rem;">Cur</th>
+                        <th class="hdr-supplier">Base Price</th>
+                        <th class="hdr-supplier">Base Total</th>
+                        <th class="hdr-supplier">Disc</th>
+                        <th class="hdr-supplier">Disc Price</th>
+                        <th class="hdr-supplier">Disc Total</th>
+                        <th class="hdr-supplier" style="font-size:0.6rem;">Exch Rate</th>
+                        <th class="hdr-usd">Unit Price</th>
+                        <th class="hdr-usd">Total Price</th>
+                        <th class="hdr-qusd">Margin</th>
+                        <th class="hdr-qusd">Unit Price</th>
+                        <th class="hdr-qusd">Total Price</th>
+                        <th class="hdr-local">Unit Price</th>
+                        <th class="hdr-local">DDP Rate</th>
+                        <th class="hdr-local">DDP Amount</th>
+                        <th class="hdr-local">Unit Inc DDP</th>
+                        <th class="hdr-local">Total Price</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for section in sections %}
+                    <tr class="section-header-row">
+                        <td>{{ section.section_number }}</td>
+                        <td colspan="27">{{ section.title }}</td>
+                        <td class="text-center">
+                            <a href="{% url 'costing:item_create' section.pk %}" class="btn btn-sm btn-outline-primary py-0 px-1" title="Add Item"><i class="bi bi-plus"></i></a>
+                            <a href="{% url 'costing:section_edit' section.pk %}" class="btn btn-sm btn-outline-secondary py-0 px-1" title="Edit"><i class="bi bi-pencil"></i></a>
+                            <a href="{% url 'costing:section_delete' section.pk %}" class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"><i class="bi bi-trash"></i></a>
+                        </td>
+                    </tr>
+
+                    {% for item in section.line_items.all %}
+                    <tr>
+                        <td>{{ item.item_number }}</td>
+                        <td style="white-space:normal;min-width:180px;">{{ item.description }}</td>
+                        <td>{{ item.make }}</td>
+                        <td>{{ item.model_number }}</td>
+                        <td class="num">{{ item.quantity|floatformat:0 }}</td>
+                        <td>{{ item.unit }}</td>
+                        <td class="num">{{ item.final_unit_price|floatformat:2|intcomma }}</td>
+                        <td class="num fw-bold">{{ item.final_total_price|floatformat:2|intcomma }}</td>
+                        <td>{{ item.vendor_name }}</td>
+                        <td>{{ item.system }}</td>
+                        <td class="grp-supplier text-center">{{ item.supplier_currency }}</td>
+                        <td class="grp-supplier num">{{ item.base_price|floatformat:2|intcomma }}</td>
+                        <td class="grp-supplier num">{{ item.base_total|floatformat:2|intcomma }}</td>
+                        <td class="grp-supplier num">{{ item.sheet.discount_rate }}</td>
+                        <td class="grp-supplier num">{{ item.discounted_price|floatformat:2|intcomma }}</td>
+                        <td class="grp-supplier num">{{ item.discounted_total|floatformat:2|intcomma }}</td>
+                        <td class="grp-supplier num">{{ item.exchange_rate }}</td>
+                        <td class="grp-usd num">{{ item.cost_usd|floatformat:2|intcomma }}</td>
+                        <td class="grp-usd num">{{ item.cost_usd_total|floatformat:2|intcomma }}</td>
+                        <td class="grp-qusd num">{{ item.sheet.margin }}</td>
+                        <td class="grp-qusd num">{{ item.quoted_usd|floatformat:2|intcomma }}</td>
+                        <td class="grp-qusd num">{{ item.quoted_usd_total|floatformat:2|intcomma }}</td>
+                        <td class="grp-local num">{{ item.quoted_local|floatformat:2|intcomma }}</td>
+                        <td class="grp-local num">{{ item.sheet.ddp_rate }}</td>
+                        <td class="grp-local num">{{ item.ddp_amount|floatformat:2|intcomma }}</td>
+                        <td class="grp-local num">{{ item.final_unit_price|floatformat:2|intcomma }}</td>
+                        <td class="grp-local num fw-bold">{{ item.final_total_price|floatformat:2|intcomma }}</td>
+                        <td class="text-center">
+                            <a href="{% url 'costing:item_edit' item.pk %}" class="btn btn-sm btn-outline-secondary py-0 px-1"><i class="bi bi-pencil"></i></a>
+                            <a href="{% url 'costing:item_delete' item.pk %}" class="btn btn-sm btn-outline-danger py-0 px-1"><i class="bi bi-trash"></i></a>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="28" class="text-center text-muted py-2">
+                            No items. <a href="{% url 'costing:item_create' section.pk %}">Add one</a>.
+                        </td>
+                    </tr>
+                    {% endfor %}
+
+                    <tr class="subtotal-row">
+                        <td colspan="7" class="text-end">Sub-Total</td>
+                        <td class="num fw-bold">{{ section.subtotal|floatformat:2|intcomma }}</td>
+                        <td colspan="20"></td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="28" class="text-center py-4 text-muted">
+                            No sections yet. <a href="{% url 'costing:section_create' sheet.pk %}">Add a section</a> to build your BOM.
+                        </td>
+                    </tr>
+                    {% endfor %}
+
+                    {% if sections %}
+                    <tr class="grand-total-row">
+                        <td colspan="7" class="text-end">GRAND TOTAL ({{ sheet.output_currency }})</td>
+                        <td class="num">{{ sheet.grand_total|floatformat:2|intcomma }}</td>
+                        <td colspan="20"></td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="mt-3">
+    <a href="{% url 'costing:list' %}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i> Back to List
+    </a>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const csrfToken = '{{ csrf_token }}';
+    const sheetPk = {{ sheet.pk }};
+    const updateParamsUrl = '{% url "costing:update_params" sheet.pk %}';
+
+    // Save param on change (margin, ddp_rate, discount_rate)
+    document.querySelectorAll('.param-edit').forEach(input => {
+        input.addEventListener('change', function() {
+            const field = this.dataset.field;
+            const value = this.value;
+            const el = this;
+
+            fetch(updateParamsUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRFToken': csrfToken,
+                },
+                body: `field=${field}&value=${value}`,
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    el.classList.add('saved');
+                    setTimeout(() => el.classList.remove('saved'), 800);
+                    // Reload page to recalculate all prices
+                    setTimeout(() => location.reload(), 500);
+                }
+            });
+        });
+    });
+
+    // Save exchange rate on change
+    document.querySelectorAll('.rate-edit').forEach(input => {
+        input.addEventListener('change', function() {
+            const rateId = this.dataset.rateId;
+            const value = this.value;
+            const el = this;
+            const url = `/costing/exchange-rates/${rateId}/update/`;
+
+            fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRFToken': csrfToken,
+                },
+                body: `value=${value}`,
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    el.classList.add('saved');
+                    setTimeout(() => el.classList.remove('saved'), 800);
+                    // Reload page to recalculate all prices
+                    setTimeout(() => location.reload(), 500);
+                }
+            });
+        });
+    });
+</script>
+{% endblock %}

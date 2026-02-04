@@ -1,0 +1,116 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Costing Sheets - Leap Networks ERP{% endblock %}
+{% block page_title %}Costing Sheets{% endblock %}
+
+{% block content %}
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="row align-items-center">
+            <div class="col-md-8">
+                <form method="get" class="row g-2">
+                    <div class="col-md-5">
+                        {{ filter_form.search }}
+                    </div>
+                    <div class="col-md-3">
+                        {{ filter_form.status }}
+                    </div>
+                    <div class="col-md-2">
+                        <button type="submit" class="btn btn-primary w-100">Filter</button>
+                    </div>
+                    <div class="col-md-2">
+                        <a href="{% url 'costing:list' %}" class="btn btn-outline-secondary w-100">Clear</a>
+                    </div>
+                </form>
+            </div>
+            <div class="col-md-4 text-end">
+                <a href="{% url 'costing:create' %}" class="btn btn-primary">
+                    <i class="bi bi-plus-lg me-1"></i> New Costing Sheet
+                </a>
+                <a href="{% url 'costing:exchange_rates' %}" class="btn btn-outline-secondary ms-1">
+                    <i class="bi bi-currency-exchange me-1"></i> Rates
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-calculator me-2"></i>Costing Sheets</span>
+        <span class="badge bg-secondary">{{ total_count }} total</span>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Title</th>
+                        <th>Project</th>
+                        <th>Customer Ref</th>
+                        <th>Margin</th>
+                        <th>Currency</th>
+                        <th>Status</th>
+                        <th>Created By</th>
+                        <th>Updated</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for sheet in sheets %}
+                    <tr>
+                        <td>
+                            <a href="{% url 'costing:detail' sheet.pk %}" class="text-decoration-none fw-bold">
+                                {{ sheet.title }}
+                            </a>
+                        </td>
+                        <td>{{ sheet.project.project_name|default:"-" }}</td>
+                        <td>{{ sheet.customer_reference|default:"-" }}</td>
+                        <td>{% widthratio sheet.margin 1 100 %}%</td>
+                        <td>{{ sheet.output_currency }}</td>
+                        <td>
+                            {% if sheet.status == 'draft' %}
+                            <span class="badge bg-warning text-dark">Draft</span>
+                            {% else %}
+                            <span class="badge bg-success">Final</span>
+                            {% endif %}
+                        </td>
+                        <td>{% if sheet.created_by %}{{ sheet.created_by.get_full_name|default:sheet.created_by.username }}{% else %}-{% endif %}</td>
+                        <td>{{ sheet.updated_at|date:"d M Y" }}</td>
+                        <td>
+                            <a href="{% url 'costing:detail' sheet.pk %}" class="btn btn-sm btn-outline-primary" title="View">
+                                <i class="bi bi-eye"></i>
+                            </a>
+                            <a href="{% url 'costing:edit' sheet.pk %}" class="btn btn-sm btn-outline-secondary" title="Edit">
+                                <i class="bi bi-pencil"></i>
+                            </a>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="9" class="text-center py-4 text-muted">
+                            No costing sheets found. <a href="{% url 'costing:create' %}">Create one</a>.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% if is_paginated %}
+<nav class="mt-3">
+    <ul class="pagination justify-content-center">
+        {% if page_obj.has_previous %}
+        <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}">&laquo; Previous</a></li>
+        {% endif %}
+        <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
+        {% if page_obj.has_next %}
+        <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}">Next &raquo;</a></li>
+        {% endif %}
+    </ul>
+</nav>
+{% endif %}
+{% endblock %}
