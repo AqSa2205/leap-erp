@@ -268,6 +268,66 @@
     .tab-pane.active {
         animation: fadeInUp 0.4s ease-out;
     }
+
+    /* ─── Dashboard Dark Mode ─── */
+    [data-theme="dark"] .summary-strip {
+        background: #1e1e1e !important;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    }
+    [data-theme="dark"] .summary-item {
+        border-right-color: #333;
+    }
+    [data-theme="dark"] .summary-item:hover {
+        background: #252525;
+    }
+    [data-theme="dark"] .summary-item h2.text-dark {
+        color: #e0e0e0 !important;
+    }
+    [data-theme="dark"] .nav-tabs {
+        background: #1e1e1e !important;
+    }
+    [data-theme="dark"] .nav-tabs .nav-link {
+        color: #aaa;
+    }
+    [data-theme="dark"] .nav-tabs .nav-link:hover:not(.active) {
+        color: #ef5350;
+        background: rgba(196,30,58,0.12);
+    }
+    [data-theme="dark"] .tab-content {
+        background: #1e1e1e !important;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    }
+    [data-theme="dark"] .region-header {
+        background: linear-gradient(135deg, #252525 0%, #1e1e1e 100%) !important;
+    }
+    [data-theme="dark"] .region-header h4,
+    [data-theme="dark"] .region-header p {
+        color: #ccc !important;
+    }
+    [data-theme="dark"] .chart-card {
+        background: #1e1e1e !important;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+    }
+    [data-theme="dark"] .chart-card .card-header {
+        background: linear-gradient(135deg, #252525 0%, #1e1e1e 100%) !important;
+        border-bottom-color: #333;
+    }
+    [data-theme="dark"] .projects-table {
+        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+    }
+    [data-theme="dark"] .projects-table .table thead {
+        background: #252525;
+    }
+    [data-theme="dark"] .projects-table .table thead th {
+        color: #aaa;
+        border-bottom-color: #333;
+    }
+    [data-theme="dark"] .projects-table .table tbody tr:hover {
+        background: #252525;
+    }
+    [data-theme="dark"] .projects-table .table tbody td {
+        color: #e0e0e0;
+    }
 </style>
 {% endblock %}
 
