@@ -428,13 +428,23 @@
         }
         [data-theme="dark"] .table {
             color: #e0e0e0;
+            background-color: #1e1e1e !important;
+            --bs-table-bg: #1e1e1e;
+            --bs-table-hover-bg: #252525;
+            --bs-table-striped-bg: #232323;
         }
-        [data-theme="dark"] .table-hover tbody tr:hover {
-            background: rgba(255,255,255,0.05);
+        [data-theme="dark"] .table > :not(caption) > * > * {
+            background-color: transparent !important;
+            border-bottom-color: #333;
+            color: #e0e0e0;
+        }
+        [data-theme="dark"] .table-hover > tbody > tr:hover > * {
+            background-color: #252525 !important;
+            --bs-table-hover-bg: #252525;
         }
         [data-theme="dark"] .table thead,
         [data-theme="dark"] .table-dark {
-            background: #252525;
+            background: #252525 !important;
         }
         [data-theme="dark"] .table-bordered {
             border-color: #333;
