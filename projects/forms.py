@@ -55,6 +55,8 @@ class ProjectFilterForm(forms.Form):
         ('LNUK', 'LNUK - Leap Networks UK & Global'),
         ('LNA', 'LNA - Leap Networks Arabia'),
         ('PA', 'PA - Pace Arabia'),
+        ('NEO-Dubai', 'NEO Dubai'),
+        ('NEO-KSA', 'NEO KSA'),
     ]
 
     # Year choices - generate dynamically

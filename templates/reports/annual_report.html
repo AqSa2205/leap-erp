@@ -60,6 +60,8 @@
     .pipeline-card.lnuk { border-color: #1a1a1a; }
     .pipeline-card.lna { border-color: #C41E3A; }
     .pipeline-card.pa { border-color: #fd7e14; }
+    .pipeline-card.neo-dubai { border-color: #0d6efd; }
+    .pipeline-card.neo-ksa { border-color: #198754; }
 
     .pipeline-card h5 {
         font-weight: 700;
@@ -251,6 +253,48 @@
                     <div class="pipeline-stat">
                         <span class="text-muted">Lost</span>
                         <span class="fw-bold text-danger">{{ pipeline_stats.pa.lost }}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-4 mb-3">
+                <div class="pipeline-card neo-dubai">
+                    <h5><span class="badge" style="background: #0d6efd;">NEO</span> NEO Dubai</h5>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Active Bids</span>
+                        <span class="fw-bold">{{ pipeline_stats.neo_dubai.active }}</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Hot Leads</span>
+                        <span class="fw-bold text-warning">{{ pipeline_stats.neo_dubai.hot_leads }}</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Won</span>
+                        <span class="fw-bold text-success">{{ pipeline_stats.neo_dubai.won }}</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Lost</span>
+                        <span class="fw-bold text-danger">{{ pipeline_stats.neo_dubai.lost }}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-4 mb-3">
+                <div class="pipeline-card neo-ksa">
+                    <h5><span class="badge" style="background: #198754;">NEO</span> NEO KSA</h5>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Active Bids</span>
+                        <span class="fw-bold">{{ pipeline_stats.neo_ksa.active }}</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Hot Leads</span>
+                        <span class="fw-bold text-warning">{{ pipeline_stats.neo_ksa.hot_leads }}</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Won</span>
+                        <span class="fw-bold text-success">{{ pipeline_stats.neo_ksa.won }}</span>
+                    </div>
+                    <div class="pipeline-stat">
+                        <span class="text-muted">Lost</span>
+                        <span class="fw-bold text-danger">{{ pipeline_stats.neo_ksa.lost }}</span>
                     </div>
                 </div>
             </div>

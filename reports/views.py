@@ -344,6 +344,8 @@ def annual_report(request):
         'lnuk': get_region_pipeline(['UK', 'GLB']),
         'lna': get_region_pipeline(['LNA']),
         'pa': get_region_pipeline(['PA']),
+        'neo_dubai': get_region_pipeline(['NEO-Dubai']),
+        'neo_ksa': get_region_pipeline(['NEO-KSA']),
     }
 
     # Get annual report data
