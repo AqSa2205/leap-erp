@@ -82,6 +82,20 @@ def index(request):
     pa_stats['name'] = 'PA'
     pa_stats['full_name'] = 'Pace Arabia'
 
+    # NEO-Dubai (AED)
+    neo_dubai_stats = get_region_stats(projects, ['NEO-Dubai'])
+    neo_dubai_stats['currency'] = 'AED'
+    neo_dubai_stats['currency_symbol'] = 'AED'
+    neo_dubai_stats['name'] = 'NEO-Dubai'
+    neo_dubai_stats['full_name'] = 'NEO Dubai'
+
+    # NEO-KSA (SAR)
+    neo_ksa_stats = get_region_stats(projects, ['NEO-KSA'])
+    neo_ksa_stats['currency'] = 'SAR'
+    neo_ksa_stats['currency_symbol'] = 'SAR'
+    neo_ksa_stats['name'] = 'NEO-KSA'
+    neo_ksa_stats['full_name'] = 'NEO KSA'
+
     # Overall stats
     overall_stats = {
         'total': {
@@ -125,6 +139,8 @@ def index(request):
         'lnuk': get_chart_data(['UK', 'GLB']),
         'lna': get_chart_data(['LNA']),
         'pa': get_chart_data(['PA']),
+        'neo_dubai': get_chart_data(['NEO-Dubai']),
+        'neo_ksa': get_chart_data(['NEO-KSA']),
     }
 
     context = {
@@ -132,6 +148,8 @@ def index(request):
         'lnuk': lnuk_stats,
         'lna': lna_stats,
         'pa': pa_stats,
+        'neo_dubai': neo_dubai_stats,
+        'neo_ksa': neo_ksa_stats,
         'chart_data': chart_data,
     }
 

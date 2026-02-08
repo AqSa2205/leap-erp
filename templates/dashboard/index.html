@@ -422,6 +422,18 @@
                 <span class="currency-tag">SAR</span>
             </button>
         </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="neo-dubai-tab" data-bs-toggle="tab" data-bs-target="#neo-dubai" type="button" role="tab">
+                <i class="bi bi-building me-2"></i>NEO Dubai
+                <span class="currency-tag">AED</span>
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="neo-ksa-tab" data-bs-toggle="tab" data-bs-target="#neo-ksa" type="button" role="tab">
+                <i class="bi bi-geo-alt me-2"></i>NEO KSA
+                <span class="currency-tag">SAR</span>
+            </button>
+        </li>
     </ul>
 
     <div class="tab-content" id="regionTabsContent">
@@ -835,6 +847,272 @@
                 </div>
             </div>
         </div>
+
+        <!-- NEO-Dubai Tab -->
+        <div class="tab-pane fade" id="neo-dubai" role="tabpanel">
+            <div class="region-header">
+                <div class="row align-items-center">
+                    <div class="col">
+                        <h4 class="mb-1 fw-bold">{{ neo_dubai.full_name }}</h4>
+                        <p class="text-muted mb-0">NEO Dubai Operations Pipeline</p>
+                    </div>
+                    <div class="col-auto text-end">
+                        <div class="region-value">AED {{ neo_dubai.total.value|floatformat:2|intcomma }}</div>
+                        <small class="text-muted fw-semibold">Total Pipeline Value</small>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row mb-4">
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-active h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ neo_dubai.active.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Active</div>
+                            <div class="stat-value">AED {{ neo_dubai.active.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-hotleads h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ neo_dubai.hot_leads.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Hot Leads</div>
+                            <div class="stat-value">AED {{ neo_dubai.hot_leads.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-won h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ neo_dubai.won.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Won</div>
+                            <div class="stat-value">AED {{ neo_dubai.won.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-lost h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ neo_dubai.lost.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Lost</div>
+                            <div class="stat-value">AED {{ neo_dubai.lost.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-ongoing h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ neo_dubai.ongoing.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Ongoing</div>
+                            <div class="stat-value">AED {{ neo_dubai.ongoing.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-total h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ neo_dubai.total.count|intcomma }}</div>
+                            <div class="stat-label">Total</div>
+                            <div class="stat-value">All Projects</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row mb-4">
+                <div class="col-md-6 mb-3">
+                    <div class="card chart-card h-100">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="bi bi-pie-chart-fill me-2" style="color: #C41E3A;"></i>Projects Distribution</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="chart-container">
+                                <canvas id="neoDubaiPieChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <div class="card chart-card h-100">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="bi bi-bar-chart-fill me-2" style="color: #C41E3A;"></i>Value by Status (AED)</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="chart-container">
+                                <canvas id="neoDubaiBarChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card projects-table">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0"><i class="bi bi-clock-history me-2"></i>Recent Projects</h6>
+                    <a href="{% url 'projects:list' %}?region=NEO-Dubai" class="btn btn-sm btn-outline-light">View All <i class="bi bi-arrow-right ms-1"></i></a>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Reference</th>
+                                    <th>Project Name</th>
+                                    <th>Status</th>
+                                    <th class="text-end">Value (AED)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for project in neo_dubai.projects %}
+                                <tr>
+                                    <td><a href="{% url 'projects:detail' project.pk %}" class="text-decoration-none fw-bold" style="color: #C41E3A;">{{ project.proposal_reference }}</a></td>
+                                    <td class="text-truncate" style="max-width: 350px;">{{ project.project_name }}</td>
+                                    <td><span class="badge px-3 py-2" style="background-color: {{ project.status.color }}">{{ project.status.name }}</span></td>
+                                    <td class="text-end fw-bold">AED {{ project.estimated_value|floatformat:2|intcomma }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr><td colspan="4" class="text-center text-muted py-5"><i class="bi bi-inbox fs-1 d-block mb-2"></i>No projects found</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- NEO-KSA Tab -->
+        <div class="tab-pane fade" id="neo-ksa" role="tabpanel">
+            <div class="region-header">
+                <div class="row align-items-center">
+                    <div class="col">
+                        <h4 class="mb-1 fw-bold">{{ neo_ksa.full_name }}</h4>
+                        <p class="text-muted mb-0">NEO KSA Operations Pipeline</p>
+                    </div>
+                    <div class="col-auto text-end">
+                        <div class="region-value">SAR {{ neo_ksa.total.value|floatformat:2|intcomma }}</div>
+                        <small class="text-muted fw-semibold">Total Pipeline Value</small>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row mb-4">
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-active h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ neo_ksa.active.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Active</div>
+                            <div class="stat-value">SAR {{ neo_ksa.active.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-hotleads h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ neo_ksa.hot_leads.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Hot Leads</div>
+                            <div class="stat-value">SAR {{ neo_ksa.hot_leads.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-won h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ neo_ksa.won.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Won</div>
+                            <div class="stat-value">SAR {{ neo_ksa.won.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-lost h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ neo_ksa.lost.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Lost</div>
+                            <div class="stat-value">SAR {{ neo_ksa.lost.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-ongoing h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ neo_ksa.ongoing.count|intcomma }}</div>
+                            <div class="stat-label text-muted">Ongoing</div>
+                            <div class="stat-value">SAR {{ neo_ksa.ongoing.value|floatformat:2|intcomma }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <div class="card stat-card stat-total h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-number">{{ neo_ksa.total.count|intcomma }}</div>
+                            <div class="stat-label">Total</div>
+                            <div class="stat-value">All Projects</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row mb-4">
+                <div class="col-md-6 mb-3">
+                    <div class="card chart-card h-100">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="bi bi-pie-chart-fill me-2" style="color: #C41E3A;"></i>Projects Distribution</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="chart-container">
+                                <canvas id="neoKsaPieChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <div class="card chart-card h-100">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="bi bi-bar-chart-fill me-2" style="color: #C41E3A;"></i>Value by Status (SAR)</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="chart-container">
+                                <canvas id="neoKsaBarChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card projects-table">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0"><i class="bi bi-clock-history me-2"></i>Recent Projects</h6>
+                    <a href="{% url 'projects:list' %}?region=NEO-KSA" class="btn btn-sm btn-outline-light">View All <i class="bi bi-arrow-right ms-1"></i></a>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Reference</th>
+                                    <th>Project Name</th>
+                                    <th>Status</th>
+                                    <th class="text-end">Value (SAR)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for project in neo_ksa.projects %}
+                                <tr>
+                                    <td><a href="{% url 'projects:detail' project.pk %}" class="text-decoration-none fw-bold" style="color: #C41E3A;">{{ project.proposal_reference }}</a></td>
+                                    <td class="text-truncate" style="max-width: 350px;">{{ project.project_name }}</td>
+                                    <td><span class="badge px-3 py-2" style="background-color: {{ project.status.color }}">{{ project.status.name }}</span></td>
+                                    <td class="text-end fw-bold">SAR {{ project.estimated_value|floatformat:2|intcomma }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr><td colspan="4" class="text-center text-muted py-5"><i class="bi bi-inbox fs-1 d-block mb-2"></i>No projects found</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 {% endblock %}
@@ -998,6 +1276,62 @@
         options: barOptions
     });
 
+    // NEO-Dubai Charts
+    new Chart(document.getElementById('neoDubaiPieChart'), {
+        type: 'doughnut',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: [chartData.neo_dubai.active, chartData.neo_dubai.hot_leads, chartData.neo_dubai.won, chartData.neo_dubai.lost, chartData.neo_dubai.ongoing],
+                backgroundColor: bgColors,
+                borderWidth: 0,
+                hoverOffset: 10
+            }]
+        },
+        options: pieOptions
+    });
+
+    new Chart(document.getElementById('neoDubaiBarChart'), {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: [chartData.neo_dubai.active_value, chartData.neo_dubai.hot_leads_value, chartData.neo_dubai.won_value, chartData.neo_dubai.lost_value, 0],
+                backgroundColor: bgColors,
+                borderRadius: 6
+            }]
+        },
+        options: barOptions
+    });
+
+    // NEO-KSA Charts
+    new Chart(document.getElementById('neoKsaPieChart'), {
+        type: 'doughnut',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: [chartData.neo_ksa.active, chartData.neo_ksa.hot_leads, chartData.neo_ksa.won, chartData.neo_ksa.lost, chartData.neo_ksa.ongoing],
+                backgroundColor: bgColors,
+                borderWidth: 0,
+                hoverOffset: 10
+            }]
+        },
+        options: pieOptions
+    });
+
+    new Chart(document.getElementById('neoKsaBarChart'), {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: [chartData.neo_ksa.active_value, chartData.neo_ksa.hot_leads_value, chartData.neo_ksa.won_value, chartData.neo_ksa.lost_value, 0],
+                backgroundColor: bgColors,
+                borderRadius: 6
+            }]
+        },
+        options: barOptions
+    });
+
     // Summary strip data per region
     const summaryData = {
         lnuk: {
@@ -1020,6 +1354,20 @@
             hot_leads: {{ pa.hot_leads.count }},
             won: {{ pa.won.count }},
             lost: {{ pa.lost.count }}
+        },
+        'neo-dubai': {
+            total: {{ neo_dubai.total.count }},
+            active: {{ neo_dubai.active.count }},
+            hot_leads: {{ neo_dubai.hot_leads.count }},
+            won: {{ neo_dubai.won.count }},
+            lost: {{ neo_dubai.lost.count }}
+        },
+        'neo-ksa': {
+            total: {{ neo_ksa.total.count }},
+            active: {{ neo_ksa.active.count }},
+            hot_leads: {{ neo_ksa.hot_leads.count }},
+            won: {{ neo_ksa.won.count }},
+            lost: {{ neo_ksa.lost.count }}
         }
     };
 
