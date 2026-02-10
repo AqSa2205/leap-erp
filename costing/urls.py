@@ -12,6 +12,7 @@ urlpatterns = [
     path('<int:pk>/edit/', views.CostingUpdateView.as_view(), name='edit'),
     path('<int:pk>/delete/', views.CostingDeleteView.as_view(), name='delete'),
     path('<int:pk>/export/', login_required(views.costing_export_excel), name='export'),
+    path('<int:pk>/export-pdf/', login_required(views.costing_export_pdf), name='export_pdf'),
     path('<int:pk>/update-params/', views.ajax_update_sheet_params, name='update_params'),
     path('exchange-rates/<int:pk>/update/', views.ajax_update_exchange_rate, name='exchange_rate_update'),
 
@@ -24,6 +25,8 @@ urlpatterns = [
     path('section/<int:section_pk>/add-item/', views.LineItemCreateView.as_view(), name='item_create'),
     path('item/<int:pk>/edit/', views.LineItemUpdateView.as_view(), name='item_edit'),
     path('item/<int:pk>/delete/', views.LineItemDeleteView.as_view(), name='item_delete'),
+    path('item/<int:pk>/update-margin/', views.ajax_update_item_margin, name='item_update_margin'),
+    path('item/<int:pk>/update-field/', views.ajax_update_item_field, name='item_update_field'),
 
     # Exchange rates
     path('exchange-rates/', views.ExchangeRateListView.as_view(), name='exchange_rates'),

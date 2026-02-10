@@ -36,6 +36,6 @@ class CostingSectionAdmin(admin.ModelAdmin):
 
 @admin.register(CostingLineItem)
 class CostingLineItemAdmin(admin.ModelAdmin):
-    list_display = ['item_number', 'description', 'quantity', 'unit', 'base_price', 'supplier_currency']
-    list_filter = ['unit', 'supplier_currency']
+    list_display = ['item_number', 'description', 'quantity', 'unit', 'unit_cost', 'margin']
+    list_filter = ['unit']
     search_fields = ['description', 'item_number', 'make', 'model_number']

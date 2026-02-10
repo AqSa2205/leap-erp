@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Vendor, EPC, Exhibition, ProcurementPortal, Certification, SalesContact
+from .models import Vendor, EPC, Exhibition, ProcurementPortal, Certification, SalesContact, SalesCallReport, SalesCallResponse
 
 
 @admin.register(Vendor)
@@ -48,3 +48,26 @@ class SalesContactAdmin(admin.ModelAdmin):
     list_filter = ['category', 'is_contacted']
     search_fields = ['company_name', 'contact_name']
     ordering = ['company_name']
+
+
+class SalesCallResponseInline(admin.TabularInline):
+    model = SalesCallResponse
+    extra = 0
+    readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(SalesCallReport)
+class SalesCallReportAdmin(admin.ModelAdmin):
+    list_display = ['company_name', 'contact_name', 'call_date', 'action_type', 'sales_rep', 'created_at']
+    list_filter = ['action_type', 'contact_type', 'goal', 'call_date', 'sales_rep']
+    search_fields = ['company_name', 'contact_name', 'comments']
+    ordering = ['-call_date']
+    inlines = [SalesCallResponseInline]
+
+
+@admin.register(SalesCallResponse)
+class SalesCallResponseAdmin(admin.ModelAdmin):
+    list_display = ['sales_call', 'responder', 'created_at']
+    list_filter = ['responder', 'created_at']
+    search_fields = ['message', 'sales_call__company_name']
+    ordering = ['-created_at']

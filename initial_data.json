@@ -54,7 +54,7 @@
   "model": "projects.region",
   "pk": 3,
   "fields": {
-    "name": "Pacific Asia",
+    "name": "Pace Arabia",
     "code": "PA",
     "currency": "USD",
     "description": "",

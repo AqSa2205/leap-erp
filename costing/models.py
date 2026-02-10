@@ -31,9 +31,13 @@ class CostingSheet(models.Model):
     )
     title = models.CharField(max_length=255)
     customer_reference = models.CharField(max_length=255, blank=True)
-    margin = models.DecimalField(max_digits=5, decimal_places=4, default=Decimal('0.4000'))
-    ddp_rate = models.DecimalField(max_digits=5, decimal_places=4, default=Decimal('0.0000'))
-    discount_rate = models.DecimalField(max_digits=5, decimal_places=4, default=Decimal('0.0000'))
+    # Sheet-level default parameters (rates as whole numbers, e.g., 40 = 40%)
+    margin = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('40'))
+    discount_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
+    shipping_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
+    customs_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
+    finances_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
+    installation_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
     output_currency = models.CharField(max_length=10, default='SAR')
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='draft')
     created_by = models.ForeignKey(
@@ -56,14 +60,77 @@ class CostingSheet(models.Model):
         total = Decimal('0')
         for section in self.sections.all():
             total += section.subtotal
-        return total
+        return total.quantize(Decimal('0.01'))
 
     @property
     def total_cost(self):
         total = Decimal('0')
         for section in self.sections.all():
             total += section.total_cost
-        return total
+        return total.quantize(Decimal('0.01'))
+
+    @property
+    def total_base_cost(self):
+        """Sum of all base_unit_cost * quantity"""
+        total = Decimal('0')
+        for section in self.sections.all():
+            for item in section.line_items.all():
+                total += item.base_unit_cost * item.quantity
+        return total.quantize(Decimal('0.01'))
+
+    @property
+    def total_discount(self):
+        """Sum of all discount_amount * quantity"""
+        total = Decimal('0')
+        for section in self.sections.all():
+            for item in section.line_items.all():
+                total += item.discount_amount * item.quantity
+        return total.quantize(Decimal('0.01'))
+
+    @property
+    def total_margin_amount(self):
+        """Total margin amount (base_total_price - total_cost)"""
+        total = Decimal('0')
+        for section in self.sections.all():
+            for item in section.line_items.all():
+                total += item.base_total_price - item.total_cost
+        return total.quantize(Decimal('0.01'))
+
+    @property
+    def total_shipping_amount(self):
+        """Total shipping amount (based on cost after discount)"""
+        total = Decimal('0')
+        for section in self.sections.all():
+            for item in section.line_items.all():
+                total += item.unit_cost_sar * item.effective_shipping_pct * item.quantity
+        return total.quantize(Decimal('0.01'))
+
+    @property
+    def total_customs_amount(self):
+        """Total customs amount (based on cost after discount)"""
+        total = Decimal('0')
+        for section in self.sections.all():
+            for item in section.line_items.all():
+                total += item.unit_cost_sar * item.effective_customs_pct * item.quantity
+        return total.quantize(Decimal('0.01'))
+
+    @property
+    def total_finances_amount(self):
+        """Total finances amount (based on cost after discount)"""
+        total = Decimal('0')
+        for section in self.sections.all():
+            for item in section.line_items.all():
+                total += item.unit_cost_sar * item.effective_finances_pct * item.quantity
+        return total.quantize(Decimal('0.01'))
+
+    @property
+    def total_installation_amount(self):
+        """Total installation amount (based on cost after discount)"""
+        total = Decimal('0')
+        for section in self.sections.all():
+            for item in section.line_items.all():
+                total += item.unit_cost_sar * item.effective_installation_pct * item.quantity
+        return total.quantize(Decimal('0.01'))
 
 
 class CostingSection(models.Model):
@@ -87,14 +154,54 @@ class CostingSection(models.Model):
         total = Decimal('0')
         for item in self.line_items.all():
             total += item.final_total_price
-        return total
+        return total.quantize(Decimal('0.01'))
 
     @property
     def total_cost(self):
         total = Decimal('0')
         for item in self.line_items.all():
-            total += item.cost_usd * item.quantity
-        return total
+            total += item.total_cost
+        return total.quantize(Decimal('0.01'))
+
+    @property
+    def subtotal_base_unit_cost(self):
+        """Sum of base_unit_cost * quantity"""
+        total = Decimal('0')
+        for item in self.line_items.all():
+            total += item.base_unit_cost * item.quantity
+        return total.quantize(Decimal('0.01'))
+
+    @property
+    def subtotal_discount(self):
+        """Sum of discount_amount * quantity"""
+        total = Decimal('0')
+        for item in self.line_items.all():
+            total += item.discount_amount * item.quantity
+        return total.quantize(Decimal('0.01'))
+
+    @property
+    def subtotal_unit_cost(self):
+        """Sum of unit_cost * quantity (after discount)"""
+        total = Decimal('0')
+        for item in self.line_items.all():
+            total += item.unit_cost * item.quantity
+        return total.quantize(Decimal('0.01'))
+
+    @property
+    def subtotal_base_unit_price(self):
+        """Sum of base_unit_price * quantity"""
+        total = Decimal('0')
+        for item in self.line_items.all():
+            total += item.base_unit_price * item.quantity
+        return total.quantize(Decimal('0.01'))
+
+    @property
+    def subtotal_base_total_price(self):
+        """Sum of base_total_price"""
+        total = Decimal('0')
+        for item in self.line_items.all():
+            total += item.base_total_price
+        return total.quantize(Decimal('0.01'))
 
 
 class CostingLineItem(models.Model):
@@ -122,8 +229,17 @@ class CostingLineItem(models.Model):
     unit = models.CharField(max_length=20, choices=UNIT_CHOICES, default='EA')
     vendor_name = models.CharField(max_length=255, blank=True)
     system = models.CharField(max_length=100, blank=True)
+    # Currency for cost fields
     supplier_currency = models.CharField(max_length=10, default='SAR')
-    base_price = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    # Cost breakdown fields
+    base_unit_cost = models.DecimalField(max_digits=15, decimal_places=2, default=0, help_text='Raw cost from supplier')
+    # Percentage fields (as whole numbers, e.g., 3 = 3%)
+    discount_pct = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text='Discount %. If blank, uses sheet rate.')
+    shipping_pct = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text='Shipping %. If blank, uses sheet rate.')
+    customs_pct = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text='Customs %. If blank, uses sheet rate.')
+    finances_pct = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text='Finances %. If blank, uses sheet rate.')
+    installation_pct = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text='Installation %. If blank, uses sheet rate.')
+    margin = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text='Item-specific margin. If blank, uses sheet margin.')
     order = models.IntegerField(default=0)
 
     class Meta:
@@ -137,74 +253,162 @@ class CostingLineItem(models.Model):
         return self.section.costing_sheet
 
     @property
-    def base_total(self):
-        return self.base_price * self.quantity
+    def effective_margin(self):
+        """Use item-specific margin if set, otherwise fall back to sheet margin. Divide by 100 for calculation."""
+        if self.margin is not None:
+            return self.margin / Decimal('100')
+        return self.sheet.margin / Decimal('100')
 
     @property
-    def discounted_price(self):
-        return self.base_price * (1 - self.sheet.discount_rate)
+    def effective_discount_pct(self):
+        """Use item-specific discount % if set, otherwise fall back to sheet rate. Divide by 100 for calculation."""
+        if self.discount_pct is not None:
+            return self.discount_pct / Decimal('100')
+        return self.sheet.discount_rate / Decimal('100')
 
     @property
-    def exchange_rate(self):
-        if self.supplier_currency == 'USD':
+    def effective_shipping_pct(self):
+        """Use item-specific shipping % if set, otherwise fall back to sheet rate. Divide by 100 for calculation."""
+        if self.shipping_pct is not None:
+            return self.shipping_pct / Decimal('100')
+        return self.sheet.shipping_rate / Decimal('100')
+
+    @property
+    def effective_customs_pct(self):
+        """Use item-specific customs % if set, otherwise fall back to sheet rate. Divide by 100 for calculation."""
+        if self.customs_pct is not None:
+            return self.customs_pct / Decimal('100')
+        return self.sheet.customs_rate / Decimal('100')
+
+    @property
+    def effective_finances_pct(self):
+        """Use item-specific finances % if set, otherwise fall back to sheet rate. Divide by 100 for calculation."""
+        if self.finances_pct is not None:
+            return self.finances_pct / Decimal('100')
+        return self.sheet.finances_rate / Decimal('100')
+
+    @property
+    def effective_installation_pct(self):
+        """Use item-specific installation % if set, otherwise fall back to sheet rate. Divide by 100 for calculation."""
+        if self.installation_pct is not None:
+            return self.installation_pct / Decimal('100')
+        return self.sheet.installation_rate / Decimal('100')
+
+    @property
+    def discount_amount(self):
+        """Calculate discount amount from base_unit_cost * discount_pct"""
+        result = self.base_unit_cost * self.effective_discount_pct
+        return result.quantize(Decimal('0.01'))
+
+    @property
+    def unit_cost(self):
+        """Base Unit Cost - Discount Amount"""
+        result = self.base_unit_cost - self.discount_amount
+        return result.quantize(Decimal('0.01'))
+
+    @property
+    def total_cost(self):
+        """Unit Cost * Quantity"""
+        result = self.unit_cost * self.quantity
+        return result.quantize(Decimal('0.01'))
+
+    @property
+    def exchange_rate_to_sar(self):
+        """Get exchange rate from supplier currency to SAR"""
+        if self.supplier_currency == 'SAR':
             return Decimal('1')
         try:
-            return ExchangeRate.objects.get(
-                currency_code=self.supplier_currency
-            ).rate_to_usd
+            supplier_rate = ExchangeRate.objects.get(currency_code=self.supplier_currency).rate_to_usd
+            sar_rate = ExchangeRate.objects.get(currency_code='SAR').rate_to_usd
+            # Convert: supplier -> USD -> SAR
+            return (sar_rate / supplier_rate).quantize(Decimal('0.000001'))
         except ExchangeRate.DoesNotExist:
             return Decimal('1')
 
     @property
-    def discounted_total(self):
-        return self.discounted_price * self.quantity
+    def unit_cost_sar(self):
+        """Unit Cost converted to SAR"""
+        result = self.unit_cost * self.exchange_rate_to_sar
+        return result.quantize(Decimal('0.01'))
 
     @property
-    def cost_usd(self):
-        rate = self.exchange_rate
-        if rate == 0:
-            return Decimal('0')
-        return self.discounted_price / rate
-
-    @property
-    def cost_usd_total(self):
-        return self.cost_usd * self.quantity
-
-    @property
-    def quoted_usd(self):
-        margin = self.sheet.margin
+    def base_unit_price(self):
+        """Selling Price = Cost / (1 - Margin), where selling price is 100%"""
+        margin = self.effective_margin
         if margin >= 1:
-            return self.cost_usd
-        return self.cost_usd / (1 - margin)
+            return self.unit_cost_sar
+        result = self.unit_cost_sar / (1 - margin)
+        return result.quantize(Decimal('0.01'))
 
     @property
-    def output_exchange_rate(self):
-        output_cur = self.sheet.output_currency
-        if output_cur == 'USD':
-            return Decimal('1')
-        try:
-            return ExchangeRate.objects.get(
-                currency_code=output_cur
-            ).rate_to_usd
-        except ExchangeRate.DoesNotExist:
-            return Decimal('1')
+    def base_total_price(self):
+        """Base Unit Price * Quantity"""
+        result = self.base_unit_price * self.quantity
+        return result.quantize(Decimal('0.01'))
 
     @property
-    def quoted_usd_total(self):
-        return self.quoted_usd * self.quantity
-
-    @property
-    def quoted_local(self):
-        return self.quoted_usd * self.output_exchange_rate
-
-    @property
-    def ddp_amount(self):
-        return self.quoted_local * self.sheet.ddp_rate
+    def total_addon_pct(self):
+        """Sum of shipping + customs + finances + installation percentages"""
+        return (self.effective_shipping_pct + self.effective_customs_pct +
+                self.effective_finances_pct + self.effective_installation_pct)
 
     @property
     def final_unit_price(self):
-        return self.quoted_local + self.ddp_amount
+        """Base Unit Price + (Unit Cost SAR * total addon percentages)"""
+        result = self.base_unit_price + (self.unit_cost_sar * self.total_addon_pct)
+        return result.quantize(Decimal('0.01'))
 
     @property
     def final_total_price(self):
-        return self.final_unit_price * self.quantity
+        """Final Unit Price * Quantity"""
+        result = self.final_unit_price * self.quantity
+        return result.quantize(Decimal('0.01'))
+
+    # Aliases for template compatibility
+    @property
+    def price_in_sar(self):
+        """Alias for final_unit_price"""
+        return self.final_unit_price
+
+    # Display properties for percentage fields (show as whole numbers)
+    @property
+    def display_margin(self):
+        """Return margin as whole number for display"""
+        if self.margin is not None:
+            return self.margin
+        return self.sheet.margin
+
+    @property
+    def display_discount_pct(self):
+        """Return discount % as whole number for display"""
+        if self.discount_pct is not None:
+            return self.discount_pct
+        return self.sheet.discount_rate
+
+    @property
+    def display_shipping_pct(self):
+        """Return shipping % as whole number for display"""
+        if self.shipping_pct is not None:
+            return self.shipping_pct
+        return self.sheet.shipping_rate
+
+    @property
+    def display_customs_pct(self):
+        """Return customs % as whole number for display"""
+        if self.customs_pct is not None:
+            return self.customs_pct
+        return self.sheet.customs_rate
+
+    @property
+    def display_finances_pct(self):
+        """Return finances % as whole number for display"""
+        if self.finances_pct is not None:
+            return self.finances_pct
+        return self.sheet.finances_rate
+
+    @property
+    def display_installation_pct(self):
+        """Return installation % as whole number for display"""
+        if self.installation_pct is not None:
+            return self.installation_pct
+        return self.sheet.installation_rate

@@ -27,7 +27,7 @@
   "model": "projects.region",
   "pk": 3,
   "fields": {
-    "name": "Pacific Asia",
+    "name": "Pace Arabia",
     "code": "PA",
     "currency": "USD",
     "description": "",
@@ -232,7 +232,7 @@
   "pk": 3,
   "fields": {
     "serial_number": null,
-    "project_name": "Call for Local SMEs – EC&I, Safety-Critical Software, OT & Resilience Engineering Support for Fujitsu at Heathrow",
+    "project_name": "Call for Local SMEs ï¿½ EC&I, Safety-Criticalï¿½Software, OT & Resilience Engineering Support for Fujitsu at Heathrow",
     "proposal_reference": "LNUK-IRL02125055",
     "client_rfq_reference": "C4N95693100",
     "po_number": "",
@@ -802,7 +802,7 @@
   "pk": 22,
   "fields": {
     "serial_number": null,
-    "project_name": "Invitation to Tender (“ITT”) for the supply and support of server infrastructure, including compute servers, storage systems, and backup solutions.",
+    "project_name": "Invitation to Tender (ï¿½ITTï¿½) for the supply and support of server infrastructure, including compute servers, storage systems, and backup solutions.",
     "proposal_reference": "LNUK-IRL02125053",
     "client_rfq_reference": "CA16071",
     "po_number": "",
@@ -864,7 +864,7 @@
     "serial_number": null,
     "project_name": "Lenovo G4 Laptops, LapCabby lyte 20, Lenovo KB+Mouse and additional laptop power supplies",
     "proposal_reference": "LNUK-IRL02125062",
-    "client_rfq_reference": " RA352092",
+    "client_rfq_reference": "ï¿½RA352092",
     "po_number": "",
     "submission_deadline": "2025-07-25",
     "estimated_po_date": null,
@@ -2902,7 +2902,7 @@
   "pk": 92,
   "fields": {
     "serial_number": null,
-    "project_name": "LNA - MAADEN\nMATERIAL REQUISITION\nCisco Video Conferencing System – MAADEN ALUMINIUM",
+    "project_name": "LNA - MAADEN\nMATERIAL REQUISITION\nCisco Video Conferencing System ï¿½ MAADEN ALUMINIUM",
     "proposal_reference": "LNUK-IRL02125007",
     "client_rfq_reference": "",
     "po_number": "",
@@ -3382,7 +3382,7 @@
   "pk": 108,
   "fields": {
     "serial_number": null,
-    "project_name": "•\tWorkstation Rockwell Full HD Display 16 GB RAM Quad Pro Processor with power supply module – qty 16.\n•\tMicro Power Supply Module compatible with the above – qty 32.\n\nFrom PACE",
+    "project_name": "ï¿½\tWorkstation Rockwell Full HD Display 16 GB RAM Quad Pro Processor with power supply module ï¿½ qty 16.\nï¿½\tMicro Power Supply Module compatible with the above ï¿½ qty 32.\n\nFrom PACE",
     "proposal_reference": "LNUK-IRL02125012",
     "client_rfq_reference": "",
     "po_number": "",
@@ -4222,7 +4222,7 @@
   "pk": 136,
   "fields": {
     "serial_number": null,
-    "project_name": "Request for Specifications and Quotation – SMART Helmet",
+    "project_name": "Request for Specifications and Quotation ï¿½ SMART Helmet",
     "proposal_reference": "LNA-2692-R01",
     "client_rfq_reference": "Smart safety and RTLS",
     "po_number": "",
@@ -5722,7 +5722,7 @@
   "pk": 186,
   "fields": {
     "serial_number": null,
-    "project_name": "JAFURAH PROJECT PHASE 1 CATEGORY 4 – Fencing, Thermal Cameras, Fixed Cameras, and PIDS Sensor",
+    "project_name": "JAFURAH PROJECT PHASE 1 CATEGORY 4 ï¿½ Fencing, Thermal Cameras, Fixed Cameras, and PIDS Sensor",
     "proposal_reference": "LNA2688",
     "client_rfq_reference": "Fencing and cameras",
     "po_number": "",
@@ -7404,7 +7404,7 @@
     "serial_number": null,
     "project_name": "Mastergas Expansion Phase 3 Projects-Package 4",
     "proposal_reference": "LNA-2450",
-    "client_rfq_reference": "Tetra Radio System and Network” of EWPS-1 to BGCS-3 EWG-3/4 Pipelines Project (PEW04 – Package 04)",
+    "client_rfq_reference": "Tetra Radio System and Networkï¿½ of EWPS-1 to BGCS-3 EWG-3/4 Pipelines Project (PEW04 ï¿½ Package 04)",
     "po_number": "",
     "submission_deadline": "2024-04-04",
     "estimated_po_date": null,
@@ -7882,9 +7882,9 @@
   "pk": 258,
   "fields": {
     "serial_number": null,
-    "project_name": "TEL-MRQ-0001 | TELECOMMUNICATION SYSTEMS AND  SECURITY CCTV |",
+    "project_name": "TEL-MRQ-0001 | TELECOMMUNICATION SYSTEMS ANDï¿½ SECURITY CCTV |",
     "proposal_reference": "LNA-2457",
-    "client_rfq_reference": "TEL-MRQ-0001 | TELECOMMUNICATION SYSTEMS AND  SECURITY CCTV |",
+    "client_rfq_reference": "TEL-MRQ-0001 | TELECOMMUNICATION SYSTEMS ANDï¿½ SECURITY CCTV |",
     "po_number": "",
     "submission_deadline": "2024-04-20",
     "estimated_po_date": null,
