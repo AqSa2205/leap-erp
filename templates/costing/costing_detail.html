@@ -20,20 +20,14 @@
     .subtotal-row { background: #fafafa; font-weight: 600; }
     .grand-total-row { background: var(--leap-red); color: #fff; font-weight: 700; }
 
-    .grp-supplier { background-color: #fff8e1 !important; }
-    .grp-usd { background-color: #e8f5e9 !important; }
-    .grp-qusd { background-color: #e3f2fd !important; }
-    .grp-local { background-color: #fce4ec !important; }
-
-    .hdr-supplier { background-color: #f9a825 !important; color: #fff !important; }
-    .hdr-usd { background-color: #2e7d32 !important; color: #fff !important; }
-    .hdr-qusd { background-color: #1565c0 !important; color: #fff !important; }
-    .hdr-local { background-color: #b71c1c !important; color: #fff !important; }
+    /* Second half - cost columns with grey background */
+    .cost-col { background-color: #d0d0d0 !important; }
+    .cost-hdr { background-color: #495057 !important; color: #fff !important; }
 
     .rate-box { font-size: 0.78rem; }
     .rate-box td { padding: 1px 8px; }
 
-    /* Inline editable inputs */
+    /* Large styled inputs for sheet-level parameters */
     .inline-edit {
         background: transparent;
         border: 1px dashed #ccc;
@@ -41,9 +35,9 @@
         text-align: center;
         font-weight: 700;
         color: var(--leap-red);
-        width: 80px;
+        width: 70px;
         padding: 2px 4px;
-        font-size: 1.1rem;
+        font-size: 1rem;
         transition: all 0.2s;
     }
     .inline-edit:focus {
@@ -56,6 +50,21 @@
         border-color: #198754;
         background: rgba(25,135,84,0.08);
     }
+    .param-label { font-size: 0.65rem; text-transform: uppercase; color: #6c757d; }
+
+    /* Totals summary strip */
+    .total-value {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #212529;
+        font-variant-numeric: tabular-nums;
+    }
+    .total-label {
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        color: #6c757d;
+    }
+
     .rate-edit {
         background: transparent;
         border: 1px dashed #ccc;
@@ -74,7 +83,50 @@
         border-color: #198754;
         background: rgba(25,135,84,0.08);
     }
-    .param-label { font-size: 0.65rem; text-transform: uppercase; color: #6c757d; }
+
+    /* Currency dropdown */
+    .currency-select {
+        background: transparent;
+        border: 1px dashed #999;
+        border-radius: 3px;
+        padding: 2px 4px;
+        font-size: 0.75rem;
+        width: 65px;
+        cursor: pointer;
+    }
+    .currency-select:focus {
+        background: #fff;
+        border-color: var(--leap-red);
+        outline: none;
+    }
+    .currency-select.saved {
+        border-color: #198754;
+        background: rgba(25,135,84,0.08);
+    }
+
+    /* Inline edit in table rows */
+    .cost-edit, .margin-edit {
+        background: transparent;
+        border: 1px dashed #999;
+        border-radius: 3px;
+        text-align: right;
+        width: 70px;
+        padding: 2px 4px;
+        font-size: 0.75rem;
+    }
+    .margin-edit {
+        text-align: center;
+        width: 60px;
+    }
+    .cost-edit:focus, .margin-edit:focus {
+        background: #fff;
+        border-color: var(--leap-red);
+        outline: none;
+    }
+    .cost-edit.saved, .margin-edit.saved {
+        border-color: #198754;
+        background: rgba(25,135,84,0.08);
+    }
 </style>
 {% endblock %}
 
@@ -83,12 +135,11 @@
 <div class="card mb-3">
     <div class="card-body py-2">
         <div class="row">
-            <div class="col-md-5">
+            <div class="col-md-3">
                 <h5 class="mb-1">{{ sheet.title }}</h5>
                 <table class="small text-muted mb-0">
                     {% if sheet.project %}
                     <tr><td class="pe-2 fw-bold">Project:</td><td>{{ sheet.project.project_name }}</td></tr>
-                    <tr><td class="pe-2 fw-bold">LN Ref:</td><td>{{ sheet.project.proposal_reference }}</td></tr>
                     {% endif %}
                     {% if sheet.customer_reference %}
                     <tr><td class="pe-2 fw-bold">Cust. Ref:</td><td>{{ sheet.customer_reference }}</td></tr>
@@ -97,27 +148,42 @@
             </div>
 
             <!-- Editable Parameters -->
-            <div class="col-md-3 text-center">
-                <div class="d-flex justify-content-center gap-3">
+            <div class="col-md-5 text-center">
+                <div class="d-flex justify-content-center gap-2 flex-wrap">
                     <div>
                         <input type="number" class="inline-edit param-edit" data-field="margin"
-                               value="{{ sheet.margin }}" step="0.01" min="0" max="1">
-                        <div class="param-label">Margin</div>
-                    </div>
-                    <div>
-                        <input type="number" class="inline-edit param-edit" data-field="ddp_rate"
-                               value="{{ sheet.ddp_rate }}" step="0.01" min="0" max="1">
-                        <div class="param-label">DDP</div>
+                               value="{{ sheet.margin|floatformat:0 }}" step="1" min="0" max="99">
+                        <div class="param-label">Margin %</div>
                     </div>
                     <div>
                         <input type="number" class="inline-edit param-edit" data-field="discount_rate"
-                               value="{{ sheet.discount_rate }}" step="0.01" min="0" max="1">
-                        <div class="param-label">Discount</div>
+                               value="{{ sheet.discount_rate|floatformat:0 }}" step="1" min="0" max="99">
+                        <div class="param-label">Discount %</div>
+                    </div>
+                    <div>
+                        <input type="number" class="inline-edit param-edit" data-field="shipping_rate"
+                               value="{{ sheet.shipping_rate|floatformat:0 }}" step="1" min="0" max="99">
+                        <div class="param-label">Shipping %</div>
+                    </div>
+                    <div>
+                        <input type="number" class="inline-edit param-edit" data-field="customs_rate"
+                               value="{{ sheet.customs_rate|floatformat:0 }}" step="1" min="0" max="99">
+                        <div class="param-label">Customs %</div>
+                    </div>
+                    <div>
+                        <input type="number" class="inline-edit param-edit" data-field="finances_rate"
+                               value="{{ sheet.finances_rate|floatformat:0 }}" step="1" min="0" max="99">
+                        <div class="param-label">Finances %</div>
+                    </div>
+                    <div>
+                        <input type="number" class="inline-edit param-edit" data-field="installation_rate"
+                               value="{{ sheet.installation_rate|floatformat:0 }}" step="1" min="0" max="99">
+                        <div class="param-label">Install %</div>
                     </div>
                 </div>
             </div>
 
-            <!-- Editable Exchange Rates -->
+            <!-- Exchange Rates Table -->
             <div class="col-md-2">
                 <table class="rate-box table table-sm table-bordered mb-0">
                     <thead><tr class="table-dark"><th colspan="2" class="text-center" style="font-size:0.7rem;">EXCHANGE RATES</th></tr></thead>
@@ -144,9 +210,50 @@
                 {% endif %}
                 <div class="btn-group-vertical btn-group-sm">
                     <a href="{% url 'costing:edit' sheet.pk %}" class="btn btn-outline-secondary"><i class="bi bi-pencil"></i> Edit</a>
-                    <a href="{% url 'costing:export' sheet.pk %}" class="btn btn-outline-primary"><i class="bi bi-download"></i> Excel</a>
-                    <a href="{% url 'costing:delete' sheet.pk %}" class="btn btn-outline-danger"><i class="bi bi-trash"></i> Delete</a>
+                    <a href="{% url 'costing:export' sheet.pk %}" class="btn btn-outline-primary"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+                    <a href="{% url 'costing:export_pdf' sheet.pk %}" class="btn btn-outline-danger"><i class="bi bi-file-earmark-pdf"></i> PDF</a>
+                    <a href="{% url 'costing:delete' sheet.pk %}" class="btn btn-outline-secondary"><i class="bi bi-trash"></i> Delete</a>
                 </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Totals Summary Strip -->
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <div class="d-flex justify-content-center gap-3 flex-wrap">
+            <div class="text-center">
+                <div class="total-value">{{ sheet.total_cost|floatformat:2|intcomma }}</div>
+                <div class="total-label">Total Cost</div>
+            </div>
+            <div class="text-center">
+                <div class="total-value">{{ sheet.total_margin_amount|floatformat:2|intcomma }}</div>
+                <div class="total-label">Margin</div>
+            </div>
+            <div class="text-center">
+                <div class="total-value">{{ sheet.total_discount|floatformat:2|intcomma }}</div>
+                <div class="total-label">Discount</div>
+            </div>
+            <div class="text-center">
+                <div class="total-value">{{ sheet.total_shipping_amount|floatformat:2|intcomma }}</div>
+                <div class="total-label">Shipping</div>
+            </div>
+            <div class="text-center">
+                <div class="total-value">{{ sheet.total_customs_amount|floatformat:2|intcomma }}</div>
+                <div class="total-label">Customs</div>
+            </div>
+            <div class="text-center">
+                <div class="total-value">{{ sheet.total_finances_amount|floatformat:2|intcomma }}</div>
+                <div class="total-label">Finances</div>
+            </div>
+            <div class="text-center">
+                <div class="total-value">{{ sheet.total_installation_amount|floatformat:2|intcomma }}</div>
+                <div class="total-label">Installation</div>
+            </div>
+            <div class="text-center">
+                <div class="total-value text-danger fw-bold">{{ sheet.grand_total|floatformat:2|intcomma }}</div>
+                <div class="total-label">Grand Total</div>
             </div>
         </div>
     </div>
@@ -166,47 +273,37 @@
             <table class="table table-bordered bom-table mb-0">
                 <thead>
                     <tr>
-                        <th rowspan="2" class="table-dark">Item No</th>
-                        <th rowspan="2" class="table-dark" style="min-width:180px;">Description</th>
-                        <th rowspan="2" class="table-dark">Make</th>
-                        <th rowspan="2" class="table-dark">Model</th>
-                        <th rowspan="2" class="table-dark">Qty</th>
-                        <th rowspan="2" class="table-dark">Unit</th>
-                        <th rowspan="2" class="table-dark">Unit Price</th>
-                        <th rowspan="2" class="table-dark">Total Price</th>
-                        <th rowspan="2" class="table-dark">Vendor</th>
-                        <th rowspan="2" class="table-dark">System</th>
-                        <th colspan="7" class="hdr-supplier">Information from Suppliers</th>
-                        <th colspan="2" class="hdr-usd">Price in USD</th>
-                        <th colspan="3" class="hdr-qusd">Quoted Price USD</th>
-                        <th colspan="5" class="hdr-local">Quoted Price {{ sheet.output_currency }}</th>
-                        <th rowspan="2" class="table-dark" style="width:60px;">Act</th>
-                    </tr>
-                    <tr>
-                        <th class="hdr-supplier" style="font-size:0.6rem;">Cur</th>
-                        <th class="hdr-supplier">Base Price</th>
-                        <th class="hdr-supplier">Base Total</th>
-                        <th class="hdr-supplier">Disc</th>
-                        <th class="hdr-supplier">Disc Price</th>
-                        <th class="hdr-supplier">Disc Total</th>
-                        <th class="hdr-supplier" style="font-size:0.6rem;">Exch Rate</th>
-                        <th class="hdr-usd">Unit Price</th>
-                        <th class="hdr-usd">Total Price</th>
-                        <th class="hdr-qusd">Margin</th>
-                        <th class="hdr-qusd">Unit Price</th>
-                        <th class="hdr-qusd">Total Price</th>
-                        <th class="hdr-local">Unit Price</th>
-                        <th class="hdr-local">DDP Rate</th>
-                        <th class="hdr-local">DDP Amount</th>
-                        <th class="hdr-local">Unit Inc DDP</th>
-                        <th class="hdr-local">Total Price</th>
+                        <th class="table-dark">Item No</th>
+                        <th class="table-dark" style="min-width:180px;">Description</th>
+                        <th class="table-dark">Make</th>
+                        <th class="table-dark">Model</th>
+                        <th class="table-dark">Qty</th>
+                        <th class="table-dark">Unit</th>
+                        <th class="table-dark">Vendor</th>
+                        <th class="table-dark">Unit Price</th>
+                        <th class="table-dark">Total Price</th>
+                        <th class="cost-hdr">Currency</th>
+                        <th class="cost-hdr">Base Unit Cost</th>
+                        <th class="cost-hdr">Discount %</th>
+                        <th class="cost-hdr">Unit Cost</th>
+                        <th class="cost-hdr">Total Cost</th>
+                        <th class="cost-hdr">Margin %</th>
+                        <th class="cost-hdr">Base Unit Price</th>
+                        <th class="cost-hdr">Base Total Price</th>
+                        <th class="cost-hdr">Shipping %</th>
+                        <th class="cost-hdr">Customs %</th>
+                        <th class="cost-hdr">Finances %</th>
+                        <th class="cost-hdr">Install %</th>
+                        <th class="cost-hdr">Unit Price</th>
+                        <th class="cost-hdr">Total Price</th>
+                        <th class="table-dark" style="width:60px;">Act</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for section in sections %}
                     <tr class="section-header-row">
                         <td>{{ section.section_number }}</td>
-                        <td colspan="27">{{ section.title }}</td>
+                        <td colspan="22">{{ section.title }}</td>
                         <td class="text-center">
                             <a href="{% url 'costing:item_create' section.pk %}" class="btn btn-sm btn-outline-primary py-0 px-1" title="Add Item"><i class="bi bi-plus"></i></a>
                             <a href="{% url 'costing:section_edit' section.pk %}" class="btn btn-sm btn-outline-secondary py-0 px-1" title="Edit"><i class="bi bi-pencil"></i></a>
@@ -222,27 +319,51 @@
                         <td>{{ item.model_number }}</td>
                         <td class="num">{{ item.quantity|floatformat:0 }}</td>
                         <td>{{ item.unit }}</td>
+                        <td>{{ item.vendor_name }}</td>
                         <td class="num">{{ item.final_unit_price|floatformat:2|intcomma }}</td>
                         <td class="num fw-bold">{{ item.final_total_price|floatformat:2|intcomma }}</td>
-                        <td>{{ item.vendor_name }}</td>
-                        <td>{{ item.system }}</td>
-                        <td class="grp-supplier text-center">{{ item.supplier_currency }}</td>
-                        <td class="grp-supplier num">{{ item.base_price|floatformat:2|intcomma }}</td>
-                        <td class="grp-supplier num">{{ item.base_total|floatformat:2|intcomma }}</td>
-                        <td class="grp-supplier num">{{ item.sheet.discount_rate }}</td>
-                        <td class="grp-supplier num">{{ item.discounted_price|floatformat:2|intcomma }}</td>
-                        <td class="grp-supplier num">{{ item.discounted_total|floatformat:2|intcomma }}</td>
-                        <td class="grp-supplier num">{{ item.exchange_rate }}</td>
-                        <td class="grp-usd num">{{ item.cost_usd|floatformat:2|intcomma }}</td>
-                        <td class="grp-usd num">{{ item.cost_usd_total|floatformat:2|intcomma }}</td>
-                        <td class="grp-qusd num">{{ item.sheet.margin }}</td>
-                        <td class="grp-qusd num">{{ item.quoted_usd|floatformat:2|intcomma }}</td>
-                        <td class="grp-qusd num">{{ item.quoted_usd_total|floatformat:2|intcomma }}</td>
-                        <td class="grp-local num">{{ item.quoted_local|floatformat:2|intcomma }}</td>
-                        <td class="grp-local num">{{ item.sheet.ddp_rate }}</td>
-                        <td class="grp-local num">{{ item.ddp_amount|floatformat:2|intcomma }}</td>
-                        <td class="grp-local num">{{ item.final_unit_price|floatformat:2|intcomma }}</td>
-                        <td class="grp-local num fw-bold">{{ item.final_total_price|floatformat:2|intcomma }}</td>
+                        <!-- Cost columns (grey) -->
+                        <td class="cost-col">
+                            <select class="currency-select" data-item-id="{{ item.pk }}">
+                                {% for rate in exchange_rates %}
+                                <option value="{{ rate.currency_code }}" {% if item.supplier_currency == rate.currency_code %}selected{% endif %}>{{ rate.currency_code }}</option>
+                                {% endfor %}
+                            </select>
+                        </td>
+                        <td class="cost-col num">
+                            <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="base_unit_cost"
+                                   value="{{ item.base_unit_cost }}" step="0.01" min="0">
+                        </td>
+                        <td class="cost-col num">
+                            <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="discount_pct"
+                                   value="{{ item.display_discount_pct|floatformat:0 }}" step="1" min="0">
+                        </td>
+                        <td class="cost-col num">{{ item.unit_cost|floatformat:2|intcomma }}</td>
+                        <td class="cost-col num">{{ item.total_cost|floatformat:2|intcomma }}</td>
+                        <td class="cost-col num">
+                            <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="margin"
+                                   value="{{ item.display_margin|floatformat:0 }}" step="1" min="0" max="99">
+                        </td>
+                        <td class="cost-col num">{{ item.base_unit_price|floatformat:2|intcomma }}</td>
+                        <td class="cost-col num">{{ item.base_total_price|floatformat:2|intcomma }}</td>
+                        <td class="cost-col num">
+                            <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="shipping_pct"
+                                   value="{{ item.display_shipping_pct|floatformat:0 }}" step="1" min="0">
+                        </td>
+                        <td class="cost-col num">
+                            <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="customs_pct"
+                                   value="{{ item.display_customs_pct|floatformat:0 }}" step="1" min="0">
+                        </td>
+                        <td class="cost-col num">
+                            <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="finances_pct"
+                                   value="{{ item.display_finances_pct|floatformat:0 }}" step="1" min="0">
+                        </td>
+                        <td class="cost-col num">
+                            <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="installation_pct"
+                                   value="{{ item.display_installation_pct|floatformat:0 }}" step="1" min="0">
+                        </td>
+                        <td class="cost-col num">{{ item.final_unit_price|floatformat:2|intcomma }}</td>
+                        <td class="cost-col num fw-bold">{{ item.final_total_price|floatformat:2|intcomma }}</td>
                         <td class="text-center">
                             <a href="{% url 'costing:item_edit' item.pk %}" class="btn btn-sm btn-outline-secondary py-0 px-1"><i class="bi bi-pencil"></i></a>
                             <a href="{% url 'costing:item_delete' item.pk %}" class="btn btn-sm btn-outline-danger py-0 px-1"><i class="bi bi-trash"></i></a>
@@ -250,20 +371,31 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="28" class="text-center text-muted py-2">
+                        <td colspan="24" class="text-center text-muted py-2">
                             No items. <a href="{% url 'costing:item_create' section.pk %}">Add one</a>.
                         </td>
                     </tr>
                     {% endfor %}
 
                     <tr class="subtotal-row">
-                        <td colspan="7" class="text-end">Sub-Total</td>
+                        <td colspan="8" class="text-end">Sub-Total</td>
                         <td class="num fw-bold">{{ section.subtotal|floatformat:2|intcomma }}</td>
-                        <td colspan="20"></td>
+                        <td class="cost-col"></td>
+                        <td class="cost-col num fw-bold">{{ section.subtotal_base_unit_cost|floatformat:2|intcomma }}</td>
+                        <td class="cost-col num fw-bold">{{ section.subtotal_discount|floatformat:2|intcomma }}</td>
+                        <td class="cost-col num fw-bold">{{ section.subtotal_unit_cost|floatformat:2|intcomma }}</td>
+                        <td class="cost-col num fw-bold">{{ section.total_cost|floatformat:2|intcomma }}</td>
+                        <td class="cost-col"></td>
+                        <td class="cost-col num fw-bold">{{ section.subtotal_base_unit_price|floatformat:2|intcomma }}</td>
+                        <td class="cost-col num fw-bold">{{ section.subtotal_base_total_price|floatformat:2|intcomma }}</td>
+                        <td class="cost-col" colspan="4"></td>
+                        <td class="cost-col num fw-bold">{{ section.subtotal|floatformat:2|intcomma }}</td>
+                        <td class="cost-col num fw-bold">{{ section.subtotal|floatformat:2|intcomma }}</td>
+                        <td></td>
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="28" class="text-center py-4 text-muted">
+                        <td colspan="24" class="text-center py-4 text-muted">
                             No sections yet. <a href="{% url 'costing:section_create' sheet.pk %}">Add a section</a> to build your BOM.
                         </td>
                     </tr>
@@ -271,9 +403,19 @@
 
                     {% if sections %}
                     <tr class="grand-total-row">
-                        <td colspan="7" class="text-end">GRAND TOTAL ({{ sheet.output_currency }})</td>
+                        <td colspan="8" class="text-end">GRAND TOTAL ({{ sheet.output_currency }})</td>
                         <td class="num">{{ sheet.grand_total|floatformat:2|intcomma }}</td>
-                        <td colspan="20"></td>
+                        <td></td>
+                        <td class="num">{{ sheet.total_base_cost|floatformat:2|intcomma }}</td>
+                        <td class="num">{{ sheet.total_discount|floatformat:2|intcomma }}</td>
+                        <td class="num">{{ sheet.total_cost|floatformat:2|intcomma }}</td>
+                        <td class="num">{{ sheet.total_cost|floatformat:2|intcomma }}</td>
+                        <td></td>
+                        <td class="num" colspan="2">{{ sheet.grand_total|floatformat:2|intcomma }}</td>
+                        <td colspan="4"></td>
+                        <td class="num">{{ sheet.grand_total|floatformat:2|intcomma }}</td>
+                        <td class="num">{{ sheet.grand_total|floatformat:2|intcomma }}</td>
+                        <td></td>
                     </tr>
                     {% endif %}
                 </tbody>
@@ -344,6 +486,88 @@
                     el.classList.add('saved');
                     setTimeout(() => el.classList.remove('saved'), 800);
                     // Reload page to recalculate all prices
+                    setTimeout(() => location.reload(), 500);
+                }
+            });
+        });
+    });
+
+    // Save line item margin on change
+    document.querySelectorAll('.margin-edit').forEach(input => {
+        input.addEventListener('change', function() {
+            const itemId = this.dataset.itemId;
+            const value = this.value;
+            const el = this;
+            const url = `/costing/item/${itemId}/update-field/`;
+
+            fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRFToken': csrfToken,
+                },
+                body: `field=margin&value=${value}`,
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    el.classList.add('saved');
+                    setTimeout(() => el.classList.remove('saved'), 800);
+                    setTimeout(() => location.reload(), 500);
+                }
+            });
+        });
+    });
+
+    // Save line item cost fields on change
+    document.querySelectorAll('.cost-edit').forEach(input => {
+        input.addEventListener('change', function() {
+            const itemId = this.dataset.itemId;
+            const field = this.dataset.field;
+            const value = this.value;
+            const el = this;
+            const url = `/costing/item/${itemId}/update-field/`;
+
+            fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRFToken': csrfToken,
+                },
+                body: `field=${field}&value=${value}`,
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    el.classList.add('saved');
+                    setTimeout(() => el.classList.remove('saved'), 800);
+                    setTimeout(() => location.reload(), 500);
+                }
+            });
+        });
+    });
+
+    // Save line item currency on change
+    document.querySelectorAll('.currency-select').forEach(select => {
+        select.addEventListener('change', function() {
+            const itemId = this.dataset.itemId;
+            const value = this.value;
+            const el = this;
+            const url = `/costing/item/${itemId}/update-field/`;
+
+            fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRFToken': csrfToken,
+                },
+                body: `field=supplier_currency&value=${value}`,
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    el.classList.add('saved');
+                    setTimeout(() => el.classList.remove('saved'), 800);
                     setTimeout(() => location.reload(), 500);
                 }
             });

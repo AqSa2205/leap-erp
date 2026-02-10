@@ -123,6 +123,49 @@
                         </div>
                     </div>
                     {% endif %}
+
+                    <!-- Manager/Admin Responses -->
+                    <div class="card mb-4">
+                        <div class="card-header bg-info text-white">
+                            <h5 class="mb-0"><i class="bi bi-reply"></i> Management Response</h5>
+                        </div>
+                        <div class="card-body">
+                            {% if responses %}
+                            <div class="responses-list mb-4">
+                                {% for response in responses %}
+                                <div class="response-item border-start border-4 border-info ps-3 mb-3 {% if not forloop.last %}pb-3 border-bottom{% endif %}">
+                                    <div class="d-flex justify-content-between align-items-start mb-2">
+                                        <div>
+                                            <strong class="text-primary">{{ response.responder.get_full_name|default:response.responder.username }}</strong>
+                                            <span class="badge bg-secondary ms-2">
+                                                {% if response.responder.is_admin_user %}Admin{% elif response.responder.is_manager_user %}Manager{% endif %}
+                                            </span>
+                                        </div>
+                                        <small class="text-muted">{{ response.created_at|date:"d M Y, H:i" }}</small>
+                                    </div>
+                                    <p class="mb-0">{{ response.message|linebreaks }}</p>
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% else %}
+                            <p class="text-muted mb-3"><i class="bi bi-info-circle"></i> No responses yet.</p>
+                            {% endif %}
+
+                            {% if can_respond %}
+                            <hr>
+                            <form method="post" action="">
+                                {% csrf_token %}
+                                <div class="mb-3">
+                                    <label for="response_message" class="form-label">Add Your Response</label>
+                                    <textarea class="form-control" id="response_message" name="response_message" rows="3" placeholder="Enter your response or feedback..."></textarea>
+                                </div>
+                                <button type="submit" class="btn btn-info">
+                                    <i class="bi bi-send"></i> Submit Response
+                                </button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Sidebar -->

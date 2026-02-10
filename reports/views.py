@@ -15,7 +15,7 @@ from dateutil.parser import parse as parse_date
 
 from projects.models import Project, Region, ProjectStatus
 from accounts.decorators import manager_or_admin_required
-from .models import Vendor, EPC, Exhibition, ProcurementPortal, Certification, SalesContact, SalesCallReport
+from .models import Vendor, EPC, Exhibition, ProcurementPortal, Certification, SalesContact, SalesCallReport, SalesCallResponse
 from .forms import SalesCallReportForm, SalesCallReportFilterForm
 
 
@@ -559,6 +559,35 @@ class SalesCallReportDetailView(LoginRequiredMixin, UserPassesTestMixin, DetailV
         report = self.get_object()
         user = self.request.user
         return user.is_admin_user or user.is_manager_user or report.sales_rep == user
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['responses'] = self.object.responses.select_related('responder').all()
+        context['can_respond'] = self.request.user.is_admin_user or self.request.user.is_manager_user
+        return context
+
+    def post(self, request, *args, **kwargs):
+        """Handle adding a response"""
+        self.object = self.get_object()
+        user = request.user
+
+        # Only admin and manager can add responses
+        if not (user.is_admin_user or user.is_manager_user):
+            messages.error(request, 'You do not have permission to add responses.')
+            return redirect('reports:sales_call_detail', pk=self.object.pk)
+
+        message = request.POST.get('response_message', '').strip()
+        if message:
+            SalesCallResponse.objects.create(
+                sales_call=self.object,
+                responder=user,
+                message=message
+            )
+            messages.success(request, 'Response added successfully.')
+        else:
+            messages.warning(request, 'Please enter a response message.')
+
+        return redirect('reports:sales_call_detail', pk=self.object.pk)
 
 
 class SalesCallReportDeleteView(LoginRequiredMixin, UserPassesTestMixin, DeleteView):

@@ -48,7 +48,7 @@
                     </div>
 
                     <hr>
-                    <h6 class="text-muted mb-3">Quantity & Pricing</h6>
+                    <h6 class="text-muted mb-3">Quantity & Unit</h6>
 
                     <div class="row mb-3">
                         <div class="col-md-3">
@@ -60,19 +60,46 @@
                             {{ form.unit }}
                         </div>
                         <div class="col-md-3">
-                            <label class="form-label fw-bold">Base Price</label>
-                            {{ form.base_price }}
+                            <label class="form-label fw-bold">Margin (optional)</label>
+                            {{ form.margin }}
+                            <small class="text-muted">Leave blank to use sheet margin</small>
                         </div>
                         <div class="col-md-3">
-                            <label class="form-label fw-bold">Currency</label>
-                            {{ form.supplier_currency }}
+                            <label class="form-label fw-bold">Display Order</label>
+                            {{ form.order }}
+                        </div>
+                    </div>
+
+                    <hr>
+                    <h6 class="text-muted mb-3">Cost Breakdown</h6>
+
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Unit Cost</label>
+                            {{ form.unit_cost }}
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Discount</label>
+                            {{ form.discount }}
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Shipping</label>
+                            {{ form.shipping }}
                         </div>
                     </div>
 
                     <div class="row mb-3">
-                        <div class="col-md-3">
-                            <label class="form-label fw-bold">Display Order</label>
-                            {{ form.order }}
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Customs</label>
+                            {{ form.customs }}
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Finances</label>
+                            {{ form.finances }}
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Installation</label>
+                            {{ form.installation }}
                         </div>
                     </div>
 

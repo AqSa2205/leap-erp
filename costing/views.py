@@ -306,7 +306,7 @@ def ajax_update_sheet_params(request, pk):
     field = request.POST.get('field')
     value = request.POST.get('value', '').strip()
 
-    allowed = ('margin', 'ddp_rate', 'discount_rate', 'output_currency')
+    allowed = ('margin', 'discount_rate', 'shipping_rate', 'customs_rate', 'finances_rate', 'installation_rate', 'output_currency')
     if field not in allowed:
         return JsonResponse({'error': 'Invalid field'}, status=400)
 
@@ -332,6 +332,48 @@ def ajax_update_exchange_rate(request, pk):
     except (InvalidOperation, ValueError):
         return JsonResponse({'error': 'Invalid number'}, status=400)
     rate.save()
+    return JsonResponse({'ok': True})
+
+
+@login_required
+@require_POST
+def ajax_update_item_margin(request, pk):
+    item = get_object_or_404(CostingLineItem, pk=pk)
+    value = request.POST.get('margin', '').strip()
+    if not value:
+        item.margin = None  # Clear to use sheet margin
+    else:
+        try:
+            item.margin = Decimal(value)
+        except (InvalidOperation, ValueError):
+            return JsonResponse({'error': 'Invalid number'}, status=400)
+    item.save()
+    return JsonResponse({'ok': True})
+
+
+@login_required
+@require_POST
+def ajax_update_item_field(request, pk):
+    item = get_object_or_404(CostingLineItem, pk=pk)
+    field = request.POST.get('field', '').strip()
+    value = request.POST.get('value', '').strip()
+
+    allowed_fields = ('base_unit_cost', 'discount_pct', 'shipping_pct', 'customs_pct', 'finances_pct', 'installation_pct', 'margin', 'supplier_currency')
+    if field not in allowed_fields:
+        return JsonResponse({'error': 'Invalid field'}, status=400)
+
+    if field == 'supplier_currency':
+        # String field - set directly
+        item.supplier_currency = value if value else 'SAR'
+    elif field == 'margin' and not value:
+        item.margin = None  # Clear to use sheet margin
+    else:
+        try:
+            setattr(item, field, Decimal(value) if value else Decimal('0'))
+        except (InvalidOperation, ValueError):
+            return JsonResponse({'error': 'Invalid number'}, status=400)
+
+    item.save()
     return JsonResponse({'ok': True})
 
 
@@ -361,27 +403,30 @@ def costing_export_excel(request, pk):
     hdr_white = Font(bold=True, color='FFFFFF', size=9)
     section_font = Font(bold=True, size=10)
     num_fmt = '#,##0.00'
-    supplier_fill = PatternFill(start_color='FFF8E1', end_color='FFF8E1', fill_type='solid')
-    usd_fill = PatternFill(start_color='E8F5E9', end_color='E8F5E9', fill_type='solid')
-    quoted_usd_fill = PatternFill(start_color='E3F2FD', end_color='E3F2FD', fill_type='solid')
-    quoted_local_fill = PatternFill(start_color='FCE4EC', end_color='FCE4EC', fill_type='solid')
-    hdr_supplier = PatternFill(start_color='F9A825', end_color='F9A825', fill_type='solid')
-    hdr_usd = PatternFill(start_color='43A047', end_color='43A047', fill_type='solid')
-    hdr_quoted_usd = PatternFill(start_color='1E88E5', end_color='1E88E5', fill_type='solid')
-    hdr_quoted_local = PatternFill(start_color='C62828', end_color='C62828', fill_type='solid')
+    # Grey for cost columns (second half)
+    cost_fill = PatternFill(start_color='D0D0D0', end_color='D0D0D0', fill_type='solid')
+    # Darker grey header for cost columns
+    hdr_cost = PatternFill(start_color='495057', end_color='495057', fill_type='solid')
+    # Dark header for info columns (first half)
     hdr_dark = PatternFill(start_color='212529', end_color='212529', fill_type='solid')
 
-    # Row 2: Margin / DDP / Discount + Exchange Rates
+    # Row 2: Sheet parameters + Exchange Rates
     ws['L2'] = 'Margin'
     ws['M2'] = float(sheet.margin)
+    ws['L3'] = 'Discount'
+    ws['M3'] = float(sheet.discount_rate)
+    ws['L4'] = 'Shipping'
+    ws['M4'] = float(sheet.shipping_rate)
+    ws['L5'] = 'Customs'
+    ws['M5'] = float(sheet.customs_rate)
+    ws['L6'] = 'Finances'
+    ws['M6'] = float(sheet.finances_rate)
+    ws['L7'] = 'Installation'
+    ws['M7'] = float(sheet.installation_rate)
+
     ws['O2'] = 'EXCHANGE RATES'
     ws['O2'].font = Font(bold=True)
-    ws['L3'] = 'DDP'
-    ws['M3'] = float(sheet.ddp_rate)
-    ws['L4'] = 'Discount'
-    ws['M4'] = float(sheet.discount_rate)
-
-    rate_row = 2
+    rate_row = 3
     for code, rate in sorted(rates.items()):
         ws.cell(row=rate_row, column=15, value=code).font = Font(bold=True)  # O
         ws.cell(row=rate_row, column=16, value=float(rate))  # P
@@ -404,44 +449,19 @@ def costing_export_excel(request, pk):
     ws['A8'] = 'BILL OF MATERIAL - COMMERCIAL'
     ws['A8'].font = Font(bold=True, size=12)
 
-    # Row 9-10: Column group headers
-    # Group header row
-    r = 10
-    group_cols = [
-        (1, 6, 'Item Details', hdr_dark),
-        (7, 8, f'Final Price ({sheet.output_currency})', hdr_dark),
-        (9, 10, '', hdr_dark),
-        (11, 16, 'INFORMATION FROM SUPPLIERS', hdr_supplier),
-        (17, 19, 'PRICE IN USD', hdr_usd),
-        (20, 22, 'QUOTED PRICE USD', hdr_quoted_usd),
-        (23, 27, f'QUOTED PRICE {sheet.output_currency}', hdr_quoted_local),
-    ]
-    for start, end, label, fill in group_cols:
-        if start != end:
-            ws.merge_cells(start_row=r, start_column=start, end_row=r, end_column=end)
-        cell = ws.cell(row=r, column=start, value=label)
-        cell.font = hdr_white
-        cell.fill = fill
-        cell.alignment = Alignment(horizontal='center')
-        for c in range(start, end + 1):
-            ws.cell(row=r, column=c).fill = fill
-
     # Column headers row
-    r = 11
+    r = 10
     headers = [
         'Item No', 'Description', 'Make', 'Model', 'Qty', 'Unit',
-        'Unit Price', 'Total Price', 'Vendor', 'System',
-        'Cur', 'Base Price', 'Base Total', 'Disc', 'Disc Price', 'Disc Total',
-        'Rate', 'Unit Price', 'Total Price',
-        'Margin', 'Unit Price', 'Total Price',
-        'Unit Price', 'DDP Rate', 'DDP Amount', 'Unit Inc DDP', 'Total Price',
+        'Vendor', 'Unit Price', 'Total Price',
+        'Currency', 'Base Unit Cost', 'Discount', 'Unit Cost', 'Total Cost',
+        'Margin', 'Base Unit Price', 'Base Total Price',
+        'Shipping %', 'Customs %', 'Finances %', 'Installation %',
+        'Unit Price', 'Total Price',
     ]
     col_fills = (
-        [hdr_dark]*10 +
-        [hdr_supplier]*6 +
-        [hdr_usd]*3 +
-        [hdr_quoted_usd]*3 +
-        [hdr_quoted_local]*5
+        [hdr_dark]*9 +
+        [hdr_cost]*14
     )
     for col, (h, fill) in enumerate(zip(headers, col_fills), 1):
         cell = ws.cell(row=r, column=col, value=h)
@@ -451,18 +471,15 @@ def costing_export_excel(request, pk):
         cell.alignment = Alignment(horizontal='center', wrap_text=True)
 
     # Data rows
-    row = 12
+    row = 11
     data_fills = (
-        [None]*10 +
-        [supplier_fill]*6 +
-        [usd_fill]*3 +
-        [quoted_usd_fill]*3 +
-        [quoted_local_fill]*5
+        [None]*9 +
+        [cost_fill]*14
     )
 
     for section in sections:
         # Section header
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=27)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=23)
         cell = ws.cell(row=row, column=1, value=f"{section.section_number}  {section.title}")
         cell.font = section_font
         cell.fill = PatternFill(start_color='F0F0F0', end_color='F0F0F0', fill_type='solid')
@@ -476,70 +493,66 @@ def costing_export_excel(request, pk):
                 item.model_number,
                 float(item.quantity),
                 item.unit,
+                item.vendor_name,
+                # Unit Price and Total Price (calculated final)
                 round(float(item.final_unit_price), 2),
                 round(float(item.final_total_price), 2),
-                item.vendor_name,
-                item.system,
-                # Supplier info
+                # Cost breakdown (grey section)
                 item.supplier_currency,
-                round(float(item.base_price), 2),
-                round(float(item.base_total), 2),
-                float(item.sheet.discount_rate),
-                round(float(item.discounted_price), 2),
-                round(float(item.discounted_total), 2),
-                # USD
-                float(item.exchange_rate),
-                round(float(item.cost_usd), 2),
-                round(float(item.cost_usd_total), 2),
-                # Quoted USD
-                float(item.sheet.margin),
-                round(float(item.quoted_usd), 2),
-                round(float(item.quoted_usd_total), 2),
-                # Quoted local
-                round(float(item.quoted_local), 2),
-                float(item.sheet.ddp_rate),
-                round(float(item.ddp_amount), 2),
+                round(float(item.base_unit_cost), 2),
+                round(float(item.discount), 2),
+                round(float(item.unit_cost), 2),
+                round(float(item.total_cost), 2),
+                float(item.effective_margin),
+                round(float(item.base_unit_price), 2),
+                round(float(item.base_total_price), 2),
+                float(item.effective_shipping_pct),
+                float(item.effective_customs_pct),
+                float(item.effective_finances_pct),
+                float(item.effective_installation_pct),
+                # Final Unit Price and Total Price at end of cost section
                 round(float(item.final_unit_price), 2),
                 round(float(item.final_total_price), 2),
             ]
             for col, val in enumerate(values, 1):
                 cell = ws.cell(row=row, column=col, value=val)
                 cell.border = thin
-                if data_fills[col - 1]:
+                if col <= len(data_fills) and data_fills[col - 1]:
                     cell.fill = data_fills[col - 1]
                 if isinstance(val, float) and col not in (5,):
                     cell.number_format = num_fmt
             row += 1
 
         # Subtotal
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
         cell = ws.cell(row=row, column=1, value=f"Sub-Total")
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal='right')
-        st_cell = ws.cell(row=row, column=8, value=round(float(section.subtotal), 2))
+        st_cell = ws.cell(row=row, column=9, value=round(float(section.subtotal), 2))
         st_cell.font = Font(bold=True)
         st_cell.number_format = num_fmt
         row += 1
 
     # Grand total
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
     cell = ws.cell(row=row, column=1, value=f'GRAND TOTAL ({sheet.output_currency})')
     cell.font = Font(bold=True, size=12, color='FFFFFF')
     cell.fill = PatternFill(start_color='C41E3A', end_color='C41E3A', fill_type='solid')
     cell.alignment = Alignment(horizontal='right')
-    gt_cell = ws.cell(row=row, column=8, value=round(float(sheet.grand_total), 2))
+    gt_cell = ws.cell(row=row, column=9, value=round(float(sheet.grand_total), 2))
     gt_cell.font = Font(bold=True, size=12, color='FFFFFF')
     gt_cell.fill = PatternFill(start_color='C41E3A', end_color='C41E3A', fill_type='solid')
     gt_cell.number_format = num_fmt
 
     # Column widths
     widths = {
-        'A': 10, 'B': 45, 'C': 14, 'D': 14, 'E': 7, 'F': 7,
-        'G': 14, 'H': 16, 'I': 14, 'J': 12,
-        'K': 6, 'L': 12, 'M': 14, 'N': 7, 'O': 12, 'P': 14,
-        'Q': 7, 'R': 12, 'S': 14,
-        'T': 7, 'U': 12, 'V': 14,
-        'W': 12, 'X': 8, 'Y': 12, 'Z': 14, 'AA': 16,
+        'A': 10, 'B': 40, 'C': 12, 'D': 12, 'E': 6, 'F': 6,
+        'G': 12, 'H': 12, 'I': 12,  # Vendor, Unit Price, Total Price
+        'J': 8,  # Currency
+        'K': 12, 'L': 10, 'M': 10, 'N': 12,  # Base Unit Cost, Discount, Unit Cost, Total Cost
+        'O': 8, 'P': 12, 'Q': 12,  # Margin, Base Unit Price, Base Total Price
+        'R': 10, 'S': 10, 'T': 10, 'U': 10,  # Percentages
+        'V': 12, 'W': 12,  # Final Unit Price, Total Price
     }
     for col_letter, w in widths.items():
         ws.column_dimensions[col_letter].width = w
@@ -550,4 +563,202 @@ def costing_export_excel(request, pk):
     filename = f"{sheet.title.replace(' ', '_')}_BOM.xlsx"
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)
+    return response
+
+
+# ─── PDF Summary Export ────────────────────────────────────────
+
+def costing_export_pdf(request, pk):
+    """Export a professional PDF summary matching the commercial offer format"""
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch, mm
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+        from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
+        from datetime import datetime
+    except ImportError:
+        messages.error(request, 'reportlab is required for PDF export. Install with: pip install reportlab')
+        return redirect('costing:detail', pk=pk)
+
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+    sections = sheet.sections.prefetch_related('line_items').all()
+
+    # Create response
+    response = HttpResponse(content_type='application/pdf')
+    filename = f"{sheet.title.replace(' ', '_')}_Commercial_Offer.pdf"
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+    # Create PDF document
+    doc = SimpleDocTemplate(
+        response,
+        pagesize=A4,
+        rightMargin=15*mm,
+        leftMargin=15*mm,
+        topMargin=15*mm,
+        bottomMargin=15*mm,
+    )
+
+    elements = []
+    styles = getSampleStyleSheet()
+
+    # Colors
+    GREEN_HEADER = colors.HexColor('#92D050')  # Light green for section headers
+    YELLOW_TITLE = colors.HexColor('#FFD966')  # Yellow for title bar
+    DARK_GREEN = colors.HexColor('#548235')    # Dark green for main header
+    BORDER_COLOR = colors.HexColor('#000000')
+
+    # ─── HEADER SECTION ───
+    # Company logo text (since we don't have actual logo file)
+    logo_style = ParagraphStyle('Logo', fontSize=18, textColor=colors.HexColor('#C41E3A'), fontName='Helvetica-Bold')
+
+    # Header info table
+    project_name = sheet.project.project_name if sheet.project else sheet.title
+    region_name = sheet.project.region.name if sheet.project and sheet.project.region else 'N/A'
+    region_code = sheet.project.region.code if sheet.project and sheet.project.region else ''
+    ln_ref = sheet.project.proposal_reference if sheet.project else ''
+    cust_ref = sheet.customer_reference or (sheet.project.client_rfq_reference if sheet.project else '')
+    current_date = datetime.now().strftime('%d-%b-%y')
+
+    header_data = [
+        [Paragraph('<b><font color="#C41E3A" size="16">LEAP</font></b><br/><font size="8" color="#C41E3A">NETWORKS</font>', styles['Normal']),
+         '', '', '', '', ''],
+        ['', '', '', '', '', ''],
+        [Paragraph(f'<b>Project:</b>', styles['Normal']),
+         Paragraph(f'{project_name}', styles['Normal']),
+         '',
+         Paragraph(f'<b>Sales Office:</b>', styles['Normal']),
+         Paragraph(f'LN-{region_name}', styles['Normal']), ''],
+        [Paragraph(f'<b>Cust. Ref:</b>', styles['Normal']),
+         Paragraph(f'{cust_ref}', styles['Normal']),
+         '',
+         Paragraph(f'<b>Contact:</b>', styles['Normal']),
+         Paragraph(f'{sheet.created_by.get_full_name() if sheet.created_by else ""}', styles['Normal']), ''],
+        [Paragraph(f'<b>LN Ref:</b>', styles['Normal']),
+         Paragraph(f'{ln_ref}', styles['Normal']),
+         '',
+         Paragraph(f'<b>Email:</b>', styles['Normal']),
+         Paragraph(f'{sheet.created_by.email if sheet.created_by else ""}', styles['Normal']), ''],
+        [Paragraph(f'<b>Date:</b>', styles['Normal']),
+         Paragraph(f'{current_date}', styles['Normal']),
+         '',
+         Paragraph(f'<b>Page:</b>', styles['Normal']),
+         Paragraph(f'Page 1 of 1', styles['Normal']), ''],
+    ]
+
+    header_table = Table(header_data, colWidths=[60, 180, 20, 70, 150, 20])
+    header_table.setStyle(TableStyle([
+        ('SPAN', (0, 0), (1, 1)),  # Logo spans
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+    ]))
+    elements.append(header_table)
+    elements.append(Spacer(1, 5*mm))
+
+    # ─── TITLE BAR ───
+    title_data = [[Paragraph(f'<b>COMMERCIAL OFFER SUMMARY</b>',
+                             ParagraphStyle('Title', fontSize=11, alignment=TA_CENTER, textColor=colors.black))]]
+    title_table = Table(title_data, colWidths=[500])
+    title_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), YELLOW_TITLE),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('BOX', (0, 0), (-1, -1), 1, BORDER_COLOR),
+    ]))
+    elements.append(title_table)
+
+    # ─── MAIN TABLE ───
+    # Headers
+    headers = ['Item No', 'Item Description', 'Qty', 'UOM', f'Total Price ({sheet.output_currency})']
+
+    # Build table data
+    data = [headers]
+
+    # Main contract price row
+    data.append(['A', 'MAIN - TOTAL CONTRACT PRICE', '', '', ''])
+
+    # Scope of Supply section
+    data.append(['A.1', 'SCOPE OF SUPPLY', '', '', f'{sheet.grand_total:,.2f}'])
+
+    # Add sections and their line items
+    for section in sections:
+        # Section header row
+        data.append([
+            section.section_number,
+            section.title,
+            '1',
+            'LOT',
+            ''
+        ])
+        # Add line items under this section
+        for item in section.line_items.all():
+            data.append([
+                item.item_number,
+                item.description[:60] + '...' if len(item.description) > 60 else item.description,
+                '',
+                '',
+                f'{item.final_total_price:,.2f}'
+            ])
+
+    # Create table
+    col_widths = [50, 280, 40, 40, 90]
+    main_table = Table(data, colWidths=col_widths)
+
+    # Build style commands
+    style_commands = [
+        # Header row - Yellow background
+        ('BACKGROUND', (0, 0), (-1, 0), YELLOW_TITLE),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+
+        # Row A - Green background (MAIN - TOTAL CONTRACT PRICE)
+        ('BACKGROUND', (0, 1), (-1, 1), GREEN_HEADER),
+        ('FONTNAME', (0, 1), (-1, 1), 'Helvetica-Bold'),
+
+        # Row A.1 - Green background (SCOPE OF SUPPLY)
+        ('BACKGROUND', (0, 2), (-1, 2), GREEN_HEADER),
+        ('FONTNAME', (0, 2), (-1, 2), 'Helvetica-Bold'),
+
+        # All data rows
+        ('FONTSIZE', (0, 1), (-1, -1), 8),
+        ('ALIGN', (0, 0), (0, -1), 'CENTER'),   # Item No centered
+        ('ALIGN', (2, 0), (2, -1), 'CENTER'),   # Qty centered
+        ('ALIGN', (3, 0), (3, -1), 'CENTER'),   # UOM centered
+        ('ALIGN', (4, 0), (4, -1), 'RIGHT'),    # Price right-aligned
+
+        # Grid and padding
+        ('GRID', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+    ]
+
+    # Add green background for section header rows (rows that start with section numbers like 12, 12.1, etc.)
+    row_idx = 3  # Start after A, A.1 rows
+    for section in sections:
+        style_commands.append(('BACKGROUND', (0, row_idx), (-1, row_idx), GREEN_HEADER))
+        style_commands.append(('FONTNAME', (0, row_idx), (-1, row_idx), 'Helvetica-Bold'))
+        row_idx += 1  # Section row
+        row_idx += section.line_items.count()  # Line item rows
+
+    main_table.setStyle(TableStyle(style_commands))
+    elements.append(main_table)
+
+    elements.append(Spacer(1, 10*mm))
+
+    # ─── FOOTER ───
+    footer_style = ParagraphStyle('Footer', fontSize=8, alignment=TA_LEFT)
+    elements.append(Paragraph('Confidential. © Leap Networks. All rights reserved.', footer_style))
+
+    # Build PDF
+    doc.build(elements)
     return response

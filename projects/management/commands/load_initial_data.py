@@ -27,7 +27,7 @@ class Command(BaseCommand):
         regions_data = [
             {'name': 'United Kingdom', 'code': 'UK', 'currency': 'GBP'},
             {'name': 'Leap Networks Arabia', 'code': 'LNA', 'currency': 'SAR'},
-            {'name': 'Pacific Asia', 'code': 'PA', 'currency': 'USD'},
+            {'name': 'Pace Arabia', 'code': 'PA', 'currency': 'USD'},
             {'name': 'Global', 'code': 'GLB', 'currency': 'USD'},
         ]
         for region_data in regions_data:

@@ -306,3 +306,27 @@ class SalesCallReport(models.Model):
         category_dict = dict(self.SYSTEM_CATEGORY_CHOICES)
         selected = self.get_system_categories_list()
         return [category_dict.get(cat, cat) for cat in selected]
+
+
+class SalesCallResponse(models.Model):
+    """Manager/Admin responses to sales call reports"""
+    sales_call = models.ForeignKey(
+        SalesCallReport,
+        on_delete=models.CASCADE,
+        related_name='responses'
+    )
+    responder = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='sales_call_responses'
+    )
+    message = models.TextField(help_text='Response message from manager/admin')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Response by {self.responder} on {self.created_at.strftime('%Y-%m-%d')}"
