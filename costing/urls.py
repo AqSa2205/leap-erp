@@ -8,6 +8,7 @@ urlpatterns = [
     # Costing sheets
     path('', views.CostingListView.as_view(), name='list'),
     path('create/', views.CostingCreateView.as_view(), name='create'),
+    path('import/', login_required(views.costing_import_new), name='import_new'),
     path('<int:pk>/', views.CostingDetailView.as_view(), name='detail'),
     path('<int:pk>/edit/', views.CostingUpdateView.as_view(), name='edit'),
     path('<int:pk>/delete/', views.CostingDeleteView.as_view(), name='delete'),

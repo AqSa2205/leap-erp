@@ -1,0 +1,96 @@
+{% extends 'base.html' %}
+
+{% block title %}Import Excel - New Costing Sheet{% endblock %}
+{% block page_title %}Import from Excel{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-10">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-file-earmark-excel me-2"></i>
+                Import BOQ from Excel
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <h6><i class="bi bi-info-circle me-1"></i> Expected Excel Format</h6>
+                    <p class="mb-2">The Excel file should have columns like:</p>
+                    <table class="table table-sm table-bordered mb-2">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Item No</th>
+                                <th>Description</th>
+                                <th>Make</th>
+                                <th>Model</th>
+                                <th>Qty</th>
+                                <th>Unit</th>
+                                <th>Vendor</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr class="table-success">
+                                <td>I</td>
+                                <td>DATA NETWORK SYSTEM</td>
+                                <td>-</td>
+                                <td>-</td>
+                                <td>-</td>
+                                <td>-</td>
+                                <td>-</td>
+                            </tr>
+                            <tr>
+                                <td>I.1</td>
+                                <td>HPE Aruba Networking Switch</td>
+                                <td>HP</td>
+                                <td>JL001A</td>
+                                <td>1</td>
+                                <td>EA</td>
+                                <td>Aruba</td>
+                            </tr>
+                            <tr>
+                                <td>I.2</td>
+                                <td>HPE 24-port Module</td>
+                                <td>HP</td>
+                                <td>J9986A</td>
+                                <td>3</td>
+                                <td>EA</td>
+                                <td>Aruba</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <small class="text-muted">
+                        <strong>Sections:</strong> Rows without Model are treated as section headers (shown in green above).<br>
+                        <strong>Items:</strong> Rows with Model become line items under the current section.
+                    </small>
+                </div>
+
+                <form method="post" enctype="multipart/form-data">
+                    {% csrf_token %}
+
+                    <div class="mb-3">
+                        <label for="title" class="form-label fw-bold">Costing Sheet Title</label>
+                        <input type="text" class="form-control" id="title" name="title"
+                               placeholder="Leave blank to use filename">
+                        <small class="text-muted">Optional - will use Excel filename if blank</small>
+                    </div>
+
+                    <div class="mb-4">
+                        <label for="excel_file" class="form-label fw-bold">Select Excel File</label>
+                        <input type="file" class="form-control" id="excel_file" name="excel_file"
+                               accept=".xlsx,.xls" required>
+                        <small class="text-muted">Supported formats: .xlsx, .xls</small>
+                    </div>
+
+                    <div class="d-flex justify-content-between">
+                        <a href="{% url 'costing:list' %}" class="btn btn-outline-secondary">
+                            <i class="bi bi-arrow-left me-1"></i> Cancel
+                        </a>
+                        <button type="submit" class="btn btn-success">
+                            <i class="bi bi-upload me-1"></i> Import & Create Sheet
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

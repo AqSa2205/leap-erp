@@ -1,6 +1,6 @@
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy, reverse
 from django.contrib import messages
 from django.http import HttpResponse, JsonResponse
@@ -874,6 +874,7 @@ def costing_import_excel(request, pk):
                         model_number=part[:100] if part else '',
                         vendor_name=vendor[:255] if vendor else '',
                         quantity=qty,
+                        unit='EA',
                         order=item_order
                     )
                     items_created += 1
@@ -890,3 +891,146 @@ def costing_import_excel(request, pk):
     return render(request, 'costing/import_excel.html', {
         'sheet': sheet,
     })
+
+
+# ─── Excel Import (New Sheet) ────────────────────────────────────
+
+def costing_import_new(request):
+    """Import Excel BOQ to create a new costing sheet"""
+    from openpyxl import load_workbook
+    from decimal import Decimal, InvalidOperation
+    import re
+
+    if request.method == 'POST':
+        excel_file = request.FILES.get('excel_file')
+        sheet_title = request.POST.get('title', '').strip()
+
+        if not excel_file:
+            messages.error(request, 'Please select an Excel file to import.')
+            return redirect('costing:import_new')
+
+        if not sheet_title:
+            # Use filename as title
+            sheet_title = excel_file.name.replace('.xlsx', '').replace('.xls', '').replace('_', ' ')
+
+        try:
+            wb = load_workbook(excel_file, data_only=True)
+            ws = wb.active  # Use first sheet
+
+            # Find header row (look for row with "Vendor", "Part#", "Description")
+            header_row = None
+            headers = {}
+            for row_num in range(1, 15):
+                row = [cell.value for cell in ws[row_num]]
+                row_lower = [str(c).lower() if c else '' for c in row]
+                if 'vendor' in row_lower or 'description' in row_lower:
+                    header_row = row_num
+                    for i, val in enumerate(row):
+                        if val:
+                            headers[str(val).lower().strip()] = i
+                    break
+
+            if not header_row:
+                messages.error(request, 'Could not find header row in Excel file. Looking for columns: Item No, Description, Make, Model, Qty, Unit, Vendor')
+                return redirect('costing:import_new')
+
+            # Map column indices
+            col_map = {
+                'item_no': headers.get('item no', headers.get('item #', headers.get('rfp item #', headers.get('rfp item', headers.get('#', -1))))),
+                'description': headers.get('description', headers.get('desc', -1)),
+                'make': headers.get('make', headers.get('manufacturer', -1)),
+                'model': headers.get('model', headers.get('part#', headers.get('part', headers.get('part no', -1)))),
+                'qty': headers.get('qty', headers.get('quantity', -1)),
+                'unit': headers.get('unit', headers.get('uom', -1)),
+                'vendor': headers.get('vendor', headers.get('vendor name', -1)),
+            }
+
+            # Create new costing sheet
+            sheet = CostingSheet.objects.create(
+                title=sheet_title,
+                created_by=request.user,
+                status='draft'
+            )
+
+            # Process rows
+            sections_created = 0
+            items_created = 0
+            current_section = None
+            item_order = 0
+
+            for row_num in range(header_row + 1, ws.max_row + 1):
+                row = [cell.value for cell in ws[row_num]]
+                if not any(row):
+                    continue
+
+                # Get values
+                item_no = str(row[col_map['item_no']] or '').strip() if col_map['item_no'] >= 0 and col_map['item_no'] < len(row) else ''
+                description = str(row[col_map['description']] or '').strip() if col_map['description'] >= 0 and col_map['description'] < len(row) else ''
+                make = str(row[col_map['make']] or '').strip() if col_map['make'] >= 0 and col_map['make'] < len(row) else ''
+                model = str(row[col_map['model']] or '').strip() if col_map['model'] >= 0 and col_map['model'] < len(row) else ''
+                qty_val = row[col_map['qty']] if col_map['qty'] >= 0 and col_map['qty'] < len(row) else None
+                unit = str(row[col_map['unit']] or '').strip() if col_map['unit'] >= 0 and col_map['unit'] < len(row) else 'EA'
+                vendor = str(row[col_map['vendor']] or '').strip() if col_map['vendor'] >= 0 and col_map['vendor'] < len(row) else ''
+
+                # Skip empty rows
+                if not item_no and not description:
+                    continue
+
+                # Parse quantity
+                try:
+                    qty = Decimal(str(qty_val)) if qty_val else Decimal('1')
+                except (InvalidOperation, ValueError):
+                    qty = Decimal('1')
+
+                # Detect if this is a section header (has Item No but no Model)
+                is_section = False
+                if item_no and not model and description:
+                    # Check if Item No looks like a section number (Roman numerals, single digits, or short codes)
+                    if re.match(r'^[IVX]+$', item_no) or re.match(r'^\d+$', item_no) or len(item_no) <= 4:
+                        is_section = True
+
+                if is_section:
+                    # Create section
+                    current_section = CostingSection.objects.create(
+                        costing_sheet=sheet,
+                        section_number=item_no,
+                        title=description[:255],
+                        order=sections_created
+                    )
+                    sections_created += 1
+                    item_order = 0
+                else:
+                    # Create line item
+                    if not current_section:
+                        # Create a default section if none exists
+                        current_section = CostingSection.objects.create(
+                            costing_sheet=sheet,
+                            section_number='1',
+                            title='Imported Items',
+                            order=0
+                        )
+                        sections_created += 1
+
+                    CostingLineItem.objects.create(
+                        section=current_section,
+                        item_number=item_no or f'{current_section.section_number}.{item_order + 1}',
+                        description=description[:500] if description else 'No description',
+                        make=make[:100] if make else '',
+                        model_number=model[:100] if model else '',
+                        quantity=qty,
+                        unit=unit[:20] if unit else 'EA',
+                        vendor_name=vendor[:255] if vendor else '',
+                        order=item_order
+                    )
+                    items_created += 1
+                    item_order += 1
+
+            messages.success(request, f'Import successful! Created costing sheet "{sheet.title}" with {sections_created} sections and {items_created} line items.')
+            return redirect('costing:detail', pk=sheet.pk)
+
+        except Exception as e:
+            messages.error(request, f'Error importing file: {str(e)}')
+            return redirect('costing:import_new')
+
+    # GET request - show import form
+    return render(request, 'costing/import_new.html', {})
