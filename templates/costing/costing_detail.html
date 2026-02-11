@@ -273,13 +273,12 @@
             <table class="table table-bordered bom-table mb-0">
                 <thead>
                     <tr>
-                        <th class="table-dark">Item No</th>
-                        <th class="table-dark" style="min-width:180px;">Description</th>
-                        <th class="table-dark">Make</th>
-                        <th class="table-dark">Model</th>
-                        <th class="table-dark">Qty</th>
-                        <th class="table-dark">Unit</th>
+                        <th class="table-dark">#</th>
                         <th class="table-dark">Vendor</th>
+                        <th class="table-dark">RFP Item #</th>
+                        <th class="table-dark">Part#</th>
+                        <th class="table-dark" style="min-width:180px;">Description</th>
+                        <th class="table-dark">Qty</th>
                         <th class="table-dark">Unit Price</th>
                         <th class="table-dark">Total Price</th>
                         <th class="cost-hdr">Currency</th>
@@ -302,8 +301,10 @@
                 <tbody>
                     {% for section in sections %}
                     <tr class="section-header-row">
+                        <td></td>
+                        <td></td>
                         <td>{{ section.section_number }}</td>
-                        <td colspan="22">{{ section.title }}</td>
+                        <td colspan="20">{{ section.title }}</td>
                         <td class="text-center">
                             <a href="{% url 'costing:item_create' section.pk %}" class="btn btn-sm btn-outline-primary py-0 px-1" title="Add Item"><i class="bi bi-plus"></i></a>
                             <a href="{% url 'costing:section_edit' section.pk %}" class="btn btn-sm btn-outline-secondary py-0 px-1" title="Edit"><i class="bi bi-pencil"></i></a>
@@ -313,13 +314,12 @@
 
                     {% for item in section.line_items.all %}
                     <tr>
-                        <td>{{ item.item_number }}</td>
-                        <td style="white-space:normal;min-width:180px;">{{ item.description }}</td>
-                        <td>{{ item.make }}</td>
-                        <td>{{ item.model_number }}</td>
-                        <td class="num">{{ item.quantity|floatformat:0 }}</td>
-                        <td>{{ item.unit }}</td>
+                        <td class="text-center">{{ forloop.counter }}</td>
                         <td>{{ item.vendor_name }}</td>
+                        <td>{{ item.item_number }}</td>
+                        <td>{{ item.model_number }}</td>
+                        <td style="white-space:normal;min-width:180px;">{{ item.description }}</td>
+                        <td class="num">{{ item.quantity|floatformat:0 }}</td>
                         <td class="num">{{ item.final_unit_price|floatformat:2|intcomma }}</td>
                         <td class="num fw-bold">{{ item.final_total_price|floatformat:2|intcomma }}</td>
                         <!-- Cost columns (grey) -->
@@ -371,14 +371,14 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="24" class="text-center text-muted py-2">
+                        <td colspan="23" class="text-center text-muted py-2">
                             No items. <a href="{% url 'costing:item_create' section.pk %}">Add one</a>.
                         </td>
                     </tr>
                     {% endfor %}
 
                     <tr class="subtotal-row">
-                        <td colspan="8" class="text-end">Sub-Total</td>
+                        <td colspan="7" class="text-end">Sub-Total</td>
                         <td class="num fw-bold">{{ section.subtotal|floatformat:2|intcomma }}</td>
                         <td class="cost-col"></td>
                         <td class="cost-col num fw-bold">{{ section.subtotal_base_unit_cost|floatformat:2|intcomma }}</td>
@@ -395,7 +395,7 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="24" class="text-center py-4 text-muted">
+                        <td colspan="23" class="text-center py-4 text-muted">
                             No sections yet. <a href="{% url 'costing:section_create' sheet.pk %}">Add a section</a> to build your BOM.
                         </td>
                     </tr>
@@ -403,7 +403,7 @@
 
                     {% if sections %}
                     <tr class="grand-total-row">
-                        <td colspan="8" class="text-end">GRAND TOTAL ({{ sheet.output_currency }})</td>
+                        <td colspan="7" class="text-end">GRAND TOTAL ({{ sheet.output_currency }})</td>
                         <td class="num">{{ sheet.grand_total|floatformat:2|intcomma }}</td>
                         <td></td>
                         <td class="num">{{ sheet.total_base_cost|floatformat:2|intcomma }}</td>

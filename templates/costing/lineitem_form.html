@@ -5,7 +5,7 @@
 
 {% block content %}
 <div class="row justify-content-center">
-    <div class="col-md-8">
+    <div class="col-md-10">
         <div class="card">
             <div class="card-header">
                 <i class="bi bi-list-ol me-2"></i>
@@ -16,55 +16,45 @@
                 <form method="post">
                     {% csrf_token %}
 
+                    <h6 class="text-muted mb-3">Item Details</h6>
                     <div class="row mb-3">
                         <div class="col-md-3">
-                            <label class="form-label fw-bold">Item Number</label>
-                            {{ form.item_number }}
-                            <small class="text-muted">e.g. 12.1.1</small>
+                            <label class="form-label fw-bold">Vendor</label>
+                            {{ form.vendor_name }}
                         </div>
-                        <div class="col-md-9">
+                        <div class="col-md-2">
+                            <label class="form-label fw-bold">RFP Item #</label>
+                            {{ form.item_number }}
+                            <small class="text-muted">e.g. I.1.1</small>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-bold">Part#</label>
+                            {{ form.model_number }}
+                        </div>
+                        <div class="col-md-4">
                             <label class="form-label fw-bold">Description</label>
                             {{ form.description }}
                         </div>
                     </div>
 
                     <div class="row mb-3">
+                        <div class="col-md-2">
+                            <label class="form-label fw-bold">Quantity</label>
+                            {{ form.quantity }}
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label fw-bold">Unit</label>
+                            {{ form.unit }}
+                        </div>
                         <div class="col-md-3">
                             <label class="form-label fw-bold">Make / Manufacturer</label>
                             {{ form.make }}
                         </div>
                         <div class="col-md-3">
-                            <label class="form-label fw-bold">Model Number</label>
-                            {{ form.model_number }}
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label fw-bold">Vendor Name</label>
-                            {{ form.vendor_name }}
-                        </div>
-                        <div class="col-md-3">
                             <label class="form-label fw-bold">System</label>
                             {{ form.system }}
                         </div>
-                    </div>
-
-                    <hr>
-                    <h6 class="text-muted mb-3">Quantity & Unit</h6>
-
-                    <div class="row mb-3">
-                        <div class="col-md-3">
-                            <label class="form-label fw-bold">Quantity</label>
-                            {{ form.quantity }}
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label fw-bold">Unit</label>
-                            {{ form.unit }}
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label fw-bold">Margin (optional)</label>
-                            {{ form.margin }}
-                            <small class="text-muted">Leave blank to use sheet margin</small>
-                        </div>
-                        <div class="col-md-3">
+                        <div class="col-md-2">
                             <label class="form-label fw-bold">Display Order</label>
                             {{ form.order }}
                         </div>
@@ -74,32 +64,46 @@
                     <h6 class="text-muted mb-3">Cost Breakdown</h6>
 
                     <div class="row mb-3">
-                        <div class="col-md-4">
-                            <label class="form-label fw-bold">Unit Cost</label>
-                            {{ form.unit_cost }}
+                        <div class="col-md-2">
+                            <label class="form-label fw-bold">Currency</label>
+                            {{ form.supplier_currency }}
                         </div>
-                        <div class="col-md-4">
-                            <label class="form-label fw-bold">Discount</label>
-                            {{ form.discount }}
+                        <div class="col-md-3">
+                            <label class="form-label fw-bold">Base Unit Cost</label>
+                            {{ form.base_unit_cost }}
                         </div>
-                        <div class="col-md-4">
-                            <label class="form-label fw-bold">Shipping</label>
-                            {{ form.shipping }}
+                        <div class="col-md-2">
+                            <label class="form-label fw-bold">Discount %</label>
+                            {{ form.discount_pct }}
+                            <small class="text-muted">Blank = sheet rate</small>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label fw-bold">Margin %</label>
+                            {{ form.margin }}
+                            <small class="text-muted">Blank = sheet rate</small>
                         </div>
                     </div>
 
                     <div class="row mb-3">
-                        <div class="col-md-4">
-                            <label class="form-label fw-bold">Customs</label>
-                            {{ form.customs }}
+                        <div class="col-md-2">
+                            <label class="form-label fw-bold">Shipping %</label>
+                            {{ form.shipping_pct }}
+                            <small class="text-muted">Blank = sheet rate</small>
                         </div>
-                        <div class="col-md-4">
-                            <label class="form-label fw-bold">Finances</label>
-                            {{ form.finances }}
+                        <div class="col-md-2">
+                            <label class="form-label fw-bold">Customs %</label>
+                            {{ form.customs_pct }}
+                            <small class="text-muted">Blank = sheet rate</small>
                         </div>
-                        <div class="col-md-4">
-                            <label class="form-label fw-bold">Installation</label>
-                            {{ form.installation }}
+                        <div class="col-md-2">
+                            <label class="form-label fw-bold">Finances %</label>
+                            {{ form.finances_pct }}
+                            <small class="text-muted">Blank = sheet rate</small>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label fw-bold">Installation %</label>
+                            {{ form.installation_pct }}
+                            <small class="text-muted">Blank = sheet rate</small>
                         </div>
                     </div>
 
