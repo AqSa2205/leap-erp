@@ -210,6 +210,7 @@
                 {% endif %}
                 <div class="btn-group-vertical btn-group-sm">
                     <a href="{% url 'costing:edit' sheet.pk %}" class="btn btn-outline-secondary"><i class="bi bi-pencil"></i> Edit</a>
+                    <a href="{% url 'costing:import_excel' sheet.pk %}" class="btn btn-outline-success"><i class="bi bi-upload"></i> Import</a>
                     <a href="{% url 'costing:export' sheet.pk %}" class="btn btn-outline-primary"><i class="bi bi-file-earmark-excel"></i> Excel</a>
                     <a href="{% url 'costing:export_pdf' sheet.pk %}" class="btn btn-outline-danger"><i class="bi bi-file-earmark-pdf"></i> PDF</a>
                     <a href="{% url 'costing:delete' sheet.pk %}" class="btn btn-outline-secondary"><i class="bi bi-trash"></i> Delete</a>

@@ -762,3 +762,131 @@ def costing_export_pdf(request, pk):
     # Build PDF
     doc.build(elements)
     return response
+
+
+# ─── Excel Import ────────────────────────────────────────────────
+
+def costing_import_excel(request, pk):
+    """Import line items from Excel BOQ file"""
+    from openpyxl import load_workbook
+    from decimal import Decimal, InvalidOperation
+    import re
+
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+
+    if request.method == 'POST':
+        excel_file = request.FILES.get('excel_file')
+        if not excel_file:
+            messages.error(request, 'Please select an Excel file to import.')
+            return redirect('costing:import_excel', pk=pk)
+
+        try:
+            wb = load_workbook(excel_file, data_only=True)
+            ws = wb.active  # Use first sheet
+
+            # Find header row (look for row with "Vendor", "Part#", "Description")
+            header_row = None
+            headers = {}
+            for row_num in range(1, 10):
+                row = [cell.value for cell in ws[row_num]]
+                row_lower = [str(c).lower() if c else '' for c in row]
+                if 'vendor' in row_lower or 'description' in row_lower:
+                    header_row = row_num
+                    for i, val in enumerate(row):
+                        if val:
+                            headers[str(val).lower().strip()] = i
+                    break
+
+            if not header_row:
+                messages.error(request, 'Could not find header row in Excel file.')
+                return redirect('costing:import_excel', pk=pk)
+
+            # Map column indices
+            col_map = {
+                'vendor': headers.get('vendor', headers.get('vendor name', -1)),
+                'rfp_item': headers.get('rfp item #', headers.get('rfp item', headers.get('item #', headers.get('item no', -1)))),
+                'part': headers.get('part#', headers.get('part', headers.get('part no', headers.get('model', -1)))),
+                'description': headers.get('description', headers.get('desc', -1)),
+                'qty': headers.get('qty', headers.get('quantity', -1)),
+            }
+
+            # Process rows
+            sections_created = 0
+            items_created = 0
+            current_section = None
+            item_order = 0
+
+            for row_num in range(header_row + 1, ws.max_row + 1):
+                row = [cell.value for cell in ws[row_num]]
+                if not any(row):
+                    continue
+
+                # Get values
+                vendor = str(row[col_map['vendor']] or '').strip() if col_map['vendor'] >= 0 else ''
+                rfp_item = str(row[col_map['rfp_item']] or '').strip() if col_map['rfp_item'] >= 0 else ''
+                part = str(row[col_map['part']] or '').strip() if col_map['part'] >= 0 else ''
+                description = str(row[col_map['description']] or '').strip() if col_map['description'] >= 0 else ''
+                qty_val = row[col_map['qty']] if col_map['qty'] >= 0 else None
+
+                # Skip empty rows
+                if not rfp_item and not description:
+                    continue
+
+                # Parse quantity
+                try:
+                    qty = Decimal(str(qty_val)) if qty_val else Decimal('1')
+                except (InvalidOperation, ValueError):
+                    qty = Decimal('1')
+
+                # Detect if this is a section header (has RFP Item but no Part#, or RFP Item is like "I", "II", "1", etc.)
+                is_section = False
+                if rfp_item and not part and description:
+                    # Check if RFP item looks like a section number (Roman numerals, single digits, or main section)
+                    if re.match(r'^[IVX]+$', rfp_item) or re.match(r'^\d+$', rfp_item) or len(rfp_item) <= 3:
+                        is_section = True
+
+                if is_section:
+                    # Create section
+                    current_section = CostingSection.objects.create(
+                        costing_sheet=sheet,
+                        section_number=rfp_item,
+                        title=description[:255],
+                        order=sections_created
+                    )
+                    sections_created += 1
+                    item_order = 0
+                else:
+                    # Create line item
+                    if not current_section:
+                        # Create a default section if none exists
+                        current_section = CostingSection.objects.create(
+                            costing_sheet=sheet,
+                            section_number='1',
+                            title='Imported Items',
+                            order=0
+                        )
+                        sections_created += 1
+
+                    CostingLineItem.objects.create(
+                        section=current_section,
+                        item_number=rfp_item or f'{current_section.section_number}.{item_order + 1}',
+                        description=description[:500] if description else 'No description',
+                        model_number=part[:100] if part else '',
+                        vendor_name=vendor[:255] if vendor else '',
+                        quantity=qty,
+                        order=item_order
+                    )
+                    items_created += 1
+                    item_order += 1
+
+            messages.success(request, f'Import successful! Created {sections_created} sections and {items_created} line items.')
+            return redirect('costing:detail', pk=pk)
+
+        except Exception as e:
+            messages.error(request, f'Error importing file: {str(e)}')
+            return redirect('costing:import_excel', pk=pk)
+
+    # GET request - show import form
+    return render(request, 'costing/import_excel.html', {
+        'sheet': sheet,
+    })

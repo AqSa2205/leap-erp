@@ -1,0 +1,84 @@
+{% extends 'base.html' %}
+
+{% block title %}Import Excel - {{ sheet.title }}{% endblock %}
+{% block page_title %}Import from Excel{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-file-earmark-excel me-2"></i>
+                Import BOQ from Excel
+                <span class="text-muted">- {{ sheet.title }}</span>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <h6><i class="bi bi-info-circle me-1"></i> Expected Excel Format</h6>
+                    <p class="mb-2">The Excel file should have columns in this order:</p>
+                    <table class="table table-sm table-bordered mb-2">
+                        <thead class="table-light">
+                            <tr>
+                                <th>#</th>
+                                <th>Vendor</th>
+                                <th>RFP Item #</th>
+                                <th>Part#</th>
+                                <th>Description</th>
+                                <th>Qty</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>-</td>
+                                <td>-</td>
+                                <td>I</td>
+                                <td>-</td>
+                                <td>DATA NETWORK SYSTEM</td>
+                                <td>-</td>
+                            </tr>
+                            <tr>
+                                <td>1</td>
+                                <td>Aruba</td>
+                                <td>I.1</td>
+                                <td>JL001A</td>
+                                <td>HPE Aruba Networking Switch</td>
+                                <td>1</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <small class="text-muted">
+                        <strong>Note:</strong> Rows without Part# are treated as section headers.
+                        The first sheet in the Excel file will be used.
+                    </small>
+                </div>
+
+                <form method="post" enctype="multipart/form-data">
+                    {% csrf_token %}
+
+                    <div class="mb-4">
+                        <label for="excel_file" class="form-label fw-bold">Select Excel File</label>
+                        <input type="file" class="form-control" id="excel_file" name="excel_file"
+                               accept=".xlsx,.xls" required>
+                        <small class="text-muted">Supported formats: .xlsx, .xls</small>
+                    </div>
+
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle me-1"></i>
+                        <strong>Warning:</strong> Imported items will be added to the existing sheet.
+                        Existing sections and items will NOT be deleted.
+                    </div>
+
+                    <div class="d-flex justify-content-between">
+                        <a href="{% url 'costing:detail' sheet.pk %}" class="btn btn-outline-secondary">
+                            <i class="bi bi-arrow-left me-1"></i> Cancel
+                        </a>
+                        <button type="submit" class="btn btn-success">
+                            <i class="bi bi-upload me-1"></i> Import
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
