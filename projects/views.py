@@ -136,8 +136,7 @@ class ProjectUpdateView(ProjectPermissionMixin, UpdateView):
     template_name = 'projects/project_form.html'
 
     def test_func(self):
-        project = self.get_object()
-        return self.request.user.can_edit_project(project)
+        return True  # All authenticated users can edit
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()

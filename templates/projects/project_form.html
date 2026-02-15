@@ -85,15 +85,23 @@
             <!-- Financial -->
             <h6 class="text-muted mb-3 border-bottom pb-2">Financial</h6>
             <div class="row mb-4">
-                <div class="col-md-4 mb-3">
+                <div class="col-md-3 mb-3">
+                    <label class="form-label">Year</label>
+                    {{ form.year }}
+                </div>
+                <div class="col-md-3 mb-3">
                     <label class="form-label">Estimated Value</label>
                     {{ form.estimated_value }}
                 </div>
-                <div class="col-md-4 mb-3">
+                <div class="col-md-3 mb-3">
+                    <label class="form-label">Actual Sales</label>
+                    {{ form.actual_sales }}
+                </div>
+                <div class="col-md-3 mb-3">
                     <label class="form-label">Success Quotient (0-1)</label>
                     {{ form.success_quotient }}
                 </div>
-                <div class="col-md-4 mb-3">
+                <div class="col-md-6 mb-3">
                     <label class="form-label">Minimum Achievement</label>
                     {{ form.minimum_achievement }}
                 </div>
