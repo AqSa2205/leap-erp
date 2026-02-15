@@ -327,9 +327,17 @@
                         <!-- Cost columns (grey) -->
                         <td class="cost-col">
                             <select class="currency-select" data-item-id="{{ item.pk }}">
-                                {% for rate in exchange_rates %}
-                                <option value="{{ rate.currency_code }}" {% if item.supplier_currency == rate.currency_code %}selected{% endif %}>{{ rate.currency_code }}</option>
-                                {% endfor %}
+                                {% if exchange_rates %}
+                                    {% for rate in exchange_rates %}
+                                    <option value="{{ rate.currency_code }}" {% if item.supplier_currency == rate.currency_code %}selected{% endif %}>{{ rate.currency_code }}</option>
+                                    {% endfor %}
+                                {% else %}
+                                    <option value="SAR" {% if item.supplier_currency == 'SAR' %}selected{% endif %}>SAR</option>
+                                    <option value="USD" {% if item.supplier_currency == 'USD' %}selected{% endif %}>USD</option>
+                                    <option value="AED" {% if item.supplier_currency == 'AED' %}selected{% endif %}>AED</option>
+                                    <option value="GBP" {% if item.supplier_currency == 'GBP' %}selected{% endif %}>GBP</option>
+                                    <option value="EUR" {% if item.supplier_currency == 'EUR' %}selected{% endif %}>EUR</option>
+                                {% endif %}
                             </select>
                         </td>
                         <td class="cost-col num">
