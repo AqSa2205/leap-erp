@@ -141,7 +141,7 @@
                         <th>Status</th>
                         <th class="text-end">Est. Value</th>
                         <th class="text-end">Actual Sales</th>
-                        <th>Owner</th>
+                        <th>Submission Date</th>
                         <th class="text-center">Actions</th>
                     </tr>
                 </thead>
@@ -192,17 +192,15 @@
                             <span class="text-muted">-</span>
                             {% endif %}
                         </td>
-                        <td>{% if project.owner %}{{ project.owner.get_full_name|default:project.owner.username }}{% else %}-{% endif %}</td>
+                        <td>{% if project.submission_deadline %}{{ project.submission_deadline|date:"d M Y" }}{% else %}-{% endif %}</td>
                         <td class="text-center">
                             <div class="btn-group btn-group-sm">
                                 <a href="{% url 'projects:detail' project.pk %}" class="btn btn-outline-dark" title="View">
                                     <i class="bi bi-eye"></i>
                                 </a>
-                                {% if user.can_edit_project %}
                                 <a href="{% url 'projects:edit' project.pk %}" class="btn btn-outline-secondary" title="Edit">
                                     <i class="bi bi-pencil"></i>
                                 </a>
-                                {% endif %}
                                 {% if user.can_delete_project %}
                                 <a href="{% url 'projects:delete' project.pk %}" class="btn btn-outline-danger" title="Delete">
                                     <i class="bi bi-trash"></i>
