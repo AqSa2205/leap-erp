@@ -439,30 +439,46 @@
     const sheetPk = {{ sheet.pk }};
     const updateParamsUrl = '{% url "costing:update_params" sheet.pk %}';
 
-    // Save param on change (margin, ddp_rate, discount_rate)
+    // Helper function for AJAX calls with error handling
+    function saveField(url, body, el) {
+        el.classList.add('saving');
+        fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-CSRFToken': csrfToken,
+            },
+            body: body,
+        })
+        .then(r => {
+            if (!r.ok) {
+                throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+            }
+            return r.json();
+        })
+        .then(data => {
+            el.classList.remove('saving');
+            if (data.ok) {
+                el.classList.add('saved');
+                setTimeout(() => el.classList.remove('saved'), 800);
+                setTimeout(() => location.reload(), 500);
+            } else {
+                alert('Error: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch(err => {
+            el.classList.remove('saving');
+            console.error('Save failed:', err);
+            alert('Failed to save: ' + err.message);
+        });
+    }
+
+    // Save param on change (margin, discount_rate, shipping_rate, etc.)
     document.querySelectorAll('.param-edit').forEach(input => {
         input.addEventListener('change', function() {
             const field = this.dataset.field;
             const value = this.value;
-            const el = this;
-
-            fetch(updateParamsUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-CSRFToken': csrfToken,
-                },
-                body: `field=${field}&value=${value}`,
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.ok) {
-                    el.classList.add('saved');
-                    setTimeout(() => el.classList.remove('saved'), 800);
-                    // Reload page to recalculate all prices
-                    setTimeout(() => location.reload(), 500);
-                }
-            });
+            saveField(updateParamsUrl, `field=${field}&value=${value}`, this);
         });
     });
 
@@ -471,26 +487,8 @@
         input.addEventListener('change', function() {
             const rateId = this.dataset.rateId;
             const value = this.value;
-            const el = this;
             const url = `/costing/exchange-rates/${rateId}/update/`;
-
-            fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-CSRFToken': csrfToken,
-                },
-                body: `value=${value}`,
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.ok) {
-                    el.classList.add('saved');
-                    setTimeout(() => el.classList.remove('saved'), 800);
-                    // Reload page to recalculate all prices
-                    setTimeout(() => location.reload(), 500);
-                }
-            });
+            saveField(url, `value=${value}`, this);
         });
     });
 
@@ -499,25 +497,8 @@
         input.addEventListener('change', function() {
             const itemId = this.dataset.itemId;
             const value = this.value;
-            const el = this;
             const url = `/costing/item/${itemId}/update-field/`;
-
-            fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-CSRFToken': csrfToken,
-                },
-                body: `field=margin&value=${value}`,
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.ok) {
-                    el.classList.add('saved');
-                    setTimeout(() => el.classList.remove('saved'), 800);
-                    setTimeout(() => location.reload(), 500);
-                }
-            });
+            saveField(url, `field=margin&value=${value}`, this);
         });
     });
 
@@ -527,25 +508,8 @@
             const itemId = this.dataset.itemId;
             const field = this.dataset.field;
             const value = this.value;
-            const el = this;
             const url = `/costing/item/${itemId}/update-field/`;
-
-            fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-CSRFToken': csrfToken,
-                },
-                body: `field=${field}&value=${value}`,
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.ok) {
-                    el.classList.add('saved');
-                    setTimeout(() => el.classList.remove('saved'), 800);
-                    setTimeout(() => location.reload(), 500);
-                }
-            });
+            saveField(url, `field=${field}&value=${value}`, this);
         });
     });
 
@@ -554,25 +518,8 @@
         select.addEventListener('change', function() {
             const itemId = this.dataset.itemId;
             const value = this.value;
-            const el = this;
             const url = `/costing/item/${itemId}/update-field/`;
-
-            fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-CSRFToken': csrfToken,
-                },
-                body: `field=supplier_currency&value=${value}`,
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.ok) {
-                    el.classList.add('saved');
-                    setTimeout(() => el.classList.remove('saved'), 800);
-                    setTimeout(() => location.reload(), 500);
-                }
-            });
+            saveField(url, `field=supplier_currency&value=${value}`, this);
         });
     });
 </script>
