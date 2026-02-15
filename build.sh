@@ -33,6 +33,7 @@ python manage.py migrate --run-syncdb
 python manage.py migrate accounts
 python manage.py migrate projects
 python manage.py migrate reports
+python manage.py migrate costing
 python manage.py migrate
 
 echo "=== Showing migration status ==="
@@ -60,5 +61,31 @@ except Exception as e:
 
 echo "=== Loading LNA project data ==="
 python manage.py loaddata fixtures/lna_data.json || echo "LNA data may already exist"
+
+echo "=== Loading exchange rates ==="
+python manage.py shell -c "
+from costing.models import ExchangeRate
+from decimal import Decimal
+
+rates = [
+    ('USD', 'US Dollar', Decimal('1.000000')),
+    ('SAR', 'Saudi Riyal', Decimal('3.750000')),
+    ('AED', 'UAE Dirham', Decimal('3.670000')),
+    ('GBP', 'British Pound', Decimal('0.790000')),
+    ('EUR', 'Euro', Decimal('0.920000')),
+    ('SGD', 'Singapore Dollar', Decimal('1.340000')),
+    ('CNY', 'Chinese Yuan', Decimal('7.240000')),
+]
+
+for code, name, rate in rates:
+    obj, created = ExchangeRate.objects.get_or_create(
+        currency_code=code,
+        defaults={'currency_name': name, 'rate_to_usd': rate}
+    )
+    if created:
+        print(f'Created: {code} = {rate}')
+    else:
+        print(f'Exists: {code} = {obj.rate_to_usd}')
+"
 
 echo "=== Build complete ==="
