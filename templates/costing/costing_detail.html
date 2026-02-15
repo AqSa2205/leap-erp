@@ -135,7 +135,7 @@
 <div class="card mb-3">
     <div class="card-body py-2">
         <div class="row">
-            <div class="col-md-3">
+            <div class="col-lg-2 col-md-3">
                 <h5 class="mb-1">{{ sheet.title }}</h5>
                 <table class="small text-muted mb-0">
                     {% if sheet.project %}
@@ -148,7 +148,7 @@
             </div>
 
             <!-- Editable Parameters -->
-            <div class="col-md-5 text-center">
+            <div class="col-lg-5 col-md-4 text-center">
                 <div class="d-flex justify-content-center gap-2 flex-wrap">
                     <div>
                         <input type="number" class="inline-edit param-edit" data-field="margin"
@@ -184,7 +184,7 @@
             </div>
 
             <!-- Exchange Rates Table -->
-            <div class="col-md-2">
+            <div class="col-lg-3 col-md-3">
                 <table class="rate-box table table-sm table-bordered mb-0">
                     <thead><tr class="table-dark"><th colspan="2" class="text-center" style="font-size:0.7rem;">EXCHANGE RATES</th></tr></thead>
                     <tbody>
@@ -196,13 +196,15 @@
                                        value="{{ rate.rate_to_usd }}" step="0.0001" min="0">
                             </td>
                         </tr>
+                        {% empty %}
+                        <tr><td colspan="2" class="text-muted">No rates configured</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
 
             <!-- Actions -->
-            <div class="col-md-2 text-end">
+            <div class="col-lg-2 col-md-2 text-end">
                 {% if sheet.status == 'draft' %}
                 <span class="badge bg-warning text-dark mb-1">Draft</span>
                 {% else %}
