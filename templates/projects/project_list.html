@@ -126,9 +126,21 @@
 <div class="card projects-table-card">
     <div class="card-header d-flex justify-content-between align-items-center">
         <h5 class="mb-0"><i class="bi bi-folder-fill me-2"></i>Projects</h5>
-        <a href="{% url 'projects:create' %}" class="btn btn-light btn-sm">
-            <i class="bi bi-plus-lg me-1"></i>New Project
-        </a>
+        <div class="d-flex gap-2">
+            {% if user.can_delete_project %}
+            <button type="button" class="btn btn-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deleteAllModal">
+                <i class="bi bi-trash me-1"></i>Delete All
+            </button>
+            {% endif %}
+            {% if user.is_admin_user or user.is_manager_user %}
+            <button type="button" class="btn btn-success btn-sm" data-bs-toggle="modal" data-bs-target="#importModal">
+                <i class="bi bi-file-earmark-arrow-up me-1"></i>Import
+            </button>
+            {% endif %}
+            <a href="{% url 'projects:create' %}" class="btn btn-light btn-sm">
+                <i class="bi bi-plus-lg me-1"></i>New Project
+            </a>
+        </div>
     </div>
     <div class="card-body p-0">
         <div class="table-responsive">
@@ -249,4 +261,89 @@
     </div>
     {% endif %}
 </div>
+
+{% if user.can_delete_project %}
+<!-- Delete All Confirmation Modal -->
+<div class="modal fade" id="deleteAllModal" tabindex="-1" aria-labelledby="deleteAllModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title" id="deleteAllModalLabel">
+                    <i class="bi bi-exclamation-triangle-fill me-2"></i>Confirm Deletion
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-1">Are you sure you want to delete all <strong>{{ total_count }}</strong> filtered project(s)?</p>
+                <p class="text-danger fw-semibold mb-0"><i class="bi bi-exclamation-circle me-1"></i>This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <form method="post" action="{% url 'projects:delete_all' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="search" value="{{ request.GET.search }}">
+                    <input type="hidden" name="region" value="{{ request.GET.region }}">
+                    <input type="hidden" name="year" value="{{ request.GET.year }}">
+                    <input type="hidden" name="status" value="{{ request.GET.status }}">
+                    <input type="hidden" name="category" value="{{ request.GET.category }}">
+                    <input type="hidden" name="quarter" value="{{ request.GET.quarter }}">
+                    <input type="hidden" name="owner" value="{{ request.GET.owner }}">
+                    <button type="submit" class="btn btn-danger">
+                        <i class="bi bi-trash me-1"></i>Delete All Projects
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if user.is_admin_user or user.is_manager_user %}
+<!-- Import Excel Modal -->
+<div class="modal fade" id="importModal" tabindex="-1" aria-labelledby="importModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <form method="post" action="{% url 'projects:import_projects' %}" enctype="multipart/form-data">
+                {% csrf_token %}
+                <div class="modal-header" style="background: linear-gradient(135deg, #198754 0%, #20c997 100%); color: #fff;">
+                    <h5 class="modal-title" id="importModalLabel">
+                        <i class="bi bi-file-earmark-arrow-up me-2"></i>Import Projects from Excel
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="importRegion" class="form-label fw-semibold">Region <span class="text-danger">*</span></label>
+                        <select name="region" id="importRegion" class="form-select" required>
+                            <option value="">Select Region</option>
+                            {% for region in regions %}
+                            <option value="{{ region.pk }}">{{ region.name }} ({{ region.code }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="excelFile" class="form-label fw-semibold">Excel File <span class="text-danger">*</span></label>
+                        <input type="file" name="excel_file" id="excelFile" class="form-control" accept=".xlsx,.xls" required>
+                    </div>
+                    <div class="alert alert-info small mb-0">
+                        <i class="bi bi-info-circle me-1"></i><strong>Import Guidelines:</strong>
+                        <ul class="mb-0 mt-1">
+                            <li>File must be in <strong>.xlsx</strong> or <strong>.xls</strong> format</li>
+                            <li>The header row must contain <strong>"Leap Proposal Reference"</strong> column</li>
+                            <li>Existing projects with the same reference will be <strong>updated</strong></li>
+                            <li>Supported columns: Project Name, Client RFQ Ref Number, Submission Date, Owner, EPC, Bid Status, Est. Value (SAR), Est. Value ($USD), Est. Value (SAR) - Per Annum, Est. GP, PO Award - Q, Success Quotient, Minimum Achievement, Contact With, Remarks</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success">
+                        <i class="bi bi-file-earmark-arrow-up me-1"></i>Import
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
 {% endblock %}

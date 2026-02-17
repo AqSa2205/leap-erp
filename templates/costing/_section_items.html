@@ -1,0 +1,81 @@
+{% load humanize costing_tags %}
+{% for item in items %}
+<tr data-item-id="{{ item.pk }}">
+    <td>{{ item.item_number }}</td>
+    <td style="white-space:normal;min-width:180px;">{{ item.description }}</td>
+    <td>{{ item.make }}</td>
+    <td>{{ item.model_number }}</td>
+    <td class="num">{{ item.quantity|floatformat:0 }}</td>
+    <td>{{ item.unit }}</td>
+    <td>{{ item.vendor_name }}</td>
+    <td class="num" data-computed="final_unit_price">{{ item.final_unit_price|floatformat:2|intcomma }}</td>
+    <td class="num fw-bold" data-computed="final_total_price">{{ item.final_total_price|floatformat:2|intcomma }}</td>
+    <td class="cost-col">
+        <select class="currency-select" data-item-id="{{ item.pk }}">
+            {% for rate in exchange_rates %}
+            <option value="{{ rate.currency_code }}" {% if item.supplier_currency == rate.currency_code %}selected{% endif %}>{{ rate.currency_code }}</option>
+            {% endfor %}
+        </select>
+    </td>
+    <td class="cost-col num">
+        <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="base_unit_cost"
+               value="{{ item.base_unit_cost }}" step="0.01" min="0">
+    </td>
+    <td class="cost-col num">
+        <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="discount_pct"
+               value="{{ item.display_discount_pct|floatformat:0 }}" step="1" min="0">
+    </td>
+    <td class="cost-col num" data-computed="unit_cost">{{ item.unit_cost|floatformat:2|intcomma }}</td>
+    <td class="cost-col num" data-computed="total_cost">{{ item.total_cost|floatformat:2|intcomma }}</td>
+    <td class="cost-col num">
+        <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="margin"
+               value="{{ item.display_margin|floatformat:0 }}" step="1" min="0" max="99">
+    </td>
+    <td class="cost-col num" data-computed="base_unit_price">{{ item.base_unit_price|floatformat:2|intcomma }}</td>
+    <td class="cost-col num" data-computed="base_total_price">{{ item.base_total_price|floatformat:2|intcomma }}</td>
+    <td class="cost-col num">
+        <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="shipping_pct"
+               value="{{ item.display_shipping_pct|floatformat:0 }}" step="1" min="0">
+    </td>
+    <td class="cost-col num">
+        <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="customs_pct"
+               value="{{ item.display_customs_pct|floatformat:0 }}" step="1" min="0">
+    </td>
+    <td class="cost-col num">
+        <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="finances_pct"
+               value="{{ item.display_finances_pct|floatformat:0 }}" step="1" min="0">
+    </td>
+    <td class="cost-col num">
+        <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="installation_pct"
+               value="{{ item.display_installation_pct|floatformat:0 }}" step="1" min="0">
+    </td>
+    <td class="cost-col num" data-computed="final_unit_price">{{ item.final_unit_price|floatformat:2|intcomma }}</td>
+    <td class="cost-col num fw-bold" data-computed="final_total_price">{{ item.final_total_price|floatformat:2|intcomma }}</td>
+    <td class="text-center">
+        <a href="{% url 'costing:item_edit' item.pk %}" class="btn btn-sm btn-outline-secondary py-0 px-1"><i class="bi bi-pencil"></i></a>
+        <a href="{% url 'costing:item_delete' item.pk %}" class="btn btn-sm btn-outline-danger py-0 px-1"><i class="bi bi-trash"></i></a>
+    </td>
+</tr>
+{% empty %}
+<tr>
+    <td colspan="24" class="text-center text-muted py-2">
+        No items. <a href="{% url 'costing:item_create' section.pk %}">Add one</a>.
+    </td>
+</tr>
+{% endfor %}
+<tr class="subtotal-row">
+    <td colspan="8" class="text-end">Sub-Total ({{ output_currency }})</td>
+    <td class="num fw-bold">{{ section.subtotal|mul:conversion_rate|floatformat:2|intcomma }}</td>
+    <td class="cost-col"></td>
+    <td class="cost-col num fw-bold">{{ section.subtotal_base_unit_cost|floatformat:2|intcomma }}</td>
+    <td class="cost-col num fw-bold">{{ section.subtotal_discount|floatformat:2|intcomma }}</td>
+    <td class="cost-col num fw-bold">{{ section.subtotal_unit_cost|floatformat:2|intcomma }}</td>
+    <td class="cost-col num fw-bold">{{ section.total_cost|floatformat:2|intcomma }}</td>
+    <td class="cost-col"></td>
+    <td class="cost-col num fw-bold">{{ section.subtotal_base_unit_price|floatformat:2|intcomma }}</td>
+    <td class="cost-col num fw-bold">{{ section.subtotal_base_total_price|floatformat:2|intcomma }}</td>
+    <td class="cost-col" colspan="4"></td>
+    <td class="cost-col num fw-bold">{{ section.subtotal|mul:conversion_rate|floatformat:2|intcomma }}</td>
+    <td class="cost-col num fw-bold">{{ section.subtotal|mul:conversion_rate|floatformat:2|intcomma }}</td>
+    <td></td>
+</tr>

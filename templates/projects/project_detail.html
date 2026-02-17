@@ -250,6 +250,24 @@
                     </h3>
                 </div>
                 <div class="mb-3">
+                    <small class="text-muted d-block">Est. Value (USD)</small>
+                    <h5 class="mb-0">
+                        ${{ project.estimated_value_usd|floatformat:2|intcomma }}
+                    </h5>
+                </div>
+                <div class="mb-3">
+                    <small class="text-muted d-block">Est. Value Per Annum (SAR)</small>
+                    <h5 class="mb-0">
+                        SAR {{ project.estimated_value_per_annum|floatformat:2|intcomma }}
+                    </h5>
+                </div>
+                <div class="mb-3">
+                    <small class="text-muted d-block">Estimated GP</small>
+                    <h5 class="mb-0">
+                        {{ project.estimated_gp|floatformat:2|intcomma }}
+                    </h5>
+                </div>
+                <div class="mb-3">
                     <small class="text-muted d-block">Weighted Value</small>
                     <h5 class="mb-0">
                         {% if project.region.code == 'UK' or project.region.code == 'GLB' %}

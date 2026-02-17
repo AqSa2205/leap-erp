@@ -10,6 +10,8 @@ urlpatterns = [
     path('<int:pk>/', views.ProjectDetailView.as_view(), name='detail'),
     path('<int:pk>/edit/', views.ProjectUpdateView.as_view(), name='edit'),
     path('<int:pk>/delete/', views.ProjectDeleteView.as_view(), name='delete'),
+    path('delete-all/', views.ProjectBulkDeleteView.as_view(), name='delete_all'),
+    path('import/', views.ProjectImportView.as_view(), name='import_projects'),
     path('<int:pk>/add-document/', views.add_project_document, name='add_document'),
 
     # Document URLs

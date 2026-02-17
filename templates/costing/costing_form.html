@@ -42,33 +42,54 @@
                     <h6 class="text-muted mb-3">Pricing Parameters</h6>
 
                     <div class="row mb-3">
-                        <div class="col-md-3">
+                        <div class="col-md-4">
                             <label class="form-label fw-bold">Margin</label>
                             <div class="input-group">
                                 {{ form.margin }}
                                 <span class="input-group-text">%</span>
                             </div>
-                            <small class="text-muted">e.g. 0.40 = 40%</small>
                         </div>
-                        <div class="col-md-3">
-                            <label class="form-label fw-bold">DDP Rate</label>
-                            <div class="input-group">
-                                {{ form.ddp_rate }}
-                                <span class="input-group-text">%</span>
-                            </div>
-                            <small class="text-muted">e.g. 0.05 = 5%</small>
-                        </div>
-                        <div class="col-md-3">
+                        <div class="col-md-4">
                             <label class="form-label fw-bold">Discount Rate</label>
                             <div class="input-group">
                                 {{ form.discount_rate }}
                                 <span class="input-group-text">%</span>
                             </div>
-                            <small class="text-muted">e.g. 0.10 = 10%</small>
                         </div>
-                        <div class="col-md-3">
+                        <div class="col-md-4">
                             <label class="form-label fw-bold">Output Currency</label>
                             {{ form.output_currency }}
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-3">
+                            <label class="form-label fw-bold">Shipping Rate</label>
+                            <div class="input-group">
+                                {{ form.shipping_rate }}
+                                <span class="input-group-text">%</span>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-bold">Customs Rate</label>
+                            <div class="input-group">
+                                {{ form.customs_rate }}
+                                <span class="input-group-text">%</span>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-bold">Finances Rate</label>
+                            <div class="input-group">
+                                {{ form.finances_rate }}
+                                <span class="input-group-text">%</span>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-bold">Installation Rate</label>
+                            <div class="input-group">
+                                {{ form.installation_rate }}
+                                <span class="input-group-text">%</span>
+                            </div>
                         </div>
                     </div>
 

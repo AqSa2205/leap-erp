@@ -7,9 +7,21 @@ from django.http import HttpResponse, JsonResponse
 from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required
 from django.db.models import Q
+from django.template.loader import render_to_string
 from decimal import Decimal, InvalidOperation
 
 from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem
+
+
+def _conversion_rate(output_currency, rates_dict):
+    """Return factor to convert SAR values to the given output currency."""
+    if output_currency == 'SAR':
+        return Decimal('1')
+    sar_rate = rates_dict.get('SAR')
+    target_rate = rates_dict.get(output_currency)
+    if sar_rate and target_rate:
+        return (sar_rate / target_rate).quantize(Decimal('0.000001'))
+    return Decimal('1')
 from .forms import (
     CostingSheetForm, CostingSectionForm, CostingLineItemForm,
     ExchangeRateForm, CostingFilterForm,
@@ -93,11 +105,75 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         sheet = self.object
-        sections = sheet.sections.prefetch_related('line_items').all()
+
+        # Pre-load exchange rates and build rates dict (single query)
+        exchange_rates = list(ExchangeRate.objects.all())
+        rates_dict = {r.currency_code: r.rate_to_usd for r in exchange_rates}
+
+        # Load sections with item counts + precompute section subtotals and
+        # sheet totals in a single pass (items are NOT sent to the template —
+        # they are lazy-loaded via AJAX when a section is expanded).
+        sections = list(sheet.sections.prefetch_related('line_items').all())
+
+        sheet_totals = {
+            'grand_total': Decimal('0'),
+            'total_cost': Decimal('0'),
+            'total_base_cost': Decimal('0'),
+            'total_discount': Decimal('0'),
+            'total_margin_amount': Decimal('0'),
+            'total_shipping_amount': Decimal('0'),
+            'total_customs_amount': Decimal('0'),
+            'total_finances_amount': Decimal('0'),
+            'total_installation_amount': Decimal('0'),
+        }
+        for section in sections:
+            section_sub = {
+                'subtotal': Decimal('0'),
+                'total_cost': Decimal('0'),
+                'base_unit_cost': Decimal('0'),
+                'discount': Decimal('0'),
+                'unit_cost': Decimal('0'),
+                'base_unit_price': Decimal('0'),
+                'base_total_price': Decimal('0'),
+            }
+            item_count = 0
+            for item in section.line_items.all():
+                item.set_exchange_rates_cache(rates_dict)
+                item.set_sheet_cache(sheet)
+                item_count += 1
+                qty = item.quantity
+                section_sub['subtotal'] += item.final_total_price
+                section_sub['total_cost'] += item.total_cost
+                section_sub['base_unit_cost'] += item.base_unit_cost * qty
+                section_sub['discount'] += item.discount_amount * qty
+                section_sub['unit_cost'] += item.unit_cost * qty
+                section_sub['base_unit_price'] += item.base_unit_price * qty
+                section_sub['base_total_price'] += item.base_total_price
+
+                ucs = item.unit_cost_sar
+                sheet_totals['grand_total'] += item.final_total_price
+                sheet_totals['total_cost'] += item.total_cost
+                sheet_totals['total_base_cost'] += item.base_unit_cost * qty
+                sheet_totals['total_discount'] += item.discount_amount * qty
+                sheet_totals['total_margin_amount'] += item.base_total_price - item.total_cost
+                sheet_totals['total_shipping_amount'] += ucs * item.effective_shipping_pct * qty
+                sheet_totals['total_customs_amount'] += ucs * item.effective_customs_pct * qty
+                sheet_totals['total_finances_amount'] += ucs * item.effective_finances_pct * qty
+                sheet_totals['total_installation_amount'] += ucs * item.effective_installation_pct * qty
+
+            section._subtotals = {k: v.quantize(Decimal('0.01')) for k, v in section_sub.items()}
+            section.item_count_cached = item_count
+
+        sheet._totals = {k: v.quantize(Decimal('0.01')) for k, v in sheet_totals.items()}
+
+        # Compute SAR → output_currency conversion rate
+        conversion_rate = _conversion_rate(sheet.output_currency, rates_dict)
+
         context['sections'] = sections
         context['section_form'] = CostingSectionForm()
         context['lineitem_form'] = CostingLineItemForm()
-        context['exchange_rates'] = ExchangeRate.objects.all()
+        context['exchange_rates'] = exchange_rates
+        context['conversion_rate'] = conversion_rate
         return context
 
 
@@ -297,6 +373,34 @@ class ExchangeRateDeleteView(LoginRequiredMixin, DeleteView):
         return super().form_valid(form)
 
 
+# ─── AJAX Section Items (lazy-load) ──────────────────────────
+
+@login_required
+def ajax_section_items(request, pk):
+    """Return HTML fragment with a section's line items for lazy-loading."""
+    section = get_object_or_404(CostingSection, pk=pk)
+    sheet = section.costing_sheet
+    items = list(section.line_items.all())
+
+    exchange_rates = list(ExchangeRate.objects.all())
+    rates_dict = {r.currency_code: r.rate_to_usd for r in exchange_rates}
+
+    for item in items:
+        item.set_exchange_rates_cache(rates_dict)
+        item.set_sheet_cache(sheet)
+
+    conversion_rate = _conversion_rate(sheet.output_currency, rates_dict)
+
+    html = render_to_string('costing/_section_items.html', {
+        'section': section,
+        'items': items,
+        'exchange_rates': exchange_rates,
+        'conversion_rate': conversion_rate,
+        'output_currency': sheet.output_currency,
+    }, request=request)
+    return HttpResponse(html)
+
+
 # ─── AJAX Inline Editing ──────────────────────────────────────
 
 @login_required
@@ -363,10 +467,9 @@ def ajax_update_item_field(request, pk):
         return JsonResponse({'error': 'Invalid field'}, status=400)
 
     if field == 'supplier_currency':
-        # String field - set directly
         item.supplier_currency = value if value else 'SAR'
     elif field == 'margin' and not value:
-        item.margin = None  # Clear to use sheet margin
+        item.margin = None
     else:
         try:
             setattr(item, field, Decimal(value) if value else Decimal('0'))
@@ -374,7 +477,23 @@ def ajax_update_item_field(request, pk):
             return JsonResponse({'error': 'Invalid number'}, status=400)
 
     item.save()
-    return JsonResponse({'ok': True})
+
+    # Recompute values with caches and return them
+    rates_dict = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
+    item.set_exchange_rates_cache(rates_dict)
+    item.set_sheet_cache(item.section.costing_sheet)
+
+    return JsonResponse({
+        'ok': True,
+        'computed': {
+            'unit_cost': str(item.unit_cost),
+            'total_cost': str(item.total_cost),
+            'base_unit_price': str(item.base_unit_price),
+            'base_total_price': str(item.base_total_price),
+            'final_unit_price': str(item.final_unit_price),
+            'final_total_price': str(item.final_total_price),
+        },
+    })
 
 
 # ─── Excel Export ─────────────────────────────────────────────
@@ -390,6 +509,12 @@ def costing_export_excel(request, pk):
     sheet = get_object_or_404(CostingSheet, pk=pk)
     sections = sheet.sections.prefetch_related('line_items').all()
     rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
+
+    # Inject caches into all line items to avoid N+1 queries
+    for section in sections:
+        for item in section.line_items.all():
+            item.set_exchange_rates_cache(rates)
+            item.set_sheet_cache(sheet)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -584,6 +709,13 @@ def costing_export_pdf(request, pk):
 
     sheet = get_object_or_404(CostingSheet, pk=pk)
     sections = sheet.sections.prefetch_related('line_items').all()
+
+    # Inject caches into all line items to avoid N+1 queries
+    rates_dict = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
+    for section in sections:
+        for item in section.line_items.all():
+            item.set_exchange_rates_cache(rates_dict)
+            item.set_sheet_cache(sheet)
 
     # Create response
     response = HttpResponse(content_type='application/pdf')

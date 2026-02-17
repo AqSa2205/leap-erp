@@ -55,82 +55,74 @@ class CostingSheet(models.Model):
     def __str__(self):
         return self.title
 
+    def _compute_totals(self):
+        """Compute all sheet totals in a single pass. Results are cached on the instance."""
+        if hasattr(self, '_totals'):
+            return self._totals
+        t = {
+            'grand_total': Decimal('0'),
+            'total_cost': Decimal('0'),
+            'total_base_cost': Decimal('0'),
+            'total_discount': Decimal('0'),
+            'total_margin_amount': Decimal('0'),
+            'total_shipping_amount': Decimal('0'),
+            'total_customs_amount': Decimal('0'),
+            'total_finances_amount': Decimal('0'),
+            'total_installation_amount': Decimal('0'),
+        }
+        for section in self.sections.all():
+            for item in section.line_items.all():
+                qty = item.quantity
+                t['grand_total'] += item.final_total_price
+                t['total_cost'] += item.total_cost
+                t['total_base_cost'] += item.base_unit_cost * qty
+                t['total_discount'] += item.discount_amount * qty
+                t['total_margin_amount'] += item.base_total_price - item.total_cost
+                ucs = item.unit_cost_sar
+                t['total_shipping_amount'] += ucs * item.effective_shipping_pct * qty
+                t['total_customs_amount'] += ucs * item.effective_customs_pct * qty
+                t['total_finances_amount'] += ucs * item.effective_finances_pct * qty
+                t['total_installation_amount'] += ucs * item.effective_installation_pct * qty
+        for key in t:
+            t[key] = t[key].quantize(Decimal('0.01'))
+        self._totals = t
+        return t
+
     @property
     def grand_total(self):
-        total = Decimal('0')
-        for section in self.sections.all():
-            total += section.subtotal
-        return total.quantize(Decimal('0.01'))
+        return self._compute_totals()['grand_total']
 
     @property
     def total_cost(self):
-        total = Decimal('0')
-        for section in self.sections.all():
-            total += section.total_cost
-        return total.quantize(Decimal('0.01'))
+        return self._compute_totals()['total_cost']
 
     @property
     def total_base_cost(self):
-        """Sum of all base_unit_cost * quantity"""
-        total = Decimal('0')
-        for section in self.sections.all():
-            for item in section.line_items.all():
-                total += item.base_unit_cost * item.quantity
-        return total.quantize(Decimal('0.01'))
+        return self._compute_totals()['total_base_cost']
 
     @property
     def total_discount(self):
-        """Sum of all discount_amount * quantity"""
-        total = Decimal('0')
-        for section in self.sections.all():
-            for item in section.line_items.all():
-                total += item.discount_amount * item.quantity
-        return total.quantize(Decimal('0.01'))
+        return self._compute_totals()['total_discount']
 
     @property
     def total_margin_amount(self):
-        """Total margin amount (base_total_price - total_cost)"""
-        total = Decimal('0')
-        for section in self.sections.all():
-            for item in section.line_items.all():
-                total += item.base_total_price - item.total_cost
-        return total.quantize(Decimal('0.01'))
+        return self._compute_totals()['total_margin_amount']
 
     @property
     def total_shipping_amount(self):
-        """Total shipping amount (based on cost after discount)"""
-        total = Decimal('0')
-        for section in self.sections.all():
-            for item in section.line_items.all():
-                total += item.unit_cost_sar * item.effective_shipping_pct * item.quantity
-        return total.quantize(Decimal('0.01'))
+        return self._compute_totals()['total_shipping_amount']
 
     @property
     def total_customs_amount(self):
-        """Total customs amount (based on cost after discount)"""
-        total = Decimal('0')
-        for section in self.sections.all():
-            for item in section.line_items.all():
-                total += item.unit_cost_sar * item.effective_customs_pct * item.quantity
-        return total.quantize(Decimal('0.01'))
+        return self._compute_totals()['total_customs_amount']
 
     @property
     def total_finances_amount(self):
-        """Total finances amount (based on cost after discount)"""
-        total = Decimal('0')
-        for section in self.sections.all():
-            for item in section.line_items.all():
-                total += item.unit_cost_sar * item.effective_finances_pct * item.quantity
-        return total.quantize(Decimal('0.01'))
+        return self._compute_totals()['total_finances_amount']
 
     @property
     def total_installation_amount(self):
-        """Total installation amount (based on cost after discount)"""
-        total = Decimal('0')
-        for section in self.sections.all():
-            for item in section.line_items.all():
-                total += item.unit_cost_sar * item.effective_installation_pct * item.quantity
-        return total.quantize(Decimal('0.01'))
+        return self._compute_totals()['total_installation_amount']
 
 
 class CostingSection(models.Model):
@@ -149,59 +141,60 @@ class CostingSection(models.Model):
     def __str__(self):
         return f"{self.section_number} - {self.title}"
 
+    def _compute_subtotals(self):
+        """Compute all section subtotals in a single pass. Results are cached on the instance."""
+        if hasattr(self, '_subtotals'):
+            return self._subtotals
+        t = {
+            'subtotal': Decimal('0'),
+            'total_cost': Decimal('0'),
+            'base_unit_cost': Decimal('0'),
+            'discount': Decimal('0'),
+            'unit_cost': Decimal('0'),
+            'base_unit_price': Decimal('0'),
+            'base_total_price': Decimal('0'),
+        }
+        for item in self.line_items.all():
+            qty = item.quantity
+            t['subtotal'] += item.final_total_price
+            t['total_cost'] += item.total_cost
+            t['base_unit_cost'] += item.base_unit_cost * qty
+            t['discount'] += item.discount_amount * qty
+            t['unit_cost'] += item.unit_cost * qty
+            t['base_unit_price'] += item.base_unit_price * qty
+            t['base_total_price'] += item.base_total_price
+        for key in t:
+            t[key] = t[key].quantize(Decimal('0.01'))
+        self._subtotals = t
+        return t
+
     @property
     def subtotal(self):
-        total = Decimal('0')
-        for item in self.line_items.all():
-            total += item.final_total_price
-        return total.quantize(Decimal('0.01'))
+        return self._compute_subtotals()['subtotal']
 
     @property
     def total_cost(self):
-        total = Decimal('0')
-        for item in self.line_items.all():
-            total += item.total_cost
-        return total.quantize(Decimal('0.01'))
+        return self._compute_subtotals()['total_cost']
 
     @property
     def subtotal_base_unit_cost(self):
-        """Sum of base_unit_cost * quantity"""
-        total = Decimal('0')
-        for item in self.line_items.all():
-            total += item.base_unit_cost * item.quantity
-        return total.quantize(Decimal('0.01'))
+        return self._compute_subtotals()['base_unit_cost']
 
     @property
     def subtotal_discount(self):
-        """Sum of discount_amount * quantity"""
-        total = Decimal('0')
-        for item in self.line_items.all():
-            total += item.discount_amount * item.quantity
-        return total.quantize(Decimal('0.01'))
+        return self._compute_subtotals()['discount']
 
     @property
     def subtotal_unit_cost(self):
-        """Sum of unit_cost * quantity (after discount)"""
-        total = Decimal('0')
-        for item in self.line_items.all():
-            total += item.unit_cost * item.quantity
-        return total.quantize(Decimal('0.01'))
+        return self._compute_subtotals()['unit_cost']
 
     @property
     def subtotal_base_unit_price(self):
-        """Sum of base_unit_price * quantity"""
-        total = Decimal('0')
-        for item in self.line_items.all():
-            total += item.base_unit_price * item.quantity
-        return total.quantize(Decimal('0.01'))
+        return self._compute_subtotals()['base_unit_price']
 
     @property
     def subtotal_base_total_price(self):
-        """Sum of base_total_price"""
-        total = Decimal('0')
-        for item in self.line_items.all():
-            total += item.base_total_price
-        return total.quantize(Decimal('0.01'))
+        return self._compute_subtotals()['base_total_price']
 
 
 class CostingLineItem(models.Model):
@@ -245,11 +238,27 @@ class CostingLineItem(models.Model):
     class Meta:
         ordering = ['order', 'item_number']
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._rates_cache = None
+        self._sheet_cache = None
+        self._computed = {}
+
     def __str__(self):
         return f"{self.item_number} - {self.description[:50]}"
 
+    def set_exchange_rates_cache(self, rates_dict):
+        """Set pre-loaded exchange rates to avoid per-item DB queries."""
+        self._rates_cache = rates_dict
+
+    def set_sheet_cache(self, sheet):
+        """Set parent sheet reference to avoid FK traversal."""
+        self._sheet_cache = sheet
+
     @property
     def sheet(self):
+        if self._sheet_cache is not None:
+            return self._sheet_cache
         return self.section.costing_sheet
 
     @property
@@ -297,54 +306,85 @@ class CostingLineItem(models.Model):
     @property
     def discount_amount(self):
         """Calculate discount amount from base_unit_cost * discount_pct"""
-        result = self.base_unit_cost * self.effective_discount_pct
-        return result.quantize(Decimal('0.01'))
+        if 'discount_amount' in self._computed:
+            return self._computed['discount_amount']
+        result = (self.base_unit_cost * self.effective_discount_pct).quantize(Decimal('0.01'))
+        self._computed['discount_amount'] = result
+        return result
 
     @property
     def unit_cost(self):
         """Base Unit Cost - Discount Amount"""
-        result = self.base_unit_cost - self.discount_amount
-        return result.quantize(Decimal('0.01'))
+        if 'unit_cost' in self._computed:
+            return self._computed['unit_cost']
+        result = (self.base_unit_cost - self.discount_amount).quantize(Decimal('0.01'))
+        self._computed['unit_cost'] = result
+        return result
 
     @property
     def total_cost(self):
         """Unit Cost * Quantity"""
-        result = self.unit_cost * self.quantity
-        return result.quantize(Decimal('0.01'))
+        if 'total_cost' in self._computed:
+            return self._computed['total_cost']
+        result = (self.unit_cost * self.quantity).quantize(Decimal('0.01'))
+        self._computed['total_cost'] = result
+        return result
 
     @property
     def exchange_rate_to_sar(self):
         """Get exchange rate from supplier currency to SAR"""
+        if 'exchange_rate_to_sar' in self._computed:
+            return self._computed['exchange_rate_to_sar']
         if self.supplier_currency == 'SAR':
-            return Decimal('1')
-        try:
-            supplier_rate = ExchangeRate.objects.get(currency_code=self.supplier_currency).rate_to_usd
-            sar_rate = ExchangeRate.objects.get(currency_code='SAR').rate_to_usd
-            # Convert: supplier -> USD -> SAR
-            return (sar_rate / supplier_rate).quantize(Decimal('0.000001'))
-        except ExchangeRate.DoesNotExist:
-            return Decimal('1')
+            result = Decimal('1')
+        elif self._rates_cache is not None:
+            supplier_rate = self._rates_cache.get(self.supplier_currency)
+            sar_rate = self._rates_cache.get('SAR')
+            if supplier_rate and sar_rate:
+                result = (sar_rate / supplier_rate).quantize(Decimal('0.000001'))
+            else:
+                result = Decimal('1')
+        else:
+            try:
+                supplier_rate = ExchangeRate.objects.get(currency_code=self.supplier_currency).rate_to_usd
+                sar_rate = ExchangeRate.objects.get(currency_code='SAR').rate_to_usd
+                # Convert: supplier -> USD -> SAR
+                result = (sar_rate / supplier_rate).quantize(Decimal('0.000001'))
+            except ExchangeRate.DoesNotExist:
+                result = Decimal('1')
+        self._computed['exchange_rate_to_sar'] = result
+        return result
 
     @property
     def unit_cost_sar(self):
         """Unit Cost converted to SAR"""
-        result = self.unit_cost * self.exchange_rate_to_sar
-        return result.quantize(Decimal('0.01'))
+        if 'unit_cost_sar' in self._computed:
+            return self._computed['unit_cost_sar']
+        result = (self.unit_cost * self.exchange_rate_to_sar).quantize(Decimal('0.01'))
+        self._computed['unit_cost_sar'] = result
+        return result
 
     @property
     def base_unit_price(self):
         """Selling Price = Cost / (1 - Margin), where selling price is 100%"""
+        if 'base_unit_price' in self._computed:
+            return self._computed['base_unit_price']
         margin = self.effective_margin
         if margin >= 1:
-            return self.unit_cost_sar
-        result = self.unit_cost_sar / (1 - margin)
-        return result.quantize(Decimal('0.01'))
+            result = self.unit_cost_sar
+        else:
+            result = (self.unit_cost_sar / (1 - margin)).quantize(Decimal('0.01'))
+        self._computed['base_unit_price'] = result
+        return result
 
     @property
     def base_total_price(self):
         """Base Unit Price * Quantity"""
-        result = self.base_unit_price * self.quantity
-        return result.quantize(Decimal('0.01'))
+        if 'base_total_price' in self._computed:
+            return self._computed['base_total_price']
+        result = (self.base_unit_price * self.quantity).quantize(Decimal('0.01'))
+        self._computed['base_total_price'] = result
+        return result
 
     @property
     def total_addon_pct(self):
@@ -355,14 +395,20 @@ class CostingLineItem(models.Model):
     @property
     def final_unit_price(self):
         """Base Unit Price + (Unit Cost SAR * total addon percentages)"""
-        result = self.base_unit_price + (self.unit_cost_sar * self.total_addon_pct)
-        return result.quantize(Decimal('0.01'))
+        if 'final_unit_price' in self._computed:
+            return self._computed['final_unit_price']
+        result = (self.base_unit_price + (self.unit_cost_sar * self.total_addon_pct)).quantize(Decimal('0.01'))
+        self._computed['final_unit_price'] = result
+        return result
 
     @property
     def final_total_price(self):
         """Final Unit Price * Quantity"""
-        result = self.final_unit_price * self.quantity
-        return result.quantize(Decimal('0.01'))
+        if 'final_total_price' in self._computed:
+            return self._computed['final_total_price']
+        result = (self.final_unit_price * self.quantity).quantize(Decimal('0.01'))
+        self._computed['final_total_price'] = result
+        return result
 
     # Aliases for template compatibility
     @property

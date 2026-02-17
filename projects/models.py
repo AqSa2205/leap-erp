@@ -108,6 +108,24 @@ class Project(models.Model):
         default=0,
         help_text="Estimated value in region currency"
     )
+    estimated_value_usd = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=0,
+        help_text="Estimated value in USD"
+    )
+    estimated_value_per_annum = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=0,
+        help_text="Estimated value (SAR) per annum"
+    )
+    estimated_gp = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=0,
+        help_text="Estimated Gross Profit"
+    )
     po_award_quarter = models.CharField(
         max_length=5,
         choices=QUARTER_CHOICES,

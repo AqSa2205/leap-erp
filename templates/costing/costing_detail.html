@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% load humanize %}
+{% load humanize costing_tags %}
 
 {% block title %}{{ sheet.title }} - BOM{% endblock %}
 {% block page_title %}Bill of Material - Commercial{% endblock %}
@@ -16,117 +16,46 @@
     }
     .bom-table td { padding: 4px 6px; vertical-align: middle; }
     .bom-table .num { text-align: right; font-variant-numeric: tabular-nums; }
-    .section-header-row { background: #f0f0f0; font-weight: 700; }
+    .section-header-row { background: #f0f0f0; font-weight: 700; cursor: pointer; user-select: none; }
+    .section-header-row:hover { background: #e4e4e4; }
     .subtotal-row { background: #fafafa; font-weight: 600; }
     .grand-total-row { background: var(--leap-red); color: #fff; font-weight: 700; }
-
-    /* Second half - cost columns with grey background */
     .cost-col { background-color: #d0d0d0 !important; }
     .cost-hdr { background-color: #495057 !important; color: #fff !important; }
-
     .rate-box { font-size: 0.78rem; }
     .rate-box td { padding: 1px 8px; }
-
-    /* Large styled inputs for sheet-level parameters */
     .inline-edit {
-        background: transparent;
-        border: 1px dashed #ccc;
-        border-radius: 4px;
-        text-align: center;
-        font-weight: 700;
-        color: var(--leap-red);
-        width: 70px;
-        padding: 2px 4px;
-        font-size: 1rem;
-        transition: all 0.2s;
+        background: transparent; border: 1px dashed #ccc; border-radius: 4px;
+        text-align: center; font-weight: 700; color: var(--leap-red);
+        width: 70px; padding: 2px 4px; font-size: 1rem; transition: all 0.2s;
     }
-    .inline-edit:focus {
-        background: #fff;
-        border-color: var(--leap-red);
-        outline: none;
-        box-shadow: 0 0 0 2px rgba(196,30,58,0.2);
-    }
-    .inline-edit.saved {
-        border-color: #198754;
-        background: rgba(25,135,84,0.08);
-    }
+    .inline-edit:focus { background: #fff; border-color: var(--leap-red); outline: none; box-shadow: 0 0 0 2px rgba(196,30,58,0.2); }
+    .inline-edit.saved { border-color: #198754; background: rgba(25,135,84,0.08); }
     .param-label { font-size: 0.65rem; text-transform: uppercase; color: #6c757d; }
-
-    /* Totals summary strip */
-    .total-value {
-        font-size: 1.1rem;
-        font-weight: 700;
-        color: #212529;
-        font-variant-numeric: tabular-nums;
-    }
-    .total-label {
-        font-size: 0.65rem;
-        text-transform: uppercase;
-        color: #6c757d;
-    }
-
+    .total-value { font-size: 1.1rem; font-weight: 700; color: #212529; font-variant-numeric: tabular-nums; }
+    .total-label { font-size: 0.65rem; text-transform: uppercase; color: #6c757d; }
     .rate-edit {
-        background: transparent;
-        border: 1px dashed #ccc;
-        border-radius: 3px;
-        text-align: right;
-        width: 80px;
-        padding: 1px 4px;
-        font-size: 0.78rem;
+        background: transparent; border: 1px dashed #ccc; border-radius: 3px;
+        text-align: right; width: 68px; padding: 1px 4px; font-size: 0.72rem;
     }
-    .rate-edit:focus {
-        background: #fff;
-        border-color: var(--leap-red);
-        outline: none;
-    }
-    .rate-edit.saved {
-        border-color: #198754;
-        background: rgba(25,135,84,0.08);
-    }
-
-    /* Currency dropdown */
+    .rate-edit:focus { background: #fff; border-color: var(--leap-red); outline: none; }
+    .rate-edit.saved { border-color: #198754; background: rgba(25,135,84,0.08); }
     .currency-select {
-        background: transparent;
-        border: 1px dashed #999;
-        border-radius: 3px;
-        padding: 2px 4px;
-        font-size: 0.75rem;
-        width: 65px;
-        cursor: pointer;
+        background: transparent; border: 1px dashed #999; border-radius: 3px;
+        padding: 2px 4px; font-size: 0.75rem; width: 65px; cursor: pointer;
     }
-    .currency-select:focus {
-        background: #fff;
-        border-color: var(--leap-red);
-        outline: none;
-    }
-    .currency-select.saved {
-        border-color: #198754;
-        background: rgba(25,135,84,0.08);
-    }
-
-    /* Inline edit in table rows */
+    .currency-select:focus { background: #fff; border-color: var(--leap-red); outline: none; }
+    .currency-select.saved { border-color: #198754; background: rgba(25,135,84,0.08); }
     .cost-edit, .margin-edit {
-        background: transparent;
-        border: 1px dashed #999;
-        border-radius: 3px;
-        text-align: right;
-        width: 70px;
-        padding: 2px 4px;
-        font-size: 0.75rem;
+        background: transparent; border: 1px dashed #999; border-radius: 3px;
+        text-align: right; width: 70px; padding: 2px 4px; font-size: 0.75rem;
     }
-    .margin-edit {
-        text-align: center;
-        width: 60px;
-    }
-    .cost-edit:focus, .margin-edit:focus {
-        background: #fff;
-        border-color: var(--leap-red);
-        outline: none;
-    }
-    .cost-edit.saved, .margin-edit.saved {
-        border-color: #198754;
-        background: rgba(25,135,84,0.08);
-    }
+    .margin-edit { text-align: center; width: 60px; }
+    .cost-edit:focus, .margin-edit:focus { background: #fff; border-color: var(--leap-red); outline: none; }
+    .cost-edit.saved, .margin-edit.saved { border-color: #198754; background: rgba(25,135,84,0.08); }
+    .section-chevron { transition: transform 0.15s; display: inline-block; }
+    .section-chevron.expanded { transform: rotate(90deg); }
+    .section-item-count { font-weight: 400; font-size: 0.7rem; color: #6c757d; }
 </style>
 {% endblock %}
 
@@ -146,10 +75,8 @@
                     {% endif %}
                 </table>
             </div>
-
-            <!-- Editable Parameters -->
             <div class="col-lg-5 col-md-4 text-center">
-                <div class="d-flex justify-content-center gap-2 flex-wrap">
+                <div class="d-flex justify-content-center gap-2 flex-wrap align-items-end">
                     <div>
                         <input type="number" class="inline-edit param-edit" data-field="margin"
                                value="{{ sheet.margin|floatformat:0 }}" step="1" min="0" max="99">
@@ -180,31 +107,37 @@
                                value="{{ sheet.installation_rate|floatformat:0 }}" step="1" min="0" max="99">
                         <div class="param-label">Install %</div>
                     </div>
+                    <div>
+                        <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" id="clearParams" title="Reset all to 0" style="font-size:0.7rem;">
+                            <i class="bi bi-arrow-counterclockwise"></i> Clear
+                        </button>
+                    </div>
                 </div>
             </div>
-
-            <!-- Exchange Rates Table -->
-            <div class="col-lg-3 col-md-3">
-                <table class="rate-box table table-sm table-bordered mb-0">
-                    <thead><tr class="table-dark"><th colspan="2" class="text-center" style="font-size:0.7rem;">EXCHANGE RATES</th></tr></thead>
+            <div class="col-lg-2 col-md-3 d-flex flex-column align-items-center">
+                <div class="mb-1" style="font-size:0.72rem; font-weight:700; color:#212529;">Exchange Rates (ref. USD)</div>
+                <table class="rate-box table table-sm table-bordered border-dark mb-0" style="font-size:0.72rem; width:170px;">
                     <tbody>
                         {% for rate in exchange_rates %}
                         <tr>
-                            <td><strong>{{ rate.currency_code }}</strong></td>
-                            <td>
-                                <input type="number" class="rate-edit" data-rate-id="{{ rate.pk }}"
-                                       value="{{ rate.rate_to_usd }}" step="0.0001" min="0">
-                            </td>
+                            <td class="py-0 px-2"><strong>{{ rate.currency_code }}</strong></td>
+                            <td class="py-0 px-1"><input type="number" class="rate-edit" data-rate-id="{{ rate.pk }}" value="{{ rate.rate_to_usd|floatformat:3 }}" step="0.001" min="0"></td>
                         </tr>
                         {% empty %}
-                        <tr><td colspan="2" class="text-muted">No rates configured</td></tr>
+                        <tr><td colspan="2" class="text-muted py-0">No rates</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
-
-            <!-- Actions -->
-            <div class="col-lg-2 col-md-2 text-end">
+            <div class="col-lg-1 col-md-2 text-center">
+                <div class="param-label mb-1">Output Currency</div>
+                <select class="form-select form-select-sm" id="outputCurrency" style="font-size:0.8rem; font-weight:700;">
+                    {% for rate in exchange_rates %}
+                    <option value="{{ rate.currency_code }}" {% if sheet.output_currency == rate.currency_code %}selected{% endif %}>{{ rate.currency_code }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-lg-1 col-md-2 text-end">
                 {% if sheet.status == 'draft' %}
                 <span class="badge bg-warning text-dark mb-1">Draft</span>
                 {% else %}
@@ -226,54 +159,60 @@
     <div class="card-body py-2">
         <div class="d-flex justify-content-center gap-3 flex-wrap">
             <div class="text-center">
-                <div class="total-value">{{ sheet.total_cost|floatformat:2|intcomma }}</div>
+                <div class="total-value">{{ sheet.total_cost|mul:conversion_rate|floatformat:2|intcomma }}</div>
                 <div class="total-label">Total Cost</div>
             </div>
             <div class="text-center">
-                <div class="total-value">{{ sheet.total_margin_amount|floatformat:2|intcomma }}</div>
+                <div class="total-value">{{ sheet.total_margin_amount|mul:conversion_rate|floatformat:2|intcomma }}</div>
                 <div class="total-label">Margin</div>
             </div>
             <div class="text-center">
-                <div class="total-value">{{ sheet.total_discount|floatformat:2|intcomma }}</div>
+                <div class="total-value">{{ sheet.total_discount|mul:conversion_rate|floatformat:2|intcomma }}</div>
                 <div class="total-label">Discount</div>
             </div>
             <div class="text-center">
-                <div class="total-value">{{ sheet.total_shipping_amount|floatformat:2|intcomma }}</div>
+                <div class="total-value">{{ sheet.total_shipping_amount|mul:conversion_rate|floatformat:2|intcomma }}</div>
                 <div class="total-label">Shipping</div>
             </div>
             <div class="text-center">
-                <div class="total-value">{{ sheet.total_customs_amount|floatformat:2|intcomma }}</div>
+                <div class="total-value">{{ sheet.total_customs_amount|mul:conversion_rate|floatformat:2|intcomma }}</div>
                 <div class="total-label">Customs</div>
             </div>
             <div class="text-center">
-                <div class="total-value">{{ sheet.total_finances_amount|floatformat:2|intcomma }}</div>
+                <div class="total-value">{{ sheet.total_finances_amount|mul:conversion_rate|floatformat:2|intcomma }}</div>
                 <div class="total-label">Finances</div>
             </div>
             <div class="text-center">
-                <div class="total-value">{{ sheet.total_installation_amount|floatformat:2|intcomma }}</div>
+                <div class="total-value">{{ sheet.total_installation_amount|mul:conversion_rate|floatformat:2|intcomma }}</div>
                 <div class="total-label">Installation</div>
             </div>
             <div class="text-center">
-                <div class="total-value text-danger fw-bold">{{ sheet.grand_total|floatformat:2|intcomma }}</div>
-                <div class="total-label">Grand Total</div>
+                <div class="total-value text-danger fw-bold">{{ sheet.grand_total|mul:conversion_rate|floatformat:2|intcomma }}</div>
+                <div class="total-label">Grand Total ({{ sheet.output_currency }})</div>
             </div>
         </div>
     </div>
 </div>
 
-<!-- Add Section Button -->
-<div class="mb-2">
+<!-- Add Section Button + Expand/Collapse -->
+<div class="mb-2 d-flex justify-content-between align-items-center">
     <a href="{% url 'costing:section_create' sheet.pk %}" class="btn btn-primary btn-sm">
         <i class="bi bi-plus-lg me-1"></i> Add Section
     </a>
+    {% if sections %}
+    <div class="btn-group btn-group-sm">
+        <button class="btn btn-outline-secondary" id="expandAll"><i class="bi bi-arrows-expand me-1"></i>Expand All</button>
+        <button class="btn btn-outline-secondary" id="collapseAll"><i class="bi bi-arrows-collapse me-1"></i>Collapse All</button>
+    </div>
+    {% endif %}
 </div>
 
 <!-- BOM Table -->
 <div class="card">
     <div class="card-body p-0">
         <div class="table-responsive" style="max-height:78vh;">
-            <table class="table table-bordered bom-table mb-0">
-                <thead>
+            <table class="table table-bordered bom-table mb-0" id="bomTable">
+                <thead class="sticky-top">
                     <tr>
                         <th class="table-dark">Item No</th>
                         <th class="table-dark" style="min-width:180px;">Description</th>
@@ -301,134 +240,56 @@
                         <th class="table-dark" style="width:60px;">Act</th>
                     </tr>
                 </thead>
+
+                {% for section in sections %}
                 <tbody>
-                    {% for section in sections %}
-                    <tr class="section-header-row">
-                        <td>{{ section.section_number }}</td>
-                        <td colspan="22">{{ section.title }}</td>
-                        <td class="text-center">
+                    <tr class="section-header-row" data-section-id="{{ section.pk }}">
+                        <td><i class="bi bi-chevron-right section-chevron"></i> {{ section.section_number }}</td>
+                        <td colspan="21">{{ section.title }} <span class="section-item-count">({{ section.item_count_cached }})</span></td>
+                        <td class="num fw-bold">{{ section.subtotal|mul:conversion_rate|floatformat:2|intcomma }}</td>
+                        <td class="text-center" onclick="event.stopPropagation();">
                             <a href="{% url 'costing:item_create' section.pk %}" class="btn btn-sm btn-outline-primary py-0 px-1" title="Add Item"><i class="bi bi-plus"></i></a>
                             <a href="{% url 'costing:section_edit' section.pk %}" class="btn btn-sm btn-outline-secondary py-0 px-1" title="Edit"><i class="bi bi-pencil"></i></a>
                             <a href="{% url 'costing:section_delete' section.pk %}" class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"><i class="bi bi-trash"></i></a>
                         </td>
                     </tr>
-
-                    {% for item in section.line_items.all %}
-                    <tr>
-                        <td>{{ item.item_number }}</td>
-                        <td style="white-space:normal;min-width:180px;">{{ item.description }}</td>
-                        <td>{{ item.make }}</td>
-                        <td>{{ item.model_number }}</td>
-                        <td class="num">{{ item.quantity|floatformat:0 }}</td>
-                        <td>{{ item.unit }}</td>
-                        <td>{{ item.vendor_name }}</td>
-                        <td class="num">{{ item.final_unit_price|floatformat:2|intcomma }}</td>
-                        <td class="num fw-bold">{{ item.final_total_price|floatformat:2|intcomma }}</td>
-                        <!-- Cost columns (grey) -->
-                        <td class="cost-col">
-                            <select class="currency-select" data-item-id="{{ item.pk }}">
-                                {% if exchange_rates %}
-                                    {% for rate in exchange_rates %}
-                                    <option value="{{ rate.currency_code }}" {% if item.supplier_currency == rate.currency_code %}selected{% endif %}>{{ rate.currency_code }}</option>
-                                    {% endfor %}
-                                {% else %}
-                                    <option value="SAR" {% if item.supplier_currency == 'SAR' %}selected{% endif %}>SAR</option>
-                                    <option value="USD" {% if item.supplier_currency == 'USD' %}selected{% endif %}>USD</option>
-                                    <option value="AED" {% if item.supplier_currency == 'AED' %}selected{% endif %}>AED</option>
-                                    <option value="GBP" {% if item.supplier_currency == 'GBP' %}selected{% endif %}>GBP</option>
-                                    <option value="EUR" {% if item.supplier_currency == 'EUR' %}selected{% endif %}>EUR</option>
-                                {% endif %}
-                            </select>
-                        </td>
-                        <td class="cost-col num">
-                            <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="base_unit_cost"
-                                   value="{{ item.base_unit_cost }}" step="0.01" min="0">
-                        </td>
-                        <td class="cost-col num">
-                            <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="discount_pct"
-                                   value="{{ item.display_discount_pct|floatformat:0 }}" step="1" min="0">
-                        </td>
-                        <td class="cost-col num">{{ item.unit_cost|floatformat:2|intcomma }}</td>
-                        <td class="cost-col num">{{ item.total_cost|floatformat:2|intcomma }}</td>
-                        <td class="cost-col num">
-                            <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="margin"
-                                   value="{{ item.display_margin|floatformat:0 }}" step="1" min="0" max="99">
-                        </td>
-                        <td class="cost-col num">{{ item.base_unit_price|floatformat:2|intcomma }}</td>
-                        <td class="cost-col num">{{ item.base_total_price|floatformat:2|intcomma }}</td>
-                        <td class="cost-col num">
-                            <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="shipping_pct"
-                                   value="{{ item.display_shipping_pct|floatformat:0 }}" step="1" min="0">
-                        </td>
-                        <td class="cost-col num">
-                            <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="customs_pct"
-                                   value="{{ item.display_customs_pct|floatformat:0 }}" step="1" min="0">
-                        </td>
-                        <td class="cost-col num">
-                            <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="finances_pct"
-                                   value="{{ item.display_finances_pct|floatformat:0 }}" step="1" min="0">
-                        </td>
-                        <td class="cost-col num">
-                            <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="installation_pct"
-                                   value="{{ item.display_installation_pct|floatformat:0 }}" step="1" min="0">
-                        </td>
-                        <td class="cost-col num">{{ item.final_unit_price|floatformat:2|intcomma }}</td>
-                        <td class="cost-col num fw-bold">{{ item.final_total_price|floatformat:2|intcomma }}</td>
-                        <td class="text-center">
-                            <a href="{% url 'costing:item_edit' item.pk %}" class="btn btn-sm btn-outline-secondary py-0 px-1"><i class="bi bi-pencil"></i></a>
-                            <a href="{% url 'costing:item_delete' item.pk %}" class="btn btn-sm btn-outline-danger py-0 px-1"><i class="bi bi-trash"></i></a>
-                        </td>
-                    </tr>
-                    {% empty %}
-                    <tr>
-                        <td colspan="24" class="text-center text-muted py-2">
-                            No items. <a href="{% url 'costing:item_create' section.pk %}">Add one</a>.
-                        </td>
-                    </tr>
-                    {% endfor %}
-
-                    <tr class="subtotal-row">
-                        <td colspan="8" class="text-end">Sub-Total</td>
-                        <td class="num fw-bold">{{ section.subtotal|floatformat:2|intcomma }}</td>
-                        <td class="cost-col"></td>
-                        <td class="cost-col num fw-bold">{{ section.subtotal_base_unit_cost|floatformat:2|intcomma }}</td>
-                        <td class="cost-col num fw-bold">{{ section.subtotal_discount|floatformat:2|intcomma }}</td>
-                        <td class="cost-col num fw-bold">{{ section.subtotal_unit_cost|floatformat:2|intcomma }}</td>
-                        <td class="cost-col num fw-bold">{{ section.total_cost|floatformat:2|intcomma }}</td>
-                        <td class="cost-col"></td>
-                        <td class="cost-col num fw-bold">{{ section.subtotal_base_unit_price|floatformat:2|intcomma }}</td>
-                        <td class="cost-col num fw-bold">{{ section.subtotal_base_total_price|floatformat:2|intcomma }}</td>
-                        <td class="cost-col" colspan="4"></td>
-                        <td class="cost-col num fw-bold">{{ section.subtotal|floatformat:2|intcomma }}</td>
-                        <td class="cost-col num fw-bold">{{ section.subtotal|floatformat:2|intcomma }}</td>
-                        <td></td>
-                    </tr>
-                    {% empty %}
+                </tbody>
+                {# Items tbody — starts empty; loaded via AJAX on first expand #}
+                <tbody class="section-body d-none" id="section-{{ section.pk }}" data-loaded="false"
+                       data-url="{% url 'costing:section_items' section.pk %}">
+                    <tr><td colspan="24" class="text-center py-3">
+                        <span class="spinner-border spinner-border-sm text-muted"></span>
+                    </td></tr>
+                </tbody>
+                {% empty %}
+                <tbody>
                     <tr>
                         <td colspan="24" class="text-center py-4 text-muted">
                             No sections yet. <a href="{% url 'costing:section_create' sheet.pk %}">Add a section</a> to build your BOM.
                         </td>
                     </tr>
-                    {% endfor %}
+                </tbody>
+                {% endfor %}
 
-                    {% if sections %}
+                {% if sections %}
+                <tbody>
                     <tr class="grand-total-row">
                         <td colspan="8" class="text-end">GRAND TOTAL ({{ sheet.output_currency }})</td>
-                        <td class="num">{{ sheet.grand_total|floatformat:2|intcomma }}</td>
+                        <td class="num">{{ sheet.grand_total|mul:conversion_rate|floatformat:2|intcomma }}</td>
                         <td></td>
                         <td class="num">{{ sheet.total_base_cost|floatformat:2|intcomma }}</td>
                         <td class="num">{{ sheet.total_discount|floatformat:2|intcomma }}</td>
                         <td class="num">{{ sheet.total_cost|floatformat:2|intcomma }}</td>
                         <td class="num">{{ sheet.total_cost|floatformat:2|intcomma }}</td>
                         <td></td>
-                        <td class="num" colspan="2">{{ sheet.grand_total|floatformat:2|intcomma }}</td>
+                        <td class="num" colspan="2">{{ sheet.grand_total|mul:conversion_rate|floatformat:2|intcomma }}</td>
                         <td colspan="4"></td>
-                        <td class="num">{{ sheet.grand_total|floatformat:2|intcomma }}</td>
-                        <td class="num">{{ sheet.grand_total|floatformat:2|intcomma }}</td>
+                        <td class="num">{{ sheet.grand_total|mul:conversion_rate|floatformat:2|intcomma }}</td>
+                        <td class="num">{{ sheet.grand_total|mul:conversion_rate|floatformat:2|intcomma }}</td>
                         <td></td>
                     </tr>
-                    {% endif %}
                 </tbody>
+                {% endif %}
             </table>
         </div>
     </div>
@@ -443,12 +304,90 @@
 
 {% block extra_js %}
 <script>
-    const csrfToken = '{{ csrf_token }}';
-    const sheetPk = {{ sheet.pk }};
-    const updateParamsUrl = '{% url "costing:update_params" sheet.pk %}';
+(function() {
+    var csrfToken = '{{ csrf_token }}';
+    var sheetPk = {{ sheet.pk }};
+    var updateParamsUrl = '{% url "costing:update_params" sheet.pk %}';
 
-    // Helper function for AJAX calls with error handling
-    function saveField(url, body, el) {
+    // ─── Lazy-load section items ───────────────────────────────
+    function loadSection(sectionId, callback) {
+        var body = document.getElementById('section-' + sectionId);
+        if (!body) return;
+        if (body.dataset.loaded === 'true') {
+            if (callback) callback();
+            return;
+        }
+        fetch(body.dataset.url)
+            .then(function(r) { return r.text(); })
+            .then(function(html) {
+                body.innerHTML = html;
+                body.dataset.loaded = 'true';
+                if (callback) callback();
+            })
+            .catch(function(err) {
+                body.innerHTML = '<tr><td colspan="24" class="text-center text-danger py-2">Failed to load items.</td></tr>';
+                console.error('Load failed:', err);
+            });
+    }
+
+    function toggleSection(sectionId) {
+        var body = document.getElementById('section-' + sectionId);
+        var header = document.querySelector('[data-section-id="' + sectionId + '"]');
+        if (!body || !header) return;
+        var chevron = header.querySelector('.section-chevron');
+        var isHidden = body.classList.contains('d-none');
+
+        if (isHidden) {
+            // Expanding — load if needed, then show
+            body.classList.remove('d-none');
+            chevron.classList.add('expanded');
+            loadSection(sectionId);
+        } else {
+            // Collapsing
+            body.classList.add('d-none');
+            chevron.classList.remove('expanded');
+        }
+    }
+
+    // Section header click
+    document.querySelectorAll('.section-header-row').forEach(function(row) {
+        row.addEventListener('click', function() {
+            toggleSection(this.dataset.sectionId);
+        });
+    });
+
+    // Expand All
+    var expandBtn = document.getElementById('expandAll');
+    if (expandBtn) {
+        expandBtn.addEventListener('click', function() {
+            document.querySelectorAll('.section-body').forEach(function(body) {
+                body.classList.remove('d-none');
+                loadSection(body.id.replace('section-', ''));
+            });
+            document.querySelectorAll('.section-chevron').forEach(function(c) {
+                c.classList.add('expanded');
+            });
+        });
+    }
+
+    // Collapse All
+    var collapseBtn = document.getElementById('collapseAll');
+    if (collapseBtn) {
+        collapseBtn.addEventListener('click', function() {
+            document.querySelectorAll('.section-body').forEach(function(b) { b.classList.add('d-none'); });
+            document.querySelectorAll('.section-chevron').forEach(function(c) { c.classList.remove('expanded'); });
+        });
+    }
+
+    // ─── Number formatting ─────────────────────────────────────
+    function formatNum(val) {
+        var n = parseFloat(val);
+        if (isNaN(n)) return val;
+        return n.toLocaleString('en', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    }
+
+    // ─── AJAX Save Helper ──────────────────────────────────────
+    function saveField(url, body, el, onSuccess) {
         el.classList.add('saving');
         fetch(url, {
             method: 'POST',
@@ -458,77 +397,112 @@
             },
             body: body,
         })
-        .then(r => {
-            if (!r.ok) {
-                throw new Error(`HTTP ${r.status}: ${r.statusText}`);
-            }
+        .then(function(r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
             return r.json();
         })
-        .then(data => {
+        .then(function(data) {
             el.classList.remove('saving');
             if (data.ok) {
                 el.classList.add('saved');
-                setTimeout(() => el.classList.remove('saved'), 800);
-                setTimeout(() => location.reload(), 500);
+                setTimeout(function() { el.classList.remove('saved'); }, 1500);
+                if (onSuccess) onSuccess(data);
             } else {
                 alert('Error: ' + (data.error || 'Unknown error'));
             }
         })
-        .catch(err => {
+        .catch(function(err) {
             el.classList.remove('saving');
             console.error('Save failed:', err);
             alert('Failed to save: ' + err.message);
         });
     }
 
-    // Save param on change (margin, discount_rate, shipping_rate, etc.)
-    document.querySelectorAll('.param-edit').forEach(input => {
+    // ─── Update row values after inline edit (no reload) ───────
+    function updateRow(el, data) {
+        if (!data.computed) return;
+        var row = el.closest('tr');
+        if (!row) return;
+        row.querySelectorAll('[data-computed]').forEach(function(cell) {
+            var key = cell.dataset.computed;
+            if (data.computed[key] !== undefined) {
+                cell.textContent = formatNum(data.computed[key]);
+            }
+        });
+    }
+
+    // ─── Event Delegation for BOM table ────────────────────────
+    var bomTable = document.getElementById('bomTable');
+    if (bomTable) {
+        bomTable.addEventListener('change', function(e) {
+            var el = e.target;
+            if (el.matches('.cost-edit')) {
+                var itemId = el.dataset.itemId;
+                var field = el.dataset.field;
+                var url = '/costing/item/' + itemId + '/update-field/';
+                saveField(url, 'field=' + field + '&value=' + encodeURIComponent(el.value), el, function(data) {
+                    updateRow(el, data);
+                });
+            } else if (el.matches('.currency-select')) {
+                var itemId = el.dataset.itemId;
+                var url = '/costing/item/' + itemId + '/update-field/';
+                saveField(url, 'field=supplier_currency&value=' + encodeURIComponent(el.value), el, function(data) {
+                    updateRow(el, data);
+                });
+            }
+        });
+    }
+
+    // ─── Sheet-level params (reload — affects all items) ───────
+    document.querySelectorAll('.param-edit').forEach(function(input) {
         input.addEventListener('change', function() {
-            const field = this.dataset.field;
-            const value = this.value;
-            saveField(updateParamsUrl, `field=${field}&value=${value}`, this);
+            saveField(updateParamsUrl, 'field=' + this.dataset.field + '&value=' + this.value, this, function() {
+                location.reload();
+            });
         });
     });
 
-    // Save exchange rate on change
-    document.querySelectorAll('.rate-edit').forEach(input => {
-        input.addEventListener('change', function() {
-            const rateId = this.dataset.rateId;
-            const value = this.value;
-            const url = `/costing/exchange-rates/${rateId}/update/`;
-            saveField(url, `value=${value}`, this);
+    // ─── Clear all params to 0 ──────────────────────────────────
+    var clearBtn = document.getElementById('clearParams');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', function() {
+            var fields = ['margin', 'discount_rate', 'shipping_rate', 'customs_rate', 'finances_rate', 'installation_rate'];
+            var pending = fields.length;
+            fields.forEach(function(field) {
+                fetch(updateParamsUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-CSRFToken': csrfToken,
+                    },
+                    body: 'field=' + field + '&value=0',
+                }).then(function() {
+                    pending--;
+                    if (pending === 0) location.reload();
+                });
+            });
         });
-    });
+    }
 
-    // Save line item margin on change
-    document.querySelectorAll('.margin-edit').forEach(input => {
-        input.addEventListener('change', function() {
-            const itemId = this.dataset.itemId;
-            const value = this.value;
-            const url = `/costing/item/${itemId}/update-field/`;
-            saveField(url, `field=margin&value=${value}`, this);
+    // ─── Output currency (reload — converts all prices) ────────
+    var currencySelect = document.getElementById('outputCurrency');
+    if (currencySelect) {
+        currencySelect.addEventListener('change', function() {
+            saveField(updateParamsUrl, 'field=output_currency&value=' + encodeURIComponent(this.value), this, function() {
+                location.reload();
+            });
         });
-    });
+    }
 
-    // Save line item cost fields on change
-    document.querySelectorAll('.cost-edit').forEach(input => {
+    // ─── Exchange rates (reload — affects all items) ───────────
+    document.querySelectorAll('.rate-edit').forEach(function(input) {
         input.addEventListener('change', function() {
-            const itemId = this.dataset.itemId;
-            const field = this.dataset.field;
-            const value = this.value;
-            const url = `/costing/item/${itemId}/update-field/`;
-            saveField(url, `field=${field}&value=${value}`, this);
+            var url = '/costing/exchange-rates/' + this.dataset.rateId + '/update/';
+            saveField(url, 'value=' + this.value, this, function() {
+                location.reload();
+            });
         });
     });
-
-    // Save line item currency on change
-    document.querySelectorAll('.currency-select').forEach(select => {
-        select.addEventListener('change', function() {
-            const itemId = this.dataset.itemId;
-            const value = this.value;
-            const url = `/costing/item/${itemId}/update-field/`;
-            saveField(url, `field=supplier_currency&value=${value}`, this);
-        });
-    });
+})();
 </script>
 {% endblock %}

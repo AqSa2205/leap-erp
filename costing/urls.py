@@ -22,6 +22,7 @@ urlpatterns = [
     path('<int:sheet_pk>/add-section/', views.SectionCreateView.as_view(), name='section_create'),
     path('section/<int:pk>/edit/', views.SectionUpdateView.as_view(), name='section_edit'),
     path('section/<int:pk>/delete/', views.SectionDeleteView.as_view(), name='section_delete'),
+    path('section/<int:pk>/items/', views.ajax_section_items, name='section_items'),
 
     # Line items
     path('section/<int:section_pk>/add-item/', views.LineItemCreateView.as_view(), name='item_create'),

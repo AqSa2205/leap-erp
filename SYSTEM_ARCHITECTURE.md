@@ -32,49 +32,49 @@ The Leap Networks ERP is a web-based Enterprise Resource Planning system designe
 └─────────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           APPLICATION LAYER                                  │
+┌────────────────────────────────────────────────────────────────────────────┐
+│                           APPLICATION LAYER                                │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                      Django 5.x Web Framework                        │   │
-│  │  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐       │   │
-│  │  │  accounts  │ │  projects  │ │ dashboard  │ │  reports   │       │   │
-│  │  │    App     │ │    App     │ │    App     │ │    App     │       │   │
-│  │  └────────────┘ └────────────┘ └────────────┘ └────────────┘       │   │
-│  │                                                                      │   │
-│  │  ┌──────────────────────────────────────────────────────────────┐  │   │
-│  │  │  Authentication  │  Authorization  │  Session Management     │  │   │
-│  │  └──────────────────────────────────────────────────────────────┘  │   │
+│  │                      Django 5.x Web Framework                       │   │
+│  │  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐        │   │
+│  │  │  accounts  │ │  projects  │ │ dashboard  │ │  reports   │        │   │
+│  │  │    App     │ │    App     │ │    App     │ │    App     │        │   │
+│  │  └────────────┘ └────────────┘ └────────────┘ └────────────┘        │   │
+│  │                                                                     │   │
+│  │  ┌──────────────────────────────────────────────────────────────┐   │   │
+│  │  │  Authentication  │  Authorization  │  Session Management     │   │   │
+│  │  └──────────────────────────────────────────────────────────────┘   │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              DATA LAYER                                      │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                        Django ORM                                    │   │
-│  │  ┌──────────────────────────────────────────────────────────────┐  │   │
-│  │  │  Models  │  Migrations  │  QuerySets  │  Managers            │  │   │
-│  │  └──────────────────────────────────────────────────────────────┘  │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
+│                              DATA LAYER                                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                        Django ORM                                   │    │
+│  │  ┌──────────────────────────────────────────────────────────────┐   │    │
+│  │  │  Models  │  Migrations  │  QuerySets  │  Managers            │   │    │
+│  │  └──────────────────────────────────────────────────────────────┘   │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
 │                                      │                                      │
 │                                      ▼                                      │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    SQLite Database (Development)                     │   │
-│  │                    PostgreSQL (Production Ready)                     │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                    SQLite Database (Development)                    │    │
+│  │                    PostgreSQL (Production Ready)                    │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            FILE STORAGE                                      │
+┌────────────────────────────────────────────────────────────────────────────┐
+│                            FILE STORAGE                                    │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  /static/          │  /media/                                        │   │
+│  │  /static/          │  /media/                                       │   │
 │  │  - CSS files       │  - Uploaded documents                          │   │
 │  │  - JavaScript      │  - Vendor quotations                           │   │
 │  │  - Images/Logos    │  - Proposals                                   │   │
 │  │  - Favicon         │  - Technical documents                         │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -83,40 +83,40 @@ The Leap Networks ERP is a web-based Enterprise Resource Planning system designe
 
 ### Backend
 
-| Technology | Version | Purpose |
-|------------|---------|---------|
-| **Python** | 3.11+ | Core programming language |
-| **Django** | 5.x | Web framework |
-| **Django ORM** | Built-in | Database abstraction layer |
-| **SQLite** | 3.x | Development database |
-| **PostgreSQL** | 15+ | Production database (recommended) |
+| Technology     | Version  | Purpose                           |
+| -------------- | -------- | --------------------------------- |
+| **Python**     | 3.11+    | Core programming language         |
+| **Django**     | 5.x      | Web framework                     |
+| **Django ORM** | Built-in | Database abstraction layer        |
+| **SQLite**     | 3.x      | Development database              |
+| **PostgreSQL** | 15+      | Production database (recommended) |
 
 ### Frontend
 
-| Technology | Version | Purpose |
-|------------|---------|---------|
-| **HTML5** | - | Markup structure |
-| **CSS3** | - | Styling |
-| **JavaScript** | ES6+ | Client-side interactivity |
-| **Bootstrap** | 5.3.2 | CSS framework & components |
-| **Bootstrap Icons** | 1.11.1 | Icon library |
-| **Chart.js** | Latest | Data visualization & charts |
+| Technology          | Version | Purpose                     |
+| ------------------- | ------- | --------------------------- |
+| **HTML5**           | -       | Markup structure            |
+| **CSS3**            | -       | Styling                     |
+| **JavaScript**      | ES6+    | Client-side interactivity   |
+| **Bootstrap**       | 5.3.2   | CSS framework & components  |
+| **Bootstrap Icons** | 1.11.1  | Icon library                |
+| **Chart.js**        | Latest  | Data visualization & charts |
 
 ### Django Apps & Extensions
 
-| Package | Purpose |
-|---------|---------|
-| **django-crispy-forms** | Enhanced form rendering |
-| **crispy-bootstrap5** | Bootstrap 5 form templates |
-| **django-filter** | Queryset filtering |
+| Package                     | Purpose                      |
+| --------------------------- | ---------------------------- |
+| **django-crispy-forms**     | Enhanced form rendering      |
+| **crispy-bootstrap5**       | Bootstrap 5 form templates   |
+| **django-filter**           | Queryset filtering           |
 | **django.contrib.humanize** | Number formatting (intcomma) |
 
 ### Development Tools
 
-| Tool | Purpose |
-|------|---------|
-| **Git** | Version control |
-| **pip** | Package management |
+| Tool             | Purpose                |
+| ---------------- | ---------------------- |
+| **Git**          | Version control        |
+| **pip**          | Package management     |
 | **Django Admin** | Backend administration |
 
 ---
@@ -195,7 +195,7 @@ ERP-Leap/
         │                        │                      │
         │                        ▼                      ▼
         │              ┌─────────────────────────────────────┐
-        │              │              Project                 │
+        │              │              Project                │
         │              ├─────────────────────────────────────┤
         └──────────────│ id                                  │
                        │ project_name                        │
@@ -214,7 +214,7 @@ ERP-Leap/
                                         │ 1:N
                                         ▼
                        ┌─────────────────────────────────────┐
-                       │             Document                 │
+                       │             Document                │
                        ├─────────────────────────────────────┤
                        │ id                                  │
                        │ name                                │
@@ -264,11 +264,11 @@ ERP-Leap/
 
 ### Role-Based Access Control (RBAC)
 
-| Role | Permissions |
-|------|-------------|
+| Role              | Permissions                                               |
+| ----------------- | --------------------------------------------------------- |
 | **Administrator** | Full access to all features, user management, all regions |
-| **Manager** | View/edit projects in own region, import/export, reports |
-| **Sales Rep** | View/edit own projects only, basic export |
+| **Manager**       | View/edit projects in own region, import/export, reports  |
+| **Sales Rep**     | View/edit own projects only, basic export                 |
 
 ### Authentication Flow
 
@@ -290,7 +290,7 @@ User Login Request
         ▼
 ┌─────────────────┐
 │ Role Check via  │
-│ Mixins/Decorators│
+│ Mixins/Decorator│
 └─────────────────┘
         │
         ▼
@@ -305,24 +305,28 @@ User Login Request
 ## Key Features
 
 ### 1. Dashboard
+
 - Regional pipeline summaries (LNUK, LNA, PA)
 - Interactive charts (doughnut & bar)
 - Real-time statistics by status
 - Recent projects table
 
 ### 2. Project Management
+
 - Full CRUD operations
 - Advanced filtering (region, status, year, category)
 - Consolidated regional view (UK + Global = LNUK)
 - Status history tracking
 
 ### 3. Document Management
+
 - File upload (PDF, Excel, Word, Images)
 - Document types: Quotations, Proposals, Technical docs
 - Project-linked and standalone documents
 - Download and preview
 
 ### 4. Annual Report
+
 - Vendor tracking
 - EPC contractors
 - Exhibitions attended
@@ -330,6 +334,7 @@ User Login Request
 - Certifications
 
 ### 5. User Interface
+
 - Responsive design (mobile-friendly)
 - Collapsible sidebar
 - Role-based menu visibility
@@ -340,42 +345,47 @@ User Login Request
 ## API Endpoints (URL Routes)
 
 ### Dashboard
-| URL | View | Description |
-|-----|------|-------------|
+
+| URL | View              | Description    |
+| --- | ----------------- | -------------- |
 | `/` | `dashboard:index` | Main dashboard |
 
 ### Projects
-| URL | View | Description |
-|-----|------|-------------|
-| `/projects/` | `projects:list` | List all projects |
-| `/projects/create/` | `projects:create` | Create project |
-| `/projects/<id>/` | `projects:detail` | Project details |
-| `/projects/<id>/edit/` | `projects:edit` | Edit project |
-| `/projects/<id>/delete/` | `projects:delete` | Delete project |
+
+| URL                      | View              | Description       |
+| ------------------------ | ----------------- | ----------------- |
+| `/projects/`             | `projects:list`   | List all projects |
+| `/projects/create/`      | `projects:create` | Create project    |
+| `/projects/<id>/`        | `projects:detail` | Project details   |
+| `/projects/<id>/edit/`   | `projects:edit`   | Edit project      |
+| `/projects/<id>/delete/` | `projects:delete` | Delete project    |
 
 ### Documents
-| URL | View | Description |
-|-----|------|-------------|
-| `/projects/documents/` | `projects:document_list` | List documents |
-| `/projects/documents/upload/` | `projects:document_create` | Upload document |
-| `/projects/documents/<id>/` | `projects:document_detail` | Document details |
-| `/projects/<id>/add-document/` | `projects:add_document` | Add doc to project |
+
+| URL                            | View                       | Description        |
+| ------------------------------ | -------------------------- | ------------------ |
+| `/projects/documents/`         | `projects:document_list`   | List documents     |
+| `/projects/documents/upload/`  | `projects:document_create` | Upload document    |
+| `/projects/documents/<id>/`    | `projects:document_detail` | Document details   |
+| `/projects/<id>/add-document/` | `projects:add_document`    | Add doc to project |
 
 ### Reports
-| URL | View | Description |
-|-----|------|-------------|
-| `/reports/` | `reports:index` | Reports home |
+
+| URL                       | View                    | Description   |
+| ------------------------- | ----------------------- | ------------- |
+| `/reports/`               | `reports:index`         | Reports home  |
 | `/reports/annual-report/` | `reports:annual_report` | Annual report |
-| `/reports/export/` | `reports:export` | Export Excel |
-| `/reports/import/` | `reports:import` | Import Excel |
+| `/reports/export/`        | `reports:export`        | Export Excel  |
+| `/reports/import/`        | `reports:import`        | Import Excel  |
 
 ### Accounts
-| URL | View | Description |
-|-----|------|-------------|
-| `/accounts/login/` | `accounts:login` | User login |
-| `/accounts/logout/` | `accounts:logout` | User logout |
-| `/accounts/profile/` | `accounts:profile` | User profile |
-| `/accounts/users/` | `accounts:user_list` | User management |
+
+| URL                  | View                 | Description     |
+| -------------------- | -------------------- | --------------- |
+| `/accounts/login/`   | `accounts:login`     | User login      |
+| `/accounts/logout/`  | `accounts:logout`    | User logout     |
+| `/accounts/profile/` | `accounts:profile`   | User profile    |
+| `/accounts/users/`   | `accounts:user_list` | User management |
 
 ---
 
@@ -393,11 +403,13 @@ User Login Request
 ## Deployment Considerations
 
 ### Development
+
 ```bash
 python manage.py runserver
 ```
 
 ### Production Checklist
+
 - [ ] Set `DEBUG = False`
 - [ ] Configure `ALLOWED_HOSTS`
 - [ ] Use PostgreSQL database
@@ -433,5 +445,5 @@ python-dateutil
 
 ---
 
-*Document generated for Leap Networks ERP System*
-*Version 1.0 | January 2026*
+_Document for Leap Networks ERP System_
+_Version 1.0 | January 2026_
