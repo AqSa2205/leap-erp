@@ -11,6 +11,7 @@ from django.template.loader import render_to_string
 from decimal import Decimal, InvalidOperation
 
 from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem
+from notifications.services import notify_users
 
 
 def _conversion_rate(output_currency, rates_dict):
@@ -88,7 +89,21 @@ class CostingCreateView(LoginRequiredMixin, CreateView):
     def form_valid(self, form):
         form.instance.created_by = self.request.user
         messages.success(self.request, 'Costing sheet created successfully.')
-        return super().form_valid(form)
+        response = super().form_valid(form)
+
+        # Notify managers about new costing sheet
+        from accounts.models import User, Role
+        managers = User.objects.filter(role__name=Role.MANAGER, is_active=True)
+        notify_users(
+            recipients=managers,
+            verb='created a new costing sheet',
+            actor=self.request.user,
+            target=self.object,
+            target_url=reverse('costing:detail', kwargs={'pk': self.object.pk}),
+            description=f'New costing sheet: {self.object.title}',
+            level='info',
+        )
+        return response
 
     def get_success_url(self):
         return reverse('costing:detail', kwargs={'pk': self.object.pk})
@@ -195,8 +210,27 @@ class CostingUpdateView(CostingPermissionMixin, UpdateView):
         return kwargs
 
     def form_valid(self, form):
+        old_status = CostingSheet.objects.get(pk=self.object.pk).status
         messages.success(self.request, 'Costing sheet updated successfully.')
-        return super().form_valid(form)
+        response = super().form_valid(form)
+
+        # Notify on draft → final
+        if old_status == 'draft' and self.object.status == 'final':
+            from accounts.models import User, Role
+            recipients = set(User.objects.filter(role__name=Role.ADMIN, is_active=True))
+            if self.object.project and self.object.project.owner:
+                recipients.add(self.object.project.owner)
+            notify_users(
+                recipients=recipients,
+                verb=f'finalized costing sheet "{self.object.title}"',
+                actor=self.request.user,
+                target=self.object,
+                target_url=reverse('costing:detail', kwargs={'pk': self.object.pk}),
+                description=f'Costing sheet "{self.object.title}" has been finalized.',
+                level='success',
+                send_email=True,
+            )
+        return response
 
     def get_success_url(self):
         return reverse('costing:detail', kwargs={'pk': self.object.pk})

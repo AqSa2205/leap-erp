@@ -15,6 +15,7 @@ urlpatterns = [
     path('reports/', include('reports.urls')),
     path('database/', include('contacts.urls')),
     path('costing/', include('costing.urls')),
+    path('notifications/', include('notifications.urls')),
 ]
 
 if settings.DEBUG:

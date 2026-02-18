@@ -12,6 +12,7 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 from .models import ContactDatabase
 from .forms import ContactDatabaseForm, ContactDatabaseFilterForm, ContactImportForm
+from notifications.services import notify_users
 
 
 class ContactListView(LoginRequiredMixin, ListView):
@@ -147,8 +148,26 @@ class ContactUpdateView(LoginRequiredMixin, UpdateView):
     success_url = reverse_lazy('contacts:contact_list')
 
     def form_valid(self, form):
+        old_status = ContactDatabase.objects.get(pk=self.object.pk).status
         messages.success(self.request, 'Contact updated successfully.')
-        return super().form_valid(form)
+        response = super().form_valid(form)
+
+        # Notify on status change
+        if 'status' in form.changed_data and old_status != self.object.status:
+            from accounts.models import User, Role
+            admins = set(User.objects.filter(role__name=Role.ADMIN, is_active=True))
+            managers = set(User.objects.filter(role__name=Role.MANAGER, is_active=True))
+            recipients = admins | managers
+            notify_users(
+                recipients=recipients,
+                verb=f'changed contact status to {self.object.get_status_display()}',
+                actor=self.request.user,
+                target=self.object,
+                target_url=reverse_lazy('contacts:contact_detail', kwargs={'pk': self.object.pk}),
+                description=f'Contact "{self.object.organisation_name}" status changed from {old_status} to {self.object.status}.',
+                level='info',
+            )
+        return response
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

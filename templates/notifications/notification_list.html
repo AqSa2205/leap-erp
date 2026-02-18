@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}Notifications - Leap Networks ERP{% endblock %}
+
+{% block page_title %}Notifications{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-bell"></i> All Notifications</span>
+        {% if notifications %}
+        <button class="btn btn-sm btn-outline-primary" id="markAllReadBtn">
+            <i class="bi bi-check-all"></i> Mark All as Read
+        </button>
+        {% endif %}
+    </div>
+    <div class="card-body p-0">
+        {% if notifications %}
+        <div class="list-group list-group-flush">
+            {% for notification in notifications %}
+            <a href="{{ notification.target_url|default:'#' }}"
+               class="list-group-item list-group-item-action {% if not notification.is_read %}bg-light{% endif %}"
+               {% if not notification.is_read %}data-notif-id="{{ notification.pk }}"{% endif %}>
+                <div class="d-flex w-100 justify-content-between">
+                    <div>
+                        <span class="badge bg-{% if notification.level == 'info' %}primary{% elif notification.level == 'success' %}success{% elif notification.level == 'warning' %}warning text-dark{% elif notification.level == 'error' %}danger{% else %}secondary{% endif %} me-2">
+                            {{ notification.level }}
+                        </span>
+                        <strong>{{ notification.actor|default:"System" }}</strong>
+                        {{ notification.verb }}
+                    </div>
+                    <small class="text-muted">{{ notification.created_at|timesince }} ago</small>
+                </div>
+                {% if notification.description %}
+                <small class="text-muted d-block mt-1">{{ notification.description|truncatewords:30 }}</small>
+                {% endif %}
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-center py-5 text-muted">
+            <i class="bi bi-bell-slash fs-1"></i>
+            <p class="mt-2">No notifications yet.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% if is_paginated %}
+<nav class="mt-3">
+    <ul class="pagination justify-content-center">
+        {% if page_obj.has_previous %}
+        <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}">Previous</a></li>
+        {% endif %}
+        {% for num in page_obj.paginator.page_range %}
+            {% if page_obj.number == num %}
+            <li class="page-item active"><span class="page-link">{{ num }}</span></li>
+            {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+            <li class="page-item"><a class="page-link" href="?page={{ num }}">{{ num }}</a></li>
+            {% endif %}
+        {% endfor %}
+        {% if page_obj.has_next %}
+        <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a></li>
+        {% endif %}
+    </ul>
+</nav>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Mark individual notification as read when clicked
+    document.querySelectorAll('[data-notif-id]').forEach(function(el) {
+        el.addEventListener('click', function() {
+            var id = this.getAttribute('data-notif-id');
+            fetch('/notifications/mark-read/' + id + '/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': '{{ csrf_token }}'}
+            });
+        });
+    });
+
+    // Mark all as read
+    var markAllBtn = document.getElementById('markAllReadBtn');
+    if (markAllBtn) {
+        markAllBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            fetch('/notifications/mark-all-read/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': '{{ csrf_token }}'}
+            }).then(function() {
+                location.reload();
+            });
+        });
+    }
+</script>
+{% endblock %}

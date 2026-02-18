@@ -12,6 +12,7 @@ import openpyxl
 
 from .models import Project, Region, ProjectStatus, ProjectHistory, Document
 from .forms import ProjectForm, ProjectFilterForm, DocumentForm, DocumentFilterForm
+from notifications.services import notify_users
 
 
 class ProjectPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
@@ -132,7 +133,24 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
         if not form.instance.owner:
             form.instance.owner = self.request.user
         messages.success(self.request, 'Project created successfully.')
-        return super().form_valid(form)
+        response = super().form_valid(form)
+
+        # Notify region managers about new project
+        from accounts.models import User, Role
+        project = self.object
+        region_managers = User.objects.filter(
+            role__name=Role.MANAGER, region=project.region, is_active=True
+        )
+        notify_users(
+            recipients=region_managers,
+            verb='created a new project',
+            actor=self.request.user,
+            target=project,
+            target_url=reverse_lazy('projects:detail', kwargs={'pk': project.pk}),
+            description=f'New project: {project.project_name}',
+            level='info',
+        )
+        return response
 
 
 class ProjectUpdateView(ProjectPermissionMixin, UpdateView):
@@ -150,6 +168,8 @@ class ProjectUpdateView(ProjectPermissionMixin, UpdateView):
         return kwargs
 
     def form_valid(self, form):
+        old_owner = Project.objects.get(pk=self.object.pk).owner
+
         # Track status change
         if 'status' in form.changed_data:
             old_status = Project.objects.get(pk=self.object.pk).status
@@ -161,7 +181,29 @@ class ProjectUpdateView(ProjectPermissionMixin, UpdateView):
             )
 
         messages.success(self.request, 'Project updated successfully.')
-        return super().form_valid(form)
+        response = super().form_valid(form)
+
+        # Notify on owner change
+        new_owner = self.object.owner
+        if 'owner' in form.changed_data and old_owner != new_owner:
+            target_url = str(reverse_lazy('projects:detail', kwargs={'pk': self.object.pk}))
+            recipients = set()
+            if old_owner:
+                recipients.add(old_owner)
+            if new_owner:
+                recipients.add(new_owner)
+            notify_users(
+                recipients=recipients,
+                verb=f'changed project owner for "{self.object.project_name}"',
+                actor=self.request.user,
+                target=self.object,
+                target_url=target_url,
+                description=f'Owner changed from {old_owner or "None"} to {new_owner or "None"}',
+                level='warning',
+                send_email=True,
+            )
+
+        return response
 
     def get_success_url(self):
         return reverse_lazy('projects:detail', kwargs={'pk': self.object.pk})
@@ -432,6 +474,15 @@ class ProjectImportView(LoginRequiredMixin, UserPassesTestMixin, View):
 
             if imported_count > 0:
                 messages.success(request, f'Successfully imported {imported_count} project(s).')
+                # Notify importer on completion
+                from notifications.services import create_notification
+                create_notification(
+                    recipient=request.user,
+                    verb=f'Excel import completed: {imported_count} project(s)',
+                    target_url=str(reverse_lazy('projects:list')),
+                    description=f'Successfully imported {imported_count} project(s) into region {region.name}.',
+                    level='success',
+                )
             if errors:
                 error_summary = '; '.join(errors[:5])
                 if len(errors) > 5:

@@ -286,6 +286,133 @@
             }
         }
 
+        /* Notification bell */
+        .notif-wrapper {
+            position: relative;
+        }
+        .notif-bell {
+            background: none;
+            border: none;
+            font-size: 1.2rem;
+            color: var(--leap-dark);
+            position: relative;
+            cursor: pointer;
+            padding: 0.35rem 0.5rem;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        .notif-bell:hover {
+            color: var(--leap-dark);
+            background: rgba(0, 0, 0, 0.06);
+        }
+        .notif-badge {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            background: var(--leap-red);
+            color: #fff;
+            font-size: 0.65rem;
+            font-weight: 700;
+            min-width: 18px;
+            height: 18px;
+            line-height: 18px;
+            text-align: center;
+            border-radius: 9px;
+            padding: 0 4px;
+            display: none;
+        }
+        .notif-badge.show { display: block; }
+        .notif-dropdown {
+            position: absolute;
+            right: 0;
+            top: 100%;
+            width: 360px;
+            max-height: 440px;
+            background: #fff;
+            border: 1px solid #eee;
+            border-radius: 10px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+            z-index: 1050;
+            display: none;
+            overflow: hidden;
+        }
+        .notif-dropdown.open { display: block; }
+        .notif-dropdown-header {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        .notif-dropdown-body {
+            max-height: 340px;
+            overflow-y: auto;
+        }
+        .notif-item {
+            display: block;
+            padding: 0.65rem 1rem;
+            border-bottom: 1px solid #f5f5f5;
+            color: inherit;
+            text-decoration: none;
+            transition: background 0.15s;
+        }
+        .notif-item:hover {
+            background: rgba(196, 30, 58, 0.04);
+            color: inherit;
+            text-decoration: none;
+        }
+        .notif-item.unread {
+            background: rgba(196, 30, 58, 0.06);
+            border-left: 3px solid var(--leap-red);
+        }
+        .notif-item .notif-actor { font-weight: 600; font-size: 0.82rem; }
+        .notif-item .notif-verb { font-size: 0.82rem; }
+        .notif-item .notif-desc { font-size: 0.75rem; color: var(--leap-grey); margin-top: 2px; }
+        .notif-item .notif-time { font-size: 0.7rem; color: #999; margin-top: 2px; }
+        .notif-dropdown-footer {
+            padding: 0.5rem 1rem;
+            border-top: 1px solid #eee;
+            text-align: center;
+        }
+        .notif-dropdown-footer a {
+            font-size: 0.82rem;
+            color: var(--leap-red);
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .notif-empty {
+            padding: 2rem;
+            text-align: center;
+            color: var(--leap-grey);
+            font-size: 0.85rem;
+        }
+        [data-theme="dark"] .notif-bell {
+            color: #ccc;
+        }
+        [data-theme="dark"] .notif-bell:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.08);
+        }
+        [data-theme="dark"] .notif-dropdown {
+            background: #2a2a2a;
+            border-color: #444;
+        }
+        [data-theme="dark"] .notif-dropdown-header,
+        [data-theme="dark"] .notif-dropdown-footer {
+            border-color: #444;
+        }
+        [data-theme="dark"] .notif-item {
+            border-bottom-color: #333;
+        }
+        [data-theme="dark"] .notif-item.unread {
+            background: rgba(196, 30, 58, 0.12);
+        }
+        [data-theme="dark"] .notif-item:hover {
+            background: #333;
+        }
+
         /* Clock widget in top navbar */
         .clock-widget {
             background: linear-gradient(135deg, var(--leap-red), var(--leap-red-dark));
@@ -746,6 +873,25 @@
                 <div class="time" id="clockTime">00:00:00</div>
                 <div class="date" id="clockDate">Loading...</div>
             </div>
+            <div class="d-flex align-items-center gap-2">
+            <div class="notif-wrapper" id="notifWrapper">
+                <button class="notif-bell" id="notifBell" title="Notifications">
+                    <i class="bi bi-bell"></i>
+                    <span class="notif-badge" id="notifBadge">0</span>
+                </button>
+                <div class="notif-dropdown" id="notifDropdown">
+                    <div class="notif-dropdown-header">
+                        <span>Notifications</span>
+                        <button class="btn btn-link btn-sm text-danger p-0" id="notifMarkAllRead" style="font-size:0.8rem;">Mark all read</button>
+                    </div>
+                    <div class="notif-dropdown-body" id="notifDropdownBody">
+                        <div class="notif-empty">Loading...</div>
+                    </div>
+                    <div class="notif-dropdown-footer">
+                        <a href="{% url 'notifications:list' %}">View all notifications</a>
+                    </div>
+                </div>
+            </div>
             <div class="dropdown">
                 <button class="btn btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
                     <i class="bi bi-person-circle text-danger"></i>
@@ -766,6 +912,7 @@
                         </form>
                     </li>
                 </ul>
+            </div>
             </div>
         </nav>
 
@@ -902,6 +1049,117 @@
             });
         }
     </script>
+    {% if user.is_authenticated %}
+    <script>
+    (function() {
+        var bell = document.getElementById('notifBell');
+        var dropdown = document.getElementById('notifDropdown');
+        var badge = document.getElementById('notifBadge');
+        var body = document.getElementById('notifDropdownBody');
+        var markAllBtn = document.getElementById('notifMarkAllRead');
+        var csrfToken = '{{ csrf_token }}';
+
+        if (!bell) return;
+
+        function getCookie(name) {
+            var v = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+            return v ? v.pop() : '';
+        }
+
+        // Poll unread count every 30 seconds
+        function pollUnread() {
+            fetch('/notifications/check/')
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    var c = data.unread_count || 0;
+                    badge.textContent = c > 99 ? '99+' : c;
+                    if (c > 0) {
+                        badge.classList.add('show');
+                    } else {
+                        badge.classList.remove('show');
+                    }
+                })
+                .catch(function() {});
+        }
+        pollUnread();
+        setInterval(pollUnread, 30000);
+
+        // Toggle dropdown
+        bell.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var isOpen = dropdown.classList.contains('open');
+            dropdown.classList.toggle('open');
+            if (!isOpen) loadRecent();
+        });
+
+        // Close on outside click
+        document.addEventListener('click', function(e) {
+            if (!dropdown.contains(e.target) && e.target !== bell) {
+                dropdown.classList.remove('open');
+            }
+        });
+
+        // Load recent notifications
+        function loadRecent() {
+            fetch('/notifications/recent/')
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    var items = data.notifications || [];
+                    if (items.length === 0) {
+                        body.innerHTML = '<div class="notif-empty"><i class="bi bi-bell-slash"></i><br>No notifications</div>';
+                        return;
+                    }
+                    var html = '';
+                    items.forEach(function(n) {
+                        var cls = n.is_read ? '' : ' unread';
+                        var url = n.target_url || '#';
+                        html += '<a href="' + url + '" class="notif-item' + cls + '" data-nid="' + n.id + '">';
+                        html += '<div class="notif-actor">' + escapeHtml(n.actor) + ' <span class="notif-verb">' + escapeHtml(n.verb) + '</span></div>';
+                        if (n.description) {
+                            html += '<div class="notif-desc">' + escapeHtml(n.description.substring(0, 80)) + '</div>';
+                        }
+                        html += '<div class="notif-time">' + escapeHtml(n.created_at) + '</div>';
+                        html += '</a>';
+                    });
+                    body.innerHTML = html;
+
+                    // Mark as read on click
+                    body.querySelectorAll('.notif-item[data-nid]').forEach(function(el) {
+                        el.addEventListener('click', function() {
+                            var nid = this.getAttribute('data-nid');
+                            fetch('/notifications/mark-read/' + nid + '/', {
+                                method: 'POST',
+                                headers: {'X-CSRFToken': csrfToken}
+                            }).then(function() { pollUnread(); });
+                        });
+                    });
+                })
+                .catch(function() {
+                    body.innerHTML = '<div class="notif-empty">Failed to load</div>';
+                });
+        }
+
+        // Mark all as read
+        markAllBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            fetch('/notifications/mark-all-read/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrfToken}
+            }).then(function() {
+                pollUnread();
+                loadRecent();
+            });
+        });
+
+        function escapeHtml(str) {
+            var div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+    })();
+    </script>
+    {% endif %}
     {% block extra_js %}{% endblock %}
 </body>
 </html>
