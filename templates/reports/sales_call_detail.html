@@ -112,6 +112,33 @@
                         </div>
                     </div>
 
+                    <!-- Bid Info -->
+                    {% if report.bid_status or report.estimated_value %}
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-briefcase"></i> Bid Information</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Bid Status</label>
+                                    <p class="mb-0">
+                                        {% if report.bid_status %}
+                                        <span class="badge bg-{% if report.bid_status == 'won' %}success{% elif report.bid_status == 'lost' %}danger{% elif report.bid_status == 'submitted' %}primary{% else %}warning text-dark{% endif %}">
+                                            {{ report.get_bid_status_display }}
+                                        </span>
+                                        {% else %}-{% endif %}
+                                    </p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Project Estimated Value</label>
+                                    <p class="mb-0">{% if report.estimated_value %}{{ report.estimated_value|floatformat:2 }}{% else %}-{% endif %}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+
                     <!-- Comments -->
                     {% if report.comments %}
                     <div class="card mb-4">

@@ -40,6 +40,8 @@ class SalesCallReportForm(forms.ModelForm):
             'email',
             'goal',
             'comments',
+            'bid_status',
+            'estimated_value',
             'next_action_date',
             'next_action_type',
         ]
@@ -55,6 +57,8 @@ class SalesCallReportForm(forms.ModelForm):
             'email': forms.EmailInput(attrs={'class': 'form-control', 'placeholder': 'email@company.com'}),
             'goal': forms.Select(attrs={'class': 'form-select'}),
             'comments': forms.Textarea(attrs={'class': 'form-control', 'rows': 3, 'placeholder': 'Notes about the call/meeting...'}),
+            'bid_status': forms.Select(attrs={'class': 'form-select'}),
+            'estimated_value': forms.NumberInput(attrs={'class': 'form-control', 'placeholder': '0.00', 'step': '0.01'}),
             'next_action_type': forms.Select(attrs={'class': 'form-select'}),
         }
 

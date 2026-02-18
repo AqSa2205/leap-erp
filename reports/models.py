@@ -170,6 +170,7 @@ class SalesCallReport(models.Model):
         ('presentation', 'Presentation'),
         ('follow_up', 'Follow Up'),
         ('proposal_sent', 'Proposal Sent'),
+        ('proposal_creation', 'Proposal Creation'),
         ('negotiation', 'Negotiation'),
         ('other', 'Other'),
     ]
@@ -184,6 +185,8 @@ class SalesCallReport(models.Model):
         ('inbound', 'Inbound Inquiry'),
         ('trade_show', 'Trade Show Lead'),
         ('online', 'Online Lead'),
+        ('epc', 'EPC'),
+        ('contractor', 'Contractor'),
         ('other', 'Other'),
     ]
 
@@ -207,6 +210,10 @@ class SalesCallReport(models.Model):
         ('healthcare', 'Healthcare'),
         ('manufacturing', 'Manufacturing'),
         ('oil_gas', 'Oil & Gas'),
+        ('vast', 'VAST'),
+        ('hse', 'HSE'),
+        ('rtls', 'RTLS'),
+        ('smart_safety', 'Smart Safety'),
         ('other', 'Other'),
     ]
 
@@ -233,6 +240,15 @@ class SalesCallReport(models.Model):
         ('technical_discussion', 'Technical Discussion'),
         ('complaint_resolution', 'Complaint Resolution'),
         ('other', 'Other'),
+    ]
+
+    # Bid Status choices
+    BID_STATUS_CHOICES = [
+        ('', 'N/A'),
+        ('submitted', 'Submitted'),
+        ('under_process', 'Under Process'),
+        ('won', 'Won'),
+        ('lost', 'Lost'),
     ]
 
     # Next Action Type choices
@@ -272,6 +288,10 @@ class SalesCallReport(models.Model):
     # Call Details
     goal = models.CharField(max_length=30, choices=GOAL_CHOICES, default='company_intro', verbose_name="Goal")
     comments = models.TextField(blank=True, verbose_name="Comments/Notes")
+
+    # Bid tracking
+    bid_status = models.CharField(max_length=20, choices=BID_STATUS_CHOICES, blank=True, default='', verbose_name="Bid Status")
+    estimated_value = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name="Project Estimated Value")
 
     # Scheduled Next Action
     next_action_date = models.DateField(null=True, blank=True, verbose_name="Next Action Date")
