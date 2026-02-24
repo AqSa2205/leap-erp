@@ -33,6 +33,7 @@ class CustomUserCreationForm(UserCreationForm):
         super().__init__(*args, **kwargs)
         for field in self.fields.values():
             field.widget.attrs['class'] = 'form-control'
+        self.fields['region'].queryset = Region.objects.filter(is_active=True)
 
 
 class CustomUserChangeForm(UserChangeForm):
@@ -51,6 +52,7 @@ class CustomUserChangeForm(UserChangeForm):
         for field in self.fields.values():
             field.widget.attrs['class'] = 'form-control'
         self.fields['is_active'].widget.attrs['class'] = 'form-check-input'
+        self.fields['region'].queryset = Region.objects.filter(is_active=True)
 
 
 class UserProfileForm(forms.ModelForm):
