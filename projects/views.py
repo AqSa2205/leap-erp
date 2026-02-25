@@ -43,9 +43,11 @@ class ProjectListView(ProjectPermissionMixin, ListView):
 
     # Mapping of consolidated regions to database region codes
     REGION_CODE_MAP = {
-        'LNUK': ['UK', 'GLB'],  # UK and Global together
+        'LNUK': ['UK', 'GLB', 'LNUK'],  # UK and Global together
         'LNA': ['LNA'],
         'PA': ['PA'],
+        'NEO-Dubai': ['NEO-Dubai'],
+        'NEO-KSA': ['NEO-KSA'],
     }
 
     def get_queryset(self):
