@@ -16,6 +16,7 @@ urlpatterns = [
     path('database/', include('contacts.urls')),
     path('costing/', include('costing.urls')),
     path('notifications/', include('notifications.urls')),
+    path('hr/', include('hr.urls')),
 ]
 
 if settings.DEBUG:

@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     "contacts",
     "costing",
     "notifications",
+    "hr",
 ]
 
 MIDDLEWARE = [
