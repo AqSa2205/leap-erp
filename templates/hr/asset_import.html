@@ -1,0 +1,171 @@
+{% extends 'base.html' %}
+
+{% block title %}Import Assets{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <!-- Header -->
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">Import Assets</h1>
+                    <p class="text-muted mb-0">Import asset data from an Excel file</p>
+                </div>
+                <a href="{% url 'hr:asset_list' %}" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Back to List
+                </a>
+            </div>
+
+            <!-- Import Form Card -->
+            <div class="card mb-4">
+                <div class="card-body">
+                    <form method="post" enctype="multipart/form-data" novalidate>
+                        {% csrf_token %}
+
+                        <div class="row mb-4">
+                            <div class="col-md-8">
+                                <label class="form-label">Excel File *</label>
+                                {{ form.excel_file }}
+                                <small class="text-muted">Upload .xlsx or .xls file</small>
+                            </div>
+                        </div>
+
+                        <div class="d-flex justify-content-end gap-2">
+                            <a href="{% url 'hr:asset_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-upload"></i> Import Assets
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Instructions Card -->
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-info-circle"></i> Import Instructions</h5>
+                </div>
+                <div class="card-body">
+                    <h6>Expected Excel Format</h6>
+                    <p>The header row is auto-detected (looks for "Asset Name", "Serial No.", etc. in the first 5 rows). The following columns are recognized:</p>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Column Name</th>
+                                    <th>Maps To</th>
+                                    <th>Required</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>Asset Name</td>
+                                    <td>Asset Name</td>
+                                    <td><span class="badge bg-danger">Required</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Asset Type</td>
+                                    <td>Asset Type</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Serial No. / Serial Number</td>
+                                    <td>Serial No.</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Specifications</td>
+                                    <td>Specifications</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Invoice Number</td>
+                                    <td>Invoice Number</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Employee Name</td>
+                                    <td>Employee Name</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Department</td>
+                                    <td>Department</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Designation</td>
+                                    <td>Designation</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Handover Date</td>
+                                    <td>Handover Date</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Handover By</td>
+                                    <td>Handover By</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Condition</td>
+                                    <td>Condition (New/Used)</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Return Date</td>
+                                    <td>Return Date (free text)</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Return To</td>
+                                    <td>Return To</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>QTY / Quantity</td>
+                                    <td>Quantity</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Purchase Date</td>
+                                    <td>Purchase Date</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Price (SAR) / Price</td>
+                                    <td>Price</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Planned Asset Life</td>
+                                    <td>Planned Life</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>In Stock?</td>
+                                    <td>In Stock (Yes/No)</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="alert alert-info mt-3 mb-0">
+                        <i class="bi bi-lightbulb"></i> <strong>Tips:</strong>
+                        <ul class="mb-0 mt-1">
+                            <li>Rows without an Asset Name will be skipped.</li>
+                            <li>Existing assets (matched by Asset Name + Serial No.) will be updated.</li>
+                            <li>Re-importing the same file is safe and will update existing records.</li>
+                            <li>The header row is expected at row 2 (row 1 may contain section groupings).</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

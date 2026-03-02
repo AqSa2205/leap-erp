@@ -837,6 +837,16 @@
                 </a>
             </li>
             <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'hr' and 'asset' not in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:employee_list' %}" data-title="HR / Employees">
+                    <i class="bi bi-people-fill"></i> <span>HR / Employees</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'hr' and 'asset' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:asset_list' %}" data-title="Assets">
+                    <i class="bi bi-laptop"></i> <span>Assets</span>
+                </a>
+            </li>
+            <li class="nav-item">
                 <a class="nav-link" href="/admin/" data-title="Admin Panel">
                     <i class="bi bi-gear"></i> <span>Admin Panel</span>
                 </a>

@@ -1,0 +1,154 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <!-- Header -->
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">{{ title }}</h1>
+                    <p class="text-muted mb-0">Enter asset information</p>
+                </div>
+                <a href="{% url 'hr:asset_list' %}" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Back to List
+                </a>
+            </div>
+
+            <!-- Form Card -->
+            <div class="card">
+                <div class="card-body">
+                    <form method="post" novalidate>
+                        {% csrf_token %}
+
+                        <!-- Asset Details -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-laptop"></i> Asset Details
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Asset Name *</label>
+                                {{ form.asset_name }}
+                                {% if form.asset_name.errors %}
+                                <div class="invalid-feedback d-block">{{ form.asset_name.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Asset Type</label>
+                                {{ form.asset_type }}
+                                <datalist id="asset-type-list">
+                                    <option value="Laptop">
+                                    <option value="Monitor">
+                                    <option value="Desktop">
+                                    <option value="Keyboard">
+                                    <option value="Mouse">
+                                    <option value="Headset">
+                                    <option value="Printer">
+                                    <option value="Phone">
+                                    <option value="Other">
+                                </datalist>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Serial No.</label>
+                                {{ form.serial_number }}
+                            </div>
+                        </div>
+                        <div class="row mb-4">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Specifications</label>
+                                {{ form.specifications }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Invoice Number</label>
+                                {{ form.invoice_number }}
+                            </div>
+                            <div class="col-md-2 mb-3">
+                                <label class="form-label">Quantity</label>
+                                {{ form.quantity }}
+                            </div>
+                            <div class="col-md-2 mb-3">
+                                <label class="form-label">Condition</label>
+                                {{ form.condition }}
+                            </div>
+                        </div>
+
+                        <!-- Employee / Assignment Details -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-person"></i> Assignment Details
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Employee Name</label>
+                                {{ form.employee_name }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Department</label>
+                                {{ form.department }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Designation</label>
+                                {{ form.designation }}
+                            </div>
+                        </div>
+                        <div class="row mb-4">
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Handover Date</label>
+                                {{ form.handover_date }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Handover By</label>
+                                {{ form.handover_by }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Return Date</label>
+                                {{ form.return_date }}
+                                <small class="text-muted">Date or notes</small>
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Return To</label>
+                                {{ form.return_to }}
+                            </div>
+                        </div>
+
+                        <!-- Financial & Lifecycle -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-cash-stack"></i> Financial & Lifecycle
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Purchase Date</label>
+                                {{ form.purchase_date }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Price (SAR)</label>
+                                {{ form.price }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Planned Life</label>
+                                {{ form.planned_life }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">In Stock</label>
+                                <div class="form-check mt-2">
+                                    {{ form.in_stock }}
+                                    <label class="form-check-label">Asset is in stock</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Submit Buttons -->
+                        <div class="d-flex justify-content-end gap-2 border-top pt-3">
+                            <a href="{% url 'hr:asset_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-check-lg"></i> {{ button_text }}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

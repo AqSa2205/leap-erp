@@ -1,0 +1,181 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}{{ asset.asset_name }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <!-- Header -->
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">{{ asset.asset_name }}</h1>
+                    <p class="text-muted mb-0">
+                        {% if asset.asset_type %}{{ asset.asset_type }} &middot; {% endif %}
+                        {% if asset.in_stock %}
+                        <span class="badge bg-success">In Stock</span>
+                        {% else %}
+                        <span class="badge bg-secondary">Assigned</span>
+                        {% endif %}
+                        {% if asset.condition %}
+                        <span class="badge {% if asset.condition == 'new' %}bg-success{% else %}bg-warning text-dark{% endif %} ms-1">
+                            {{ asset.get_condition_display }}
+                        </span>
+                        {% endif %}
+                    </p>
+                </div>
+                <div>
+                    <a href="{% url 'hr:asset_list' %}" class="btn btn-outline-secondary me-2">
+                        <i class="bi bi-arrow-left"></i> Back
+                    </a>
+                    <a href="{% url 'hr:asset_update' asset.pk %}" class="btn btn-primary me-2">
+                        <i class="bi bi-pencil"></i> Edit
+                    </a>
+                    <a href="{% url 'hr:asset_delete' asset.pk %}" class="btn btn-danger">
+                        <i class="bi bi-trash"></i> Delete
+                    </a>
+                </div>
+            </div>
+
+            <div class="row">
+                <!-- Main Info -->
+                <div class="col-md-8">
+                    <!-- Asset Details -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-laptop"></i> Asset Details</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Asset Name</label>
+                                    <p class="mb-0"><strong>{{ asset.asset_name }}</strong></p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Asset Type</label>
+                                    <p class="mb-0">{{ asset.asset_type|default:"-" }}</p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Serial No.</label>
+                                    <p class="mb-0"><strong>{{ asset.serial_number|default:"-" }}</strong></p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Specifications</label>
+                                    <p class="mb-0">{{ asset.specifications|default:"-" }}</p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Invoice Number</label>
+                                    <p class="mb-0">{{ asset.invoice_number|default:"-" }}</p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Quantity</label>
+                                    <p class="mb-0">{{ asset.quantity }}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Employee / Handover Details -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-person"></i> Assignment Details</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Employee Name</label>
+                                    <p class="mb-0">{{ asset.employee_name|default:"-" }}</p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Department</label>
+                                    <p class="mb-0">{{ asset.department|default:"-" }}</p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Designation</label>
+                                    <p class="mb-0">{{ asset.designation|default:"-" }}</p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Handover Date</label>
+                                    <p class="mb-0">{{ asset.handover_date|date:"d F Y"|default:"-" }}</p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Handover By</label>
+                                    <p class="mb-0">{{ asset.handover_by|default:"-" }}</p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Return Date</label>
+                                    <p class="mb-0">{{ asset.return_date|default:"-" }}</p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Return To</label>
+                                    <p class="mb-0">{{ asset.return_to|default:"-" }}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sidebar -->
+                <div class="col-md-4">
+                    <!-- Financial / Lifecycle -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-cash-stack"></i> Financial & Lifecycle</h5>
+                        </div>
+                        <div class="card-body">
+                            <p class="mb-2">
+                                <strong>Purchase Date:</strong><br>
+                                {{ asset.purchase_date|date:"d F Y"|default:"-" }}
+                            </p>
+                            <p class="mb-2">
+                                <strong>Price (SAR):</strong><br>
+                                {% if asset.price %}{{ asset.price|floatformat:2|intcomma }}{% else %}-{% endif %}
+                            </p>
+                            <p class="mb-2">
+                                <strong>Planned Life:</strong><br>
+                                {{ asset.planned_life|default:"-" }}
+                            </p>
+                            <p class="mb-2">
+                                <strong>Current Age:</strong><br>
+                                {{ asset.current_age }}
+                            </p>
+                            <p class="mb-0">
+                                <strong>Condition:</strong><br>
+                                {% if asset.condition %}
+                                <span class="badge {% if asset.condition == 'new' %}bg-success{% else %}bg-warning text-dark{% endif %}">
+                                    {{ asset.get_condition_display }}
+                                </span>
+                                {% else %}-{% endif %}
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Record Info -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-info-circle"></i> Record Info</h5>
+                        </div>
+                        <div class="card-body">
+                            <p class="mb-2">
+                                <strong>Created:</strong><br>
+                                {{ asset.created_at|date:"d M Y, H:i" }}
+                            </p>
+                            <p class="mb-2">
+                                <strong>Last Updated:</strong><br>
+                                {{ asset.updated_at|date:"d M Y, H:i" }}
+                            </p>
+                            {% if asset.created_by %}
+                            <p class="mb-0">
+                                <strong>Created By:</strong><br>
+                                {{ asset.created_by }}
+                            </p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
