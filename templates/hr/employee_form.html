@@ -1,0 +1,149 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <!-- Header -->
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">{{ title }}</h1>
+                    <p class="text-muted mb-0">Enter employee information</p>
+                </div>
+                <a href="{% url 'hr:employee_list' %}" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Back to List
+                </a>
+            </div>
+
+            <!-- Form Card -->
+            <div class="card">
+                <div class="card-body">
+                    <form method="post" novalidate>
+                        {% csrf_token %}
+
+                        <!-- Personal Information -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-person"></i> Personal Information
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Iqama/Passport No. *</label>
+                                {{ form.iqama_number }}
+                                {% if form.iqama_number.errors %}
+                                <div class="invalid-feedback d-block">{{ form.iqama_number.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Full Name *</label>
+                                {{ form.full_name }}
+                                {% if form.full_name.errors %}
+                                <div class="invalid-feedback d-block">{{ form.full_name.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Nationality</label>
+                                {{ form.nationality }}
+                            </div>
+                        </div>
+                        <div class="row mb-4">
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Date of Birth</label>
+                                {{ form.date_of_birth }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Marital Status</label>
+                                {{ form.marital_status }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Blood Group</label>
+                                {{ form.blood_group }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Mobile Number</label>
+                                {{ form.mobile_number }}
+                            </div>
+                        </div>
+
+                        <!-- Employment Details -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-briefcase"></i> Employment Details
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Designation</label>
+                                {{ form.designation }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Qualification</label>
+                                {{ form.qualification }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Joining Date</label>
+                                {{ form.joining_date }}
+                            </div>
+                        </div>
+                        <div class="row mb-4">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Deployment</label>
+                                {{ form.deployment }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Contract Type</label>
+                                {{ form.contract_type }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Status</label>
+                                <div class="form-check mt-2">
+                                    {{ form.is_active }}
+                                    <label class="form-check-label">Active Employee</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Contact Information -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-envelope"></i> Contact Information
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Work Email</label>
+                                {{ form.work_email }}
+                                {% if form.work_email.errors %}
+                                <div class="invalid-feedback d-block">{{ form.work_email.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Personal Email</label>
+                                {{ form.personal_email }}
+                                {% if form.personal_email.errors %}
+                                <div class="invalid-feedback d-block">{{ form.personal_email.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="row mb-4">
+                            <div class="col-md-12">
+                                <label class="form-label">Documents Link</label>
+                                {{ form.documents_link }}
+                                {% if form.documents_link.errors %}
+                                <div class="invalid-feedback d-block">{{ form.documents_link.errors.0 }}</div>
+                                {% endif %}
+                                <small class="text-muted">URL to employee documents folder</small>
+                            </div>
+                        </div>
+
+                        <!-- Submit Buttons -->
+                        <div class="d-flex justify-content-end gap-2 border-top pt-3">
+                            <a href="{% url 'hr:employee_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-check-lg"></i> {{ button_text }}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

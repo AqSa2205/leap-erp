@@ -1,0 +1,150 @@
+{% extends 'base.html' %}
+
+{% block title %}Import Employees{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <!-- Header -->
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">Import Employees</h1>
+                    <p class="text-muted mb-0">Import employee data from an Excel file</p>
+                </div>
+                <a href="{% url 'hr:employee_list' %}" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Back to List
+                </a>
+            </div>
+
+            <!-- Import Form Card -->
+            <div class="card mb-4">
+                <div class="card-body">
+                    <form method="post" enctype="multipart/form-data" novalidate>
+                        {% csrf_token %}
+
+                        <div class="row mb-4">
+                            <div class="col-md-8">
+                                <label class="form-label">Excel File *</label>
+                                {{ form.excel_file }}
+                                <small class="text-muted">Upload .xlsx or .xls file</small>
+                            </div>
+                        </div>
+
+                        <div class="d-flex justify-content-end gap-2">
+                            <a href="{% url 'hr:employee_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-upload"></i> Import Employees
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Instructions Card -->
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-info-circle"></i> Import Instructions</h5>
+                </div>
+                <div class="card-body">
+                    <h6>Expected Excel Format</h6>
+                    <p>The header row is auto-detected (looks for "NAME" or "S/No." in the first 5 rows). The following columns are recognized:</p>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Column Name</th>
+                                    <th>Maps To</th>
+                                    <th>Required</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>IQAMAH/PASSPORT / Iqama</td>
+                                    <td>Iqama/Passport No.</td>
+                                    <td><span class="badge bg-danger">Required</span></td>
+                                </tr>
+                                <tr>
+                                    <td>NAME / Full Name</td>
+                                    <td>Full Name</td>
+                                    <td><span class="badge bg-danger">Required</span></td>
+                                </tr>
+                                <tr>
+                                    <td>DESIGNATION</td>
+                                    <td>Designation</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>QUALIFICATION</td>
+                                    <td>Qualification</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>DATE OF BIRTH</td>
+                                    <td>Date of Birth</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>JOINING DATE</td>
+                                    <td>Joining Date</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>NATIONALITY</td>
+                                    <td>Nationality</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Marital Status</td>
+                                    <td>Marital Status (Single/Married)</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>BLOOD GROUP</td>
+                                    <td>Blood Group</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Email / Work Email</td>
+                                    <td>Work Email</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>DOCUMENTS</td>
+                                    <td>Documents Link</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>DEPLOYMENT</td>
+                                    <td>Deployment</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Contract type</td>
+                                    <td>Contract Type (Permanent/Yearly/AJEER)</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Mobile No</td>
+                                    <td>Mobile Number</td>
+                                    <td><span class="badge bg-secondary">Optional</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="alert alert-info mt-3 mb-0">
+                        <i class="bi bi-lightbulb"></i> <strong>Tips:</strong>
+                        <ul class="mb-0 mt-1">
+                            <li>Rows without a Name or Iqama/Passport number will be skipped.</li>
+                            <li>Existing employees (matched by Iqama/Passport) will be updated.</li>
+                            <li>Re-importing the same file is safe and will update existing records.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

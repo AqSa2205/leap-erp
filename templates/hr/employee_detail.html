@@ -1,0 +1,185 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}{{ employee.full_name }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <!-- Header -->
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">{{ employee.full_name }}</h1>
+                    <p class="text-muted mb-0">
+                        {% if employee.designation %}{{ employee.designation }} &middot; {% endif %}
+                        {% if employee.is_active %}
+                        <span class="badge bg-success">Active</span>
+                        {% else %}
+                        <span class="badge bg-secondary">Inactive</span>
+                        {% endif %}
+                        {% if employee.contract_type %}
+                        <span class="badge {% if employee.contract_type == 'permanent' %}bg-success{% elif employee.contract_type == 'yearly' %}bg-warning text-dark{% else %}bg-info{% endif %} ms-1">
+                            {{ employee.get_contract_type_display }}
+                        </span>
+                        {% endif %}
+                    </p>
+                </div>
+                <div>
+                    <a href="{% url 'hr:employee_list' %}" class="btn btn-outline-secondary me-2">
+                        <i class="bi bi-arrow-left"></i> Back
+                    </a>
+                    <a href="{% url 'hr:employee_update' employee.pk %}" class="btn btn-primary me-2">
+                        <i class="bi bi-pencil"></i> Edit
+                    </a>
+                    <a href="{% url 'hr:employee_delete' employee.pk %}" class="btn btn-danger">
+                        <i class="bi bi-trash"></i> Delete
+                    </a>
+                </div>
+            </div>
+
+            <div class="row">
+                <!-- Main Info -->
+                <div class="col-md-8">
+                    <!-- Personal Information -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-person"></i> Personal Information</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Full Name</label>
+                                    <p class="mb-0"><strong>{{ employee.full_name }}</strong></p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Iqama/Passport No.</label>
+                                    <p class="mb-0"><strong>{{ employee.iqama_number }}</strong></p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Date of Birth</label>
+                                    <p class="mb-0">{{ employee.date_of_birth|date:"d F Y"|default:"-" }}</p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Nationality</label>
+                                    <p class="mb-0">{{ employee.nationality|default:"-" }}</p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Marital Status</label>
+                                    <p class="mb-0">{{ employee.get_marital_status_display|default:"-" }}</p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Blood Group</label>
+                                    <p class="mb-0">{{ employee.blood_group|default:"-" }}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Contact Details -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-envelope"></i> Contact Details</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Work Email</label>
+                                    <p class="mb-0">
+                                        {% if employee.work_email %}
+                                        <a href="mailto:{{ employee.work_email }}">{{ employee.work_email }}</a>
+                                        {% else %}-{% endif %}
+                                    </p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Personal Email</label>
+                                    <p class="mb-0">
+                                        {% if employee.personal_email %}
+                                        <a href="mailto:{{ employee.personal_email }}">{{ employee.personal_email }}</a>
+                                        {% else %}-{% endif %}
+                                    </p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Mobile Number</label>
+                                    <p class="mb-0">
+                                        {% if employee.mobile_number %}
+                                        <a href="tel:{{ employee.mobile_number }}">{{ employee.mobile_number }}</a>
+                                        {% else %}-{% endif %}
+                                    </p>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Documents</label>
+                                    <p class="mb-0">
+                                        {% if employee.documents_link %}
+                                        <a href="{{ employee.documents_link }}" target="_blank">View Documents <i class="bi bi-box-arrow-up-right"></i></a>
+                                        {% else %}-{% endif %}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sidebar -->
+                <div class="col-md-4">
+                    <!-- Employment Details -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-briefcase"></i> Employment</h5>
+                        </div>
+                        <div class="card-body">
+                            <p class="mb-2">
+                                <strong>Designation:</strong><br>
+                                {{ employee.designation|default:"-" }}
+                            </p>
+                            <p class="mb-2">
+                                <strong>Qualification:</strong><br>
+                                {{ employee.qualification|default:"-" }}
+                            </p>
+                            <p class="mb-2">
+                                <strong>Joining Date:</strong><br>
+                                {{ employee.joining_date|date:"d F Y"|default:"-" }}
+                            </p>
+                            <p class="mb-2">
+                                <strong>Deployment:</strong><br>
+                                {{ employee.deployment|default:"-" }}
+                            </p>
+                            <p class="mb-0">
+                                <strong>Contract Type:</strong><br>
+                                {% if employee.contract_type %}
+                                <span class="badge {% if employee.contract_type == 'permanent' %}bg-success{% elif employee.contract_type == 'yearly' %}bg-warning text-dark{% else %}bg-info{% endif %}">
+                                    {{ employee.get_contract_type_display }}
+                                </span>
+                                {% else %}-{% endif %}
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Record Info -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-info-circle"></i> Record Info</h5>
+                        </div>
+                        <div class="card-body">
+                            <p class="mb-2">
+                                <strong>Created:</strong><br>
+                                {{ employee.created_at|date:"d M Y, H:i" }}
+                            </p>
+                            <p class="mb-2">
+                                <strong>Last Updated:</strong><br>
+                                {{ employee.updated_at|date:"d M Y, H:i" }}
+                            </p>
+                            {% if employee.created_by %}
+                            <p class="mb-0">
+                                <strong>Created By:</strong><br>
+                                {{ employee.created_by }}
+                            </p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

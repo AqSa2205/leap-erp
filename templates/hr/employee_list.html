@@ -1,0 +1,225 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}HR - Employees{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Employees</h1>
+            <p class="text-muted mb-0">Employee master data management</p>
+        </div>
+        <div>
+            <a href="{% url 'hr:employee_export' %}?{{ request.GET.urlencode }}" class="btn btn-outline-secondary me-2">
+                <i class="bi bi-download"></i> Export
+            </a>
+            <a href="{% url 'hr:employee_import' %}" class="btn btn-outline-primary me-2">
+                <i class="bi bi-upload"></i> Import
+            </a>
+            <a href="{% url 'hr:employee_create' %}" class="btn btn-primary">
+                <i class="bi bi-plus-lg"></i> Add Employee
+            </a>
+        </div>
+    </div>
+
+    <!-- Stat Cards -->
+    <div class="row mb-4">
+        <div class="col-md-3 mb-3">
+            <div class="card stat-card primary">
+                <div class="card-body py-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="text-muted small">Total Employees</div>
+                            <div class="h4 mb-0">{{ total_count }}</div>
+                        </div>
+                        <i class="bi bi-people-fill fs-2 text-muted"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="card stat-card success">
+                <div class="card-body py-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="text-muted small">Active</div>
+                            <div class="h4 mb-0">{{ active_count }}</div>
+                        </div>
+                        <i class="bi bi-person-check-fill fs-2 text-muted"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="card stat-card warning">
+                <div class="card-body py-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="text-muted small">Permanent</div>
+                            <div class="h4 mb-0">{{ contract_counts.permanent|default:"0" }}</div>
+                        </div>
+                        <i class="bi bi-file-earmark-person-fill fs-2 text-muted"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="card stat-card danger">
+                <div class="card-body py-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="text-muted small">Top Nationalities</div>
+                            <div class="small mt-1">
+                                {% for n in nationality_counts %}
+                                {{ n.nationality }} ({{ n.count }}){% if not forloop.last %}, {% endif %}
+                                {% endfor %}
+                            </div>
+                        </div>
+                        <i class="bi bi-globe fs-2 text-muted"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <form method="get" class="row g-3">
+                <div class="col-md-3">
+                    {{ filter_form.search }}
+                </div>
+                <div class="col-md-2">
+                    {{ filter_form.contract_type }}
+                </div>
+                <div class="col-md-2">
+                    {{ filter_form.nationality }}
+                </div>
+                <div class="col-md-2">
+                    {{ filter_form.deployment }}
+                </div>
+                <div class="col-md-3">
+                    <button type="submit" class="btn btn-primary">Filter</button>
+                    {% if request.GET %}
+                    <a href="{% url 'hr:employee_list' %}" class="btn btn-outline-secondary ms-1">Clear</a>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Employees Table -->
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>#</th>
+                            <th>Name</th>
+                            <th>Iqama/Passport</th>
+                            <th>Designation</th>
+                            <th>Nationality</th>
+                            <th>Deployment</th>
+                            <th>Contract</th>
+                            <th>Mobile</th>
+                            <th>Status</th>
+                            <th width="100">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for emp in employees %}
+                        <tr>
+                            <td>{{ forloop.counter0|add:page_obj.start_index }}</td>
+                            <td>
+                                <a href="{% url 'hr:employee_detail' emp.pk %}" class="text-decoration-none">
+                                    <strong>{{ emp.full_name }}</strong>
+                                </a>
+                            </td>
+                            <td>{{ emp.iqama_number }}</td>
+                            <td>{{ emp.designation|default:"-"|truncatechars:25 }}</td>
+                            <td>{{ emp.nationality|default:"-" }}</td>
+                            <td>{{ emp.deployment|default:"-" }}</td>
+                            <td>
+                                {% if emp.contract_type %}
+                                <span class="badge {% if emp.contract_type == 'permanent' %}bg-success{% elif emp.contract_type == 'yearly' %}bg-warning text-dark{% else %}bg-info{% endif %}">
+                                    {{ emp.get_contract_type_display }}
+                                </span>
+                                {% else %}-{% endif %}
+                            </td>
+                            <td>
+                                {% if emp.mobile_number %}
+                                <a href="tel:{{ emp.mobile_number }}">{{ emp.mobile_number }}</a>
+                                {% else %}-{% endif %}
+                            </td>
+                            <td>
+                                {% if emp.is_active %}
+                                <span class="badge bg-success">Active</span>
+                                {% else %}
+                                <span class="badge bg-secondary">Inactive</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="btn-group btn-group-sm">
+                                    <a href="{% url 'hr:employee_detail' emp.pk %}" class="btn btn-outline-primary" title="View">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
+                                    <a href="{% url 'hr:employee_update' emp.pk %}" class="btn btn-outline-secondary" title="Edit">
+                                        <i class="bi bi-pencil"></i>
+                                    </a>
+                                    <a href="{% url 'hr:employee_delete' emp.pk %}" class="btn btn-outline-danger" title="Delete">
+                                        <i class="bi bi-trash"></i>
+                                    </a>
+                                </div>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="10" class="text-center py-5">
+                                <i class="bi bi-people display-4 text-muted"></i>
+                                <p class="text-muted mt-3">No employees found.</p>
+                                <a href="{% url 'hr:employee_create' %}" class="btn btn-primary me-2">
+                                    <i class="bi bi-plus-lg"></i> Add Employee
+                                </a>
+                                <a href="{% url 'hr:employee_import' %}" class="btn btn-outline-primary">
+                                    <i class="bi bi-upload"></i> Import from Excel
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pagination -->
+    {% if page_obj.has_other_pages %}
+    <nav class="mt-4">
+        <ul class="pagination justify-content-center">
+            {% if page_obj.has_previous %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% for key, value in request.GET.items %}{% if key != 'page' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">Previous</a>
+            </li>
+            {% endif %}
+
+            {% for num in page_obj.paginator.page_range %}
+                {% if page_obj.number == num %}
+                <li class="page-item active"><span class="page-link">{{ num }}</span></li>
+                {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                <li class="page-item"><a class="page-link" href="?page={{ num }}{% for key, value in request.GET.items %}{% if key != 'page' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">{{ num }}</a></li>
+                {% endif %}
+            {% endfor %}
+
+            {% if page_obj.has_next %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page_obj.next_page_number }}{% for key, value in request.GET.items %}{% if key != 'page' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">Next</a>
+            </li>
+            {% endif %}
+        </ul>
+    </nav>
+    {% endif %}
+</div>
+{% endblock %}
