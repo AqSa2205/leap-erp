@@ -377,24 +377,34 @@
         <div class="summary-strip">
             <div class="row g-0">
                 <div class="col summary-item">
-                    <h2 class="text-dark" id="summary-total">{{ overall_stats.total.count|intcomma }}</h2>
-                    <small class="text-muted">Total Projects</small>
+                    <a href="{% url 'projects:list' %}?region=LNUK" id="summary-total-link" class="text-decoration-none">
+                        <h2 class="text-dark" id="summary-total">{{ overall_stats.total.count|intcomma }}</h2>
+                        <small class="text-muted">Total Projects</small>
+                    </a>
                 </div>
                 <div class="col summary-item">
-                    <h2 style="color: #1a1a1a;" id="summary-active">{{ overall_stats.active.count|intcomma }}</h2>
-                    <small class="text-muted">Active Bids</small>
+                    <a href="{% url 'projects:list' %}?region=LNUK&category=active" id="summary-active-link" class="text-decoration-none">
+                        <h2 style="color: #1a1a1a;" id="summary-active">{{ overall_stats.active.count|intcomma }}</h2>
+                        <small class="text-muted">Active Bids</small>
+                    </a>
                 </div>
                 <div class="col summary-item">
-                    <h2 style="color: #fd7e14;" id="summary-hotleads">{{ overall_stats.hot_leads.count|intcomma }}</h2>
-                    <small class="text-muted">Hot Leads</small>
+                    <a href="{% url 'projects:list' %}?region=LNUK&category=hot_lead" id="summary-hotleads-link" class="text-decoration-none">
+                        <h2 style="color: #fd7e14;" id="summary-hotleads">{{ overall_stats.hot_leads.count|intcomma }}</h2>
+                        <small class="text-muted">Hot Leads</small>
+                    </a>
                 </div>
                 <div class="col summary-item">
-                    <h2 class="text-success" id="summary-won">{{ overall_stats.won.count|intcomma }}</h2>
-                    <small class="text-muted">Won</small>
+                    <a href="{% url 'projects:list' %}?region=LNUK&category=won" id="summary-won-link" class="text-decoration-none">
+                        <h2 class="text-success" id="summary-won">{{ overall_stats.won.count|intcomma }}</h2>
+                        <small class="text-muted">Won</small>
+                    </a>
                 </div>
                 <div class="col summary-item">
-                    <h2 style="color: #C41E3A;" id="summary-lost">{{ overall_stats.lost.count|intcomma }}</h2>
-                    <small class="text-muted">Lost</small>
+                    <a href="{% url 'projects:list' %}?region=LNUK&category=lost" id="summary-lost-link" class="text-decoration-none">
+                        <h2 style="color: #C41E3A;" id="summary-lost">{{ overall_stats.lost.count|intcomma }}</h2>
+                        <small class="text-muted">Lost</small>
+                    </a>
                 </div>
             </div>
         </div>
@@ -456,6 +466,7 @@
             <!-- LNUK Stats -->
             <div class="row mb-4">
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=LNUK&category=active" class="text-decoration-none">
                     <div class="card stat-card stat-active h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ lnuk.active.count|intcomma }}</div>
@@ -463,8 +474,10 @@
                             <div class="stat-value">£{{ lnuk.active.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=LNUK&category=hot_lead" class="text-decoration-none">
                     <div class="card stat-card stat-hotleads h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ lnuk.hot_leads.count|intcomma }}</div>
@@ -472,8 +485,10 @@
                             <div class="stat-value">£{{ lnuk.hot_leads.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=LNUK&category=won" class="text-decoration-none">
                     <div class="card stat-card stat-won h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ lnuk.won.count|intcomma }}</div>
@@ -481,8 +496,10 @@
                             <div class="stat-value">£{{ lnuk.won.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=LNUK&category=lost" class="text-decoration-none">
                     <div class="card stat-card stat-lost h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ lnuk.lost.count|intcomma }}</div>
@@ -490,8 +507,10 @@
                             <div class="stat-value">£{{ lnuk.lost.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=LNUK&category=ongoing" class="text-decoration-none">
                     <div class="card stat-card stat-ongoing h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ lnuk.ongoing.count|intcomma }}</div>
@@ -499,8 +518,10 @@
                             <div class="stat-value">£{{ lnuk.ongoing.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=LNUK" class="text-decoration-none">
                     <div class="card stat-card stat-total h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ lnuk.total.count|intcomma }}</div>
@@ -508,6 +529,7 @@
                             <div class="stat-value">All Projects</div>
                         </div>
                     </div>
+                    </a>
                 </div>
             </div>
 
@@ -593,6 +615,7 @@
             <!-- LNA Stats -->
             <div class="row mb-4">
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=LNA&category=active" class="text-decoration-none">
                     <div class="card stat-card stat-active h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ lna.active.count|intcomma }}</div>
@@ -600,8 +623,10 @@
                             <div class="stat-value">SAR {{ lna.active.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=LNA&category=hot_lead" class="text-decoration-none">
                     <div class="card stat-card stat-hotleads h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ lna.hot_leads.count|intcomma }}</div>
@@ -609,8 +634,10 @@
                             <div class="stat-value">SAR {{ lna.hot_leads.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=LNA&category=won" class="text-decoration-none">
                     <div class="card stat-card stat-won h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ lna.won.count|intcomma }}</div>
@@ -618,8 +645,10 @@
                             <div class="stat-value">SAR {{ lna.won.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=LNA&category=lost" class="text-decoration-none">
                     <div class="card stat-card stat-lost h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ lna.lost.count|intcomma }}</div>
@@ -627,8 +656,10 @@
                             <div class="stat-value">SAR {{ lna.lost.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=LNA&category=ongoing" class="text-decoration-none">
                     <div class="card stat-card stat-ongoing h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ lna.ongoing.count|intcomma }}</div>
@@ -636,8 +667,10 @@
                             <div class="stat-value">SAR {{ lna.ongoing.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=LNA" class="text-decoration-none">
                     <div class="card stat-card stat-total h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ lna.total.count|intcomma }}</div>
@@ -645,6 +678,7 @@
                             <div class="stat-value">All Projects</div>
                         </div>
                     </div>
+                    </a>
                 </div>
             </div>
 
@@ -730,6 +764,7 @@
             <!-- PA Stats -->
             <div class="row mb-4">
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=PA&category=active" class="text-decoration-none">
                     <div class="card stat-card stat-active h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ pa.active.count|intcomma }}</div>
@@ -737,8 +772,10 @@
                             <div class="stat-value">SAR {{ pa.active.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=PA&category=hot_lead" class="text-decoration-none">
                     <div class="card stat-card stat-hotleads h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ pa.hot_leads.count|intcomma }}</div>
@@ -746,8 +783,10 @@
                             <div class="stat-value">SAR {{ pa.hot_leads.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=PA&category=won" class="text-decoration-none">
                     <div class="card stat-card stat-won h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ pa.won.count|intcomma }}</div>
@@ -755,8 +794,10 @@
                             <div class="stat-value">SAR {{ pa.won.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=PA&category=lost" class="text-decoration-none">
                     <div class="card stat-card stat-lost h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ pa.lost.count|intcomma }}</div>
@@ -764,8 +805,10 @@
                             <div class="stat-value">SAR {{ pa.lost.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=PA&category=ongoing" class="text-decoration-none">
                     <div class="card stat-card stat-ongoing h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ pa.ongoing.count|intcomma }}</div>
@@ -773,8 +816,10 @@
                             <div class="stat-value">SAR {{ pa.ongoing.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=PA" class="text-decoration-none">
                     <div class="card stat-card stat-total h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ pa.total.count|intcomma }}</div>
@@ -782,6 +827,7 @@
                             <div class="stat-value">All Projects</div>
                         </div>
                     </div>
+                    </a>
                 </div>
             </div>
 
@@ -865,6 +911,7 @@
 
             <div class="row mb-4">
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=NEO-Dubai&category=active" class="text-decoration-none">
                     <div class="card stat-card stat-active h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ neo_dubai.active.count|intcomma }}</div>
@@ -872,8 +919,10 @@
                             <div class="stat-value">AED {{ neo_dubai.active.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=NEO-Dubai&category=hot_lead" class="text-decoration-none">
                     <div class="card stat-card stat-hotleads h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ neo_dubai.hot_leads.count|intcomma }}</div>
@@ -881,8 +930,10 @@
                             <div class="stat-value">AED {{ neo_dubai.hot_leads.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=NEO-Dubai&category=won" class="text-decoration-none">
                     <div class="card stat-card stat-won h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ neo_dubai.won.count|intcomma }}</div>
@@ -890,8 +941,10 @@
                             <div class="stat-value">AED {{ neo_dubai.won.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=NEO-Dubai&category=lost" class="text-decoration-none">
                     <div class="card stat-card stat-lost h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ neo_dubai.lost.count|intcomma }}</div>
@@ -899,8 +952,10 @@
                             <div class="stat-value">AED {{ neo_dubai.lost.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=NEO-Dubai&category=ongoing" class="text-decoration-none">
                     <div class="card stat-card stat-ongoing h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ neo_dubai.ongoing.count|intcomma }}</div>
@@ -908,8 +963,10 @@
                             <div class="stat-value">AED {{ neo_dubai.ongoing.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=NEO-Dubai" class="text-decoration-none">
                     <div class="card stat-card stat-total h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ neo_dubai.total.count|intcomma }}</div>
@@ -917,6 +974,7 @@
                             <div class="stat-value">All Projects</div>
                         </div>
                     </div>
+                    </a>
                 </div>
             </div>
 
@@ -998,6 +1056,7 @@
 
             <div class="row mb-4">
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=NEO-KSA&category=active" class="text-decoration-none">
                     <div class="card stat-card stat-active h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ neo_ksa.active.count|intcomma }}</div>
@@ -1005,8 +1064,10 @@
                             <div class="stat-value">SAR {{ neo_ksa.active.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=NEO-KSA&category=hot_lead" class="text-decoration-none">
                     <div class="card stat-card stat-hotleads h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ neo_ksa.hot_leads.count|intcomma }}</div>
@@ -1014,8 +1075,10 @@
                             <div class="stat-value">SAR {{ neo_ksa.hot_leads.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=NEO-KSA&category=won" class="text-decoration-none">
                     <div class="card stat-card stat-won h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ neo_ksa.won.count|intcomma }}</div>
@@ -1023,8 +1086,10 @@
                             <div class="stat-value">SAR {{ neo_ksa.won.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=NEO-KSA&category=lost" class="text-decoration-none">
                     <div class="card stat-card stat-lost h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ neo_ksa.lost.count|intcomma }}</div>
@@ -1032,8 +1097,10 @@
                             <div class="stat-value">SAR {{ neo_ksa.lost.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=NEO-KSA&category=ongoing" class="text-decoration-none">
                     <div class="card stat-card stat-ongoing h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ neo_ksa.ongoing.count|intcomma }}</div>
@@ -1041,8 +1108,10 @@
                             <div class="stat-value">SAR {{ neo_ksa.ongoing.value|floatformat:2|intcomma }}</div>
                         </div>
                     </div>
+                    </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
+                    <a href="{% url 'projects:list' %}?region=NEO-KSA" class="text-decoration-none">
                     <div class="card stat-card stat-total h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ neo_ksa.total.count|intcomma }}</div>
@@ -1050,6 +1119,7 @@
                             <div class="stat-value">All Projects</div>
                         </div>
                     </div>
+                    </a>
                 </div>
             </div>
 
@@ -1371,8 +1441,27 @@
         }
     };
 
+    // Map tab IDs to project list region codes
+    const regionCodeMap = {
+        'lnuk': 'LNUK',
+        'lna': 'LNA',
+        'pa': 'PA',
+        'neo-dubai': 'NEO-Dubai',
+        'neo-ksa': 'NEO-KSA'
+    };
+
+    const projectListUrl = "{% url 'projects:list' %}";
+
     function formatNumber(n) {
         return n.toLocaleString();
+    }
+
+    function updateSummaryLinks(regionCode) {
+        document.getElementById('summary-total-link').href = projectListUrl + '?region=' + regionCode;
+        document.getElementById('summary-active-link').href = projectListUrl + '?region=' + regionCode + '&category=active';
+        document.getElementById('summary-hotleads-link').href = projectListUrl + '?region=' + regionCode + '&category=hot_lead';
+        document.getElementById('summary-won-link').href = projectListUrl + '?region=' + regionCode + '&category=won';
+        document.getElementById('summary-lost-link').href = projectListUrl + '?region=' + regionCode + '&category=lost';
     }
 
     function updateSummary(region) {
@@ -1382,6 +1471,7 @@
         document.getElementById('summary-hotleads').textContent = formatNumber(d.hot_leads);
         document.getElementById('summary-won').textContent = formatNumber(d.won);
         document.getElementById('summary-lost').textContent = formatNumber(d.lost);
+        updateSummaryLinks(regionCodeMap[region] || region);
     }
 
     // Update summary strip when tab changes
