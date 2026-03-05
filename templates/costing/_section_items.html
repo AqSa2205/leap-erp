@@ -3,11 +3,11 @@
 <tr data-item-id="{{ item.pk }}">
     <td>{{ item.item_number }}</td>
     <td style="white-space:normal;min-width:180px;">{{ item.description }}</td>
+    <td>{{ item.vendor_name }}</td>
     <td>{{ item.make }}</td>
     <td>{{ item.model_number }}</td>
     <td class="num">{{ item.quantity|floatformat:0 }}</td>
     <td>{{ item.unit }}</td>
-    <td>{{ item.vendor_name }}</td>
     <td class="num" data-computed="final_unit_price">{{ item.final_unit_price|floatformat:2|intcomma }}</td>
     <td class="num fw-bold" data-computed="final_total_price">{{ item.final_total_price|floatformat:2|intcomma }}</td>
     <td class="cost-col">

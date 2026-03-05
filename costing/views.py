@@ -611,8 +611,8 @@ def costing_export_excel(request, pk):
     # Column headers row
     r = 10
     headers = [
-        'Item No', 'Description', 'Make', 'Model', 'Qty', 'Unit',
-        'Vendor', 'Unit Price', 'Total Price',
+        'Item No', 'Description', 'Vendor', 'Make', 'Model', 'Qty', 'Unit',
+        'Unit Price', 'Total Price',
         'Currency', 'Base Unit Cost', 'Discount', 'Unit Cost', 'Total Cost',
         'Margin', 'Base Unit Price', 'Base Total Price',
         'Shipping %', 'Customs %', 'Finances %', 'Installation %',
@@ -648,11 +648,11 @@ def costing_export_excel(request, pk):
             values = [
                 item.item_number,
                 item.description,
+                item.vendor_name,
                 item.make,
                 item.model_number,
                 float(item.quantity),
                 item.unit,
-                item.vendor_name,
                 # Unit Price and Total Price (calculated final)
                 round(float(item.final_unit_price), 2),
                 round(float(item.final_total_price), 2),
@@ -1097,7 +1097,7 @@ def costing_import_new(request):
                     break
 
             if not header_row:
-                messages.error(request, 'Could not find header row in Excel file. Looking for columns: Item No, Description, Make, Model, Qty, Unit, Vendor')
+                messages.error(request, 'Could not find header row in Excel file. Looking for columns: Item No, Description, Vendor, Make, Model, Qty, Unit')
                 return redirect('costing:import_new')
 
             # Map column indices
@@ -1138,8 +1138,11 @@ def costing_import_new(request):
                 unit = str(row[col_map['unit']] or '').strip() if col_map['unit'] >= 0 and col_map['unit'] < len(row) else 'EA'
                 vendor = str(row[col_map['vendor']] or '').strip() if col_map['vendor'] >= 0 and col_map['vendor'] < len(row) else ''
 
-                # Skip empty rows
+                # Skip empty rows or sheet-level headings
+                # (rows with only item_no but no description, qty, or other data)
                 if not item_no and not description:
+                    continue
+                if item_no and not description and not make and not model and qty_val is None:
                     continue
 
                 # Parse quantity
@@ -1148,12 +1151,16 @@ def costing_import_new(request):
                 except (InvalidOperation, ValueError):
                     qty = Decimal('1')
 
-                # Detect if this is a section header (has Item No but no Model)
+                # Detect if this is a section header
+                # Section headers: whole numbers (1, 2, 3) or roman numerals, with a title
+                # but NO quantity data and NO decimal in item number (1.1, 2.3 = line items)
                 is_section = False
-                if item_no and not model and description:
-                    # Check if Item No looks like a section number (Roman numerals, single digits, or short codes)
-                    if re.match(r'^[IVX]+$', item_no) or re.match(r'^\d+$', item_no) or len(item_no) <= 4:
-                        is_section = True
+                if item_no and description:
+                    has_qty = qty_val is not None and qty_val != '' and qty_val != 0
+                    is_decimal_item = '.' in item_no
+                    if not is_decimal_item and not has_qty:
+                        if re.match(r'^[IVX]+$', item_no) or re.match(r'^\d+$', item_no):
+                            is_section = True
 
                 if is_section:
                     # Create section

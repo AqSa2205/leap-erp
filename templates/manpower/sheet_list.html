@@ -1,0 +1,209 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Manpower Costing{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Manpower Costing</h1>
+            <p class="text-muted mb-0">Manage manpower cost sheets for projects</p>
+        </div>
+        <div>
+            <a href="{% url 'manpower:sheet_import' %}" class="btn btn-outline-primary me-2">
+                <i class="bi bi-upload"></i> Import
+            </a>
+            <a href="{% url 'manpower:sheet_create' %}" class="btn btn-primary">
+                <i class="bi bi-plus-lg"></i> New Sheet
+            </a>
+        </div>
+    </div>
+
+    <!-- Stat Cards -->
+    <div class="row mb-4">
+        <div class="col-md-3 mb-3">
+            <div class="card stat-card primary">
+                <div class="card-body py-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="text-muted small">Total Sheets</div>
+                            <div class="h4 mb-0">{{ total_sheets }}</div>
+                        </div>
+                        <i class="bi bi-file-earmark-spreadsheet fs-2 text-muted"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="card stat-card success">
+                <div class="card-body py-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="text-muted small">Total Employees</div>
+                            <div class="h4 mb-0">{{ total_employees }}</div>
+                        </div>
+                        <i class="bi bi-person-badge fs-2 text-muted"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filter -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <form method="get" class="row g-3">
+                <div class="col-md-4">
+                    {{ filter_form.search }}
+                </div>
+                <div class="col-md-3">
+                    <button type="submit" class="btn btn-primary">Filter</button>
+                    {% if request.GET.search %}
+                    <a href="{% url 'manpower:sheet_list' %}" class="btn btn-outline-secondary ms-1">Clear</a>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Data Table -->
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover table-bordered table-sm mb-0" style="font-size: 0.82rem;">
+                    <thead class="table-dark">
+                        <tr>
+                            <th rowspan="2" class="align-middle text-center" style="min-width:50px">Sr. No.</th>
+                            <th rowspan="2" class="align-middle" style="min-width:160px">Employees Name</th>
+                            <th rowspan="2" class="align-middle" style="min-width:120px">Department</th>
+                            <th rowspan="2" class="align-middle" style="min-width:140px">Classification Of Staff</th>
+                            <th rowspan="2" class="align-middle" style="min-width:130px">Location/Project</th>
+                            <th rowspan="2" class="align-middle" style="min-width:130px">Designation</th>
+                            <th rowspan="2" class="align-middle text-center" style="min-width:100px">DOJ</th>
+                            <th rowspan="2" class="align-middle text-center" style="min-width:110px">Demobilization Date</th>
+                            <th rowspan="2" class="align-middle text-center" style="min-width:100px">Date Of Birth</th>
+                            <th rowspan="2" class="align-middle text-center" style="min-width:50px">Employee Age</th>
+                            <th colspan="14" class="text-center">Costing</th>
+                            <th rowspan="2" class="align-middle text-end" style="min-width:120px">Total Yearly Cost</th>
+                            <th rowspan="2" class="align-middle text-end" style="min-width:100px">Monthly Cost</th>
+                            <th rowspan="2" class="align-middle text-end" style="min-width:90px">Daily Cost</th>
+                            <th rowspan="2" class="align-middle text-end" style="min-width:90px">Hourly Cost</th>
+                            <th rowspan="2" class="align-middle text-center" style="min-width:80px">Actions</th>
+                        </tr>
+                        <tr>
+                            <th class="text-end" style="min-width:100px">Budget Cost</th>
+                            <th class="text-end" style="min-width:100px">Gross Salary</th>
+                            <th class="text-end" style="min-width:90px">Iqama Cost</th>
+                            <th class="text-end" style="min-width:130px">Services Transfer & Visa Fee</th>
+                            <th class="text-end" style="min-width:90px">GOSI Cost</th>
+                            <th class="text-end" style="min-width:100px">Vacation Pay</th>
+                            <th class="text-end" style="min-width:90px">EXE Cost</th>
+                            <th class="text-end" style="min-width:80px">EOSB</th>
+                            <th class="text-end" style="min-width:90px">Air Ticket</th>
+                            <th class="text-end" style="min-width:100px">Insurance Cost</th>
+                            <th class="text-end" style="min-width:120px">Project Allowance</th>
+                            <th class="text-end" style="min-width:70px">PPE</th>
+                            <th class="text-end" style="min-width:130px">Engineering Council Cost</th>
+                            <th class="text-end" style="min-width:120px">Other Expenditures</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in employees %}
+                        <tr>
+                            <td class="text-center">{{ forloop.counter0|add:page_obj.start_index }}</td>
+                            <td>
+                                <a href="{% url 'manpower:sheet_detail' item.sheet.pk %}" class="text-decoration-none">
+                                    <strong>{{ item.employee_name }}</strong>
+                                </a>
+                            </td>
+                            <td>{{ item.department|default:"-" }}</td>
+                            <td>{{ item.classification|default:"-" }}</td>
+                            <td>{{ item.location_project|default:"-" }}</td>
+                            <td>{{ item.designation|default:"-" }}</td>
+                            <td class="text-center">{{ item.doj|date:"d/m/Y"|default:"-" }}</td>
+                            <td class="text-center">{{ item.demobilization_date|date:"d/m/Y"|default:"-" }}</td>
+                            <td class="text-center">{{ item.date_of_birth|date:"d/m/Y"|default:"-" }}</td>
+                            <td class="text-center">{{ item.employee_age|default:"-" }}</td>
+                            <!-- Costing -->
+                            <td class="text-end">{{ item.budget_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.gross_salary|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.iqama_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.service_transfer_visa_fee|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.gosi_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.vacation_pay|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.exe_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.eosb|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.air_ticket|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.insurance_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.project_allowance|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.ppe|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.engineering_council_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.other_expenditures|floatformat:2|intcomma }}</td>
+                            <!-- Totals -->
+                            <td class="text-end"><strong>{{ item.total_yearly_cost|floatformat:2|intcomma }}</strong></td>
+                            <td class="text-end">{{ item.monthly_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.daily_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.hourly_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-center">
+                                <div class="btn-group btn-group-sm">
+                                    <a href="{% url 'manpower:lineitem_update' item.pk %}" class="btn btn-outline-secondary" title="Edit">
+                                        <i class="bi bi-pencil"></i>
+                                    </a>
+                                    <a href="{% url 'manpower:lineitem_delete' item.pk %}" class="btn btn-outline-danger" title="Delete">
+                                        <i class="bi bi-trash"></i>
+                                    </a>
+                                </div>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="29" class="text-center py-5">
+                                <i class="bi bi-person-lines-fill display-4 text-muted"></i>
+                                <p class="text-muted mt-3">No employees found.</p>
+                                <a href="{% url 'manpower:sheet_create' %}" class="btn btn-primary me-2">
+                                    <i class="bi bi-plus-lg"></i> New Sheet
+                                </a>
+                                <a href="{% url 'manpower:sheet_import' %}" class="btn btn-outline-primary">
+                                    <i class="bi bi-upload"></i> Import from Excel
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pagination -->
+    {% if page_obj.has_other_pages %}
+    <nav class="mt-4">
+        <ul class="pagination justify-content-center">
+            {% if page_obj.has_previous %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% for key, value in request.GET.items %}{% if key != 'page' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">Previous</a>
+            </li>
+            {% endif %}
+
+            {% for num in page_obj.paginator.page_range %}
+                {% if page_obj.number == num %}
+                <li class="page-item active"><span class="page-link">{{ num }}</span></li>
+                {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                <li class="page-item">
+                    <a class="page-link" href="?page={{ num }}{% for key, value in request.GET.items %}{% if key != 'page' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">{{ num }}</a>
+                </li>
+                {% endif %}
+            {% endfor %}
+
+            {% if page_obj.has_next %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page_obj.next_page_number }}{% for key, value in request.GET.items %}{% if key != 'page' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">Next</a>
+            </li>
+            {% endif %}
+        </ul>
+    </nav>
+    {% endif %}
+</div>
+{% endblock %}

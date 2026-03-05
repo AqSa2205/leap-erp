@@ -1,0 +1,213 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}{{ sheet.title }} - Manpower Costing{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">{{ sheet.title }}</h1>
+            <p class="text-muted mb-0">
+                {% if sheet.project_reference %}
+                    {{ sheet.project_reference }} &middot;
+                {% endif %}
+                {{ sheet.date|date:"d M Y" }}
+            </p>
+        </div>
+        <div>
+            <a href="{% url 'manpower:sheet_list' %}" class="btn btn-outline-secondary me-2">
+                <i class="bi bi-arrow-left"></i> Back
+            </a>
+            <a href="{% url 'manpower:sheet_update' sheet.pk %}" class="btn btn-outline-secondary me-2">
+                <i class="bi bi-pencil"></i> Edit
+            </a>
+            <a href="{% url 'manpower:sheet_export' sheet.pk %}" class="btn btn-outline-success me-2">
+                <i class="bi bi-download"></i> Export
+            </a>
+            <a href="{% url 'manpower:sheet_delete' sheet.pk %}" class="btn btn-danger">
+                <i class="bi bi-trash"></i> Delete
+            </a>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- Sheet Info -->
+        <div class="col-md-8">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-info-circle"></i> Sheet Information</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="text-muted small">Title</label>
+                            <p class="mb-0"><strong>{{ sheet.title }}</strong></p>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="text-muted small">Project Reference</label>
+                            <p class="mb-0"><strong>{{ sheet.project_reference|default:"-" }}</strong></p>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="text-muted small">Date</label>
+                            <p class="mb-0"><strong>{{ sheet.date|date:"d M Y" }}</strong></p>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="text-muted small">Total Yearly Cost</label>
+                            <p class="mb-0"><strong class="text-primary">SAR {{ sheet.total_cost|floatformat:2|intcomma }}</strong></p>
+                        </div>
+                        {% if sheet.notes %}
+                        <div class="col-12">
+                            <label class="text-muted small">Notes</label>
+                            <p class="mb-0">{{ sheet.notes }}</p>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Record Info -->
+        <div class="col-md-4">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-clock-history"></i> Record Info</h5>
+                </div>
+                <div class="card-body">
+                    <p class="mb-2">
+                        <strong>Created:</strong><br>
+                        {{ sheet.created_at|date:"d M Y, H:i" }}
+                    </p>
+                    {% if sheet.created_by %}
+                    <p class="mb-2">
+                        <strong>Created By:</strong><br>
+                        {{ sheet.created_by }}
+                    </p>
+                    {% endif %}
+                    <p class="mb-0">
+                        <strong>Last Updated:</strong><br>
+                        {{ sheet.updated_at|date:"d M Y, H:i" }}
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Employees / Line Items Table -->
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0"><i class="bi bi-person-lines-fill"></i> Employees ({{ line_items|length }})</h5>
+            <a href="{% url 'manpower:lineitem_create' sheet.pk %}" class="btn btn-primary btn-sm">
+                <i class="bi bi-plus-lg"></i> Add Employee
+            </a>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover table-bordered table-sm mb-0" style="font-size: 0.82rem;">
+                    <thead class="table-dark">
+                        <tr>
+                            <th rowspan="2" class="align-middle text-center" style="min-width:50px">Sr. No.</th>
+                            <th rowspan="2" class="align-middle" style="min-width:160px">Employee Name</th>
+                            <th rowspan="2" class="align-middle" style="min-width:120px">Department</th>
+                            <th rowspan="2" class="align-middle" style="min-width:130px">Classification</th>
+                            <th rowspan="2" class="align-middle" style="min-width:130px">Location/Project</th>
+                            <th rowspan="2" class="align-middle" style="min-width:130px">Designation</th>
+                            <th rowspan="2" class="align-middle text-center" style="min-width:100px">DOJ</th>
+                            <th rowspan="2" class="align-middle text-center" style="min-width:100px">Demob. Date</th>
+                            <th rowspan="2" class="align-middle text-center" style="min-width:100px">DOB</th>
+                            <th rowspan="2" class="align-middle text-center" style="min-width:50px">Age</th>
+                            <th colspan="14" class="text-center">Costing</th>
+                            <th rowspan="2" class="align-middle text-end" style="min-width:110px">Total Yearly Cost</th>
+                            <th rowspan="2" class="align-middle text-end" style="min-width:100px">Monthly Cost</th>
+                            <th rowspan="2" class="align-middle text-end" style="min-width:90px">Daily Cost</th>
+                            <th rowspan="2" class="align-middle text-end" style="min-width:90px">Hourly Cost</th>
+                            <th rowspan="2" class="align-middle text-center" style="min-width:80px">Actions</th>
+                        </tr>
+                        <tr>
+                            <th class="text-end" style="min-width:100px">Budget Cost</th>
+                            <th class="text-end" style="min-width:100px">Gross Salary</th>
+                            <th class="text-end" style="min-width:90px">Iqama Cost</th>
+                            <th class="text-end" style="min-width:120px">Transfer & Visa</th>
+                            <th class="text-end" style="min-width:90px">GOSI Cost</th>
+                            <th class="text-end" style="min-width:100px">Vacation Pay</th>
+                            <th class="text-end" style="min-width:90px">EXE Cost</th>
+                            <th class="text-end" style="min-width:80px">EOSB</th>
+                            <th class="text-end" style="min-width:90px">Air Ticket</th>
+                            <th class="text-end" style="min-width:100px">Insurance</th>
+                            <th class="text-end" style="min-width:110px">Project Allow.</th>
+                            <th class="text-end" style="min-width:70px">PPE</th>
+                            <th class="text-end" style="min-width:110px">Eng. Council</th>
+                            <th class="text-end" style="min-width:100px">Other Exp.</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in line_items %}
+                        <tr>
+                            <td class="text-center">{{ forloop.counter }}</td>
+                            <td><strong>{{ item.employee_name }}</strong></td>
+                            <td>{{ item.department|default:"-" }}</td>
+                            <td>{{ item.classification|default:"-" }}</td>
+                            <td>{{ item.location_project|default:"-" }}</td>
+                            <td>{{ item.designation|default:"-" }}</td>
+                            <td class="text-center">{{ item.doj|date:"d/m/Y"|default:"-" }}</td>
+                            <td class="text-center">{{ item.demobilization_date|date:"d/m/Y"|default:"-" }}</td>
+                            <td class="text-center">{{ item.date_of_birth|date:"d/m/Y"|default:"-" }}</td>
+                            <td class="text-center">{{ item.employee_age|default:"-" }}</td>
+                            <!-- Costing -->
+                            <td class="text-end">{{ item.budget_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.gross_salary|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.iqama_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.service_transfer_visa_fee|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.gosi_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.vacation_pay|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.exe_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.eosb|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.air_ticket|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.insurance_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.project_allowance|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.ppe|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.engineering_council_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.other_expenditures|floatformat:2|intcomma }}</td>
+                            <!-- Totals -->
+                            <td class="text-end"><strong>{{ item.total_yearly_cost|floatformat:2|intcomma }}</strong></td>
+                            <td class="text-end">{{ item.monthly_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.daily_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-end">{{ item.hourly_cost|floatformat:2|intcomma }}</td>
+                            <td class="text-center">
+                                <div class="btn-group btn-group-sm">
+                                    <a href="{% url 'manpower:lineitem_update' item.pk %}" class="btn btn-outline-secondary" title="Edit">
+                                        <i class="bi bi-pencil"></i>
+                                    </a>
+                                    <a href="{% url 'manpower:lineitem_delete' item.pk %}" class="btn btn-outline-danger" title="Delete">
+                                        <i class="bi bi-trash"></i>
+                                    </a>
+                                </div>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="29" class="text-center py-4">
+                                <i class="bi bi-person-lines-fill display-6 text-muted"></i>
+                                <p class="text-muted mt-2 mb-0">No employees added yet.</p>
+                            </td>
+                        </tr>
+                        {% endfor %}
+
+                        {% if line_items %}
+                        <!-- Grand Total Row -->
+                        <tr class="table-light">
+                            <td></td>
+                            <td><strong>GRAND TOTAL</strong></td>
+                            <td colspan="22"></td>
+                            <td class="text-end"><strong class="text-primary">{{ sheet.total_cost|floatformat:2|intcomma }}</strong></td>
+                            <td colspan="4"></td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

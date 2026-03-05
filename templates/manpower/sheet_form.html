@@ -1,0 +1,182 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ title }} - Manpower Costing{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <!-- Header -->
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">{{ title }}</h1>
+                    <p class="text-muted mb-0">Enter employee costing details</p>
+                </div>
+                <a href="{% url 'manpower:sheet_list' %}" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Back to List
+                </a>
+            </div>
+
+            <!-- Form Card -->
+            <div class="card">
+                <div class="card-body">
+                    <form method="post" novalidate>
+                        {% csrf_token %}
+
+                        <!-- Sheet Selection -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-file-earmark-spreadsheet"></i> Manpower Sheet
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Sheet *</label>
+                                {{ form.sheet }}
+                                {% if form.sheet.errors %}
+                                <div class="invalid-feedback d-block">{{ form.sheet.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-3 mb-3 d-flex align-items-end">
+                                <a href="{% url 'manpower:sheet_create_new' %}" class="btn btn-outline-primary">
+                                    <i class="bi bi-plus-lg"></i> New Sheet
+                                </a>
+                            </div>
+                        </div>
+
+                        <!-- Employee Information -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-person"></i> Employee Information
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Employee Name *</label>
+                                {{ form.employee_name }}
+                                {% if form.employee_name.errors %}
+                                <div class="invalid-feedback d-block">{{ form.employee_name.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Department</label>
+                                {{ form.department }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Classification of Staff</label>
+                                {{ form.classification }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Location/Project</label>
+                                {{ form.location_project }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Designation</label>
+                                {{ form.designation }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Order</label>
+                                {{ form.order }}
+                            </div>
+                        </div>
+
+                        <!-- Dates -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-calendar"></i> Dates
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Date of Joining</label>
+                                {{ form.doj }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Demobilization Date</label>
+                                {{ form.demobilization_date }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Date of Birth</label>
+                                {{ form.date_of_birth }}
+                            </div>
+                        </div>
+
+                        <!-- Costing Breakdown -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-currency-dollar"></i> Costing Breakdown
+                        </h5>
+                        <div class="row mb-4">
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Budget Cost</label>
+                                {{ form.budget_cost }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Gross Salary</label>
+                                {{ form.gross_salary }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Iqama Cost</label>
+                                {{ form.iqama_cost }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Services Transfer & Visa Fee</label>
+                                {{ form.service_transfer_visa_fee }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">GOSI Cost</label>
+                                {{ form.gosi_cost }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Vacation Pay</label>
+                                {{ form.vacation_pay }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">EXE Cost</label>
+                                {{ form.exe_cost }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">EOSB</label>
+                                {{ form.eosb }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Air Ticket</label>
+                                {{ form.air_ticket }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Insurance Cost</label>
+                                {{ form.insurance_cost }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Project Allowance</label>
+                                {{ form.project_allowance }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">PPE</label>
+                                {{ form.ppe }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Engineering Council Cost</label>
+                                {{ form.engineering_council_cost }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Other Expenditures</label>
+                                {{ form.other_expenditures }}
+                            </div>
+                        </div>
+
+                        <div class="alert alert-light border mb-4">
+                            <small class="text-muted">
+                                <i class="bi bi-info-circle"></i>
+                                <strong>Total Yearly Cost</strong>, <strong>Monthly Cost</strong>, <strong>Daily Cost</strong>, and <strong>Hourly Cost</strong>
+                                are automatically calculated from the costing breakdown above.
+                            </small>
+                        </div>
+
+                        <!-- Submit -->
+                        <div class="d-flex justify-content-end gap-2 border-top pt-3">
+                            <a href="{% url 'manpower:sheet_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-check-lg"></i> {{ button_text }}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

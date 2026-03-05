@@ -847,6 +847,11 @@
                 </a>
             </li>
             <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'manpower' %}active{% endif %}" href="{% url 'manpower:sheet_list' %}" data-title="Manpower Costing">
+                    <i class="bi bi-person-lines-fill"></i> <span>Manpower Costing</span>
+                </a>
+            </li>
+            <li class="nav-item">
                 <a class="nav-link" href="/admin/" data-title="Admin Panel">
                     <i class="bi bi-gear"></i> <span>Admin Panel</span>
                 </a>
