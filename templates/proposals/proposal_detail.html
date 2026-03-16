@@ -1,0 +1,103 @@
+{% extends 'base.html' %}
+{% load proposal_tags %}
+
+{% block title %}{{ proposal.title }} - Leap Networks ERP{% endblock %}
+{% block page_title %}{{ proposal.title }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <span class="badge bg-{% if proposal.status == 'draft' %}warning text-dark{% elif proposal.status == 'review' %}info{% elif proposal.status == 'final' %}success{% else %}primary{% endif %} me-2">
+            {{ proposal.get_status_display }}
+        </span>
+        <code>{{ proposal.proposal_reference }}</code>
+    </div>
+    <div>
+        <a href="{% url 'proposals:content' proposal.pk %}" class="btn btn-primary">
+            <i class="bi bi-pencil-square me-1"></i> Edit Content
+        </a>
+        <a href="{% url 'proposals:edit' proposal.pk %}" class="btn btn-outline-secondary">
+            <i class="bi bi-gear me-1"></i> Edit Metadata
+        </a>
+        <a href="{% url 'proposals:export_docx' proposal.pk %}" class="btn btn-success">
+            <i class="bi bi-file-earmark-word me-1"></i> Export DOCX
+        </a>
+        <a href="{% url 'proposals:delete' proposal.pk %}" class="btn btn-outline-danger">
+            <i class="bi bi-trash me-1"></i> Delete
+        </a>
+    </div>
+</div>
+
+<!-- Metadata Card -->
+<div class="card mb-4">
+    <div class="card-header"><i class="bi bi-info-circle me-2"></i>Proposal Details</div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-6">
+                <table class="table table-sm">
+                    <tr><th class="text-muted" style="width:40%">Client</th><td>{{ proposal.client_name }}</td></tr>
+                    <tr><th class="text-muted">Project</th><td>{{ proposal.project.project_name|default:"-" }}</td></tr>
+                    <tr><th class="text-muted">Region</th><td>{{ proposal.get_region_entity_display }}</td></tr>
+                    <tr><th class="text-muted">Document Type</th><td>{{ proposal.document_type }}</td></tr>
+                    <tr><th class="text-muted">Description</th><td>{{ proposal.project_description|default:"-" }}</td></tr>
+                </table>
+            </div>
+            <div class="col-md-6">
+                <table class="table table-sm">
+                    <tr><th class="text-muted" style="width:40%">Revision</th><td>{{ proposal.revision }}</td></tr>
+                    <tr><th class="text-muted">Revision Date</th><td>{{ proposal.revision_date|date:"d M Y" }}</td></tr>
+                    <tr><th class="text-muted">Prepared By</th><td>{{ proposal.prepared_by_initials }}</td></tr>
+                    <tr><th class="text-muted">Checked By</th><td>{{ proposal.checked_by_initials|default:"-" }}</td></tr>
+                    <tr><th class="text-muted">Approved By</th><td>{{ proposal.approved_by_initials|default:"-" }}</td></tr>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Sections -->
+{% for field_name, label in proposal.SECTION_FIELDS %}
+{% with content=proposal|getattr_filter:field_name %}
+{% if content %}
+<div class="card mb-3">
+    <div class="card-header"><i class="bi bi-text-left me-2"></i>{{ label }}</div>
+    <div class="card-body">
+        <div style="white-space: pre-wrap;">{{ content }}</div>
+    </div>
+</div>
+{% endif %}
+{% endwith %}
+{% endfor %}
+
+<!-- Engineering Documents -->
+{% if engineering_docs %}
+<div class="card mb-3">
+    <div class="card-header"><i class="bi bi-file-earmark-text me-2"></i>Engineering Documents</div>
+    <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th>Number</th>
+                    <th>Title</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for doc in engineering_docs %}
+                <tr>
+                    <td>{{ doc.doc_type }}</td>
+                    <td>{{ doc.doc_number }}</td>
+                    <td>{{ doc.doc_title }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<div class="text-muted small mt-3">
+    Created by {{ proposal.created_by.get_full_name|default:proposal.created_by.username }} on {{ proposal.created_at|date:"d M Y H:i" }}
+    | Last updated {{ proposal.updated_at|date:"d M Y H:i" }}
+</div>
+{% endblock %}

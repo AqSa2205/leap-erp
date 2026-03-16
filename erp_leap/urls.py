@@ -18,6 +18,7 @@ urlpatterns = [
     path('notifications/', include('notifications.urls')),
     path('hr/', include('hr.urls')),
     path('manpower/', include('manpower.urls')),
+    path('proposals/', include('proposals.urls')),
 ]
 
 if settings.DEBUG:

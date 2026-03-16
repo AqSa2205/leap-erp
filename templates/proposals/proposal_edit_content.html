@@ -1,0 +1,143 @@
+{% extends 'base.html' %}
+{% load proposal_tags %}
+
+{% block title %}Edit Content - {{ object.title }} - Leap Networks ERP{% endblock %}
+{% block page_title %}Edit Content: {{ object.title }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <a href="{% url 'proposals:detail' object.pk %}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-arrow-left me-1"></i> Back to Detail
+        </a>
+        <code class="ms-2">{{ object.proposal_reference }}</code>
+    </div>
+    <div>
+        <a href="{% url 'proposals:export_docx' object.pk %}" class="btn btn-success btn-sm">
+            <i class="bi bi-file-earmark-word me-1"></i> Export DOCX
+        </a>
+    </div>
+</div>
+
+<form method="post">
+    {% csrf_token %}
+    {{ eng_formset.management_form }}
+
+    <div class="card">
+        <div class="card-header p-0">
+            <ul class="nav nav-tabs card-header-tabs" role="tablist">
+                {% for field_name, label in section_fields %}
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link {% if forloop.first %}active{% endif %}" id="tab-{{ field_name }}"
+                            data-bs-toggle="tab" data-bs-target="#pane-{{ field_name }}"
+                            type="button" role="tab">
+                        {{ label }}
+                    </button>
+                </li>
+                {% endfor %}
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="tab-eng-docs"
+                            data-bs-toggle="tab" data-bs-target="#pane-eng-docs"
+                            type="button" role="tab">
+                        Engineering Docs
+                    </button>
+                </li>
+            </ul>
+        </div>
+
+        <div class="card-body">
+            <div class="tab-content">
+                {% for field_name, label in section_fields %}
+                <div class="tab-pane fade {% if forloop.first %}show active{% endif %}"
+                     id="pane-{{ field_name }}" role="tabpanel">
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <label class="form-label fw-bold mb-0">{{ label }}</label>
+                            <div class="d-flex gap-2">
+                                <select class="form-select form-select-sm" style="width:auto"
+                                        id="bp-select-{{ field_name }}" data-section="{{ field_name }}">
+                                    <option value="">Load Boilerplate...</option>
+                                    {% for bp in boilerplates %}
+                                    {% if bp.section == field_name %}
+                                    <option value="{{ bp.pk }}">{{ bp.name }}</option>
+                                    {% endif %}
+                                    {% endfor %}
+                                </select>
+                                <button type="button" class="btn btn-sm btn-outline-secondary btn-load-bp"
+                                        data-section="{{ field_name }}">
+                                    <i class="bi bi-arrow-down-circle"></i> Load
+                                </button>
+                            </div>
+                        </div>
+                        {{ form|get_field:field_name }}
+                    </div>
+                </div>
+                {% endfor %}
+
+                <!-- Engineering Documents Tab -->
+                <div class="tab-pane fade" id="pane-eng-docs" role="tabpanel">
+                    <h6 class="fw-bold mb-3">Engineering Documents</h6>
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Type</th>
+                                <th>Number</th>
+                                <th>Title</th>
+                                <th style="width:80px">Order</th>
+                                <th style="width:60px">Delete</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for ef in eng_formset %}
+                            <tr>
+                                <td>{{ ef.id }}{{ ef.doc_type }}</td>
+                                <td>{{ ef.doc_number }}</td>
+                                <td>{{ ef.doc_title }}</td>
+                                <td>{{ ef.order }}</td>
+                                <td class="text-center">
+                                    {% if ef.instance.pk %}
+                                    {{ ef.DELETE }}
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="card-footer d-flex justify-content-between">
+            <a href="{% url 'proposals:detail' object.pk %}" class="btn btn-outline-secondary">Cancel</a>
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-check-lg me-1"></i> Save All Content
+            </button>
+        </div>
+    </div>
+</form>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Boilerplate loading
+    document.querySelectorAll('.btn-load-bp').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var section = this.dataset.section;
+            var select = document.getElementById('bp-select-' + section);
+            var bpId = select.value;
+            if (!bpId) return;
+
+            fetch("{% url 'proposals:boilerplate_content' 0 %}".replace('0', bpId))
+                .then(r => r.json())
+                .then(data => {
+                    var textarea = document.getElementById('id_' + section);
+                    if (textarea) {
+                        if (textarea.value && !confirm('Replace existing content?')) return;
+                        textarea.value = data.content;
+                    }
+                })
+                .catch(err => console.error('Failed to load boilerplate:', err));
+        });
+    });
+});
+</script>
+{% endblock %}
