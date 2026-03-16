@@ -892,8 +892,13 @@ def costing_export_pdf(request, pk):
     current_date = datetime.now().strftime('%d-%b-%y')
 
     import os
-    logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static', 'images', 'leap_logo.jpg')
-    if os.path.exists(logo_path):
+    from django.contrib.staticfiles.finders import find as find_static
+    # Try Django staticfiles finder first (works in dev and after collectstatic)
+    logo_path = find_static('images/leap_logo.jpg')
+    if not logo_path:
+        # Fallback to direct path
+        logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static', 'images', 'leap_logo.jpg')
+    if logo_path and os.path.exists(logo_path):
         logo = Image(logo_path, width=120, height=45)
     else:
         logo = Paragraph(
