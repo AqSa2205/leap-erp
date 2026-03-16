@@ -36,4 +36,13 @@ urlpatterns = [
     path('exchange-rates/add/', views.ExchangeRateCreateView.as_view(), name='exchange_rate_create'),
     path('exchange-rates/<int:pk>/edit/', views.ExchangeRateUpdateView.as_view(), name='exchange_rate_edit'),
     path('exchange-rates/<int:pk>/delete/', views.ExchangeRateDeleteView.as_view(), name='exchange_rate_delete'),
+
+    # Terms templates
+    path('terms-templates/', views.TermsTemplateListView.as_view(), name='terms_templates'),
+    path('terms-templates/create/', views.TermsTemplateCreateView.as_view(), name='terms_template_create'),
+    path('terms-templates/<int:pk>/edit/', views.TermsTemplateUpdateView.as_view(), name='terms_template_edit'),
+    path('terms-templates/<int:pk>/delete/', views.TermsTemplateDeleteView.as_view(), name='terms_template_delete'),
+
+    # Toggle terms on costing sheet
+    path('<int:pk>/toggle-term/', views.ajax_toggle_term, name='toggle_term'),
 ]

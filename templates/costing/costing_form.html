@@ -93,6 +93,35 @@
                         </div>
                     </div>
 
+                    <hr>
+                    <h6 class="text-muted mb-3">PDF Header Info</h6>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Customer Name</label>
+                            {{ form.customer_name }}
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">End User</label>
+                            {{ form.end_user }}
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Contact Person</label>
+                            {{ form.contact_person }}
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Telephone</label>
+                            {{ form.telephone }}
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Fax</label>
+                            {{ form.fax }}
+                        </div>
+                    </div>
+
                     <div class="d-flex justify-content-between mt-4">
                         <a href="{% if form.instance.pk %}{% url 'costing:detail' form.instance.pk %}{% else %}{% url 'costing:list' %}{% endif %}" class="btn btn-outline-secondary">
                             Cancel

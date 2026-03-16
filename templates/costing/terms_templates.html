@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+
+{% block title %}Terms & Conditions Templates - Leap Networks ERP{% endblock %}
+{% block page_title %}Terms & Conditions Templates{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Templates Table -->
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-file-text me-2"></i> Template Library
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Category</th>
+                                <th>Content Preview</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for tmpl in templates %}
+                            <tr>
+                                <td><strong>{{ tmpl.name }}</strong></td>
+                                <td><span class="badge bg-secondary">{{ tmpl.get_category_display }}</span></td>
+                                <td class="text-muted" style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ tmpl.content|truncatewords:20 }}</td>
+                                <td>{{ tmpl.created_at|date:"d M Y" }}</td>
+                                <td>
+                                    <a href="{% url 'costing:terms_template_edit' tmpl.pk %}" class="btn btn-sm btn-outline-secondary">
+                                        <i class="bi bi-pencil"></i>
+                                    </a>
+                                    <a href="{% url 'costing:terms_template_delete' tmpl.pk %}" class="btn btn-sm btn-outline-danger">
+                                        <i class="bi bi-trash"></i>
+                                    </a>
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="5" class="text-center py-3 text-muted">No templates defined yet. Create one to get started.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add New Template -->
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-plus-lg me-2"></i> Add Template
+            </div>
+            <div class="card-body">
+                <form method="post" action="{% url 'costing:terms_template_create' %}">
+                    {% csrf_token %}
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Name</label>
+                        {{ form.name }}
+                        <small class="text-muted">e.g. "Standard Terms", "NET 30 Payment"</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Category</label>
+                        {{ form.category }}
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Content</label>
+                        {{ form.content }}
+                        <small class="text-muted">Enter each item on a new line. They will be numbered/lettered in the PDF.</small>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-plus-lg me-1"></i> Add Template
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="mt-3">
+    <a href="{% url 'costing:list' %}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i> Back to Costing
+    </a>
+</div>
+{% endblock %}

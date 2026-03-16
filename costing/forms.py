@@ -1,5 +1,5 @@
 from django import forms
-from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem
+from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, TermsTemplate
 from projects.models import Project
 
 
@@ -11,6 +11,7 @@ class CostingSheetForm(forms.ModelForm):
             'margin', 'discount_rate', 'shipping_rate', 'customs_rate',
             'finances_rate', 'installation_rate',
             'output_currency', 'status',
+            'customer_name', 'end_user', 'contact_person', 'telephone', 'fax',
         ]
         widgets = {
             'margin': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '1'}),
@@ -86,6 +87,23 @@ class ExchangeRateForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         for field in self.fields.values():
             field.widget.attrs['class'] = 'form-control'
+
+
+class TermsTemplateForm(forms.ModelForm):
+    class Meta:
+        model = TermsTemplate
+        fields = ['name', 'category', 'content']
+        widgets = {
+            'content': forms.Textarea(attrs={'rows': 5}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            if isinstance(field.widget, forms.Select):
+                field.widget.attrs['class'] = 'form-select'
+            else:
+                field.widget.attrs['class'] = 'form-control'
 
 
 class CostingFilterForm(forms.Form):

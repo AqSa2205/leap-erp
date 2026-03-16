@@ -10,7 +10,7 @@ from django.db.models import Q
 from django.template.loader import render_to_string
 from decimal import Decimal, InvalidOperation
 
-from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem
+from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, TermsTemplate
 from notifications.services import notify_users
 
 
@@ -25,7 +25,7 @@ def _conversion_rate(output_currency, rates_dict):
     return Decimal('1')
 from .forms import (
     CostingSheetForm, CostingSectionForm, CostingLineItemForm,
-    ExchangeRateForm, CostingFilterForm,
+    ExchangeRateForm, CostingFilterForm, TermsTemplateForm,
 )
 
 
@@ -189,6 +189,18 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
         context['lineitem_form'] = CostingLineItemForm()
         context['exchange_rates'] = exchange_rates
         context['conversion_rate'] = conversion_rate
+
+        # Terms templates for PDF selection
+        all_terms = TermsTemplate.objects.all()
+        selected_ids = set(sheet.selected_terms.values_list('pk', flat=True))
+        terms_by_category = {}
+        for cat_value, cat_label in TermsTemplate.CATEGORY_CHOICES:
+            terms_by_category[cat_label] = [
+                {'template': t, 'selected': t.pk in selected_ids}
+                for t in all_terms if t.category == cat_value
+            ]
+        context['terms_by_category'] = terms_by_category
+
         return context
 
 
@@ -405,6 +417,74 @@ class ExchangeRateDeleteView(LoginRequiredMixin, DeleteView):
     def form_valid(self, form):
         messages.success(self.request, 'Exchange rate deleted.')
         return super().form_valid(form)
+
+
+# ─── Terms Template CRUD ─────────────────────────────────────
+
+class TermsTemplateListView(LoginRequiredMixin, ListView):
+    model = TermsTemplate
+    template_name = 'costing/terms_templates.html'
+    context_object_name = 'templates'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['form'] = TermsTemplateForm()
+        return context
+
+
+class TermsTemplateCreateView(LoginRequiredMixin, CreateView):
+    model = TermsTemplate
+    form_class = TermsTemplateForm
+    template_name = 'costing/terms_templates.html'
+    success_url = reverse_lazy('costing:terms_templates')
+
+    def form_valid(self, form):
+        form.instance.created_by = self.request.user
+        messages.success(self.request, 'Terms template added.')
+        return super().form_valid(form)
+
+    def form_invalid(self, form):
+        messages.error(self.request, 'Error adding terms template.')
+        return redirect('costing:terms_templates')
+
+
+class TermsTemplateUpdateView(LoginRequiredMixin, UpdateView):
+    model = TermsTemplate
+    form_class = TermsTemplateForm
+    template_name = 'costing/terms_template_form.html'
+    success_url = reverse_lazy('costing:terms_templates')
+
+    def form_valid(self, form):
+        messages.success(self.request, 'Terms template updated.')
+        return super().form_valid(form)
+
+
+class TermsTemplateDeleteView(LoginRequiredMixin, DeleteView):
+    model = TermsTemplate
+    template_name = 'costing/costing_confirm_delete.html'
+    success_url = reverse_lazy('costing:terms_templates')
+
+    def form_valid(self, form):
+        messages.success(self.request, 'Terms template deleted.')
+        return super().form_valid(form)
+
+
+@login_required
+@require_POST
+def ajax_toggle_term(request, pk):
+    """Toggle a TermsTemplate on/off for a costing sheet."""
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+    term_id = request.POST.get('term_id')
+    if not term_id:
+        return JsonResponse({'error': 'term_id required'}, status=400)
+    term = get_object_or_404(TermsTemplate, pk=term_id)
+    if term in sheet.selected_terms.all():
+        sheet.selected_terms.remove(term)
+        selected = False
+    else:
+        sheet.selected_terms.add(term)
+        selected = True
+    return JsonResponse({'ok': True, 'selected': selected})
 
 
 # ─── AJAX Section Items (lazy-load) ──────────────────────────
@@ -731,18 +811,22 @@ def costing_export_pdf(request, pk):
     """Export a professional PDF summary matching the commercial offer format"""
     try:
         from reportlab.lib import colors
-        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.units import inch, mm
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+        from reportlab.lib.units import mm
+        from reportlab.platypus import (
+            SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer,
+            PageBreak, Image,
+        )
         from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
         from datetime import datetime
+        import string
     except ImportError:
         messages.error(request, 'reportlab is required for PDF export. Install with: pip install reportlab')
         return redirect('costing:detail', pk=pk)
 
     sheet = get_object_or_404(CostingSheet, pk=pk)
-    sections = sheet.sections.prefetch_related('line_items').all()
+    sections = list(sheet.sections.prefetch_related('line_items').all())
 
     # Inject caches into all line items to avoid N+1 queries
     rates_dict = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
@@ -755,6 +839,15 @@ def costing_export_pdf(request, pk):
     response = HttpResponse(content_type='application/pdf')
     filename = f"{sheet.title.replace(' ', '_')}_Commercial_Offer.pdf"
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+    # Page numbering support
+    page_numbers = []
+
+    def on_page(canvas, doc):
+        page_numbers.append(canvas.getPageNumber())
+
+    def on_page_later(canvas, doc):
+        page_numbers.append(canvas.getPageNumber())
 
     # Create PDF document
     doc = SimpleDocTemplate(
@@ -769,164 +862,404 @@ def costing_export_pdf(request, pk):
     elements = []
     styles = getSampleStyleSheet()
 
-    # Colors
-    GREEN_HEADER = colors.HexColor('#92D050')  # Light green for section headers
-    YELLOW_TITLE = colors.HexColor('#FFD966')  # Yellow for title bar
-    DARK_GREEN = colors.HexColor('#548235')    # Dark green for main header
-    BORDER_COLOR = colors.HexColor('#000000')
+    # ─── Colors ───
+    LIGHT_BLUE = colors.HexColor('#BDD7EE')
+    YELLOW_BG = colors.HexColor('#FFD966')
+    BORDER_COLOR = colors.black
 
-    # ─── HEADER SECTION ───
-    # Company logo text (since we don't have actual logo file)
-    logo_style = ParagraphStyle('Logo', fontSize=18, textColor=colors.HexColor('#C41E3A'), fontName='Helvetica-Bold')
+    # ─── Reusable paragraph styles ───
+    cell_style = ParagraphStyle('Cell', fontName='Helvetica', fontSize=9, leading=11)
+    cell_bold = ParagraphStyle('CellBold', fontName='Helvetica-Bold', fontSize=9, leading=11)
+    cell_right = ParagraphStyle('CellRight', fontName='Helvetica', fontSize=9, leading=11, alignment=TA_RIGHT)
+    cell_center = ParagraphStyle('CellCenter', fontName='Helvetica', fontSize=9, leading=11, alignment=TA_CENTER)
+    desc_style = ParagraphStyle('Desc', fontName='Helvetica', fontSize=9, leading=11, wordWrap='CJK')
+    title_style = ParagraphStyle('TitleBar', fontName='Helvetica-Bold', fontSize=12, alignment=TA_CENTER)
 
-    # Header info table
+    def fmt_num(val):
+        """Format a Decimal/number with thousand separators and 2 decimals."""
+        try:
+            return f'{float(val):,.2f}'
+        except (TypeError, ValueError):
+            return ''
+
+    # ─── HEADER SECTION (rows 1-3: logo, rows 4-10: info) ───
     project_name = sheet.project.project_name if sheet.project else sheet.title
     region_name = sheet.project.region.name if sheet.project and sheet.project.region else 'N/A'
-    region_code = sheet.project.region.code if sheet.project and sheet.project.region else ''
     ln_ref = sheet.project.proposal_reference if sheet.project else ''
-    cust_ref = sheet.customer_reference or (sheet.project.client_rfq_reference if sheet.project else '')
+    cust_ref = sheet.customer_reference or ''
+    created_by_name = sheet.created_by.get_full_name() if sheet.created_by else ''
+    created_by_email = sheet.created_by.email if sheet.created_by else ''
     current_date = datetime.now().strftime('%d-%b-%y')
 
+    import os
+    logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static', 'images', 'leap_logo.jpg')
+    if os.path.exists(logo_path):
+        logo = Image(logo_path, width=120, height=45)
+    else:
+        logo = Paragraph(
+            '<b><font color="#C41E3A" size="16">LEAP</font></b><br/>'
+            '<font size="8" color="#C41E3A">NETWORKS</font>',
+            styles['Normal'],
+        )
+
     header_data = [
-        [Paragraph('<b><font color="#C41E3A" size="16">LEAP</font></b><br/><font size="8" color="#C41E3A">NETWORKS</font>', styles['Normal']),
-         '', '', '', '', ''],
+        [logo, '', '', '', '', ''],
         ['', '', '', '', '', ''],
-        [Paragraph(f'<b>Project:</b>', styles['Normal']),
-         Paragraph(f'{project_name}', styles['Normal']),
-         '',
-         Paragraph(f'<b>Sales Office:</b>', styles['Normal']),
-         Paragraph(f'LN-{region_name}', styles['Normal']), ''],
-        [Paragraph(f'<b>Cust. Ref:</b>', styles['Normal']),
-         Paragraph(f'{cust_ref}', styles['Normal']),
-         '',
-         Paragraph(f'<b>Contact:</b>', styles['Normal']),
-         Paragraph(f'{sheet.created_by.get_full_name() if sheet.created_by else ""}', styles['Normal']), ''],
-        [Paragraph(f'<b>LN Ref:</b>', styles['Normal']),
-         Paragraph(f'{ln_ref}', styles['Normal']),
-         '',
-         Paragraph(f'<b>Email:</b>', styles['Normal']),
-         Paragraph(f'{sheet.created_by.email if sheet.created_by else ""}', styles['Normal']), ''],
-        [Paragraph(f'<b>Date:</b>', styles['Normal']),
-         Paragraph(f'{current_date}', styles['Normal']),
-         '',
-         Paragraph(f'<b>Page:</b>', styles['Normal']),
-         Paragraph(f'Page 1 of 1', styles['Normal']), ''],
+        [Paragraph('<b>Project:</b>', cell_style),
+         Paragraph(project_name, cell_style), '',
+         Paragraph('<b>Sales Office:</b>', cell_style),
+         Paragraph(f'LN-{region_name}', cell_style), ''],
+        [Paragraph('<b>Customer:</b>', cell_style),
+         Paragraph(sheet.customer_name, cell_style), '',
+         Paragraph('<b>Telephone:</b>', cell_style),
+         Paragraph(sheet.telephone, cell_style), ''],
+        [Paragraph('<b>End User:</b>', cell_style),
+         Paragraph(sheet.end_user, cell_style), '',
+         Paragraph('<b>Fax:</b>', cell_style),
+         Paragraph(sheet.fax, cell_style), ''],
+        [Paragraph('<b>Cust. Ref:</b>', cell_style),
+         Paragraph(cust_ref, cell_style), '',
+         Paragraph('<b>Contact:</b>', cell_style),
+         Paragraph(sheet.contact_person, cell_style), ''],
+        [Paragraph('<b>Contact Person:</b>', cell_style),
+         Paragraph(created_by_name, cell_style), '', '', '', ''],
+        [Paragraph('<b>LN Ref:</b>', cell_style),
+         Paragraph(ln_ref, cell_style), '',
+         Paragraph('<b>Email:</b>', cell_style),
+         Paragraph(created_by_email, cell_style), ''],
+        [Paragraph('<b>Date:</b>', cell_style),
+         Paragraph(current_date, cell_style), '', '', '', ''],
     ]
 
-    header_table = Table(header_data, colWidths=[60, 180, 20, 70, 150, 20])
+    header_table = Table(header_data, colWidths=[80, 180, 10, 80, 150, None])
     header_table.setStyle(TableStyle([
-        ('SPAN', (0, 0), (1, 1)),  # Logo spans
+        ('SPAN', (0, 0), (1, 1)),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('FONTSIZE', (0, 0), (-1, -1), 9),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
         ('TOPPADDING', (0, 0), (-1, -1), 2),
     ]))
     elements.append(header_table)
-    elements.append(Spacer(1, 5*mm))
+    elements.append(Spacer(1, 5 * mm))
 
     # ─── TITLE BAR ───
-    title_data = [[Paragraph(f'<b>COMMERCIAL OFFER SUMMARY</b>',
-                             ParagraphStyle('Title', fontSize=11, alignment=TA_CENTER, textColor=colors.black))]]
-    title_table = Table(title_data, colWidths=[500])
+    # col_widths for data table: [40, 210, 35, 35, 80, 80] = 480
+    table_total_width = 480
+    title_data = [[Paragraph('<b>COMMERCIAL OFFER SUMMARY</b>', title_style)]]
+    title_table = Table(title_data, colWidths=[table_total_width])
     title_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, -1), YELLOW_TITLE),
+        ('BACKGROUND', (0, 0), (-1, -1), LIGHT_BLUE),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('TOPPADDING', (0, 0), (-1, -1), 6),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ('BOX', (0, 0), (-1, -1), 1, BORDER_COLOR),
+        ('BOX', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
     ]))
     elements.append(title_table)
+    elements.append(Spacer(1, 2 * mm))
 
-    # ─── MAIN TABLE ───
-    # Headers
-    headers = ['Item No', 'Item Description', 'Qty', 'UOM', f'Total Price ({sheet.output_currency})']
+    # ─── MAIN DATA TABLE (6 columns) ───
+    currency = sheet.output_currency
+    col_widths = [40, 210, 35, 35, 80, 80]  # ≈480pt total
 
-    # Build table data
-    data = [headers]
+    # Column headers
+    hdr = [
+        Paragraph('<b>Item No</b>', cell_center),
+        Paragraph('<b>Item Description</b>', cell_bold),
+        Paragraph('<b>Qty</b>', cell_center),
+        Paragraph('<b>UOM</b>', cell_center),
+        Paragraph('<b>UNIT PRICE</b>', cell_center),
+        Paragraph(f'<b>Total Price ({currency})</b>', cell_center),
+    ]
+    data = [hdr]
 
-    # Main contract price row
-    data.append(['A', 'MAIN - TOTAL CONTRACT PRICE', '', '', ''])
+    # Row A: MAIN - TOTAL CONTRACT PRICE
+    data.append([
+        Paragraph('A', cell_bold),
+        Paragraph('MAIN - TOTAL CONTRACT PRICE', cell_bold),
+        '', '', '',
+        Paragraph(fmt_num(sheet.grand_total), cell_right),
+    ])
 
-    # Scope of Supply section
-    data.append(['A.1', 'SCOPE OF SUPPLY', '', '', f'{sheet.grand_total:,.2f}'])
+    # Row A.1: SCOPE OF SUPPLY
+    data.append([
+        Paragraph('A.1', cell_bold),
+        Paragraph('SCOPE OF SUPPLY', cell_bold),
+        '', '', '',
+        Paragraph(fmt_num(sheet.grand_total), cell_right),
+    ])
 
-    # Add sections and their line items
     for section in sections:
-        # Section header row
         data.append([
-            section.section_number,
-            section.title,
-            '1',
-            'LOT',
-            ''
+            Paragraph(section.section_number, cell_bold),
+            Paragraph(section.title, cell_bold),
+            Paragraph('1', cell_center),
+            Paragraph('LOT', cell_center),
+            '',
+            Paragraph(fmt_num(section.subtotal), cell_right),
         ])
-        # Add line items under this section
-        for item in section.line_items.all():
-            data.append([
-                item.item_number,
-                item.description[:60] + '...' if len(item.description) > 60 else item.description,
-                '',
-                '',
-                f'{item.final_total_price:,.2f}'
-            ])
 
-    # Create table
-    col_widths = [50, 280, 40, 40, 90]
-    main_table = Table(data, colWidths=col_widths)
+    main_table = Table(data, colWidths=col_widths, repeatRows=1)
 
-    # Build style commands
-    style_commands = [
-        # Header row - Yellow background
-        ('BACKGROUND', (0, 0), (-1, 0), YELLOW_TITLE),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+    style_cmds = [
+        # Header row — yellow
+        ('BACKGROUND', (0, 0), (-1, 0), YELLOW_BG),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, 0), 9),
         ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-
-        # Row A - Green background (MAIN - TOTAL CONTRACT PRICE)
-        ('BACKGROUND', (0, 1), (-1, 1), GREEN_HEADER),
-        ('FONTNAME', (0, 1), (-1, 1), 'Helvetica-Bold'),
-
-        # Row A.1 - Green background (SCOPE OF SUPPLY)
-        ('BACKGROUND', (0, 2), (-1, 2), GREEN_HEADER),
-        ('FONTNAME', (0, 2), (-1, 2), 'Helvetica-Bold'),
-
-        # All data rows
-        ('FONTSIZE', (0, 1), (-1, -1), 8),
-        ('ALIGN', (0, 0), (0, -1), 'CENTER'),   # Item No centered
-        ('ALIGN', (2, 0), (2, -1), 'CENTER'),   # Qty centered
-        ('ALIGN', (3, 0), (3, -1), 'CENTER'),   # UOM centered
-        ('ALIGN', (4, 0), (4, -1), 'RIGHT'),    # Price right-aligned
-
-        # Grid and padding
+        # All rows — white bg, black grid
+        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
         ('GRID', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
         ('LEFTPADDING', (0, 0), (-1, -1), 4),
         ('RIGHTPADDING', (0, 0), (-1, -1), 4),
     ]
 
-    # Add green background for section header rows (rows that start with section numbers like 12, 12.1, etc.)
-    row_idx = 3  # Start after A, A.1 rows
-    for section in sections:
-        style_commands.append(('BACKGROUND', (0, row_idx), (-1, row_idx), GREEN_HEADER))
-        style_commands.append(('FONTNAME', (0, row_idx), (-1, row_idx), 'Helvetica-Bold'))
-        row_idx += 1  # Section row
-        row_idx += section.line_items.count()  # Line item rows
-
-    main_table.setStyle(TableStyle(style_commands))
+    main_table.setStyle(TableStyle(style_cmds))
     elements.append(main_table)
+    elements.append(Spacer(1, 8 * mm))
 
-    elements.append(Spacer(1, 10*mm))
+    # ─── PAGE 2+: DETAILED BOM WITH ALL LINE ITEMS ───
+    elements.append(PageBreak())
+
+    # Compact header for BOM pages
+    bom_header_data = [
+        [Paragraph('<b>Project:</b>', cell_style),
+         Paragraph(project_name, cell_style), '',
+         Paragraph('<b>LN Ref:</b>', cell_style),
+         Paragraph(ln_ref, cell_style)],
+        [Paragraph('<b>Cust Ref:</b>', cell_style),
+         Paragraph(cust_ref, cell_style), '',
+         Paragraph('<b>Date:</b>', cell_style),
+         Paragraph(current_date, cell_style)],
+        [Paragraph('<b>Customer:</b>', cell_style),
+         Paragraph(sheet.customer_name, cell_style), '',
+         Paragraph('<b>End User:</b>', cell_style),
+         Paragraph(sheet.end_user, cell_style)],
+    ]
+    bom_header_table = Table(bom_header_data, colWidths=[65, 200, 10, 65, 140])
+    bom_header_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+        ('TOPPADDING', (0, 0), (-1, -1), 1),
+    ]))
+    elements.append(bom_header_table)
+    elements.append(Spacer(1, 4 * mm))
+
+    # BOM title bar
+    bom_col_widths = [40, 170, 55, 55, 30, 30, 50, 50]  # ≈480pt
+    bom_title_data = [[Paragraph('<b>BILL OF MATERIAL - PRICED</b>', title_style)]]
+    bom_title_table = Table(bom_title_data, colWidths=[sum(bom_col_widths)])
+    bom_title_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), LIGHT_BLUE),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('BOX', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
+    ]))
+    elements.append(bom_title_table)
+
+    # Subtitle: MAIN - SCOPE OF SUPPLY
+    bom_subtitle_data = [[Paragraph(
+        f'<b>MAIN - SCOPE OF SUPPLY - {project_name}</b>',
+        ParagraphStyle('SubTitle', fontName='Helvetica-Bold', fontSize=9, alignment=TA_CENTER),
+    )]]
+    bom_subtitle_table = Table(bom_subtitle_data, colWidths=[sum(bom_col_widths)])
+    bom_subtitle_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('BOX', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
+    ]))
+    elements.append(bom_subtitle_table)
+
+    # BOM column headers
+    cell_right_bold = ParagraphStyle('CellRightBold', fontName='Helvetica-Bold', fontSize=8, leading=10, alignment=TA_RIGHT)
+    cell_sm = ParagraphStyle('CellSm', fontName='Helvetica', fontSize=8, leading=10)
+    cell_sm_bold = ParagraphStyle('CellSmBold', fontName='Helvetica-Bold', fontSize=8, leading=10)
+    cell_sm_center = ParagraphStyle('CellSmCenter', fontName='Helvetica', fontSize=8, leading=10, alignment=TA_CENTER)
+    cell_sm_right = ParagraphStyle('CellSmRight', fontName='Helvetica', fontSize=8, leading=10, alignment=TA_RIGHT)
+    desc_sm_style = ParagraphStyle('DescSm', fontName='Helvetica', fontSize=8, leading=10, wordWrap='CJK')
+
+    bom_hdr = [
+        Paragraph('<b>Item No</b>', cell_sm_center),
+        Paragraph('<b>Description</b>', cell_sm_bold),
+        Paragraph('<b>Make</b>', cell_sm_center),
+        Paragraph('<b>Model</b>', cell_sm_center),
+        Paragraph('<b>Qty</b>', cell_sm_center),
+        Paragraph('<b>Unit</b>', cell_sm_center),
+        Paragraph(f'<b>Unit Price ({currency})</b>', cell_sm_center),
+        Paragraph(f'<b>Total Price ({currency})</b>', cell_sm_center),
+    ]
+    bom_data = [bom_hdr]
+
+    # Build all rows: section headers + line items + subtotals
+    SECTION_BG = colors.HexColor('#D9E2F3')
+    SUBTOTAL_BG = colors.HexColor('#E2EFDA')
+    section_rows = []  # track (row_index, type) for styling
+    row_idx = 1  # 0 is header
+
+    for section in sections:
+        # Section header row
+        bom_data.append([
+            Paragraph(f'<b>{section.section_number}</b>', cell_sm_bold),
+            Paragraph(f'<b>{section.title}</b>', cell_sm_bold),
+            '', '', '', '', '', '',
+        ])
+        section_rows.append((row_idx, 'section'))
+        row_idx += 1
+
+        # Line items
+        for item in section.line_items.all():
+            bom_data.append([
+                Paragraph(item.item_number, cell_sm_center),
+                Paragraph(item.description, desc_sm_style),
+                Paragraph(item.make or '', cell_sm),
+                Paragraph(item.model_number or '', cell_sm),
+                Paragraph(str(int(item.quantity) if item.quantity == int(item.quantity) else item.quantity), cell_sm_center),
+                Paragraph(item.unit, cell_sm_center),
+                Paragraph(fmt_num(item.final_unit_price), cell_sm_right),
+                Paragraph(fmt_num(item.final_total_price), cell_sm_right),
+            ])
+            row_idx += 1
+
+        # Subtotal row
+        bom_data.append([
+            '', '', '', '', '', '',
+            Paragraph('<b>Sub-Total</b>', cell_right_bold),
+            Paragraph(f'<b>{fmt_num(section.subtotal)}</b>', cell_right_bold),
+        ])
+        section_rows.append((row_idx, 'subtotal'))
+        row_idx += 1
+
+    # Build the BOM table
+    bom_table = Table(bom_data, colWidths=bom_col_widths, repeatRows=1)
+
+    bom_style_cmds = [
+        # Header row — yellow
+        ('BACKGROUND', (0, 0), (-1, 0), YELLOW_BG),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 8),
+        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+        # All rows
+        ('GRID', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('LEFTPADDING', (0, 0), (-1, -1), 3),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+    ]
+
+    # Style section header and subtotal rows
+    for ridx, rtype in section_rows:
+        if rtype == 'section':
+            bom_style_cmds.append(('BACKGROUND', (0, ridx), (-1, ridx), SECTION_BG))
+            bom_style_cmds.append(('SPAN', (1, ridx), (-1, ridx)))
+        elif rtype == 'subtotal':
+            bom_style_cmds.append(('BACKGROUND', (0, ridx), (-1, ridx), SUBTOTAL_BG))
+            bom_style_cmds.append(('SPAN', (0, ridx), (5, ridx)))
+
+    bom_table.setStyle(TableStyle(bom_style_cmds))
+    elements.append(bom_table)
+    elements.append(Spacer(1, 8 * mm))
+
+    # ─── TERMS & CONDITIONS (from selected templates or legacy text fields) ───
+    section_hdr_style = ParagraphStyle('SectionHdr', fontName='Helvetica-Bold', fontSize=10, leading=14, spaceAfter=4)
+    sub_hdr_style = ParagraphStyle('SubHdr', fontName='Helvetica-Bold', fontSize=9, leading=12, spaceAfter=2)
+    body_style = ParagraphStyle('Body', fontName='Helvetica', fontSize=9, leading=12, spaceAfter=2)
+
+    # Group selected templates by category
+    selected = sheet.selected_terms.all()
+    terms_grouped = {}
+    for cat_value, cat_label in TermsTemplate.CATEGORY_CHOICES:
+        items = [t for t in selected if t.category == cat_value]
+        if items:
+            terms_grouped[cat_value] = items
+
+    # Terms & Conditions
+    tc_templates = terms_grouped.get('terms_and_conditions', [])
+    tc_legacy = sheet.terms_and_conditions.strip()
+    if tc_templates or tc_legacy:
+        elements.append(Paragraph('Terms &amp; Conditions:', section_hdr_style))
+        counter = 1
+        for tmpl in tc_templates:
+            elements.append(Paragraph(f'<b>{tmpl.name}</b>', sub_hdr_style))
+            lines = [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]
+            for line in lines:
+                elements.append(Paragraph(f'{counter}. {line}', body_style))
+                counter += 1
+        if tc_legacy and not tc_templates:
+            lines = [l.strip() for l in tc_legacy.splitlines() if l.strip()]
+            for line in lines:
+                elements.append(Paragraph(f'{counter}. {line}', body_style))
+                counter += 1
+        elements.append(Spacer(1, 4 * mm))
+
+    # Exclusions
+    excl_templates = terms_grouped.get('exclusions', [])
+    excl_legacy = sheet.exclusions.strip()
+    if excl_templates or excl_legacy:
+        last_num = sections[-1].section_number if sections else '1'
+        try:
+            excl_num = str(int(last_num) + 1)
+        except ValueError:
+            excl_num = 'B'
+        elements.append(Paragraph(f'{excl_num}. Exclusion', section_hdr_style))
+        letters = list(string.ascii_lowercase)
+        idx = 0
+        for tmpl in excl_templates:
+            lines = [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]
+            for line in lines:
+                letter = letters[idx] if idx < len(letters) else str(idx + 1)
+                elements.append(Paragraph(f'{letter}. {line}', body_style))
+                idx += 1
+        if excl_legacy and not excl_templates:
+            lines = [l.strip() for l in excl_legacy.splitlines() if l.strip()]
+            for line in lines:
+                letter = letters[idx] if idx < len(letters) else str(idx + 1)
+                elements.append(Paragraph(f'{letter}. {line}', body_style))
+                idx += 1
+        elements.append(Spacer(1, 4 * mm))
+
+    # Payment Terms
+    pt_templates = terms_grouped.get('payment_terms', [])
+    pt_legacy = sheet.payment_terms.strip()
+    if pt_templates or pt_legacy:
+        elements.append(Paragraph('Payment Terms:', section_hdr_style))
+        for tmpl in pt_templates:
+            lines = [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]
+            for line in lines:
+                elements.append(Paragraph(line, body_style))
+        if pt_legacy and not pt_templates:
+            lines = [l.strip() for l in pt_legacy.splitlines() if l.strip()]
+            for line in lines:
+                elements.append(Paragraph(line, body_style))
+        elements.append(Spacer(1, 4 * mm))
+
+    # Conclusion
+    conc_templates = terms_grouped.get('conclusion', [])
+    conc_legacy = sheet.conclusion.strip()
+    if conc_templates or conc_legacy:
+        elements.append(Paragraph('Conclusion', section_hdr_style))
+        for tmpl in conc_templates:
+            lines = [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]
+            for line in lines:
+                elements.append(Paragraph(line, body_style))
+        if conc_legacy and not conc_templates:
+            lines = [l.strip() for l in conc_legacy.splitlines() if l.strip()]
+            for line in lines:
+                elements.append(Paragraph(line, body_style))
+        elements.append(Spacer(1, 4 * mm))
 
     # ─── FOOTER ───
     footer_style = ParagraphStyle('Footer', fontSize=8, alignment=TA_LEFT)
-    elements.append(Paragraph('Confidential. © Leap Networks. All rights reserved.', footer_style))
+    elements.append(Spacer(1, 6 * mm))
+    elements.append(Paragraph('Confidential. &copy; Leap Networks. All rights reserved.', footer_style))
 
     # Build PDF
-    doc.build(elements)
+    doc.build(elements, onFirstPage=on_page, onLaterPages=on_page_later)
     return response
 
 

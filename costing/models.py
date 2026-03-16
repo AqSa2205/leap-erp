@@ -3,6 +3,31 @@ from django.conf import settings
 from decimal import Decimal
 
 
+class TermsTemplate(models.Model):
+    CATEGORY_CHOICES = [
+        ('terms_and_conditions', 'Terms & Conditions'),
+        ('exclusions', 'Exclusions'),
+        ('payment_terms', 'Payment Terms'),
+        ('conclusion', 'Conclusion'),
+    ]
+    name = models.CharField(max_length=255)
+    category = models.CharField(max_length=30, choices=CATEGORY_CHOICES)
+    content = models.TextField()
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='terms_templates',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['category', 'name']
+
+    def __str__(self):
+        return f"{self.get_category_display()} - {self.name}"
+
+
 class ExchangeRate(models.Model):
     currency_code = models.CharField(max_length=10, unique=True)
     currency_name = models.CharField(max_length=50)
@@ -39,6 +64,18 @@ class CostingSheet(models.Model):
     finances_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
     installation_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
     output_currency = models.CharField(max_length=10, default='SAR')
+    # PDF header fields
+    customer_name = models.CharField(max_length=255, blank=True)
+    end_user = models.CharField(max_length=255, blank=True)
+    contact_person = models.CharField(max_length=255, blank=True)
+    telephone = models.CharField(max_length=100, blank=True)
+    fax = models.CharField(max_length=100, blank=True)
+    # PDF content sections
+    terms_and_conditions = models.TextField(blank=True)
+    exclusions = models.TextField(blank=True)
+    payment_terms = models.TextField(blank=True)
+    conclusion = models.TextField(blank=True)
+    selected_terms = models.ManyToManyField('TermsTemplate', blank=True, related_name='costing_sheets')
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='draft')
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

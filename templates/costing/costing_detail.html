@@ -295,6 +295,41 @@
     </div>
 </div>
 
+<!-- PDF Terms & Conditions Selection -->
+<div class="card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-file-text me-2"></i> PDF Terms & Conditions</span>
+        <a href="{% url 'costing:terms_templates' %}" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-gear me-1"></i> Manage Templates
+        </a>
+    </div>
+    <div class="card-body">
+        {% for category_label, items in terms_by_category.items %}
+        {% if items %}
+        <h6 class="text-muted mb-2">{{ category_label }}</h6>
+        <div class="row mb-3">
+            {% for item in items %}
+            <div class="col-md-6 col-lg-4 mb-2">
+                <div class="form-check">
+                    <input class="form-check-input term-checkbox" type="checkbox"
+                           id="term-{{ item.template.pk }}"
+                           data-term-id="{{ item.template.pk }}"
+                           {% if item.selected %}checked{% endif %}>
+                    <label class="form-check-label" for="term-{{ item.template.pk }}">
+                        <strong>{{ item.template.name }}</strong>
+                        <br><small class="text-muted">{{ item.template.content|truncatewords:15 }}</small>
+                    </label>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% empty %}
+        <p class="text-muted mb-0">No templates defined yet. <a href="{% url 'costing:terms_templates' %}">Create some templates</a> to select from.</p>
+        {% endfor %}
+    </div>
+</div>
+
 <div class="mt-3">
     <a href="{% url 'costing:list' %}" class="btn btn-outline-secondary">
         <i class="bi bi-arrow-left me-1"></i> Back to List
@@ -500,6 +535,34 @@
             var url = '/costing/exchange-rates/' + this.dataset.rateId + '/update/';
             saveField(url, 'value=' + this.value, this, function() {
                 location.reload();
+            });
+        });
+    });
+
+    // ─── Terms template toggle ──────────────────────────────────
+    var toggleTermUrl = '{% url "costing:toggle_term" sheet.pk %}';
+    document.querySelectorAll('.term-checkbox').forEach(function(cb) {
+        cb.addEventListener('change', function() {
+            var termId = this.dataset.termId;
+            var checkbox = this;
+            fetch(toggleTermUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRFToken': csrfToken,
+                },
+                body: 'term_id=' + termId,
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data.ok) {
+                    checkbox.checked = !checkbox.checked;
+                    alert('Error: ' + (data.error || 'Unknown'));
+                }
+            })
+            .catch(function(err) {
+                checkbox.checked = !checkbox.checked;
+                console.error('Toggle failed:', err);
             });
         });
     });
