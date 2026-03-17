@@ -24,7 +24,7 @@
                     <a href="{% url 'reports:sales_call_update' report.pk %}" class="btn btn-primary me-2">
                         <i class="bi bi-pencil"></i> Edit
                     </a>
-                    {% if request.user.is_admin_user or request.user.is_manager_user or report.sales_rep == request.user %}
+                    {% if request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_manager_user or report.sales_rep == request.user %}
                     <a href="{% url 'reports:sales_call_delete' report.pk %}" class="btn btn-danger">
                         <i class="bi bi-trash"></i> Delete
                     </a>
@@ -165,7 +165,7 @@
                                         <div>
                                             <strong class="text-primary">{{ response.responder.get_full_name|default:response.responder.username }}</strong>
                                             <span class="badge bg-secondary ms-2">
-                                                {% if response.responder.is_admin_user %}Admin{% elif response.responder.is_manager_user %}Manager{% endif %}
+                                                {% if response.responder.is_super_admin_user %}Super Admin{% elif response.responder.is_admin_user %}Admin{% elif response.responder.is_manager_user %}Manager{% endif %}
                                             </span>
                                         </div>
                                         <small class="text-muted">{{ response.created_at|date:"d M Y, H:i" }}</small>

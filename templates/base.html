@@ -833,14 +833,16 @@
             </li>
         </ul>
 
-        {% if user.is_admin_user %}
+        {% if user.is_super_admin_user or user.is_admin_user %}
         <div class="nav-section">Administration</div>
         <ul class="nav flex-column">
+            {% if user.is_super_admin_user %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'user_list' %}active{% endif %}" href="{% url 'accounts:user_list' %}" data-title="Users">
                     <i class="bi bi-people"></i> <span>Users</span>
                 </a>
             </li>
+            {% endif %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'hr' and 'asset' not in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:employee_list' %}" data-title="HR / Employees">
                     <i class="bi bi-people-fill"></i> <span>HR / Employees</span>
@@ -856,11 +858,13 @@
                     <i class="bi bi-person-lines-fill"></i> <span>Manpower Costing</span>
                 </a>
             </li>
+            {% if user.is_super_admin_user %}
             <li class="nav-item">
                 <a class="nav-link" href="/admin/" data-title="Admin Panel">
                     <i class="bi bi-gear"></i> <span>Admin Panel</span>
                 </a>
             </li>
+            {% endif %}
         </ul>
         {% endif %}
 

@@ -30,9 +30,9 @@ class ProposalMetadataForm(forms.ModelForm):
         self.fields['project'].queryset = Project.objects.select_related('region').all()
 
         if self.user:
-            if self.user.is_admin_user:
+            if self.user.is_super_admin_user:
                 pass
-            elif self.user.is_manager_user:
+            elif self.user.is_admin_user or self.user.is_manager_user:
                 self.fields['project'].queryset = Project.objects.filter(
                     region=self.user.region
                 )

@@ -33,9 +33,9 @@ class CostingPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
         queryset = CostingSheet.objects.select_related('project', 'created_by').all()
         user = self.request.user
-        if user.is_admin_user:
+        if user.is_super_admin_user:
             return queryset
-        elif user.is_manager_user:
+        elif user.is_admin_user or user.is_manager_user:
             return queryset.filter(
                 Q(created_by=user) |
                 Q(project__region=user.region)
@@ -212,7 +212,9 @@ class CostingUpdateView(CostingPermissionMixin, UpdateView):
     def test_func(self):
         sheet = self.get_object()
         user = self.request.user
-        if user.is_admin_user:
+        if user.is_super_admin_user:
+            return True
+        if user.is_admin_user and sheet.project and sheet.project.region == user.region:
             return True
         return sheet.created_by == user
 
@@ -229,7 +231,7 @@ class CostingUpdateView(CostingPermissionMixin, UpdateView):
         # Notify on draft → final
         if old_status == 'draft' and self.object.status == 'final':
             from accounts.models import User, Role
-            recipients = set(User.objects.filter(role__name=Role.ADMIN, is_active=True))
+            recipients = set(User.objects.filter(role__name__in=[Role.SUPER_ADMIN, Role.ADMIN], is_active=True))
             if self.object.project and self.object.project.owner:
                 recipients.add(self.object.project.owner)
             notify_users(
@@ -255,9 +257,11 @@ class CostingDeleteView(CostingPermissionMixin, DeleteView):
 
     def test_func(self):
         user = self.request.user
-        if user.is_admin_user:
+        if user.is_super_admin_user:
             return True
         sheet = self.get_object()
+        if user.is_admin_user and sheet.project and sheet.project.region == user.region:
+            return True
         return sheet.created_by == user
 
     def form_valid(self, form):

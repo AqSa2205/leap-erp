@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def _get_admins():
-    return User.objects.filter(role__name=Role.ADMIN, is_active=True)
+    return User.objects.filter(role__name__in=[Role.SUPER_ADMIN, Role.ADMIN], is_active=True)
 
 
 def _get_region_managers(region):

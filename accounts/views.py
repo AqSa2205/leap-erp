@@ -43,9 +43,9 @@ def profile_view(request):
 
 
 class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
-    """Mixin to require admin role"""
+    """Mixin to require super admin role for user management"""
     def test_func(self):
-        return self.request.user.is_admin_user
+        return self.request.user.is_super_admin_user
 
 
 class UserListView(AdminRequiredMixin, ListView):

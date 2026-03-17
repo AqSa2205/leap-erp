@@ -14,12 +14,12 @@ class CostingSheetForm(forms.ModelForm):
             'customer_name', 'end_user', 'contact_person', 'telephone', 'fax',
         ]
         widgets = {
-            'margin': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '1'}),
-            'discount_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '1'}),
-            'shipping_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '1'}),
-            'customs_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '1'}),
-            'finances_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '1'}),
-            'installation_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '1'}),
+            'margin': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '100', 'placeholder': 'e.g. 40 for 40%'}),
+            'discount_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '100', 'placeholder': 'e.g. 5 for 5%'}),
+            'shipping_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '100', 'placeholder': 'e.g. 3 for 3%'}),
+            'customs_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '100', 'placeholder': 'e.g. 5 for 5%'}),
+            'finances_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '100', 'placeholder': 'e.g. 2 for 2%'}),
+            'installation_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '100', 'placeholder': 'e.g. 10 for 10%'}),
         }
 
     def __init__(self, *args, **kwargs):
@@ -35,9 +35,9 @@ class CostingSheetForm(forms.ModelForm):
         self.fields['project'].queryset = Project.objects.select_related('region').all()
 
         if self.user:
-            if self.user.is_admin_user:
+            if self.user.is_super_admin_user:
                 pass
-            elif self.user.is_manager_user:
+            elif self.user.is_admin_user or self.user.is_manager_user:
                 self.fields['project'].queryset = Project.objects.filter(
                     region=self.user.region
                 )

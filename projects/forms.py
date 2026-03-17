@@ -36,9 +36,9 @@ class ProjectForm(forms.ModelForm):
         # Filter owner choices based on user role
         if self.user:
             from accounts.models import User
-            if self.user.is_admin_user:
+            if self.user.is_super_admin_user:
                 self.fields['owner'].queryset = User.objects.filter(is_active=True)
-            elif self.user.is_manager_user:
+            elif self.user.is_admin_user or self.user.is_manager_user:
                 self.fields['owner'].queryset = User.objects.filter(
                     is_active=True,
                     region=self.user.region
@@ -104,10 +104,10 @@ class ProjectFilterForm(forms.Form):
         super().__init__(*args, **kwargs)
         # Populate owner choices based on user role
         from accounts.models import User
-        if user and user.is_admin_user:
-            # Admin sees all users
+        if user and user.is_super_admin_user:
+            # Super admin sees all users
             users = User.objects.filter(is_active=True).order_by('first_name', 'last_name')
-        elif user and user.is_manager_user:
+        elif user and (user.is_admin_user or user.is_manager_user):
             # Manager sees users in their region
             users = User.objects.filter(is_active=True, region=user.region).order_by('first_name', 'last_name')
         else:

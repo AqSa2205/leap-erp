@@ -102,7 +102,7 @@
                 <label class="form-label small text-muted fw-semibold">Category</label>
                 {{ filter_form.category }}
             </div>
-            {% if request.user.is_admin_user or request.user.is_manager_user %}
+            {% if request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_manager_user %}
             <div class="col-lg-2 col-md-3 col-6">
                 <label class="form-label small text-muted fw-semibold">Owner</label>
                 {{ filter_form.owner }}
@@ -132,7 +132,7 @@
                 <i class="bi bi-trash me-1"></i>Delete All
             </button>
             {% endif %}
-            {% if user.is_admin_user or user.is_manager_user %}
+            {% if user.is_super_admin_user or user.is_admin_user or user.is_manager_user %}
             <button type="button" class="btn btn-success btn-sm" data-bs-toggle="modal" data-bs-target="#importModal">
                 <i class="bi bi-file-earmark-arrow-up me-1"></i>Import
             </button>
@@ -298,7 +298,7 @@
 </div>
 {% endif %}
 
-{% if user.is_admin_user or user.is_manager_user %}
+{% if user.is_super_admin_user or user.is_admin_user or user.is_manager_user %}
 <!-- Import Excel Modal -->
 <div class="modal fade" id="importModal" tabindex="-1" aria-labelledby="importModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">

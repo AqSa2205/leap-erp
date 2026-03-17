@@ -19,9 +19,9 @@ class ProposalPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
         queryset = TechnicalProposal.objects.select_related('project', 'created_by').all()
         user = self.request.user
-        if user.is_admin_user:
+        if user.is_super_admin_user:
             return queryset
-        elif user.is_manager_user:
+        elif user.is_admin_user or user.is_manager_user:
             return queryset.filter(
                 Q(created_by=user) |
                 Q(project__region=user.region)
@@ -104,7 +104,7 @@ class ProposalUpdateView(ProposalPermissionMixin, UpdateView):
     def test_func(self):
         obj = self.get_object()
         user = self.request.user
-        if user.is_admin_user:
+        if user.is_super_admin_user or user.is_admin_user:
             return True
         return obj.created_by == user
 
@@ -128,7 +128,7 @@ class ProposalDeleteView(ProposalPermissionMixin, DeleteView):
 
     def test_func(self):
         user = self.request.user
-        if user.is_admin_user:
+        if user.is_super_admin_user or user.is_admin_user:
             return True
         obj = self.get_object()
         return obj.created_by == user
@@ -148,7 +148,7 @@ class ProposalEditContentView(ProposalPermissionMixin, UpdateView):
     def test_func(self):
         obj = self.get_object()
         user = self.request.user
-        if user.is_admin_user:
+        if user.is_super_admin_user or user.is_admin_user:
             return True
         return obj.created_by == user
 
@@ -190,7 +190,7 @@ def ajax_save_section(request, pk):
     proposal = get_object_or_404(TechnicalProposal, pk=pk)
     # Permission check
     user = request.user
-    if not user.is_admin_user and proposal.created_by != user:
+    if not (user.is_super_admin_user or user.is_admin_user) and proposal.created_by != user:
         return JsonResponse({'error': 'Permission denied'}, status=403)
 
     field = request.POST.get('field')

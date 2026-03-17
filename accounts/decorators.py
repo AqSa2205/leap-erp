@@ -26,14 +26,14 @@ def role_required(allowed_roles):
 
 
 def admin_required(view_func):
-    """Decorator to require admin role"""
+    """Decorator to require admin or super admin role"""
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):
         if not request.user.is_authenticated:
             messages.error(request, 'Please login to access this page.')
             return redirect('accounts:login')
 
-        if request.user.is_admin_user:
+        if request.user.is_super_admin_user or request.user.is_admin_user:
             return view_func(request, *args, **kwargs)
 
         messages.error(request, 'Admin access required.')
@@ -42,14 +42,14 @@ def admin_required(view_func):
 
 
 def manager_or_admin_required(view_func):
-    """Decorator to require manager or admin role"""
+    """Decorator to require manager, admin, or super admin role"""
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):
         if not request.user.is_authenticated:
             messages.error(request, 'Please login to access this page.')
             return redirect('accounts:login')
 
-        if request.user.is_admin_user or request.user.is_manager_user:
+        if request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_manager_user:
             return view_func(request, *args, **kwargs)
 
         messages.error(request, 'Manager or Admin access required.')

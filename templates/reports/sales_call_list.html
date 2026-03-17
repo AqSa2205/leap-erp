@@ -152,7 +152,7 @@
                             <th>System</th>
                             <th>Action</th>
                             <th>Goal</th>
-                            {% if request.user.is_admin_user or request.user.is_manager_user %}
+                            {% if request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_manager_user %}
                             <th>Sales Rep</th>
                             <th>Region</th>
                             {% endif %}
@@ -184,7 +184,7 @@
                             </td>
                             <td>{{ report.get_action_type_display }}</td>
                             <td>{{ report.get_goal_display }}</td>
-                            {% if request.user.is_admin_user or request.user.is_manager_user %}
+                            {% if request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_manager_user %}
                             <td>
                                 <strong>{{ report.sales_rep.get_full_name|default:report.sales_rep.username }}</strong>
                             </td>
@@ -212,7 +212,7 @@
                                     <a href="{% url 'reports:sales_call_update' report.pk %}" class="btn btn-outline-secondary" title="Edit">
                                         <i class="bi bi-pencil"></i>
                                     </a>
-                                    {% if request.user.is_admin_user or request.user.is_manager_user or report.sales_rep == request.user %}
+                                    {% if request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_manager_user or report.sales_rep == request.user %}
                                     <a href="{% url 'reports:sales_call_delete' report.pk %}" class="btn btn-outline-danger" title="Delete">
                                         <i class="bi bi-trash"></i>
                                     </a>
@@ -222,7 +222,7 @@
                         </tr>
                         {% empty %}
                         <tr>
-                            <td colspan="{% if request.user.is_admin_user or request.user.is_manager_user %}10{% else %}8{% endif %}" class="text-center py-5">
+                            <td colspan="{% if request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_manager_user %}10{% else %}8{% endif %}" class="text-center py-5">
                                 <i class="bi bi-telephone-x display-4 text-muted"></i>
                                 <p class="text-muted mt-3">No sales call reports found.</p>
                                 <a href="{% url 'reports:sales_call_create' %}" class="btn btn-primary">

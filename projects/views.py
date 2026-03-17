@@ -23,9 +23,9 @@ class ProjectPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
         queryset = Project.objects.select_related('status', 'region', 'owner').all()
         user = self.request.user
 
-        if user.is_admin_user:
+        if user.is_super_admin_user:
             return queryset
-        elif user.is_manager_user:
+        elif user.is_admin_user or user.is_manager_user:
             return queryset.filter(region=user.region)
         else:
             return queryset.filter(owner=user)
@@ -276,7 +276,7 @@ class ProjectImportView(LoginRequiredMixin, UserPassesTestMixin, View):
     """Import projects from an Excel file"""
 
     def test_func(self):
-        return self.request.user.is_admin_user or self.request.user.is_manager_user
+        return self.request.user.is_super_admin_user or self.request.user.is_admin_user or self.request.user.is_manager_user
 
     def post(self, request):
         excel_file = request.FILES.get('excel_file')
@@ -585,7 +585,7 @@ class DocumentDeleteView(LoginRequiredMixin, UserPassesTestMixin, DeleteView):
         document = self.get_object()
         user = self.request.user
         # Allow deletion if user is admin or uploaded the document
-        return user.is_admin_user or document.uploaded_by == user
+        return user.is_super_admin_user or user.is_admin_user or document.uploaded_by == user
 
     def form_valid(self, form):
         document = self.get_object()

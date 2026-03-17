@@ -155,7 +155,7 @@ class ContactUpdateView(LoginRequiredMixin, UpdateView):
         # Notify on status change
         if 'status' in form.changed_data and old_status != self.object.status:
             from accounts.models import User, Role
-            admins = set(User.objects.filter(role__name=Role.ADMIN, is_active=True))
+            admins = set(User.objects.filter(role__name__in=[Role.SUPER_ADMIN, Role.ADMIN], is_active=True))
             managers = set(User.objects.filter(role__name=Role.MANAGER, is_active=True))
             recipients = admins | managers
             notify_users(

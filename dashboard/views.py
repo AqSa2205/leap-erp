@@ -53,9 +53,9 @@ def index(request):
     user = request.user
 
     # Base queryset based on user role
-    if user.is_admin_user:
+    if user.is_super_admin_user:
         projects = Project.objects.all()
-    elif user.is_manager_user:
+    elif user.is_admin_user or user.is_manager_user:
         projects = Project.objects.filter(region=user.region)
     else:
         projects = Project.objects.filter(owner=user)
@@ -161,9 +161,9 @@ def chart_data(request):
     """API endpoint for dashboard charts"""
     user = request.user
 
-    if user.is_admin_user:
+    if user.is_super_admin_user:
         projects = Project.objects.all()
-    elif user.is_manager_user:
+    elif user.is_admin_user or user.is_manager_user:
         projects = Project.objects.filter(region=user.region)
     else:
         projects = Project.objects.filter(owner=user)

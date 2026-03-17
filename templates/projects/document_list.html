@@ -243,7 +243,7 @@
                                 <a href="{% url 'projects:document_detail' document.pk %}" class="btn btn-outline-dark" title="View Details">
                                     <i class="bi bi-eye"></i>
                                 </a>
-                                {% if user.is_admin_user or document.uploaded_by == user %}
+                                {% if user.is_super_admin_user or user.is_admin_user or document.uploaded_by == user %}
                                 <a href="{% url 'projects:document_delete' document.pk %}" class="btn btn-outline-danger" title="Delete">
                                     <i class="bi bi-trash"></i>
                                 </a>

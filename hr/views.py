@@ -19,7 +19,7 @@ from .forms import (
 
 class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
     def test_func(self):
-        return self.request.user.is_admin_user
+        return self.request.user.is_super_admin_user or self.request.user.is_admin_user
 
 
 class EmployeeListView(AdminRequiredMixin, ListView):
@@ -128,7 +128,7 @@ class EmployeeDeleteView(AdminRequiredMixin, DeleteView):
 
 @login_required
 def employee_import(request):
-    if not request.user.is_admin_user:
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
         messages.error(request, 'You do not have permission to import employees.')
         return redirect('hr:employee_list')
 
@@ -292,7 +292,7 @@ def employee_import(request):
 
 @login_required
 def employee_export(request):
-    if not request.user.is_admin_user:
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
         messages.error(request, 'You do not have permission to export employees.')
         return redirect('hr:employee_list')
 
@@ -492,7 +492,7 @@ class AssetDeleteView(AdminRequiredMixin, DeleteView):
 
 @login_required
 def asset_import(request):
-    if not request.user.is_admin_user:
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
         messages.error(request, 'You do not have permission to import assets.')
         return redirect('hr:asset_list')
 
@@ -656,7 +656,7 @@ def asset_import(request):
 
 @login_required
 def asset_export(request):
-    if not request.user.is_admin_user:
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
         messages.error(request, 'You do not have permission to export assets.')
         return redirect('hr:asset_list')
 

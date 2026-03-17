@@ -25,9 +25,9 @@ def index(request):
     user = request.user
 
     # Get project counts by category
-    if user.is_admin_user:
+    if user.is_super_admin_user:
         projects = Project.objects.all()
-    elif user.is_manager_user:
+    elif user.is_super_admin_user or user.is_admin_user or user.is_manager_user:
         projects = Project.objects.filter(region=user.region)
     else:
         projects = Project.objects.filter(owner=user)
@@ -49,9 +49,9 @@ def export_excel(request):
     user = request.user
 
     # Filter based on role
-    if user.is_admin_user:
+    if user.is_super_admin_user:
         projects = Project.objects.all()
-    elif user.is_manager_user:
+    elif user.is_super_admin_user or user.is_admin_user or user.is_manager_user:
         projects = Project.objects.filter(region=user.region)
     else:
         projects = Project.objects.filter(owner=user)
@@ -275,9 +275,9 @@ def summary_report(request):
     """Summary report view"""
     user = request.user
 
-    if user.is_admin_user:
+    if user.is_super_admin_user:
         projects = Project.objects.all()
-    elif user.is_manager_user:
+    elif user.is_super_admin_user or user.is_admin_user or user.is_manager_user:
         projects = Project.objects.filter(region=user.region)
     else:
         projects = Project.objects.filter(owner=user)
@@ -321,9 +321,9 @@ def annual_report(request):
     user = request.user
 
     # Get project pipeline stats
-    if user.is_admin_user:
+    if user.is_super_admin_user:
         projects = Project.objects.all()
-    elif user.is_manager_user:
+    elif user.is_super_admin_user or user.is_admin_user or user.is_manager_user:
         projects = Project.objects.filter(region=user.region)
     else:
         projects = Project.objects.filter(owner=user)
@@ -417,9 +417,9 @@ class SalesCallReportListView(LoginRequiredMixin, ListView):
         user = self.request.user
 
         # Role-based filtering
-        if user.is_admin_user:
+        if user.is_super_admin_user:
             queryset = SalesCallReport.objects.all()
-        elif user.is_manager_user:
+        elif user.is_super_admin_user or user.is_admin_user or user.is_manager_user:
             queryset = SalesCallReport.objects.all()
         else:
             queryset = SalesCallReport.objects.filter(sales_rep=user)
@@ -428,7 +428,7 @@ class SalesCallReportListView(LoginRequiredMixin, ListView):
 
         # Region filter
         region_code = self.request.GET.get('region')
-        if region_code and (user.is_admin_user or user.is_manager_user):
+        if region_code and (user.is_super_admin_user or user.is_admin_user or user.is_manager_user):
             queryset = queryset.filter(sales_rep__region__code=region_code)
 
         # Apply filters
@@ -467,7 +467,7 @@ class SalesCallReportListView(LoginRequiredMixin, ListView):
         if goal:
             queryset = queryset.filter(goal=goal)
 
-        if sales_rep_id and (user.is_admin_user or user.is_manager_user):
+        if sales_rep_id and (user.is_super_admin_user or user.is_admin_user or user.is_manager_user):
             queryset = queryset.filter(sales_rep_id=sales_rep_id)
 
         return queryset.order_by('-call_date', '-created_at')
@@ -479,7 +479,7 @@ class SalesCallReportListView(LoginRequiredMixin, ListView):
         active_region = self.request.GET.get('region', '')
 
         # Regions for tabs (admin/manager only)
-        if user.is_admin_user or user.is_manager_user:
+        if user.is_super_admin_user or user.is_admin_user or user.is_manager_user:
             from projects.models import Region
             context['regions'] = Region.objects.filter(is_active=True).order_by('code')
 
@@ -536,7 +536,7 @@ class SalesCallReportUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateV
         report = self.get_object()
         user = self.request.user
         # Only allow editing own reports or admin/manager
-        return user.is_admin_user or user.is_manager_user or report.sales_rep == user
+        return user.is_super_admin_user or user.is_admin_user or user.is_manager_user or report.sales_rep == user
 
     def form_valid(self, form):
         messages.success(self.request, 'Sales call report updated successfully.')
@@ -558,7 +558,7 @@ class SalesCallReportDetailView(LoginRequiredMixin, UserPassesTestMixin, DetailV
     def test_func(self):
         report = self.get_object()
         user = self.request.user
-        return user.is_admin_user or user.is_manager_user or report.sales_rep == user
+        return user.is_super_admin_user or user.is_admin_user or user.is_manager_user or report.sales_rep == user
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -572,7 +572,7 @@ class SalesCallReportDetailView(LoginRequiredMixin, UserPassesTestMixin, DetailV
         user = request.user
 
         # Only admin and manager can add responses
-        if not (user.is_admin_user or user.is_manager_user):
+        if not (user.is_super_admin_user or user.is_admin_user or user.is_manager_user):
             messages.error(request, 'You do not have permission to add responses.')
             return redirect('reports:sales_call_detail', pk=self.object.pk)
 
@@ -600,7 +600,7 @@ class SalesCallReportDeleteView(LoginRequiredMixin, UserPassesTestMixin, DeleteV
         report = self.get_object()
         user = self.request.user
         # Admin and Manager can delete any, Sales Rep can only delete their own
-        return user.is_admin_user or user.is_manager_user or report.sales_rep == user
+        return user.is_super_admin_user or user.is_admin_user or user.is_manager_user or report.sales_rep == user
 
     def form_valid(self, form):
         messages.success(self.request, 'Sales call report deleted successfully.')
@@ -613,9 +613,9 @@ def export_sales_call_reports(request):
     user = request.user
 
     # Get queryset based on role
-    if user.is_admin_user:
+    if user.is_super_admin_user:
         queryset = SalesCallReport.objects.all()
-    elif user.is_manager_user:
+    elif user.is_admin_user or user.is_manager_user:
         queryset = SalesCallReport.objects.all()
     else:
         queryset = SalesCallReport.objects.filter(sales_rep=user)

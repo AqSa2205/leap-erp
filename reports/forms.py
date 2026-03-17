@@ -128,7 +128,7 @@ class SalesCallReportFilterForm(forms.Form):
         super().__init__(*args, **kwargs)
         # Populate sales_rep choices based on user role
         from accounts.models import User
-        if user and (user.is_admin_user or user.is_manager_user):
+        if user and (user.is_super_admin_user or user.is_admin_user or user.is_manager_user):
             reps = User.objects.filter(
                 role__name__in=['manager', 'sales_rep']
             ).select_related('region').order_by('first_name', 'last_name')

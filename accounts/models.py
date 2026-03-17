@@ -4,11 +4,13 @@ from django.db import models
 
 class Role(models.Model):
     """User roles for access control"""
+    SUPER_ADMIN = 'super_admin'
     ADMIN = 'admin'
     MANAGER = 'manager'
     SALES_REP = 'sales_rep'
 
     ROLE_CHOICES = [
+        (SUPER_ADMIN, 'Super Administrator'),
         (ADMIN, 'Administrator'),
         (MANAGER, 'Manager'),
         (SALES_REP, 'Sales Representative'),
@@ -23,6 +25,10 @@ class Role(models.Model):
 
     def __str__(self):
         return self.get_name_display()
+
+    @property
+    def is_super_admin(self):
+        return self.name == self.SUPER_ADMIN
 
     @property
     def is_admin(self):
@@ -63,6 +69,10 @@ class User(AbstractUser):
         return f"{self.get_full_name() or self.username}"
 
     @property
+    def is_super_admin_user(self):
+        return self.role and self.role.is_super_admin
+
+    @property
     def is_admin_user(self):
         return self.role and self.role.is_admin
 
@@ -75,16 +85,18 @@ class User(AbstractUser):
         return self.role and self.role.is_sales_rep
 
     def can_view_all_projects(self):
-        """Admins can view all projects"""
-        return self.is_admin_user
+        """Super admins can view all projects"""
+        return self.is_super_admin_user
 
     def can_view_region_projects(self):
-        """Managers can view projects in their region"""
-        return self.is_admin_user or self.is_manager_user
+        """Super admins, admins, and managers can view projects in their region"""
+        return self.is_super_admin_user or self.is_admin_user or self.is_manager_user
 
     def can_edit_project(self, project):
         """Check if user can edit a specific project"""
-        if self.is_admin_user:
+        if self.is_super_admin_user:
+            return True
+        if self.is_admin_user and project.region == self.region:
             return True
         if self.is_manager_user and project.region == self.region:
             return True
@@ -93,13 +105,13 @@ class User(AbstractUser):
         return False
 
     def can_delete_project(self):
-        """Only admins can delete projects"""
-        return self.is_admin_user
+        """Super admins and admins can delete projects"""
+        return self.is_super_admin_user or self.is_admin_user
 
     def can_manage_users(self):
-        """Only admins can manage users"""
-        return self.is_admin_user
+        """Only super admins can manage users"""
+        return self.is_super_admin_user
 
     def can_import_excel(self):
-        """Admins and managers can import Excel"""
-        return self.is_admin_user or self.is_manager_user
+        """Super admins, admins, and managers can import Excel"""
+        return self.is_super_admin_user or self.is_admin_user or self.is_manager_user

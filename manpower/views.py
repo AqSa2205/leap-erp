@@ -24,7 +24,7 @@ COST_FIELDS = [
 
 class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
     def test_func(self):
-        return self.request.user.is_admin_user
+        return self.request.user.is_super_admin_user or self.request.user.is_admin_user
 
 
 # ─── Sheet Views ─────────────────────────────────────────────────────────────
@@ -199,7 +199,7 @@ class LineItemDeleteView(AdminRequiredMixin, DeleteView):
 
 @login_required
 def sheet_import(request):
-    if not request.user.is_admin_user:
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
         messages.error(request, 'You do not have permission to import manpower sheets.')
         return redirect('manpower:sheet_list')
 
@@ -383,7 +383,7 @@ def sheet_import(request):
 
 @login_required
 def sheet_export(request, pk):
-    if not request.user.is_admin_user:
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
         messages.error(request, 'You do not have permission to export.')
         return redirect('manpower:sheet_list')
 

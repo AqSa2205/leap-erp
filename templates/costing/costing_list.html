@@ -70,7 +70,7 @@
                         </td>
                         <td>{{ sheet.project.project_name|default:"-" }}</td>
                         <td>{{ sheet.customer_reference|default:"-" }}</td>
-                        <td>{% widthratio sheet.margin 1 100 %}%</td>
+                        <td>{{ sheet.margin }}%</td>
                         <td>{{ sheet.output_currency }}</td>
                         <td>
                             {% if sheet.status == 'draft' %}

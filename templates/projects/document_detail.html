@@ -108,7 +108,7 @@
                         <i class="bi bi-folder me-2"></i>View Project
                     </a>
                     {% endif %}
-                    {% if user.is_admin_user or document.uploaded_by == user %}
+                    {% if user.is_super_admin_user or user.is_admin_user or document.uploaded_by == user %}
                     <a href="{% url 'projects:document_delete' document.pk %}" class="btn btn-outline-danger">
                         <i class="bi bi-trash me-2"></i>Delete Document
                     </a>
