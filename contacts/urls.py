@@ -19,4 +19,7 @@ urlpatterns = [
     # Import/Export
     path('import/', views.contact_import, name='contact_import'),
     path('export/', views.contact_export, name='contact_export'),
+
+    # One-time backfill (admin only)
+    path('backfill-from-sales-calls/', views.backfill_contacts_from_sales_calls, name='backfill_sales_calls'),
 ]

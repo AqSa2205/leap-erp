@@ -5,7 +5,7 @@ from django.contrib import messages
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
 from django.urls import reverse_lazy
 from django.db.models import Q, Count
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from datetime import datetime
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -379,3 +379,63 @@ def contact_export(request):
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)
     return response
+
+
+@login_required
+def backfill_contacts_from_sales_calls(request):
+    """One-time backfill: create contacts from existing sales call reports."""
+    if not request.user.is_super_admin_user:
+        return JsonResponse({'error': 'Super admin only'}, status=403)
+
+    from reports.models import SalesCallReport
+    from contacts.signals import _map_category
+
+    created_count = 0
+    skipped_count = 0
+
+    for report in SalesCallReport.objects.select_related('sales_rep').all():
+        existing = None
+        if report.email:
+            existing = ContactDatabase.objects.filter(
+                organisation_name__iexact=report.company_name,
+                contact_email__iexact=report.email,
+            ).first()
+        if not existing and report.contact_name:
+            existing = ContactDatabase.objects.filter(
+                organisation_name__iexact=report.company_name,
+                contact_name__iexact=report.contact_name,
+            ).first()
+
+        if existing:
+            skipped_count += 1
+            continue
+
+        role_parts = []
+        if report.title:
+            role_parts.append(report.get_title_display())
+        if report.role:
+            role_parts.append(report.role)
+        role_str = ' - '.join(role_parts)
+
+        ContactDatabase.objects.create(
+            category=_map_category(report),
+            organisation_name=report.company_name,
+            contact_name=report.contact_name,
+            contact_email=report.email or '',
+            contact_telephone=report.phone or '',
+            contact_address=report.address or '',
+            notice_type='opportunity',
+            status='open',
+            last_contact=report.call_date,
+            comments=f'Auto-created from Sales Call Report.\nRole: {role_str}' if role_str else 'Auto-created from Sales Call Report.',
+            created_by=report.sales_rep,
+            source_report=report,
+        )
+        created_count += 1
+
+    return JsonResponse({
+        'status': 'done',
+        'created': created_count,
+        'skipped': skipped_count,
+        'total_contacts': ContactDatabase.objects.count(),
+    })
