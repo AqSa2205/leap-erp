@@ -147,6 +147,16 @@ class ContactDatabase(models.Model):
         verbose_name="Comments"
     )
 
+    # Source tracking
+    source_report = models.ForeignKey(
+        'reports.SalesCallReport',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='synced_contacts',
+        verbose_name="Source Sales Call"
+    )
+
     # Metadata
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

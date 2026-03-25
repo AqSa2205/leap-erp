@@ -104,6 +104,9 @@
                                 <a href="{% url 'contacts:contact_detail' contact.pk %}" class="text-decoration-none">
                                     <strong>{{ contact.organisation_name|truncatechars:35 }}</strong>
                                 </a>
+                                {% if contact.source_report %}
+                                <span class="badge bg-info text-dark ms-1" title="Auto-synced from Sales Call"><i class="bi bi-telephone-forward"></i></span>
+                                {% endif %}
                                 {% if contact.title %}
                                 <br><small class="text-muted">{{ contact.title|truncatechars:40 }}</small>
                                 {% endif %}

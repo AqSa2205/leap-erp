@@ -112,6 +112,18 @@ class ContactDetailView(LoginRequiredMixin, DetailView):
     template_name = 'contacts/contact_detail.html'
     context_object_name = 'contact'
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        from reports.models import SalesCallReport
+        contact = self.object
+        # Get all sales calls linked via source_report OR matching company+contact
+        linked = SalesCallReport.objects.filter(
+            Q(synced_contacts=contact) |
+            Q(company_name__iexact=contact.organisation_name, contact_name__iexact=contact.contact_name)
+        ).select_related('sales_rep').distinct().order_by('-call_date')
+        context['linked_sales_calls'] = linked
+        return context
+
 
 class ContactCreateView(LoginRequiredMixin, CreateView):
     """Create a new contact."""
