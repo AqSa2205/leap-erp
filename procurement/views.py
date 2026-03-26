@@ -36,9 +36,12 @@ def procurement_dashboard(request):
     """Procurement dashboard with KPIs, recent activity, and stats."""
     user = request.user
 
+    # Procurement roles get full access
+    has_full_access = user.is_super_admin_user or user.is_procurement_user
+
     # PO stats
     po_qs = PurchaseOrder.objects.all()
-    if not user.is_super_admin_user:
+    if not has_full_access:
         if user.is_admin_user or user.is_manager_user:
             po_qs = po_qs.filter(Q(created_by=user) | Q(project__region=user.region))
         else:
@@ -51,7 +54,7 @@ def procurement_dashboard(request):
 
     # DN stats
     dn_qs = DeliveryNote.objects.all()
-    if not user.is_super_admin_user:
+    if not has_full_access:
         if user.is_admin_user or user.is_manager_user:
             dn_qs = dn_qs.filter(Q(created_by=user) | Q(project__region=user.region))
         else:
@@ -60,7 +63,7 @@ def procurement_dashboard(request):
 
     # Summary stats
     summary_qs = ProcurementSummary.objects.all()
-    if not user.is_super_admin_user:
+    if not has_full_access:
         if user.is_admin_user or user.is_manager_user:
             summary_qs = summary_qs.filter(Q(created_by=user) | Q(project__region=user.region))
         else:
@@ -69,7 +72,7 @@ def procurement_dashboard(request):
 
     # Inventory stats
     inv_qs = InventoryReport.objects.all()
-    if not user.is_super_admin_user:
+    if not has_full_access:
         if user.is_admin_user or user.is_manager_user:
             inv_qs = inv_qs.filter(Q(created_by=user) | Q(project__region=user.region))
         else:
@@ -107,7 +110,7 @@ class ProcurementPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
         queryset = PurchaseOrder.objects.select_related('project', 'created_by').all()
         user = self.request.user
-        if user.is_super_admin_user:
+        if user.is_super_admin_user or user.is_procurement_user:
             return queryset
         elif user.is_admin_user or user.is_manager_user:
             return queryset.filter(
@@ -213,7 +216,7 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
     def test_func(self):
         obj = self.get_object()
         user = self.request.user
-        if user.is_super_admin_user or user.is_admin_user:
+        if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
             return True
         return obj.created_by == user
 
@@ -841,7 +844,7 @@ class SummaryUpdateView(SummaryPermissionMixin, UpdateView):
 
     def test_func(self):
         user = self.request.user
-        if user.is_super_admin_user or user.is_admin_user:
+        if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
             return True
         return self.get_object().created_by == user
 
@@ -882,7 +885,7 @@ class SummaryDeleteView(SummaryPermissionMixin, DeleteView):
 
     def test_func(self):
         user = self.request.user
-        if user.is_super_admin_user or user.is_admin_user:
+        if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
             return True
         return self.get_object().created_by == user
 
@@ -1182,7 +1185,7 @@ class DNPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
         queryset = DeliveryNote.objects.select_related('project', 'created_by', 'purchase_order').all()
         user = self.request.user
-        if user.is_super_admin_user:
+        if user.is_super_admin_user or user.is_procurement_user:
             return queryset
         elif user.is_admin_user or user.is_manager_user:
             return queryset.filter(Q(created_by=user) | Q(project__region=user.region))
@@ -1277,7 +1280,7 @@ class DNUpdateView(DNPermissionMixin, UpdateView):
 
     def test_func(self):
         user = self.request.user
-        if user.is_super_admin_user or user.is_admin_user:
+        if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
             return True
         return self.get_object().created_by == user
 
@@ -1317,7 +1320,7 @@ class DNDeleteView(DNPermissionMixin, DeleteView):
 
     def test_func(self):
         user = self.request.user
-        if user.is_super_admin_user or user.is_admin_user:
+        if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
             return True
         return self.get_object().created_by == user
 
@@ -1635,7 +1638,7 @@ class InventoryPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
         queryset = InventoryReport.objects.select_related('project', 'created_by').all()
         user = self.request.user
-        if user.is_super_admin_user:
+        if user.is_super_admin_user or user.is_procurement_user:
             return queryset
         elif user.is_admin_user or user.is_manager_user:
             return queryset.filter(Q(created_by=user) | Q(project__region=user.region))
@@ -1727,7 +1730,7 @@ class InventoryUpdateView(InventoryPermissionMixin, UpdateView):
 
     def test_func(self):
         user = self.request.user
-        if user.is_super_admin_user or user.is_admin_user:
+        if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
             return True
         return self.get_object().created_by == user
 
@@ -1767,7 +1770,7 @@ class InventoryDeleteView(InventoryPermissionMixin, DeleteView):
 
     def test_func(self):
         user = self.request.user
-        if user.is_super_admin_user or user.is_admin_user:
+        if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
             return True
         return self.get_object().created_by == user
 
@@ -2066,7 +2069,7 @@ class FRCPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
         queryset = FRCReport.objects.select_related('project', 'created_by').all()
         user = self.request.user
-        if user.is_super_admin_user:
+        if user.is_super_admin_user or user.is_procurement_user:
             return queryset
         elif user.is_admin_user or user.is_manager_user:
             return queryset.filter(Q(created_by=user) | Q(project__region=user.region))
@@ -2177,7 +2180,7 @@ class FRCUpdateView(FRCPermissionMixin, UpdateView):
 
     def test_func(self):
         user = self.request.user
-        if user.is_super_admin_user or user.is_admin_user:
+        if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
             return True
         return self.get_object().created_by == user
 
@@ -2217,7 +2220,7 @@ class FRCDeleteView(FRCPermissionMixin, DeleteView):
 
     def test_func(self):
         user = self.request.user
-        if user.is_super_admin_user or user.is_admin_user:
+        if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
             return True
         return self.get_object().created_by == user
 

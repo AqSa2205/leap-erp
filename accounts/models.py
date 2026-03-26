@@ -8,12 +8,16 @@ class Role(models.Model):
     ADMIN = 'admin'
     MANAGER = 'manager'
     SALES_REP = 'sales_rep'
+    PROCUREMENT_MGR = 'procurement_mgr'
+    PROCUREMENT_OFF = 'procurement_off'
 
     ROLE_CHOICES = [
         (SUPER_ADMIN, 'Super Administrator'),
         (ADMIN, 'Administrator'),
         (MANAGER, 'Manager'),
         (SALES_REP, 'Sales Representative'),
+        (PROCUREMENT_MGR, 'Procurement Manager'),
+        (PROCUREMENT_OFF, 'Procurement Officer'),
     ]
 
     name = models.CharField(max_length=20, choices=ROLE_CHOICES, unique=True)
@@ -41,6 +45,14 @@ class Role(models.Model):
     @property
     def is_sales_rep(self):
         return self.name == self.SALES_REP
+
+    @property
+    def is_procurement_manager(self):
+        return self.name == self.PROCUREMENT_MGR
+
+    @property
+    def is_procurement_officer(self):
+        return self.name == self.PROCUREMENT_OFF
 
 
 class User(AbstractUser):
@@ -83,6 +95,19 @@ class User(AbstractUser):
     @property
     def is_sales_rep_user(self):
         return self.role and self.role.is_sales_rep
+
+    @property
+    def is_procurement_manager_user(self):
+        return self.role and self.role.is_procurement_manager
+
+    @property
+    def is_procurement_officer_user(self):
+        return self.role and self.role.is_procurement_officer
+
+    @property
+    def is_procurement_user(self):
+        """Either procurement manager or officer."""
+        return self.is_procurement_manager_user or self.is_procurement_officer_user
 
     def can_view_all_projects(self):
         """Super admins can view all projects"""
