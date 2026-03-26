@@ -1,0 +1,130 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-11">
+            <h1 class="h3 mb-4">{{ title }}</h1>
+            <form method="post" novalidate>
+                {% csrf_token %}
+                {% if form.errors %}<div class="alert alert-danger"><strong>Please correct the errors below.</strong>{{ form.errors }}</div>{% endif %}
+
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="card mb-4">
+                            <div class="card-header"><h5 class="mb-0"><i class="bi bi-building"></i> Sold To / Contact</h5></div>
+                            <div class="card-body">
+                                <div class="mb-3"><label class="form-label fw-bold">Company *</label>{{ form.sold_to_company }}</div>
+                                <div class="mb-3"><label class="form-label fw-bold">Address</label>{{ form.sold_to_address }}</div>
+                                <div class="mb-3"><label class="form-label fw-bold">Delivery Address</label>{{ form.delivery_address }}</div>
+                                <div class="row">
+                                    <div class="col-md-6 mb-3"><label class="form-label fw-bold">Attention</label>{{ form.attention }}</div>
+                                    <div class="col-md-6 mb-3"><label class="form-label fw-bold">Mobile</label>{{ form.mobile }}</div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-6 mb-3"><label class="form-label fw-bold">Email</label>{{ form.email }}</div>
+                                    <div class="col-md-6 mb-3"><label class="form-label fw-bold">Date *</label>{{ form.date }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card mb-4">
+                            <div class="card-header"><h5 class="mb-0"><i class="bi bi-folder"></i> Project / PO</h5></div>
+                            <div class="card-body">
+                                <div class="mb-3"><label class="form-label fw-bold">Project Title</label>{{ form.project_title }}</div>
+                                <div class="row">
+                                    <div class="col-md-6 mb-3"><label class="form-label fw-bold">LEAP PO No.</label>{{ form.leap_po_number }}</div>
+                                    <div class="col-md-6 mb-3"><label class="form-label fw-bold">Client PO No.</label>{{ form.client_po_number }}</div>
+                                </div>
+                                <div class="mb-3"><label class="form-label fw-bold">DN Number</label>{{ form.dn_number }}</div>
+                                <div class="row">
+                                    <div class="col-md-6 mb-3"><label class="form-label fw-bold">Link to Project</label>{{ form.project }}</div>
+                                    <div class="col-md-6 mb-3"><label class="form-label fw-bold">Link to PO</label>{{ form.purchase_order }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card mb-4">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0"><i class="bi bi-list-ol"></i> Items</h5>
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="add-item"><i class="bi bi-plus-lg"></i> Add Item</button>
+                    </div>
+                    <div class="card-body p-0">
+                        {{ item_formset.management_form }}
+                        <div class="table-responsive">
+                            <table class="table table-sm mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th width="60">S.No.</th>
+                                        <th>Make/Part No.</th>
+                                        <th>Description</th>
+                                        <th width="80">Qty</th>
+                                        <th width="70">UOM</th>
+                                        <th>Remarks</th>
+                                        <th width="40">Del</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="item-rows">
+                                    {% for f in item_formset %}
+                                    <tr class="item-row">
+                                        <td>{{ f.serial_number }}{{ f.order.as_hidden }}{{ f.id }}</td>
+                                        <td>{{ f.make_part_number }}</td>
+                                        <td>{{ f.description }}</td>
+                                        <td>{{ f.quantity }}</td>
+                                        <td>{{ f.uom }}</td>
+                                        <td>{{ f.remarks }}</td>
+                                        <td class="text-center">
+                                            {% if f.instance.pk %}{{ f.DELETE }}{% else %}<button type="button" class="btn btn-sm btn-outline-danger remove-row"><i class="bi bi-x"></i></button>{% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="d-flex gap-2 mb-4">
+                    <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> Save</button>
+                    <a href="{% url 'procurement:dn_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const tbody = document.getElementById('item-rows');
+    const addBtn = document.getElementById('add-item');
+    const totalForms = document.getElementById('id_items-TOTAL_FORMS');
+    addBtn.addEventListener('click', function() {
+        const idx = parseInt(totalForms.value);
+        const first = tbody.querySelector('.item-row');
+        if (!first) return;
+        const row = first.cloneNode(true);
+        row.querySelectorAll('input, textarea, select').forEach(el => {
+            if (el.name) {
+                el.name = el.name.replace(/items-\d+/, 'items-' + idx);
+                el.id = el.id.replace(/items-\d+/, 'items-' + idx);
+                if (el.type === 'checkbox') el.checked = false;
+                else if (el.tagName === 'SELECT') el.selectedIndex = 0;
+                else el.value = '';
+            }
+        });
+        const sn = row.querySelector('[name$="-serial_number"]');
+        if (sn) sn.value = idx + 1;
+        const ord = row.querySelector('[name$="-order"]');
+        if (ord) ord.value = idx;
+        row.querySelector('td:last-child').innerHTML = '<button type="button" class="btn btn-sm btn-outline-danger remove-row"><i class="bi bi-x"></i></button>';
+        tbody.appendChild(row);
+        totalForms.value = idx + 1;
+    });
+    tbody.addEventListener('click', e => { const b = e.target.closest('.remove-row'); if (b) b.closest('tr').remove(); });
+});
+</script>
+{% endblock %}

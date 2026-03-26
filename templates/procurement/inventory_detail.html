@@ -1,0 +1,231 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Inventory: {{ report.title }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .inv-header {
+        border: none;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #3a3a3a 0%, #555 100%);
+        color: white;
+    }
+    .kpi-mini {
+        background: rgba(255,255,255,0.1);
+        border-radius: 10px;
+        padding: 12px 18px;
+        text-align: center;
+    }
+    .kpi-mini .kpi-num { font-size: 1.6rem; font-weight: 700; line-height: 1; }
+    .kpi-mini .kpi-lbl { font-size: 0.7rem; opacity: 0.75; text-transform: uppercase; letter-spacing: 0.5px; }
+    .inv-item-card {
+        border: 1px solid #e9ecef;
+        border-radius: 10px;
+        padding: 1rem;
+        margin-bottom: 0.6rem;
+        transition: all 0.15s;
+        background: white;
+    }
+    .inv-item-card:hover { border-color: #C41E3A; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+    .inv-item-card.low-stock { border-left: 4px solid #dc3545; background: #fff5f5; }
+    .inv-label { font-size: 0.68rem; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.3px; font-weight: 600; }
+    .inv-val { font-size: 0.88rem; font-weight: 500; }
+    .cat-badge { font-size: 0.7rem; padding: 3px 10px; border-radius: 6px; font-weight: 600; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+    .filter-tabs .btn { border-radius: 20px; font-size: 0.8rem; padding: 5px 14px; }
+    .filter-tabs .btn.active { font-weight: 600; }
+    .export-btn { border-radius: 8px; font-size: 0.82rem; font-weight: 600; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+
+    <!-- Header -->
+    <div class="card inv-header mb-4">
+        <div class="card-body p-4">
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                <div>
+                    <h1 class="h3 mb-1 text-white">{{ report.title }}</h1>
+                    {% if report.warehouse_location %}
+                    <p class="mb-0 opacity-75"><i class="bi bi-geo-alt me-1"></i>{{ report.warehouse_location }}</p>
+                    {% endif %}
+                </div>
+                <div class="d-flex gap-2">
+                    <a href="{% url 'procurement:inventory_list' %}" class="btn btn-outline-light export-btn"><i class="bi bi-arrow-left"></i></a>
+                    <a href="{% url 'procurement:inventory_export' report.pk %}" class="btn btn-outline-light export-btn"><i class="bi bi-file-earmark-excel me-1"></i>Excel</a>
+                    <a href="{% url 'procurement:inventory_export_pdf' report.pk %}" class="btn btn-outline-light export-btn"><i class="bi bi-file-earmark-pdf me-1"></i>PDF</a>
+                    <a href="{% url 'procurement:inventory_update' report.pk %}" class="btn btn-light text-primary export-btn"><i class="bi bi-pencil me-1"></i>Edit</a>
+                    <a href="{% url 'procurement:inventory_delete' report.pk %}" class="btn btn-outline-light text-danger border-danger export-btn"><i class="bi bi-trash"></i></a>
+                </div>
+            </div>
+            <div class="row g-3">
+                <div class="col-auto">
+                    <div class="kpi-mini">
+                        <div class="kpi-num">{{ report.total_items }}</div>
+                        <div class="kpi-lbl">Total Items</div>
+                    </div>
+                </div>
+                <div class="col-auto">
+                    <div class="kpi-mini" {% if report.low_stock_count > 0 %}style="background:rgba(220,53,69,0.3);"{% endif %}>
+                        <div class="kpi-num">{{ report.low_stock_count }}</div>
+                        <div class="kpi-lbl">Low Stock</div>
+                    </div>
+                </div>
+                <div class="col-auto">
+                    <div class="kpi-mini">
+                        <div class="kpi-num">{{ report.total_stock_value|floatformat:0|intcomma }}</div>
+                        <div class="kpi-lbl">Stock Value (SAR)</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filter / Search -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div class="filter-tabs d-flex gap-1">
+            <button class="btn btn-outline-secondary btn-sm active" onclick="filterItems('all', this)">All</button>
+            <button class="btn btn-outline-success btn-sm" onclick="filterItems('available', this)">Available</button>
+            <button class="btn btn-outline-warning btn-sm" onclick="filterItems('reserved', this)">Reserved</button>
+            <button class="btn btn-outline-info btn-sm" onclick="filterItems('issued', this)">Issued</button>
+            <button class="btn btn-outline-danger btn-sm" onclick="filterItems('damaged', this)">Damaged</button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="filterItems('returned', this)">Returned</button>
+            <button class="btn btn-outline-danger btn-sm" onclick="filterItems('lowstock', this)"><i class="bi bi-exclamation-triangle"></i> Low Stock</button>
+        </div>
+        <div>
+            <input type="text" class="form-control form-control-sm" id="itemSearch" placeholder="Search items..." style="width:250px; border-radius:20px;">
+        </div>
+    </div>
+
+    <!-- Items -->
+    <div id="items-container">
+        {% for item in items %}
+        <div class="inv-item-card {% if item.is_low_stock %}low-stock{% endif %}" data-status="{{ item.status }}" data-lowstock="{% if item.is_low_stock %}yes{% else %}no{% endif %}" data-name="{{ item.name|lower }}">
+            <div class="row align-items-center">
+                <!-- Item # + Name -->
+                <div class="col-md-3">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge bg-dark" style="border-radius:6px; min-width:32px;">{{ item.serial_number }}</span>
+                        <div>
+                            <div class="fw-bold" style="font-size:0.95rem;">{{ item.name }}</div>
+                            <div class="text-muted" style="font-size:0.75rem;">
+                                {% if item.item_code %}{{ item.item_code }} &middot; {% endif %}
+                                {% if item.model_number %}{{ item.model_number }}{% endif %}
+                                {% if item.make %} &middot; {{ item.make }}{% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Category + Status -->
+                <div class="col-md-2">
+                    <span class="cat-badge bg-light text-dark">{{ item.get_category_display }}</span>
+                    <div class="mt-1">
+                        {% if item.status == 'available' %}
+                        <span class="status-dot" style="background:#198754;"></span><small class="text-success fw-semibold">Available</small>
+                        {% elif item.status == 'reserved' %}
+                        <span class="status-dot" style="background:#ffc107;"></span><small class="text-warning fw-semibold">Reserved</small>
+                        {% elif item.status == 'issued' %}
+                        <span class="status-dot" style="background:#0dcaf0;"></span><small class="text-info fw-semibold">Issued</small>
+                        {% elif item.status == 'damaged' %}
+                        <span class="status-dot" style="background:#dc3545;"></span><small class="text-danger fw-semibold">Damaged</small>
+                        {% elif item.status == 'returned' %}
+                        <span class="status-dot" style="background:#6c757d;"></span><small class="text-secondary fw-semibold">Returned</small>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Stock -->
+                <div class="col-md-3">
+                    <div class="d-flex gap-3">
+                        <div class="text-center">
+                            <div class="inv-label">Received</div>
+                            <div class="inv-val">{{ item.quantity_received|floatformat:0 }}</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="inv-label">Issued</div>
+                            <div class="inv-val">{{ item.quantity_issued|floatformat:0 }}</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="inv-label">Balance</div>
+                            <div class="inv-val {% if item.is_low_stock %}text-danger fw-bold{% endif %}">
+                                {% if item.balance_qty is not None %}{{ item.balance_qty|floatformat:0 }}{% else %}-{% endif %}
+                                {% if item.is_low_stock %}<i class="bi bi-exclamation-triangle-fill text-danger" style="font-size:0.7rem;"></i>{% endif %}
+                            </div>
+                        </div>
+                        {% if item.min_stock_level %}
+                        <div class="text-center">
+                            <div class="inv-label">Min</div>
+                            <div class="inv-val text-muted">{{ item.min_stock_level|floatformat:0 }}</div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Location -->
+                <div class="col-md-2">
+                    {% if item.tag %}<div><span class="inv-label">TAG</span> <span class="inv-val">{{ item.tag }}</span></div>{% endif %}
+                    {% if item.rack_location %}<div><span class="inv-label">Rack</span> <span class="inv-val">{{ item.rack_location }}</span></div>{% endif %}
+                    {% if item.unit_cost %}<div><span class="inv-label">Cost</span> <span class="inv-val">{{ item.unit_cost|floatformat:2|intcomma }} SAR</span></div>{% endif %}
+                </div>
+
+                <!-- Movement -->
+                <div class="col-md-2">
+                    {% if item.handover_to %}
+                    <div><span class="inv-label">Handover</span> <span class="inv-val">{{ item.handover_to }}</span></div>
+                    {% endif %}
+                    {% if item.received_date %}
+                    <div><span class="inv-label">Received</span> <span class="inv-val">{{ item.received_date|date:"d M Y" }}</span></div>
+                    {% endif %}
+                    {% if item.project_ref %}
+                    <div><span class="inv-label">Project</span> <span class="inv-val">{{ item.project_ref }}</span></div>
+                    {% endif %}
+                    {% if item.remarks %}
+                    <div class="mt-1"><small class="text-muted fst-italic">{{ item.remarks|truncatechars:50 }}</small></div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% empty %}
+        <div class="text-center py-5 text-muted">
+            <i class="bi bi-archive display-4"></i>
+            <p class="mt-3">No items in this report.</p>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Metadata -->
+    <div class="text-center py-3 mt-3">
+        <small class="text-muted">
+            Created by {{ report.created_by.get_full_name|default:report.created_by.username }} on {{ report.created_at|date:"d M Y, H:i" }}
+            &middot; Last updated {{ report.updated_at|date:"d M Y, H:i" }}
+        </small>
+    </div>
+</div>
+
+<script>
+function filterItems(status, btn) {
+    document.querySelectorAll('.filter-tabs .btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    document.querySelectorAll('.inv-item-card').forEach(card => {
+        if (status === 'all') {
+            card.style.display = '';
+        } else if (status === 'lowstock') {
+            card.style.display = card.dataset.lowstock === 'yes' ? '' : 'none';
+        } else {
+            card.style.display = card.dataset.status === status ? '' : 'none';
+        }
+    });
+}
+
+document.getElementById('itemSearch').addEventListener('input', function() {
+    const q = this.value.toLowerCase();
+    document.querySelectorAll('.inv-item-card').forEach(card => {
+        card.style.display = card.dataset.name.includes(q) ? '' : 'none';
+    });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,331 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .form-header {
+        border: none;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #C41E3A 0%, #a01830 100%);
+        color: white;
+    }
+    .section-card {
+        border: none;
+        border-radius: 12px;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    }
+    .section-card .card-header {
+        background: transparent;
+        border-bottom: 2px solid #f0f0f0;
+        padding: 1rem 1.25rem 0.75rem;
+    }
+    .section-card .card-header h6 {
+        font-weight: 700;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #C41E3A;
+    }
+    .item-entry {
+        background: #f8f9fa;
+        border-radius: 10px;
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+        border: 1px solid #e9ecef;
+        transition: border-color 0.2s;
+        position: relative;
+    }
+    .item-entry:hover { border-color: #C41E3A; }
+    .item-entry .item-number {
+        position: absolute;
+        top: -8px;
+        left: 12px;
+        background: #C41E3A;
+        color: white;
+        font-size: 0.7rem;
+        font-weight: 700;
+        padding: 2px 10px;
+        border-radius: 10px;
+    }
+    .item-entry .remove-item {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+    }
+    .item-entry label { font-size: 0.75rem; font-weight: 600; color: #6c757d; margin-bottom: 2px; }
+    .add-item-btn {
+        border: 2px dashed #C41E3A;
+        border-radius: 10px;
+        padding: 1rem;
+        text-align: center;
+        color: #C41E3A;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        background: transparent;
+        width: 100%;
+    }
+    .add-item-btn:hover { background: rgba(31,78,121,0.05); border-style: solid; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-11">
+
+            <!-- Header -->
+            <div class="card form-header mb-4">
+                <div class="card-body p-4">
+                    <h1 class="h3 mb-1 text-white">{{ title }}</h1>
+                    <p class="mb-0 opacity-75">Track inventory items with stock levels, location, and movement data</p>
+                </div>
+            </div>
+
+            <form method="post" novalidate>
+                {% csrf_token %}
+
+                {% if form.errors %}
+                <div class="alert alert-danger alert-dismissible fade show" style="border-radius:10px;">
+                    <strong><i class="bi bi-exclamation-triangle me-1"></i> Please correct the errors below.</strong>
+                    {{ form.errors }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+                {% endif %}
+
+                <!-- Report Info -->
+                <div class="card section-card mb-4">
+                    <div class="card-header">
+                        <h6 class="mb-0"><i class="bi bi-info-circle me-2"></i>Report Information</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <div class="col-md-5">
+                                <label class="form-label fw-bold">Report Title <span class="text-danger">*</span></label>
+                                {{ form.title }}
+                                <small class="text-muted">e.g. "Store Material", "Turaif Return", "Main Warehouse Q1"</small>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label fw-bold">Warehouse / Location</label>
+                                {{ form.warehouse_location }}
+                                <small class="text-muted">e.g. "Al Khobar HQ", "Site Warehouse"</small>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label fw-bold">Link to Project</label>
+                                {{ form.project }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Items -->
+                <div class="card section-card mb-4">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0"><i class="bi bi-archive me-2"></i>Inventory Items</h6>
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="badge bg-primary" id="item-count-badge">0 items</span>
+                            <button type="button" class="btn btn-sm btn-outline-danger" id="add-item" style="border-radius:8px;"><i class="bi bi-plus-lg me-1"></i>Add Item</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        {{ item_formset.management_form }}
+                        <div id="item-container">
+                            {% for f in item_formset %}
+                            <div class="item-entry" data-index="{{ forloop.counter0 }}">
+                                <span class="item-number">Item #{{ forloop.counter }}</span>
+                                {{ f.id }}
+                                {{ f.order.as_hidden }}
+                                <div class="text-end">
+                                    {% if f.instance.pk %}
+                                    <label class="text-danger remove-item" style="cursor:pointer;">{{ f.DELETE }} Delete</label>
+                                    {% else %}
+                                    <button type="button" class="btn btn-sm btn-outline-danger remove-item remove-row"><i class="bi bi-trash"></i></button>
+                                    {% endif %}
+                                </div>
+
+                                <!-- Row 1: Identification -->
+                                <div class="row g-2 mb-2">
+                                    <div class="col-md-1">
+                                        <label>S.No</label>
+                                        {{ f.serial_number }}
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label>Item Code / SKU</label>
+                                        {{ f.item_code }}
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label>Item Name <span class="text-danger">*</span></label>
+                                        {{ f.name }}
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label>Model</label>
+                                        {{ f.model_number }}
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label>Make / Manufacturer</label>
+                                        {{ f.make }}
+                                    </div>
+                                    <div class="col-md-1">
+                                        <label>Category</label>
+                                        {{ f.category }}
+                                    </div>
+                                    <div class="col-md-1">
+                                        <label>Status</label>
+                                        {{ f.status }}
+                                    </div>
+                                </div>
+
+                                <!-- Row 2: Stock & Financial -->
+                                <div class="row g-2 mb-2">
+                                    <div class="col-md-1">
+                                        <label>Unit</label>
+                                        {{ f.unit }}
+                                    </div>
+                                    <div class="col">
+                                        <label>Qty Received</label>
+                                        {{ f.quantity_received }}
+                                    </div>
+                                    <div class="col">
+                                        <label>Qty Issued</label>
+                                        {{ f.quantity_issued }}
+                                    </div>
+                                    <div class="col">
+                                        <label>Balance</label>
+                                        {{ f.balance_qty }}
+                                    </div>
+                                    <div class="col">
+                                        <label>Min Stock</label>
+                                        {{ f.min_stock_level }}
+                                    </div>
+                                    <div class="col">
+                                        <label>Unit Cost (SAR)</label>
+                                        {{ f.unit_cost }}
+                                    </div>
+                                    <div class="col">
+                                        <label>TAG / Serial</label>
+                                        {{ f.tag }}
+                                    </div>
+                                    <div class="col">
+                                        <label>Rack / Shelf</label>
+                                        {{ f.rack_location }}
+                                    </div>
+                                </div>
+
+                                <!-- Row 3: Movement -->
+                                <div class="row g-2">
+                                    <div class="col-md-2">
+                                        <label>Received Date</label>
+                                        {{ f.received_date }}
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label>Handover To</label>
+                                        {{ f.handover_to }}
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label>Handover Date</label>
+                                        {{ f.handover_date }}
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label>Project</label>
+                                        {{ f.project_ref }}
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label>PO Reference</label>
+                                        {{ f.po_reference }}
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label>Remarks</label>
+                                        {{ f.remarks }}
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- Submit -->
+                <div class="d-flex gap-2 mb-4">
+                    <button type="submit" class="btn btn-primary btn-lg px-4" style="border-radius:10px;">
+                        <i class="bi bi-check-lg me-1"></i> Save Inventory Report
+                    </button>
+                    <a href="{% url 'procurement:inventory_list' %}" class="btn btn-outline-secondary btn-lg px-4" style="border-radius:10px;">Cancel</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const container = document.getElementById('item-container');
+    const addBtn = document.getElementById('add-item');
+    const totalForms = document.getElementById('id_items-TOTAL_FORMS');
+    const badge = document.getElementById('item-count-badge');
+
+    function updateCount() {
+        const visible = container.querySelectorAll('.item-entry').length;
+        badge.textContent = visible + ' item' + (visible !== 1 ? 's' : '');
+    }
+    updateCount();
+
+    addBtn.addEventListener('click', function() {
+        const idx = parseInt(totalForms.value);
+        const first = container.querySelector('.item-entry');
+        if (!first) return;
+
+        const clone = first.cloneNode(true);
+        clone.setAttribute('data-index', idx);
+
+        // Update item number label
+        const numLabel = clone.querySelector('.item-number');
+        if (numLabel) numLabel.textContent = 'Item #' + (idx + 1);
+
+        // Update all fields
+        clone.querySelectorAll('input, textarea, select').forEach(function(el) {
+            if (el.name) {
+                el.name = el.name.replace(/items-\d+/, 'items-' + idx);
+                el.id = el.id ? el.id.replace(/items-\d+/, 'items-' + idx) : '';
+                if (el.type === 'checkbox') el.checked = false;
+                else if (el.tagName === 'SELECT') el.selectedIndex = 0;
+                else el.value = '';
+            }
+        });
+
+        // Set serial number
+        const sn = clone.querySelector('[name$="-serial_number"]');
+        if (sn) sn.value = idx + 1;
+        const ord = clone.querySelector('[name$="-order"]');
+        if (ord) ord.value = idx;
+
+        // Replace delete button
+        const delArea = clone.querySelector('.remove-item');
+        if (delArea) {
+            delArea.parentElement.innerHTML = '<button type="button" class="btn btn-sm btn-outline-danger remove-item remove-row"><i class="bi bi-trash"></i></button>';
+        }
+
+        container.appendChild(clone);
+        totalForms.value = idx + 1;
+        updateCount();
+
+        // Scroll to new item
+        clone.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        clone.style.borderColor = '#C41E3A';
+        setTimeout(() => { clone.style.borderColor = ''; }, 1500);
+    });
+
+    container.addEventListener('click', function(e) {
+        const btn = e.target.closest('.remove-row');
+        if (btn) {
+            const entry = btn.closest('.item-entry');
+            entry.style.opacity = '0';
+            entry.style.transform = 'translateX(20px)';
+            entry.style.transition = 'all 0.3s';
+            setTimeout(() => { entry.remove(); updateCount(); }, 300);
+        }
+    });
+});
+</script>
+{% endblock %}

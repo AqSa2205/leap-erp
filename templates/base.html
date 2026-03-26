@@ -733,6 +733,45 @@
             </li>
         </ul>
 
+        <div class="nav-section">Procurement</div>
+        <ul class="nav flex-column">
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'dashboard' and request.resolver_match.app_name == 'procurement' %}active{% endif %}" href="{% url 'procurement:dashboard' %}" data-title="Procurement Overview">
+                    <i class="bi bi-speedometer2"></i> <span>Overview</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if 'po_' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'procurement:po_list' %}" data-title="Purchase Orders">
+                    <i class="bi bi-box-seam"></i> <span>Purchase Orders</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if 'summary' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'procurement:summary_list' %}" data-title="Summary">
+                    <i class="bi bi-clipboard-data"></i> <span>Summary</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if 'dn_' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'procurement:dn_list' %}" data-title="Delivery Notes">
+                    <i class="bi bi-truck"></i> <span>Delivery Notes</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if 'inventory' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'procurement:inventory_list' %}" data-title="Inventory">
+                    <i class="bi bi-archive"></i> <span>Inventory</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'frc_list' or 'frc_detail' in request.resolver_match.url_name or 'frc_create' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'procurement:frc_list' %}" data-title="FRC / PPE">
+                    <i class="bi bi-shield-check"></i> <span>FRC / PPE</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if 'frc_inventory' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'procurement:frc_inventory' %}" data-title="FRC Stock">
+                    <i class="bi bi-box2-heart"></i> <span>FRC Stock</span>
+                </a>
+            </li>
+        </ul>
+
         <div class="nav-section">Reports</div>
         <ul class="nav flex-column">
             <li class="nav-item">

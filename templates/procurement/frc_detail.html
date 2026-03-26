@@ -1,0 +1,286 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}FRC: {{ report.title }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .frc-header {
+        border: none; border-radius: 12px;
+        background: linear-gradient(135deg, #3a3a3a 0%, #555 100%);
+        color: white;
+    }
+    .kpi-mini { background: rgba(255,255,255,0.1); border-radius: 10px; padding: 12px 18px; text-align: center; }
+    .kpi-mini .kpi-num { font-size: 1.6rem; font-weight: 700; line-height: 1; }
+    .kpi-mini .kpi-lbl { font-size: 0.7rem; opacity: 0.75; text-transform: uppercase; letter-spacing: 0.5px; }
+    .employee-card {
+        border: 1px solid #e9ecef; border-radius: 10px; padding: 1rem;
+        margin-bottom: 0.5rem; transition: all 0.15s; background: white;
+    }
+    .employee-card:hover { border-color: #C41E3A; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+    .ppe-badge {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: 600;
+    }
+    .ppe-badge.shirt { background: #e8f4fd; color: #0d6efd; }
+    .ppe-badge.pants { background: #fff3cd; color: #856404; }
+    .ppe-badge.shoes { background: #d1e7dd; color: #0f5132; }
+    .ppe-badge.glasses { background: #e2e3e5; color: #41464b; }
+    .ppe-badge.helmet { background: #f8d7da; color: #842029; }
+    .emp-name { font-weight: 700; font-size: 0.95rem; }
+    .emp-meta { font-size: 0.78rem; color: #6c757d; }
+    .export-btn { border-radius: 8px; font-size: 0.82rem; font-weight: 600; }
+    .filter-section { background: #f8f9fa; border-radius: 12px; padding: 1rem; margin-bottom: 1rem; }
+    .filter-section h6 { font-size: 0.72rem; color: #6c757d; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; margin-bottom: 0.5rem; }
+    .filter-pill {
+        display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.78rem;
+        font-weight: 600; cursor: pointer; border: 1px solid #dee2e6; background: white;
+        color: #495057; transition: all 0.15s; margin: 2px;
+    }
+    .filter-pill:hover { border-color: #C41E3A; color: #C41E3A; }
+    .filter-pill.active { background: #C41E3A; color: white; border-color: #C41E3A; }
+    .filter-pill.project-pill.active { background: #333; border-color: #333; }
+    .size-tab-content { display: none; }
+    .size-tab-content.active { display: block; }
+    .size-tabs .nav-link { font-size: 0.82rem; font-weight: 600; color: #495057; padding: 6px 16px; border-radius: 8px 8px 0 0; }
+    .size-tabs .nav-link.active { color: #C41E3A; border-color: #dee2e6 #dee2e6 #fff; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+
+    <!-- Header -->
+    <div class="card frc-header mb-4">
+        <div class="card-body p-4">
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                <div>
+                    <h1 class="h3 mb-1 text-white"><i class="bi bi-shield-check me-2"></i>{{ report.title }}</h1>
+                </div>
+                <div class="d-flex gap-2">
+                    <a href="{% url 'procurement:frc_list' %}" class="btn btn-outline-light export-btn"><i class="bi bi-arrow-left"></i></a>
+                    <a href="{% url 'procurement:frc_update' report.pk %}" class="btn btn-warning export-btn"><i class="bi bi-person-plus me-1"></i>Add Employee</a>
+                    <a href="{% url 'procurement:frc_export' report.pk %}" class="btn btn-outline-light export-btn"><i class="bi bi-file-earmark-excel me-1"></i>Excel</a>
+                    <a href="{% url 'procurement:frc_export_pdf' report.pk %}" class="btn btn-outline-light export-btn"><i class="bi bi-file-earmark-pdf me-1"></i>PDF</a>
+                    <a href="{% url 'procurement:frc_update' report.pk %}" class="btn btn-light export-btn"><i class="bi bi-pencil me-1"></i>Edit</a>
+                    <a href="{% url 'procurement:frc_delete' report.pk %}" class="btn btn-outline-light text-danger border-danger export-btn"><i class="bi bi-trash"></i></a>
+                </div>
+            </div>
+            <div class="row g-3">
+                <div class="col-auto"><div class="kpi-mini"><div class="kpi-num">{{ report.total_employees }}</div><div class="kpi-lbl">Employees</div></div></div>
+                <div class="col-auto"><div class="kpi-mini" style="background:rgba(196,30,58,0.3);"><div class="kpi-num">{{ report.total_shirts }}</div><div class="kpi-lbl">Shirts</div></div></div>
+                <div class="col-auto"><div class="kpi-mini"><div class="kpi-num">{{ report.total_pants }}</div><div class="kpi-lbl">Pants</div></div></div>
+                <div class="col-auto"><div class="kpi-mini"><div class="kpi-num">{{ report.total_shoes }}</div><div class="kpi-lbl">Shoes</div></div></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="filter-section">
+        <div class="row">
+            <div class="col-md-4">
+                <h6><i class="bi bi-funnel me-1"></i> Project</h6>
+                <span class="filter-pill project-pill active" data-filter="project" data-value="all">All</span>
+                {% for p in projects %}
+                <span class="filter-pill project-pill" data-filter="project" data-value="{{ p|lower }}">{{ p }}</span>
+                {% endfor %}
+            </div>
+            <div class="col-md-8">
+                <!-- Size Tabs -->
+                <ul class="nav size-tabs mb-2" role="tablist">
+                    <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#tab-shirts">Shirt Sizes</a></li>
+                    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-pants">Pants Sizes</a></li>
+                    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-shoes">Shoe Sizes</a></li>
+                </ul>
+                <div class="tab-content">
+                    <div class="tab-pane fade show active" id="tab-shirts">
+                        <span class="filter-pill size-pill active" data-filter="shirt" data-value="all">All</span>
+                        {% for s in shirt_sizes %}
+                        <span class="filter-pill size-pill" data-filter="shirt" data-value="{{ s|lower }}">{{ s }}</span>
+                        {% endfor %}
+                    </div>
+                    <div class="tab-pane fade" id="tab-pants">
+                        <span class="filter-pill size-pill active" data-filter="pants" data-value="all">All</span>
+                        {% for s in pants_sizes %}
+                        <span class="filter-pill size-pill" data-filter="pants" data-value="{{ s|lower }}">{{ s }}</span>
+                        {% endfor %}
+                    </div>
+                    <div class="tab-pane fade" id="tab-shoes">
+                        <span class="filter-pill size-pill active" data-filter="shoes" data-value="all">All</span>
+                        {% for s in shoe_sizes %}
+                        <span class="filter-pill size-pill" data-filter="shoes" data-value="{{ s|lower }}">{{ s }}</span>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="mt-2 d-flex justify-content-between align-items-center">
+            <button class="btn btn-sm btn-outline-secondary" id="clearFilters" style="border-radius:20px;"><i class="bi bi-x-circle me-1"></i>Clear All Filters</button>
+            <div>
+                <input type="text" class="form-control form-control-sm d-inline-block" id="empSearch" placeholder="Search name..." style="width:220px; border-radius:20px;">
+                <span class="badge bg-dark ms-2" id="visible-count"></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Employee Cards -->
+    <div id="entries-container">
+        {% for e in entries %}
+        <div class="employee-card"
+             data-name="{{ e.employee_name|lower }}"
+             data-project="{{ e.project_name|lower }}"
+             data-shirt="{{ e.shirt_size|lower }}"
+             data-pants="{{ e.pants_size|lower }}"
+             data-shoes="{{ e.safety_shoes|lower }}">
+            <div class="row align-items-center">
+                <div class="col-md-3">
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="rounded-circle bg-dark text-white d-flex align-items-center justify-content-center" style="width:36px; height:36px; font-size:0.8rem; font-weight:700; flex-shrink:0;">{{ e.serial_number }}</div>
+                        <div>
+                            <div class="emp-name">{{ e.employee_name }}</div>
+                            <div class="emp-meta">{{ e.designation|default:"-" }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-1">
+                    <small class="text-muted d-block" style="font-size:0.65rem; text-transform:uppercase;">Project</small>
+                    <span class="fw-semibold" style="font-size:0.85rem;">{{ e.project_name|default:"-" }}</span>
+                </div>
+                <div class="col-md-5">
+                    <div class="d-flex flex-wrap gap-1">
+                        {% if e.shirt_qty > 0 %}
+                        <span class="ppe-badge shirt"><i class="bi bi-person-badge"></i> {{ e.shirt_qty }} Shirt{{ e.shirt_qty|pluralize }} {% if e.shirt_size %}({{ e.shirt_size }}){% endif %}</span>
+                        {% endif %}
+                        {% if e.pants_qty > 0 %}
+                        <span class="ppe-badge pants"><i class="bi bi-rulers"></i> {{ e.pants_qty }} Pant{{ e.pants_qty|pluralize }} {% if e.pants_size %}({{ e.pants_size }}){% endif %}</span>
+                        {% endif %}
+                        {% if e.safety_glasses and e.safety_glasses != 'N/A' and e.safety_glasses != 'n/a' %}
+                        <span class="ppe-badge glasses"><i class="bi bi-eyeglasses"></i> Glasses: {{ e.safety_glasses }}</span>
+                        {% endif %}
+                        {% if e.shoes_qty > 0 or e.safety_shoes and e.safety_shoes != 'N/A' %}
+                        <span class="ppe-badge shoes"><i class="bi bi-boot"></i> {% if e.shoes_qty %}{{ e.shoes_qty }} {% endif %}Shoes {% if e.safety_shoes and e.safety_shoes != 'N/A' %}({{ e.safety_shoes }}){% endif %}</span>
+                        {% endif %}
+                        {% if e.safety_helmet and e.safety_helmet != 'N/A' and e.safety_helmet != 'n/a' %}
+                        <span class="ppe-badge helmet"><i class="bi bi-shield-fill"></i> Helmet: {{ e.safety_helmet }}</span>
+                        {% endif %}
+                        {% if e.total_items_issued == 0 %}
+                        <span class="text-muted" style="font-size:0.8rem;">No PPE issued</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    {% if e.receiving_date %}
+                    <small class="text-muted d-block" style="font-size:0.65rem; text-transform:uppercase;">Received</small>
+                    <span style="font-size:0.82rem;">{{ e.receiving_date }}</span>
+                    {% endif %}
+                    {% if e.handed_to %}
+                    <small class="text-muted d-block mt-1" style="font-size:0.65rem; text-transform:uppercase;">Handed To</small>
+                    <span style="font-size:0.82rem;">{{ e.handed_to|truncatechars:30 }}</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% empty %}
+        <div class="text-center py-5 text-muted">
+            <i class="bi bi-shield-check display-4"></i>
+            <p class="mt-3">No entries in this report.</p>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="text-center py-3 mt-3">
+        <small class="text-muted">
+            Created by {{ report.created_by.get_full_name|default:report.created_by.username }} on {{ report.created_at|date:"d M Y, H:i" }}
+            &middot; Last updated {{ report.updated_at|date:"d M Y, H:i" }}
+        </small>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const cards = document.querySelectorAll('.employee-card');
+    const searchInput = document.getElementById('empSearch');
+    const countBadge = document.getElementById('visible-count');
+
+    // Active filters
+    let activeProject = 'all';
+    let activeShirt = 'all';
+    let activePants = 'all';
+    let activeShoes = 'all';
+    let searchQuery = '';
+
+    function applyFilters() {
+        let visible = 0;
+        cards.forEach(card => {
+            let show = true;
+
+            // Project filter
+            if (activeProject !== 'all' && !card.dataset.project.includes(activeProject)) show = false;
+
+            // Size filters
+            if (activeShirt !== 'all' && !card.dataset.shirt.includes(activeShirt)) show = false;
+            if (activePants !== 'all' && !card.dataset.pants.includes(activePants)) show = false;
+            if (activeShoes !== 'all' && !card.dataset.shoes.includes(activeShoes)) show = false;
+
+            // Search
+            if (searchQuery && !card.dataset.name.includes(searchQuery)) show = false;
+
+            card.style.display = show ? '' : 'none';
+            if (show) visible++;
+        });
+        countBadge.textContent = visible + ' of ' + cards.length + ' shown';
+    }
+
+    // Project pills
+    document.querySelectorAll('.project-pill').forEach(pill => {
+        pill.addEventListener('click', function() {
+            document.querySelectorAll('.project-pill').forEach(p => p.classList.remove('active'));
+            this.classList.add('active');
+            activeProject = this.dataset.value;
+            applyFilters();
+        });
+    });
+
+    // Size pills (within tabs)
+    document.querySelectorAll('.size-pill').forEach(pill => {
+        pill.addEventListener('click', function() {
+            // Deactivate siblings in same tab pane
+            this.closest('.tab-pane').querySelectorAll('.size-pill').forEach(p => p.classList.remove('active'));
+            this.classList.add('active');
+
+            const filter = this.dataset.filter;
+            const value = this.dataset.value;
+
+            if (filter === 'shirt') activeShirt = value;
+            else if (filter === 'pants') activePants = value;
+            else if (filter === 'shoes') activeShoes = value;
+
+            applyFilters();
+        });
+    });
+
+    // Search
+    searchInput.addEventListener('input', function() {
+        searchQuery = this.value.toLowerCase();
+        applyFilters();
+    });
+
+    // Clear all
+    document.getElementById('clearFilters').addEventListener('click', function() {
+        activeProject = 'all';
+        activeShirt = 'all';
+        activePants = 'all';
+        activeShoes = 'all';
+        searchQuery = '';
+        searchInput.value = '';
+
+        document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
+        document.querySelectorAll('.filter-pill[data-value="all"]').forEach(p => p.classList.add('active'));
+        applyFilters();
+    });
+
+    // Init
+    applyFilters();
+});
+</script>
+{% endblock %}

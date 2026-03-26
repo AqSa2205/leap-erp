@@ -1,0 +1,165 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .form-header { border:none; border-radius:12px; background:linear-gradient(135deg,#C41E3A 0%,#a01830 100%); color:white; }
+    .section-card { border:none; border-radius:12px; box-shadow:0 2px 12px rgba(0,0,0,0.06); }
+    .section-card .card-header { background:transparent; border-bottom:2px solid #f0f0f0; }
+    .section-card .card-header h6 { font-weight:700; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.5px; color:#C41E3A; }
+    .emp-entry {
+        background:#f8f9fa; border-radius:10px; padding:1rem; margin-bottom:0.6rem;
+        border:1px solid #e9ecef; transition:border-color 0.2s; position:relative;
+    }
+    .emp-entry:hover { border-color:#C41E3A; }
+    .emp-entry .emp-num { position:absolute; top:-8px; left:12px; background:#C41E3A; color:white; font-size:0.7rem; font-weight:700; padding:2px 10px; border-radius:10px; }
+    .emp-entry label { font-size:0.72rem; font-weight:600; color:#6c757d; margin-bottom:2px; }
+    .ppe-section { background:#fff; border:1px solid #dee2e6; border-radius:8px; padding:0.75rem; }
+    .ppe-section h6 { font-size:0.72rem; color:#C41E3A; text-transform:uppercase; letter-spacing:0.5px; font-weight:700; margin-bottom:0.5rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-11">
+            <div class="card form-header mb-4">
+                <div class="card-body p-4">
+                    <h1 class="h3 mb-1 text-white"><i class="bi bi-shield-check me-2"></i>{{ title }}</h1>
+                    <p class="mb-0 opacity-75">Track FRC uniforms and PPE issuance per employee</p>
+                </div>
+            </div>
+
+            <form method="post" novalidate>
+                {% csrf_token %}
+                {% if form.errors %}<div class="alert alert-danger" style="border-radius:10px;"><strong>Please correct the errors below.</strong>{{ form.errors }}</div>{% endif %}
+
+                <div class="card section-card mb-4">
+                    <div class="card-header"><h6 class="mb-0"><i class="bi bi-info-circle me-2"></i>Report Information</h6></div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <div class="col-md-6"><label class="form-label fw-bold">Report Title <span class="text-danger">*</span></label>{{ form.title }}<small class="text-muted">e.g. "LNA Team Uniform", "FRC With Reflector For Turaif"</small></div>
+                            <div class="col-md-6"><label class="form-label fw-bold">Link to Project</label>{{ form.project }}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h5 class="mb-0"><i class="bi bi-people me-2"></i>Employee PPE Records <span class="badge bg-dark" id="emp-count-badge">0 employees</span></h5>
+                    <button type="button" class="btn btn-danger" id="add-emp"><i class="bi bi-person-plus me-1"></i> Add Employee</button>
+                </div>
+
+                <div class="card section-card mb-4">
+                    <div class="card-body">
+                        {{ entry_formset.management_form }}
+                        <div id="emp-container">
+                            {% for f in entry_formset %}
+                            <div class="emp-entry" data-index="{{ forloop.counter0 }}">
+                                <span class="emp-num">Employee #{{ forloop.counter }}</span>
+                                {{ f.id }}{{ f.order.as_hidden }}
+                                <div class="text-end mb-2">
+                                    {% if f.instance.pk %}<label class="text-danger" style="cursor:pointer;">{{ f.DELETE }} Delete</label>
+                                    {% else %}<button type="button" class="btn btn-sm btn-outline-danger remove-row"><i class="bi bi-trash"></i></button>{% endif %}
+                                </div>
+
+                                <!-- Employee Info -->
+                                <div class="row g-2 mb-2">
+                                    <div class="col-md-1"><label>Sr.</label>{{ f.serial_number }}</div>
+                                    <div class="col-md-3"><label>Employee Name <span class="text-danger">*</span></label>{{ f.employee_name }}</div>
+                                    <div class="col-md-3"><label>Designation</label>{{ f.designation }}</div>
+                                    <div class="col-md-3"><label>Project</label>{{ f.project_name }}</div>
+                                </div>
+
+                                <!-- PPE Items -->
+                                <div class="ppe-section mb-2">
+                                    <h6><i class="bi bi-shield-check me-1"></i> PPE Items</h6>
+                                    <div class="row g-2">
+                                        <div class="col"><label>Shirt Size</label>{{ f.shirt_size }}</div>
+                                        <div class="col"><label>Shirt Qty</label>{{ f.shirt_qty }}</div>
+                                        <div class="col"><label>Pants Size</label>{{ f.pants_size }}</div>
+                                        <div class="col"><label>Pants Qty</label>{{ f.pants_qty }}</div>
+                                        <div class="col"><label>Safety Glasses</label>{{ f.safety_glasses }}</div>
+                                        <div class="col"><label>Safety Shoes</label>{{ f.safety_shoes }}</div>
+                                        <div class="col"><label>Shoes Qty</label>{{ f.shoes_qty }}</div>
+                                        <div class="col"><label>Safety Helmet</label>{{ f.safety_helmet }}</div>
+                                    </div>
+                                </div>
+
+                                <!-- Tracking -->
+                                <div class="row g-2">
+                                    <div class="col-md-4"><label>Receiving Date</label>{{ f.receiving_date }}</div>
+                                    <div class="col-md-8"><label>Handed To / Remarks</label>{{ f.handed_to }}</div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="d-flex gap-2 mb-4">
+                    <button type="submit" class="btn btn-primary btn-lg px-4" style="border-radius:10px;"><i class="bi bi-check-lg me-1"></i> Save FRC Report</button>
+                    <a href="{% url 'procurement:frc_list' %}" class="btn btn-outline-secondary btn-lg px-4" style="border-radius:10px;">Cancel</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const container = document.getElementById('emp-container');
+    const addBtn = document.getElementById('add-emp');
+    const totalForms = document.getElementById('id_entries-TOTAL_FORMS');
+    const badge = document.getElementById('emp-count-badge');
+
+    function updateCount() {
+        const n = container.querySelectorAll('.emp-entry').length;
+        badge.textContent = n + ' employee' + (n !== 1 ? 's' : '');
+    }
+    updateCount();
+
+    addBtn.addEventListener('click', function() {
+        const idx = parseInt(totalForms.value);
+        const first = container.querySelector('.emp-entry');
+        if (!first) return;
+        const clone = first.cloneNode(true);
+        clone.setAttribute('data-index', idx);
+        const numLabel = clone.querySelector('.emp-num');
+        if (numLabel) numLabel.textContent = 'Employee #' + (idx + 1);
+        clone.querySelectorAll('input, textarea, select').forEach(el => {
+            if (el.name) {
+                el.name = el.name.replace(/entries-\d+/, 'entries-' + idx);
+                el.id = el.id ? el.id.replace(/entries-\d+/, 'entries-' + idx) : '';
+                if (el.type === 'checkbox') el.checked = false;
+                else if (el.tagName === 'SELECT') el.selectedIndex = 0;
+                else el.value = '';
+            }
+        });
+        const sn = clone.querySelector('[name$="-serial_number"]');
+        if (sn) sn.value = idx + 1;
+        const ord = clone.querySelector('[name$="-order"]');
+        if (ord) ord.value = idx;
+        const delArea = clone.querySelector('.text-end');
+        if (delArea) delArea.innerHTML = '<button type="button" class="btn btn-sm btn-outline-danger remove-row"><i class="bi bi-trash"></i></button>';
+        container.appendChild(clone);
+        totalForms.value = idx + 1;
+        updateCount();
+        clone.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        clone.style.borderColor = '#C41E3A';
+        setTimeout(() => { clone.style.borderColor = ''; }, 1500);
+    });
+
+    container.addEventListener('click', function(e) {
+        const btn = e.target.closest('.remove-row');
+        if (btn) {
+            const entry = btn.closest('.emp-entry');
+            entry.style.opacity = '0';
+            entry.style.transform = 'translateX(20px)';
+            entry.style.transition = 'all 0.3s';
+            setTimeout(() => { entry.remove(); updateCount(); }, 300);
+        }
+    });
+});
+</script>
+{% endblock %}

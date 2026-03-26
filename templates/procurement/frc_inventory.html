@@ -1,0 +1,190 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}FRC Stock / PPE Inventory{% endblock %}
+
+{% block extra_css %}
+<style>
+    .stock-header { border:none; border-radius:12px; background:linear-gradient(135deg,#3a3a3a 0%,#555 100%); color:white; }
+    .kpi-mini { background:rgba(255,255,255,0.1); border-radius:10px; padding:12px 18px; text-align:center; }
+    .kpi-mini .kpi-num { font-size:1.5rem; font-weight:700; line-height:1; }
+    .kpi-mini .kpi-lbl { font-size:0.68rem; opacity:0.75; text-transform:uppercase; letter-spacing:0.5px; }
+    .type-card {
+        border:none; border-radius:12px; box-shadow:0 2px 10px rgba(0,0,0,0.06);
+        transition:transform 0.15s, box-shadow 0.15s; cursor:pointer; text-decoration:none; color:inherit;
+    }
+    .type-card:hover { transform:translateY(-3px); box-shadow:0 6px 20px rgba(0,0,0,0.1); }
+    .type-card.active-type { border:2px solid #C41E3A; }
+    .type-icon { width:44px; height:44px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; }
+    .stock-item {
+        border:1px solid #e9ecef; border-radius:10px; padding:0.75rem 1rem;
+        margin-bottom:0.5rem; transition:all 0.15s; background:white;
+    }
+    .stock-item:hover { border-color:#C41E3A; }
+    .stock-item.low { border-left:4px solid #dc3545; background:#fff5f5; }
+    .stock-bar { height:6px; border-radius:3px; background:#e9ecef; overflow:hidden; }
+    .stock-bar-fill { height:100%; border-radius:3px; transition:width 0.3s; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+
+    <!-- Header -->
+    <div class="card stock-header mb-4">
+        <div class="card-body p-4">
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                <div>
+                    <h1 class="h3 mb-1 text-white"><i class="bi bi-box2-heart me-2"></i>FRC / PPE Stock Inventory</h1>
+                    <p class="mb-0 opacity-75">Track available PPE stock by type and size</p>
+                </div>
+                <a href="{% url 'procurement:frc_inventory_create' %}" class="btn btn-warning fw-semibold" style="border-radius:8px;">
+                    <i class="bi bi-plus-lg me-1"></i> Add Stock Item
+                </a>
+            </div>
+            <div class="row g-3">
+                <div class="col-auto"><div class="kpi-mini"><div class="kpi-num">{{ total_items }}</div><div class="kpi-lbl">Stock Items</div></div></div>
+                <div class="col-auto">
+                    <div class="kpi-mini" {% if total_low > 0 %}style="background:rgba(220,53,69,0.3);"{% endif %}>
+                        <div class="kpi-num">{{ total_low }}</div><div class="kpi-lbl">Low Stock</div>
+                    </div>
+                </div>
+                <div class="col-auto"><div class="kpi-mini"><div class="kpi-num">{{ total_value|floatformat:0|intcomma }}</div><div class="kpi-lbl">Stock Value (SAR)</div></div></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Type Cards -->
+    {% if type_summary %}
+    <div class="row g-3 mb-4">
+        {% for type_key, ts in type_summary.items %}
+        <div class="col-lg-3 col-md-4 col-6">
+            <a href="?type={{ type_key }}" class="d-block text-decoration-none">
+                <div class="card type-card h-100 {% if active_type == type_key %}active-type{% endif %}">
+                    <div class="card-body p-3">
+                        <div class="d-flex align-items-center gap-3 mb-2">
+                            <div class="type-icon bg-danger bg-opacity-10 text-danger">
+                                {% if type_key == 'shirt' %}<i class="bi bi-person-badge"></i>
+                                {% elif type_key == 'pants' %}<i class="bi bi-rulers"></i>
+                                {% elif type_key == 'shoes' %}<i class="bi bi-boot"></i>
+                                {% elif type_key == 'helmet' %}<i class="bi bi-shield-fill"></i>
+                                {% elif type_key == 'glasses' %}<i class="bi bi-eyeglasses"></i>
+                                {% elif type_key == 'gloves' %}<i class="bi bi-hand-index"></i>
+                                {% elif type_key == 'vest' %}<i class="bi bi-person-check"></i>
+                                {% else %}<i class="bi bi-box-seam"></i>{% endif %}
+                            </div>
+                            <div>
+                                <div class="fw-bold">{{ ts.label }}</div>
+                                <small class="text-muted">{{ ts.count }} size{{ ts.count|pluralize }}</small>
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-between" style="font-size:0.8rem;">
+                            <span><strong>{{ ts.available }}</strong> available</span>
+                            <span class="text-muted">{{ ts.issued }} issued</span>
+                        </div>
+                        {% if ts.low_stock > 0 %}
+                        <div class="mt-1"><span class="badge bg-danger" style="font-size:0.7rem;">{{ ts.low_stock }} low stock</span></div>
+                        {% endif %}
+                    </div>
+                </div>
+            </a>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Filter bar -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <a href="{% url 'procurement:frc_inventory' %}" class="btn btn-sm {% if not active_type %}btn-dark{% else %}btn-outline-secondary{% endif %}" style="border-radius:20px;">All</a>
+            {% for val, label in item_type_choices %}
+            <a href="?type={{ val }}" class="btn btn-sm {% if active_type == val %}btn-dark{% else %}btn-outline-secondary{% endif %}" style="border-radius:20px;">{{ label }}</a>
+            {% endfor %}
+        </div>
+        <input type="text" class="form-control form-control-sm" id="stockSearch" placeholder="Search..." style="width:200px; border-radius:20px;">
+    </div>
+
+    <!-- Stock Items -->
+    <div id="stock-container">
+        {% for item in items %}
+        <div class="stock-item {% if item.is_low_stock %}low{% endif %}" data-name="{{ item|lower }}">
+            <div class="row align-items-center">
+                <div class="col-md-3">
+                    <div class="d-flex align-items-center gap-2">
+                        {% if item.item_type == 'shirt' %}<span class="badge bg-primary" style="border-radius:6px;">Shirt</span>
+                        {% elif item.item_type == 'pants' %}<span class="badge bg-warning text-dark" style="border-radius:6px;">Pants</span>
+                        {% elif item.item_type == 'shoes' %}<span class="badge bg-success" style="border-radius:6px;">Shoes</span>
+                        {% elif item.item_type == 'helmet' %}<span class="badge bg-danger" style="border-radius:6px;">Helmet</span>
+                        {% elif item.item_type == 'glasses' %}<span class="badge bg-secondary" style="border-radius:6px;">Glasses</span>
+                        {% else %}<span class="badge bg-dark" style="border-radius:6px;">{{ item.get_item_type_display }}</span>{% endif %}
+                        <div>
+                            <strong>{{ item.get_item_type_display }}</strong>
+                            {% if item.size %}<span class="text-muted ms-1">({{ item.size }})</span>{% endif %}
+                            {% if item.color %}<br><small class="text-muted">{{ item.color }}</small>{% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-md-4">
+                    <div class="d-flex gap-4">
+                        <div class="text-center">
+                            <div style="font-size:0.65rem; text-transform:uppercase; color:#999; font-weight:600;">Purchased</div>
+                            <div class="fw-bold">{{ item.total_purchased }}</div>
+                        </div>
+                        <div class="text-center">
+                            <div style="font-size:0.65rem; text-transform:uppercase; color:#999; font-weight:600;">Issued</div>
+                            <div class="fw-bold text-info">{{ item.total_issued }}</div>
+                        </div>
+                        <div class="text-center">
+                            <div style="font-size:0.65rem; text-transform:uppercase; color:#999; font-weight:600;">Lost</div>
+                            <div class="fw-bold text-danger">{{ item.damaged_lost }}</div>
+                        </div>
+                        <div class="text-center">
+                            <div style="font-size:0.65rem; text-transform:uppercase; color:#999; font-weight:600;">Available</div>
+                            <div class="fw-bold {% if item.is_low_stock %}text-danger{% else %}text-success{% endif %}" style="font-size:1.1rem;">
+                                {{ item.available_stock }}
+                                {% if item.is_low_stock %}<i class="bi bi-exclamation-triangle-fill" style="font-size:0.75rem;"></i>{% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Stock bar -->
+                    <div class="stock-bar mt-2">
+                        {% if item.total_purchased > 0 %}
+                        {% widthratio item.available_stock item.total_purchased 100 as avail_pct %}
+                        <div class="stock-bar-fill {% if item.is_low_stock %}bg-danger{% else %}bg-success{% endif %}" style="width:{% widthratio item.available_stock item.total_purchased 100 %}%"></div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="col-md-3">
+                    {% if item.supplier %}<small class="text-muted d-block"><i class="bi bi-building me-1"></i>{{ item.supplier }}</small>{% endif %}
+                    {% if item.unit_cost %}<small class="text-muted d-block"><i class="bi bi-cash me-1"></i>{{ item.unit_cost|floatformat:2 }} SAR/unit</small>{% endif %}
+                    {% if item.last_restocked %}<small class="text-muted d-block"><i class="bi bi-calendar me-1"></i>Restocked: {{ item.last_restocked|date:"d M Y" }}</small>{% endif %}
+                    <small class="text-muted d-block"><i class="bi bi-speedometer me-1"></i>Min: {{ item.min_stock }}</small>
+                </div>
+
+                <div class="col-md-2 text-end">
+                    <a href="{% url 'procurement:frc_inventory_update' item.pk %}" class="btn btn-sm btn-outline-secondary" title="Edit"><i class="bi bi-pencil"></i></a>
+                    <a href="{% url 'procurement:frc_inventory_delete' item.pk %}" class="btn btn-sm btn-outline-danger" title="Delete"><i class="bi bi-trash"></i></a>
+                </div>
+            </div>
+        </div>
+        {% empty %}
+        <div class="text-center py-5 text-muted">
+            <i class="bi bi-box2-heart display-4"></i>
+            <p class="mt-3">No PPE stock items yet.</p>
+            <a href="{% url 'procurement:frc_inventory_create' %}" class="btn btn-warning"><i class="bi bi-plus-lg me-1"></i>Add Stock Item</a>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<script>
+document.getElementById('stockSearch').addEventListener('input', function() {
+    const q = this.value.toLowerCase();
+    document.querySelectorAll('.stock-item').forEach(c => {
+        c.style.display = c.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+});
+</script>
+{% endblock %}

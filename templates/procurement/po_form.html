@@ -1,0 +1,268 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-11">
+            <h1 class="h3 mb-4">{{ title }}</h1>
+
+            <form method="post" novalidate>
+                {% csrf_token %}
+
+                {% if form.errors %}
+                <div class="alert alert-danger">
+                    <strong>Please correct the errors below.</strong>
+                    {{ form.errors }}
+                </div>
+                {% endif %}
+
+                <!-- PO Header -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="bi bi-file-text"></i> PO Information</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label fw-bold">PO Date *</label>
+                                {{ form.po_date }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label fw-bold">PO Number *</label>
+                                {{ form.po_number }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label fw-bold">Cost Center</label>
+                                {{ form.cost_center }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label fw-bold">Status</label>
+                                {{ form.status }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label fw-bold">PO Issued By *</label>
+                                {{ form.po_issued_by }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label fw-bold">Issuer Email</label>
+                                {{ form.issuer_email }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Vendor Information -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="bi bi-building"></i> Vendor Information</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label fw-bold">Vendor Name *</label>
+                                {{ form.vendor_name }}
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label fw-bold">Contact Person</label>
+                                {{ form.vendor_contact_person }}
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label fw-bold">Vendor Email</label>
+                                {{ form.vendor_contact_email }}
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label fw-bold">Vendor Tel</label>
+                                {{ form.vendor_contact_tel }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Project & Delivery -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="bi bi-folder"></i> Project & Delivery</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label fw-bold">Link to Project</label>
+                                {{ form.project }}
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label fw-bold">Project Name</label>
+                                {{ form.project_name }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label fw-bold">End User</label>
+                                {{ form.end_user }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label fw-bold">MR / Item No.</label>
+                                {{ form.mr_item_number }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label fw-bold">Delivery Incoterms</label>
+                                {{ form.delivery_incoterms }}
+                            </div>
+                            <div class="col-md-8 mb-3">
+                                <label class="form-label fw-bold">Delivery Location</label>
+                                {{ form.delivery_location }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Financial -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="bi bi-cash-stack"></i> Financial</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label fw-bold">Discount %</label>
+                                {{ form.discount_rate }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label fw-bold">VAT %</label>
+                                {{ form.vat_rate }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Line Items -->
+                <div class="card mb-4">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0"><i class="bi bi-list-ol"></i> Line Items</h5>
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="add-item">
+                            <i class="bi bi-plus-lg"></i> Add Item
+                        </button>
+                    </div>
+                    <div class="card-body p-0">
+                        {{ item_formset.management_form }}
+                        <div class="table-responsive">
+                            <table class="table table-sm mb-0" id="item-table">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th width="60">S.No.</th>
+                                        <th width="120">Make/Model</th>
+                                        <th>Description</th>
+                                        <th width="80">Qty</th>
+                                        <th width="70">UOM</th>
+                                        <th width="110">Rate/Unit</th>
+                                        <th width="120">Remarks</th>
+                                        <th width="50">Del</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="item-rows">
+                                    {% for item_form in item_formset %}
+                                    <tr class="item-row">
+                                        <td>
+                                            {{ item_form.serial_number }}
+                                            {{ item_form.order.as_hidden }}
+                                            {{ item_form.id }}
+                                            {% if item_form.instance.pk %}{{ item_form.DELETE }}{% endif %}
+                                        </td>
+                                        <td>{{ item_form.make_model }}</td>
+                                        <td>{{ item_form.description }}</td>
+                                        <td>{{ item_form.quantity }}</td>
+                                        <td>{{ item_form.uom }}</td>
+                                        <td>{{ item_form.rate_per_unit }}</td>
+                                        <td>{{ item_form.remarks }}</td>
+                                        <td class="text-center">
+                                            {% if item_form.instance.pk %}
+                                            <label class="text-danger" title="Delete">
+                                                {{ item_form.DELETE }}
+                                            </label>
+                                            {% else %}
+                                            <button type="button" class="btn btn-sm btn-outline-danger remove-row" title="Remove">
+                                                <i class="bi bi-x"></i>
+                                            </button>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Terms & Conditions -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="bi bi-file-earmark-text"></i> Terms & Conditions</h5>
+                    </div>
+                    <div class="card-body">
+                        {{ form.terms_and_conditions }}
+                    </div>
+                </div>
+
+                <div class="d-flex gap-2 mb-4">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-lg"></i> Save Purchase Order
+                    </button>
+                    <a href="{% url 'procurement:po_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const tbody = document.getElementById('item-rows');
+    const addBtn = document.getElementById('add-item');
+    const totalForms = document.getElementById('id_items-TOTAL_FORMS');
+
+    addBtn.addEventListener('click', function() {
+        const formIdx = parseInt(totalForms.value);
+        const firstRow = tbody.querySelector('.item-row');
+        if (!firstRow) return;
+
+        const newRow = firstRow.cloneNode(true);
+        // Update all input/textarea/select names and ids
+        newRow.querySelectorAll('input, textarea, select').forEach(function(el) {
+            if (el.name) {
+                el.name = el.name.replace(/items-\d+/, 'items-' + formIdx);
+                el.id = el.id.replace(/items-\d+/, 'items-' + formIdx);
+                if (el.type === 'checkbox') {
+                    el.checked = false;
+                } else if (el.tagName === 'SELECT') {
+                    el.selectedIndex = 0;
+                } else {
+                    el.value = '';
+                }
+            }
+        });
+
+        // Set serial number
+        const snInput = newRow.querySelector('[name$="-serial_number"]');
+        if (snInput) snInput.value = formIdx + 1;
+
+        // Set order
+        const orderInput = newRow.querySelector('[name$="-order"]');
+        if (orderInput) orderInput.value = formIdx;
+
+        // Replace delete column with remove button
+        const lastTd = newRow.querySelector('td:last-child');
+        lastTd.innerHTML = '<button type="button" class="btn btn-sm btn-outline-danger remove-row" title="Remove"><i class="bi bi-x"></i></button>';
+
+        tbody.appendChild(newRow);
+        totalForms.value = formIdx + 1;
+    });
+
+    // Remove row handler
+    tbody.addEventListener('click', function(e) {
+        const btn = e.target.closest('.remove-row');
+        if (btn) {
+            btn.closest('tr').remove();
+        }
+    });
+});
+</script>
+{% endblock %}

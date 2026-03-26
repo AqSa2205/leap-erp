@@ -1,0 +1,291 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}PO: {{ po.po_number }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .po-header-card {
+        border: none;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #C41E3A 0%, #a01830 100%);
+        color: white;
+    }
+    .po-header-card .status-pill {
+        padding: 6px 16px;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        font-weight: 600;
+    }
+    .info-card {
+        border: none;
+        border-radius: 12px;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+        transition: box-shadow 0.2s;
+    }
+    .info-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+    .info-card .card-header {
+        background: transparent;
+        border-bottom: 2px solid #f0f0f0;
+        padding: 1rem 1.25rem 0.75rem;
+    }
+    .info-card .card-header h6 { font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; color: #6c757d; }
+    .info-label { font-size: 0.72rem; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.3px; font-weight: 600; margin-bottom: 2px; }
+    .info-value { font-size: 0.95rem; font-weight: 500; }
+    .totals-card { border: none; border-radius: 12px; background: #f8f9fa; }
+    .totals-card .total-row { padding: 8px 16px; display: flex; justify-content: space-between; border-bottom: 1px solid #e9ecef; }
+    .totals-card .total-row:last-child { border-bottom: none; }
+    .totals-card .grand-total { background: linear-gradient(135deg, #C41E3A 0%, #a01830 100%); color: white; border-radius: 0 0 12px 12px; padding: 12px 16px; }
+    .line-item-table th { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; color: #C41E3A; border-bottom: 2px solid #C41E3A !important; }
+    .line-item-table td { vertical-align: middle; font-size: 0.9rem; }
+    .line-item-table tbody tr:hover { background: rgba(196,30,58,0.04); }
+    .tc-section { background: #f8f9fa; border-radius: 12px; padding: 1.5rem; }
+    .export-btn-group .btn { border-radius: 8px; padding: 6px 14px; font-size: 0.82rem; font-weight: 600; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-11">
+
+            <!-- Hero Header -->
+            <div class="card po-header-card mb-4">
+                <div class="card-body p-4">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <div class="d-flex align-items-center gap-3 mb-2">
+                                <h1 class="h3 mb-0 text-white">{{ po.po_number }}</h1>
+                                {% if po.status == 'draft' %}
+                                <span class="status-pill bg-warning text-dark">Draft</span>
+                                {% elif po.status == 'issued' %}
+                                <span class="status-pill bg-white text-danger">Issued</span>
+                                {% elif po.status == 'acknowledged' %}
+                                <span class="status-pill bg-info text-white">Acknowledged</span>
+                                {% elif po.status == 'completed' %}
+                                <span class="status-pill bg-success text-white">Completed</span>
+                                {% elif po.status == 'cancelled' %}
+                                <span class="status-pill bg-danger text-white">Cancelled</span>
+                                {% endif %}
+                            </div>
+                            <p class="mb-0 opacity-75">{{ po.vendor_name }}</p>
+                            {% if po.project_name %}<p class="mb-0 opacity-50" style="font-size:0.85rem;">{{ po.project_name }}</p>{% endif %}
+                        </div>
+                        <div class="d-flex gap-2 export-btn-group">
+                            <a href="{% url 'procurement:po_list' %}" class="btn btn-outline-light"><i class="bi bi-arrow-left"></i></a>
+                            <a href="{% url 'procurement:po_export' po.pk %}" class="btn btn-outline-light"><i class="bi bi-file-earmark-excel me-1"></i>Excel</a>
+                            <a href="{% url 'procurement:po_export_pdf' po.pk %}" class="btn btn-outline-light"><i class="bi bi-file-earmark-pdf me-1"></i>PDF</a>
+                            <a href="{% url 'procurement:po_update' po.pk %}" class="btn btn-light text-danger"><i class="bi bi-pencil me-1"></i>Edit</a>
+                            <a href="{% url 'procurement:po_delete' po.pk %}" class="btn btn-outline-light text-danger border-danger"><i class="bi bi-trash"></i></a>
+                        </div>
+                    </div>
+
+                    <!-- Quick Stats -->
+                    <div class="row mt-4 g-3">
+                        <div class="col-auto">
+                            <div class="d-flex align-items-center gap-2 bg-white bg-opacity-10 rounded-3 px-3 py-2">
+                                <i class="bi bi-calendar3"></i>
+                                <div>
+                                    <div style="font-size:0.7rem;" class="opacity-75">PO Date</div>
+                                    <div class="fw-bold" style="font-size:0.9rem;">{{ po.po_date|date:"d M Y" }}</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-auto">
+                            <div class="d-flex align-items-center gap-2 bg-white bg-opacity-10 rounded-3 px-3 py-2">
+                                <i class="bi bi-building"></i>
+                                <div>
+                                    <div style="font-size:0.7rem;" class="opacity-75">Cost Center</div>
+                                    <div class="fw-bold" style="font-size:0.9rem;">{{ po.get_cost_center_display }}</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-auto">
+                            <div class="d-flex align-items-center gap-2 bg-white bg-opacity-10 rounded-3 px-3 py-2">
+                                <i class="bi bi-person"></i>
+                                <div>
+                                    <div style="font-size:0.7rem;" class="opacity-75">Issued By</div>
+                                    <div class="fw-bold" style="font-size:0.9rem;">{{ po.po_issued_by }}</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-auto">
+                            <div class="d-flex align-items-center gap-2 bg-white bg-opacity-10 rounded-3 px-3 py-2">
+                                <i class="bi bi-list-ol"></i>
+                                <div>
+                                    <div style="font-size:0.7rem;" class="opacity-75">Line Items</div>
+                                    <div class="fw-bold" style="font-size:0.9rem;">{{ items.count }}</div>
+                                </div>
+                            </div>
+                        </div>
+                        {% if po.delivery_incoterms %}
+                        <div class="col-auto">
+                            <div class="d-flex align-items-center gap-2 bg-white bg-opacity-10 rounded-3 px-3 py-2">
+                                <i class="bi bi-truck"></i>
+                                <div>
+                                    <div style="font-size:0.7rem;" class="opacity-75">Incoterms</div>
+                                    <div class="fw-bold" style="font-size:0.9rem;">{{ po.delivery_incoterms }}</div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Info Cards Row -->
+            <div class="row g-3 mb-4">
+                <div class="col-md-4">
+                    <div class="card info-card h-100">
+                        <div class="card-header"><h6 class="mb-0"><i class="bi bi-building me-2 text-danger"></i>Vendor</h6></div>
+                        <div class="card-body">
+                            <p class="fw-bold mb-2" style="font-size:1.05rem;">{{ po.vendor_name }}</p>
+                            {% if po.vendor_contact_person %}
+                            <div class="mb-2"><span class="info-label">Contact</span><div class="info-value">{{ po.vendor_contact_person }}</div></div>
+                            {% endif %}
+                            {% if po.vendor_contact_email %}
+                            <div class="mb-2"><span class="info-label">Email</span><div class="info-value"><a href="mailto:{{ po.vendor_contact_email }}">{{ po.vendor_contact_email }}</a></div></div>
+                            {% endif %}
+                            {% if po.vendor_contact_tel %}
+                            <div><span class="info-label">Phone</span><div class="info-value"><a href="tel:{{ po.vendor_contact_tel }}">{{ po.vendor_contact_tel }}</a></div></div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card info-card h-100">
+                        <div class="card-header"><h6 class="mb-0"><i class="bi bi-folder me-2 text-success"></i>Project</h6></div>
+                        <div class="card-body">
+                            {% if po.project %}
+                            <div class="mb-2"><span class="info-label">Linked</span><div class="info-value"><a href="{% url 'projects:detail' po.project.pk %}">{{ po.project.project_name }}</a></div></div>
+                            {% endif %}
+                            {% if po.project_name %}
+                            <div class="mb-2"><span class="info-label">Project Name</span><div class="info-value">{{ po.project_name }}</div></div>
+                            {% endif %}
+                            {% if po.end_user %}
+                            <div class="mb-2"><span class="info-label">End User</span><div class="info-value">{{ po.end_user }}</div></div>
+                            {% endif %}
+                            {% if po.mr_item_number %}
+                            <div><span class="info-label">MR / Item No.</span><div class="info-value">{{ po.mr_item_number }}</div></div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card info-card h-100">
+                        <div class="card-header"><h6 class="mb-0"><i class="bi bi-truck me-2 text-info"></i>Delivery</h6></div>
+                        <div class="card-body">
+                            {% if po.delivery_incoterms %}
+                            <div class="mb-2"><span class="info-label">Incoterms</span><div class="info-value"><span class="badge bg-secondary">{{ po.get_delivery_incoterms_display }}</span></div></div>
+                            {% endif %}
+                            {% if po.delivery_location %}
+                            <div class="mb-2"><span class="info-label">Location</span><div class="info-value">{{ po.delivery_location }}</div></div>
+                            {% endif %}
+                            {% if po.issuer_email %}
+                            <div><span class="info-label">Issuer Email</span><div class="info-value"><a href="mailto:{{ po.issuer_email }}">{{ po.issuer_email }}</a></div></div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Line Items + Totals -->
+            <div class="row g-3 mb-4">
+                <div class="col-lg-8">
+                    <div class="card info-card">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h6 class="mb-0"><i class="bi bi-list-ol me-2 text-danger"></i>Line Items</h6>
+                            <span class="badge bg-dark">{{ items.count }} item{{ items.count|pluralize }}</span>
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="table-responsive">
+                                <table class="table line-item-table mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th width="50">#</th>
+                                            <th>Description</th>
+                                            <th>Make/Model</th>
+                                            <th class="text-end">Qty</th>
+                                            <th>UOM</th>
+                                            <th class="text-end">Rate</th>
+                                            <th class="text-end">Total</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for item in items %}
+                                        <tr>
+                                            <td class="text-muted">{{ item.serial_number }}</td>
+                                            <td>
+                                                <strong>{{ item.description }}</strong>
+                                                {% if item.remarks %}<br><small class="text-muted">{{ item.remarks }}</small>{% endif %}
+                                            </td>
+                                            <td><small>{{ item.make_model|default:"-" }}</small></td>
+                                            <td class="text-end">{{ item.quantity|floatformat:0 }}</td>
+                                            <td><small>{{ item.uom }}</small></td>
+                                            <td class="text-end">{{ item.rate_per_unit|floatformat:2|intcomma }}</td>
+                                            <td class="text-end fw-bold">{{ item.total_value|floatformat:2|intcomma }}</td>
+                                        </tr>
+                                        {% empty %}
+                                        <tr><td colspan="7" class="text-center py-4 text-muted">No line items.</td></tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-lg-4">
+                    <div class="card totals-card">
+                        <div class="card-body p-0">
+                            <div class="p-3 pb-0">
+                                <h6 class="text-muted text-uppercase fw-bold" style="font-size:0.78rem; letter-spacing:0.5px;">Financial Summary</h6>
+                            </div>
+                            <div class="total-row">
+                                <span>Base Amount</span>
+                                <span class="fw-semibold">{{ po.base_amount|floatformat:2|intcomma }}</span>
+                            </div>
+                            {% if po.discount_rate %}
+                            <div class="total-row">
+                                <span>Discount ({{ po.discount_rate|floatformat:0 }}%)</span>
+                                <span class="fw-semibold text-danger">-{{ po.discount_amount|floatformat:2|intcomma }}</span>
+                            </div>
+                            {% endif %}
+                            <div class="total-row">
+                                <span>Gross Value</span>
+                                <span class="fw-semibold">{{ po.gross_value|floatformat:2|intcomma }}</span>
+                            </div>
+                            <div class="total-row">
+                                <span>VAT ({{ po.vat_rate|floatformat:0 }}%)</span>
+                                <span class="fw-semibold">{{ po.vat_amount|floatformat:2|intcomma }}</span>
+                            </div>
+                            <div class="grand-total d-flex justify-content-between align-items-center">
+                                <span class="fw-bold">Total (SAR)</span>
+                                <span class="fw-bold" style="font-size:1.3rem;">{{ po.total_value|floatformat:2|intcomma }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Terms & Conditions -->
+            {% if po.terms_and_conditions %}
+            <div class="tc-section mb-4">
+                <h6 class="text-muted text-uppercase fw-bold mb-3" style="font-size:0.78rem; letter-spacing:0.5px;">
+                    <i class="bi bi-file-earmark-text me-1"></i> Terms & Conditions
+                </h6>
+                <div style="font-size:0.9rem; line-height:1.7;">{{ po.terms_and_conditions|linebreaks }}</div>
+            </div>
+            {% endif %}
+
+            <!-- Metadata -->
+            <div class="text-center py-3">
+                <small class="text-muted">
+                    Created by {{ po.created_by.get_full_name|default:po.created_by.username }} on {{ po.created_at|date:"d M Y, H:i" }}
+                    &middot; Last updated {{ po.updated_at|date:"d M Y, H:i" }}
+                </small>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

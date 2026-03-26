@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     "hr",
     "manpower",
     "proposals",
+    "procurement",
 ]
 
 MIDDLEWARE = [

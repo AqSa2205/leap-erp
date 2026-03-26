@@ -1,0 +1,111 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}{{ summary }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">{{ summary.project_name }}</h1>
+            <p class="text-muted mb-0">
+                {% if summary.package_name %}<span class="badge bg-secondary">{{ summary.package_name }}</span>{% endif %}
+                {{ items.count }} items
+            </p>
+        </div>
+        <div>
+            <a href="{% url 'procurement:summary_list' %}" class="btn btn-outline-secondary me-2"><i class="bi bi-arrow-left"></i> Back</a>
+            <a href="{% url 'procurement:summary_export' summary.pk %}" class="btn btn-outline-success me-2"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+            <a href="{% url 'procurement:summary_export_pdf' summary.pk %}" class="btn btn-outline-danger me-2"><i class="bi bi-file-earmark-pdf"></i> PDF</a>
+            <a href="{% url 'procurement:summary_update' summary.pk %}" class="btn btn-primary me-2"><i class="bi bi-pencil"></i> Edit</a>
+            <a href="{% url 'procurement:summary_delete' summary.pk %}" class="btn btn-danger"><i class="bi bi-trash"></i> Delete</a>
+        </div>
+    </div>
+
+    <!-- Items Table -->
+    <div class="card mb-4">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Sr.</th>
+                            <th>System / Item</th>
+                            <th>PO Number</th>
+                            <th>Status</th>
+                            <th>PO QTY</th>
+                            <th>Supplier</th>
+                            <th>Lead Time</th>
+                            <th>Incoterm</th>
+                            <th>Payment Terms</th>
+                            <th>Warranty</th>
+                            <th class="text-end">PO Value SAR</th>
+                            <th class="text-end">PO Value USD</th>
+                            <th class="text-end">Advance Pmt</th>
+                            <th>Delivery Status</th>
+                            <th>SCM</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in items %}
+                        <tr>
+                            <td>{{ item.serial_number }}</td>
+                            <td><strong>{{ item.system_item }}</strong></td>
+                            <td><small>{{ item.po_number|default:"-" }}</small></td>
+                            <td>
+                                {% if item.po_status == 'issued' %}
+                                <span class="badge bg-primary">Issued</span>
+                                {% elif item.po_status == 'completed' %}
+                                <span class="badge bg-success">Completed</span>
+                                {% elif item.po_status == 'draft' %}
+                                <span class="badge bg-warning text-dark">Draft</span>
+                                {% elif item.po_status == 'cancelled' %}
+                                <span class="badge bg-danger">Cancelled</span>
+                                {% else %}
+                                <span class="text-muted">-</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ item.po_qty|default:"-" }}</td>
+                            <td>{{ item.supplier|default:"-" }}</td>
+                            <td><small>{{ item.lead_time|default:"-" }}</small></td>
+                            <td>{{ item.incoterm|default:"-" }}</td>
+                            <td><small>{{ item.payment_terms|default:"-"|linebreaksbr }}</small></td>
+                            <td><small>{{ item.warranty|default:"-" }}</small></td>
+                            <td class="text-end">{% if item.po_value_sar %}{{ item.po_value_sar|floatformat:2|intcomma }}{% else %}-{% endif %}</td>
+                            <td class="text-end">{% if item.po_value_usd %}{{ item.po_value_usd|floatformat:2|intcomma }}{% else %}-{% endif %}</td>
+                            <td class="text-end">{% if item.advance_payment %}{{ item.advance_payment|floatformat:2|intcomma }}{% else %}-{% endif %}</td>
+                            <td><small>{{ item.delivery_status|default:"-"|linebreaksbr }}</small></td>
+                            <td>{{ item.scm|default:"-" }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="15" class="text-center py-3 text-muted">No items.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                    {% if items %}
+                    <tfoot class="table-light">
+                        <tr>
+                            <td colspan="10" class="text-end"><strong>Total</strong></td>
+                            <td class="text-end"><strong>{{ summary.total_po_value_sar|floatformat:2|intcomma }}</strong></td>
+                            <td class="text-end"><strong>{{ summary.total_po_value_usd|floatformat:2|intcomma }}</strong></td>
+                            <td class="text-end"><strong>{{ summary.total_advance_payment|floatformat:2|intcomma }}</strong></td>
+                            <td colspan="2"></td>
+                        </tr>
+                    </tfoot>
+                    {% endif %}
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body">
+            <small class="text-muted">
+                Created by {{ summary.created_by.get_full_name|default:summary.created_by.username }} on {{ summary.created_at|date:"d M Y, H:i" }}
+                &middot; Last updated {{ summary.updated_at|date:"d M Y, H:i" }}
+            </small>
+        </div>
+    </div>
+</div>
+{% endblock %}
