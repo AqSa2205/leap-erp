@@ -104,3 +104,15 @@ class UserDeleteView(AdminRequiredMixin, DeleteView):
     def form_valid(self, form):
         messages.success(self.request, 'User deleted successfully.')
         return super().form_valid(form)
+
+
+@login_required
+def fix_admin_role(request):
+    """One-time: set admin user to super_admin role."""
+    from django.http import JsonResponse
+    if request.user.username != 'admin':
+        return JsonResponse({'error': 'admin only'}, status=403)
+    super_admin = Role.objects.get(name='super_admin')
+    request.user.role = super_admin
+    request.user.save()
+    return JsonResponse({'status': 'done', 'role': 'Super Administrator'})
