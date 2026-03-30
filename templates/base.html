@@ -885,6 +885,11 @@
                     <i class="bi bi-people"></i> <span>Users</span>
                 </a>
             </li>
+            <li class="nav-item">
+                <a class="nav-link {% if 'reset' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'accounts:reset_requests' %}" data-title="Reset Requests">
+                    <i class="bi bi-shield-lock"></i> <span>Reset Requests</span>
+                </a>
+            </li>
             {% endif %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'hr' and 'asset' not in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:employee_list' %}" data-title="HR / Employees">

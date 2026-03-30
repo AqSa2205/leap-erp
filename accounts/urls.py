@@ -12,4 +12,12 @@ urlpatterns = [
     path('users/<int:pk>/edit/', views.UserUpdateView.as_view(), name='user_edit'),
     path('users/<int:pk>/delete/', views.UserDeleteView.as_view(), name='user_delete'),
     path('fix-admin-role/', views.fix_admin_role, name='fix_admin_role'),
+
+    # Password Reset (admin-controlled)
+    path('users/<int:pk>/send-reset/', views.send_reset_link, name='send_reset_link'),
+    path('users/send-reset-all/', views.send_reset_link_all, name='send_reset_all'),
+    path('reset-password/<str:token>/', views.reset_password_form, name='reset_password'),
+    path('reset-requests/', views.reset_requests_list, name='reset_requests'),
+    path('reset-requests/<int:pk>/approve/', views.approve_reset, name='approve_reset'),
+    path('reset-requests/<int:pk>/reject/', views.reject_reset, name='reject_reset'),
 ]
