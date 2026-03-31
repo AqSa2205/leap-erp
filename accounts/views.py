@@ -123,8 +123,88 @@ def fix_admin_role(request):
 
 
 # ═══════════════════════════════════════════════════════════════
-# PASSWORD RESET (Admin-controlled)
+# PASSWORD RESET
 # ═══════════════════════════════════════════════════════════════
+
+def _build_reset_email_html(user_name, reset_url):
+    """Build a professional HTML email for password reset."""
+    return f'''<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0; padding:0; background:#f4f4f4; font-family:Arial,Helvetica,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4; padding:30px 0;">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.08);">
+
+    <!-- Header -->
+    <tr>
+        <td style="background:linear-gradient(135deg,#C41E3A,#a01830); padding:35px 40px; text-align:center;">
+            <img src="https://leap-erp.onrender.com/static/images/leap_logo.jpg" alt="Leap Networks" style="max-width:180px; margin-bottom:15px;" />
+            <h1 style="color:#ffffff; margin:0; font-size:22px; font-weight:700; letter-spacing:0.5px;">Password Reset</h1>
+        </td>
+    </tr>
+
+    <!-- Body -->
+    <tr>
+        <td style="padding:40px;">
+            <p style="color:#333; font-size:16px; margin:0 0 20px;">Hi <strong>{user_name}</strong>,</p>
+
+            <p style="color:#555; font-size:14px; line-height:1.7; margin:0 0 25px;">
+                A password reset has been initiated for your <strong>Leap Networks ERP</strong> account
+                by the system administrator. Click the button below to set your new password.
+            </p>
+
+            <!-- CTA Button -->
+            <table width="100%" cellpadding="0" cellspacing="0">
+            <tr><td align="center" style="padding:10px 0 30px;">
+                <a href="{reset_url}" style="display:inline-block; background:#C41E3A; color:#ffffff; text-decoration:none; padding:14px 40px; border-radius:8px; font-size:16px; font-weight:700; letter-spacing:0.5px;">
+                    Reset My Password
+                </a>
+            </td></tr>
+            </table>
+
+            <p style="color:#888; font-size:12px; line-height:1.6; margin:0 0 15px;">
+                If the button doesn't work, copy and paste this link into your browser:
+            </p>
+            <p style="color:#C41E3A; font-size:12px; word-break:break-all; background:#f9f9f9; padding:12px; border-radius:6px; border:1px solid #eee; margin:0 0 25px;">
+                {reset_url}
+            </p>
+
+            <!-- Info Box -->
+            <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8f9fa; border-radius:8px; border-left:4px solid #C41E3A;">
+            <tr><td style="padding:15px 20px;">
+                <p style="color:#555; font-size:13px; margin:0; line-height:1.6;">
+                    <strong>Please note:</strong><br>
+                    &#8226; This link will expire in <strong>7 days</strong><br>
+                    &#8226; Your new password takes effect <strong>immediately</strong><br>
+                    &#8226; Password must be at least <strong>8 characters</strong>
+                </p>
+            </td></tr>
+            </table>
+
+            <p style="color:#999; font-size:12px; margin:25px 0 0;">
+                If you did not request this reset, you can safely ignore this email. Your current password will remain unchanged.
+            </p>
+        </td>
+    </tr>
+
+    <!-- Footer -->
+    <tr>
+        <td style="background:#2a2a2a; padding:25px 40px; text-align:center;">
+            <p style="color:#999; font-size:12px; margin:0 0 5px;">
+                <strong style="color:#ccc;">Leap Networks</strong> &mdash; ERP System
+            </p>
+            <p style="color:#666; font-size:11px; margin:0;">
+                This is an automated message. Please do not reply directly to this email.
+            </p>
+        </td>
+    </tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>'''
 
 @login_required
 def send_reset_link(request, pk):
@@ -150,28 +230,28 @@ def send_reset_link(request, pk):
     # Build reset URL
     reset_url = request.build_absolute_uri(f'/accounts/reset-password/{token}/')
 
-    # Send email in background
-    subject = '[Leap ERP] Password Reset Request'
-    body = (
-        f'Hi {user.get_full_name() or user.username},\n\n'
-        f'A password reset has been initiated for your Leap ERP account by the administrator.\n\n'
-        f'Click the link below to set your new password:\n'
-        f'{reset_url}\n\n'
-        f'This link will expire in 7 days.\n\n'
-        f'Your new password will take effect immediately after you submit it.\n\n'
-        f'If you did not expect this, please contact your administrator.\n\n'
-        f'— Leap ERP System'
+    # Send email
+    subject = 'Password Reset — Leap Networks ERP'
+    user_name = user.get_full_name() or user.username
+    html_body = _build_reset_email_html(user_name, reset_url)
+    plain_body = (
+        f'Hi {user_name},\n\n'
+        f'A password reset has been initiated for your Leap Networks ERP account.\n\n'
+        f'Reset your password: {reset_url}\n\n'
+        f'This link expires in 7 days. Your new password takes effect immediately.\n\n'
+        f'If you did not request this, please ignore this email.\n\n'
+        f'Leap Networks ERP System'
     )
 
-    def _send():
-        try:
-            send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=False)
-        except Exception:
-            pass
+    try:
+        from django.core.mail import EmailMultiAlternatives
+        email = EmailMultiAlternatives(subject, plain_body, settings.DEFAULT_FROM_EMAIL, [user.email])
+        email.attach_alternative(html_body, 'text/html')
+        email.send(fail_silently=False)
+        messages.success(request, f'Password reset link sent to {user.email}')
+    except Exception as e:
+        messages.error(request, f'Failed to send email: {e}')
 
-    threading.Thread(target=_send).start()
-
-    messages.success(request, f'Password reset link sent to {user.email}')
     return redirect('accounts:user_list')
 
 
@@ -198,25 +278,19 @@ def send_reset_link_all(request):
         )
 
         reset_url = request.build_absolute_uri(f'/accounts/reset-password/{token}/')
-        subject = '[Leap ERP] Password Reset Request'
-        body = (
-            f'Hi {user.get_full_name() or user.username},\n\n'
-            f'A password reset has been initiated for your Leap ERP account by the administrator.\n\n'
-            f'Click the link below to set your new password:\n'
-            f'{reset_url}\n\n'
-            f'This link will expire in 7 days.\n\n'
-            f'Your new password will take effect immediately after you submit it.\n\n'
-            f'— Leap ERP System'
-        )
+        user_name = user.get_full_name() or user.username
+        subject = 'Password Reset — Leap Networks ERP'
+        html_body = _build_reset_email_html(user_name, reset_url)
+        plain_body = f'Hi {user_name},\n\nReset your password: {reset_url}\n\nLeap Networks ERP'
 
-        def _send(email, subj, msg):
-            try:
-                send_mail(subj, msg, settings.DEFAULT_FROM_EMAIL, [email], fail_silently=False)
-            except Exception:
-                pass
-
-        threading.Thread(target=_send, args=(user.email, subject, body)).start()
-        sent_count += 1
+        try:
+            from django.core.mail import EmailMultiAlternatives
+            email_msg = EmailMultiAlternatives(subject, plain_body, settings.DEFAULT_FROM_EMAIL, [user.email])
+            email_msg.attach_alternative(html_body, 'text/html')
+            email_msg.send(fail_silently=True)
+            sent_count += 1
+        except Exception:
+            pass
 
     messages.success(request, f'Password reset links sent to {sent_count} users.')
     return redirect('accounts:user_list')
