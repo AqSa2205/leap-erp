@@ -23,6 +23,85 @@ class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
         return self.request.user.is_super_admin_user or self.request.user.is_admin_user
 
 
+@login_required
+def hr_dashboard(request):
+    """Comprehensive HR Admin Dashboard with employees, assets, vehicles, and assignments."""
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('dashboard:index')
+
+    employees = Employee.objects.all()
+    assets = Asset.objects.all()
+    vehicles = Vehicle.objects.all()
+
+    # Employee stats
+    total_employees = employees.count()
+    active_employees = employees.filter(is_active=True).count()
+    contract_breakdown = {}
+    for ct in ['permanent', 'yearly', 'ajeer']:
+        contract_breakdown[ct] = employees.filter(contract_type=ct).count()
+
+    # Top nationalities
+    nationalities = employees.values('nationality').annotate(
+        count=Count('id')
+    ).order_by('-count')[:6]
+
+    # Top deployments
+    deployments = employees.values('deployment').annotate(
+        count=Count('id')
+    ).exclude(deployment='').order_by('-count')[:6]
+
+    # Asset stats
+    total_assets = assets.count()
+    assets_in_stock = assets.filter(in_stock=True).count()
+    assets_assigned = assets.filter(in_stock=False).count()
+    total_asset_value = assets.aggregate(val=Sum('price'))['val'] or 0
+
+    # Vehicle stats
+    total_vehicles = vehicles.count()
+    valid_vehicles = vehicles.filter(vehicle_status='valid').count()
+    compliance_issues = sum(1 for v in vehicles if v.has_compliance_issue)
+
+    # Vehicle makers breakdown
+    makers = vehicles.values('vehicle_maker').annotate(
+        count=Count('id')
+    ).order_by('-count')[:6]
+
+    # Employee-Asset-Vehicle assignments
+    assignments = []
+    for emp in employees.filter(is_active=True).order_by('full_name'):
+        emp_assets = assets.filter(employee_name__icontains=emp.full_name.split()[0]) if emp.full_name else assets.none()
+        emp_vehicles = vehicles.filter(driver_name__icontains=emp.full_name.split()[0]) if emp.full_name else vehicles.none()
+        if emp_assets.exists() or emp_vehicles.exists():
+            assignments.append({
+                'employee': emp,
+                'assets': list(emp_assets),
+                'vehicles': list(emp_vehicles),
+            })
+
+    # Recent employees
+    recent_employees = employees.order_by('-created_at')[:5]
+
+    context = {
+        'total_employees': total_employees,
+        'active_employees': active_employees,
+        'contract_breakdown': contract_breakdown,
+        'nationalities': nationalities,
+        'deployments': deployments,
+        'total_assets': total_assets,
+        'assets_in_stock': assets_in_stock,
+        'assets_assigned': assets_assigned,
+        'total_asset_value': total_asset_value,
+        'total_vehicles': total_vehicles,
+        'valid_vehicles': valid_vehicles,
+        'compliance_issues': compliance_issues,
+        'makers': makers,
+        'assignments': assignments,
+        'recent_employees': recent_employees,
+    }
+    return render(request, 'hr/dashboard.html', context)
+
+
 class EmployeeListView(AdminRequiredMixin, ListView):
     model = Employee
     template_name = 'hr/employee_list.html'
@@ -782,6 +861,10 @@ class VehicleListView(AdminRequiredMixin, ListView):
             )
         if status:
             queryset = queryset.filter(vehicle_status=status)
+        compliance = self.request.GET.get('compliance')
+        if compliance == 'issues':
+            pks = [v.pk for v in queryset if v.has_compliance_issue]
+            queryset = queryset.filter(pk__in=pks)
         return queryset
 
     def get_context_data(self, **kwargs):

@@ -32,13 +32,13 @@
                 </div>
             </div>
             <div class="row g-3">
-                <div class="col-auto"><div class="kpi-mini"><div class="kpi-num">{{ total_count }}</div><div class="kpi-lbl">Total Vehicles</div></div></div>
-                <div class="col-auto"><div class="kpi-mini"><div class="kpi-num">{{ valid_count }}</div><div class="kpi-lbl">Valid</div></div></div>
-                <div class="col-auto">
-                    <div class="kpi-mini" {% if compliance_issues > 0 %}style="background:rgba(220,53,69,0.3);"{% endif %}>
+                <div class="col-auto"><a href="{% url 'hr:vehicle_list' %}" class="text-decoration-none text-white"><div class="kpi-mini" style="cursor:pointer;"><div class="kpi-num">{{ total_count }}</div><div class="kpi-lbl">Total Vehicles</div></div></a></div>
+                <div class="col-auto"><a href="{% url 'hr:vehicle_list' %}?status=valid" class="text-decoration-none text-white"><div class="kpi-mini" style="cursor:pointer;"><div class="kpi-num">{{ valid_count }}</div><div class="kpi-lbl">Valid</div></div></a></div>
+                <div class="col-auto"><a href="{% url 'hr:vehicle_list' %}?compliance=issues" class="text-decoration-none text-white">
+                    <div class="kpi-mini" style="cursor:pointer;" {% if compliance_issues > 0 %}style="background:rgba(220,53,69,0.3); cursor:pointer;"{% endif %}>
                         <div class="kpi-num">{{ compliance_issues }}</div><div class="kpi-lbl">Compliance Issues</div>
                     </div>
-                </div>
+                </a></div>
             </div>
         </div>
     </div>

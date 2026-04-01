@@ -892,8 +892,13 @@
             </li>
             {% endif %}
             <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.app_name == 'hr' and 'asset' not in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:employee_list' %}" data-title="HR / Employees">
-                    <i class="bi bi-people-fill"></i> <span>HR / Employees</span>
+                <a class="nav-link {% if request.resolver_match.url_name == 'hr_dashboard' %}active{% endif %}" href="{% url 'hr:hr_dashboard' %}" data-title="HR Dashboard">
+                    <i class="bi bi-speedometer2"></i> <span>HR Dashboard</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if 'employee' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:employee_list' %}" data-title="Employees">
+                    <i class="bi bi-people-fill"></i> <span>Employees</span>
                 </a>
             </li>
             <li class="nav-item">

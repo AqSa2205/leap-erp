@@ -4,7 +4,8 @@ from . import views
 app_name = 'hr'
 
 urlpatterns = [
-    path('', views.EmployeeListView.as_view(), name='employee_list'),
+    path('', views.hr_dashboard, name='hr_dashboard'),
+    path('employees/', views.EmployeeListView.as_view(), name='employee_list'),
     path('create/', views.EmployeeCreateView.as_view(), name='employee_create'),
     path('import/', views.employee_import, name='employee_import'),
     path('export/', views.employee_export, name='employee_export'),
