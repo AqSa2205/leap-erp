@@ -69,6 +69,7 @@ def hr_dashboard(request):
 
     # Employee-Asset-Vehicle assignments
     assignments = []
+    unassigned_employees = []
     for emp in employees.filter(is_active=True).order_by('full_name'):
         emp_assets = assets.filter(employee_name__icontains=emp.full_name.split()[0]) if emp.full_name else assets.none()
         emp_vehicles = vehicles.filter(driver_name__icontains=emp.full_name.split()[0]) if emp.full_name else vehicles.none()
@@ -78,13 +79,32 @@ def hr_dashboard(request):
                 'assets': list(emp_assets),
                 'vehicles': list(emp_vehicles),
             })
+        else:
+            unassigned_employees.append(emp)
+
+    # Unassigned assets & vehicles
+    unassigned_assets = assets.filter(in_stock=True)
+    unassigned_vehicles = vehicles.filter(Q(driver_name='') | Q(driver_name='-') | Q(driver_name__isnull=True))
 
     # Recent employees
     recent_employees = employees.order_by('-created_at')[:5]
 
+    # Asset types breakdown
+    asset_types = assets.values('asset_type').annotate(count=Count('id')).exclude(asset_type='').order_by('-count')[:8]
+
+    # JSON data for Chart.js
+    import json
+    nationality_labels = [n['nationality'] or 'Unknown' for n in nationalities]
+    nationality_data = [n['count'] for n in nationalities]
+    maker_labels = [m['vehicle_maker'] for m in makers]
+    maker_data = [m['count'] for m in makers]
+    asset_type_labels = [a['asset_type'] for a in asset_types]
+    asset_type_data = [a['count'] for a in asset_types]
+
     context = {
         'total_employees': total_employees,
         'active_employees': active_employees,
+        'inactive_employees': total_employees - active_employees,
         'contract_breakdown': contract_breakdown,
         'nationalities': nationalities,
         'deployments': deployments,
@@ -97,7 +117,19 @@ def hr_dashboard(request):
         'compliance_issues': compliance_issues,
         'makers': makers,
         'assignments': assignments,
+        'unassigned_employees': unassigned_employees[:20],
+        'unassigned_assets': unassigned_assets,
+        'unassigned_vehicles': unassigned_vehicles,
         'recent_employees': recent_employees,
+        'asset_types': asset_types,
+        # Chart.js JSON
+        'nationality_labels': json.dumps(nationality_labels),
+        'nationality_data': json.dumps(nationality_data),
+        'maker_labels': json.dumps(maker_labels),
+        'maker_data': json.dumps(maker_data),
+        'asset_type_labels': json.dumps(asset_type_labels),
+        'asset_type_data': json.dumps(asset_type_data),
+        'contract_data': json.dumps([contract_breakdown.get('permanent', 0), contract_breakdown.get('yearly', 0), contract_breakdown.get('ajeer', 0)]),
     }
     return render(request, 'hr/dashboard.html', context)
 
