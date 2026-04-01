@@ -10,10 +10,11 @@ from datetime import datetime, date
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-from .models import Employee, Asset
+from .models import Employee, Asset, Vehicle
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm,
+    VehicleForm, VehicleFilterForm,
 )
 
 
@@ -753,5 +754,231 @@ def asset_export(request):
     )
     filename = f'assets_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    wb.save(response)
+    return response
+
+
+# ═══════════════════════════════════════════════════════════════
+# VEHICLES
+# ═══════════════════════════════════════════════════════════════
+
+class VehicleListView(AdminRequiredMixin, ListView):
+    model = Vehicle
+    template_name = 'hr/vehicle_list.html'
+    context_object_name = 'vehicles'
+    paginate_by = 25
+
+    def get_queryset(self):
+        queryset = Vehicle.objects.all()
+        search = self.request.GET.get('search')
+        status = self.request.GET.get('status')
+        if search:
+            queryset = queryset.filter(
+                Q(plate_number__icontains=search) |
+                Q(vehicle_maker__icontains=search) |
+                Q(vehicle_model__icontains=search) |
+                Q(driver_name__icontains=search) |
+                Q(chassis_number__icontains=search)
+            )
+        if status:
+            queryset = queryset.filter(vehicle_status=status)
+        return queryset
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['filter_form'] = VehicleFilterForm(self.request.GET)
+        context['total_count'] = self.get_queryset().count()
+        all_vehicles = Vehicle.objects.all()
+        context['valid_count'] = all_vehicles.filter(vehicle_status='valid').count()
+        context['compliance_issues'] = sum(1 for v in all_vehicles if v.has_compliance_issue)
+        return context
+
+
+class VehicleCreateView(AdminRequiredMixin, CreateView):
+    model = Vehicle
+    form_class = VehicleForm
+    template_name = 'hr/vehicle_form.html'
+    success_url = reverse_lazy('hr:vehicle_list')
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['title'] = 'Add Vehicle'
+        return context
+
+    def form_valid(self, form):
+        form.instance.created_by = self.request.user
+        messages.success(self.request, 'Vehicle added.')
+        return super().form_valid(form)
+
+
+class VehicleDetailView(AdminRequiredMixin, DetailView):
+    model = Vehicle
+    template_name = 'hr/vehicle_detail.html'
+    context_object_name = 'vehicle'
+
+
+class VehicleUpdateView(AdminRequiredMixin, UpdateView):
+    model = Vehicle
+    form_class = VehicleForm
+    template_name = 'hr/vehicle_form.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['title'] = f'Edit: {self.object.plate_number}'
+        return context
+
+    def form_valid(self, form):
+        messages.success(self.request, 'Vehicle updated.')
+        return super().form_valid(form)
+
+    def get_success_url(self):
+        return reverse_lazy('hr:vehicle_detail', kwargs={'pk': self.object.pk})
+
+
+class VehicleDeleteView(AdminRequiredMixin, DeleteView):
+    model = Vehicle
+    template_name = 'hr/vehicle_confirm_delete.html'
+    success_url = reverse_lazy('hr:vehicle_list')
+
+    def form_valid(self, form):
+        messages.success(self.request, 'Vehicle deleted.')
+        return super().form_valid(form)
+
+
+@login_required
+def vehicle_import(request):
+    """Import vehicles from MOI Excel export."""
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:vehicle_list')
+
+    if request.method != 'POST':
+        return redirect('hr:vehicle_list')
+
+    excel_file = request.FILES.get('excel_file')
+    if not excel_file:
+        messages.error(request, 'Please select a file.')
+        return redirect('hr:vehicle_list')
+
+    try:
+        wb = openpyxl.load_workbook(excel_file, data_only=True)
+        ws = wb.active
+
+        header_row = None
+        for r in range(1, min(20, ws.max_row + 1)):
+            val = str(ws.cell(row=r, column=1).value or '').strip()
+            if 'plate' in val.lower():
+                header_row = r
+                break
+        if not header_row:
+            messages.error(request, 'Could not find header row.')
+            return redirect('hr:vehicle_list')
+
+        imported = 0
+        for r in range(header_row + 1, ws.max_row + 1):
+            plate = ws.cell(row=r, column=1).value
+            if not plate:
+                continue
+            plate_str = str(plate).strip()
+            if not plate_str:
+                continue
+
+            def cv(col):
+                v = ws.cell(row=r, column=col).value
+                return str(v).strip() if v is not None else ''
+
+            mvpi_raw = cv(16).lower()
+            mvpi = 'valid' if mvpi_raw == 'valid' else ('expired' if 'expir' in mvpi_raw else 'not_exist')
+            ins_raw = cv(17).lower()
+            ins = 'valid' if ins_raw == 'valid' else ('expired' if 'expir' in ins_raw else 'not_exist')
+            rest_raw = cv(18).lower()
+            rest = 'unrestricted' if 'unrestrict' in rest_raw else 'restricted'
+            vstatus_raw = cv(10).lower()
+            vstatus = 'valid' if vstatus_raw == 'valid' else 'expired'
+
+            Vehicle.objects.update_or_create(
+                plate_number=plate_str,
+                defaults={
+                    'plate_type': cv(2),
+                    'branch_name': cv(3),
+                    'vehicle_maker': cv(4),
+                    'vehicle_model': cv(5),
+                    'model_year': cv(6),
+                    'sequence_number': cv(7),
+                    'chassis_number': cv(8),
+                    'major_color': cv(9),
+                    'vehicle_status': vstatus,
+                    'ownership_date': cv(11),
+                    'license_expiry': cv(12),
+                    'inspection_expiry': cv(13),
+                    'driver_id': cv(14),
+                    'driver_name': cv(15),
+                    'mvpi_status': mvpi,
+                    'insurance_status': ins,
+                    'restriction_status': rest,
+                    'license_issue_date': cv(19),
+                    'body_type': cv(21),
+                    'created_by': request.user,
+                },
+            )
+            imported += 1
+
+        messages.success(request, f'Imported {imported} vehicles.')
+        return redirect('hr:vehicle_list')
+
+    except Exception as e:
+        messages.error(request, f'Import error: {str(e)}')
+        return redirect('hr:vehicle_list')
+
+
+@login_required
+def vehicle_export(request):
+    """Export vehicles to Excel."""
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:vehicle_list')
+
+    vehicles = Vehicle.objects.all()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Vehicles'
+
+    header_font = Font(bold=True, color='FFFFFF')
+    header_fill = PatternFill(start_color='C41E3A', end_color='C41E3A', fill_type='solid')
+    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+
+    headers = [
+        'Plate Number', 'Plate Type', 'Branch', 'Maker', 'Model', 'Year',
+        'Sequence No.', 'Chassis No.', 'Color', 'Status',
+        'Ownership Date', 'License Expiry', 'Inspection Expiry',
+        'Driver ID', 'Driver Name', 'MVPI', 'Insurance', 'Restriction',
+        'License Issue Date', 'Body Type',
+    ]
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.border = thin_border
+
+    for row_num, v in enumerate(vehicles, 2):
+        data = [
+            v.plate_number, v.plate_type, v.branch_name, v.vehicle_maker,
+            v.vehicle_model, v.model_year, v.sequence_number, v.chassis_number,
+            v.major_color, v.get_vehicle_status_display(),
+            v.ownership_date, v.license_expiry, v.inspection_expiry,
+            v.driver_id, v.driver_name,
+            v.get_mvpi_status_display(), v.get_insurance_status_display(),
+            v.get_restriction_status_display(), v.license_issue_date, v.body_type,
+        ]
+        for col, val in enumerate(data, 1):
+            ws.cell(row=row_num, column=col, value=val).border = thin_border
+
+    widths = [16, 14, 10, 12, 16, 8, 14, 22, 10, 10, 14, 14, 14, 14, 30, 12, 12, 14, 14, 16]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+
+    response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition'] = f'attachment; filename="vehicles_{datetime.now().strftime("%Y%m%d")}.xlsx"'
     wb.save(response)
     return response

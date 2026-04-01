@@ -1,0 +1,120 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Vehicles{% endblock %}
+
+{% block extra_css %}
+<style>
+    .fleet-header { border:none; border-radius:12px; background:linear-gradient(135deg,#3a3a3a 0%,#555 100%); color:white; }
+    .kpi-mini { background:rgba(255,255,255,0.1); border-radius:10px; padding:12px 18px; text-align:center; }
+    .kpi-mini .kpi-num { font-size:1.5rem; font-weight:700; line-height:1; }
+    .kpi-mini .kpi-lbl { font-size:0.68rem; opacity:0.75; text-transform:uppercase; letter-spacing:0.5px; }
+    .vehicle-card { border:1px solid #e9ecef; border-radius:10px; padding:0.75rem 1rem; margin-bottom:0.5rem; transition:all 0.15s; background:white; }
+    .vehicle-card:hover { border-color:#C41E3A; box-shadow:0 2px 12px rgba(0,0,0,0.06); }
+    .vehicle-card.issue { border-left:4px solid #dc3545; background:#fff5f5; }
+    .plate-badge { background:#1a1a1a; color:#fff; padding:6px 14px; border-radius:8px; font-weight:700; font-size:0.9rem; letter-spacing:1px; font-family:monospace; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="card fleet-header mb-4">
+        <div class="card-body p-4">
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                <div>
+                    <h1 class="h3 mb-1 text-white"><i class="bi bi-car-front me-2"></i>Vehicle Fleet</h1>
+                    <p class="mb-0 opacity-75">Company vehicle management</p>
+                </div>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-outline-light" data-bs-toggle="modal" data-bs-target="#importModal"><i class="bi bi-upload me-1"></i>Import</button>
+                    <a href="{% url 'hr:vehicle_export' %}" class="btn btn-outline-light"><i class="bi bi-download me-1"></i>Export</a>
+                    <a href="{% url 'hr:vehicle_create' %}" class="btn btn-warning fw-semibold"><i class="bi bi-plus-lg me-1"></i>Add Vehicle</a>
+                </div>
+            </div>
+            <div class="row g-3">
+                <div class="col-auto"><div class="kpi-mini"><div class="kpi-num">{{ total_count }}</div><div class="kpi-lbl">Total Vehicles</div></div></div>
+                <div class="col-auto"><div class="kpi-mini"><div class="kpi-num">{{ valid_count }}</div><div class="kpi-lbl">Valid</div></div></div>
+                <div class="col-auto">
+                    <div class="kpi-mini" {% if compliance_issues > 0 %}style="background:rgba(220,53,69,0.3);"{% endif %}>
+                        <div class="kpi-num">{{ compliance_issues }}</div><div class="kpi-lbl">Compliance Issues</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-4"><div class="card-body">
+        <form method="get" class="row g-3">
+            <div class="col-md-7">{{ filter_form.search }}</div>
+            <div class="col-md-3">{{ filter_form.status }}</div>
+            <div class="col-md-2"><button type="submit" class="btn btn-primary w-100">Filter</button></div>
+        </form>
+    </div></div>
+
+    <div id="vehicle-container">
+        {% for v in vehicles %}
+        <div class="vehicle-card {% if v.has_compliance_issue %}issue{% endif %}">
+            <div class="row align-items-center">
+                <div class="col-md-2">
+                    <span class="plate-badge">{{ v.plate_number }}</span>
+                </div>
+                <div class="col-md-2">
+                    <strong>{{ v.vehicle_maker }}</strong>
+                    <div class="text-muted" style="font-size:0.82rem;">{{ v.vehicle_model }} {{ v.model_year }}</div>
+                </div>
+                <div class="col-md-2">
+                    {% if v.driver_name and v.driver_name != '-' %}
+                    <small class="text-muted d-block" style="font-size:0.65rem; text-transform:uppercase;">Driver</small>
+                    <span style="font-size:0.85rem;">{{ v.driver_name|truncatechars:25 }}</span>
+                    {% else %}
+                    <span class="text-muted">No driver assigned</span>
+                    {% endif %}
+                </div>
+                <div class="col-md-3">
+                    <div class="d-flex gap-2 flex-wrap">
+                        {% if v.vehicle_status == 'valid' %}<span class="badge bg-success">Valid</span>{% else %}<span class="badge bg-danger">{{ v.get_vehicle_status_display }}</span>{% endif %}
+                        {% if v.mvpi_status == 'valid' %}<span class="badge bg-success">MVPI</span>{% elif v.mvpi_status == 'expired' %}<span class="badge bg-danger">MVPI Expired</span>{% endif %}
+                        {% if v.insurance_status == 'valid' %}<span class="badge bg-success">Insured</span>{% elif v.insurance_status == 'expired' %}<span class="badge bg-danger">Insurance Expired</span>{% endif %}
+                    </div>
+                    {% if v.license_expiry and v.license_expiry != '-' %}
+                    <small class="text-muted d-block mt-1">License exp: {{ v.license_expiry }}</small>
+                    {% endif %}
+                </div>
+                <div class="col-md-1 text-end">
+                    <div class="btn-group btn-group-sm">
+                        <a href="{% url 'hr:vehicle_detail' v.pk %}" class="btn btn-outline-primary" title="View"><i class="bi bi-eye"></i></a>
+                        <a href="{% url 'hr:vehicle_update' v.pk %}" class="btn btn-outline-secondary" title="Edit"><i class="bi bi-pencil"></i></a>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% empty %}
+        <div class="text-center py-5 text-muted">
+            <i class="bi bi-car-front display-4"></i>
+            <p class="mt-3">No vehicles registered.</p>
+            <a href="{% url 'hr:vehicle_create' %}" class="btn btn-warning me-2"><i class="bi bi-plus-lg"></i> Add Vehicle</a>
+            <button class="btn btn-outline-success" data-bs-toggle="modal" data-bs-target="#importModal"><i class="bi bi-upload"></i> Import</button>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="modal fade" id="importModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title"><i class="bi bi-upload"></i> Import Vehicles</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <form method="post" action="{% url 'hr:vehicle_import' %}" enctype="multipart/form-data">
+                {% csrf_token %}
+                <div class="modal-body">
+                    <p class="text-muted small">Upload the MOI vehicle list Excel export. Existing plates will be updated.</p>
+                    <div class="mb-3"><label class="form-label fw-bold">Excel File</label><input type="file" name="excel_file" class="form-control" accept=".xlsx,.xls" required></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success"><i class="bi bi-upload"></i> Import</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

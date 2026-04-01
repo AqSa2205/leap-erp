@@ -1,5 +1,5 @@
 from django import forms
-from .models import Employee, Asset
+from .models import Employee, Asset, Vehicle
 
 
 class EmployeeForm(forms.ModelForm):
@@ -128,4 +128,38 @@ class AssetFilterForm(forms.Form):
 class AssetImportForm(forms.Form):
     excel_file = forms.FileField(
         widget=forms.FileInput(attrs={'class': 'form-control', 'accept': '.xlsx,.xls'}),
+    )
+
+
+# ─── Vehicle Forms ────────────────────────────────────────────
+
+class VehicleForm(forms.ModelForm):
+    class Meta:
+        model = Vehicle
+        fields = [
+            'plate_number', 'plate_type', 'sequence_number', 'chassis_number',
+            'vehicle_maker', 'vehicle_model', 'model_year', 'major_color', 'body_type',
+            'vehicle_status', 'mvpi_status', 'insurance_status', 'restriction_status',
+            'ownership_date', 'license_expiry', 'license_issue_date', 'inspection_expiry',
+            'driver_id', 'driver_name', 'branch_name',
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            if isinstance(field.widget, forms.Select):
+                field.widget.attrs['class'] = 'form-select'
+            else:
+                field.widget.attrs['class'] = 'form-control'
+
+
+class VehicleFilterForm(forms.Form):
+    search = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Search plate, maker, driver...'}),
+    )
+    status = forms.ChoiceField(
+        required=False,
+        choices=[('', 'All Statuses')] + list(Vehicle.VEHICLE_STATUS_CHOICES),
+        widget=forms.Select(attrs={'class': 'form-select'}),
     )

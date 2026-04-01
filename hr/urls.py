@@ -12,7 +12,7 @@ urlpatterns = [
     path('<int:pk>/edit/', views.EmployeeUpdateView.as_view(), name='employee_update'),
     path('<int:pk>/delete/', views.EmployeeDeleteView.as_view(), name='employee_delete'),
 
-    # Assets
+    # Assets (Laptops & Equipment)
     path('assets/', views.AssetListView.as_view(), name='asset_list'),
     path('assets/create/', views.AssetCreateView.as_view(), name='asset_create'),
     path('assets/import/', views.asset_import, name='asset_import'),
@@ -20,4 +20,13 @@ urlpatterns = [
     path('assets/<int:pk>/', views.AssetDetailView.as_view(), name='asset_detail'),
     path('assets/<int:pk>/edit/', views.AssetUpdateView.as_view(), name='asset_update'),
     path('assets/<int:pk>/delete/', views.AssetDeleteView.as_view(), name='asset_delete'),
+
+    # Vehicles
+    path('vehicles/', views.VehicleListView.as_view(), name='vehicle_list'),
+    path('vehicles/create/', views.VehicleCreateView.as_view(), name='vehicle_create'),
+    path('vehicles/import/', views.vehicle_import, name='vehicle_import'),
+    path('vehicles/export/', views.vehicle_export, name='vehicle_export'),
+    path('vehicles/<int:pk>/', views.VehicleDetailView.as_view(), name='vehicle_detail'),
+    path('vehicles/<int:pk>/edit/', views.VehicleUpdateView.as_view(), name='vehicle_update'),
+    path('vehicles/<int:pk>/delete/', views.VehicleDeleteView.as_view(), name='vehicle_delete'),
 ]

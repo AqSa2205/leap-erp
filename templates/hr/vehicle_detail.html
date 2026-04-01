@@ -1,0 +1,110 @@
+{% extends 'base.html' %}
+
+{% block title %}Vehicle: {{ vehicle.plate_number }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .v-header { border:none; border-radius:12px; background:linear-gradient(135deg,#3a3a3a 0%,#555 100%); color:white; }
+    .plate-big { background:#1a1a1a; color:#fff; padding:10px 24px; border-radius:10px; font-weight:700; font-size:1.4rem; letter-spacing:2px; font-family:monospace; display:inline-block; }
+    .info-card { border:none; border-radius:12px; box-shadow:0 2px 12px rgba(0,0,0,0.06); }
+    .info-card .card-header { background:transparent; border-bottom:2px solid #f0f0f0; }
+    .info-card .card-header h6 { font-weight:700; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.5px; color:#C41E3A; }
+    .info-label { font-size:0.72rem; color:#9ca3af; text-transform:uppercase; letter-spacing:0.3px; font-weight:600; margin-bottom:2px; }
+    .info-value { font-size:0.95rem; font-weight:500; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <div class="card v-header mb-4">
+                <div class="card-body p-4">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <div class="plate-big mb-2">{{ vehicle.plate_number }}</div>
+                            <p class="mb-0 opacity-75">{{ vehicle.vehicle_maker }} {{ vehicle.vehicle_model }} {{ vehicle.model_year }}</p>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <a href="{% url 'hr:vehicle_list' %}" class="btn btn-outline-light" style="border-radius:8px;"><i class="bi bi-arrow-left"></i></a>
+                            <a href="{% url 'hr:vehicle_update' vehicle.pk %}" class="btn btn-light" style="border-radius:8px;"><i class="bi bi-pencil me-1"></i>Edit</a>
+                            <a href="{% url 'hr:vehicle_delete' vehicle.pk %}" class="btn btn-outline-light text-danger border-danger" style="border-radius:8px;"><i class="bi bi-trash"></i></a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-4">
+                <div class="col-md-6">
+                    <div class="card info-card h-100">
+                        <div class="card-header"><h6 class="mb-0"><i class="bi bi-car-front me-2"></i>Vehicle Details</h6></div>
+                        <div class="card-body">
+                            <div class="row g-3">
+                                <div class="col-6"><div class="info-label">Maker</div><div class="info-value">{{ vehicle.vehicle_maker }}</div></div>
+                                <div class="col-6"><div class="info-label">Model</div><div class="info-value">{{ vehicle.vehicle_model|default:"-" }}</div></div>
+                                <div class="col-6"><div class="info-label">Year</div><div class="info-value">{{ vehicle.model_year|default:"-" }}</div></div>
+                                <div class="col-6"><div class="info-label">Color</div><div class="info-value">{{ vehicle.major_color|default:"-" }}</div></div>
+                                <div class="col-6"><div class="info-label">Plate Type</div><div class="info-value">{{ vehicle.plate_type|default:"-" }}</div></div>
+                                <div class="col-6"><div class="info-label">Body Type</div><div class="info-value">{{ vehicle.body_type|default:"-" }}</div></div>
+                                <div class="col-6"><div class="info-label">Chassis Number</div><div class="info-value" style="font-family:monospace; font-size:0.85rem;">{{ vehicle.chassis_number|default:"-" }}</div></div>
+                                <div class="col-6"><div class="info-label">Sequence Number</div><div class="info-value">{{ vehicle.sequence_number|default:"-" }}</div></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-md-6">
+                    <div class="card info-card h-100">
+                        <div class="card-header"><h6 class="mb-0"><i class="bi bi-shield-check me-2"></i>Compliance & Status</h6></div>
+                        <div class="card-body">
+                            <div class="row g-3">
+                                <div class="col-6">
+                                    <div class="info-label">Vehicle Status</div>
+                                    {% if vehicle.vehicle_status == 'valid' %}<span class="badge bg-success">Valid</span>{% else %}<span class="badge bg-danger">{{ vehicle.get_vehicle_status_display }}</span>{% endif %}
+                                </div>
+                                <div class="col-6">
+                                    <div class="info-label">MVPI Status</div>
+                                    {% if vehicle.mvpi_status == 'valid' %}<span class="badge bg-success">Valid</span>{% elif vehicle.mvpi_status == 'expired' %}<span class="badge bg-danger">Expired</span>{% else %}<span class="badge bg-secondary">Not Exist</span>{% endif %}
+                                </div>
+                                <div class="col-6">
+                                    <div class="info-label">Insurance</div>
+                                    {% if vehicle.insurance_status == 'valid' %}<span class="badge bg-success">Valid</span>{% elif vehicle.insurance_status == 'expired' %}<span class="badge bg-danger">Expired</span>{% else %}<span class="badge bg-secondary">Not Exist</span>{% endif %}
+                                </div>
+                                <div class="col-6">
+                                    <div class="info-label">Restriction</div>
+                                    {% if vehicle.restriction_status == 'unrestricted' %}<span class="badge bg-success">Unrestricted</span>{% else %}<span class="badge bg-danger">Restricted</span>{% endif %}
+                                </div>
+                                <div class="col-6"><div class="info-label">License Expiry</div><div class="info-value">{{ vehicle.license_expiry|default:"-" }}</div></div>
+                                <div class="col-6"><div class="info-label">Inspection Expiry</div><div class="info-value">{{ vehicle.inspection_expiry|default:"-" }}</div></div>
+                                <div class="col-6"><div class="info-label">License Issue Date</div><div class="info-value">{{ vehicle.license_issue_date|default:"-" }}</div></div>
+                                <div class="col-6"><div class="info-label">Ownership Date</div><div class="info-value">{{ vehicle.ownership_date|default:"-" }}</div></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-4">
+                <div class="col-md-6">
+                    <div class="card info-card">
+                        <div class="card-header"><h6 class="mb-0"><i class="bi bi-person me-2"></i>Driver</h6></div>
+                        <div class="card-body">
+                            <div class="row g-3">
+                                <div class="col-6"><div class="info-label">Driver Name</div><div class="info-value">{{ vehicle.driver_name|default:"-" }}</div></div>
+                                <div class="col-6"><div class="info-label">Driver ID</div><div class="info-value">{{ vehicle.driver_id|default:"-" }}</div></div>
+                                {% if vehicle.branch_name and vehicle.branch_name != '-' %}
+                                <div class="col-12"><div class="info-label">Branch</div><div class="info-value">{{ vehicle.branch_name }}</div></div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="text-center py-3">
+                <small class="text-muted">Added {{ vehicle.created_at|date:"d M Y, H:i" }} &middot; Updated {{ vehicle.updated_at|date:"d M Y, H:i" }}</small>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

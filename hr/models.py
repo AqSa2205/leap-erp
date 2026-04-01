@@ -113,3 +113,87 @@ class Asset(models.Model):
                 return f"{years} Year{'s' if years != 1 else ''}, {months} Month{'s' if months != 1 else ''}"
             return f"{months} Month{'s' if months != 1 else ''}"
         return "-"
+
+
+class Vehicle(models.Model):
+    """Company vehicle fleet management."""
+
+    VEHICLE_STATUS_CHOICES = [
+        ('valid', 'Valid'),
+        ('expired', 'Expired'),
+        ('suspended', 'Suspended'),
+        ('sold', 'Sold'),
+    ]
+
+    MVPI_STATUS_CHOICES = [
+        ('valid', 'Valid'),
+        ('expired', 'Expired'),
+        ('not_exist', 'Not Exist'),
+    ]
+
+    INSURANCE_STATUS_CHOICES = [
+        ('valid', 'Valid'),
+        ('expired', 'Expired'),
+        ('not_exist', 'Not Exist'),
+    ]
+
+    RESTRICTION_CHOICES = [
+        ('unrestricted', 'Unrestricted'),
+        ('restricted', 'Restricted'),
+    ]
+
+    # Plate & Identity
+    plate_number = models.CharField(max_length=100, verbose_name="Plate Number")
+    plate_type = models.CharField(max_length=100, blank=True, verbose_name="Plate Type")
+    sequence_number = models.CharField(max_length=100, blank=True, verbose_name="Sequence Number")
+    chassis_number = models.CharField(max_length=100, blank=True, verbose_name="Chassis Number")
+
+    # Vehicle Details
+    vehicle_maker = models.CharField(max_length=100, verbose_name="Vehicle Maker")
+    vehicle_model = models.CharField(max_length=100, blank=True, verbose_name="Vehicle Model")
+    model_year = models.CharField(max_length=10, blank=True, verbose_name="Model Year")
+    major_color = models.CharField(max_length=50, blank=True, verbose_name="Color")
+    body_type = models.CharField(max_length=100, blank=True, verbose_name="Body Type")
+
+    # Status & Compliance
+    vehicle_status = models.CharField(max_length=20, choices=VEHICLE_STATUS_CHOICES, default='valid', verbose_name="Vehicle Status")
+    mvpi_status = models.CharField(max_length=20, choices=MVPI_STATUS_CHOICES, default='valid', verbose_name="MVPI Status")
+    insurance_status = models.CharField(max_length=20, choices=INSURANCE_STATUS_CHOICES, default='valid', verbose_name="Insurance Status")
+    restriction_status = models.CharField(max_length=20, choices=RESTRICTION_CHOICES, default='unrestricted', verbose_name="Restriction Status")
+
+    # Dates
+    ownership_date = models.CharField(max_length=50, blank=True, verbose_name="Ownership Date")
+    license_expiry = models.CharField(max_length=50, blank=True, verbose_name="License Expiry Date")
+    license_issue_date = models.CharField(max_length=50, blank=True, verbose_name="License Issue Date")
+    inspection_expiry = models.CharField(max_length=50, blank=True, verbose_name="Inspection Expiry")
+
+    # Driver
+    driver_id = models.CharField(max_length=50, blank=True, verbose_name="Driver ID")
+    driver_name = models.CharField(max_length=255, blank=True, verbose_name="Driver Name")
+
+    # Organization
+    branch_name = models.CharField(max_length=255, blank=True, verbose_name="Branch")
+
+    # Metadata
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='created_vehicles',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['plate_number']
+        verbose_name = "Vehicle"
+        verbose_name_plural = "Vehicles"
+
+    def __str__(self):
+        return f"{self.plate_number} - {self.vehicle_maker} {self.vehicle_model}"
+
+    @property
+    def has_compliance_issue(self):
+        return (
+            self.mvpi_status == 'expired' or
+            self.insurance_status == 'expired' or
+            self.vehicle_status != 'valid'
+        )
