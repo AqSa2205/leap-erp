@@ -323,7 +323,9 @@ class ProjectImportView(LoginRequiredMixin, UserPassesTestMixin, View):
                 'client rfq ref number': 'client_rfq_reference',
                 'submission date': 'submission_deadline',
                 'owner': 'owner',
-                'epc': 'epc',
+                'epc': 'customer',
+                'customer': 'customer',
+                'end user': 'end_user',
                 'bid status': 'status',
                 'est. value (sar)': 'estimated_value',
                 'est. value ($usd)': 'estimated_value_usd',
@@ -415,10 +417,15 @@ class ProjectImportView(LoginRequiredMixin, UserPassesTestMixin, View):
                         if matched_user:
                             defaults['owner'] = matched_user
 
-                    # EPC
-                    epc_val = get_val('epc')
-                    if epc_val:
-                        defaults['epc'] = str(epc_val).strip()
+                    # Customer (was EPC)
+                    customer_val = get_val('customer')
+                    if customer_val:
+                        defaults['customer'] = str(customer_val).strip()
+
+                    # End User
+                    end_user_val = get_val('end_user')
+                    if end_user_val:
+                        defaults['end_user'] = str(end_user_val).strip()
 
                     # Bid Status
                     status_val = get_val('status')

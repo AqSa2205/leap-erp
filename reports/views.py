@@ -89,7 +89,7 @@ def export_excel(request):
     # Headers
     headers = [
         'S/N', 'Proposal Reference', 'Project Name', 'Client RFQ Ref',
-        'Region', 'Status', 'Owner', 'EPC', 'Est. Value',
+        'Region', 'Status', 'Owner', 'Customer', 'End User', 'Est. Value',
         'PO Quarter', 'Success Quotient', 'Submission Date',
         'Est. PO Date', 'Remarks', 'Notes'
     ]
@@ -118,7 +118,8 @@ def export_excel(request):
             project.region.code if project.region else '',
             project.status.name if project.status else '',
             str(project.owner) if project.owner else '',
-            project.epc,
+            project.customer,
+            project.end_user,
             float(project.estimated_value),
             project.po_award_quarter,
             float(project.success_quotient),

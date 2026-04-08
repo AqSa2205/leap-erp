@@ -50,9 +50,19 @@
                                 <td>{{ project.owner|default:'-' }}</td>
                             </tr>
                             <tr>
-                                <th class="text-muted">EPC</th>
-                                <td>{{ project.epc|default:'-' }}</td>
+                                <th class="text-muted">Customer</th>
+                                <td>{{ project.customer|default:'-' }}</td>
                             </tr>
+                            <tr>
+                                <th class="text-muted">End User</th>
+                                <td>{{ project.end_user|default:'-' }}</td>
+                            </tr>
+                            {% if project.project_stage %}
+                            <tr>
+                                <th class="text-muted">Project Stage</th>
+                                <td><span class="badge {% if project.project_stage == 'procurement' %}bg-primary{% else %}bg-warning text-dark{% endif %}">{{ project.get_project_stage_display }}</span></td>
+                            </tr>
+                            {% endif %}
                         </table>
                     </div>
                     <div class="col-md-6">

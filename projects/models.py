@@ -85,11 +85,29 @@ class Project(models.Model):
         related_name='owned_projects',
         help_text="Project owner/responsible person"
     )
-    epc = models.CharField(
+    customer = models.CharField(
         max_length=200,
         blank=True,
-        help_text="EPC Contractor"
+        help_text="Customer"
     )
+    end_user = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="End User"
+    )
+
+    PROJECT_STAGE_CHOICES = [
+        ('', '-'),
+        ('procurement', 'Procurement Stage'),
+        ('building', 'Building Stage'),
+    ]
+    project_stage = models.CharField(
+        max_length=20,
+        choices=PROJECT_STAGE_CHOICES,
+        blank=True,
+        verbose_name="Project Stage"
+    )
+
     status = models.ForeignKey(
         ProjectStatus,
         on_delete=models.PROTECT,

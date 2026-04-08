@@ -36,7 +36,7 @@ class ProjectAdmin(admin.ModelAdmin):
             )
         }),
         ('Status & Region', {
-            'fields': ('status', 'region', 'owner', 'epc')
+            'fields': ('status', 'region', 'owner', 'customer', 'end_user', 'project_stage')
         }),
         ('Dates', {
             'fields': ('submission_deadline', 'estimated_po_date')

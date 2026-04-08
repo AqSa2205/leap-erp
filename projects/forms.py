@@ -10,7 +10,7 @@ class ProjectForm(forms.ModelForm):
         fields = [
             'project_name', 'proposal_reference', 'client_rfq_reference',
             'po_number', 'submission_deadline', 'estimated_po_date',
-            'owner', 'epc', 'status', 'region', 'year', 'estimated_value',
+            'owner', 'customer', 'end_user', 'project_stage', 'status', 'region', 'year', 'estimated_value',
             'estimated_value_usd', 'estimated_value_per_annum', 'estimated_gp',
             'actual_sales', 'po_award_quarter', 'success_quotient', 'minimum_achievement',
             'contact_with', 'remarks', 'notes', 'portal_url'
