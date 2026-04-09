@@ -5,21 +5,40 @@ Leap Networks Sales ERP System
 
 import os
 from pathlib import Path
+from django.core.exceptions import ImproperlyConfigured
 import dj_database_url
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-# Environment detection
+# Environment detection — production is auto-detected on Render even
+# if DJANGO_ENV isn't set, so we don't fall through to insecure defaults.
 ENVIRONMENT = os.environ.get('DJANGO_ENV', 'development')
-IS_PRODUCTION = ENVIRONMENT == 'production'
+IS_PRODUCTION = (
+    ENVIRONMENT == 'production'
+    or bool(os.environ.get('RENDER'))
+    or bool(os.environ.get('RENDER_EXTERNAL_HOSTNAME'))
+)
 
 
-# Security settings
-SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-$ju)!-er4z0yt*=*=0)9kzpde*17e+!i=g+2h%&2*4gm_5gz$e')
+# Security settings — fail fast in production if SECRET_KEY is missing.
+SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    if IS_PRODUCTION:
+        raise ImproperlyConfigured(
+            'SECRET_KEY environment variable must be set in production. '
+            'Refusing to start with an insecure fallback.'
+        )
+    # Local development only — never used in production due to the check above.
+    SECRET_KEY = 'django-insecure-dev-only-do-not-use-in-production'
 
-DEBUG = os.environ.get('DEBUG', 'True').lower() == 'true'
+# DEBUG: defaults to False in production, True in local dev.
+# Production is auto-detected (Render), so the dev default cannot leak.
+_debug_default = 'False' if IS_PRODUCTION else 'True'
+DEBUG = os.environ.get('DEBUG', _debug_default).lower() == 'true'
+if IS_PRODUCTION:
+    DEBUG = False  # Never allow DEBUG in production regardless of env var.
 
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
