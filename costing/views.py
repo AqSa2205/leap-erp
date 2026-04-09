@@ -635,6 +635,13 @@ def ajax_update_sheet_params(request, pk):
             new_value = Decimal(value)
         except (InvalidOperation, ValueError):
             return JsonResponse({'error': 'Invalid number'}, status=400)
+        # Clamp percentage fields to sane bounds. Margin must be in
+        # [0, 99] to keep the selling-price formula 1/(1-margin) stable.
+        # Other rates are allowed in [0, 100].
+        if field == 'margin':
+            new_value = max(Decimal('0'), min(new_value, Decimal('99')))
+        else:
+            new_value = max(Decimal('0'), min(new_value, Decimal('100')))
 
     # Single atomic UPDATE WHERE pk=X SET field=value. This only writes
     # the one field, so concurrent edits to other fields on the same sheet
@@ -678,6 +685,8 @@ def ajax_update_item_margin(request, pk):
             new_margin = Decimal(value)
         except (InvalidOperation, ValueError):
             return JsonResponse({'error': 'Invalid number'}, status=400)
+        # Clamp to [0, 99] to keep the selling-price formula stable.
+        new_margin = max(Decimal('0'), min(new_margin, Decimal('99')))
     # Atomic single-field UPDATE — no read-modify-write race against
     # other concurrent edits to different fields on the same line item.
     CostingLineItem.objects.filter(pk=pk).update(margin=new_margin)
@@ -710,6 +719,11 @@ def ajax_update_item_field(request, pk):
             new_value = Decimal(value) if value else Decimal('0')
         except (InvalidOperation, ValueError):
             return JsonResponse({'error': 'Invalid number'}, status=400)
+        # Clamp percentage fields to sane bounds.
+        if field == 'margin':
+            new_value = max(Decimal('0'), min(new_value, Decimal('99')))
+        elif field in ('discount_pct', 'shipping_pct', 'customs_pct', 'finances_pct', 'installation_pct'):
+            new_value = max(Decimal('0'), min(new_value, Decimal('100')))
 
     # Atomic single-field UPDATE — only writes the one field, so it cannot
     # clobber concurrent edits to other fields on the same line item.

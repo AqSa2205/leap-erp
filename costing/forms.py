@@ -14,7 +14,7 @@ class CostingSheetForm(forms.ModelForm):
             'customer_name', 'end_user', 'contact_person', 'telephone', 'fax',
         ]
         widgets = {
-            'margin': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '100', 'placeholder': 'e.g. 40 for 40%'}),
+            'margin': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '99', 'placeholder': 'e.g. 40 for 40% (max 99)'}),
             'discount_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '100', 'placeholder': 'e.g. 5 for 5%'}),
             'shipping_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '100', 'placeholder': 'e.g. 3 for 3%'}),
             'customs_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '100', 'placeholder': 'e.g. 5 for 5%'}),

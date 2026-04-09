@@ -298,12 +298,28 @@ class CostingLineItem(models.Model):
             return self._sheet_cache
         return self.section.costing_sheet
 
+    # Pricing math safety bounds. Margins are stored as whole-number percents
+    # (e.g. 40 = 40%) and converted to decimals (0.40) for the price formula
+    # selling_price = cost / (1 - margin). Without bounds, a margin of 99.99
+    # produces a 10000x markup; a negative margin produces an under-priced
+    # selling price. Clamp to [0%, 99%] so the math is always sane.
+    MIN_MARGIN_DECIMAL = Decimal('0')
+    MAX_MARGIN_DECIMAL = Decimal('0.99')
+
     @property
     def effective_margin(self):
-        """Use item-specific margin if set, otherwise fall back to sheet margin. Divide by 100 for calculation."""
-        if self.margin is not None:
-            return self.margin / Decimal('100')
-        return self.sheet.margin / Decimal('100')
+        """Use item-specific margin if set, otherwise fall back to sheet
+        margin. Returned as a decimal (40% -> 0.40), clamped to [0, 0.99]
+        to keep the selling-price formula numerically stable."""
+        raw = self.margin if self.margin is not None else self.sheet.margin
+        if raw is None:
+            return Decimal('0')
+        margin_decimal = Decimal(raw) / Decimal('100')
+        if margin_decimal < self.MIN_MARGIN_DECIMAL:
+            return self.MIN_MARGIN_DECIMAL
+        if margin_decimal > self.MAX_MARGIN_DECIMAL:
+            return self.MAX_MARGIN_DECIMAL
+        return margin_decimal
 
     @property
     def effective_discount_pct(self):
@@ -403,14 +419,15 @@ class CostingLineItem(models.Model):
 
     @property
     def base_unit_price(self):
-        """Selling Price = Cost / (1 - Margin), where selling price is 100%"""
+        """Selling Price = Cost / (1 - Margin), where selling price is 100%.
+
+        effective_margin is guaranteed to be in [0, 0.99] so (1 - margin) is
+        always in [0.01, 1.0] - never zero, never negative, never explosive.
+        """
         if 'base_unit_price' in self._computed:
             return self._computed['base_unit_price']
         margin = self.effective_margin
-        if margin >= 1:
-            result = self.unit_cost_sar
-        else:
-            result = (self.unit_cost_sar / (1 - margin)).quantize(Decimal('0.01'))
+        result = (self.unit_cost_sar / (Decimal('1') - margin)).quantize(Decimal('0.01'))
         self._computed['base_unit_price'] = result
         return result
 
