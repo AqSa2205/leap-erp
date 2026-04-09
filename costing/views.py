@@ -29,6 +29,35 @@ from .forms import (
 )
 
 
+def _user_can_view_sheet(user, sheet):
+    """Check whether user has view access to a costing sheet."""
+    if not user.is_authenticated:
+        return False
+    if user.is_super_admin_user:
+        return True
+    if sheet.created_by_id == user.id:
+        return True
+    if user.is_admin_user or user.is_manager_user:
+        return bool(sheet.project and sheet.project.region_id == user.region_id)
+    return False
+
+
+def _user_can_edit_sheet(user, sheet):
+    """Check whether user has edit access to a costing sheet.
+    Edit rules: super_admin can edit anything, admin can edit within region,
+    creator can edit their own. Manager-only access is read-only.
+    """
+    if not user.is_authenticated:
+        return False
+    if user.is_super_admin_user:
+        return True
+    if sheet.created_by_id == user.id:
+        return True
+    if user.is_admin_user and sheet.project and sheet.project.region_id == user.region_id:
+        return True
+    return False
+
+
 class CostingPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
         queryset = CostingSheet.objects.select_related('project', 'created_by').all()
@@ -42,6 +71,18 @@ class CostingPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
             )
         else:
             return queryset.filter(created_by=user)
+
+
+class _SheetChildPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
+    """Ownership check for views that operate on a child of a CostingSheet
+    (Section, LineItem). The subclass must implement get_sheet()."""
+
+    def get_sheet(self):
+        raise NotImplementedError
+
+    def test_func(self):
+        sheet = self.get_sheet()
+        return _user_can_edit_sheet(self.request.user, sheet)
 
 
 # ─── Costing Sheet CRUD ───────────────────────────────────────
@@ -271,13 +312,16 @@ class CostingDeleteView(CostingPermissionMixin, DeleteView):
 
 # ─── Section CRUD ─────────────────────────────────────────────
 
-class SectionCreateView(LoginRequiredMixin, CreateView):
+class SectionCreateView(_SheetChildPermissionMixin, CreateView):
     model = CostingSection
     form_class = CostingSectionForm
     template_name = 'costing/section_form.html'
 
+    def get_sheet(self):
+        return get_object_or_404(CostingSheet, pk=self.kwargs['sheet_pk'])
+
     def form_valid(self, form):
-        sheet = get_object_or_404(CostingSheet, pk=self.kwargs['sheet_pk'])
+        sheet = self.get_sheet()
         form.instance.costing_sheet = sheet
         messages.success(self.request, 'Section added successfully.')
         return super().form_valid(form)
@@ -287,14 +331,17 @@ class SectionCreateView(LoginRequiredMixin, CreateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['sheet'] = get_object_or_404(CostingSheet, pk=self.kwargs['sheet_pk'])
+        context['sheet'] = self.get_sheet()
         return context
 
 
-class SectionUpdateView(LoginRequiredMixin, UpdateView):
+class SectionUpdateView(_SheetChildPermissionMixin, UpdateView):
     model = CostingSection
     form_class = CostingSectionForm
     template_name = 'costing/section_form.html'
+
+    def get_sheet(self):
+        return self.get_object().costing_sheet
 
     def get_success_url(self):
         return reverse('costing:detail', kwargs={'pk': self.object.costing_sheet.pk})
@@ -309,9 +356,12 @@ class SectionUpdateView(LoginRequiredMixin, UpdateView):
         return context
 
 
-class SectionDeleteView(LoginRequiredMixin, DeleteView):
+class SectionDeleteView(_SheetChildPermissionMixin, DeleteView):
     model = CostingSection
     template_name = 'costing/costing_confirm_delete.html'
+
+    def get_sheet(self):
+        return self.get_object().costing_sheet
 
     def get_success_url(self):
         return reverse('costing:detail', kwargs={'pk': self.object.costing_sheet.pk})
@@ -323,31 +373,38 @@ class SectionDeleteView(LoginRequiredMixin, DeleteView):
 
 # ─── Line Item CRUD ───────────────────────────────────────────
 
-class LineItemCreateView(LoginRequiredMixin, CreateView):
+class LineItemCreateView(_SheetChildPermissionMixin, CreateView):
     model = CostingLineItem
     form_class = CostingLineItemForm
     template_name = 'costing/lineitem_form.html'
 
+    def _get_section(self):
+        return get_object_or_404(CostingSection, pk=self.kwargs['section_pk'])
+
+    def get_sheet(self):
+        return self._get_section().costing_sheet
+
     def form_valid(self, form):
-        section = get_object_or_404(CostingSection, pk=self.kwargs['section_pk'])
-        form.instance.section = section
+        form.instance.section = self._get_section()
         messages.success(self.request, 'Line item added successfully.')
         return super().form_valid(form)
 
     def get_success_url(self):
-        section = get_object_or_404(CostingSection, pk=self.kwargs['section_pk'])
-        return reverse('costing:detail', kwargs={'pk': section.costing_sheet.pk})
+        return reverse('costing:detail', kwargs={'pk': self._get_section().costing_sheet.pk})
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['section'] = get_object_or_404(CostingSection, pk=self.kwargs['section_pk'])
+        context['section'] = self._get_section()
         return context
 
 
-class LineItemUpdateView(LoginRequiredMixin, UpdateView):
+class LineItemUpdateView(_SheetChildPermissionMixin, UpdateView):
     model = CostingLineItem
     form_class = CostingLineItemForm
     template_name = 'costing/lineitem_form.html'
+
+    def get_sheet(self):
+        return self.get_object().section.costing_sheet
 
     def get_success_url(self):
         return reverse('costing:detail', kwargs={'pk': self.object.section.costing_sheet.pk})
@@ -362,9 +419,12 @@ class LineItemUpdateView(LoginRequiredMixin, UpdateView):
         return context
 
 
-class LineItemDeleteView(LoginRequiredMixin, DeleteView):
+class LineItemDeleteView(_SheetChildPermissionMixin, DeleteView):
     model = CostingLineItem
     template_name = 'costing/costing_confirm_delete.html'
+
+    def get_sheet(self):
+        return self.get_object().section.costing_sheet
 
     def get_success_url(self):
         return reverse('costing:detail', kwargs={'pk': self.object.section.costing_sheet.pk})
@@ -478,6 +538,8 @@ class TermsTemplateDeleteView(LoginRequiredMixin, DeleteView):
 def ajax_toggle_term(request, pk):
     """Toggle a TermsTemplate on/off for a costing sheet."""
     sheet = get_object_or_404(CostingSheet, pk=pk)
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
     term_id = request.POST.get('term_id')
     if not term_id:
         return JsonResponse({'error': 'term_id required'}, status=400)
@@ -498,6 +560,8 @@ def ajax_section_items(request, pk):
     """Return HTML fragment with a section's line items for lazy-loading."""
     section = get_object_or_404(CostingSection, pk=pk)
     sheet = section.costing_sheet
+    if not _user_can_view_sheet(request.user, sheet):
+        return HttpResponse(status=403)
     items = list(section.line_items.all())
 
     exchange_rates = list(ExchangeRate.objects.all())
@@ -525,6 +589,8 @@ def ajax_section_items(request, pk):
 @require_POST
 def ajax_update_sheet_params(request, pk):
     sheet = get_object_or_404(CostingSheet, pk=pk)
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
     field = request.POST.get('field')
     value = request.POST.get('value', '').strip()
 
@@ -547,6 +613,10 @@ def ajax_update_sheet_params(request, pk):
 @login_required
 @require_POST
 def ajax_update_exchange_rate(request, pk):
+    # Exchange rates are global; only super admin or admin may modify them.
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
     rate = get_object_or_404(ExchangeRate, pk=pk)
     value = request.POST.get('value', '').strip()
     try:
@@ -561,6 +631,8 @@ def ajax_update_exchange_rate(request, pk):
 @require_POST
 def ajax_update_item_margin(request, pk):
     item = get_object_or_404(CostingLineItem, pk=pk)
+    if not _user_can_edit_sheet(request.user, item.section.costing_sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
     value = request.POST.get('margin', '').strip()
     if not value:
         item.margin = None  # Clear to use sheet margin
@@ -577,6 +649,8 @@ def ajax_update_item_margin(request, pk):
 @require_POST
 def ajax_update_item_field(request, pk):
     item = get_object_or_404(CostingLineItem, pk=pk)
+    if not _user_can_edit_sheet(request.user, item.section.costing_sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
     field = request.POST.get('field', '').strip()
     value = request.POST.get('value', '').strip()
 
@@ -616,6 +690,7 @@ def ajax_update_item_field(request, pk):
 
 # ─── Excel Export ─────────────────────────────────────────────
 
+@login_required
 def costing_export_excel(request, pk):
     try:
         import openpyxl
@@ -625,6 +700,9 @@ def costing_export_excel(request, pk):
         return redirect('costing:detail', pk=pk)
 
     sheet = get_object_or_404(CostingSheet, pk=pk)
+    if not _user_can_view_sheet(request.user, sheet):
+        messages.error(request, 'You do not have permission to export this costing sheet.')
+        return redirect('costing:list')
     sections = sheet.sections.prefetch_related('line_items').all()
     rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
 
@@ -811,6 +889,7 @@ def costing_export_excel(request, pk):
 
 # ─── PDF Summary Export ────────────────────────────────────────
 
+@login_required
 def costing_export_pdf(request, pk):
     """Export a professional PDF summary matching the commercial offer format"""
     try:
@@ -830,6 +909,9 @@ def costing_export_pdf(request, pk):
         return redirect('costing:detail', pk=pk)
 
     sheet = get_object_or_404(CostingSheet, pk=pk)
+    if not _user_can_view_sheet(request.user, sheet):
+        messages.error(request, 'You do not have permission to export this costing sheet.')
+        return redirect('costing:list')
     sections = list(sheet.sections.prefetch_related('line_items').all())
 
     # Inject caches into all line items to avoid N+1 queries
@@ -1274,6 +1356,7 @@ def costing_export_pdf(request, pk):
 
 # ─── Excel Import ────────────────────────────────────────────────
 
+@login_required
 def costing_import_excel(request, pk):
     """Import line items from Excel BOQ file"""
     from openpyxl import load_workbook
@@ -1281,6 +1364,9 @@ def costing_import_excel(request, pk):
     import re
 
     sheet = get_object_or_404(CostingSheet, pk=pk)
+    if not _user_can_edit_sheet(request.user, sheet):
+        messages.error(request, 'You do not have permission to import into this costing sheet.')
+        return redirect('costing:list')
 
     if request.method == 'POST':
         excel_file = request.FILES.get('excel_file')
@@ -1403,6 +1489,7 @@ def costing_import_excel(request, pk):
 
 # ─── Excel Import (New Sheet) ────────────────────────────────────
 
+@login_required
 def costing_import_new(request):
     """Import Excel BOQ to create a new costing sheet"""
     from openpyxl import load_workbook
