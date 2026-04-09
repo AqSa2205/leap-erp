@@ -1481,10 +1481,26 @@ def costing_import_excel(request, pk):
         # never leave orphaned sections/items behind.
         try:
             with transaction.atomic():
+                # Continue numbering from any existing data on the sheet
+                # so re-importing into the same sheet appends instead of
+                # colliding with existing rows.
+                existing_sections = list(sheet.sections.all().order_by('order', 'pk'))
+                existing_max_order = max((s.order for s in existing_sections), default=-1)
+                # Highest existing section number that parses as an int
+                # (so we can keep auto-numbering 1, 2, 3, ...).
+                existing_max_num = 0
+                for s in existing_sections:
+                    try:
+                        existing_max_num = max(existing_max_num, int(s.section_number))
+                    except (TypeError, ValueError):
+                        pass
+
                 sections_created = 0
                 items_created = 0
                 current_section = None
                 item_order = 0
+                next_order = existing_max_order + 1
+                next_auto_num = existing_max_num + 1
 
                 for row_num in range(header_row + 1, ws.max_row + 1):
                     row = [cell.value for cell in ws[row_num]]
@@ -1516,26 +1532,57 @@ def costing_import_excel(request, pk):
                             is_section = True
 
                     if is_section:
-                        # Create section
+                        # Create section. If the imported section number
+                        # collides with an existing one (or with one we just
+                        # created in this import), bump it to the next free
+                        # auto-numbered slot so existing items stay intact.
+                        section_num = rfp_item
+                        existing_nums = set(
+                            CostingSection.objects.filter(costing_sheet=sheet)
+                            .values_list('section_number', flat=True)
+                        )
+                        if section_num in existing_nums:
+                            section_num = str(next_auto_num)
+                            next_auto_num += 1
+                        else:
+                            try:
+                                next_auto_num = max(next_auto_num, int(section_num) + 1)
+                            except (TypeError, ValueError):
+                                pass
+
                         current_section = CostingSection.objects.create(
                             costing_sheet=sheet,
-                            section_number=rfp_item,
+                            section_number=section_num,
                             title=description[:255],
-                            order=sections_created
+                            order=next_order,
                         )
+                        next_order += 1
                         sections_created += 1
                         item_order = 0
                     else:
                         # Create line item
                         if not current_section:
-                            # Create a default section if none exists
-                            current_section = CostingSection.objects.create(
-                                costing_sheet=sheet,
-                                section_number='1',
-                                title='Imported Items',
-                                order=0
-                            )
-                            sections_created += 1
+                            # No section header in the file yet. Either
+                            # continue appending to the last existing
+                            # section or create a default "Imported Items"
+                            # bucket.
+                            if existing_sections:
+                                current_section = existing_sections[-1]
+                                # Continue ordering from the last item in
+                                # that section so we don't collide.
+                                last_item = current_section.line_items.order_by('-order').first()
+                                item_order = (last_item.order + 1) if last_item else 0
+                            else:
+                                current_section = CostingSection.objects.create(
+                                    costing_sheet=sheet,
+                                    section_number=str(next_auto_num),
+                                    title='Imported Items',
+                                    order=next_order,
+                                )
+                                next_order += 1
+                                next_auto_num += 1
+                                sections_created += 1
+                                item_order = 0
 
                         CostingLineItem.objects.create(
                             section=current_section,
@@ -1550,7 +1597,7 @@ def costing_import_excel(request, pk):
                         items_created += 1
                         item_order += 1
 
-            messages.success(request, f'Import successful! Created {sections_created} sections and {items_created} line items.')
+            messages.success(request, f'Import successful! Added {sections_created} sections and {items_created} line items.')
             return redirect('costing:detail', pk=pk)
 
         except (KeyError, ValueError, TypeError) as e:

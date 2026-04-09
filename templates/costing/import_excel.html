@@ -62,10 +62,12 @@
                         <small class="text-muted">Supported formats: .xlsx, .xls</small>
                     </div>
 
-                    <div class="alert alert-warning">
-                        <i class="bi bi-exclamation-triangle me-1"></i>
-                        <strong>Warning:</strong> Imported items will be added to the existing sheet.
-                        Existing sections and items will NOT be deleted.
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle me-1"></i>
+                        <strong>How re-import works:</strong> New items are appended to the existing sheet.
+                        Section numbering continues from the last existing section
+                        (e.g. if the sheet already has sections 1, 2, 3, the new ones become 4, 5, ...).
+                        Existing sections and items are never modified or deleted.
                     </div>
 
                     <div class="d-flex justify-content-between">
