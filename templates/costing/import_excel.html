@@ -75,6 +75,15 @@
                         <small class="text-muted">Supported formats: .xlsx, .xls</small>
                     </div>
 
+                    <div class="mb-4">
+                        <label for="import_heading" class="form-label fw-bold">
+                            Heading for this import <span class="text-muted fw-normal">(optional)</span>
+                        </label>
+                        <input type="text" class="form-control" id="import_heading" name="import_heading"
+                               placeholder="e.g. AMIRAL BOM Phase 2, or leave blank for none">
+                        <small class="text-muted">A divider row with this title will be added before the new sections so you can see where this batch starts.</small>
+                    </div>
+
                     <div class="alert alert-info">
                         <i class="bi bi-info-circle me-1"></i>
                         <strong>How re-import works:</strong> New items are appended to the existing sheet.

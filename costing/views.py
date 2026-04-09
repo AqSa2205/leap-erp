@@ -1436,6 +1436,9 @@ def costing_import_excel(request, pk):
         if not excel_file:
             messages.error(request, 'Please select an Excel file to import.')
             return redirect('costing:import_excel', pk=pk)
+        # Optional heading the user wants stamped on top of this import
+        # batch so they can visually separate it from earlier content.
+        import_heading = request.POST.get('import_heading', '').strip()
 
         # Parse the file outside any transaction so a bad file doesn't
         # hold a DB lock and we can return clean error messages.
@@ -1504,6 +1507,21 @@ def costing_import_excel(request, pk):
                 item_order = 0
                 next_order = existing_max_order + 1
                 next_auto_num = existing_max_num + 1
+
+                # If the admin entered a heading, create a divider section
+                # at the top of this import batch so it's visually marked
+                # off from earlier content. The divider is just a regular
+                # section with the heading text as its title and no items.
+                if import_heading and existing_sections:
+                    CostingSection.objects.create(
+                        costing_sheet=sheet,
+                        section_number=str(next_auto_num),
+                        title=import_heading[:255],
+                        order=next_order,
+                    )
+                    next_order += 1
+                    next_auto_num += 1
+                    sections_created += 1
 
                 # Helper to safely read a cell from a row by column index.
                 def cell(row, key):
