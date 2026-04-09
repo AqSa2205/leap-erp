@@ -9,9 +9,9 @@
             <h1 class="h3 mb-1"><i class="bi bi-shield-lock me-2"></i>Password Reset Requests</h1>
             <p class="text-muted mb-0">
                 {% if pending_count > 0 %}
-                <span class="badge bg-danger">{{ pending_count }} pending approval</span>
+                <span class="badge bg-info">{{ pending_count }} active link{{ pending_count|pluralize }}</span>
                 {% else %}
-                No pending requests
+                No active links
                 {% endif %}
             </p>
         </div>
@@ -41,12 +41,10 @@
                             <td>
                                 {% if req.status == 'pending_user' %}
                                 <span class="badge bg-info">Waiting for User</span>
-                                {% elif req.status == 'pending_approval' %}
-                                <span class="badge bg-warning text-dark">Pending Approval</span>
                                 {% elif req.status == 'approved' %}
-                                <span class="badge bg-success">Approved</span>
+                                <span class="badge bg-success">Completed</span>
                                 {% elif req.status == 'rejected' %}
-                                <span class="badge bg-danger">Rejected</span>
+                                <span class="badge bg-secondary">Cancelled</span>
                                 {% elif req.status == 'expired' %}
                                 <span class="badge bg-secondary">Expired</span>
                                 {% endif %}
@@ -55,15 +53,10 @@
                             <td>{{ req.created_at|date:"d M Y, H:i" }}</td>
                             <td>{{ req.updated_at|date:"d M Y, H:i" }}</td>
                             <td>
-                                {% if req.status == 'pending_approval' %}
-                                <a href="{% url 'accounts:approve_reset' req.pk %}" class="btn btn-sm btn-success" title="Approve">
-                                    <i class="bi bi-check-lg"></i> Approve
+                                {% if req.status == 'pending_user' %}
+                                <a href="{% url 'accounts:reject_reset' req.pk %}" class="btn btn-sm btn-outline-danger" title="Cancel link" onclick="return confirm('Cancel this reset link? The user will no longer be able to use it.')">
+                                    <i class="bi bi-x-lg"></i> Cancel
                                 </a>
-                                <a href="{% url 'accounts:reject_reset' req.pk %}" class="btn btn-sm btn-danger" title="Reject">
-                                    <i class="bi bi-x-lg"></i>
-                                </a>
-                                {% elif req.status == 'pending_user' %}
-                                <span class="text-muted" style="font-size:0.8rem;">Waiting...</span>
                                 {% else %}
                                 <span class="text-muted">—</span>
                                 {% endif %}

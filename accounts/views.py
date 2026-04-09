@@ -359,7 +359,7 @@ def reset_requests_list(request):
         return redirect('dashboard:index')
 
     requests = PasswordResetRequest.objects.select_related('user', 'created_by').all()
-    pending = requests.filter(status='pending_approval')
+    pending = requests.filter(status='pending_user')
     return render(request, 'accounts/reset_requests.html', {
         'requests': requests,
         'pending_count': pending.count(),
@@ -367,55 +367,16 @@ def reset_requests_list(request):
 
 
 @login_required
-def approve_reset(request, pk):
-    """Super admin approves a password reset — actually changes the password."""
-    if not request.user.is_super_admin_user:
-        messages.error(request, 'Only super admins can approve resets.')
-        return redirect('accounts:reset_requests')
-
-    reset_req = get_object_or_404(PasswordResetRequest, pk=pk)
-
-    if reset_req.status != 'pending_approval':
-        messages.error(request, 'This request is not pending approval.')
-        return redirect('accounts:reset_requests')
-
-    # Apply the password
-    user = reset_req.user
-    user.password = reset_req.new_password_hash
-    user.save()
-
-    reset_req.status = 'approved'
-    reset_req.save()
-
-    # Notify user
-    if user.email:
-        subject = '[Leap ERP] Password Reset Approved'
-        body = (
-            f'Hi {user.get_full_name() or user.username},\n\n'
-            f'Your password reset has been approved. You can now login with your new password.\n\n'
-            f'— Leap ERP System'
-        )
-
-        def _send():
-            try:
-                send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=False)
-            except Exception:
-                pass
-
-        threading.Thread(target=_send).start()
-
-    messages.success(request, f'Password reset approved for {user.username}.')
-    return redirect('accounts:reset_requests')
-
-
-@login_required
 def reject_reset(request, pk):
-    """Super admin rejects a password reset."""
+    """Super admin cancels a pending reset request (before the user uses it)."""
     if not request.user.is_super_admin_user:
         messages.error(request, 'Only super admins can reject resets.')
         return redirect('accounts:reset_requests')
 
     reset_req = get_object_or_404(PasswordResetRequest, pk=pk)
+    if reset_req.status != 'pending_user':
+        messages.error(request, 'Only pending requests can be cancelled.')
+        return redirect('accounts:reset_requests')
     reset_req.status = 'rejected'
     reset_req.save()
 

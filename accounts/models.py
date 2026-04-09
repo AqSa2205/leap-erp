@@ -147,15 +147,13 @@ class PasswordResetRequest(models.Model):
 
     STATUS_CHOICES = [
         ('pending_user', 'Waiting for User'),
-        ('pending_approval', 'Pending Approval'),
-        ('approved', 'Approved'),
-        ('rejected', 'Rejected'),
+        ('approved', 'Completed'),
+        ('rejected', 'Cancelled'),
         ('expired', 'Expired'),
     ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='password_reset_requests')
     token = models.CharField(max_length=64, unique=True)
-    new_password_hash = models.CharField(max_length=255, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending_user')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='sent_reset_requests')
     created_at = models.DateTimeField(auto_now_add=True)
