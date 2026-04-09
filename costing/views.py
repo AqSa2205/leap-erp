@@ -6,6 +6,7 @@ from django.contrib import messages
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required
+from django.db import transaction
 from django.db.models import Q
 from django.template.loader import render_to_string
 from decimal import Decimal, InvalidOperation
@@ -537,19 +538,26 @@ class TermsTemplateDeleteView(LoginRequiredMixin, DeleteView):
 @require_POST
 def ajax_toggle_term(request, pk):
     """Toggle a TermsTemplate on/off for a costing sheet."""
+    # Permission check uses an unlocked read
     sheet = get_object_or_404(CostingSheet, pk=pk)
     if not _user_can_edit_sheet(request.user, sheet):
         return JsonResponse({'error': 'Permission denied'}, status=403)
+
     term_id = request.POST.get('term_id')
     if not term_id:
         return JsonResponse({'error': 'term_id required'}, status=400)
     term = get_object_or_404(TermsTemplate, pk=term_id)
-    if term in sheet.selected_terms.all():
-        sheet.selected_terms.remove(term)
-        selected = False
-    else:
-        sheet.selected_terms.add(term)
-        selected = True
+
+    # Lock the sheet row inside a transaction so concurrent toggles
+    # against the same M2M can't race.
+    with transaction.atomic():
+        locked_sheet = CostingSheet.objects.select_for_update().get(pk=sheet.pk)
+        if locked_sheet.selected_terms.filter(pk=term.pk).exists():
+            locked_sheet.selected_terms.remove(term)
+            selected = False
+        else:
+            locked_sheet.selected_terms.add(term)
+            selected = True
     return JsonResponse({'ok': True, 'selected': selected})
 
 
@@ -588,9 +596,11 @@ def ajax_section_items(request, pk):
 @login_required
 @require_POST
 def ajax_update_sheet_params(request, pk):
+    # Permission check via an unlocked read first.
     sheet = get_object_or_404(CostingSheet, pk=pk)
     if not _user_can_edit_sheet(request.user, sheet):
         return JsonResponse({'error': 'Permission denied'}, status=403)
+
     field = request.POST.get('field')
     value = request.POST.get('value', '').strip()
 
@@ -598,15 +608,20 @@ def ajax_update_sheet_params(request, pk):
     if field not in allowed:
         return JsonResponse({'error': 'Invalid field'}, status=400)
 
+    # Validate the value before opening a write transaction
     if field == 'output_currency':
-        sheet.output_currency = value
+        new_value = value
     else:
         try:
-            sheet.__setattr__(field, Decimal(value))
+            new_value = Decimal(value)
         except (InvalidOperation, ValueError):
             return JsonResponse({'error': 'Invalid number'}, status=400)
 
-    sheet.save()
+    # Single atomic UPDATE WHERE pk=X SET field=value. This only writes
+    # the one field, so concurrent edits to other fields on the same sheet
+    # cannot clobber each other (the previous bug came from sheet.save()
+    # writing the entire in-memory snapshot).
+    CostingSheet.objects.filter(pk=sheet.pk).update(**{field: new_value})
     return JsonResponse({'ok': True})
 
 
@@ -617,13 +632,16 @@ def ajax_update_exchange_rate(request, pk):
     user = request.user
     if not (user.is_super_admin_user or user.is_admin_user):
         return JsonResponse({'error': 'Permission denied'}, status=403)
-    rate = get_object_or_404(ExchangeRate, pk=pk)
+    # Make sure the row exists (404 if not)
+    if not ExchangeRate.objects.filter(pk=pk).exists():
+        return JsonResponse({'error': 'Not found'}, status=404)
     value = request.POST.get('value', '').strip()
     try:
-        rate.rate_to_usd = Decimal(value)
+        new_value = Decimal(value)
     except (InvalidOperation, ValueError):
         return JsonResponse({'error': 'Invalid number'}, status=400)
-    rate.save()
+    # Atomic single-field UPDATE — no read-modify-write race.
+    ExchangeRate.objects.filter(pk=pk).update(rate_to_usd=new_value)
     return JsonResponse({'ok': True})
 
 
@@ -635,22 +653,27 @@ def ajax_update_item_margin(request, pk):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     value = request.POST.get('margin', '').strip()
     if not value:
-        item.margin = None  # Clear to use sheet margin
+        new_margin = None  # Clear to use sheet margin
     else:
         try:
-            item.margin = Decimal(value)
+            new_margin = Decimal(value)
         except (InvalidOperation, ValueError):
             return JsonResponse({'error': 'Invalid number'}, status=400)
-    item.save()
+    # Atomic single-field UPDATE — no read-modify-write race against
+    # other concurrent edits to different fields on the same line item.
+    CostingLineItem.objects.filter(pk=pk).update(margin=new_margin)
     return JsonResponse({'ok': True})
 
 
 @login_required
 @require_POST
 def ajax_update_item_field(request, pk):
-    item = get_object_or_404(CostingLineItem, pk=pk)
-    if not _user_can_edit_sheet(request.user, item.section.costing_sheet):
+    # Permission check on a normal (unlocked) read.
+    item = get_object_or_404(CostingLineItem.objects.select_related('section__costing_sheet'), pk=pk)
+    sheet = item.section.costing_sheet
+    if not _user_can_edit_sheet(request.user, sheet):
         return JsonResponse({'error': 'Permission denied'}, status=403)
+
     field = request.POST.get('field', '').strip()
     value = request.POST.get('value', '').strip()
 
@@ -658,17 +681,23 @@ def ajax_update_item_field(request, pk):
     if field not in allowed_fields:
         return JsonResponse({'error': 'Invalid field'}, status=400)
 
+    # Validate / coerce the value before opening the transaction.
     if field == 'supplier_currency':
-        item.supplier_currency = value if value else 'SAR'
+        new_value = value if value else 'SAR'
     elif field == 'margin' and not value:
-        item.margin = None
+        new_value = None
     else:
         try:
-            setattr(item, field, Decimal(value) if value else Decimal('0'))
+            new_value = Decimal(value) if value else Decimal('0')
         except (InvalidOperation, ValueError):
             return JsonResponse({'error': 'Invalid number'}, status=400)
 
-    item.save()
+    # Atomic single-field UPDATE — only writes the one field, so it cannot
+    # clobber concurrent edits to other fields on the same line item.
+    # Re-fetch after the update so computed properties reflect the fresh
+    # committed state.
+    CostingLineItem.objects.filter(pk=pk).update(**{field: new_value})
+    item = CostingLineItem.objects.select_related('section__costing_sheet').get(pk=pk)
 
     # Recompute values with caches and return them
     rates_dict = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
