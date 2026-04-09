@@ -883,7 +883,9 @@ def costing_export_excel(request, pk):
                 # Cost breakdown (grey section)
                 item.supplier_currency,
                 round(float(item.base_unit_cost), 2),
-                round(float(item.discount), 2),
+                # "Discount" column shows the discount amount in SAR so the
+                # math reads as Base Unit Cost - Discount ~ Unit Cost.
+                round(float(item.discount_amount), 2),
                 round(float(item.unit_cost), 2),
                 round(float(item.total_cost), 2),
                 float(item.effective_margin),
