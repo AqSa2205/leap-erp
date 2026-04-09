@@ -1689,12 +1689,16 @@ class InventoryListView(InventoryPermissionMixin, ListView):
             queryset = queryset.filter(
                 Q(title__icontains=search) | Q(warehouse_location__icontains=search)
             )
-        # Annotate item counts and low-stock counts in a single SQL query
-        # so the list page does not run a per-row query for each report.
-        from django.db.models import Q as _Q
+        # Annotate item count, low-stock count, and total stock value in a
+        # single SQL query so the list page does not run several per-row
+        # queries (was N+1 across items.count, low_stock_count property,
+        # and total_stock_value property).
+        # Note: annotation names cannot start with underscore - Django
+        # templates reject variables that begin with one.
+        from django.db.models import Q as _Q, DecimalField, ExpressionWrapper
         return queryset.annotate(
-            _item_count=Count('items', distinct=True),
-            _low_stock_count=Count(
+            annotated_item_count=Count('items', distinct=True),
+            annotated_low_stock_count=Count(
                 'items',
                 filter=_Q(
                     items__min_stock_level__isnull=False,
@@ -1704,7 +1708,13 @@ class InventoryListView(InventoryPermissionMixin, ListView):
                 ),
                 distinct=True,
             ),
-        )
+            annotated_stock_value=Sum(
+                ExpressionWrapper(
+                    F('items__unit_cost') * F('items__balance_qty'),
+                    output_field=DecimalField(max_digits=18, decimal_places=2),
+                ),
+            ),
+        ).order_by('-updated_at')
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

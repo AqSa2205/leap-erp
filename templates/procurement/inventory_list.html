@@ -58,15 +58,15 @@
                                 </a>
                             </td>
                             <td>{{ report.warehouse_location|default:"-"|truncatechars:30 }}</td>
-                            <td>{{ report.items.count }}</td>
+                            <td>{{ report.annotated_item_count }}</td>
                             <td>
-                                {% if report.low_stock_count > 0 %}
-                                    <span class="badge bg-danger">{{ report.low_stock_count }}</span>
+                                {% if report.annotated_low_stock_count > 0 %}
+                                    <span class="badge bg-danger">{{ report.annotated_low_stock_count }}</span>
                                 {% else %}
                                     <span class="text-muted">0</span>
                                 {% endif %}
                             </td>
-                            <td>{{ report.total_stock_value|floatformat:2|intcomma }}</td>
+                            <td>{{ report.annotated_stock_value|default:0|floatformat:2|intcomma }}</td>
                             <td>{{ report.created_by.get_full_name|default:report.created_by.username }}</td>
                             <td>{{ report.updated_at|date:"d M Y" }}</td>
                             <td>
