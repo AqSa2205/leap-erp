@@ -361,15 +361,31 @@ class InventoryReport(models.Model):
 
     @property
     def low_stock_count(self):
-        count = 0
-        for i in self.items.all():
-            if i.min_stock_level and i.balance_qty is not None and i.balance_qty <= i.min_stock_level:
-                count += 1
-        return count
+        """Count of items where balance_qty <= min_stock_level. Pushed
+        into SQL via the InventoryItem queryset's low_stock() method so
+        callers don't pay an N+1 cost when this is rendered in a list."""
+        return self.items.low_stock().count()
+
+
+class InventoryItemQuerySet(models.QuerySet):
+    """Custom queryset that pushes the low-stock condition into the DB."""
+
+    def low_stock(self):
+        """Items where balance_qty <= min_stock_level (and both are set).
+        Equivalent to the is_low_stock property but expressed in SQL so it
+        can be used with .count() / .filter() without a Python loop."""
+        return self.filter(
+            min_stock_level__isnull=False,
+            min_stock_level__gt=0,
+            balance_qty__isnull=False,
+            balance_qty__lte=models.F('min_stock_level'),
+        )
 
 
 class InventoryItem(models.Model):
     """Individual item in an Inventory Report."""
+
+    objects = InventoryItemQuerySet.as_manager()
 
     CATEGORY_CHOICES = [
         ('cctv', 'CCTV / Cameras'),

@@ -96,12 +96,17 @@ def procurement_dashboard(request):
     inv_total = inv_qs.count()
     total_inventory_items = InventoryItem.objects.filter(report__in=inv_qs).count()
 
-    # Low stock items
-    low_stock_items = []
-    for item in InventoryItem.objects.filter(report__in=inv_qs).select_related('report'):
-        if item.is_low_stock:
-            low_stock_items.append(item)
-    low_stock_count = len(low_stock_items)
+    # Low stock items - pushed entirely into SQL via the custom queryset.
+    # Previously this loaded every InventoryItem and ran the is_low_stock
+    # Python property per row (N+1 over potentially thousands of items).
+    low_stock_qs = (
+        InventoryItem.objects
+        .filter(report__in=inv_qs)
+        .low_stock()
+        .select_related('report')
+    )
+    low_stock_count = low_stock_qs.count()
+    low_stock_items = list(low_stock_qs[:10])  # template only uses first 10
 
     # Recent activity
     recent_pos = po_qs.order_by('-created_at')[:5]
@@ -115,7 +120,7 @@ def procurement_dashboard(request):
         'inv_total': inv_total,
         'total_inventory_items': total_inventory_items,
         'low_stock_count': low_stock_count,
-        'low_stock_items': low_stock_items[:10],
+        'low_stock_items': low_stock_items,
         'recent_pos': recent_pos,
         'recent_dns': recent_dns,
     }
@@ -1684,7 +1689,22 @@ class InventoryListView(InventoryPermissionMixin, ListView):
             queryset = queryset.filter(
                 Q(title__icontains=search) | Q(warehouse_location__icontains=search)
             )
-        return queryset
+        # Annotate item counts and low-stock counts in a single SQL query
+        # so the list page does not run a per-row query for each report.
+        from django.db.models import Q as _Q
+        return queryset.annotate(
+            _item_count=Count('items', distinct=True),
+            _low_stock_count=Count(
+                'items',
+                filter=_Q(
+                    items__min_stock_level__isnull=False,
+                    items__min_stock_level__gt=0,
+                    items__balance_qty__isnull=False,
+                    items__balance_qty__lte=F('items__min_stock_level'),
+                ),
+                distinct=True,
+            ),
+        )
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
