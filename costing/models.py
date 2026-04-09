@@ -168,7 +168,7 @@ class CostingSection(models.Model):
         on_delete=models.CASCADE,
         related_name='sections',
     )
-    section_number = models.CharField(max_length=20)
+    section_number = models.CharField(max_length=20, blank=True)
     title = models.CharField(max_length=255)
     order = models.IntegerField(default=0)
 
@@ -176,7 +176,9 @@ class CostingSection(models.Model):
         ordering = ['order', 'section_number']
 
     def __str__(self):
-        return f"{self.section_number} - {self.title}"
+        if self.section_number:
+            return f"{self.section_number} - {self.title}"
+        return self.title
 
     def _compute_subtotals(self):
         """Compute all section subtotals in a single pass. Results are cached on the instance."""

@@ -1510,17 +1510,17 @@ def costing_import_excel(request, pk):
 
                 # If the admin entered a heading, create a divider section
                 # at the top of this import batch so it's visually marked
-                # off from earlier content. The divider is just a regular
-                # section with the heading text as its title and no items.
+                # off from earlier content. The divider has NO section
+                # number (blank) so the regular numbering continues
+                # uninterrupted: existing 1, 2, 3 -> heading -> 4, 5, 6.
                 if import_heading and existing_sections:
                     CostingSection.objects.create(
                         costing_sheet=sheet,
-                        section_number=str(next_auto_num),
+                        section_number='',
                         title=import_heading[:255],
                         order=next_order,
                     )
                     next_order += 1
-                    next_auto_num += 1
                     sections_created += 1
 
                 # Helper to safely read a cell from a row by column index.

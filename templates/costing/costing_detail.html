@@ -244,6 +244,18 @@
 
                 {% for section in sections %}
                 <tbody>
+                    {% if not section.section_number %}
+                    {# Divider/banner row - no section number, no items, no expand #}
+                    <tr class="section-divider-row">
+                        <td colspan="23" class="fw-bold text-uppercase" style="background:#fff8e1; border-top:2px solid #ffc107; border-bottom:2px solid #ffc107; padding:10px 16px; letter-spacing:0.5px; color:#856404;">
+                            <i class="bi bi-bookmark-fill me-2"></i>{{ section.title }}
+                        </td>
+                        <td class="text-center" style="background:#fff8e1; border-top:2px solid #ffc107; border-bottom:2px solid #ffc107;" onclick="event.stopPropagation();">
+                            <a href="{% url 'costing:section_edit' section.pk %}" class="btn btn-sm btn-outline-secondary py-0 px-1" title="Edit"><i class="bi bi-pencil"></i></a>
+                            <a href="{% url 'costing:section_delete' section.pk %}" class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"><i class="bi bi-trash"></i></a>
+                        </td>
+                    </tr>
+                    {% else %}
                     <tr class="section-header-row" data-section-id="{{ section.pk }}">
                         <td><i class="bi bi-chevron-right section-chevron"></i> {{ section.section_number }}</td>
                         <td colspan="21">{{ section.title }} <span class="section-item-count">({{ section.item_count_cached }})</span></td>
@@ -254,14 +266,17 @@
                             <a href="{% url 'costing:section_delete' section.pk %}" class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"><i class="bi bi-trash"></i></a>
                         </td>
                     </tr>
+                    {% endif %}
                 </tbody>
-                {# Items tbody — starts empty; loaded via AJAX on first expand #}
+                {# Items tbody — starts empty; loaded via AJAX on first expand. Skipped for divider rows. #}
+                {% if section.section_number %}
                 <tbody class="section-body d-none" id="section-{{ section.pk }}" data-loaded="false"
                        data-url="{% url 'costing:section_items' section.pk %}">
                     <tr><td colspan="24" class="text-center py-3">
                         <span class="spinner-border spinner-border-sm text-muted"></span>
                     </td></tr>
                 </tbody>
+                {% endif %}
                 {% empty %}
                 <tbody>
                     <tr>
