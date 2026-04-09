@@ -9,7 +9,23 @@ from django.contrib.auth.decorators import login_required
 from django.db import transaction
 from django.db.models import Q
 from django.template.loader import render_to_string
+from django.utils.text import slugify
 from decimal import Decimal, InvalidOperation
+
+
+def _safe_filename(name, suffix='', extension=''):
+    """Build a safe filename for Content-Disposition headers.
+
+    Strips quotes, newlines, slashes, and any other characters that could
+    be used to inject header values or path traversal. Falls back to
+    'export' if the result would be empty.
+    """
+    safe = slugify(str(name or ''))[:80] or 'export'
+    if suffix:
+        safe = f'{safe}_{suffix}'
+    if extension and not extension.startswith('.'):
+        extension = f'.{extension}'
+    return f'{safe}{extension}'
 
 from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, TermsTemplate
 from notifications.services import notify_users
@@ -910,7 +926,7 @@ def costing_export_excel(request, pk):
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
-    filename = f"{sheet.title.replace(' ', '_')}_BOM.xlsx"
+    filename = _safe_filename(sheet.title, suffix='BOM', extension='xlsx')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)
     return response
@@ -952,7 +968,7 @@ def costing_export_pdf(request, pk):
 
     # Create response
     response = HttpResponse(content_type='application/pdf')
-    filename = f"{sheet.title.replace(' ', '_')}_Commercial_Offer.pdf"
+    filename = _safe_filename(sheet.title, suffix='Commercial_Offer', extension='pdf')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
 
     # Page numbering support

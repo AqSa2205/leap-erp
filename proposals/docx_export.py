@@ -6,6 +6,7 @@ from lxml import etree
 from django.http import HttpResponse
 from django.conf import settings
 from django.contrib.staticfiles import finders
+from django.utils.text import slugify
 
 WNS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 WPS_NS = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape'
@@ -511,7 +512,8 @@ def generate_proposal_docx(proposal):
                 zout.writestr(item, data)
 
     output.seek(0)
-    filename = f"{proposal.proposal_reference}.docx"
+    safe_ref = slugify(str(proposal.proposal_reference or ''))[:80] or 'proposal'
+    filename = f"{safe_ref}.docx"
     response = HttpResponse(
         output.getvalue(),
         content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -575,7 +577,8 @@ def _generate_fallback_docx(proposal):
     doc.save(buf)
     buf.seek(0)
 
-    filename = f"{proposal.proposal_reference}.docx"
+    safe_ref = slugify(str(proposal.proposal_reference or ''))[:80] or 'proposal'
+    filename = f"{safe_ref}.docx"
     response = HttpResponse(
         buf.getvalue(),
         content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',

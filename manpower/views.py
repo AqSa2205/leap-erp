@@ -6,6 +6,7 @@ from django.views.generic import ListView, DetailView, CreateView, UpdateView, D
 from django.urls import reverse_lazy, reverse
 from django.db.models import Q, Count, Sum, F
 from django.http import HttpResponse
+from django.utils.text import slugify
 from datetime import datetime, date
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -511,7 +512,7 @@ def sheet_export(request, pk):
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
-    safe_title = sheet.title.replace(' ', '_')[:30]
+    safe_title = slugify(str(sheet.title or ''))[:50] or 'sheet'
     filename = f'manpower_{safe_title}_{datetime.now().strftime("%Y%m%d")}.xlsx'
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)

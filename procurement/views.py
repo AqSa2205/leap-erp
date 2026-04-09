@@ -23,8 +23,24 @@ from .forms import (
 )
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Sum, F
+from django.utils.text import slugify
 import openpyxl
 from datetime import datetime, timedelta
+
+
+def _safe_filename(name, prefix='', suffix='', extension=''):
+    """Build a safe filename for Content-Disposition headers.
+
+    Strips quotes, newlines, slashes, and any other characters that could
+    inject header values or cause path traversal. Falls back to 'export'
+    if the result would be empty.
+    """
+    safe = slugify(str(name or ''))[:80] or 'export'
+    parts = [p for p in (prefix, safe, suffix) if p]
+    base = '_'.join(parts)
+    if extension and not extension.startswith('.'):
+        extension = f'.{extension}'
+    return f'{base}{extension}'
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -389,7 +405,8 @@ def po_export_excel(request, pk):
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
-    response['Content-Disposition'] = f'attachment; filename="{po.po_number}.xlsx"'
+    filename = _safe_filename(po.po_number, prefix='PO', extension='xlsx')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)
     return response
 
@@ -573,7 +590,8 @@ def po_export_pdf(request, pk):
     buf.seek(0)
 
     response = HttpResponse(buf.read(), content_type='application/pdf')
-    response['Content-Disposition'] = f'attachment; filename="{po.po_number}.pdf"'
+    filename = _safe_filename(po.po_number, prefix='PO', extension='pdf')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
     return response
 
 
@@ -967,8 +985,9 @@ def summary_export_excel(request, pk):
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
-    safe_name = summary.package_name or summary.project_name
-    response['Content-Disposition'] = f'attachment; filename="Summary - {safe_name}.xlsx"'
+    raw_name = summary.package_name or summary.project_name
+    filename = _safe_filename(raw_name, prefix='Summary', extension='xlsx')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)
     return response
 
@@ -1078,8 +1097,9 @@ def summary_export_pdf(request, pk):
     doc.build(elements)
     buf.seek(0)
     response = HttpResponse(buf.read(), content_type='application/pdf')
-    safe_name = summary.package_name or summary.project_name
-    response['Content-Disposition'] = f'attachment; filename="Summary - {safe_name}.pdf"'
+    raw_name = summary.package_name or summary.project_name
+    filename = _safe_filename(raw_name, prefix='Summary', extension='pdf')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
     return response
 
 
@@ -1407,8 +1427,9 @@ def dn_export_excel(request, pk):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
 
     response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    fname = dn.dn_number or f'DN-{dn.pk}'
-    response['Content-Disposition'] = f'attachment; filename="{fname}.xlsx"'
+    raw = dn.dn_number or f'DN-{dn.pk}'
+    filename = _safe_filename(raw, extension='xlsx')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)
     return response
 
@@ -1531,8 +1552,9 @@ def dn_export_pdf(request, pk):
     doc.build(elements)
     buf.seek(0)
     response = HttpResponse(buf.read(), content_type='application/pdf')
-    fname = dn.dn_number or f'DN-{dn.pk}'
-    response['Content-Disposition'] = f'attachment; filename="{fname}.pdf"'
+    raw = dn.dn_number or f'DN-{dn.pk}'
+    filename = _safe_filename(raw, extension='pdf')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
     return response
 
 
@@ -1845,7 +1867,8 @@ def inventory_export_excel(request, pk):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
 
     response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    response['Content-Disposition'] = f'attachment; filename="Inventory - {report.title}.xlsx"'
+    filename = _safe_filename(report.title, prefix='Inventory', extension='xlsx')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)
     return response
 
@@ -1957,7 +1980,8 @@ def inventory_export_pdf(request, pk):
     doc.build(elements)
     buf.seek(0)
     response = HttpResponse(buf.read(), content_type='application/pdf')
-    response['Content-Disposition'] = f'attachment; filename="Inventory - {report.title}.pdf"'
+    filename = _safe_filename(report.title, prefix='Inventory', extension='pdf')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
     return response
 
 
@@ -2272,7 +2296,8 @@ def frc_export_excel(request, pk):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
 
     response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    response['Content-Disposition'] = f'attachment; filename="FRC - {report.title}.xlsx"'
+    filename = _safe_filename(report.title, prefix='FRC', extension='xlsx')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)
     return response
 
@@ -2346,7 +2371,8 @@ def frc_export_pdf(request, pk):
     doc.build(elements)
     buf.seek(0)
     response = HttpResponse(buf.read(), content_type='application/pdf')
-    response['Content-Disposition'] = f'attachment; filename="FRC - {report.title}.pdf"'
+    filename = _safe_filename(report.title, prefix='FRC', extension='pdf')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
     return response
 
 
