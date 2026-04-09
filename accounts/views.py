@@ -16,8 +16,10 @@ from .decorators import admin_required
 from django.core.mail import send_mail
 from django.conf import settings
 from django.http import JsonResponse
+import logging
 import secrets
-import threading
+
+logger = logging.getLogger(__name__)
 
 
 class CustomLoginView(LoginView):
@@ -257,7 +259,9 @@ def send_reset_link(request, pk):
 
 @login_required
 def send_reset_link_all(request):
-    """Super admin sends reset links to ALL active users with email."""
+    """Super admin queues reset link emails for ALL active users with email.
+    Emails are sent on background threads with proper error logging and
+    DB connection cleanup."""
     if not request.user.is_super_admin_user:
         messages.error(request, 'Only super admins can do this.')
         return redirect('accounts:user_list')
@@ -265,8 +269,10 @@ def send_reset_link_all(request):
     if request.method != 'POST':
         return redirect('accounts:user_list')
 
+    from notifications.services import send_email_in_background
+
     users = User.objects.filter(is_active=True).exclude(email='').exclude(email__isnull=True)
-    sent_count = 0
+    queued = 0
 
     for user in users:
         token = secrets.token_urlsafe(48)
@@ -281,18 +287,25 @@ def send_reset_link_all(request):
         user_name = user.get_full_name() or user.username
         subject = 'Password Reset — Leap Networks ERP'
         html_body = _build_reset_email_html(user_name, reset_url)
-        plain_body = f'Hi {user_name},\n\nReset your password: {reset_url}\n\nLeap Networks ERP'
+        plain_body = (
+            f'Hi {user_name},\n\n'
+            f'Reset your password: {reset_url}\n\n'
+            f'This link expires in 7 days.\n\n'
+            f'— Leap Networks ERP'
+        )
 
-        try:
-            from django.core.mail import EmailMultiAlternatives
-            email_msg = EmailMultiAlternatives(subject, plain_body, settings.DEFAULT_FROM_EMAIL, [user.email])
-            email_msg.attach_alternative(html_body, 'text/html')
-            email_msg.send(fail_silently=True)
-            sent_count += 1
-        except Exception:
-            pass
+        send_email_in_background(
+            subject=subject,
+            body=plain_body,
+            to_email=user.email,
+            html_body=html_body,
+        )
+        queued += 1
 
-    messages.success(request, f'Password reset links sent to {sent_count} users.')
+    messages.success(
+        request,
+        f'Queued password reset emails for {queued} user(s). Delivery happens in the background.'
+    )
     return redirect('accounts:user_list')
 
 
