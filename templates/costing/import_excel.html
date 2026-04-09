@@ -15,40 +15,53 @@
             <div class="card-body">
                 <div class="alert alert-info">
                     <h6><i class="bi bi-info-circle me-1"></i> Expected Excel Format</h6>
-                    <p class="mb-2">The Excel file should have columns in this order:</p>
+                    <p class="mb-2">The Excel file should have these columns:</p>
                     <table class="table table-sm table-bordered mb-2">
                         <thead class="table-light">
                             <tr>
-                                <th>#</th>
-                                <th>Vendor</th>
-                                <th>RFP Item #</th>
-                                <th>Part#</th>
+                                <th>Item No</th>
                                 <th>Description</th>
+                                <th>Make</th>
+                                <th>Model</th>
                                 <th>Qty</th>
+                                <th>Unit</th>
+                                <th>Vendor</th>
                             </tr>
                         </thead>
                         <tbody>
                             <tr>
-                                <td>-</td>
-                                <td>-</td>
                                 <td>I</td>
-                                <td>-</td>
                                 <td>DATA NETWORK SYSTEM</td>
+                                <td>-</td>
+                                <td>-</td>
+                                <td>-</td>
+                                <td>-</td>
                                 <td>-</td>
                             </tr>
                             <tr>
-                                <td>1</td>
-                                <td>Aruba</td>
                                 <td>I.1</td>
-                                <td>JL001A</td>
                                 <td>HPE Aruba Networking Switch</td>
+                                <td>HP</td>
+                                <td>JL001A</td>
                                 <td>1</td>
+                                <td>EA</td>
+                                <td>Aruba</td>
+                            </tr>
+                            <tr>
+                                <td>I.2</td>
+                                <td>HPE 24-port Module</td>
+                                <td>HP</td>
+                                <td>J9986A</td>
+                                <td>3</td>
+                                <td>EA</td>
+                                <td>Aruba</td>
                             </tr>
                         </tbody>
                     </table>
                     <small class="text-muted">
-                        <strong>Note:</strong> Rows without Part# are treated as section headers.
-                        The first sheet in the Excel file will be used.
+                        <strong>Section headers</strong> are rows where Item No is a whole number (1, 2, ...) or a Roman numeral (I, II, ...) <strong>and</strong> there's no quantity.
+                        Decimal item numbers like <code>I.1</code>, <code>1.2</code> are line items.
+                        The first sheet in the workbook is used.
                     </small>
                 </div>
 

@@ -1450,10 +1450,10 @@ def costing_import_excel(request, pk):
             messages.error(request, 'Could not read the Excel file. Please check the format and try again.')
             return redirect('costing:import_excel', pk=pk)
 
-        # Find header row (look for row with "Vendor", "Part#", "Description")
+        # Find header row (look for row containing 'description' or 'vendor')
         header_row = None
         headers = {}
-        for row_num in range(1, 10):
+        for row_num in range(1, 15):
             row = [cell.value for cell in ws[row_num]]
             row_lower = [str(c).lower() if c else '' for c in row]
             if 'vendor' in row_lower or 'description' in row_lower:
@@ -1464,16 +1464,19 @@ def costing_import_excel(request, pk):
                 break
 
         if not header_row:
-            messages.error(request, 'Could not find header row in Excel file.')
+            messages.error(request, 'Could not find header row in Excel file. Looking for columns: Item No, Description, Make, Model, Qty, Unit, Vendor')
             return redirect('costing:import_excel', pk=pk)
 
-        # Map column indices
+        # Map column indices - matches the Item No / Description / Make /
+        # Model / Qty / Unit / Vendor template used by costing_import_new.
         col_map = {
-            'vendor': headers.get('vendor', headers.get('vendor name', -1)),
-            'rfp_item': headers.get('rfp item #', headers.get('rfp item', headers.get('item #', headers.get('item no', -1)))),
-            'part': headers.get('part#', headers.get('part', headers.get('part no', headers.get('model', -1)))),
+            'item_no': headers.get('item no', headers.get('item #', headers.get('rfp item #', headers.get('rfp item', headers.get('#', -1))))),
             'description': headers.get('description', headers.get('desc', -1)),
+            'make': headers.get('make', headers.get('manufacturer', -1)),
+            'model': headers.get('model', headers.get('part#', headers.get('part', headers.get('part no', -1)))),
             'qty': headers.get('qty', headers.get('quantity', -1)),
+            'unit': headers.get('unit', headers.get('uom', -1)),
+            'vendor': headers.get('vendor', headers.get('vendor name', -1)),
         }
 
         # All DB writes happen inside a single atomic block.
@@ -1502,20 +1505,37 @@ def costing_import_excel(request, pk):
                 next_order = existing_max_order + 1
                 next_auto_num = existing_max_num + 1
 
+                # Helper to safely read a cell from a row by column index.
+                def cell(row, key):
+                    idx = col_map[key]
+                    if idx < 0 or idx >= len(row):
+                        return ''
+                    return str(row[idx] or '').strip()
+
+                def cell_raw(row, key):
+                    idx = col_map[key]
+                    if idx < 0 or idx >= len(row):
+                        return None
+                    return row[idx]
+
                 for row_num in range(header_row + 1, ws.max_row + 1):
-                    row = [cell.value for cell in ws[row_num]]
+                    row = [c.value for c in ws[row_num]]
                     if not any(row):
                         continue
 
                     # Get values
-                    vendor = str(row[col_map['vendor']] or '').strip() if col_map['vendor'] >= 0 else ''
-                    rfp_item = str(row[col_map['rfp_item']] or '').strip() if col_map['rfp_item'] >= 0 else ''
-                    part = str(row[col_map['part']] or '').strip() if col_map['part'] >= 0 else ''
-                    description = str(row[col_map['description']] or '').strip() if col_map['description'] >= 0 else ''
-                    qty_val = row[col_map['qty']] if col_map['qty'] >= 0 else None
+                    item_no = cell(row, 'item_no')
+                    description = cell(row, 'description')
+                    make = cell(row, 'make')
+                    model = cell(row, 'model')
+                    qty_val = cell_raw(row, 'qty')
+                    unit = cell(row, 'unit') or 'EA'
+                    vendor = cell(row, 'vendor')
 
-                    # Skip empty rows
-                    if not rfp_item and not description:
+                    # Skip empty rows or sheet-level headings.
+                    if not item_no and not description:
+                        continue
+                    if item_no and not description and not make and not model and qty_val is None:
                         continue
 
                     # Parse quantity
@@ -1524,19 +1544,24 @@ def costing_import_excel(request, pk):
                     except (InvalidOperation, ValueError):
                         qty = Decimal('1')
 
-                    # Detect if this is a section header (has RFP Item but no Part#, or RFP Item is like "I", "II", "1", etc.)
+                    # Detect if this is a section header.
+                    # Section headers: whole numbers (1, 2, 3) or roman numerals,
+                    # with a title but NO quantity data and NO decimal in item
+                    # number (1.1, 2.3 are line items).
                     is_section = False
-                    if rfp_item and not part and description:
-                        # Check if RFP item looks like a section number (Roman numerals, single digits, or main section)
-                        if re.match(r'^[IVX]+$', rfp_item) or re.match(r'^\d+$', rfp_item) or len(rfp_item) <= 3:
-                            is_section = True
+                    if item_no and description:
+                        has_qty = qty_val is not None and qty_val != '' and qty_val != 0
+                        is_decimal_item = '.' in item_no
+                        if not is_decimal_item and not has_qty:
+                            if re.match(r'^[IVX]+$', item_no) or re.match(r'^\d+$', item_no):
+                                is_section = True
 
                     if is_section:
                         # Create section. If the imported section number
                         # collides with an existing one (or with one we just
                         # created in this import), bump it to the next free
                         # auto-numbered slot so existing items stay intact.
-                        section_num = rfp_item
+                        section_num = item_no
                         existing_nums = set(
                             CostingSection.objects.filter(costing_sheet=sheet)
                             .values_list('section_number', flat=True)
@@ -1568,8 +1593,6 @@ def costing_import_excel(request, pk):
                             # bucket.
                             if existing_sections:
                                 current_section = existing_sections[-1]
-                                # Continue ordering from the last item in
-                                # that section so we don't collide.
                                 last_item = current_section.line_items.order_by('-order').first()
                                 item_order = (last_item.order + 1) if last_item else 0
                             else:
@@ -1586,12 +1609,13 @@ def costing_import_excel(request, pk):
 
                         CostingLineItem.objects.create(
                             section=current_section,
-                            item_number=rfp_item or f'{current_section.section_number}.{item_order + 1}',
+                            item_number=item_no or f'{current_section.section_number}.{item_order + 1}',
                             description=description[:500] if description else 'No description',
-                            model_number=part[:100] if part else '',
-                            vendor_name=vendor[:255] if vendor else '',
+                            make=make[:100] if make else '',
+                            model_number=model[:100] if model else '',
                             quantity=qty,
-                            unit='EA',
+                            unit=unit[:20] if unit else 'EA',
+                            vendor_name=vendor[:255] if vendor else '',
                             order=item_order
                         )
                         items_created += 1
