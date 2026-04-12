@@ -990,23 +990,70 @@ def costing_export_pdf(request, pk):
     filename = _safe_filename(sheet.title, suffix='Commercial_Offer', extension='pdf')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
 
-    # Page numbering support
-    page_numbers = []
+    import os
+    from django.contrib.staticfiles.finders import find as find_static
+
+    # Logo path (resolved once, used in every page callback)
+    _logo_path = find_static('images/leap_logo.jpg')
+    if not _logo_path:
+        _logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static', 'images', 'leap_logo.jpg')
+    if _logo_path and not os.path.exists(_logo_path):
+        _logo_path = None
+
+    from reportlab.pdfgen.canvas import Canvas
+
+    class NumberedCanvas(Canvas):
+        """Custom canvas that draws logo header + page footer with
+        'Page X of Y' on every page. The total page count is filled
+        in at the end after all pages are rendered."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._saved_pages = []
+
+        def showPage(self):
+            self._saved_pages.append(dict(self.__dict__))
+            super().showPage()
+
+        def save(self):
+            total = len(self._saved_pages)
+            for state in self._saved_pages:
+                self.__dict__.update(state)
+                self._draw_header_footer(total)
+                super().showPage()
+            super().save()
+
+        def _draw_header_footer(self, total_pages):
+            self.saveState()
+            page_w, page_h = A4
+
+            # ── Header: logo top-left ──
+            if _logo_path:
+                self.drawImage(_logo_path, 15*mm, page_h - 18*mm, width=100, height=35, preserveAspectRatio=True, mask='auto')
+
+            # ── Footer ──
+            footer_y = 10*mm
+            self.setFont('Helvetica', 7)
+            page_num = getattr(self, '_pageNumber', 0)
+            self.drawCentredString(page_w / 2, footer_y, f'Page {page_num} of {total_pages}')
+            self.setFont('Helvetica-Oblique', 6)
+            self.drawCentredString(
+                page_w / 2, footer_y - 8,
+                'This document is confidential and proprietary to Leap Networks. Unauthorized distribution is prohibited.'
+            )
+            self.restoreState()
 
     def on_page(canvas, doc):
-        page_numbers.append(canvas.getPageNumber())
+        pass  # header/footer drawn by NumberedCanvas.save()
 
-    def on_page_later(canvas, doc):
-        page_numbers.append(canvas.getPageNumber())
-
-    # Create PDF document
+    # Create PDF document — extra top/bottom margin for header/footer
     doc = SimpleDocTemplate(
         response,
         pagesize=A4,
         rightMargin=15*mm,
         leftMargin=15*mm,
-        topMargin=15*mm,
-        bottomMargin=15*mm,
+        topMargin=25*mm,
+        bottomMargin=22*mm,
     )
 
     elements = []
@@ -1032,34 +1079,20 @@ def costing_export_pdf(request, pk):
         except (TypeError, ValueError):
             return ''
 
-    # ─── HEADER SECTION (rows 1-3: logo, rows 4-10: info) ───
+    # ─── HEADER SECTION (logo drawn by on_page callback, info table here) ───
     project_name = sheet.project.project_name if sheet.project else sheet.title
     region_name = sheet.project.region.name if sheet.project and sheet.project.region else 'N/A'
     ln_ref = sheet.project.proposal_reference if sheet.project else ''
     cust_ref = sheet.customer_reference or ''
     created_by_name = sheet.created_by.get_full_name() if sheet.created_by else ''
     created_by_email = sheet.created_by.email if sheet.created_by else ''
-    current_date = datetime.now().strftime('%d-%b-%y')
+    current_date = datetime.now().strftime('%d/%m/%Y')
 
-    import os
-    from django.contrib.staticfiles.finders import find as find_static
-    # Try Django staticfiles finder first (works in dev and after collectstatic)
-    logo_path = find_static('images/leap_logo.jpg')
-    if not logo_path:
-        # Fallback to direct path
-        logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static', 'images', 'leap_logo.jpg')
-    if logo_path and os.path.exists(logo_path):
-        logo = Image(logo_path, width=120, height=45)
-    else:
-        logo = Paragraph(
-            '<b><font color="#C41E3A" size="16">LEAP</font></b><br/>'
-            '<font size="8" color="#C41E3A">NETWORKS</font>',
-            styles['Normal'],
-        )
+    # Page X of Y placeholder — filled in by the on_page callback.
+    # We also add it inline in the header for the summary page.
+    total_pages_text = ''  # will be set after build
 
     header_data = [
-        [logo, '', '', '', '', ''],
-        ['', '', '', '', '', ''],
         [Paragraph('<b>Project:</b>', cell_style),
          Paragraph(project_name, cell_style), '',
          Paragraph('<b>Sales Office:</b>', cell_style),
@@ -1088,7 +1121,6 @@ def costing_export_pdf(request, pk):
 
     header_table = Table(header_data, colWidths=[80, 180, 10, 80, 150, None])
     header_table.setStyle(TableStyle([
-        ('SPAN', (0, 0), (1, 1)),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
         ('TOPPADDING', (0, 0), (-1, -1), 2),
@@ -1173,7 +1205,86 @@ def costing_export_pdf(request, pk):
 
     main_table.setStyle(TableStyle(style_cmds))
     elements.append(main_table)
-    elements.append(Spacer(1, 8 * mm))
+    elements.append(Spacer(1, 6 * mm))
+
+    # ─── TERMS & CONDITIONS (on the COS summary page, page 1) ───
+    section_hdr_style = ParagraphStyle('SectionHdr', fontName='Helvetica-Bold', fontSize=10, leading=14, spaceAfter=4)
+    sub_hdr_style = ParagraphStyle('SubHdr', fontName='Helvetica-Bold', fontSize=9, leading=12, spaceAfter=2)
+    body_style = ParagraphStyle('Body', fontName='Helvetica', fontSize=9, leading=12, spaceAfter=2)
+
+    selected = sheet.selected_terms.all()
+    terms_grouped = {}
+    for cat_value, cat_label in TermsTemplate.CATEGORY_CHOICES:
+        items_list = [t for t in selected if t.category == cat_value]
+        if items_list:
+            terms_grouped[cat_value] = items_list
+
+    # Terms & Conditions
+    tc_templates = terms_grouped.get('terms_and_conditions', [])
+    tc_legacy = sheet.terms_and_conditions.strip()
+    if tc_templates or tc_legacy:
+        elements.append(Paragraph('Terms &amp; Conditions:', section_hdr_style))
+        counter = 1
+        for tmpl in tc_templates:
+            elements.append(Paragraph(f'<b>{tmpl.name}</b>', sub_hdr_style))
+            for line in [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]:
+                elements.append(Paragraph(f'{counter}. {line}', body_style))
+                counter += 1
+        if tc_legacy and not tc_templates:
+            for line in [l.strip() for l in tc_legacy.splitlines() if l.strip()]:
+                elements.append(Paragraph(f'{counter}. {line}', body_style))
+                counter += 1
+        elements.append(Spacer(1, 3 * mm))
+
+    # Exclusions
+    excl_templates = terms_grouped.get('exclusions', [])
+    excl_legacy = sheet.exclusions.strip()
+    if excl_templates or excl_legacy:
+        last_num = sections[-1].section_number if sections else '1'
+        try:
+            excl_num = str(int(last_num) + 1)
+        except ValueError:
+            excl_num = 'B'
+        elements.append(Paragraph(f'{excl_num}. Exclusion', section_hdr_style))
+        letters = list(string.ascii_lowercase)
+        idx = 0
+        for tmpl in excl_templates:
+            for line in [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]:
+                letter = letters[idx] if idx < len(letters) else str(idx + 1)
+                elements.append(Paragraph(f'{letter}. {line}', body_style))
+                idx += 1
+        if excl_legacy and not excl_templates:
+            for line in [l.strip() for l in excl_legacy.splitlines() if l.strip()]:
+                letter = letters[idx] if idx < len(letters) else str(idx + 1)
+                elements.append(Paragraph(f'{letter}. {line}', body_style))
+                idx += 1
+        elements.append(Spacer(1, 3 * mm))
+
+    # Payment Terms
+    pt_templates = terms_grouped.get('payment_terms', [])
+    pt_legacy = sheet.payment_terms.strip()
+    if pt_templates or pt_legacy:
+        elements.append(Paragraph('Payment Terms:', section_hdr_style))
+        for tmpl in pt_templates:
+            for line in [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]:
+                elements.append(Paragraph(line, body_style))
+        if pt_legacy and not pt_templates:
+            for line in [l.strip() for l in pt_legacy.splitlines() if l.strip()]:
+                elements.append(Paragraph(line, body_style))
+        elements.append(Spacer(1, 3 * mm))
+
+    # Conclusion
+    conc_templates = terms_grouped.get('conclusion', [])
+    conc_legacy = sheet.conclusion.strip()
+    if conc_templates or conc_legacy:
+        elements.append(Paragraph('Conclusion', section_hdr_style))
+        for tmpl in conc_templates:
+            for line in [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]:
+                elements.append(Paragraph(line, body_style))
+        if conc_legacy and not conc_templates:
+            for line in [l.strip() for l in conc_legacy.splitlines() if l.strip()]:
+                elements.append(Paragraph(line, body_style))
+        elements.append(Spacer(1, 3 * mm))
 
     # ─── PAGE 2+: DETAILED BOM WITH ALL LINE ITEMS ───
     elements.append(PageBreak())
@@ -1318,103 +1429,19 @@ def costing_export_pdf(request, pk):
 
     bom_table.setStyle(TableStyle(bom_style_cmds))
     elements.append(bom_table)
-    elements.append(Spacer(1, 8 * mm))
+    elements.append(Spacer(1, 10 * mm))
 
-    # ─── TERMS & CONDITIONS (from selected templates or legacy text fields) ───
-    section_hdr_style = ParagraphStyle('SectionHdr', fontName='Helvetica-Bold', fontSize=10, leading=14, spaceAfter=4)
-    sub_hdr_style = ParagraphStyle('SubHdr', fontName='Helvetica-Bold', fontSize=9, leading=12, spaceAfter=2)
-    body_style = ParagraphStyle('Body', fontName='Helvetica', fontSize=9, leading=12, spaceAfter=2)
+    # ─── END OF DOCUMENT ───
+    end_style = ParagraphStyle(
+        'EndDoc', fontName='Helvetica-Bold', fontSize=11,
+        alignment=TA_CENTER, textColor=colors.HexColor('#666666'),
+    )
+    elements.append(Paragraph('— End of Document —', end_style))
 
-    # Group selected templates by category
-    selected = sheet.selected_terms.all()
-    terms_grouped = {}
-    for cat_value, cat_label in TermsTemplate.CATEGORY_CHOICES:
-        items = [t for t in selected if t.category == cat_value]
-        if items:
-            terms_grouped[cat_value] = items
-
-    # Terms & Conditions
-    tc_templates = terms_grouped.get('terms_and_conditions', [])
-    tc_legacy = sheet.terms_and_conditions.strip()
-    if tc_templates or tc_legacy:
-        elements.append(Paragraph('Terms &amp; Conditions:', section_hdr_style))
-        counter = 1
-        for tmpl in tc_templates:
-            elements.append(Paragraph(f'<b>{tmpl.name}</b>', sub_hdr_style))
-            lines = [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]
-            for line in lines:
-                elements.append(Paragraph(f'{counter}. {line}', body_style))
-                counter += 1
-        if tc_legacy and not tc_templates:
-            lines = [l.strip() for l in tc_legacy.splitlines() if l.strip()]
-            for line in lines:
-                elements.append(Paragraph(f'{counter}. {line}', body_style))
-                counter += 1
-        elements.append(Spacer(1, 4 * mm))
-
-    # Exclusions
-    excl_templates = terms_grouped.get('exclusions', [])
-    excl_legacy = sheet.exclusions.strip()
-    if excl_templates or excl_legacy:
-        last_num = sections[-1].section_number if sections else '1'
-        try:
-            excl_num = str(int(last_num) + 1)
-        except ValueError:
-            excl_num = 'B'
-        elements.append(Paragraph(f'{excl_num}. Exclusion', section_hdr_style))
-        letters = list(string.ascii_lowercase)
-        idx = 0
-        for tmpl in excl_templates:
-            lines = [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]
-            for line in lines:
-                letter = letters[idx] if idx < len(letters) else str(idx + 1)
-                elements.append(Paragraph(f'{letter}. {line}', body_style))
-                idx += 1
-        if excl_legacy and not excl_templates:
-            lines = [l.strip() for l in excl_legacy.splitlines() if l.strip()]
-            for line in lines:
-                letter = letters[idx] if idx < len(letters) else str(idx + 1)
-                elements.append(Paragraph(f'{letter}. {line}', body_style))
-                idx += 1
-        elements.append(Spacer(1, 4 * mm))
-
-    # Payment Terms
-    pt_templates = terms_grouped.get('payment_terms', [])
-    pt_legacy = sheet.payment_terms.strip()
-    if pt_templates or pt_legacy:
-        elements.append(Paragraph('Payment Terms:', section_hdr_style))
-        for tmpl in pt_templates:
-            lines = [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]
-            for line in lines:
-                elements.append(Paragraph(line, body_style))
-        if pt_legacy and not pt_templates:
-            lines = [l.strip() for l in pt_legacy.splitlines() if l.strip()]
-            for line in lines:
-                elements.append(Paragraph(line, body_style))
-        elements.append(Spacer(1, 4 * mm))
-
-    # Conclusion
-    conc_templates = terms_grouped.get('conclusion', [])
-    conc_legacy = sheet.conclusion.strip()
-    if conc_templates or conc_legacy:
-        elements.append(Paragraph('Conclusion', section_hdr_style))
-        for tmpl in conc_templates:
-            lines = [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]
-            for line in lines:
-                elements.append(Paragraph(line, body_style))
-        if conc_legacy and not conc_templates:
-            lines = [l.strip() for l in conc_legacy.splitlines() if l.strip()]
-            for line in lines:
-                elements.append(Paragraph(line, body_style))
-        elements.append(Spacer(1, 4 * mm))
-
-    # ─── FOOTER ───
-    footer_style = ParagraphStyle('Footer', fontSize=8, alignment=TA_LEFT)
-    elements.append(Spacer(1, 6 * mm))
-    elements.append(Paragraph('Confidential. &copy; Leap Networks. All rights reserved.', footer_style))
-
-    # Build PDF
-    doc.build(elements, onFirstPage=on_page, onLaterPages=on_page_later)
+    # Build PDF with logo header and Page X of Y footer on every page.
+    # NumberedCanvas handles the drawing after all pages are rendered
+    # so it knows the total page count for "Page X of Y".
+    doc.build(elements, canvasmaker=NumberedCanvas)
     return response
 
 
