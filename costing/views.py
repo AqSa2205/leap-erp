@@ -1250,16 +1250,31 @@ def costing_export_pdf(request, pk):
         Paragraph(f'<b>{fmt_num(supply_total)}</b>', cell_right),
     ])
 
-    # Supply line items (one per section)
+    # Consolidate sections with the same title so that duplicate
+    # imports (e.g. two "DATA NETWORK SYSTEM" sections) are merged
+    # into a single summary row with their subtotals added together.
+    from collections import OrderedDict
+    consolidated = OrderedDict()
     for section in sections:
         if not section.section_number:
             continue  # skip divider rows
+        title = section.title.strip().upper()
+        if title in consolidated:
+            consolidated[title]['subtotal'] += section.subtotal
+        else:
+            consolidated[title] = {
+                'title': section.title,
+                'subtotal': section.subtotal,
+            }
+
+    # Supply line items (one per consolidated group, renumbered)
+    for idx, (title_key, group) in enumerate(consolidated.items(), 1):
         data.append([
-            Paragraph(section.section_number, cell_center),
-            Paragraph(f' {section.title}', cell_style),
+            Paragraph(str(idx), cell_center),
+            Paragraph(f' {group["title"]}', cell_style),
             Paragraph('1', cell_center),
             Paragraph('LOT', cell_center),
-            Paragraph(fmt_num(section.subtotal), cell_right),
+            Paragraph(fmt_num(group['subtotal']), cell_right),
         ])
 
     # Blank separator row
@@ -1284,10 +1299,10 @@ def costing_export_pdf(request, pk):
         ])
 
     # Row indices for special styling:
-    # 0=header, 1=A row, 2=A.1 row, 3..N=supply items, N+1=blank, N+2=A.2, N+3..=SOW items
-    visible_sections = [s for s in sections if s.section_number]
+    # 0=header, 1=A row, 2=A.1 row, 3..N=consolidated items, N+1=blank, N+2=A.2, N+3..=SOW items
+    num_consolidated = len(consolidated)
     a1_row = 2
-    a2_row = 2 + len(visible_sections) + 1 + 1  # +1 blank +1 for A.2 itself
+    a2_row = 2 + num_consolidated + 1 + 1  # +1 blank +1 for A.2 itself
     PINK_BG = colors.HexColor('#F1DCDB')
 
     main_table = Table(data, colWidths=col_widths, repeatRows=1)
