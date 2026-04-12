@@ -1057,18 +1057,22 @@ def costing_export_pdf(request, pk):
     elements = []
     styles = getSampleStyleSheet()
 
-    # ─── Colors ───
-    LIGHT_BLUE = colors.HexColor('#BDD7EE')
-    YELLOW_BG = colors.HexColor('#FFD966')
+    # ─── Colors (matched to the reference PDF) ───
+    TITLE_BLUE = colors.HexColor('#528DD4')   # "COMMERCIAL OFFER SUMMARY" bg
+    YELLOW_BG = colors.HexColor('#FFC000')    # Column header rows
+    ALT_ROW = colors.HexColor('#F1DCDB')      # Alternating light pink rows
+    SECTION_BG_P1 = colors.white              # Summary rows on page 1
     BORDER_COLOR = colors.black
 
-    # ─── Reusable paragraph styles ───
-    cell_style = ParagraphStyle('Cell', fontName='Helvetica', fontSize=9, leading=11)
-    cell_bold = ParagraphStyle('CellBold', fontName='Helvetica-Bold', fontSize=9, leading=11)
-    cell_right = ParagraphStyle('CellRight', fontName='Helvetica', fontSize=9, leading=11, alignment=TA_RIGHT)
-    cell_center = ParagraphStyle('CellCenter', fontName='Helvetica', fontSize=9, leading=11, alignment=TA_CENTER)
-    desc_style = ParagraphStyle('Desc', fontName='Helvetica', fontSize=9, leading=11, wordWrap='CJK')
-    title_style = ParagraphStyle('TitleBar', fontName='Helvetica-Bold', fontSize=12, alignment=TA_CENTER)
+    # ─── Reusable paragraph styles (sizes from reference PDF) ───
+    # Page 1 info: 7.6pt equivalent
+    cell_style = ParagraphStyle('Cell', fontName='Helvetica', fontSize=8, leading=10)
+    cell_bold = ParagraphStyle('CellBold', fontName='Helvetica-Bold', fontSize=8, leading=10)
+    cell_right = ParagraphStyle('CellRight', fontName='Helvetica', fontSize=8, leading=10, alignment=TA_RIGHT)
+    cell_center = ParagraphStyle('CellCenter', fontName='Helvetica', fontSize=8, leading=10, alignment=TA_CENTER)
+    desc_style = ParagraphStyle('Desc', fontName='Helvetica', fontSize=8, leading=10, wordWrap='CJK')
+    # Title bar: 10pt white on blue
+    title_style = ParagraphStyle('TitleBar', fontName='Helvetica-Bold', fontSize=10, alignment=TA_CENTER, textColor=colors.white)
 
     def fmt_num(val):
         """Format a Decimal/number with thousand separators and 2 decimals."""
@@ -1132,7 +1136,7 @@ def costing_export_pdf(request, pk):
     title_data = [[Paragraph('<b>COMMERCIAL OFFER SUMMARY</b>', title_style)]]
     title_table = Table(title_data, colWidths=[table_total_width])
     title_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, -1), LIGHT_BLUE),
+        ('BACKGROUND', (0, 0), (-1, -1), TITLE_BLUE),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('TOPPADDING', (0, 0), (-1, -1), 6),
@@ -1316,7 +1320,7 @@ def costing_export_pdf(request, pk):
     bom_title_data = [[Paragraph('<b>BILL OF MATERIAL - PRICED</b>', title_style)]]
     bom_title_table = Table(bom_title_data, colWidths=[sum(bom_col_widths)])
     bom_title_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, -1), LIGHT_BLUE),
+        ('BACKGROUND', (0, 0), (-1, -1), TITLE_BLUE),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('TOPPADDING', (0, 0), (-1, -1), 6),
@@ -1339,13 +1343,13 @@ def costing_export_pdf(request, pk):
     ]))
     elements.append(bom_subtitle_table)
 
-    # BOM column headers
-    cell_right_bold = ParagraphStyle('CellRightBold', fontName='Helvetica-Bold', fontSize=8, leading=10, alignment=TA_RIGHT)
-    cell_sm = ParagraphStyle('CellSm', fontName='Helvetica', fontSize=8, leading=10)
-    cell_sm_bold = ParagraphStyle('CellSmBold', fontName='Helvetica-Bold', fontSize=8, leading=10)
-    cell_sm_center = ParagraphStyle('CellSmCenter', fontName='Helvetica', fontSize=8, leading=10, alignment=TA_CENTER)
-    cell_sm_right = ParagraphStyle('CellSmRight', fontName='Helvetica', fontSize=8, leading=10, alignment=TA_RIGHT)
-    desc_sm_style = ParagraphStyle('DescSm', fontName='Helvetica', fontSize=8, leading=10, wordWrap='CJK')
+    # BOM column styles — smaller font to fit 8 columns (reference uses 4.8-5.4pt)
+    cell_right_bold = ParagraphStyle('CellRightBold', fontName='Helvetica-Bold', fontSize=7, leading=8.5, alignment=TA_RIGHT)
+    cell_sm = ParagraphStyle('CellSm', fontName='Helvetica', fontSize=7, leading=8.5)
+    cell_sm_bold = ParagraphStyle('CellSmBold', fontName='Helvetica-Bold', fontSize=7, leading=8.5)
+    cell_sm_center = ParagraphStyle('CellSmCenter', fontName='Helvetica', fontSize=7, leading=8.5, alignment=TA_CENTER)
+    cell_sm_right = ParagraphStyle('CellSmRight', fontName='Helvetica', fontSize=7, leading=8.5, alignment=TA_RIGHT)
+    desc_sm_style = ParagraphStyle('DescSm', fontName='Helvetica', fontSize=7, leading=8.5, wordWrap='CJK')
 
     bom_hdr = [
         Paragraph('<b>Item No</b>', cell_sm_center),
@@ -1360,8 +1364,8 @@ def costing_export_pdf(request, pk):
     bom_data = [bom_hdr]
 
     # Build all rows: section headers + line items + subtotals
-    SECTION_BG = colors.HexColor('#D9E2F3')
-    SUBTOTAL_BG = colors.HexColor('#E2EFDA')
+    SECTION_BG = colors.HexColor('#D9E2F3')    # Light blue for section headers
+    SUBTOTAL_BG = colors.HexColor('#E2EFDA')   # Light green for subtotals
     section_rows = []  # track (row_index, type) for styling
     row_idx = 1  # 0 is header
 
