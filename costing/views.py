@@ -1004,26 +1004,28 @@ def costing_export_pdf(request, pk):
 
     class NumberedCanvas(Canvas):
         """Custom canvas that draws logo header + page footer with
-        'Page X of Y' on every page. The total page count is filled
-        in at the end after all pages are rendered."""
+        'Page X of Y' on every page. Uses a two-pass approach:
+        showPage() saves page state without writing; save() replays
+        all pages with the header/footer drawn, now knowing the total."""
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self._saved_pages = []
+            self._saved_page_states = []
 
         def showPage(self):
-            self._saved_pages.append(dict(self.__dict__))
-            super().showPage()
+            # Save current page drawing commands without writing to PDF.
+            self._saved_page_states.append(dict(self.__dict__))
+            self._startPage()  # reset canvas for next page
 
         def save(self):
-            total = len(self._saved_pages)
-            for state in self._saved_pages:
+            total = len(self._saved_page_states)
+            for page_num, state in enumerate(self._saved_page_states, 1):
                 self.__dict__.update(state)
-                self._draw_header_footer(total)
-                super().showPage()
-            super().save()
+                self._draw_header_footer(page_num, total)
+                Canvas.showPage(self)
+            Canvas.save(self)
 
-        def _draw_header_footer(self, total_pages):
+        def _draw_header_footer(self, page_num, total_pages):
             self.saveState()
             page_w, page_h = A4
 
@@ -1034,7 +1036,6 @@ def costing_export_pdf(request, pk):
             # ── Footer ──
             footer_y = 10*mm
             self.setFont('Helvetica', 7)
-            page_num = getattr(self, '_pageNumber', 0)
             self.drawCentredString(page_w / 2, footer_y, f'Page {page_num} of {total_pages}')
             self.setFont('Helvetica-Oblique', 6)
             self.drawCentredString(
@@ -1042,9 +1043,6 @@ def costing_export_pdf(request, pk):
                 'This document is confidential and proprietary to Leap Networks. Unauthorized distribution is prohibited.'
             )
             self.restoreState()
-
-    def on_page(canvas, doc):
-        pass  # header/footer drawn by NumberedCanvas.save()
 
     # Create PDF document — extra top/bottom margin for header/footer
     doc = SimpleDocTemplate(
