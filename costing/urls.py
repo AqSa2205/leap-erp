@@ -45,4 +45,8 @@ urlpatterns = [
 
     # Toggle terms on costing sheet
     path('<int:pk>/toggle-term/', views.ajax_toggle_term, name='toggle_term'),
+
+    # Scope of Work items
+    path('<int:pk>/add-sow-item/', views.ajax_add_sow_item, name='add_sow_item'),
+    path('sow-item/<int:pk>/delete/', views.ajax_delete_sow_item, name='delete_sow_item'),
 ]

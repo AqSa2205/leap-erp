@@ -311,6 +311,88 @@
     </div>
 </div>
 
+<!-- Scope of Work (A.2) -->
+<div class="card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center" style="background:#F1DCDB;">
+        <span><i class="bi bi-hammer me-2"></i> <strong>A.2 — Scope of Work</strong></span>
+        <button class="btn btn-sm btn-dark" data-bs-toggle="modal" data-bs-target="#addSowModal">
+            <i class="bi bi-plus-lg me-1"></i> Add Item
+        </button>
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0" id="sowTable">
+            <thead class="table-light">
+                <tr>
+                    <th width="50">#</th>
+                    <th>Description</th>
+                    <th width="60">Qty</th>
+                    <th width="60">UOM</th>
+                    <th width="120" class="text-end">Total Price ({{ sheet.output_currency }})</th>
+                    <th width="50"></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in sow_items %}
+                <tr>
+                    <td>{{ item.serial_number }}</td>
+                    <td>{{ item.description }}</td>
+                    <td>{{ item.quantity|floatformat:0 }}</td>
+                    <td>{{ item.uom }}</td>
+                    <td class="text-end fw-bold">{{ item.total_price|floatformat:2 }}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-danger py-0 px-1 delete-sow" data-pk="{{ item.pk }}" title="Delete">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr class="sow-empty-row">
+                    <td colspan="6" class="text-center text-muted py-3">No scope of work items. Click "Add Item" to define installation, commissioning, etc.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Add SOW Item Modal -->
+<div class="modal fade" id="addSowModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-hammer me-2"></i>Add Scope of Work Item</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Description *</label>
+                    <textarea class="form-control" id="sowDescription" rows="2" placeholder="e.g. Installation, Testing, Commissioning, Documentation..."></textarea>
+                </div>
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label fw-bold">Quantity</label>
+                        <input type="number" class="form-control" id="sowQty" value="1" min="1" step="1">
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label fw-bold">UOM</label>
+                        <input type="text" class="form-control" id="sowUom" value="LOT">
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label fw-bold">Total Price ({{ sheet.output_currency }})</label>
+                        <input type="number" class="form-control" id="sowPrice" value="0" min="0" step="0.01">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="saveSowItem">
+                    <i class="bi bi-check-lg me-1"></i> Add
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- PDF Terms & Conditions Selection -->
 <div class="card mt-3">
     <div class="card-header d-flex justify-content-between align-items-center">
@@ -581,6 +663,82 @@
                 console.error('Toggle failed:', err);
             });
         });
+    });
+})();
+
+// ─── Scope of Work AJAX ──────────────────────────────────────
+(function() {
+    const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    const tbody = document.querySelector('#sowTable tbody');
+
+    // Add SOW item
+    document.getElementById('saveSowItem').addEventListener('click', function() {
+        const desc = document.getElementById('sowDescription').value.trim();
+        if (!desc) { alert('Description is required.'); return; }
+
+        const data = new FormData();
+        data.append('description', desc);
+        data.append('quantity', document.getElementById('sowQty').value);
+        data.append('uom', document.getElementById('sowUom').value);
+        data.append('total_price', document.getElementById('sowPrice').value);
+
+        fetch('{% url "costing:add_sow_item" sheet.pk %}', {
+            method: 'POST',
+            headers: {'X-CSRFToken': csrfToken},
+            body: data,
+        })
+        .then(r => r.json())
+        .then(function(resp) {
+            if (resp.ok) {
+                // Remove empty row if present
+                const emptyRow = tbody.querySelector('.sow-empty-row');
+                if (emptyRow) emptyRow.remove();
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${resp.item.serial_number}</td>
+                    <td>${resp.item.description}</td>
+                    <td>${parseFloat(resp.item.quantity).toFixed(0)}</td>
+                    <td>${resp.item.uom}</td>
+                    <td class="text-end fw-bold">${parseFloat(resp.item.total_price).toFixed(2)}</td>
+                    <td><button class="btn btn-sm btn-outline-danger py-0 px-1 delete-sow" data-pk="${resp.item.pk}" title="Delete"><i class="bi bi-trash"></i></button></td>
+                `;
+                tbody.appendChild(tr);
+
+                // Reset form and close modal
+                document.getElementById('sowDescription').value = '';
+                document.getElementById('sowQty').value = '1';
+                document.getElementById('sowUom').value = 'LOT';
+                document.getElementById('sowPrice').value = '0';
+                bootstrap.Modal.getInstance(document.getElementById('addSowModal')).hide();
+            } else {
+                alert(resp.error || 'Failed to add item.');
+            }
+        })
+        .catch(err => console.error('Add SOW failed:', err));
+    });
+
+    // Delete SOW item (event delegation)
+    tbody.addEventListener('click', function(e) {
+        const btn = e.target.closest('.delete-sow');
+        if (!btn) return;
+        if (!confirm('Delete this scope of work item?')) return;
+
+        fetch(`/costing/sow-item/${btn.dataset.pk}/delete/`, {
+            method: 'POST',
+            headers: {'X-CSRFToken': csrfToken},
+        })
+        .then(r => r.json())
+        .then(function(resp) {
+            if (resp.ok) {
+                btn.closest('tr').remove();
+                // Show empty message if no rows left
+                if (!tbody.querySelectorAll('tr').length) {
+                    tbody.innerHTML = '<tr class="sow-empty-row"><td colspan="6" class="text-center text-muted py-3">No scope of work items.</td></tr>';
+                }
+            }
+        })
+        .catch(err => console.error('Delete SOW failed:', err));
     });
 })();
 </script>

@@ -30,7 +30,7 @@ def _safe_filename(name, suffix='', extension=''):
         extension = f'.{extension}'
     return f'{safe}{extension}'
 
-from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, TermsTemplate
+from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, TermsTemplate, ScopeOfWorkItem
 from notifications.services import notify_users
 
 
@@ -261,6 +261,9 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
                 for t in all_terms if t.category == cat_value
             ]
         context['terms_by_category'] = terms_by_category
+
+        # Scope of Work items (A.2 section)
+        context['sow_items'] = sheet.scope_of_work_items.all()
 
         return context
 
@@ -748,6 +751,63 @@ def ajax_update_item_field(request, pk):
             'final_total_price': str(item.final_total_price),
         },
     })
+
+
+# ─── Scope of Work AJAX ──────────────────────────────────────
+
+@login_required
+@require_POST
+def ajax_add_sow_item(request, pk):
+    """Add a Scope of Work line item to a costing sheet."""
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    description = request.POST.get('description', '').strip()
+    if not description:
+        return JsonResponse({'error': 'Description required'}, status=400)
+
+    try:
+        qty = Decimal(request.POST.get('quantity', '1'))
+        total_price = Decimal(request.POST.get('total_price', '0'))
+    except (InvalidOperation, ValueError):
+        return JsonResponse({'error': 'Invalid number'}, status=400)
+
+    uom = request.POST.get('uom', 'LOT').strip() or 'LOT'
+    last_order = sheet.scope_of_work_items.order_by('-order').values_list('order', flat=True).first() or 0
+    last_sn = sheet.scope_of_work_items.order_by('-serial_number').values_list('serial_number', flat=True).first() or 0
+
+    item = ScopeOfWorkItem.objects.create(
+        costing_sheet=sheet,
+        serial_number=last_sn + 1,
+        description=description,
+        quantity=qty,
+        uom=uom,
+        total_price=total_price,
+        order=last_order + 1,
+    )
+    return JsonResponse({
+        'ok': True,
+        'item': {
+            'pk': item.pk,
+            'serial_number': item.serial_number,
+            'description': item.description,
+            'quantity': str(item.quantity),
+            'uom': item.uom,
+            'total_price': str(item.total_price),
+        },
+    })
+
+
+@login_required
+@require_POST
+def ajax_delete_sow_item(request, pk):
+    """Delete a Scope of Work line item."""
+    item = get_object_or_404(ScopeOfWorkItem, pk=pk)
+    if not _user_can_edit_sheet(request.user, item.costing_sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    item.delete()
+    return JsonResponse({'ok': True})
 
 
 # ─── Excel Export ─────────────────────────────────────────────
