@@ -1115,6 +1115,9 @@ def costing_export_pdf(request, pk):
     elements = []
     styles = getSampleStyleSheet()
 
+    # Page usable width (A4=595pt minus 15mm margins each side)
+    PAGE_WIDTH = A4[0] - 15*mm - 15*mm  # ≈510pt
+
     # ─── Colors (matched to the reference PDF) ───
     TITLE_BLUE = colors.HexColor('#528DD4')   # "COMMERCIAL OFFER SUMMARY" bg
     YELLOW_BG = colors.HexColor('#FFC000')    # Column header rows
@@ -1181,7 +1184,8 @@ def costing_export_pdf(request, pk):
          Paragraph('Page 1 of ...', cell_style), ''],
     ]
 
-    header_table = Table(header_data, colWidths=[80, 180, 10, 80, 150, None])
+    # Split page width into 6 columns for the info block
+    header_table = Table(header_data, colWidths=[70, PAGE_WIDTH*0.35, 10, 70, PAGE_WIDTH*0.35, None])
     header_table.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
@@ -1195,8 +1199,9 @@ def costing_export_pdf(request, pk):
 
     # ─── TITLE BAR + DATA TABLE ───
     # Define column widths first so the title bar matches
-    col_widths = [40, 250, 35, 35, 120]  # 5 columns ≈480pt
-    table_total_width = sum(col_widths)
+    # 5 columns spanning the full page width
+    col_widths = [40, PAGE_WIDTH - 40 - 35 - 35 - 120, 35, 35, 120]
+    table_total_width = PAGE_WIDTH
     title_data = [[Paragraph('<b>COMMERCIAL OFFER SUMMARY</b>', title_style)]]
     title_table = Table(title_data, colWidths=[table_total_width])
     title_table.setStyle(TableStyle([
@@ -1410,7 +1415,7 @@ def costing_export_pdf(request, pk):
          Paragraph('<b>End User:</b>', cell_style),
          Paragraph(sheet.end_user, cell_style)],
     ]
-    bom_header_table = Table(bom_header_data, colWidths=[65, 200, 10, 65, 140])
+    bom_header_table = Table(bom_header_data, colWidths=[65, PAGE_WIDTH*0.38, 10, 65, PAGE_WIDTH*0.30])
     bom_header_table.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
@@ -1420,9 +1425,10 @@ def costing_export_pdf(request, pk):
     elements.append(Spacer(1, 4 * mm))
 
     # BOM title bar
-    bom_col_widths = [40, 170, 55, 55, 30, 30, 50, 50]  # ≈480pt
+    # 8 BOM columns spanning full page width
+    bom_col_widths = [40, PAGE_WIDTH - 40 - 55 - 55 - 30 - 30 - 65 - 65, 55, 55, 30, 30, 65, 65]
     bom_title_data = [[Paragraph('<b>BILL OF MATERIAL - PRICED</b>', title_style)]]
-    bom_title_table = Table(bom_title_data, colWidths=[sum(bom_col_widths)])
+    bom_title_table = Table(bom_title_data, colWidths=[PAGE_WIDTH])
     bom_title_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), TITLE_BLUE),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
@@ -1438,7 +1444,7 @@ def costing_export_pdf(request, pk):
         f'<b>MAIN - SCOPE OF SUPPLY - {project_name}</b>',
         ParagraphStyle('SubTitle', fontName='Helvetica-Bold', fontSize=9, alignment=TA_CENTER),
     )]]
-    bom_subtitle_table = Table(bom_subtitle_data, colWidths=[sum(bom_col_widths)])
+    bom_subtitle_table = Table(bom_subtitle_data, colWidths=[PAGE_WIDTH])
     bom_subtitle_table.setStyle(TableStyle([
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('TOPPADDING', (0, 0), (-1, -1), 3),
