@@ -10,11 +10,11 @@ from datetime import datetime, date
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-from .models import Employee, Asset, Vehicle
+from .models import Employee, Asset, Vehicle, EmployeeDocument
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm,
-    VehicleForm, VehicleFilterForm,
+    VehicleForm, VehicleFilterForm, EmployeeDocumentForm,
 )
 
 
@@ -191,6 +191,12 @@ class EmployeeDetailView(AdminRequiredMixin, DetailView):
     model = Employee
     template_name = 'hr/employee_detail.html'
     context_object_name = 'employee'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['documents'] = self.object.documents.all()
+        context['doc_form'] = EmployeeDocumentForm()
+        return context
 
 
 class EmployeeCreateView(AdminRequiredMixin, CreateView):
@@ -867,6 +873,49 @@ def asset_export(request):
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)
     return response
+
+
+# ═══════════════════════════════════════════════════════════════
+# EMPLOYEE DOCUMENTS
+# ═══════════════════════════════════════════════════════════════
+
+@login_required
+def employee_document_upload(request, pk):
+    """Upload a document for an employee."""
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:employee_list')
+
+    employee = get_object_or_404(Employee, pk=pk)
+
+    if request.method == 'POST':
+        form = EmployeeDocumentForm(request.POST, request.FILES)
+        if form.is_valid():
+            doc = form.save(commit=False)
+            doc.employee = employee
+            doc.uploaded_by = request.user
+            doc.save()
+            messages.success(request, f'Document "{doc.title}" uploaded.')
+        else:
+            messages.error(request, 'Please fix the errors below.')
+
+    return redirect('hr:employee_detail', pk=pk)
+
+
+@login_required
+def employee_document_delete(request, pk):
+    """Delete an employee document."""
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:employee_list')
+
+    doc = get_object_or_404(EmployeeDocument, pk=pk)
+    employee_pk = doc.employee_id
+    if doc.file:
+        doc.file.delete(save=False)
+    doc.delete()
+    messages.success(request, 'Document deleted.')
+    return redirect('hr:employee_detail', pk=employee_pk)
 
 
 # ═══════════════════════════════════════════════════════════════

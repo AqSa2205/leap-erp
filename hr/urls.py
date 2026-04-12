@@ -13,6 +13,10 @@ urlpatterns = [
     path('<int:pk>/edit/', views.EmployeeUpdateView.as_view(), name='employee_update'),
     path('<int:pk>/delete/', views.EmployeeDeleteView.as_view(), name='employee_delete'),
 
+    # Employee Documents
+    path('<int:pk>/upload-document/', views.employee_document_upload, name='employee_doc_upload'),
+    path('document/<int:pk>/delete/', views.employee_document_delete, name='employee_doc_delete'),
+
     # Assets (Laptops & Equipment)
     path('assets/', views.AssetListView.as_view(), name='asset_list'),
     path('assets/create/', views.AssetCreateView.as_view(), name='asset_create'),

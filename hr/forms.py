@@ -1,5 +1,5 @@
 from django import forms
-from .models import Employee, Asset, Vehicle
+from .models import Employee, Asset, Vehicle, EmployeeDocument
 
 
 class EmployeeForm(forms.ModelForm):
@@ -163,3 +163,24 @@ class VehicleFilterForm(forms.Form):
         choices=[('', 'All Statuses')] + list(Vehicle.VEHICLE_STATUS_CHOICES),
         widget=forms.Select(attrs={'class': 'form-select'}),
     )
+
+
+# ─── Employee Document Form ──────────────────────────────────
+
+class EmployeeDocumentForm(forms.ModelForm):
+    class Meta:
+        model = EmployeeDocument
+        fields = ['document_type', 'title', 'file', 'notes']
+        widgets = {
+            'notes': forms.Textarea(attrs={'rows': 2}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            if isinstance(field.widget, forms.Select):
+                field.widget.attrs['class'] = 'form-select'
+            elif isinstance(field.widget, forms.FileInput):
+                field.widget.attrs['class'] = 'form-control'
+            else:
+                field.widget.attrs['class'] = 'form-control'

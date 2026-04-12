@@ -57,6 +57,65 @@ class Employee(models.Model):
         return self.full_name
 
 
+class EmployeeDocument(models.Model):
+    """Documents uploaded for an employee (joining letter, leave forms, etc.)."""
+
+    DOC_TYPE_CHOICES = [
+        ('joining_letter', 'Joining Letter'),
+        ('asset_handover', 'Asset Handover'),
+        ('leave_form', 'Leave Form'),
+        ('contract', 'Contract'),
+        ('iqama', 'Iqama / ID Copy'),
+        ('passport', 'Passport Copy'),
+        ('visa', 'Visa'),
+        ('certificate', 'Certificate'),
+        ('warning_letter', 'Warning Letter'),
+        ('termination', 'Termination Letter'),
+        ('salary_slip', 'Salary Slip'),
+        ('other', 'Other'),
+    ]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name='documents'
+    )
+    document_type = models.CharField(max_length=30, choices=DOC_TYPE_CHOICES, default='other', verbose_name="Document Type")
+    title = models.CharField(max_length=255, verbose_name="Document Title")
+    file = models.FileField(upload_to='employee_documents/%Y/%m/', verbose_name="File")
+    notes = models.TextField(blank=True, verbose_name="Notes")
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='uploaded_employee_docs',
+    )
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-uploaded_at']
+        verbose_name = "Employee Document"
+        verbose_name_plural = "Employee Documents"
+
+    def __str__(self):
+        return f"{self.title} ({self.get_document_type_display()})"
+
+    @property
+    def filename(self):
+        import os
+        return os.path.basename(self.file.name) if self.file else ''
+
+    @property
+    def file_extension(self):
+        import os
+        _, ext = os.path.splitext(self.file.name) if self.file else ('', '')
+        return ext.lower()
+
+    @property
+    def is_image(self):
+        return self.file_extension in ('.jpg', '.jpeg', '.png', '.gif', '.webp')
+
+    @property
+    def is_pdf(self):
+        return self.file_extension == '.pdf'
+
+
 class Asset(models.Model):
     CONDITION_CHOICES = [
         ('new', 'New'),
