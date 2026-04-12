@@ -1033,15 +1033,13 @@ def costing_export_pdf(request, pk):
             if _logo_path:
                 self.drawImage(_logo_path, 15*mm, page_h - 18*mm, width=100, height=35, preserveAspectRatio=True, mask='auto')
 
-            # ── Footer ──
+            # ── Footer: confidential left, page number right ──
             footer_y = 10*mm
-            self.setFont('Helvetica', 7)
-            self.drawCentredString(page_w / 2, footer_y, f'Page {page_num} of {total_pages}')
-            self.setFont('Helvetica-Oblique', 6)
-            self.drawCentredString(
-                page_w / 2, footer_y - 8,
-                'This document is confidential and proprietary to Leap Networks. Unauthorized distribution is prohibited.'
-            )
+            self.setFont('Helvetica', 6)
+            self.drawString(15*mm, footer_y,
+                'Confidential. \u00A9 Leap Networks. All rights reserved.')
+            self.drawRightString(page_w - 15*mm, footer_y,
+                f'Page {page_num} of {total_pages}')
             self.restoreState()
 
     # Create PDF document — extra top/bottom margin for header/footer
@@ -1118,7 +1116,9 @@ def costing_export_pdf(request, pk):
          Paragraph('<b>Email:</b>', cell_style),
          Paragraph(created_by_email, cell_style), ''],
         [Paragraph('<b>Date:</b>', cell_style),
-         Paragraph(current_date, cell_style), '', '', '', ''],
+         Paragraph(current_date, cell_style), '',
+         Paragraph('<b>Page</b>', cell_style),
+         Paragraph('Page 1 of ...', cell_style), ''],
     ]
 
     header_table = Table(header_data, colWidths=[80, 180, 10, 80, 150, None])
@@ -1126,13 +1126,17 @@ def costing_export_pdf(request, pk):
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
         ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOX', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
+        ('LINEBELOW', (0, 0), (-1, -2), 0.25, colors.HexColor('#CCCCCC')),
+        ('LINEAFTER', (1, 0), (1, -1), 0.25, colors.HexColor('#CCCCCC')),
     ]))
     elements.append(header_table)
     elements.append(Spacer(1, 5 * mm))
 
-    # ─── TITLE BAR ───
-    # col_widths for data table: [40, 210, 35, 35, 80, 80] = 480
-    table_total_width = 480
+    # ─── TITLE BAR + DATA TABLE ───
+    # Define column widths first so the title bar matches
+    col_widths = [40, 250, 35, 35, 120]  # 5 columns ≈480pt
+    table_total_width = sum(col_widths)
     title_data = [[Paragraph('<b>COMMERCIAL OFFER SUMMARY</b>', title_style)]]
     title_table = Table(title_data, colWidths=[table_total_width])
     title_table.setStyle(TableStyle([
@@ -1146,9 +1150,8 @@ def costing_export_pdf(request, pk):
     elements.append(title_table)
     elements.append(Spacer(1, 2 * mm))
 
-    # ─── MAIN DATA TABLE (6 columns) ───
+    # ─── MAIN DATA TABLE ───
     currency = sheet.output_currency
-    col_widths = [40, 210, 35, 35, 80, 80]  # ≈480pt total
 
     # Column headers
     hdr = [
@@ -1156,36 +1159,71 @@ def costing_export_pdf(request, pk):
         Paragraph('<b>Item Description</b>', cell_bold),
         Paragraph('<b>Qty</b>', cell_center),
         Paragraph('<b>UOM</b>', cell_center),
-        Paragraph('<b>UNIT PRICE</b>', cell_center),
         Paragraph(f'<b>Total Price ({currency})</b>', cell_center),
     ]
     data = [hdr]
 
-    # Row A: MAIN - TOTAL CONTRACT PRICE
+    # Scope of Work items & total
+    sow_items = list(sheet.scope_of_work_items.all())
+    sow_total = sum(i.total_price for i in sow_items) if sow_items else sheet.scope_of_work_total
+    supply_total = sheet.grand_total
+    contract_total = supply_total + sow_total
+
+    # Row A: MAIN - TOTAL CONTRACT PRICE (A.1 + A.2)
     data.append([
-        Paragraph('A', cell_bold),
-        Paragraph('MAIN - TOTAL CONTRACT PRICE', cell_bold),
-        '', '', '',
-        Paragraph(fmt_num(sheet.grand_total), cell_right),
+        Paragraph('<b>A</b>', cell_bold),
+        Paragraph('<b>MAIN - TOTAL CONTRACT PRICE (A.1+A.2)</b>', cell_bold),
+        '', '',
+        Paragraph(f'<b>{fmt_num(contract_total)}</b>', cell_right),
     ])
 
-    # Row A.1: SCOPE OF SUPPLY
+    # Row A.1: SCOPE OF SUPPLY (pink bg)
     data.append([
-        Paragraph('A.1', cell_bold),
-        Paragraph('SCOPE OF SUPPLY', cell_bold),
-        '', '', '',
-        Paragraph(fmt_num(sheet.grand_total), cell_right),
+        Paragraph('<b>A.1</b>', cell_bold),
+        Paragraph('<b>SCOPE OF SUPPLY</b>', cell_bold),
+        '', '',
+        Paragraph(f'<b>{fmt_num(supply_total)}</b>', cell_right),
     ])
 
+    # Supply line items (one per section)
     for section in sections:
+        if not section.section_number:
+            continue  # skip divider rows
         data.append([
-            Paragraph(section.section_number, cell_bold),
-            Paragraph(section.title, cell_bold),
+            Paragraph(section.section_number, cell_center),
+            Paragraph(f' {section.title}', cell_style),
             Paragraph('1', cell_center),
             Paragraph('LOT', cell_center),
-            '',
             Paragraph(fmt_num(section.subtotal), cell_right),
         ])
+
+    # Blank separator row
+    data.append(['', '', '', '', ''])
+
+    # Row A.2: SCOPE OF WORK (pink bg)
+    data.append([
+        Paragraph('<b>A.2</b>', cell_bold),
+        Paragraph('<b>SCOPE OF WORK</b>', cell_bold),
+        '', '',
+        Paragraph(f'<b>{fmt_num(sow_total)}</b>', cell_right),
+    ])
+
+    # Scope of work line items
+    for item in sow_items:
+        data.append([
+            Paragraph(str(item.serial_number), cell_center),
+            Paragraph(f' {item.description}', desc_style),
+            Paragraph(str(int(item.quantity) if item.quantity == int(item.quantity) else item.quantity), cell_center),
+            Paragraph(item.uom, cell_center),
+            Paragraph(fmt_num(item.total_price), cell_right),
+        ])
+
+    # Row indices for special styling:
+    # 0=header, 1=A row, 2=A.1 row, 3..N=supply items, N+1=blank, N+2=A.2, N+3..=SOW items
+    visible_sections = [s for s in sections if s.section_number]
+    a1_row = 2
+    a2_row = 2 + len(visible_sections) + 1 + 1  # +1 blank +1 for A.2 itself
+    PINK_BG = colors.HexColor('#F1DCDB')
 
     main_table = Table(data, colWidths=col_widths, repeatRows=1)
 
@@ -1193,9 +1231,9 @@ def costing_export_pdf(request, pk):
         # Header row — yellow
         ('BACKGROUND', (0, 0), (-1, 0), YELLOW_BG),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('FONTSIZE', (0, 0), (-1, 0), 8),
         ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-        # All rows — white bg, black grid
+        # All rows
         ('BACKGROUND', (0, 1), (-1, -1), colors.white),
         ('GRID', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
@@ -1203,6 +1241,12 @@ def costing_export_pdf(request, pk):
         ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
         ('LEFTPADDING', (0, 0), (-1, -1), 4),
         ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+        # Row A (contract total) — orange/red thin line below header
+        ('LINEABOVE', (0, 1), (-1, 1), 2, colors.HexColor('#E26B0A')),
+        # A.1 SCOPE OF SUPPLY — pink bg
+        ('BACKGROUND', (0, a1_row), (-1, a1_row), PINK_BG),
+        # A.2 SCOPE OF WORK — pink bg
+        ('BACKGROUND', (0, a2_row), (-1, a2_row), PINK_BG),
     ]
 
     main_table.setStyle(TableStyle(style_cmds))

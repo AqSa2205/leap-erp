@@ -1,5 +1,5 @@
 from django import forms
-from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, TermsTemplate
+from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, TermsTemplate, ScopeOfWorkItem
 from projects.models import Project
 
 

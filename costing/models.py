@@ -76,6 +76,14 @@ class CostingSheet(models.Model):
     payment_terms = models.TextField(blank=True)
     conclusion = models.TextField(blank=True)
     selected_terms = models.ManyToManyField('TermsTemplate', blank=True, related_name='costing_sheets')
+
+    # Scope of Work (A.2 section in the commercial offer)
+    scope_of_work_total = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('0'),
+        verbose_name="Scope of Work Total",
+        help_text="Total value for A.2 Scope of Work"
+    )
+
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='draft')
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -160,6 +168,25 @@ class CostingSheet(models.Model):
     @property
     def total_installation_amount(self):
         return self._compute_totals()['total_installation_amount']
+
+
+class ScopeOfWorkItem(models.Model):
+    """Line item under A.2 SCOPE OF WORK in the commercial offer."""
+    costing_sheet = models.ForeignKey(
+        'CostingSheet', on_delete=models.CASCADE, related_name='scope_of_work_items'
+    )
+    serial_number = models.PositiveIntegerField(default=1, verbose_name="S.No.")
+    description = models.TextField(verbose_name="Description")
+    quantity = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('1'))
+    uom = models.CharField(max_length=50, default='LOT', verbose_name="UOM")
+    total_price = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0'), verbose_name="Total Price")
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order', 'serial_number']
+
+    def __str__(self):
+        return f"#{self.serial_number} - {self.description[:50]}"
 
 
 class CostingSection(models.Model):
