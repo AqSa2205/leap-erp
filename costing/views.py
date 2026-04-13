@@ -1502,13 +1502,25 @@ def costing_export_pdf(request, pk):
     ]
     bom_data = [bom_hdr]
 
-    # Build all rows: section headers + line items + subtotals
+    # Build all rows: divider banners + section headers + line items + subtotals
     SECTION_BG = colors.HexColor('#D9E2F3')    # Light blue for section headers
     SUBTOTAL_BG = colors.HexColor('#E2EFDA')   # Light green for subtotals
+    DIVIDER_BG = colors.HexColor('#FFC000')    # Gold/yellow for import dividers
+    divider_style = ParagraphStyle('Divider', fontName='Helvetica-Bold', fontSize=8, leading=10, alignment=TA_CENTER, textColor=colors.HexColor('#333333'))
     section_rows = []  # track (row_index, type) for styling
     row_idx = 1  # 0 is header
 
     for section in sections:
+        # Divider row (blank section_number = import batch heading)
+        if not section.section_number:
+            bom_data.append([
+                Paragraph(f'<b>{section.title}</b>', divider_style),
+                '', '', '', '', '', '', '',
+            ])
+            section_rows.append((row_idx, 'divider'))
+            row_idx += 1
+            continue
+
         # Section header row
         bom_data.append([
             Paragraph(f'<b>{section.section_number}</b>', cell_sm_bold),
@@ -1559,9 +1571,14 @@ def costing_export_pdf(request, pk):
         ('RIGHTPADDING', (0, 0), (-1, -1), 3),
     ]
 
-    # Style section header and subtotal rows
+    # Style section header, subtotal, and divider rows
     for ridx, rtype in section_rows:
-        if rtype == 'section':
+        if rtype == 'divider':
+            # Gold banner spanning all columns — import batch heading
+            bom_style_cmds.append(('BACKGROUND', (0, ridx), (-1, ridx), DIVIDER_BG))
+            bom_style_cmds.append(('SPAN', (0, ridx), (-1, ridx)))
+            bom_style_cmds.append(('ALIGN', (0, ridx), (-1, ridx), 'CENTER'))
+        elif rtype == 'section':
             bom_style_cmds.append(('BACKGROUND', (0, ridx), (-1, ridx), SECTION_BG))
             bom_style_cmds.append(('SPAN', (1, ridx), (-1, ridx)))
         elif rtype == 'subtotal':
