@@ -1048,7 +1048,7 @@ def costing_export_pdf(request, pk):
     # Create response
     response = HttpResponse(content_type='application/pdf')
     filename = _safe_filename(sheet.title, suffix='Commercial_Offer', extension='pdf')
-    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    response['Content-Disposition'] = f'inline; filename="{filename}"'
 
     import os
     from django.contrib.staticfiles.finders import find as find_static
