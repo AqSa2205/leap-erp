@@ -1512,13 +1512,15 @@ def costing_export_pdf(request, pk):
     batch_total_style = ParagraphStyle('BatchTotal', fontName='Helvetica-Bold', fontSize=7, leading=8.5, alignment=TA_RIGHT)
     row_idx = 1  # 0 is header
     batch_running_total = Decimal('0')
-    batch_name = ''
-    has_batch = False  # tracks if we've seen at least one divider
+    # Use the sheet title as the default batch name for sections that
+    # appear before any divider. This way the first group always gets a total.
+    batch_name = sheet.title
+    has_sections_in_batch = False
 
     def _insert_batch_total():
-        """Insert a batch total row for the previous import batch."""
-        nonlocal row_idx
-        if batch_name and batch_running_total:
+        """Insert a batch total row for the current batch."""
+        nonlocal row_idx, has_sections_in_batch
+        if has_sections_in_batch and batch_running_total:
             bom_data.append([
                 '', '', '', '', '',
                 Paragraph(f'<b>Total — {batch_name}</b>', batch_total_style),
@@ -1527,6 +1529,7 @@ def costing_export_pdf(request, pk):
             ])
             section_rows.append((row_idx, 'batch_total'))
             row_idx += 1
+            has_sections_in_batch = False
 
     for section in sections:
         # Divider row (blank section_number = import batch heading)
@@ -1542,7 +1545,6 @@ def costing_export_pdf(request, pk):
             row_idx += 1
             batch_name = section.title
             batch_running_total = Decimal('0')
-            has_batch = True
             continue
 
         # Section header row
@@ -1577,10 +1579,10 @@ def costing_export_pdf(request, pk):
         section_rows.append((row_idx, 'subtotal'))
         row_idx += 1
         batch_running_total += section.subtotal
+        has_sections_in_batch = True
 
     # Insert total for the last batch
-    if has_batch:
-        _insert_batch_total()
+    _insert_batch_total()
 
     # Build the BOM table
     bom_table = Table(bom_data, colWidths=bom_col_widths, repeatRows=1)
