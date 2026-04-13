@@ -1558,18 +1558,46 @@ def costing_export_pdf(request, pk):
         section_rows.append((row_idx, 'section'))
         row_idx += 1
 
-        # Line items
-        for item in section.line_items.all():
-            bom_data.append([
-                Paragraph(item.item_number, cell_sm_center),
-                Paragraph(item.description, desc_sm_style),
-                Paragraph(item.make or '', cell_sm),
-                Paragraph(item.model_number or '', cell_sm),
-                Paragraph(str(int(item.quantity) if item.quantity == int(item.quantity) else item.quantity), cell_sm_center),
-                Paragraph(item.unit, cell_sm_center),
-                Paragraph(fmt_num(item.final_unit_price), cell_sm_right),
-                Paragraph(fmt_num(item.final_total_price), cell_sm_right),
-            ])
+        # Line items — detect sub-headings (e.g. 1.14 that has children 1.14.1, 1.14.2)
+        items_list = list(section.line_items.all())
+        item_numbers = [i.item_number for i in items_list]
+        # Build a set of prefixes that have children
+        sub_heading_numbers = set()
+        for num in item_numbers:
+            # If "1.14.1" exists, then "1.14" is a sub-heading
+            parts = num.rsplit('.', 1)
+            if len(parts) == 2 and parts[0]:
+                sub_heading_numbers.add(parts[0])
+
+        SUBHEADING_BG = colors.HexColor('#E8EEF4')  # Light blue-grey
+
+        for item in items_list:
+            is_subheading = item.item_number in sub_heading_numbers
+
+            if is_subheading:
+                # Sub-heading row: bold, highlighted bg
+                bom_data.append([
+                    Paragraph(f'<b>{item.item_number}</b>', cell_sm_bold),
+                    Paragraph(f'<b>{item.description}</b>', cell_sm_bold),
+                    Paragraph(item.make or '', cell_sm),
+                    Paragraph(item.model_number or '', cell_sm),
+                    Paragraph(str(int(item.quantity) if item.quantity == int(item.quantity) else item.quantity), cell_sm_center),
+                    Paragraph(item.unit, cell_sm_center),
+                    Paragraph(fmt_num(item.final_unit_price), cell_sm_right),
+                    Paragraph(fmt_num(item.final_total_price), cell_sm_right),
+                ])
+                section_rows.append((row_idx, 'subheading'))
+            else:
+                bom_data.append([
+                    Paragraph(item.item_number, cell_sm_center),
+                    Paragraph(item.description, desc_sm_style),
+                    Paragraph(item.make or '', cell_sm),
+                    Paragraph(item.model_number or '', cell_sm),
+                    Paragraph(str(int(item.quantity) if item.quantity == int(item.quantity) else item.quantity), cell_sm_center),
+                    Paragraph(item.unit, cell_sm_center),
+                    Paragraph(fmt_num(item.final_unit_price), cell_sm_right),
+                    Paragraph(fmt_num(item.final_total_price), cell_sm_right),
+                ])
             row_idx += 1
 
         # Subtotal row
@@ -1617,6 +1645,9 @@ def costing_export_pdf(request, pk):
         elif rtype == 'subtotal':
             bom_style_cmds.append(('BACKGROUND', (0, ridx), (-1, ridx), SUBTOTAL_BG))
             bom_style_cmds.append(('SPAN', (0, ridx), (5, ridx)))
+        elif rtype == 'subheading':
+            # Light blue-grey for sub-heading items (e.g. 1.14 with children 1.14.1)
+            bom_style_cmds.append(('BACKGROUND', (0, ridx), (-1, ridx), SUBHEADING_BG))
         elif rtype == 'batch_total':
             # Darker pink total row for the entire import batch
             bom_style_cmds.append(('BACKGROUND', (0, ridx), (-1, ridx), BATCH_TOTAL_BG))
