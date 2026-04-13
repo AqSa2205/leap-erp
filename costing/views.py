@@ -1321,9 +1321,11 @@ def costing_export_pdf(request, pk):
 
     main_table = Table(data, colWidths=col_widths, repeatRows=1)
 
+    SUMMARY_GOLD = colors.HexColor('#FFC000')  # Gold for summary header only
+
     style_cmds = [
-        # Header row — yellow
-        ('BACKGROUND', (0, 0), (-1, 0), HEADER_GREY),
+        # Header row — gold (summary page keeps gold)
+        ('BACKGROUND', (0, 0), (-1, 0), SUMMARY_GOLD),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, 0), 8),
         ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
