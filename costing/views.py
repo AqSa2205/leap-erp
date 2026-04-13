@@ -1134,7 +1134,7 @@ def costing_export_pdf(request, pk):
 
     # ─── Colors (matched to the reference PDF) ───
     TITLE_BLUE = colors.HexColor('#528DD4')   # "COMMERCIAL OFFER SUMMARY" bg
-    YELLOW_BG = colors.HexColor('#FFC000')    # Column header rows
+    HEADER_GREY = colors.HexColor('#D9D9D9')   # Column header rows
     ALT_ROW = colors.HexColor('#F1DCDB')      # Alternating light pink rows
     SECTION_BG_P1 = colors.white              # Summary rows on page 1
     BORDER_COLOR = colors.black
@@ -1323,7 +1323,7 @@ def costing_export_pdf(request, pk):
 
     style_cmds = [
         # Header row — yellow
-        ('BACKGROUND', (0, 0), (-1, 0), YELLOW_BG),
+        ('BACKGROUND', (0, 0), (-1, 0), HEADER_GREY),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, 0), 8),
         ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
@@ -1589,7 +1589,7 @@ def costing_export_pdf(request, pk):
 
     bom_style_cmds = [
         # Header row — yellow
-        ('BACKGROUND', (0, 0), (-1, 0), YELLOW_BG),
+        ('BACKGROUND', (0, 0), (-1, 0), HEADER_GREY),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, 0), 8),
         ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
