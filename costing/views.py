@@ -1089,6 +1089,20 @@ def costing_export_pdf(request, pk):
             self.saveState()
             page_w, page_h = A4
 
+            # ── Watermark: centered, semi-transparent logo ──
+            if _logo_path:
+                self.saveState()
+                self.setFillAlpha(0.06)  # very faint
+                wm_w, wm_h = 300, 110
+                self.drawImage(
+                    _logo_path,
+                    (page_w - wm_w) / 2,
+                    (page_h - wm_h) / 2,
+                    width=wm_w, height=wm_h,
+                    preserveAspectRatio=True, mask='auto',
+                )
+                self.restoreState()
+
             # ── Header: logo top-left ──
             if _logo_path:
                 self.drawImage(_logo_path, 15*mm, page_h - 18*mm, width=100, height=35, preserveAspectRatio=True, mask='auto')
