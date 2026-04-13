@@ -1522,7 +1522,7 @@ def costing_export_pdf(request, pk):
     def _insert_batch_total():
         """Insert a batch total row for the current batch."""
         nonlocal row_idx, has_sections_in_batch
-        if has_sections_in_batch and batch_running_total:
+        if has_sections_in_batch:
             bom_data.append([
                 '', '', '', '', '',
                 Paragraph(f'<b>Total — {batch_name}</b>', batch_total_style),
