@@ -1508,17 +1508,41 @@ def costing_export_pdf(request, pk):
     DIVIDER_BG = colors.HexColor('#FFC000')    # Gold/yellow for import dividers
     divider_style = ParagraphStyle('Divider', fontName='Helvetica-Bold', fontSize=8, leading=10, alignment=TA_CENTER, textColor=colors.HexColor('#333333'))
     section_rows = []  # track (row_index, type) for styling
+    BATCH_TOTAL_BG = colors.HexColor('#E6B8AF')  # Darker pink for batch totals
+    batch_total_style = ParagraphStyle('BatchTotal', fontName='Helvetica-Bold', fontSize=7, leading=8.5, alignment=TA_RIGHT)
     row_idx = 1  # 0 is header
+    batch_running_total = Decimal('0')
+    batch_name = ''
+    has_batch = False  # tracks if we've seen at least one divider
+
+    def _insert_batch_total():
+        """Insert a batch total row for the previous import batch."""
+        nonlocal row_idx
+        if batch_name and batch_running_total:
+            bom_data.append([
+                '', '', '', '', '',
+                Paragraph(f'<b>Total — {batch_name}</b>', batch_total_style),
+                '',
+                Paragraph(f'<b>{fmt_num(batch_running_total)}</b>', cell_right_bold),
+            ])
+            section_rows.append((row_idx, 'batch_total'))
+            row_idx += 1
 
     for section in sections:
         # Divider row (blank section_number = import batch heading)
         if not section.section_number:
+            # Insert total for the previous batch before starting a new one
+            _insert_batch_total()
+
             bom_data.append([
                 Paragraph(f'<b>{section.title}</b>', divider_style),
                 '', '', '', '', '', '', '',
             ])
             section_rows.append((row_idx, 'divider'))
             row_idx += 1
+            batch_name = section.title
+            batch_running_total = Decimal('0')
+            has_batch = True
             continue
 
         # Section header row
@@ -1552,6 +1576,11 @@ def costing_export_pdf(request, pk):
         ])
         section_rows.append((row_idx, 'subtotal'))
         row_idx += 1
+        batch_running_total += section.subtotal
+
+    # Insert total for the last batch
+    if has_batch:
+        _insert_batch_total()
 
     # Build the BOM table
     bom_table = Table(bom_data, colWidths=bom_col_widths, repeatRows=1)
@@ -1571,7 +1600,7 @@ def costing_export_pdf(request, pk):
         ('RIGHTPADDING', (0, 0), (-1, -1), 3),
     ]
 
-    # Style section header, subtotal, and divider rows
+    # Style section header, subtotal, divider, and batch total rows
     for ridx, rtype in section_rows:
         if rtype == 'divider':
             # Gold banner spanning all columns — import batch heading
@@ -1584,6 +1613,12 @@ def costing_export_pdf(request, pk):
         elif rtype == 'subtotal':
             bom_style_cmds.append(('BACKGROUND', (0, ridx), (-1, ridx), SUBTOTAL_BG))
             bom_style_cmds.append(('SPAN', (0, ridx), (5, ridx)))
+        elif rtype == 'batch_total':
+            # Darker pink total row for the entire import batch
+            bom_style_cmds.append(('BACKGROUND', (0, ridx), (-1, ridx), BATCH_TOTAL_BG))
+            bom_style_cmds.append(('SPAN', (0, ridx), (4, ridx)))
+            bom_style_cmds.append(('SPAN', (5, ridx), (6, ridx)))
+            bom_style_cmds.append(('LINEABOVE', (0, ridx), (-1, ridx), 1.5, BORDER_COLOR))
 
     bom_table.setStyle(TableStyle(bom_style_cmds))
     elements.append(bom_table)
