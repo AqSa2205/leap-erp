@@ -754,9 +754,9 @@ var _csrfToken = '{{ csrf_token }}';
                     if (pending === 0) {
                         saveBtn.disabled = false;
                         if (allOk) {
-                            saveBtn.innerHTML = '<i class="bi bi-check-lg"></i> Saved!';
-                            saveBtn.className = 'btn btn-sm btn-success save-section-rates';
-                            setTimeout(function() { saveBtn.innerHTML = '<i class="bi bi-check-lg"></i> Save'; }, 2000);
+                            saveBtn.innerHTML = '<i class="bi bi-check-lg"></i> Saved! Reloading...';
+                            // Reload the page so all computed prices update
+                            setTimeout(function() { window.location.reload(); }, 500);
                         } else {
                             saveBtn.innerHTML = '<i class="bi bi-x-lg"></i> Error';
                             saveBtn.className = 'btn btn-sm btn-danger save-section-rates';
