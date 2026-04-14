@@ -532,37 +532,32 @@ class CostingLineItem(models.Model):
             return section_margin
         return self.sheet.margin
 
+    def _display_rate(self, item_field, section_field, sheet_field):
+        """Return rate as whole number for display (item → section → sheet)."""
+        item_val = getattr(self, item_field)
+        if item_val is not None:
+            return item_val
+        section_val = getattr(self.section, section_field, None)
+        if section_val is not None:
+            return section_val
+        return getattr(self.sheet, sheet_field)
+
     @property
     def display_discount_pct(self):
-        """Return discount % as whole number for display"""
-        if self.discount_pct is not None:
-            return self.discount_pct
-        return self.sheet.discount_rate
+        return self._display_rate('discount_pct', 'discount_rate', 'discount_rate')
 
     @property
     def display_shipping_pct(self):
-        """Return shipping % as whole number for display"""
-        if self.shipping_pct is not None:
-            return self.shipping_pct
-        return self.sheet.shipping_rate
+        return self._display_rate('shipping_pct', 'shipping_rate', 'shipping_rate')
 
     @property
     def display_customs_pct(self):
-        """Return customs % as whole number for display"""
-        if self.customs_pct is not None:
-            return self.customs_pct
-        return self.sheet.customs_rate
+        return self._display_rate('customs_pct', 'customs_rate', 'customs_rate')
 
     @property
     def display_finances_pct(self):
-        """Return finances % as whole number for display"""
-        if self.finances_pct is not None:
-            return self.finances_pct
-        return self.sheet.finances_rate
+        return self._display_rate('finances_pct', 'finances_rate', 'finances_rate')
 
     @property
     def display_installation_pct(self):
-        """Return installation % as whole number for display"""
-        if self.installation_pct is not None:
-            return self.installation_pct
-        return self.sheet.installation_rate
+        return self._display_rate('installation_pct', 'installation_rate', 'installation_rate')

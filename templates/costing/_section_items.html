@@ -23,31 +23,31 @@
     </td>
     <td class="cost-col num">
         <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="discount_pct"
-               value="{{ item.display_discount_pct|floatformat:0 }}" step="1" min="0">
+               value="{{ item.display_discount_pct|floatformat:2 }}" step="1" min="0">
     </td>
     <td class="cost-col num" data-computed="unit_cost">{{ item.unit_cost|floatformat:2|intcomma }}</td>
     <td class="cost-col num" data-computed="total_cost">{{ item.total_cost|floatformat:2|intcomma }}</td>
     <td class="cost-col num">
         <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="margin"
-               value="{{ item.display_margin|floatformat:0 }}" step="1" min="0" max="99">
+               value="{{ item.display_margin|floatformat:2 }}" step="1" min="0" max="99">
     </td>
     <td class="cost-col num" data-computed="base_unit_price">{{ item.base_unit_price|floatformat:2|intcomma }}</td>
     <td class="cost-col num" data-computed="base_total_price">{{ item.base_total_price|floatformat:2|intcomma }}</td>
     <td class="cost-col num">
         <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="shipping_pct"
-               value="{{ item.display_shipping_pct|floatformat:0 }}" step="1" min="0">
+               value="{{ item.display_shipping_pct|floatformat:2 }}" step="1" min="0">
     </td>
     <td class="cost-col num">
         <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="customs_pct"
-               value="{{ item.display_customs_pct|floatformat:0 }}" step="1" min="0">
+               value="{{ item.display_customs_pct|floatformat:2 }}" step="1" min="0">
     </td>
     <td class="cost-col num">
         <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="finances_pct"
-               value="{{ item.display_finances_pct|floatformat:0 }}" step="1" min="0">
+               value="{{ item.display_finances_pct|floatformat:2 }}" step="1" min="0">
     </td>
     <td class="cost-col num">
         <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="installation_pct"
-               value="{{ item.display_installation_pct|floatformat:0 }}" step="1" min="0">
+               value="{{ item.display_installation_pct|floatformat:2 }}" step="1" min="0">
     </td>
     <td class="cost-col num" data-computed="final_unit_price">{{ item.final_unit_price|floatformat:2|intcomma }}</td>
     <td class="cost-col num fw-bold" data-computed="final_total_price">{{ item.final_total_price|floatformat:2|intcomma }}</td>
