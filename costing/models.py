@@ -180,7 +180,16 @@ class ScopeOfWorkItem(models.Model):
     quantity = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('1'))
     uom = models.CharField(max_length=50, default='LOT', verbose_name="UOM")
     total_price = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0'), verbose_name="Total Price")
+    price_text = models.CharField(max_length=100, blank=True, verbose_name="Price Text",
+        help_text='If set, shows this text instead of the number (e.g. "Included", "TBD")')
     order = models.PositiveIntegerField(default=0)
+
+    @property
+    def display_price(self):
+        """Show price_text if set, otherwise the numeric total_price."""
+        if self.price_text:
+            return self.price_text
+        return f'{self.total_price:,.2f}'
 
     class Meta:
         ordering = ['order', 'serial_number']

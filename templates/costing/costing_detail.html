@@ -392,7 +392,7 @@
                     <th>Description</th>
                     <th width="60">Qty</th>
                     <th width="60">UOM</th>
-                    <th width="120" class="text-end">Total Price ({{ sheet.output_currency }})</th>
+                    <th width="150" class="text-end">Total Price ({{ sheet.output_currency }})</th>
                     <th width="50"></th>
                 </tr>
             </thead>
@@ -403,7 +403,7 @@
                     <td>{{ item.description }}</td>
                     <td>{{ item.quantity|floatformat:0 }}</td>
                     <td>{{ item.uom }}</td>
-                    <td class="text-end fw-bold">{{ item.total_price|floatformat:2 }}</td>
+                    <td class="text-end fw-bold">{{ item.display_price }}</td>
                     <td>
                         <button class="btn btn-sm btn-outline-danger py-0 px-1 delete-sow" data-pk="{{ item.pk }}" title="Delete">
                             <i class="bi bi-trash"></i>
@@ -434,17 +434,22 @@
                     <textarea class="form-control" id="sowDescription" rows="2" placeholder="e.g. Installation, Testing, Commissioning, Documentation..."></textarea>
                 </div>
                 <div class="row">
-                    <div class="col-md-4 mb-3">
+                    <div class="col-md-3 mb-3">
                         <label class="form-label fw-bold">Quantity</label>
                         <input type="number" class="form-control" id="sowQty" value="1" min="1" step="1">
                     </div>
-                    <div class="col-md-4 mb-3">
+                    <div class="col-md-3 mb-3">
                         <label class="form-label fw-bold">UOM</label>
                         <input type="text" class="form-control" id="sowUom" value="LOT">
                     </div>
-                    <div class="col-md-4 mb-3">
-                        <label class="form-label fw-bold">Total Price ({{ sheet.output_currency }})</label>
+                    <div class="col-md-3 mb-3">
+                        <label class="form-label fw-bold">Price ({{ sheet.output_currency }})</label>
                         <input type="number" class="form-control" id="sowPrice" value="0" min="0" step="0.01">
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <label class="form-label fw-bold">Or Text</label>
+                        <input type="text" class="form-control" id="sowPriceText" placeholder='e.g. Included, TBD'>
+                        <small class="text-muted">If filled, shows this instead of the number</small>
                     </div>
                 </div>
             </div>
@@ -811,6 +816,7 @@ var _csrfToken = '{{ csrf_token }}';
         data.append('quantity', document.getElementById('sowQty').value);
         data.append('uom', document.getElementById('sowUom').value);
         data.append('total_price', document.getElementById('sowPrice').value);
+        data.append('price_text', document.getElementById('sowPriceText').value);
 
         fetch('{% url "costing:add_sow_item" sheet.pk %}', {
             method: 'POST',
@@ -830,7 +836,7 @@ var _csrfToken = '{{ csrf_token }}';
                     <td>${resp.item.description}</td>
                     <td>${parseFloat(resp.item.quantity).toFixed(0)}</td>
                     <td>${resp.item.uom}</td>
-                    <td class="text-end fw-bold">${parseFloat(resp.item.total_price).toFixed(2)}</td>
+                    <td class="text-end fw-bold">${resp.item.display_price}</td>
                     <td><button class="btn btn-sm btn-outline-danger py-0 px-1 delete-sow" data-pk="${resp.item.pk}" title="Delete"><i class="bi bi-trash"></i></button></td>
                 `;
                 tbody.appendChild(tr);
@@ -840,6 +846,7 @@ var _csrfToken = '{{ csrf_token }}';
                 document.getElementById('sowQty').value = '1';
                 document.getElementById('sowUom').value = 'LOT';
                 document.getElementById('sowPrice').value = '0';
+                document.getElementById('sowPriceText').value = '';
                 bootstrap.Modal.getInstance(document.getElementById('addSowModal')).hide();
             } else {
                 alert(resp.error || 'Failed to add item.');

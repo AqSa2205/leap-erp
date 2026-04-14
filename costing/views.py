@@ -849,6 +849,7 @@ def ajax_add_sow_item(request, pk):
         return JsonResponse({'error': 'Invalid number'}, status=400)
 
     uom = request.POST.get('uom', 'LOT').strip() or 'LOT'
+    price_text = request.POST.get('price_text', '').strip()
     last_order = sheet.scope_of_work_items.order_by('-order').values_list('order', flat=True).first() or 0
     last_sn = sheet.scope_of_work_items.order_by('-serial_number').values_list('serial_number', flat=True).first() or 0
 
@@ -859,6 +860,7 @@ def ajax_add_sow_item(request, pk):
         quantity=qty,
         uom=uom,
         total_price=total_price,
+        price_text=price_text,
         order=last_order + 1,
     )
     return JsonResponse({
@@ -869,7 +871,7 @@ def ajax_add_sow_item(request, pk):
             'description': item.description,
             'quantity': str(item.quantity),
             'uom': item.uom,
-            'total_price': str(item.total_price),
+            'display_price': item.display_price,
         },
     })
 
@@ -1384,7 +1386,7 @@ def costing_export_pdf(request, pk):
             Paragraph(f' {item.description}', desc_style),
             Paragraph(str(int(item.quantity) if item.quantity == int(item.quantity) else item.quantity), cell_center),
             Paragraph(item.uom, cell_center),
-            Paragraph(fmt_num(item.total_price), cell_right),
+            Paragraph(item.display_price, cell_right),
         ])
 
     # Row indices for special styling:
