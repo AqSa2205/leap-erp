@@ -2,7 +2,7 @@
 {% for item in items %}
 <tr data-item-id="{{ item.pk }}">
     <td style="white-space:nowrap;">
-        <input type="checkbox" class="form-check-input item-select-cb" value="{{ item.pk }}" data-section="{{ section.pk }}" style="margin-right:4px;">
+        <input type="checkbox" class="form-check-input" value="{{ item.pk }}" onclick="window._onItemCb({{ section.pk }})" style="margin-right:4px;" name="del_item_{{ section.pk }}">
         {{ item.item_number }}
     </td>
     <td style="white-space:normal;min-width:180px;">{{ item.description }}</td>
@@ -67,82 +67,16 @@
 </tr>
 {% endfor %}
 {% if items %}
-<tr class="bulk-actions-row d-none" id="bulk-bar-{{ section.pk }}" style="background:#fff3cd;">
+<tr id="bulk-bar-{{ section.pk }}" style="background:#fff3cd; display:none;">
     <td colspan="9">
-        <input type="checkbox" class="form-check-input" id="select-all-{{ section.pk }}" style="margin-right:6px;">
+        <input type="checkbox" class="form-check-input" onclick="window._onSelectAll({{ section.pk }}, this.checked)" style="margin-right:6px;">
         <strong id="sel-count-{{ section.pk }}">0</strong> selected
-        <button class="btn btn-sm btn-danger ms-2" id="bulk-del-{{ section.pk }}">
+        <button class="btn btn-sm btn-danger ms-2" onclick="window._onBulkDelete({{ section.pk }}, this)">
             <i class="bi bi-trash me-1"></i>Delete Selected
         </button>
     </td>
     <td colspan="15"></td>
 </tr>
-<script>
-(function(){
-    var secPk = '{{ section.pk }}';
-    var bar = document.getElementById('bulk-bar-' + secPk);
-    var countEl = document.getElementById('sel-count-' + secPk);
-    var selectAll = document.getElementById('select-all-' + secPk);
-    var delBtn = document.getElementById('bulk-del-' + secPk);
-
-    function getCbs() { return document.querySelectorAll('.item-select-cb[data-section="' + secPk + '"]'); }
-    function getChecked() { return document.querySelectorAll('.item-select-cb[data-section="' + secPk + '"]:checked'); }
-
-    function updateBar() {
-        var n = getChecked().length;
-        countEl.textContent = n;
-        bar.classList.toggle('d-none', n === 0);
-        selectAll.checked = getCbs().length > 0 && n === getCbs().length;
-    }
-
-    // Checkbox clicks
-    getCbs().forEach(function(cb) {
-        cb.addEventListener('click', function() { setTimeout(updateBar, 10); });
-    });
-
-    // Select all
-    selectAll.addEventListener('click', function() {
-        var check = this.checked;
-        getCbs().forEach(function(cb) { cb.checked = check; });
-        setTimeout(updateBar, 10);
-    });
-
-    // Delete
-    delBtn.addEventListener('click', function() {
-        var checked = getChecked();
-        if (!checked.length) return;
-        if (!confirm('Delete ' + checked.length + ' item(s)? Remaining items will be renumbered.')) return;
-
-        var ids = [];
-        checked.forEach(function(cb) { ids.push(parseInt(cb.value)); });
-
-        delBtn.disabled = true;
-        delBtn.innerHTML = '<i class="bi bi-hourglass"></i> Deleting...';
-
-        var data = new FormData();
-        data.append('item_ids', JSON.stringify(ids));
-
-        fetch('/costing/section/' + secPk + '/bulk-delete-items/', {
-            method: 'POST',
-            headers: {'X-CSRFToken': _csrfToken},
-            body: data,
-        })
-        .then(function(r) { return r.json(); })
-        .then(function(resp) {
-            if (resp.ok) {
-                var body = document.getElementById('section-' + secPk);
-                if (body) {
-                    fetch(body.dataset.url).then(function(r){return r.text();}).then(function(html){ body.innerHTML = html; });
-                }
-            } else {
-                alert(resp.error || 'Delete failed');
-                delBtn.disabled = false;
-                delBtn.innerHTML = '<i class="bi bi-trash me-1"></i>Delete Selected';
-            }
-        });
-    });
-})();
-</script>
 {% endif %}
 <tr class="subtotal-row">
     <td colspan="8" class="text-end">Sub-Total ({{ output_currency }})</td>
