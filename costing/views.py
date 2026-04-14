@@ -753,6 +753,44 @@ def ajax_update_item_field(request, pk):
     })
 
 
+# ─── Bulk Delete Items AJAX ───────────────────────────────────
+
+@login_required
+@require_POST
+def ajax_bulk_delete_items(request, pk):
+    """Delete multiple line items from a section and renumber the remaining."""
+    section = get_object_or_404(CostingSection, pk=pk)
+    if not _user_can_edit_sheet(request.user, section.costing_sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    import json
+    try:
+        item_ids = json.loads(request.POST.get('item_ids', '[]'))
+    except (json.JSONDecodeError, TypeError):
+        return JsonResponse({'error': 'Invalid item_ids'}, status=400)
+
+    if not item_ids:
+        return JsonResponse({'error': 'No items selected'}, status=400)
+
+    with transaction.atomic():
+        # Delete selected items
+        deleted_count = CostingLineItem.objects.filter(
+            pk__in=item_ids, section=section
+        ).delete()[0]
+
+        # Renumber remaining items sequentially
+        remaining = section.line_items.all().order_by('order', 'pk')
+        for idx, item in enumerate(remaining):
+            new_number = f'{section.section_number}.{idx + 1}'
+            new_order = idx
+            if item.item_number != new_number or item.order != new_order:
+                CostingLineItem.objects.filter(pk=item.pk).update(
+                    item_number=new_number, order=new_order
+                )
+
+    return JsonResponse({'ok': True, 'deleted': deleted_count})
+
+
 # ─── Section Rate Override AJAX ───────────────────────────────
 
 @login_required
