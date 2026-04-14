@@ -271,45 +271,64 @@
                             <a href="{% url 'costing:section_delete' section.pk %}" class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"><i class="bi bi-trash"></i></a>
                         </td>
                     </tr>
-                    {# Section rate overrides — auto-show if any rate is set #}
-                    <tr class="section-rates-row {% if not section.margin and not section.discount_rate and not section.shipping_rate and not section.customs_rate and not section.finances_rate and not section.installation_rate %}d-none{% endif %}" id="rates-{{ section.pk }}" style="background:#f0f8ff;">
-                        <td colspan="24">
-                            <div class="d-flex align-items-center gap-3 py-1 px-2" style="font-size:0.78rem;">
-                                <strong class="text-info me-2"><i class="bi bi-sliders2 me-1"></i>Section Rates:</strong>
-                                <label class="mb-0">Margin %
-                                    <input type="number" class="form-control form-control-sm d-inline-block section-rate-input" style="width:65px;" step="0.01" min="0" max="99"
-                                           value="{{ section.margin|default_if_none:'' }}" placeholder="Sheet"
-                                           data-section="{{ section.pk }}" data-field="margin">
-                                </label>
-                                <label class="mb-0">Discount %
-                                    <input type="number" class="form-control form-control-sm d-inline-block section-rate-input" style="width:65px;" step="0.01" min="0" max="100"
-                                           value="{{ section.discount_rate|default_if_none:'' }}" placeholder="Sheet"
-                                           data-section="{{ section.pk }}" data-field="discount_rate">
-                                </label>
-                                <label class="mb-0">Shipping %
-                                    <input type="number" class="form-control form-control-sm d-inline-block section-rate-input" style="width:65px;" step="0.01" min="0" max="100"
-                                           value="{{ section.shipping_rate|default_if_none:'' }}" placeholder="Sheet"
-                                           data-section="{{ section.pk }}" data-field="shipping_rate">
-                                </label>
-                                <label class="mb-0">Customs %
-                                    <input type="number" class="form-control form-control-sm d-inline-block section-rate-input" style="width:65px;" step="0.01" min="0" max="100"
-                                           value="{{ section.customs_rate|default_if_none:'' }}" placeholder="Sheet"
-                                           data-section="{{ section.pk }}" data-field="customs_rate">
-                                </label>
-                                <label class="mb-0">Finances %
-                                    <input type="number" class="form-control form-control-sm d-inline-block section-rate-input" style="width:65px;" step="0.01" min="0" max="100"
-                                           value="{{ section.finances_rate|default_if_none:'' }}" placeholder="Sheet"
-                                           data-section="{{ section.pk }}" data-field="finances_rate">
-                                </label>
-                                <label class="mb-0">Install %
-                                    <input type="number" class="form-control form-control-sm d-inline-block section-rate-input" style="width:65px;" step="0.01" min="0" max="100"
-                                           value="{{ section.installation_rate|default_if_none:'' }}" placeholder="Sheet"
-                                           data-section="{{ section.pk }}" data-field="installation_rate">
-                                </label>
-                                <button class="btn btn-sm btn-success save-section-rates" data-section="{{ section.pk }}"><i class="bi bi-check-lg"></i> Save</button>
-                                <small class="text-muted ms-2">Leave blank = use sheet rate</small>
-                            </div>
+                    {# Section rate overrides — aligned under the matching BOM columns #}
+                    <tr class="section-rates-row {% if not section.margin and not section.discount_rate and not section.shipping_rate and not section.customs_rate and not section.finances_rate and not section.installation_rate %}d-none{% endif %}" id="rates-{{ section.pk }}" style="background:#f0f8ff; font-size:0.75rem;">
+                        {# cols 1-9: label spanning the non-rate columns #}
+                        <td colspan="2" class="text-end pe-2"><strong class="text-info"><i class="bi bi-sliders2 me-1"></i>Section Rates</strong></td>
+                        <td colspan="7" class="text-start">
+                            <button class="btn btn-sm btn-success save-section-rates py-0 px-2" data-section="{{ section.pk }}"><i class="bi bi-check-lg"></i> Save</button>
+                            <small class="text-muted ms-1">Blank = sheet rate</small>
                         </td>
+                        {# col 10: Currency — empty #}
+                        <td class="cost-col"></td>
+                        {# col 11: Base Unit Cost — empty #}
+                        <td class="cost-col"></td>
+                        {# col 12: Discount % #}
+                        <td class="cost-col">
+                            <input type="number" class="form-control form-control-sm section-rate-input p-0 text-center" style="font-size:0.75rem;" step="0.01" min="0" max="100"
+                                   value="{{ section.discount_rate|default_if_none:'' }}" placeholder="—"
+                                   data-section="{{ section.pk }}" data-field="discount_rate">
+                        </td>
+                        {# col 13-14: Unit Cost, Total Cost — empty #}
+                        <td class="cost-col"></td>
+                        <td class="cost-col"></td>
+                        {# col 15: Margin % #}
+                        <td class="cost-col">
+                            <input type="number" class="form-control form-control-sm section-rate-input p-0 text-center" style="font-size:0.75rem;" step="0.01" min="0" max="99"
+                                   value="{{ section.margin|default_if_none:'' }}" placeholder="—"
+                                   data-section="{{ section.pk }}" data-field="margin">
+                        </td>
+                        {# col 16-17: Base Unit/Total Price — empty #}
+                        <td class="cost-col"></td>
+                        <td class="cost-col"></td>
+                        {# col 18: Shipping % #}
+                        <td class="cost-col">
+                            <input type="number" class="form-control form-control-sm section-rate-input p-0 text-center" style="font-size:0.75rem;" step="0.01" min="0" max="100"
+                                   value="{{ section.shipping_rate|default_if_none:'' }}" placeholder="—"
+                                   data-section="{{ section.pk }}" data-field="shipping_rate">
+                        </td>
+                        {# col 19: Customs % #}
+                        <td class="cost-col">
+                            <input type="number" class="form-control form-control-sm section-rate-input p-0 text-center" style="font-size:0.75rem;" step="0.01" min="0" max="100"
+                                   value="{{ section.customs_rate|default_if_none:'' }}" placeholder="—"
+                                   data-section="{{ section.pk }}" data-field="customs_rate">
+                        </td>
+                        {# col 20: Finances % #}
+                        <td class="cost-col">
+                            <input type="number" class="form-control form-control-sm section-rate-input p-0 text-center" style="font-size:0.75rem;" step="0.01" min="0" max="100"
+                                   value="{{ section.finances_rate|default_if_none:'' }}" placeholder="—"
+                                   data-section="{{ section.pk }}" data-field="finances_rate">
+                        </td>
+                        {# col 21: Install % #}
+                        <td class="cost-col">
+                            <input type="number" class="form-control form-control-sm section-rate-input p-0 text-center" style="font-size:0.75rem;" step="0.01" min="0" max="100"
+                                   value="{{ section.installation_rate|default_if_none:'' }}" placeholder="—"
+                                   data-section="{{ section.pk }}" data-field="installation_rate">
+                        </td>
+                        {# cols 22-24: remaining — empty #}
+                        <td class="cost-col"></td>
+                        <td class="cost-col"></td>
+                        <td></td>
                     </tr>
                     {% endif %}
                 </tbody>
