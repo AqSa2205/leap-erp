@@ -306,6 +306,7 @@
                                            value="{{ section.installation_rate|default_if_none:'' }}" placeholder="Sheet"
                                            data-section="{{ section.pk }}" data-field="installation_rate">
                                 </label>
+                                <button class="btn btn-sm btn-success save-section-rates" data-section="{{ section.pk }}"><i class="bi bi-check-lg"></i> Save</button>
                                 <small class="text-muted ms-2">Leave blank = use sheet rate</small>
                             </div>
                         </td>
@@ -722,36 +723,56 @@ var _csrfToken = '{{ csrf_token }}';
         });
     });
 
-    // Save section rate on change (debounced)
-    let rateTimer = null;
-    document.querySelectorAll('.section-rate-input').forEach(function(input) {
-        input.addEventListener('change', function() {
-            const sectionPk = this.dataset.section;
-            const field = this.dataset.field;
-            const value = this.value.trim();
+    // Save all section rates on button click
+    document.querySelectorAll('.save-section-rates').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var sectionPk = this.dataset.section;
+            var saveBtn = this;
+            var row = document.getElementById('rates-' + sectionPk);
+            var inputs = row.querySelectorAll('.section-rate-input');
+            var pending = inputs.length;
+            var allOk = true;
 
-            clearTimeout(rateTimer);
-            rateTimer = setTimeout(function() {
-                const data = new FormData();
-                data.append('field', field);
-                data.append('value', value);
+            saveBtn.disabled = true;
+            saveBtn.innerHTML = '<i class="bi bi-hourglass"></i> Saving...';
 
-                fetch(`/costing/section/${sectionPk}/update-rate/`, {
+            inputs.forEach(function(input) {
+                var data = new FormData();
+                data.append('field', input.dataset.field);
+                data.append('value', input.value.trim());
+
+                fetch('/costing/section/' + sectionPk + '/update-rate/', {
                     method: 'POST',
                     headers: {'X-CSRFToken': _csrfToken},
                     body: data,
                 })
-                .then(r => r.json())
+                .then(function(r) { return r.json(); })
                 .then(function(resp) {
-                    if (resp.ok) {
-                        input.style.borderColor = '#198754';
-                        setTimeout(() => { input.style.borderColor = ''; }, 1500);
-                    } else {
-                        input.style.borderColor = '#dc3545';
+                    if (!resp.ok) allOk = false;
+                    pending--;
+                    if (pending === 0) {
+                        saveBtn.disabled = false;
+                        if (allOk) {
+                            saveBtn.innerHTML = '<i class="bi bi-check-lg"></i> Saved!';
+                            saveBtn.className = 'btn btn-sm btn-success save-section-rates';
+                            setTimeout(function() { saveBtn.innerHTML = '<i class="bi bi-check-lg"></i> Save'; }, 2000);
+                        } else {
+                            saveBtn.innerHTML = '<i class="bi bi-x-lg"></i> Error';
+                            saveBtn.className = 'btn btn-sm btn-danger save-section-rates';
+                            setTimeout(function() {
+                                saveBtn.innerHTML = '<i class="bi bi-check-lg"></i> Save';
+                                saveBtn.className = 'btn btn-sm btn-success save-section-rates';
+                            }, 2000);
+                        }
                     }
                 })
-                .catch(err => console.error('Section rate update failed:', err));
-            }, 300);
+                .catch(function(err) {
+                    console.error('Section rate save failed:', err);
+                    allOk = false;
+                    pending--;
+                });
+            });
         });
     });
 })();
