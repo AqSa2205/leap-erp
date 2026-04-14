@@ -481,8 +481,9 @@
 
 {% block extra_js %}
 <script>
+var _csrfToken = '{{ csrf_token }}';
 (function() {
-    var csrfToken = '{{ csrf_token }}';
+    var csrfToken = _csrfToken;
     var sheetPk = {{ sheet.pk }};
     var updateParamsUrl = '{% url "costing:update_params" sheet.pk %}';
 
@@ -728,7 +729,6 @@
             const sectionPk = this.dataset.section;
             const field = this.dataset.field;
             const value = this.value.trim();
-            const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
 
             clearTimeout(rateTimer);
             rateTimer = setTimeout(function() {
@@ -738,7 +738,7 @@
 
                 fetch(`/costing/section/${sectionPk}/update-rate/`, {
                     method: 'POST',
-                    headers: {'X-CSRFToken': csrfToken},
+                    headers: {'X-CSRFToken': _csrfToken},
                     body: data,
                 })
                 .then(r => r.json())
@@ -758,7 +758,6 @@
 
 // ─── Scope of Work AJAX ──────────────────────────────────────
 (function() {
-    const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
     const tbody = document.querySelector('#sowTable tbody');
 
     // Add SOW item
@@ -774,7 +773,7 @@
 
         fetch('{% url "costing:add_sow_item" sheet.pk %}', {
             method: 'POST',
-            headers: {'X-CSRFToken': csrfToken},
+            headers: {'X-CSRFToken': _csrfToken},
             body: data,
         })
         .then(r => r.json())
@@ -816,7 +815,7 @@
 
         fetch(`/costing/sow-item/${btn.dataset.pk}/delete/`, {
             method: 'POST',
-            headers: {'X-CSRFToken': csrfToken},
+            headers: {'X-CSRFToken': _csrfToken},
         })
         .then(r => r.json())
         .then(function(resp) {
