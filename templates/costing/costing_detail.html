@@ -271,8 +271,8 @@
                             <a href="{% url 'costing:section_delete' section.pk %}" class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"><i class="bi bi-trash"></i></a>
                         </td>
                     </tr>
-                    {# Section rate overrides — hidden by default, toggled by sliders button #}
-                    <tr class="section-rates-row d-none" id="rates-{{ section.pk }}" style="background:#f0f8ff;">
+                    {# Section rate overrides — auto-show if any rate is set #}
+                    <tr class="section-rates-row {% if not section.margin and not section.discount_rate and not section.shipping_rate and not section.customs_rate and not section.finances_rate and not section.installation_rate %}d-none{% endif %}" id="rates-{{ section.pk }}" style="background:#f0f8ff;">
                         <td colspan="24">
                             <div class="d-flex align-items-center gap-3 py-1 px-2" style="font-size:0.78rem;">
                                 <strong class="text-info me-2"><i class="bi bi-sliders2 me-1"></i>Section Rates:</strong>
