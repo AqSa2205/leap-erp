@@ -753,6 +753,39 @@ def ajax_update_item_field(request, pk):
     })
 
 
+# ─── Section Rate Override AJAX ───────────────────────────────
+
+@login_required
+@require_POST
+def ajax_update_section_rate(request, pk):
+    """Update a rate field on a CostingSection (margin, discount, shipping, etc.)."""
+    section = get_object_or_404(CostingSection, pk=pk)
+    if not _user_can_edit_sheet(request.user, section.costing_sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    field = request.POST.get('field', '').strip()
+    value = request.POST.get('value', '').strip()
+
+    allowed = ('margin', 'discount_rate', 'shipping_rate', 'customs_rate', 'finances_rate', 'installation_rate')
+    if field not in allowed:
+        return JsonResponse({'error': 'Invalid field'}, status=400)
+
+    if not value:
+        new_value = None  # Clear to fall back to sheet rate
+    else:
+        try:
+            new_value = Decimal(value)
+        except (InvalidOperation, ValueError):
+            return JsonResponse({'error': 'Invalid number'}, status=400)
+        if field == 'margin':
+            new_value = max(Decimal('0'), min(new_value, Decimal('99')))
+        else:
+            new_value = max(Decimal('0'), min(new_value, Decimal('100')))
+
+    CostingSection.objects.filter(pk=pk).update(**{field: new_value})
+    return JsonResponse({'ok': True})
+
+
 # ─── Scope of Work AJAX ──────────────────────────────────────
 
 @login_required

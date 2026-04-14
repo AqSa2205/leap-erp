@@ -258,12 +258,56 @@
                     {% else %}
                     <tr class="section-header-row" data-section-id="{{ section.pk }}">
                         <td><i class="bi bi-chevron-right section-chevron"></i> {{ section.section_number }}</td>
-                        <td colspan="21">{{ section.title }} <span class="section-item-count">({{ section.item_count_cached }})</span></td>
+                        <td colspan="20">{{ section.title }} <span class="section-item-count">({{ section.item_count_cached }})</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-info py-0 px-1 toggle-section-rates" data-target="rates-{{ section.pk }}" title="Section Rates" onclick="event.stopPropagation();">
+                                <i class="bi bi-sliders2"></i>
+                            </button>
+                        </td>
                         <td class="num fw-bold">{{ section.subtotal|mul:conversion_rate|floatformat:2|intcomma }}</td>
                         <td class="text-center" onclick="event.stopPropagation();">
                             <a href="{% url 'costing:item_create' section.pk %}" class="btn btn-sm btn-outline-primary py-0 px-1" title="Add Item"><i class="bi bi-plus"></i></a>
                             <a href="{% url 'costing:section_edit' section.pk %}" class="btn btn-sm btn-outline-secondary py-0 px-1" title="Edit"><i class="bi bi-pencil"></i></a>
                             <a href="{% url 'costing:section_delete' section.pk %}" class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"><i class="bi bi-trash"></i></a>
+                        </td>
+                    </tr>
+                    {# Section rate overrides — hidden by default, toggled by sliders button #}
+                    <tr class="section-rates-row d-none" id="rates-{{ section.pk }}" style="background:#f0f8ff;">
+                        <td colspan="24">
+                            <div class="d-flex align-items-center gap-3 py-1 px-2" style="font-size:0.78rem;">
+                                <strong class="text-info me-2"><i class="bi bi-sliders2 me-1"></i>Section Rates:</strong>
+                                <label class="mb-0">Margin %
+                                    <input type="number" class="form-control form-control-sm d-inline-block section-rate-input" style="width:65px;" step="0.01" min="0" max="99"
+                                           value="{{ section.margin|default_if_none:'' }}" placeholder="Sheet"
+                                           data-section="{{ section.pk }}" data-field="margin">
+                                </label>
+                                <label class="mb-0">Discount %
+                                    <input type="number" class="form-control form-control-sm d-inline-block section-rate-input" style="width:65px;" step="0.01" min="0" max="100"
+                                           value="{{ section.discount_rate|default_if_none:'' }}" placeholder="Sheet"
+                                           data-section="{{ section.pk }}" data-field="discount_rate">
+                                </label>
+                                <label class="mb-0">Shipping %
+                                    <input type="number" class="form-control form-control-sm d-inline-block section-rate-input" style="width:65px;" step="0.01" min="0" max="100"
+                                           value="{{ section.shipping_rate|default_if_none:'' }}" placeholder="Sheet"
+                                           data-section="{{ section.pk }}" data-field="shipping_rate">
+                                </label>
+                                <label class="mb-0">Customs %
+                                    <input type="number" class="form-control form-control-sm d-inline-block section-rate-input" style="width:65px;" step="0.01" min="0" max="100"
+                                           value="{{ section.customs_rate|default_if_none:'' }}" placeholder="Sheet"
+                                           data-section="{{ section.pk }}" data-field="customs_rate">
+                                </label>
+                                <label class="mb-0">Finances %
+                                    <input type="number" class="form-control form-control-sm d-inline-block section-rate-input" style="width:65px;" step="0.01" min="0" max="100"
+                                           value="{{ section.finances_rate|default_if_none:'' }}" placeholder="Sheet"
+                                           data-section="{{ section.pk }}" data-field="finances_rate">
+                                </label>
+                                <label class="mb-0">Install %
+                                    <input type="number" class="form-control form-control-sm d-inline-block section-rate-input" style="width:65px;" step="0.01" min="0" max="100"
+                                           value="{{ section.installation_rate|default_if_none:'' }}" placeholder="Sheet"
+                                           data-section="{{ section.pk }}" data-field="installation_rate">
+                                </label>
+                                <small class="text-muted ms-2">Leave blank = use sheet rate</small>
+                            </div>
                         </td>
                     </tr>
                     {% endif %}
@@ -662,6 +706,52 @@
                 checkbox.checked = !checkbox.checked;
                 console.error('Toggle failed:', err);
             });
+        });
+    });
+})();
+
+// ─── Section Rate Overrides ──────────────────────────────────
+(function() {
+    // Toggle visibility of section rate rows
+    document.querySelectorAll('.toggle-section-rates').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const row = document.getElementById(this.dataset.target);
+            if (row) row.classList.toggle('d-none');
+        });
+    });
+
+    // Save section rate on change (debounced)
+    let rateTimer = null;
+    document.querySelectorAll('.section-rate-input').forEach(function(input) {
+        input.addEventListener('change', function() {
+            const sectionPk = this.dataset.section;
+            const field = this.dataset.field;
+            const value = this.value.trim();
+            const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+            clearTimeout(rateTimer);
+            rateTimer = setTimeout(function() {
+                const data = new FormData();
+                data.append('field', field);
+                data.append('value', value);
+
+                fetch(`/costing/section/${sectionPk}/update-rate/`, {
+                    method: 'POST',
+                    headers: {'X-CSRFToken': csrfToken},
+                    body: data,
+                })
+                .then(r => r.json())
+                .then(function(resp) {
+                    if (resp.ok) {
+                        input.style.borderColor = '#198754';
+                        setTimeout(() => { input.style.borderColor = ''; }, 1500);
+                    } else {
+                        input.style.borderColor = '#dc3545';
+                    }
+                })
+                .catch(err => console.error('Section rate update failed:', err));
+            }, 300);
         });
     });
 })();

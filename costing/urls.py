@@ -23,6 +23,7 @@ urlpatterns = [
     path('section/<int:pk>/edit/', views.SectionUpdateView.as_view(), name='section_edit'),
     path('section/<int:pk>/delete/', views.SectionDeleteView.as_view(), name='section_delete'),
     path('section/<int:pk>/items/', views.ajax_section_items, name='section_items'),
+    path('section/<int:pk>/update-rate/', views.ajax_update_section_rate, name='section_update_rate'),
 
     # Line items
     path('section/<int:section_pk>/add-item/', views.LineItemCreateView.as_view(), name='item_create'),

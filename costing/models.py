@@ -199,6 +199,20 @@ class CostingSection(models.Model):
     title = models.CharField(max_length=255)
     order = models.IntegerField(default=0)
 
+    # Section-level rate overrides (optional — blank falls back to sheet rates)
+    margin = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text='Section margin %. Blank = use sheet margin.')
+    discount_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text='Section discount %. Blank = use sheet rate.')
+    shipping_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text='Section shipping %. Blank = use sheet rate.')
+    customs_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text='Section customs %. Blank = use sheet rate.')
+    finances_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text='Section finances %. Blank = use sheet rate.')
+    installation_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text='Section installation %. Blank = use sheet rate.')
+
     class Meta:
         ordering = ['order', 'section_number']
 
@@ -335,12 +349,25 @@ class CostingLineItem(models.Model):
     MIN_MARGIN_DECIMAL = Decimal('0')
     MAX_MARGIN_DECIMAL = Decimal('0.99')
 
+    def _resolve_rate(self, item_field, section_field, sheet_field):
+        """Resolve a rate using the hierarchy: item → section → sheet.
+        Returns the raw value (whole-number %) before dividing by 100."""
+        # 1. Item-specific override
+        item_val = getattr(self, item_field)
+        if item_val is not None:
+            return item_val
+        # 2. Section-level override
+        section_val = getattr(self.section, section_field, None)
+        if section_val is not None:
+            return section_val
+        # 3. Sheet-level default
+        return getattr(self.sheet, sheet_field)
+
     @property
     def effective_margin(self):
-        """Use item-specific margin if set, otherwise fall back to sheet
-        margin. Returned as a decimal (40% -> 0.40), clamped to [0, 0.99]
-        to keep the selling-price formula numerically stable."""
-        raw = self.margin if self.margin is not None else self.sheet.margin
+        """Item → section → sheet margin. Returned as a decimal (40% -> 0.40),
+        clamped to [0, 0.99] to keep the selling-price formula stable."""
+        raw = self._resolve_rate('margin', 'margin', 'margin')
         if raw is None:
             return Decimal('0')
         margin_decimal = Decimal(raw) / Decimal('100')
@@ -352,37 +379,32 @@ class CostingLineItem(models.Model):
 
     @property
     def effective_discount_pct(self):
-        """Use item-specific discount % if set, otherwise fall back to sheet rate. Divide by 100 for calculation."""
-        if self.discount_pct is not None:
-            return self.discount_pct / Decimal('100')
-        return self.sheet.discount_rate / Decimal('100')
+        """Item → section → sheet discount rate. Divide by 100."""
+        raw = self._resolve_rate('discount_pct', 'discount_rate', 'discount_rate')
+        return (Decimal(raw) / Decimal('100')) if raw else Decimal('0')
 
     @property
     def effective_shipping_pct(self):
-        """Use item-specific shipping % if set, otherwise fall back to sheet rate. Divide by 100 for calculation."""
-        if self.shipping_pct is not None:
-            return self.shipping_pct / Decimal('100')
-        return self.sheet.shipping_rate / Decimal('100')
+        """Item → section → sheet shipping rate. Divide by 100."""
+        raw = self._resolve_rate('shipping_pct', 'shipping_rate', 'shipping_rate')
+        return (Decimal(raw) / Decimal('100')) if raw else Decimal('0')
 
     @property
     def effective_customs_pct(self):
-        """Use item-specific customs % if set, otherwise fall back to sheet rate. Divide by 100 for calculation."""
-        if self.customs_pct is not None:
-            return self.customs_pct / Decimal('100')
-        return self.sheet.customs_rate / Decimal('100')
+        """Item → section → sheet customs rate. Divide by 100."""
+        raw = self._resolve_rate('customs_pct', 'customs_rate', 'customs_rate')
+        return (Decimal(raw) / Decimal('100')) if raw else Decimal('0')
 
     @property
     def effective_finances_pct(self):
-        """Use item-specific finances % if set, otherwise fall back to sheet rate. Divide by 100 for calculation."""
-        if self.finances_pct is not None:
-            return self.finances_pct / Decimal('100')
-        return self.sheet.finances_rate / Decimal('100')
+        """Item → section → sheet finances rate. Divide by 100."""
+        raw = self._resolve_rate('finances_pct', 'finances_rate', 'finances_rate')
+        return (Decimal(raw) / Decimal('100')) if raw else Decimal('0')
 
     @property
     def effective_installation_pct(self):
-        """Use item-specific installation % if set, otherwise fall back to sheet rate. Divide by 100 for calculation."""
-        if self.installation_pct is not None:
-            return self.installation_pct / Decimal('100')
+        """Item → section → sheet installation rate. Divide by 100."""
+        raw = self._resolve_rate('installation_pct', 'installation_rate', 'installation_rate')
         return self.sheet.installation_rate / Decimal('100')
 
     @property
