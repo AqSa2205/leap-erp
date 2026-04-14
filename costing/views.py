@@ -753,42 +753,46 @@ def ajax_update_item_field(request, pk):
     })
 
 
-# ─── Bulk Delete Items AJAX ───────────────────────────────────
+# ─── Bulk Delete Items (dedicated page) ──────────────────────
 
 @login_required
-@require_POST
-def ajax_bulk_delete_items(request, pk):
-    """Delete multiple line items from a section and renumber the remaining."""
+def bulk_delete_page(request, pk):
+    """Page with checkboxes to select and delete multiple line items."""
     section = get_object_or_404(CostingSection, pk=pk)
-    if not _user_can_edit_sheet(request.user, section.costing_sheet):
-        return JsonResponse({'error': 'Permission denied'}, status=403)
+    sheet = section.costing_sheet
+    if not _user_can_edit_sheet(request.user, sheet):
+        messages.error(request, 'Permission denied.')
+        return redirect('costing:detail', pk=sheet.pk)
 
-    import json
-    try:
-        item_ids = json.loads(request.POST.get('item_ids', '[]'))
-    except (json.JSONDecodeError, TypeError):
-        return JsonResponse({'error': 'Invalid item_ids'}, status=400)
+    items = section.line_items.all()
 
-    if not item_ids:
-        return JsonResponse({'error': 'No items selected'}, status=400)
+    if request.method == 'POST':
+        selected_ids = request.POST.getlist('item_ids')
+        if not selected_ids:
+            messages.warning(request, 'No items selected.')
+            return redirect('costing:bulk_delete_page', pk=pk)
 
-    with transaction.atomic():
-        # Delete selected items
-        deleted_count = CostingLineItem.objects.filter(
-            pk__in=item_ids, section=section
-        ).delete()[0]
+        with transaction.atomic():
+            deleted = CostingLineItem.objects.filter(
+                pk__in=selected_ids, section=section
+            ).delete()[0]
 
-        # Renumber remaining items sequentially
-        remaining = section.line_items.all().order_by('order', 'pk')
-        for idx, item in enumerate(remaining):
-            new_number = f'{section.section_number}.{idx + 1}'
-            new_order = idx
-            if item.item_number != new_number or item.order != new_order:
+            # Renumber remaining items
+            remaining = section.line_items.all().order_by('order', 'pk')
+            for idx, item in enumerate(remaining):
+                new_number = f'{section.section_number}.{idx + 1}'
                 CostingLineItem.objects.filter(pk=item.pk).update(
-                    item_number=new_number, order=new_order
+                    item_number=new_number, order=idx
                 )
 
-    return JsonResponse({'ok': True, 'deleted': deleted_count})
+        messages.success(request, f'Deleted {deleted} item(s). Remaining items renumbered.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    return render(request, 'costing/bulk_delete.html', {
+        'section': section,
+        'sheet': sheet,
+        'items': items,
+    })
 
 
 # ─── Section Rate Override AJAX ───────────────────────────────

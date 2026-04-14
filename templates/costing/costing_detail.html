@@ -267,6 +267,7 @@
                         <td class="num fw-bold">{{ section.subtotal|mul:conversion_rate|floatformat:2|intcomma }}</td>
                         <td class="text-center" onclick="event.stopPropagation();">
                             <a href="{% url 'costing:item_create' section.pk %}" class="btn btn-sm btn-outline-primary py-0 px-1" title="Add Item"><i class="bi bi-plus"></i></a>
+                            <a href="{% url 'costing:bulk_delete_page' section.pk %}" class="btn btn-sm btn-outline-warning py-0 px-1" title="Bulk Delete Items"><i class="bi bi-check2-square"></i></a>
                             <a href="{% url 'costing:section_edit' section.pk %}" class="btn btn-sm btn-outline-secondary py-0 px-1" title="Edit"><i class="bi bi-pencil"></i></a>
                             <a href="{% url 'costing:section_delete' section.pk %}" class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"><i class="bi bi-trash"></i></a>
                         </td>
@@ -730,59 +731,6 @@ var _csrfToken = '{{ csrf_token }}';
         });
     });
 })();
-
-// ─── Bulk Delete (global functions called via onclick from AJAX-loaded items) ───
-window._onItemCb = function(secPk) {
-    var cbs = document.querySelectorAll('input[name="del_item_' + secPk + '"]');
-    var checked = document.querySelectorAll('input[name="del_item_' + secPk + '"]:checked');
-    var bar = document.getElementById('bulk-bar-' + secPk);
-    if (!bar) return;
-    var count = checked.length;
-    document.getElementById('sel-count-' + secPk).textContent = count;
-    bar.style.display = count > 0 ? '' : 'none';
-};
-
-window._onSelectAll = function(secPk, isChecked) {
-    var cbs = document.querySelectorAll('input[name="del_item_' + secPk + '"]');
-    cbs.forEach(function(cb) { cb.checked = isChecked; });
-    window._onItemCb(secPk);
-};
-
-window._onBulkDelete = function(secPk, btn) {
-    var checked = document.querySelectorAll('input[name="del_item_' + secPk + '"]:checked');
-    if (!checked.length) return;
-    if (!confirm('Delete ' + checked.length + ' item(s)? Remaining items will be renumbered.')) return;
-
-    var ids = [];
-    checked.forEach(function(cb) { ids.push(parseInt(cb.value)); });
-
-    btn.disabled = true;
-    btn.innerHTML = '<i class="bi bi-hourglass"></i> Deleting...';
-
-    var data = new FormData();
-    data.append('item_ids', JSON.stringify(ids));
-
-    fetch('/costing/section/' + secPk + '/bulk-delete-items/', {
-        method: 'POST',
-        headers: {'X-CSRFToken': _csrfToken},
-        body: data,
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(resp) {
-        if (resp.ok) {
-            var body = document.getElementById('section-' + secPk);
-            if (body) {
-                fetch(body.dataset.url)
-                    .then(function(r) { return r.text(); })
-                    .then(function(html) { body.innerHTML = html; });
-            }
-        } else {
-            alert(resp.error || 'Delete failed');
-            btn.disabled = false;
-            btn.innerHTML = '<i class="bi bi-trash me-1"></i>Delete Selected';
-        }
-    });
-};
 
 // ─── Section Rate Overrides ──────────────────────────────────
 (function() {

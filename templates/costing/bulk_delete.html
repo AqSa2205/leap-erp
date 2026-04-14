@@ -1,0 +1,92 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Bulk Delete — {{ section }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h4 mb-1">Bulk Delete Items</h1>
+                    <p class="text-muted mb-0">{{ section }} — {{ sheet.title }}</p>
+                </div>
+                <a href="{% url 'costing:detail' sheet.pk %}" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left me-1"></i>Back
+                </a>
+            </div>
+
+            <form method="post">
+                {% csrf_token %}
+
+                <div class="card mb-3">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span><strong>{{ items.count }}</strong> items in this section</span>
+                        <div>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="selectAll">Select All</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="deselectAll">Deselect All</button>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-hover table-sm mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th width="40"><input type="checkbox" class="form-check-input" id="toggleAll"></th>
+                                        <th>Item No</th>
+                                        <th>Description</th>
+                                        <th>Make</th>
+                                        <th>Model</th>
+                                        <th>Qty</th>
+                                        <th>Unit</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for item in items %}
+                                    <tr>
+                                        <td><input type="checkbox" class="form-check-input item-cb" name="item_ids" value="{{ item.pk }}"></td>
+                                        <td>{{ item.item_number }}</td>
+                                        <td>{{ item.description|truncatechars:80 }}</td>
+                                        <td>{{ item.make|default:"-" }}</td>
+                                        <td>{{ item.model_number|default:"-" }}</td>
+                                        <td>{{ item.quantity|floatformat:0 }}</td>
+                                        <td>{{ item.unit }}</td>
+                                    </tr>
+                                    {% empty %}
+                                    <tr><td colspan="7" class="text-center py-3 text-muted">No items in this section.</td></tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                {% if items %}
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-danger" onclick="return confirm('Delete selected items? Remaining items will be renumbered.')">
+                        <i class="bi bi-trash me-1"></i>Delete Selected
+                    </button>
+                    <a href="{% url 'costing:detail' sheet.pk %}" class="btn btn-outline-secondary">Cancel</a>
+                </div>
+                {% endif %}
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+document.getElementById('toggleAll').addEventListener('change', function() {
+    var checked = this.checked;
+    document.querySelectorAll('.item-cb').forEach(function(cb) { cb.checked = checked; });
+});
+document.getElementById('selectAll').addEventListener('click', function() {
+    document.querySelectorAll('.item-cb').forEach(function(cb) { cb.checked = true; });
+    document.getElementById('toggleAll').checked = true;
+});
+document.getElementById('deselectAll').addEventListener('click', function() {
+    document.querySelectorAll('.item-cb').forEach(function(cb) { cb.checked = false; });
+    document.getElementById('toggleAll').checked = false;
+});
+</script>
+{% endblock %}

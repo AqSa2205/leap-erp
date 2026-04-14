@@ -1,10 +1,7 @@
 {% load humanize costing_tags %}
 {% for item in items %}
 <tr data-item-id="{{ item.pk }}">
-    <td style="white-space:nowrap;">
-        <input type="checkbox" class="form-check-input" value="{{ item.pk }}" onclick="window._onItemCb({{ section.pk }})" style="margin-right:4px;" name="del_item_{{ section.pk }}">
-        {{ item.item_number }}
-    </td>
+    <td>{{ item.item_number }}</td>
     <td style="white-space:normal;min-width:180px;">{{ item.description }}</td>
     <td>{{ item.vendor_name }}</td>
     <td>{{ item.make }}</td>
@@ -66,18 +63,6 @@
     </td>
 </tr>
 {% endfor %}
-{% if items %}
-<tr id="bulk-bar-{{ section.pk }}" style="background:#fff3cd; display:none;">
-    <td colspan="9">
-        <input type="checkbox" class="form-check-input" onclick="window._onSelectAll({{ section.pk }}, this.checked)" style="margin-right:6px;">
-        <strong id="sel-count-{{ section.pk }}">0</strong> selected
-        <button class="btn btn-sm btn-danger ms-2" onclick="window._onBulkDelete({{ section.pk }}, this)">
-            <i class="bi bi-trash me-1"></i>Delete Selected
-        </button>
-    </td>
-    <td colspan="15"></td>
-</tr>
-{% endif %}
 <tr class="subtotal-row">
     <td colspan="8" class="text-end">Sub-Total ({{ output_currency }})</td>
     <td class="num fw-bold">{{ section.subtotal|mul:conversion_rate|floatformat:2|intcomma }}</td>
