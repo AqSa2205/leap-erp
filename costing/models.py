@@ -524,9 +524,12 @@ class CostingLineItem(models.Model):
     # Display properties for percentage fields (show as whole numbers)
     @property
     def display_margin(self):
-        """Return margin as whole number for display"""
+        """Return margin as whole number for display (item → section → sheet)."""
         if self.margin is not None:
             return self.margin
+        section_margin = getattr(self.section, 'margin', None)
+        if section_margin is not None:
+            return section_margin
         return self.sheet.margin
 
     @property
