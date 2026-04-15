@@ -1656,21 +1656,18 @@ def costing_export_pdf(request, pk):
         if items_list:
             terms_grouped[cat_value] = items_list
 
-    # Terms & Conditions
+    # Terms & Conditions — lines rendered as-is; user supplies their own numbering
     tc_templates = terms_grouped.get('terms_and_conditions', [])
     tc_legacy = sheet.terms_and_conditions.strip()
     if tc_templates or tc_legacy:
         elements.append(Paragraph('Terms &amp; Conditions:', section_hdr_style))
-        counter = 1
         for tmpl in tc_templates:
             elements.append(Paragraph(f'<b>{tmpl.name}</b>', sub_hdr_style))
             for line in [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]:
-                elements.append(Paragraph(f'{counter}. {line}', body_style))
-                counter += 1
+                elements.append(Paragraph(line, body_style))
         if tc_legacy and not tc_templates:
             for line in [l.strip() for l in tc_legacy.splitlines() if l.strip()]:
-                elements.append(Paragraph(f'{counter}. {line}', body_style))
-                counter += 1
+                elements.append(Paragraph(line, body_style))
         elements.append(Spacer(1, 3 * mm))
 
     # Exclusions
