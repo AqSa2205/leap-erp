@@ -60,6 +60,9 @@
             visibility: hidden;
             width: 0;
         }
+        /* When the whole sidebar is collapsed (icon-only mode), force all section item lists
+           to be visible and ignore the per-section collapsed state so users can still navigate. */
+        .sidebar.collapsed .nav-section-items { max-height: none !important; }
         .sidebar.collapsed .nav-link {
             padding: 0.75rem;
             justify-content: center;
@@ -165,7 +168,20 @@
             font-weight: 600;
             transition: all 0.3s ease;
             white-space: nowrap;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            user-select: none;
         }
+        .nav-section:hover { background: rgba(0,0,0,0.03); }
+        .nav-section .section-chevron {
+            font-size: 0.65rem;
+            transition: transform 0.2s ease;
+        }
+        .nav-section.collapsed .section-chevron { transform: rotate(-90deg); }
+        .nav-section-items { overflow: hidden; transition: max-height 0.25s ease; }
+        .nav-section-items.collapsed { max-height: 0 !important; }
         .card {
             border: none;
             box-shadow: 0 2px 8px rgba(0,0,0,0.06);
@@ -699,9 +715,10 @@
             </button>
         </div>
 
+        {# ─── MAIN ─── #}
         {% if not user.is_procurement_manager_user and not user.is_procurement_officer_user %}
-        <div class="nav-section">Main</div>
-        <ul class="nav flex-column">
+        <div class="nav-section" data-section="main"><span>Main</span><i class="bi bi-chevron-down section-chevron"></i></div>
+        <ul class="nav flex-column nav-section-items" data-section-items="main">
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'index' and request.resolver_match.app_name == 'dashboard' %}active{% endif %}" href="{% url 'dashboard:index' %}" data-title="Dashboard">
                     <i class="bi bi-speedometer2"></i> <span>Dashboard</span>
@@ -718,11 +735,6 @@
                 </a>
             </li>
             <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'annual_report' %}active{% endif %}" href="{% url 'reports:annual_report' %}" data-title="Annual Report">
-                    <i class="bi bi-journal-text"></i> <span>Annual Report</span>
-                </a>
-            </li>
-            <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'costing' %}active{% endif %}" href="{% url 'costing:list' %}" data-title="Costing">
                     <i class="bi bi-calculator"></i> <span>Costing</span>
                 </a>
@@ -735,8 +747,43 @@
         </ul>
         {% endif %}
 
-        <div class="nav-section">Procurement</div>
-        <ul class="nav flex-column">
+        {# ─── REPORTS ─── #}
+        {% if not user.is_procurement_manager_user and not user.is_procurement_officer_user %}
+        <div class="nav-section" data-section="reports"><span>Reports</span><i class="bi bi-chevron-down section-chevron"></i></div>
+        <ul class="nav flex-column nav-section-items" data-section-items="reports">
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'index' and request.resolver_match.app_name == 'reports' %}active{% endif %}" href="{% url 'reports:index' %}" data-title="Reports">
+                    <i class="bi bi-file-earmark-bar-graph"></i> <span>Reports</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'annual_report' %}active{% endif %}" href="{% url 'reports:annual_report' %}" data-title="Annual Report">
+                    <i class="bi bi-journal-text"></i> <span>Annual Report</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if 'sales_call' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'reports:sales_call_list' %}" data-title="Sales Call Reports">
+                    <i class="bi bi-telephone"></i> <span>Sales Call Reports</span>
+                </a>
+            </li>
+            {% if user.can_import_excel %}
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'import' %}active{% endif %}" href="{% url 'reports:import' %}" data-title="Import Excel">
+                    <i class="bi bi-upload"></i> <span>Import Excel</span>
+                </a>
+            </li>
+            {% endif %}
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'export' %}active{% endif %}" href="{% url 'reports:export' %}" data-title="Export Excel">
+                    <i class="bi bi-download"></i> <span>Export Excel</span>
+                </a>
+            </li>
+        </ul>
+        {% endif %}
+
+        {# ─── PROCUREMENT ─── #}
+        <div class="nav-section" data-section="procurement"><span>Procurement</span><i class="bi bi-chevron-down section-chevron"></i></div>
+        <ul class="nav flex-column nav-section-items" data-section-items="procurement">
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'dashboard' and request.resolver_match.app_name == 'procurement' %}active{% endif %}" href="{% url 'procurement:dashboard' %}" data-title="Procurement Overview">
                     <i class="bi bi-speedometer2"></i> <span>Overview</span>
@@ -774,111 +821,10 @@
             </li>
         </ul>
 
-        {% if not user.is_procurement_manager_user and not user.is_procurement_officer_user %}
-        <div class="nav-section">Reports</div>
-        <ul class="nav flex-column">
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'index' and request.resolver_match.app_name == 'reports' %}active{% endif %}" href="{% url 'reports:index' %}" data-title="Reports">
-                    <i class="bi bi-file-earmark-bar-graph"></i> <span>Reports</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {% if 'sales_call' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'reports:sales_call_list' %}" data-title="Sales Call Reports">
-                    <i class="bi bi-telephone"></i> <span>Sales Call Reports</span>
-                </a>
-            </li>
-            {% if user.can_import_excel %}
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'import' %}active{% endif %}" href="{% url 'reports:import' %}" data-title="Import Excel">
-                    <i class="bi bi-upload"></i> <span>Import Excel</span>
-                </a>
-            </li>
-            {% endif %}
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'export' %}active{% endif %}" href="{% url 'reports:export' %}" data-title="Export Excel">
-                    <i class="bi bi-download"></i> <span>Export Excel</span>
-                </a>
-            </li>
-        </ul>
-
-        <div class="nav-section">Database</div>
-        <ul class="nav flex-column">
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.app_name == 'contacts' and request.resolver_match.url_name == 'contact_list' %}active{% endif %}" href="{% url 'contacts:contact_list' %}" data-title="All Contacts">
-                    <i class="bi bi-database"></i> <span>All Contacts</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link d-flex justify-content-between align-items-center" data-bs-toggle="collapse" href="#dbCategories" role="button" aria-expanded="{% if request.resolver_match.url_name == 'contact_by_category' %}true{% else %}false{% endif %}">
-                    <span><i class="bi bi-grid"></i> <span>Categories</span></span>
-                    <i class="bi bi-chevron-down small"></i>
-                </a>
-                <div class="collapse {% if request.resolver_match.url_name == 'contact_by_category' %}show{% endif %}" id="dbCategories">
-                    <ul class="nav flex-column ms-3">
-                        <li class="nav-item">
-                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'cctv' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'cctv' %}">
-                                <i class="bi bi-camera-video"></i> <span>CCTV</span>
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'radios' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'radios' %}">
-                                <i class="bi bi-broadcast"></i> <span>Radios</span>
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'acs' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'acs' %}">
-                                <i class="bi bi-shield-lock"></i> <span>ACS</span>
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'iot' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'iot' %}">
-                                <i class="bi bi-cpu"></i> <span>IoT</span>
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'iiot' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'iiot' %}">
-                                <i class="bi bi-gear-wide-connected"></i> <span>IIoT</span>
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'servers' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'servers' %}">
-                                <i class="bi bi-hdd-rack"></i> <span>Servers</span>
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'network_security' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'network_security' %}">
-                                <i class="bi bi-diagram-3"></i> <span>Network & Security</span>
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'firewall' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'firewall' %}">
-                                <i class="bi bi-bricks"></i> <span>Firewall</span>
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'cyber_security' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'cyber_security' %}">
-                                <i class="bi bi-shield-check"></i> <span>Cyber Security</span>
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'windows' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'windows' %}">
-                                <i class="bi bi-windows"></i> <span>Windows</span>
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'ot' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'ot' %}">
-                                <i class="bi bi-tools"></i> <span>OT</span>
-                            </a>
-                        </li>
-                    </ul>
-                </div>
-            </li>
-        </ul>
-        {% endif %}
-
+        {# ─── ADMINISTRATION (includes Contacts/Database) ─── #}
         {% if user.is_super_admin_user or user.is_admin_user %}
-        <div class="nav-section">Administration</div>
-        <ul class="nav flex-column">
+        <div class="nav-section" data-section="administration"><span>Administration</span><i class="bi bi-chevron-down section-chevron"></i></div>
+        <ul class="nav flex-column nav-section-items" data-section-items="administration">
             {% if user.is_super_admin_user %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'user_list' %}active{% endif %}" href="{% url 'accounts:user_list' %}" data-title="Users">
@@ -925,6 +871,33 @@
                 <a class="nav-link {% if request.resolver_match.app_name == 'manpower' %}active{% endif %}" href="{% url 'manpower:sheet_list' %}" data-title="Manpower Costing">
                     <i class="bi bi-person-lines-fill"></i> <span>Manpower Costing</span>
                 </a>
+            </li>
+            {# Database / Contacts moved here from its own section #}
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'contacts' and request.resolver_match.url_name == 'contact_list' %}active{% endif %}" href="{% url 'contacts:contact_list' %}" data-title="All Contacts">
+                    <i class="bi bi-database"></i> <span>All Contacts</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link d-flex justify-content-between align-items-center" data-bs-toggle="collapse" href="#dbCategories" role="button" aria-expanded="{% if request.resolver_match.url_name == 'contact_by_category' %}true{% else %}false{% endif %}">
+                    <span><i class="bi bi-grid"></i> <span>Contact Categories</span></span>
+                    <i class="bi bi-chevron-down small"></i>
+                </a>
+                <div class="collapse {% if request.resolver_match.url_name == 'contact_by_category' %}show{% endif %}" id="dbCategories">
+                    <ul class="nav flex-column ms-3">
+                        <li class="nav-item"><a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'cctv' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'cctv' %}"><i class="bi bi-camera-video"></i> <span>CCTV</span></a></li>
+                        <li class="nav-item"><a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'radios' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'radios' %}"><i class="bi bi-broadcast"></i> <span>Radios</span></a></li>
+                        <li class="nav-item"><a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'acs' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'acs' %}"><i class="bi bi-shield-lock"></i> <span>ACS</span></a></li>
+                        <li class="nav-item"><a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'iot' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'iot' %}"><i class="bi bi-cpu"></i> <span>IoT</span></a></li>
+                        <li class="nav-item"><a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'iiot' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'iiot' %}"><i class="bi bi-gear-wide-connected"></i> <span>IIoT</span></a></li>
+                        <li class="nav-item"><a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'servers' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'servers' %}"><i class="bi bi-hdd-rack"></i> <span>Servers</span></a></li>
+                        <li class="nav-item"><a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'network_security' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'network_security' %}"><i class="bi bi-diagram-3"></i> <span>Network & Security</span></a></li>
+                        <li class="nav-item"><a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'firewall' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'firewall' %}"><i class="bi bi-bricks"></i> <span>Firewall</span></a></li>
+                        <li class="nav-item"><a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'cyber_security' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'cyber_security' %}"><i class="bi bi-shield-check"></i> <span>Cyber Security</span></a></li>
+                        <li class="nav-item"><a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'windows' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'windows' %}"><i class="bi bi-windows"></i> <span>Windows</span></a></li>
+                        <li class="nav-item"><a class="nav-link py-1 {% if request.resolver_match.url_name == 'contact_by_category' and request.resolver_match.kwargs.category == 'ot' %}active{% endif %}" href="{% url 'contacts:contact_by_category' 'ot' %}"><i class="bi bi-tools"></i> <span>OT</span></a></li>
+                    </ul>
+                </div>
             </li>
             {% if user.is_super_admin_user %}
             <li class="nav-item">
@@ -1037,6 +1010,56 @@
         const mainContent = document.getElementById('mainContent');
         const sidebarOverlay = document.getElementById('sidebarOverlay');
         const collapseIcon = document.getElementById('collapseIcon');
+
+        // ─── Collapsible sidebar sections (Main / Reports / Procurement / Administration) ───
+        (function() {
+            const sectionHeaders = document.querySelectorAll('.nav-section[data-section]');
+            sectionHeaders.forEach(function(header) {
+                const key = header.dataset.section;
+                const items = document.querySelector('[data-section-items="' + key + '"]');
+                if (!items) return;
+
+                // Measure natural height so we can animate
+                function openItems() {
+                    items.style.maxHeight = items.scrollHeight + 'px';
+                    items.classList.remove('collapsed');
+                    header.classList.remove('collapsed');
+                }
+                function closeItems() {
+                    items.style.maxHeight = items.scrollHeight + 'px';
+                    // Force reflow so the transition runs from the current height to 0
+                    items.offsetHeight;
+                    items.style.maxHeight = '0px';
+                    items.classList.add('collapsed');
+                    header.classList.add('collapsed');
+                }
+
+                // Restore saved state, but always auto-expand if the active link is inside
+                const hasActive = items.querySelector('.nav-link.active');
+                const saved = localStorage.getItem('navSection_' + key);
+                if (hasActive || saved !== 'collapsed') {
+                    items.style.maxHeight = 'none';
+                } else {
+                    items.style.maxHeight = '0px';
+                    items.classList.add('collapsed');
+                    header.classList.add('collapsed');
+                }
+
+                header.addEventListener('click', function() {
+                    if (items.classList.contains('collapsed')) {
+                        openItems();
+                        localStorage.setItem('navSection_' + key, 'expanded');
+                        // After animation, remove fixed height so inner expansions (e.g. Assets submenu) aren't clipped
+                        setTimeout(function() {
+                            if (!items.classList.contains('collapsed')) items.style.maxHeight = 'none';
+                        }, 260);
+                    } else {
+                        closeItems();
+                        localStorage.setItem('navSection_' + key, 'collapsed');
+                    }
+                });
+            });
+        })();
 
         document.getElementById('sidebarToggle')?.addEventListener('click', function() {
             sidebar.classList.toggle('show');
