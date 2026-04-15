@@ -62,7 +62,7 @@
         }
         /* When the whole sidebar is collapsed (icon-only mode), force all section item lists
            to be visible and ignore the per-section collapsed state so users can still navigate. */
-        .sidebar.collapsed .nav-section-items { max-height: none !important; }
+        .sidebar.collapsed .nav-section-items.collapsed { display: flex !important; }
         .sidebar.collapsed .nav-link {
             padding: 0.75rem;
             justify-content: center;
@@ -180,12 +180,7 @@
             transition: transform 0.2s ease;
         }
         .nav-section.collapsed .section-chevron { transform: rotate(-90deg); }
-        .nav-section-items {
-            overflow: hidden;
-            transition: max-height 0.25s ease;
-            flex-wrap: nowrap !important;
-        }
-        .nav-section-items.collapsed { max-height: 0 !important; }
+        .nav-section-items.collapsed { display: none !important; }
         .card {
             border: none;
             box-shadow: 0 2px 8px rgba(0,0,0,0.06);
@@ -1023,44 +1018,18 @@
                 const items = document.querySelector('[data-section-items="' + key + '"]');
                 if (!items) return;
 
-                // Measure natural height so we can animate
-                function openItems() {
-                    items.style.maxHeight = items.scrollHeight + 'px';
-                    items.classList.remove('collapsed');
-                    header.classList.remove('collapsed');
-                }
-                function closeItems() {
-                    items.style.maxHeight = items.scrollHeight + 'px';
-                    // Force reflow so the transition runs from the current height to 0
-                    items.offsetHeight;
-                    items.style.maxHeight = '0px';
-                    items.classList.add('collapsed');
-                    header.classList.add('collapsed');
-                }
-
                 // Restore saved state, but always auto-expand if the active link is inside
                 const hasActive = items.querySelector('.nav-link.active');
                 const saved = localStorage.getItem('navSection_' + key);
-                if (hasActive || saved !== 'collapsed') {
-                    items.style.maxHeight = 'none';
-                } else {
-                    items.style.maxHeight = '0px';
+                if (!hasActive && saved === 'collapsed') {
                     items.classList.add('collapsed');
                     header.classList.add('collapsed');
                 }
 
                 header.addEventListener('click', function() {
-                    if (items.classList.contains('collapsed')) {
-                        openItems();
-                        localStorage.setItem('navSection_' + key, 'expanded');
-                        // After animation, remove fixed height so inner expansions (e.g. Assets submenu) aren't clipped
-                        setTimeout(function() {
-                            if (!items.classList.contains('collapsed')) items.style.maxHeight = 'none';
-                        }, 260);
-                    } else {
-                        closeItems();
-                        localStorage.setItem('navSection_' + key, 'collapsed');
-                    }
+                    const isCollapsed = items.classList.toggle('collapsed');
+                    header.classList.toggle('collapsed', isCollapsed);
+                    localStorage.setItem('navSection_' + key, isCollapsed ? 'collapsed' : 'expanded');
                 });
             });
         })();
