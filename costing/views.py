@@ -764,6 +764,111 @@ def ajax_update_item_field(request, pk):
     })
 
 
+# ─── Paste from Excel (AJAX) ─────────────────────────────────
+
+@login_required
+@require_POST
+def ajax_paste_line_items(request, pk):
+    """Bulk-create line items from TSV pasted from Excel.
+
+    Expected columns (in order, tab-separated):
+      Description | Make | Model | Qty | Unit | Base Cost | Currency
+
+    Missing trailing columns are allowed — they default to blank/0/EA/SAR.
+    """
+    section = get_object_or_404(CostingSection, pk=pk)
+    sheet = section.costing_sheet
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    raw = request.POST.get('data', '').strip()
+    if not raw:
+        return JsonResponse({'error': 'No data pasted'}, status=400)
+
+    # Case-insensitive unit map: lowercase input -> canonical code
+    valid_units = {code.lower(): code for code, _ in CostingLineItem.UNIT_CHOICES}
+    valid_currencies = {r.currency_code for r in ExchangeRate.objects.all()}
+
+    existing_count = section.line_items.count()
+    created_items = []
+    errors = []
+
+    lines = [ln for ln in raw.splitlines() if ln.strip()]
+    # Detect & skip an obvious header row
+    if lines and 'description' in lines[0].lower() and '\t' in lines[0]:
+        lines = lines[1:]
+
+    with transaction.atomic():
+        for idx, line in enumerate(lines):
+            cols = line.split('\t')
+            # Pad to 7 columns
+            cols += [''] * (7 - len(cols))
+            description = cols[0].strip()
+            if not description:
+                errors.append(f'Row {idx + 1}: empty description — skipped')
+                continue
+            make = cols[1].strip()
+            model_number = cols[2].strip()
+            qty_raw = cols[3].strip().replace(',', '') or '1'
+            unit = cols[4].strip() or 'EA'
+            cost_raw = cols[5].strip().replace(',', '') or '0'
+            currency = cols[6].strip().upper() or 'SAR'
+
+            try:
+                qty = Decimal(qty_raw) if qty_raw else Decimal('1')
+            except (InvalidOperation, ValueError):
+                qty = Decimal('1')
+            try:
+                cost = Decimal(cost_raw) if cost_raw else Decimal('0')
+            except (InvalidOperation, ValueError):
+                cost = Decimal('0')
+
+            unit = valid_units.get(unit.lower(), 'EA')
+            if currency not in valid_currencies:
+                currency = 'SAR'
+
+            next_number = f'{section.section_number}.{existing_count + len(created_items) + 1}'
+            next_order = existing_count + len(created_items)
+
+            item = CostingLineItem.objects.create(
+                section=section,
+                item_number=next_number,
+                description=description[:500],
+                make=make[:100],
+                model_number=model_number[:100],
+                quantity=qty,
+                unit=unit,
+                supplier_currency=currency,
+                base_unit_cost=cost,
+                order=next_order,
+            )
+            created_items.append(item)
+
+    # Render all created rows
+    exchange_rates = list(ExchangeRate.objects.all())
+    rates_dict = {r.currency_code: r.rate_to_usd for r in exchange_rates}
+    conversion_rate = _conversion_rate(sheet.output_currency, rates_dict)
+
+    rows_html = []
+    for item in created_items:
+        item.set_exchange_rates_cache(rates_dict)
+        item.set_sheet_cache(sheet)
+        rows_html.append(render_to_string('costing/_section_item_row.html', {
+            'item': item,
+            'section': section,
+            'exchange_rates': exchange_rates,
+            'output_currency': sheet.output_currency,
+            'conversion_rate': conversion_rate,
+        }))
+
+    return JsonResponse({
+        'ok': True,
+        'created': len(created_items),
+        'errors': errors,
+        'html': ''.join(rows_html),
+    })
+
+
 # ─── Inline Add Row (AJAX) ───────────────────────────────────
 
 @login_required

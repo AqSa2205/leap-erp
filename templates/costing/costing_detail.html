@@ -479,6 +479,39 @@
     </div>
 </div>
 
+<!-- Paste from Excel Modal -->
+<div class="modal fade" id="pasteExcelModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-clipboard-plus me-2"></i>Paste from Excel</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-2"><strong>Copy rows from Excel and paste below.</strong></p>
+                <div class="alert alert-info py-2 small mb-2">
+                    <strong>Expected column order (tab-separated):</strong><br>
+                    <code>Description | Make | Model | Qty | Unit | Base Cost | Currency</code><br>
+                    <small class="text-muted">
+                        A header row is optional — if the first row contains the word "description", it will be skipped.
+                        Missing trailing columns default to: Unit=EA, Currency=SAR, Cost=0, Qty=1.
+                    </small>
+                </div>
+                <textarea id="pasteExcelData" class="form-control" rows="12"
+                    placeholder="Description&#9;Make&#9;Model&#9;Qty&#9;Unit&#9;Cost&#9;Currency&#10;Dome Camera 4K&#9;Avigilon&#9;H5A-DO-IR&#9;10&#9;EA&#9;1200&#9;USD&#10;UTP Cat6 Cable&#9;3M&#9;&#9;500&#9;Mtr&#9;5&#9;SAR"
+                    style="font-family:monospace; font-size:0.8rem; white-space:pre;"></textarea>
+                <div id="pasteExcelResult" class="mt-2 small"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="pasteExcelImport">
+                    <i class="bi bi-download me-1"></i>Import Rows
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- PDF Terms & Conditions Selection -->
 <div class="card mt-3">
     <div class="card-header d-flex justify-content-between align-items-center">
@@ -693,6 +726,21 @@ var _csrfToken = '{{ csrf_token }}';
             }
         });
 
+        // Paste from Excel — open modal scoped to this section
+        bomTable.addEventListener('click', function(e) {
+            var pasteBtn = e.target.closest('.paste-excel-btn');
+            if (!pasteBtn) return;
+            e.preventDefault();
+            var sectionPk = pasteBtn.dataset.section;
+            // Remember which section the modal is targeting
+            document.getElementById('pasteExcelImport').dataset.section = sectionPk;
+            document.getElementById('pasteExcelData').value = '';
+            document.getElementById('pasteExcelResult').innerHTML = '';
+            var modal = new bootstrap.Modal(document.getElementById('pasteExcelModal'));
+            modal.show();
+            setTimeout(function() { document.getElementById('pasteExcelData').focus(); }, 300);
+        });
+
         // Inline "Add row" button — creates a new blank item in the section and inserts it above the add-row-trigger
         bomTable.addEventListener('click', function(e) {
             var btn = e.target.closest('.add-row-btn');
@@ -736,6 +784,77 @@ var _csrfToken = '{{ csrf_token }}';
                 console.error('Add row failed:', err);
                 btn.disabled = false;
                 btn.innerHTML = origHtml;
+            });
+        });
+    }
+
+    // ─── Paste from Excel: import handler ───────────────────────
+    var pasteImportBtn = document.getElementById('pasteExcelImport');
+    if (pasteImportBtn) {
+        pasteImportBtn.addEventListener('click', function() {
+            var sectionPk = this.dataset.section;
+            var textarea = document.getElementById('pasteExcelData');
+            var resultDiv = document.getElementById('pasteExcelResult');
+            var data = textarea.value;
+            if (!data.trim()) {
+                resultDiv.innerHTML = '<div class="alert alert-warning py-2">Please paste some data first.</div>';
+                return;
+            }
+
+            pasteImportBtn.disabled = true;
+            pasteImportBtn.innerHTML = '<i class="bi bi-hourglass"></i> Importing...';
+            resultDiv.innerHTML = '';
+
+            var fd = new FormData();
+            fd.append('data', data);
+
+            fetch('/costing/section/' + sectionPk + '/paste-line-items/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': _csrfToken},
+                body: fd,
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(resp) {
+                pasteImportBtn.disabled = false;
+                pasteImportBtn.innerHTML = '<i class="bi bi-download me-1"></i>Import Rows';
+
+                if (!resp.ok) {
+                    resultDiv.innerHTML = '<div class="alert alert-danger py-2">' + (resp.error || 'Import failed') + '</div>';
+                    return;
+                }
+
+                // Insert the new rows into the correct section body
+                var triggerRow = document.querySelector('.add-row-trigger[data-section="' + sectionPk + '"]');
+                if (triggerRow) {
+                    var tbody = triggerRow.parentNode;
+                    var emptyRow = tbody.querySelector('.empty-section-row');
+                    if (emptyRow) emptyRow.remove();
+                    var temp = document.createElement('tbody');
+                    temp.innerHTML = resp.html.trim();
+                    while (temp.firstElementChild) {
+                        tbody.insertBefore(temp.firstElementChild, triggerRow);
+                    }
+                }
+
+                var msg = '<div class="alert alert-success py-2 mb-0">Imported <strong>' + resp.created + '</strong> row(s).';
+                if (resp.errors && resp.errors.length) {
+                    msg += '<br><small>' + resp.errors.join('<br>') + '</small>';
+                }
+                msg += '</div>';
+                resultDiv.innerHTML = msg;
+
+                // Auto-close after 1.5 seconds on clean success
+                if (!resp.errors || !resp.errors.length) {
+                    setTimeout(function() {
+                        bootstrap.Modal.getInstance(document.getElementById('pasteExcelModal')).hide();
+                    }, 1500);
+                }
+            })
+            .catch(function(err) {
+                console.error('Paste import failed:', err);
+                pasteImportBtn.disabled = false;
+                pasteImportBtn.innerHTML = '<i class="bi bi-download me-1"></i>Import Rows';
+                resultDiv.innerHTML = '<div class="alert alert-danger py-2">Network error — please try again.</div>';
             });
         });
     }

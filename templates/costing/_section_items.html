@@ -8,11 +8,14 @@
     </td>
 </tr>
 {% endfor %}
-{# Inline "Add row" button — appears at the bottom of each section #}
+{# Inline "Add row" / "Paste from Excel" buttons — appears at the bottom of each section #}
 <tr class="add-row-trigger" data-section="{{ section.pk }}">
     <td colspan="24" class="p-1" style="background:#f8f9fa;">
         <button class="btn btn-sm btn-outline-success add-row-btn" data-section="{{ section.pk }}" type="button">
             <i class="bi bi-plus-lg me-1"></i>Add row
+        </button>
+        <button class="btn btn-sm btn-outline-primary paste-excel-btn ms-1" data-section="{{ section.pk }}" type="button">
+            <i class="bi bi-clipboard-plus me-1"></i>Paste from Excel
         </button>
         <small class="text-muted ms-2">Tab through cells to enter data — auto-saves on blur</small>
     </td>
