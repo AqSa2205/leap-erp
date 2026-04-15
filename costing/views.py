@@ -1583,7 +1583,7 @@ def costing_export_pdf(request, pk):
 
     # Build all rows: divider banners + section headers + line items + subtotals
     SECTION_BG = colors.HexColor('#D9E2F3')    # Light blue for section headers
-    SUBTOTAL_BG = colors.HexColor('#E2EFDA')   # Light green for subtotals
+    SUBTOTAL_BG = colors.HexColor('#BFBFBF')   # Medium grey for subtotals
     DIVIDER_BG = colors.HexColor('#FFC000')    # Gold/yellow for import dividers
     divider_style = ParagraphStyle('Divider', fontName='Helvetica-Bold', fontSize=8, leading=10, alignment=TA_CENTER, textColor=colors.HexColor('#333333'))
     section_rows = []  # track (row_index, type) for styling
