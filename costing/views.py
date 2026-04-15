@@ -1099,8 +1099,9 @@ def costing_export_pdf(request, pk):
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import mm
         from reportlab.platypus import (
-            SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer,
-            PageBreak, Image,
+            SimpleDocTemplate, BaseDocTemplate, PageTemplate, Frame,
+            Table, TableStyle, Paragraph, Spacer,
+            PageBreak, Image, NextPageTemplate,
         )
         from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
         from datetime import datetime
@@ -1224,15 +1225,31 @@ def costing_export_pdf(request, pk):
                 f'Page {page_num} of {total_pages}')
             self.restoreState()
 
-    # Create PDF document — extra top/bottom margin for header/footer
-    doc = SimpleDocTemplate(
+    # Create PDF document — use BaseDocTemplate with two page templates:
+    #  - "summary"  = page 1 (topMargin=25mm, no project details header)
+    #  - "bom"      = pages 2+ (topMargin=42mm, project details header drawn by canvas)
+    doc = BaseDocTemplate(
         response,
         pagesize=A4,
         rightMargin=15*mm,
         leftMargin=15*mm,
-        topMargin=42*mm,  # room for logo + project details header on BOM pages
+        topMargin=25*mm,
         bottomMargin=22*mm,
     )
+    summary_frame = Frame(
+        15*mm, 22*mm,
+        A4[0] - 30*mm, A4[1] - 25*mm - 22*mm,
+        id='summary', leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0,
+    )
+    bom_frame = Frame(
+        15*mm, 22*mm,
+        A4[0] - 30*mm, A4[1] - 42*mm - 22*mm,
+        id='bom', leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0,
+    )
+    doc.addPageTemplates([
+        PageTemplate(id='summary', frames=[summary_frame]),
+        PageTemplate(id='bom', frames=[bom_frame]),
+    ])
 
     elements = []
     styles = getSampleStyleSheet()
@@ -1537,6 +1554,8 @@ def costing_export_pdf(request, pk):
         elements.append(Spacer(1, 3 * mm))
 
     # ─── PAGE 2+: DETAILED BOM WITH ALL LINE ITEMS ───
+    # Switch to the "bom" page template (larger top margin + canvas header)
+    elements.append(NextPageTemplate('bom'))
     elements.append(PageBreak())
 
     # Project details header is now drawn by NumberedCanvas on every page — no inline table here.
