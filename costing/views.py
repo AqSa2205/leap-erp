@@ -1304,26 +1304,34 @@ def costing_export_pdf(request, pk):
         """Custom canvas that draws logo header + page footer with
         'Page X of Y' on every page. Uses a two-pass approach:
         showPage() saves page state without writing; save() replays
-        all pages with the header/footer drawn, now knowing the total."""
+        all pages with the header/footer drawn, now knowing the total.
+
+        Each page template's onPage callback stamps _leap_template on
+        the canvas so we know which template (summary/bom) owned each
+        page when replaying."""
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self._saved_page_states = []
+            self._leap_template = 'summary'  # default
 
         def showPage(self):
             # Save current page drawing commands without writing to PDF.
-            self._saved_page_states.append(dict(self.__dict__))
+            state = dict(self.__dict__)
+            state['_leap_template'] = getattr(self, '_leap_template', 'summary')
+            self._saved_page_states.append(state)
             self._startPage()  # reset canvas for next page
 
         def save(self):
             total = len(self._saved_page_states)
             for page_num, state in enumerate(self._saved_page_states, 1):
                 self.__dict__.update(state)
-                self._draw_header_footer(page_num, total)
+                template_id = state.get('_leap_template', 'summary')
+                self._draw_header_footer(page_num, total, template_id)
                 Canvas.showPage(self)
             Canvas.save(self)
 
-        def _draw_header_footer(self, page_num, total_pages):
+        def _draw_header_footer(self, page_num, total_pages, template_id='summary'):
             self.saveState()
             page_w, page_h = A4
 
@@ -1346,7 +1354,7 @@ def costing_export_pdf(request, pk):
                 self.drawImage(_logo_path, 15*mm, page_h - 18*mm, width=100, height=35, preserveAspectRatio=True, mask='auto')
 
             # ── Header: project details table (full width, below logo, BOM pages only) ──
-            if page_num >= 2:
+            if template_id == 'bom':
                 header_cell_style = ParagraphStyle('HdrCell', fontName='Helvetica', fontSize=7, leading=8.5)
                 header_cell_bold = ParagraphStyle('HdrCellBold', fontName='Helvetica-Bold', fontSize=7, leading=8.5)
                 hdr_data = [
@@ -1406,9 +1414,11 @@ def costing_export_pdf(request, pk):
         A4[0] - 30*mm, A4[1] - 42*mm - 22*mm,
         id='bom', leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0,
     )
+    def _mark_summary(canvas, _doc): canvas._leap_template = 'summary'
+    def _mark_bom(canvas, _doc): canvas._leap_template = 'bom'
     doc.addPageTemplates([
-        PageTemplate(id='summary', frames=[summary_frame]),
-        PageTemplate(id='bom', frames=[bom_frame]),
+        PageTemplate(id='summary', frames=[summary_frame], onPage=_mark_summary),
+        PageTemplate(id='bom', frames=[bom_frame], onPage=_mark_bom),
     ])
 
     elements = []
