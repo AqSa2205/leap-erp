@@ -1210,7 +1210,10 @@ def costing_export_pdf(request, pk):
                     ('TOPPADDING', (0, 0), (-1, -1), 1),
                 ]))
                 hdr_w, hdr_h = hdr_table.wrapOn(self, avail_w, 30*mm)
-                hdr_table.drawOn(self, 15*mm, page_h - 22*mm - hdr_h)
+                # Position the table so its bottom sits just above the flowable content area
+                # (content area starts at page_h - topMargin = page_h - 42mm).
+                # Leave a 2mm gap above content.
+                hdr_table.drawOn(self, 15*mm, page_h - 40*mm)
 
             # ── Footer: confidential left, page number right ──
             footer_y = 10*mm
@@ -1227,7 +1230,7 @@ def costing_export_pdf(request, pk):
         pagesize=A4,
         rightMargin=15*mm,
         leftMargin=15*mm,
-        topMargin=32*mm,  # room for logo + project details header on BOM pages
+        topMargin=42*mm,  # room for logo + project details header on BOM pages
         bottomMargin=22*mm,
     )
 
