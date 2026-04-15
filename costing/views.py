@@ -1552,13 +1552,24 @@ def costing_export_pdf(request, pk):
     # Scope of Work items & total
     sow_items = list(sheet.scope_of_work_items.all())
     sow_total = sum(i.total_price for i in sow_items) if sow_items else sheet.scope_of_work_total
-    supply_total = sheet.grand_total  # already excludes optional unless include flag is on
     optional_total = sheet.optional_subtotal
     has_optional = optional_total and optional_total > 0
-    contract_total = supply_total + sow_total
+    # A.1 always shows the non-optional supply subtotal.
+    # sheet.grand_total already excludes optional when include_optional_in_total=False,
+    # and includes them when True — so we subtract the optional piece back out to get
+    # the stable "non-optional supply" figure for A.1.
+    if sheet.include_optional_in_total:
+        non_optional_supply = sheet.grand_total - optional_total
+    else:
+        non_optional_supply = sheet.grand_total
+    # Contract total: A.1 + A.2 always, plus A.3 only when the flag is on.
+    contract_total = non_optional_supply + sow_total
+    if sheet.include_optional_in_total and has_optional:
+        contract_total += optional_total
 
-    # Row A: MAIN - TOTAL CONTRACT PRICE (A.1 + A.2)
-    contract_label = 'MAIN - TOTAL CONTRACT PRICE (A.1+A.2)'
+    # Row A: MAIN - TOTAL CONTRACT PRICE
+    contract_label_parts = 'A.1+A.2+A.3' if (has_optional and sheet.include_optional_in_total) else 'A.1+A.2'
+    contract_label = f'MAIN - TOTAL CONTRACT PRICE ({contract_label_parts})'
     data.append([
         Paragraph('<b>A</b>', cell_bold),
         Paragraph(f'<b>{contract_label}</b>', cell_bold),
@@ -1566,12 +1577,12 @@ def costing_export_pdf(request, pk):
         Paragraph(f'<b>{fmt_num(contract_total)}</b>', cell_right),
     ])
 
-    # Row A.1: SCOPE OF SUPPLY (pink bg)
+    # Row A.1: SCOPE OF SUPPLY (pink bg) — always non-optional
     data.append([
         Paragraph('<b>A.1</b>', cell_bold),
         Paragraph('<b>SCOPE OF SUPPLY</b>', cell_bold),
         '', '',
-        Paragraph(f'<b>{fmt_num(supply_total)}</b>', cell_right),
+        Paragraph(f'<b>{fmt_num(non_optional_supply)}</b>', cell_right),
     ])
 
     # Consolidate sections with the same title so that duplicate
