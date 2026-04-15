@@ -1184,27 +1184,33 @@ def costing_export_pdf(request, pk):
             if _logo_path:
                 self.drawImage(_logo_path, 15*mm, page_h - 18*mm, width=100, height=35, preserveAspectRatio=True, mask='auto')
 
-            # ── Header: project details (right side, on every page) ──
-            self.setFont('Helvetica', 6.5)
-            details_x_label = 120*mm
-            details_x_value = 140*mm
-            details_y = page_h - 8*mm
-            line_h = 3.2*mm
-            details = [
-                ('Project:', project_name),
-                ('LN Ref:', ln_ref),
-                ('Customer:', sheet.customer_name or ''),
-                ('Cust Ref:', cust_ref),
-                ('Date:', current_date),
-            ]
-            for i, (label, value) in enumerate(details):
-                y = details_y - (i * line_h)
-                self.setFont('Helvetica-Bold', 6.5)
-                self.drawString(details_x_label, y, label)
-                self.setFont('Helvetica', 6.5)
-                # Truncate long values to fit
-                value_str = str(value)[:55]
-                self.drawString(details_x_value, y, value_str)
+            # ── Header: project details table (full width, below logo, BOM pages only) ──
+            if page_num >= 2:
+                header_cell_style = ParagraphStyle('HdrCell', fontName='Helvetica', fontSize=7, leading=8.5)
+                header_cell_bold = ParagraphStyle('HdrCellBold', fontName='Helvetica-Bold', fontSize=7, leading=8.5)
+                hdr_data = [
+                    [Paragraph('Project:', header_cell_bold),
+                     Paragraph(str(project_name), header_cell_style), '',
+                     Paragraph('LN Ref:', header_cell_bold),
+                     Paragraph(str(ln_ref), header_cell_style)],
+                    [Paragraph('Cust Ref:', header_cell_bold),
+                     Paragraph(str(cust_ref), header_cell_style), '',
+                     Paragraph('Date:', header_cell_bold),
+                     Paragraph(current_date, header_cell_style)],
+                    [Paragraph('Customer:', header_cell_bold),
+                     Paragraph(str(sheet.customer_name or ''), header_cell_style), '',
+                     Paragraph('End User:', header_cell_bold),
+                     Paragraph(str(sheet.end_user or ''), header_cell_style)],
+                ]
+                avail_w = page_w - 30*mm  # minus left+right margins
+                hdr_table = Table(hdr_data, colWidths=[55, avail_w*0.40, 10, 55, avail_w*0.32])
+                hdr_table.setStyle(TableStyle([
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+                    ('TOPPADDING', (0, 0), (-1, -1), 1),
+                ]))
+                hdr_w, hdr_h = hdr_table.wrapOn(self, avail_w, 30*mm)
+                hdr_table.drawOn(self, 15*mm, page_h - 22*mm - hdr_h)
 
             # ── Footer: confidential left, page number right ──
             footer_y = 10*mm
@@ -1221,7 +1227,7 @@ def costing_export_pdf(request, pk):
         pagesize=A4,
         rightMargin=15*mm,
         leftMargin=15*mm,
-        topMargin=25*mm,
+        topMargin=32*mm,  # room for logo + project details header on BOM pages
         bottomMargin=22*mm,
     )
 
@@ -1530,29 +1536,7 @@ def costing_export_pdf(request, pk):
     # ─── PAGE 2+: DETAILED BOM WITH ALL LINE ITEMS ───
     elements.append(PageBreak())
 
-    # Compact header for BOM pages
-    bom_header_data = [
-        [Paragraph('<b>Project:</b>', cell_style),
-         Paragraph(project_name, cell_style), '',
-         Paragraph('<b>LN Ref:</b>', cell_style),
-         Paragraph(ln_ref, cell_style)],
-        [Paragraph('<b>Cust Ref:</b>', cell_style),
-         Paragraph(cust_ref, cell_style), '',
-         Paragraph('<b>Date:</b>', cell_style),
-         Paragraph(current_date, cell_style)],
-        [Paragraph('<b>Customer:</b>', cell_style),
-         Paragraph(sheet.customer_name, cell_style), '',
-         Paragraph('<b>End User:</b>', cell_style),
-         Paragraph(sheet.end_user, cell_style)],
-    ]
-    bom_header_table = Table(bom_header_data, colWidths=[65, PAGE_WIDTH*0.38, 10, 65, PAGE_WIDTH*0.30])
-    bom_header_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
-        ('TOPPADDING', (0, 0), (-1, -1), 1),
-    ]))
-    elements.append(bom_header_table)
-    elements.append(Spacer(1, 4 * mm))
+    # Project details header is now drawn by NumberedCanvas on every page — no inline table here.
 
     # BOM title bar
     # 8 BOM columns spanning full page width
