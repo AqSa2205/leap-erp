@@ -1761,6 +1761,7 @@ def costing_export_pdf(request, pk):
     cell_sm = ParagraphStyle('CellSm', fontName='Helvetica', fontSize=7, leading=8.5)
     cell_sm_bold = ParagraphStyle('CellSmBold', fontName='Helvetica-Bold', fontSize=7, leading=8.5)
     cell_sm_center = ParagraphStyle('CellSmCenter', fontName='Helvetica', fontSize=7, leading=8.5, alignment=TA_CENTER)
+    cell_sm_center_bold = ParagraphStyle('CellSmCenterBold', fontName='Helvetica-Bold', fontSize=7, leading=8.5, alignment=TA_CENTER)
     cell_sm_right = ParagraphStyle('CellSmRight', fontName='Helvetica', fontSize=7, leading=8.5, alignment=TA_RIGHT)
     desc_sm_style = ParagraphStyle('DescSm', fontName='Helvetica', fontSize=7, leading=8.5, wordWrap='CJK')
 
@@ -1823,7 +1824,7 @@ def costing_export_pdf(request, pk):
 
         # Section header row
         bom_data.append([
-            Paragraph(f'<b>{section.section_number}</b>', cell_sm_bold),
+            Paragraph(f'<b>{section.section_number}</b>', cell_sm_center_bold),
             Paragraph(f'<b>{section.title}</b>', cell_sm_bold),
             '', '', '', '', '', '',
         ])
@@ -1849,7 +1850,7 @@ def costing_export_pdf(request, pk):
             if is_subheading:
                 # Sub-heading row: bold, highlighted bg
                 bom_data.append([
-                    Paragraph(f'<b>{item.item_number}</b>', cell_sm_bold),
+                    Paragraph(f'<b>{item.item_number}</b>', cell_sm_center_bold),
                     Paragraph(f'<b>{item.description}</b>', cell_sm_bold),
                     Paragraph(item.make or '', cell_sm),
                     Paragraph(item.model_number or '', cell_sm),
