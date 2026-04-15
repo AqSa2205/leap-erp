@@ -35,6 +35,14 @@
                         <small class="text-muted">Lower numbers appear first</small>
                     </div>
 
+                    <div class="mb-3 form-check">
+                        {{ form.is_optional }}
+                        <label class="form-check-label fw-bold" for="{{ form.is_optional.id_for_label }}">
+                            Optional Items
+                        </label>
+                        <div class="form-text">Items in this section are shown in the BOM and summary but excluded from the grand total. Use the "Include optional in total" toggle on the costing sheet to add them back.</div>
+                    </div>
+
                     <div class="d-flex justify-content-between mt-4">
                         <a href="{% url 'costing:detail' sheet.pk %}" class="btn btn-outline-secondary">Cancel</a>
                         <button type="submit" class="btn btn-primary">

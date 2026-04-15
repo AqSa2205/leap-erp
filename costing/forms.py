@@ -50,12 +50,15 @@ class CostingSheetForm(forms.ModelForm):
 class CostingSectionForm(forms.ModelForm):
     class Meta:
         model = CostingSection
-        fields = ['section_number', 'title', 'order']
+        fields = ['section_number', 'title', 'order', 'is_optional']
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        for field in self.fields.values():
-            field.widget.attrs['class'] = 'form-control'
+        for name, field in self.fields.items():
+            if name == 'is_optional':
+                field.widget.attrs['class'] = 'form-check-input'
+            else:
+                field.widget.attrs['class'] = 'form-control'
 
 
 class CostingLineItemForm(forms.ModelForm):

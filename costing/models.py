@@ -85,6 +85,10 @@ class CostingSheet(models.Model):
     )
 
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='draft')
+    include_optional_in_total = models.BooleanField(
+        default=False,
+        help_text='If checked, optional sections are included in the grand total. Otherwise they are shown but not counted.'
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -101,7 +105,12 @@ class CostingSheet(models.Model):
         return self.title
 
     def _compute_totals(self):
-        """Compute all sheet totals in a single pass. Results are cached on the instance."""
+        """Compute all sheet totals in a single pass. Results are cached on the instance.
+
+        Optional sections (is_optional=True) are tracked separately and only
+        added to the main totals if include_optional_in_total is enabled on
+        the sheet. Their subtotals are still exposed via optional_subtotal.
+        """
         if hasattr(self, '_totals'):
             return self._totals
         t = {
@@ -114,10 +123,17 @@ class CostingSheet(models.Model):
             'total_customs_amount': Decimal('0'),
             'total_finances_amount': Decimal('0'),
             'total_installation_amount': Decimal('0'),
+            'optional_subtotal': Decimal('0'),
         }
+        include_opt = self.include_optional_in_total
         for section in self.sections.all():
+            section_is_optional = section.is_optional
             for item in section.line_items.all():
                 qty = item.quantity
+                if section_is_optional:
+                    t['optional_subtotal'] += item.final_total_price
+                    if not include_opt:
+                        continue
                 t['grand_total'] += item.final_total_price
                 t['total_cost'] += item.total_cost
                 t['total_base_cost'] += item.base_unit_cost * qty
@@ -132,6 +148,10 @@ class CostingSheet(models.Model):
             t[key] = t[key].quantize(Decimal('0.01'))
         self._totals = t
         return t
+
+    @property
+    def optional_subtotal(self):
+        return self._compute_totals()['optional_subtotal']
 
     @property
     def grand_total(self):
@@ -207,6 +227,10 @@ class CostingSection(models.Model):
     section_number = models.CharField(max_length=20, blank=True)
     title = models.CharField(max_length=255)
     order = models.IntegerField(default=0)
+    is_optional = models.BooleanField(
+        default=False,
+        help_text='Mark this section as optional. Its subtotal is shown but excluded from the grand total unless the sheet setting is enabled.'
+    )
 
     # Section-level rate overrides (optional — blank falls back to sheet rates)
     margin = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True,

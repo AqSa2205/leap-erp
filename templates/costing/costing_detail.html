@@ -203,11 +203,27 @@
                 <div class="total-value">{{ sheet.total_installation_amount|mul:conversion_rate|floatformat:2|intcomma }}</div>
                 <div class="total-label">Installation</div>
             </div>
+            {% if sheet.optional_subtotal %}
+            <div class="text-center">
+                <div class="total-value text-info fw-bold">{{ sheet.optional_subtotal|mul:conversion_rate|floatformat:2|intcomma }}</div>
+                <div class="total-label">Optional Subtotal</div>
+            </div>
+            {% endif %}
             <div class="text-center">
                 <div class="total-value text-danger fw-bold">{{ sheet.grand_total|mul:conversion_rate|floatformat:2|intcomma }}</div>
                 <div class="total-label">Grand Total ({{ sheet.output_currency }})</div>
             </div>
         </div>
+        {% if sheet.optional_subtotal %}
+        <div class="text-center mt-2 pt-2 border-top">
+            <div class="form-check form-switch d-inline-flex align-items-center" style="gap:8px;">
+                <input class="form-check-input" type="checkbox" id="includeOptionalSwitch" {% if sheet.include_optional_in_total %}checked{% endif %}>
+                <label class="form-check-label small fw-bold" for="includeOptionalSwitch">
+                    Include optional items in Grand Total
+                </label>
+            </div>
+        </div>
+        {% endif %}
     </div>
 </div>
 
@@ -855,6 +871,17 @@ var _csrfToken = '{{ csrf_token }}';
                 pasteImportBtn.disabled = false;
                 pasteImportBtn.innerHTML = '<i class="bi bi-download me-1"></i>Import Rows';
                 resultDiv.innerHTML = '<div class="alert alert-danger py-2">Network error — please try again.</div>';
+            });
+        });
+    }
+
+    // ─── Include Optional in Total toggle ─────────────────────
+    var includeOptSwitch = document.getElementById('includeOptionalSwitch');
+    if (includeOptSwitch) {
+        includeOptSwitch.addEventListener('change', function() {
+            var val = this.checked ? '1' : '0';
+            saveField(updateParamsUrl, 'field=include_optional_in_total&value=' + val, this, function() {
+                location.reload();
             });
         });
     }

@@ -201,7 +201,9 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
             'total_customs_amount': Decimal('0'),
             'total_finances_amount': Decimal('0'),
             'total_installation_amount': Decimal('0'),
+            'optional_subtotal': Decimal('0'),
         }
+        include_opt = sheet.include_optional_in_total
         for section in sections:
             section_sub = {
                 'subtotal': Decimal('0'),
@@ -213,6 +215,7 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
                 'base_total_price': Decimal('0'),
             }
             item_count = 0
+            section_is_optional = section.is_optional
             for item in section.line_items.all():
                 item.set_exchange_rates_cache(rates_dict)
                 item.set_sheet_cache(sheet)
@@ -225,6 +228,13 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
                 section_sub['unit_cost'] += item.unit_cost * qty
                 section_sub['base_unit_price'] += item.base_unit_price * qty
                 section_sub['base_total_price'] += item.base_total_price
+
+                # Optional sections are tracked separately and excluded from the
+                # main sheet totals unless the include flag is on.
+                if section_is_optional:
+                    sheet_totals['optional_subtotal'] += item.final_total_price
+                    if not include_opt:
+                        continue
 
                 ucs = item.unit_cost_sar
                 sheet_totals['grand_total'] += item.final_total_price
@@ -626,13 +636,15 @@ def ajax_update_sheet_params(request, pk):
     field = request.POST.get('field')
     value = request.POST.get('value', '').strip()
 
-    allowed = ('margin', 'discount_rate', 'shipping_rate', 'customs_rate', 'finances_rate', 'installation_rate', 'output_currency')
+    allowed = ('margin', 'discount_rate', 'shipping_rate', 'customs_rate', 'finances_rate', 'installation_rate', 'output_currency', 'include_optional_in_total')
     if field not in allowed:
         return JsonResponse({'error': 'Invalid field'}, status=400)
 
     # Validate the value before opening a write transaction
     if field == 'output_currency':
         new_value = value
+    elif field == 'include_optional_in_total':
+        new_value = value in ('1', 'true', 'True', 'on')
     else:
         try:
             new_value = Decimal(value)
