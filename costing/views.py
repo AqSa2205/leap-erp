@@ -1637,8 +1637,8 @@ def costing_export_pdf(request, pk):
     if has_optional:
         # Blank separator + A.3 header
         data.append(['', '', '', '', ''])
-        num_sow = len(sow_items)
-        a3_row = 2 + num_consolidated + 1 + 1 + num_sow + 1  # after A.2 block + blank
+        # Capture A.3 row index right before appending so indexing is bulletproof
+        a3_row = len(data)
         data.append([
             Paragraph('<b>A.3</b>', cell_bold),
             Paragraph('<b>OPTIONAL ITEMS</b>', cell_bold),
