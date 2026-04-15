@@ -53,6 +53,17 @@
     .margin-edit { text-align: center; width: 60px; }
     .cost-edit:focus, .margin-edit:focus { background: #fff; border-color: var(--leap-red); outline: none; }
     .cost-edit.saved, .margin-edit.saved { border-color: #198754; background: rgba(25,135,84,0.08); }
+    /* Highlight the row currently being edited so users don't lose context when scrolling right */
+    .bom-table tr.row-editing > td { background: #fff9c4 !important; }
+    .bom-table tr.row-editing > td.sticky-col { background: #fff9c4 !important; }
+    /* Sticky first two columns (Item No, Description) so they stay visible when scrolling right */
+    .bom-table td.sticky-col, .bom-table th.sticky-col {
+        position: sticky; background: #fff; z-index: 2;
+        box-shadow: 1px 0 0 #dee2e6;
+    }
+    .bom-table th.sticky-col { background: #212529; z-index: 3; }
+    .bom-table td.sticky-col-1, .bom-table th.sticky-col-1 { left: 0; min-width: 45px; }
+    .bom-table td.sticky-col-2, .bom-table th.sticky-col-2 { left: 45px; min-width: 180px; max-width: 220px; white-space: normal; }
     .section-chevron { transition: transform 0.15s; display: inline-block; }
     .section-chevron.expanded { transform: rotate(90deg); }
     .section-item-count { font-weight: 400; font-size: 0.7rem; color: #6c757d; }
@@ -215,8 +226,8 @@
             <table class="table table-bordered bom-table mb-0" id="bomTable">
                 <thead class="sticky-top">
                     <tr>
-                        <th class="table-dark">Item No</th>
-                        <th class="table-dark" style="min-width:180px;">Description</th>
+                        <th class="table-dark sticky-col sticky-col-1">Item No</th>
+                        <th class="table-dark sticky-col sticky-col-2" style="min-width:180px;">Description</th>
                         <th class="table-dark">Vendor</th>
                         <th class="table-dark">Make</th>
                         <th class="table-dark">Model</th>
@@ -653,6 +664,27 @@ var _csrfToken = '{{ csrf_token }}';
                 saveField(url, 'field=supplier_currency&value=' + encodeURIComponent(el.value), el, function(data) {
                     updateRow(el, data);
                 });
+            }
+        });
+
+        // Select-all + row highlight on focus (Excel-like behavior)
+        bomTable.addEventListener('focusin', function(e) {
+            var el = e.target;
+            if (el.matches('.cost-edit, .currency-select')) {
+                // Auto-select content so typing replaces 0.00 instead of appending
+                if (el.matches('.cost-edit')) {
+                    try { el.select(); } catch (ex) {}
+                }
+                // Highlight the current row
+                var row = el.closest('tr');
+                if (row) row.classList.add('row-editing');
+            }
+        });
+        bomTable.addEventListener('focusout', function(e) {
+            var el = e.target;
+            if (el.matches('.cost-edit, .currency-select')) {
+                var row = el.closest('tr');
+                if (row) row.classList.remove('row-editing');
             }
         });
     }

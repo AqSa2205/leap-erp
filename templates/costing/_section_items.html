@@ -1,8 +1,8 @@
 {% load humanize costing_tags %}
 {% for item in items %}
 <tr data-item-id="{{ item.pk }}">
-    <td>{{ item.item_number }}</td>
-    <td style="white-space:normal;min-width:180px;">{{ item.description }}</td>
+    <td class="sticky-col sticky-col-1">{{ item.item_number }}</td>
+    <td class="sticky-col sticky-col-2">{{ item.description }}</td>
     <td>{{ item.vendor_name }}</td>
     <td>{{ item.make }}</td>
     <td>{{ item.model_number }}</td>
