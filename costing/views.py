@@ -708,13 +708,24 @@ def ajax_update_item_field(request, pk):
     field = request.POST.get('field', '').strip()
     value = request.POST.get('value', '').strip()
 
-    allowed_fields = ('base_unit_cost', 'discount_pct', 'shipping_pct', 'customs_pct', 'finances_pct', 'installation_pct', 'margin', 'supplier_currency')
+    numeric_fields = ('base_unit_cost', 'discount_pct', 'shipping_pct', 'customs_pct', 'finances_pct', 'installation_pct', 'margin')
+    text_fields = ('description', 'make', 'model_number', 'vendor_name', 'unit', 'item_number')
+    allowed_fields = numeric_fields + text_fields + ('supplier_currency', 'quantity')
     if field not in allowed_fields:
         return JsonResponse({'error': 'Invalid field'}, status=400)
 
     # Validate / coerce the value before opening the transaction.
     if field == 'supplier_currency':
         new_value = value if value else 'SAR'
+    elif field in text_fields:
+        new_value = value  # plain text — stored as-is (may be empty string)
+    elif field == 'quantity':
+        try:
+            new_value = Decimal(value) if value else Decimal('1')
+        except (InvalidOperation, ValueError):
+            return JsonResponse({'error': 'Invalid quantity'}, status=400)
+        if new_value < 0:
+            new_value = Decimal('0')
     elif field == 'margin' and not value:
         new_value = None
     else:
@@ -751,6 +762,50 @@ def ajax_update_item_field(request, pk):
             'final_total_price': str(item.final_total_price),
         },
     })
+
+
+# ─── Inline Add Row (AJAX) ───────────────────────────────────
+
+@login_required
+@require_POST
+def ajax_add_line_item(request, pk):
+    """Create a blank line item in a section and return the rendered row."""
+    section = get_object_or_404(CostingSection, pk=pk)
+    sheet = section.costing_sheet
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    # Auto-generate the next item number: section_number + "." + next index
+    existing_count = section.line_items.count()
+    next_number = f'{section.section_number}.{existing_count + 1}'
+    next_order = existing_count
+
+    item = CostingLineItem.objects.create(
+        section=section,
+        item_number=next_number,
+        description='',
+        quantity=Decimal('1'),
+        unit='EA',
+        supplier_currency='SAR',
+        base_unit_cost=Decimal('0'),
+        order=next_order,
+    )
+
+    # Render the single row with the cached sheet / rates so computed fields work
+    exchange_rates = list(ExchangeRate.objects.all())
+    rates_dict = {r.currency_code: r.rate_to_usd for r in exchange_rates}
+    item.set_exchange_rates_cache(rates_dict)
+    item.set_sheet_cache(sheet)
+
+    conversion_rate = _conversion_rate(sheet.output_currency, rates_dict)
+    html = render_to_string('costing/_section_item_row.html', {
+        'item': item,
+        'section': section,
+        'exchange_rates': exchange_rates,
+        'output_currency': sheet.output_currency,
+        'conversion_rate': conversion_rate,
+    })
+    return JsonResponse({'ok': True, 'html': html, 'item_pk': item.pk})
 
 
 # ─── Bulk Delete Items (dedicated page) ──────────────────────

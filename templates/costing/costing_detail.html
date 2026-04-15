@@ -46,13 +46,18 @@
     }
     .currency-select:focus { background: #fff; border-color: var(--leap-red); outline: none; }
     .currency-select.saved { border-color: #198754; background: rgba(25,135,84,0.08); }
-    .cost-edit, .margin-edit {
-        background: transparent; border: 1px dashed #999; border-radius: 3px;
-        text-align: right; width: 70px; padding: 2px 4px; font-size: 0.75rem;
+    .cost-edit, .margin-edit, .text-edit {
+        background: transparent; border: 1px dashed transparent; border-radius: 3px;
+        padding: 2px 4px; font-size: 0.75rem;
     }
+    .cost-edit, .margin-edit { border-color: #999; text-align: right; width: 70px; }
+    .text-edit { width: 100%; min-width: 60px; }
+    .text-edit.desc-edit { min-width: 180px; }
+    .text-edit.item-num-edit { width: 50px; }
+    .text-edit:hover, .cost-edit:hover, .margin-edit:hover { border-color: #ccc; background: rgba(0,0,0,0.02); }
     .margin-edit { text-align: center; width: 60px; }
-    .cost-edit:focus, .margin-edit:focus { background: #fff; border-color: var(--leap-red); outline: none; }
-    .cost-edit.saved, .margin-edit.saved { border-color: #198754; background: rgba(25,135,84,0.08); }
+    .cost-edit:focus, .margin-edit:focus, .text-edit:focus { background: #fff; border-color: var(--leap-red); outline: none; }
+    .cost-edit.saved, .margin-edit.saved, .text-edit.saved { border-color: #198754; background: rgba(25,135,84,0.08); }
     /* Highlight the row currently being edited so users don't lose context when scrolling right */
     .bom-table tr.row-editing > td { background: #fff9c4 !important; }
     .bom-table tr.row-editing > td.sticky-col { background: #fff9c4 !important; }
@@ -651,7 +656,7 @@ var _csrfToken = '{{ csrf_token }}';
     if (bomTable) {
         bomTable.addEventListener('change', function(e) {
             var el = e.target;
-            if (el.matches('.cost-edit')) {
+            if (el.matches('.cost-edit, .text-edit')) {
                 var itemId = el.dataset.itemId;
                 var field = el.dataset.field;
                 var url = '/costing/item/' + itemId + '/update-field/';
@@ -670,9 +675,9 @@ var _csrfToken = '{{ csrf_token }}';
         // Select-all + row highlight on focus (Excel-like behavior)
         bomTable.addEventListener('focusin', function(e) {
             var el = e.target;
-            if (el.matches('.cost-edit, .currency-select')) {
+            if (el.matches('.cost-edit, .text-edit, .currency-select')) {
                 // Auto-select content so typing replaces 0.00 instead of appending
-                if (el.matches('.cost-edit')) {
+                if (el.matches('.cost-edit, .text-edit') && el.tagName !== 'SELECT') {
                     try { el.select(); } catch (ex) {}
                 }
                 // Highlight the current row
@@ -682,10 +687,56 @@ var _csrfToken = '{{ csrf_token }}';
         });
         bomTable.addEventListener('focusout', function(e) {
             var el = e.target;
-            if (el.matches('.cost-edit, .currency-select')) {
+            if (el.matches('.cost-edit, .text-edit, .currency-select')) {
                 var row = el.closest('tr');
                 if (row) row.classList.remove('row-editing');
             }
+        });
+
+        // Inline "Add row" button — creates a new blank item in the section and inserts it above the add-row-trigger
+        bomTable.addEventListener('click', function(e) {
+            var btn = e.target.closest('.add-row-btn');
+            if (!btn) return;
+            e.preventDefault();
+            var sectionPk = btn.dataset.section;
+            btn.disabled = true;
+            var origHtml = btn.innerHTML;
+            btn.innerHTML = '<i class="bi bi-hourglass"></i> Adding...';
+
+            var data = new FormData();
+            fetch('/costing/section/' + sectionPk + '/add-line-item/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': _csrfToken},
+                body: data,
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(resp) {
+                btn.disabled = false;
+                btn.innerHTML = origHtml;
+                if (!resp.ok) {
+                    alert(resp.error || 'Failed to add row');
+                    return;
+                }
+                // Insert the new row HTML right before the add-row-trigger
+                var triggerRow = btn.closest('tr.add-row-trigger');
+                var tbody = triggerRow.parentNode;
+                // Remove the empty-section-row if present
+                var emptyRow = tbody.querySelector('.empty-section-row');
+                if (emptyRow) emptyRow.remove();
+                // Insert new row HTML
+                var temp = document.createElement('tbody');
+                temp.innerHTML = resp.html.trim();
+                var newRow = temp.firstElementChild;
+                tbody.insertBefore(newRow, triggerRow);
+                // Focus the description cell for immediate typing
+                var descInput = newRow.querySelector('.desc-edit');
+                if (descInput) descInput.focus();
+            })
+            .catch(function(err) {
+                console.error('Add row failed:', err);
+                btn.disabled = false;
+                btn.innerHTML = origHtml;
+            });
         });
     }
 

@@ -1,0 +1,74 @@
+{% load humanize costing_tags %}
+<tr data-item-id="{{ item.pk }}">
+    <td class="sticky-col sticky-col-1">
+        <input type="text" class="text-edit item-num-edit" data-item-id="{{ item.pk }}" data-field="item_number" value="{{ item.item_number }}">
+    </td>
+    <td class="sticky-col sticky-col-2">
+        <input type="text" class="text-edit desc-edit" data-item-id="{{ item.pk }}" data-field="description" value="{{ item.description }}" placeholder="Description">
+    </td>
+    <td>
+        <input type="text" class="text-edit" data-item-id="{{ item.pk }}" data-field="vendor_name" value="{{ item.vendor_name }}" style="width:90px;">
+    </td>
+    <td>
+        <input type="text" class="text-edit" data-item-id="{{ item.pk }}" data-field="make" value="{{ item.make }}" style="width:80px;">
+    </td>
+    <td>
+        <input type="text" class="text-edit" data-item-id="{{ item.pk }}" data-field="model_number" value="{{ item.model_number }}" style="width:90px;">
+    </td>
+    <td class="num">
+        <input type="number" class="text-edit num-edit" data-item-id="{{ item.pk }}" data-field="quantity" value="{{ item.quantity|floatformat:0 }}" step="1" min="0" style="width:55px; text-align:right;">
+    </td>
+    <td>
+        <select class="text-edit unit-edit" data-item-id="{{ item.pk }}" data-field="unit" style="width:60px;">
+            {% for code, label in item.UNIT_CHOICES %}
+            <option value="{{ code }}" {% if item.unit == code %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </td>
+    <td class="num" data-computed="final_unit_price">{{ item.final_unit_price|floatformat:2|intcomma }}</td>
+    <td class="num fw-bold" data-computed="final_total_price">{{ item.final_total_price|floatformat:2|intcomma }}</td>
+    <td class="cost-col">
+        <select class="currency-select" data-item-id="{{ item.pk }}">
+            {% for rate in exchange_rates %}
+            <option value="{{ rate.currency_code }}" {% if item.supplier_currency == rate.currency_code %}selected{% endif %}>{{ rate.currency_code }}</option>
+            {% endfor %}
+        </select>
+    </td>
+    <td class="cost-col num">
+        <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="base_unit_cost"
+               value="{{ item.base_unit_cost }}" step="0.01" min="0">
+    </td>
+    <td class="cost-col num">
+        <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="discount_pct"
+               value="{{ item.display_discount_pct|floatformat:2 }}" step="1" min="0">
+    </td>
+    <td class="cost-col num" data-computed="unit_cost">{{ item.unit_cost|floatformat:2|intcomma }}</td>
+    <td class="cost-col num" data-computed="total_cost">{{ item.total_cost|floatformat:2|intcomma }}</td>
+    <td class="cost-col num">
+        <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="margin"
+               value="{{ item.display_margin|floatformat:2 }}" step="1" min="0" max="99">
+    </td>
+    <td class="cost-col num" data-computed="base_unit_price">{{ item.base_unit_price|floatformat:2|intcomma }}</td>
+    <td class="cost-col num" data-computed="base_total_price">{{ item.base_total_price|floatformat:2|intcomma }}</td>
+    <td class="cost-col num">
+        <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="shipping_pct"
+               value="{{ item.display_shipping_pct|floatformat:2 }}" step="1" min="0">
+    </td>
+    <td class="cost-col num">
+        <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="customs_pct"
+               value="{{ item.display_customs_pct|floatformat:2 }}" step="1" min="0">
+    </td>
+    <td class="cost-col num">
+        <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="finances_pct"
+               value="{{ item.display_finances_pct|floatformat:2 }}" step="1" min="0">
+    </td>
+    <td class="cost-col num">
+        <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="installation_pct"
+               value="{{ item.display_installation_pct|floatformat:2 }}" step="1" min="0">
+    </td>
+    <td class="cost-col num" data-computed="final_unit_price">{{ item.final_unit_price|floatformat:2|intcomma }}</td>
+    <td class="cost-col num fw-bold" data-computed="final_total_price">{{ item.final_total_price|floatformat:2|intcomma }}</td>
+    <td class="text-center">
+        <a href="{% url 'costing:item_delete' item.pk %}" class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"><i class="bi bi-trash"></i></a>
+    </td>
+</tr>

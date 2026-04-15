@@ -25,6 +25,7 @@ urlpatterns = [
     path('section/<int:pk>/items/', views.ajax_section_items, name='section_items'),
     path('section/<int:pk>/update-rate/', views.ajax_update_section_rate, name='section_update_rate'),
     path('section/<int:pk>/bulk-delete/', views.bulk_delete_page, name='bulk_delete_page'),
+    path('section/<int:pk>/add-line-item/', views.ajax_add_line_item, name='ajax_add_line_item'),
 
     # Line items
     path('section/<int:section_pk>/add-item/', views.LineItemCreateView.as_view(), name='item_create'),
