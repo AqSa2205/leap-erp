@@ -1602,7 +1602,7 @@ def costing_export_pdf(request, pk):
         if has_sections_in_batch:
             bom_data.append([
                 '', '', '', '', '',
-                Paragraph(f'<b>Total — {batch_name}</b>', batch_total_style),
+                Paragraph('<b>Total</b>', batch_total_style),
                 '',
                 Paragraph(f'<b>{fmt_num(batch_running_total)}</b>', cell_right_bold),
             ])
