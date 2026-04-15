@@ -1552,13 +1552,16 @@ def costing_export_pdf(request, pk):
     # Scope of Work items & total
     sow_items = list(sheet.scope_of_work_items.all())
     sow_total = sum(i.total_price for i in sow_items) if sow_items else sheet.scope_of_work_total
-    supply_total = sheet.grand_total
+    supply_total = sheet.grand_total  # already excludes optional unless include flag is on
+    optional_total = sheet.optional_subtotal
+    has_optional = optional_total and optional_total > 0
     contract_total = supply_total + sow_total
 
     # Row A: MAIN - TOTAL CONTRACT PRICE (A.1 + A.2)
+    contract_label = 'MAIN - TOTAL CONTRACT PRICE (A.1+A.2)'
     data.append([
         Paragraph('<b>A</b>', cell_bold),
-        Paragraph('<b>MAIN - TOTAL CONTRACT PRICE (A.1+A.2)</b>', cell_bold),
+        Paragraph(f'<b>{contract_label}</b>', cell_bold),
         '', '',
         Paragraph(f'<b>{fmt_num(contract_total)}</b>', cell_right),
     ])
@@ -1574,16 +1577,20 @@ def costing_export_pdf(request, pk):
     # Consolidate sections with the same title so that duplicate
     # imports (e.g. two "DATA NETWORK SYSTEM" sections) are merged
     # into a single summary row with their subtotals added together.
+    # Optional sections are pulled into a separate list so they render
+    # under their own A.3 block at the bottom.
     from collections import OrderedDict
     consolidated = OrderedDict()
+    optional_groups = OrderedDict()
     for section in sections:
         if not section.section_number:
             continue  # skip divider rows
+        target = optional_groups if section.is_optional else consolidated
         title = section.title.strip().upper()
-        if title in consolidated:
-            consolidated[title]['subtotal'] += section.subtotal
+        if title in target:
+            target[title]['subtotal'] += section.subtotal
         else:
-            consolidated[title] = {
+            target[title] = {
                 'title': section.title,
                 'subtotal': section.subtotal,
             }
@@ -1619,12 +1626,34 @@ def costing_export_pdf(request, pk):
             Paragraph(item.display_price, cell_right),
         ])
 
-    # Row indices for special styling:
-    # 0=header, 1=A row, 2=A.1 row, 3..N=consolidated items, N+1=blank, N+2=A.2, N+3..=SOW items
+    # Row indices for special styling
     num_consolidated = len(consolidated)
     a1_row = 2
     a2_row = 2 + num_consolidated + 1 + 1  # +1 blank +1 for A.2 itself
+    a3_row = None  # set below if optional section exists
     PINK_BG = colors.HexColor('#F1DCDB')
+
+    # ─── A.3 OPTIONAL ITEMS (only when there are optional sections) ───
+    if has_optional:
+        # Blank separator + A.3 header
+        data.append(['', '', '', '', ''])
+        num_sow = len(sow_items)
+        a3_row = 2 + num_consolidated + 1 + 1 + num_sow + 1  # after A.2 block + blank
+        data.append([
+            Paragraph('<b>A.3</b>', cell_bold),
+            Paragraph('<b>OPTIONAL ITEMS</b>', cell_bold),
+            '', '',
+            Paragraph(f'<b>{fmt_num(optional_total)}</b>', cell_right),
+        ])
+        # Optional section line items (renumbered starting from 1 within this block)
+        for idx, (title_key, group) in enumerate(optional_groups.items(), 1):
+            data.append([
+                Paragraph(str(idx), cell_center),
+                Paragraph(f' {group["title"]}', cell_style),
+                Paragraph('1', cell_center),
+                Paragraph('LOT', cell_center),
+                Paragraph(fmt_num(group['subtotal']), cell_right),
+            ])
 
     main_table = Table(data, colWidths=col_widths, repeatRows=1)
 
@@ -1651,6 +1680,8 @@ def costing_export_pdf(request, pk):
         # A.2 SCOPE OF WORK — pink bg
         ('BACKGROUND', (0, a2_row), (-1, a2_row), PINK_BG),
     ]
+    if a3_row is not None:
+        style_cmds.append(('BACKGROUND', (0, a3_row), (-1, a3_row), PINK_BG))
 
     main_table.setStyle(TableStyle(style_cmds))
     elements.append(main_table)
