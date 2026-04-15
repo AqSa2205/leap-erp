@@ -180,7 +180,11 @@
             transition: transform 0.2s ease;
         }
         .nav-section.collapsed .section-chevron { transform: rotate(-90deg); }
-        .nav-section-items { overflow: hidden; transition: max-height 0.25s ease; }
+        .nav-section-items {
+            overflow: hidden;
+            transition: max-height 0.25s ease;
+            flex-wrap: nowrap !important;
+        }
         .nav-section-items.collapsed { max-height: 0 !important; }
         .card {
             border: none;
