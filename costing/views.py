@@ -1184,6 +1184,28 @@ def costing_export_pdf(request, pk):
             if _logo_path:
                 self.drawImage(_logo_path, 15*mm, page_h - 18*mm, width=100, height=35, preserveAspectRatio=True, mask='auto')
 
+            # ── Header: project details (right side, on every page) ──
+            self.setFont('Helvetica', 6.5)
+            details_x_label = 120*mm
+            details_x_value = 140*mm
+            details_y = page_h - 8*mm
+            line_h = 3.2*mm
+            details = [
+                ('Project:', project_name),
+                ('LN Ref:', ln_ref),
+                ('Customer:', sheet.customer_name or ''),
+                ('Cust Ref:', cust_ref),
+                ('Date:', current_date),
+            ]
+            for i, (label, value) in enumerate(details):
+                y = details_y - (i * line_h)
+                self.setFont('Helvetica-Bold', 6.5)
+                self.drawString(details_x_label, y, label)
+                self.setFont('Helvetica', 6.5)
+                # Truncate long values to fit
+                value_str = str(value)[:55]
+                self.drawString(details_x_value, y, value_str)
+
             # ── Footer: confidential left, page number right ──
             footer_y = 10*mm
             self.setFont('Helvetica', 6)
