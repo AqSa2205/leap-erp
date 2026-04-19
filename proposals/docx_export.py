@@ -767,19 +767,24 @@ def _resolve_image_path(src):
     """Resolve an image URL (/media/...) to a local filesystem path."""
     if not src:
         return None
-    media_url = settings.MEDIA_URL.rstrip('/')
     # Strip origin if present
     if src.startswith('http://') or src.startswith('https://'):
-        # Try to extract the media path
         try:
             from urllib.parse import urlparse
             parsed = urlparse(src)
             src = parsed.path
         except Exception:
             return None
-    if src.startswith(media_url + '/') or src.startswith(media_url):
-        rel_path = src[len(media_url):].lstrip('/')
+    # Normalize MEDIA_URL to a clean prefix without leading/trailing slashes
+    media_prefix = settings.MEDIA_URL.strip('/')
+    # Strip any leading slashes from src for comparison
+    src_clean = src.lstrip('/')
+    if media_prefix and src_clean.startswith(media_prefix + '/'):
+        rel_path = src_clean[len(media_prefix) + 1:]
         return os.path.join(str(settings.MEDIA_ROOT), rel_path.replace('/', os.sep))
+    if media_prefix and src_clean == media_prefix:
+        return None
+    # If src starts with /media but media_prefix is 'media' — handle that
     return None
 
 

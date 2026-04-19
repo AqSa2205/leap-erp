@@ -239,7 +239,9 @@ def ajax_upload_image(request, pk):
     path = f'proposals/images/proposal_{proposal.pk}/{safe_name}'
 
     saved_path = default_storage.save(path, ContentFile(uploaded.read()))
-    location = settings.MEDIA_URL.rstrip('/') + '/' + saved_path
+    # Build absolute URL with leading slash — MEDIA_URL may or may not have one
+    media_prefix = '/' + settings.MEDIA_URL.strip('/')
+    location = media_prefix + '/' + saved_path.replace('\\', '/')
 
     return JsonResponse({'location': location})
 
