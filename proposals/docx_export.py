@@ -391,6 +391,7 @@ def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_templ
             self._current_cell = ''
             self._is_header_row = False
             self._bold = False
+            self._in_heading = None  # None or 'h2'/'h3'/'h4'
 
         def _flush_text(self, prefix=''):
             text = unescape(self._text).strip()
@@ -399,10 +400,34 @@ def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_templ
                 self.elements.append(p)
             self._text = ''
 
+        def _flush_heading(self):
+            """Create a DOCX heading paragraph from accumulated text."""
+            text = unescape(self._text).strip()
+            if not text:
+                self._text = ''
+                return
+            level = {'h2': 'Heading2', 'h3': 'Heading3', 'h4': 'Heading4'}.get(self._in_heading, 'Heading2')
+            p = etree.Element(f'{{{WNS}}}p')
+            pPr = etree.SubElement(p, f'{{{WNS}}}pPr')
+            pStyle = etree.SubElement(pPr, f'{{{WNS}}}pStyle')
+            pStyle.set(f'{{{WNS}}}val', level)
+            r = etree.SubElement(p, f'{{{WNS}}}r')
+            rPr = _make_default_rPr()
+            bold = etree.SubElement(rPr, f'{{{WNS}}}b')
+            r.insert(0, rPr)
+            t = etree.SubElement(r, f'{{{WNS}}}t')
+            t.text = text
+            t.set(XML_SPACE, 'preserve')
+            self.elements.append(p)
+            self._text = ''
+
         def handle_starttag(self, tag, attrs):
             tag = tag.lower()
             if tag == 'p':
                 self._text = ''
+            elif tag in ('h2', 'h3', 'h4'):
+                self._text = ''
+                self._in_heading = tag
             elif tag == 'ul':
                 self._in_list = True
                 self._list_type = 'ul'
@@ -431,7 +456,10 @@ def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_templ
 
         def handle_endtag(self, tag):
             tag = tag.lower()
-            if tag == 'p':
+            if tag in ('h2', 'h3', 'h4'):
+                self._flush_heading()
+                self._in_heading = None
+            elif tag == 'p':
                 self._flush_text()
             elif tag in ('ul', 'ol'):
                 self._in_list = False
