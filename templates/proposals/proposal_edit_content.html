@@ -143,9 +143,47 @@ document.addEventListener('DOMContentLoaded', function() {
         menubar: false,
         branding: false,
         promotion: false,
-        plugins: 'table lists autolink link',
-        toolbar: 'undo redo | blocks | bold italic underline | bullist numlist | table | alignleft aligncenter alignright alignjustify | link | removeformat',
+        plugins: 'table lists autolink link image',
+        toolbar: 'undo redo | blocks | bold italic underline | bullist numlist | table | image | alignleft aligncenter alignright alignjustify | link | removeformat',
         block_formats: 'Paragraph=p; Heading 2=h2; Heading 3=h3; Heading 4=h4',
+        // Image handling
+        image_caption: true,
+        image_advtab: false,
+        image_dimensions: true,
+        image_uploadtab: true,
+        automatic_uploads: true,
+        file_picker_types: 'image',
+        images_upload_url: "{% url 'proposals:upload_image' object.pk %}",
+        images_upload_handler: function(blobInfo, progress) {
+            return new Promise(function(resolve, reject) {
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', "{% url 'proposals:upload_image' object.pk %}");
+                xhr.setRequestHeader('X-CSRFToken', '{{ csrf_token }}');
+                xhr.upload.onprogress = function(e) {
+                    if (e.lengthComputable) progress(e.loaded / e.total * 100);
+                };
+                xhr.onload = function() {
+                    if (xhr.status !== 200) {
+                        reject('Upload failed: ' + xhr.status);
+                        return;
+                    }
+                    try {
+                        var json = JSON.parse(xhr.responseText);
+                        if (!json || typeof json.location !== 'string') {
+                            reject('Invalid response');
+                            return;
+                        }
+                        resolve(json.location);
+                    } catch (e) {
+                        reject('Invalid JSON response');
+                    }
+                };
+                xhr.onerror = function() { reject('Network error'); };
+                var formData = new FormData();
+                formData.append('file', blobInfo.blob(), blobInfo.filename());
+                xhr.send(formData);
+            });
+        },
         // Force Trebuchet MS font and justified text
         content_style: `
             @import url('https://fonts.googleapis.com/css2?family=Trebuchet+MS&display=swap');

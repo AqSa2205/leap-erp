@@ -206,6 +206,45 @@ def ajax_save_section(request, pk):
 
 
 @login_required
+@require_POST
+def ajax_upload_image(request, pk):
+    """Upload an image for use in the proposal content editor.
+    Returns JSON { location: '/media/...' } per TinyMCE's upload handler contract."""
+    import os
+    from django.conf import settings
+    from django.utils.text import slugify
+    from django.core.files.storage import default_storage
+    from django.core.files.base import ContentFile
+    from uuid import uuid4
+
+    proposal = get_object_or_404(TechnicalProposal, pk=pk)
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user) and proposal.created_by != user:
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    uploaded = request.FILES.get('file')
+    if not uploaded:
+        return JsonResponse({'error': 'No file'}, status=400)
+
+    # Enforce size + type
+    if uploaded.size > 10 * 1024 * 1024:  # 10 MB
+        return JsonResponse({'error': 'File too large (max 10MB)'}, status=400)
+    content_type = uploaded.content_type or ''
+    if not content_type.startswith('image/'):
+        return JsonResponse({'error': 'Only image files allowed'}, status=400)
+
+    # Build a safe filename
+    ext = os.path.splitext(uploaded.name)[1].lower() or '.png'
+    safe_name = f'{uuid4().hex}{ext}'
+    path = f'proposals/images/proposal_{proposal.pk}/{safe_name}'
+
+    saved_path = default_storage.save(path, ContentFile(uploaded.read()))
+    location = settings.MEDIA_URL.rstrip('/') + '/' + saved_path
+
+    return JsonResponse({'location': location})
+
+
+@login_required
 def ajax_load_boilerplate(request, pk):
     boilerplate = get_object_or_404(ProposalBoilerplate, pk=pk)
     return JsonResponse({

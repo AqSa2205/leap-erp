@@ -14,6 +14,7 @@ urlpatterns = [
     path('<int:pk>/delete/', views.ProposalDeleteView.as_view(), name='delete'),
     path('<int:pk>/export-docx/', login_required(views.proposal_export_docx), name='export_docx'),
     path('<int:pk>/save-section/', views.ajax_save_section, name='save_section'),
+    path('<int:pk>/upload-image/', views.ajax_upload_image, name='upload_image'),
 
     # Boilerplate
     path('boilerplate/', views.BoilerplateListView.as_view(), name='boilerplate_list'),

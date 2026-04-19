@@ -11,6 +11,10 @@ from django.utils.text import slugify
 WNS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 WPS_NS = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape'
 VML_NS = 'urn:schemas-microsoft-com:vml'
+DRAWING_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+WP_NS = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
+PIC_NS = 'http://schemas.openxmlformats.org/drawingml/2006/picture'
+REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 XML_SPACE = '{http://www.w3.org/XML/1998/namespace}space'
 
 
@@ -279,7 +283,7 @@ def _is_heading1(elem):
     return _get_paragraph_style(elem) == 'Heading1'
 
 
-def _replace_body_sections(xml_bytes, proposal):
+def _replace_body_sections(xml_bytes, proposal, image_registry):
     """Replace body section content between Heading1 paragraphs.
 
     Works with ALL body children (paragraphs, tables, etc.) so that
@@ -289,6 +293,10 @@ def _replace_body_sections(xml_bytes, proposal):
     - Matched headings: content replaced with user's text from the form
     - Unmatched headings (SUMMARY, OBJECTIVE, etc.): heading AND all
       content between it and the next heading are removed entirely.
+
+    image_registry: mutable list populated with image metadata as <img>
+    tags are encountered. Used to later add image files and relationships
+    to the ZIP.
     """
     root = etree.fromstring(xml_bytes)
     body = root.find(f'.//{{{WNS}}}body')
@@ -354,8 +362,8 @@ def _replace_body_sections(xml_bytes, proposal):
         heading_para = children[start_pos]
 
         # Check if content is HTML (from TinyMCE)
-        if '<p>' in content or '<table' in content or '<ul' in content or '<ol' in content:
-            _insert_html_content(body, heading_para, content, pPr_template, rPr_template)
+        if '<p>' in content or '<table' in content or '<ul' in content or '<ol' in content or '<img' in content or '<figure' in content:
+            _insert_html_content(body, heading_para, content, pPr_template, rPr_template, image_registry)
         else:
             for line in content.split('\n'):
                 new_para = _make_content_paragraph(line, pPr_template, rPr_template)
@@ -368,9 +376,14 @@ def _replace_body_sections(xml_bytes, proposal):
     return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
 
-def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_template):
-    """Convert HTML from TinyMCE to DOCX elements (paragraphs + tables)
-    and insert them after the given element."""
+def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_template, image_registry):
+    """Convert HTML from TinyMCE to DOCX elements (paragraphs, tables, images)
+    and insert them after the given element.
+
+    image_registry is a mutable list the parser appends (src, alt, width, height)
+    tuples to as it encounters <img> tags. Each entry's index becomes the
+    image's rId suffix (rIdImg0, rIdImg1, ...) that we add to the zip later.
+    """
     import re
     from html import unescape
     from html.parser import HTMLParser
@@ -392,6 +405,10 @@ def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_templ
             self._is_header_row = False
             self._bold = False
             self._in_heading = None  # None or 'h2'/'h3'/'h4'
+            self._in_figure = False
+            self._figure_img = None    # dict with src, alt, width, height
+            self._figure_caption = ''
+            self._in_figcaption = False
 
         def _flush_text(self, prefix=''):
             text = unescape(self._text).strip()
@@ -423,11 +440,32 @@ def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_templ
 
         def handle_starttag(self, tag, attrs):
             tag = tag.lower()
+            attrs_dict = dict(attrs)
             if tag == 'p':
                 self._text = ''
             elif tag in ('h2', 'h3', 'h4'):
                 self._text = ''
                 self._in_heading = tag
+            elif tag == 'figure':
+                self._in_figure = True
+                self._figure_img = None
+                self._figure_caption = ''
+            elif tag == 'figcaption':
+                self._in_figcaption = True
+                self._figure_caption = ''
+            elif tag == 'img':
+                self._figure_img = {
+                    'src': attrs_dict.get('src', ''),
+                    'alt': attrs_dict.get('alt', ''),
+                    'width': attrs_dict.get('width', ''),
+                    'height': attrs_dict.get('height', ''),
+                }
+                # Bare <img> (no <figure>) — emit image paragraph immediately
+                if not self._in_figure:
+                    img_para = self._build_image_paragraph(self._figure_img, '')
+                    if img_para is not None:
+                        self.elements.append(img_para)
+                    self._figure_img = None
             elif tag == 'ul':
                 self._in_list = True
                 self._list_type = 'ul'
@@ -459,6 +497,22 @@ def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_templ
             if tag in ('h2', 'h3', 'h4'):
                 self._flush_heading()
                 self._in_heading = None
+            elif tag == 'figcaption':
+                self._in_figcaption = False
+            elif tag == 'figure':
+                # Emit image paragraph + caption paragraph
+                if self._figure_img:
+                    img_para = self._build_image_paragraph(
+                        self._figure_img, self._figure_caption
+                    )
+                    if img_para is not None:
+                        self.elements.append(img_para)
+                    if self._figure_caption:
+                        cap_para = self._build_caption_paragraph(self._figure_caption)
+                        self.elements.append(cap_para)
+                self._in_figure = False
+                self._figure_img = None
+                self._figure_caption = ''
             elif tag == 'p':
                 self._flush_text()
             elif tag in ('ul', 'ol'):
@@ -481,10 +535,113 @@ def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_templ
                 self._bold = False
 
         def handle_data(self, data):
-            if self._in_table:
+            if self._in_figcaption:
+                self._figure_caption += data
+            elif self._in_table:
                 self._current_cell += data
             else:
                 self._text += data
+
+        def _build_image_paragraph(self, img_info, alt_caption):
+            """Register the image and build a w:p containing a w:drawing that references it."""
+            src = img_info.get('src', '')
+            if not src:
+                return None
+
+            # Register this image in the registry; the index becomes our ref number
+            idx = len(image_registry)
+            image_registry.append({
+                'src': src,
+                'alt': img_info.get('alt') or alt_caption or 'image',
+                'width': img_info.get('width'),
+                'height': img_info.get('height'),
+            })
+            rid = f'rIdImg{idx}'
+
+            # Determine display size in EMU (914400 per inch).
+            # Default to 15 cm wide (~5.9 in) with proportional height.
+            try:
+                w_px = int(img_info.get('width') or 0)
+            except (TypeError, ValueError):
+                w_px = 0
+            try:
+                h_px = int(img_info.get('height') or 0)
+            except (TypeError, ValueError):
+                h_px = 0
+            if w_px > 0 and h_px > 0:
+                # Convert pixels to EMU (assuming 96 DPI)
+                cx = int(w_px * 9525)
+                cy = int(h_px * 9525)
+            else:
+                cx = 5400000  # ~15cm
+                cy = 3600000  # ~10cm
+
+            # Build the drawing XML
+            p = etree.Element(f'{{{WNS}}}p')
+            pPr = etree.SubElement(p, f'{{{WNS}}}pPr')
+            jc = etree.SubElement(pPr, f'{{{WNS}}}jc')
+            jc.set(f'{{{WNS}}}val', 'center')
+            r = etree.SubElement(p, f'{{{WNS}}}r')
+            drawing = etree.SubElement(r, f'{{{WNS}}}drawing')
+            inline = etree.SubElement(drawing, f'{{{WP_NS}}}inline')
+            inline.set('distT', '0'); inline.set('distB', '0')
+            inline.set('distL', '0'); inline.set('distR', '0')
+
+            extent = etree.SubElement(inline, f'{{{WP_NS}}}extent')
+            extent.set('cx', str(cx)); extent.set('cy', str(cy))
+
+            docPr = etree.SubElement(inline, f'{{{WP_NS}}}docPr')
+            docPr.set('id', str(idx + 1))
+            docPr.set('name', f'Picture {idx + 1}')
+
+            cNvGraphicFramePr = etree.SubElement(inline, f'{{{WP_NS}}}cNvGraphicFramePr')
+
+            graphic = etree.SubElement(inline, f'{{{DRAWING_NS}}}graphic')
+            graphicData = etree.SubElement(graphic, f'{{{DRAWING_NS}}}graphicData')
+            graphicData.set('uri', PIC_NS)
+
+            pic = etree.SubElement(graphicData, f'{{{PIC_NS}}}pic')
+            nvPicPr = etree.SubElement(pic, f'{{{PIC_NS}}}nvPicPr')
+            cNvPr = etree.SubElement(nvPicPr, f'{{{PIC_NS}}}cNvPr')
+            cNvPr.set('id', str(idx + 1)); cNvPr.set('name', f'Picture {idx + 1}')
+            cNvPicPr = etree.SubElement(nvPicPr, f'{{{PIC_NS}}}cNvPicPr')
+
+            blipFill = etree.SubElement(pic, f'{{{PIC_NS}}}blipFill')
+            blip = etree.SubElement(blipFill, f'{{{DRAWING_NS}}}blip')
+            blip.set(f'{{{REL_NS}}}embed', rid)
+            stretch = etree.SubElement(blipFill, f'{{{DRAWING_NS}}}stretch')
+            etree.SubElement(stretch, f'{{{DRAWING_NS}}}fillRect')
+
+            spPr = etree.SubElement(pic, f'{{{PIC_NS}}}spPr')
+            xfrm = etree.SubElement(spPr, f'{{{DRAWING_NS}}}xfrm')
+            off = etree.SubElement(xfrm, f'{{{DRAWING_NS}}}off')
+            off.set('x', '0'); off.set('y', '0')
+            ext = etree.SubElement(xfrm, f'{{{DRAWING_NS}}}ext')
+            ext.set('cx', str(cx)); ext.set('cy', str(cy))
+            prstGeom = etree.SubElement(spPr, f'{{{DRAWING_NS}}}prstGeom')
+            prstGeom.set('prst', 'rect')
+            etree.SubElement(prstGeom, f'{{{DRAWING_NS}}}avLst')
+
+            return p
+
+        def _build_caption_paragraph(self, caption_text):
+            """Italic centered caption paragraph below an image."""
+            p = etree.Element(f'{{{WNS}}}p')
+            pPr = etree.SubElement(p, f'{{{WNS}}}pPr')
+            jc = etree.SubElement(pPr, f'{{{WNS}}}jc')
+            jc.set(f'{{{WNS}}}val', 'center')
+            r = etree.SubElement(p, f'{{{WNS}}}r')
+            rPr = etree.SubElement(r, f'{{{WNS}}}rPr')
+            rFonts = etree.SubElement(rPr, f'{{{WNS}}}rFonts')
+            rFonts.set(f'{{{WNS}}}ascii', 'Trebuchet MS')
+            rFonts.set(f'{{{WNS}}}hAnsi', 'Trebuchet MS')
+            etree.SubElement(rPr, f'{{{WNS}}}i')  # italic
+            sz = etree.SubElement(rPr, f'{{{WNS}}}sz')
+            sz.set(f'{{{WNS}}}val', '18')  # 9pt
+            t = etree.SubElement(r, f'{{{WNS}}}t')
+            t.text = unescape(caption_text).strip()
+            t.set(XML_SPACE, 'preserve')
+            return p
 
         def _build_docx_table(self):
             """Build a w:tbl element from parsed rows."""
@@ -604,6 +761,97 @@ def _fill_engineering_table(body, proposal):
         break
 
 
+# ── Image injection (post-process ZIP) ────────────────────────
+
+def _resolve_image_path(src):
+    """Resolve an image URL (/media/...) to a local filesystem path."""
+    if not src:
+        return None
+    media_url = settings.MEDIA_URL.rstrip('/')
+    # Strip origin if present
+    if src.startswith('http://') or src.startswith('https://'):
+        # Try to extract the media path
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(src)
+            src = parsed.path
+        except Exception:
+            return None
+    if src.startswith(media_url + '/') or src.startswith(media_url):
+        rel_path = src[len(media_url):].lstrip('/')
+        return os.path.join(str(settings.MEDIA_ROOT), rel_path.replace('/', os.sep))
+    return None
+
+
+def _inject_images(modified_files, image_registry, all_names):
+    """Add image files to word/media/, update relationships + content types."""
+    # Load existing document.xml.rels
+    rels_name = 'word/_rels/document.xml.rels'
+    if rels_name not in modified_files:
+        return
+    rels_xml = modified_files[rels_name]
+    rels_root = etree.fromstring(rels_xml)
+    # Build set of existing rId values
+    existing_rids = set()
+    ns_rel = 'http://schemas.openxmlformats.org/package/2006/relationships'
+    for rel in rels_root.findall(f'{{{ns_rel}}}Relationship'):
+        existing_rids.add(rel.get('Id'))
+
+    # Content types
+    ct_name = '[Content_Types].xml'
+    ct_xml = modified_files.get(ct_name)
+    ct_root = etree.fromstring(ct_xml) if ct_xml is not None else None
+    ns_ct = 'http://schemas.openxmlformats.org/package/2006/content-types'
+    existing_extensions = set()
+    if ct_root is not None:
+        for d in ct_root.findall(f'{{{ns_ct}}}Default'):
+            existing_extensions.add((d.get('Extension') or '').lower())
+
+    ext_to_ct = {
+        'png': 'image/png',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'gif': 'image/gif',
+        'bmp': 'image/bmp',
+        'svg': 'image/svg+xml',
+        'webp': 'image/webp',
+    }
+
+    for idx, img in enumerate(image_registry):
+        path = _resolve_image_path(img['src'])
+        if not path or not os.path.exists(path):
+            continue  # skip missing
+
+        ext = os.path.splitext(path)[1].lower().lstrip('.') or 'png'
+        if ext not in ext_to_ct:
+            ext = 'png'
+        rid = f'rIdImg{idx}'
+        media_name = f'proposal-image-{idx + 1}.{ext}'
+        zip_path = f'word/media/{media_name}'
+
+        with open(path, 'rb') as f:
+            modified_files[zip_path] = f.read()
+
+        # Add relationship
+        if rid not in existing_rids:
+            rel = etree.SubElement(rels_root, f'{{{ns_rel}}}Relationship')
+            rel.set('Id', rid)
+            rel.set('Type', 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image')
+            rel.set('Target', f'media/{media_name}')
+            existing_rids.add(rid)
+
+        # Add content type default for this extension
+        if ct_root is not None and ext not in existing_extensions:
+            default = etree.SubElement(ct_root, f'{{{ns_ct}}}Default')
+            default.set('Extension', ext)
+            default.set('ContentType', ext_to_ct[ext])
+            existing_extensions.add(ext)
+
+    modified_files[rels_name] = etree.tostring(rels_root, xml_declaration=True, encoding='UTF-8', standalone=True)
+    if ct_root is not None:
+        modified_files[ct_name] = etree.tostring(ct_root, xml_declaration=True, encoding='UTF-8', standalone=True)
+
+
 # ── Main entry point ─────────────────────────────────────────
 
 def generate_proposal_docx(proposal):
@@ -660,49 +908,61 @@ def generate_proposal_docx(proposal):
         sorted(textbox_replacements.items(), key=lambda x: len(x[0]), reverse=True)
     )
 
+    # Image registry — populated by _replace_body_sections, consumed below
+    image_registry = []
+
     # ── Process ZIP ───────────────────────────────────────────
     output = io.BytesIO()
+    modified_files = {}  # filename -> bytes (for files we add/replace)
+
     with zipfile.ZipFile(io.BytesIO(template_bytes), 'r') as zin:
+        all_names = set(zin.namelist())
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+
+            if item.filename == 'word/header1.xml':
+                root = etree.fromstring(data)
+                _strip_highlights(root)
+                _replace_textboxes_in_part(root, textbox_replacements,
+                                           exact_replacements)
+                data = etree.tostring(root, xml_declaration=True,
+                                      encoding='UTF-8', standalone=True)
+
+            elif item.filename == 'word/footer1.xml':
+                root = etree.fromstring(data)
+                _strip_highlights(root)
+                _replace_textboxes_in_part(root, textbox_replacements,
+                                           exact_replacements)
+                data = etree.tostring(root, xml_declaration=True,
+                                      encoding='UTF-8', standalone=True)
+
+            elif item.filename == 'word/document.xml':
+                root = etree.fromstring(data)
+                _strip_highlights(root)
+                body = root.find(f'.//{{{WNS}}}body')
+                _replace_cover_page(body, proposal)
+                _replace_textboxes_in_part(root, textbox_replacements,
+                                           exact_replacements)
+                data = etree.tostring(root, xml_declaration=True,
+                                      encoding='UTF-8', standalone=True)
+                data = _replace_body_sections(data, proposal, image_registry)
+
+            modified_files[item.filename] = data
+
+        # If we collected images, inject them and update relationships + content types
+        if image_registry:
+            _inject_images(modified_files, image_registry, all_names)
+
+        # Write final ZIP
         with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as zout:
+            written = set()
             for item in zin.infolist():
-                data = zin.read(item.filename)
-
-                if item.filename == 'word/header1.xml':
-                    root = etree.fromstring(data)
-                    _strip_highlights(root)
-                    _replace_textboxes_in_part(root, textbox_replacements,
-                                               exact_replacements)
-                    data = etree.tostring(root, xml_declaration=True,
-                                          encoding='UTF-8', standalone=True)
-
-                elif item.filename == 'word/footer1.xml':
-                    root = etree.fromstring(data)
-                    _strip_highlights(root)
-                    _replace_textboxes_in_part(root, textbox_replacements,
-                                               exact_replacements)
-                    data = etree.tostring(root, xml_declaration=True,
-                                          encoding='UTF-8', standalone=True)
-
-                elif item.filename == 'word/document.xml':
-                    root = etree.fromstring(data)
-                    _strip_highlights(root)
-
-                    body = root.find(f'.//{{{WNS}}}body')
-
-                    # 1. Replace cover page text
-                    _replace_cover_page(body, proposal)
-
-                    # 2. Replace text boxes in the body (if any)
-                    _replace_textboxes_in_part(root, textbox_replacements,
-                                               exact_replacements)
-
-                    data = etree.tostring(root, xml_declaration=True,
-                                          encoding='UTF-8', standalone=True)
-
-                    # 3. Replace body sections between headings
-                    data = _replace_body_sections(data, proposal)
-
-                zout.writestr(item, data)
+                zout.writestr(item, modified_files.get(item.filename, zin.read(item.filename)))
+                written.add(item.filename)
+            # New files (images)
+            for name, data in modified_files.items():
+                if name not in written:
+                    zout.writestr(name, data)
 
     output.seek(0)
     safe_ref = slugify(str(proposal.proposal_reference or ''))[:80] or 'proposal'
