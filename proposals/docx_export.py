@@ -178,9 +178,6 @@ HEADING_TO_FIELD = {
     'assumptions': 'assumptions_constraints',
 }
 
-STOP_HEADINGS = {'appendix', 'annexe', 'summary', 'objective', 'lng proposed'}
-
-
 def _get_paragraph_text(para):
     return ''.join(
         (t.text or '') for t in para.findall(f'.//{{{WNS}}}t')
@@ -276,7 +273,14 @@ def _make_content_paragraph(text, pPr_template=None, rPr_template=None):
 
 
 def _replace_body_sections(xml_bytes, proposal):
-    """Replace body section content between Heading1 paragraphs."""
+    """Replace body section content between Heading1 paragraphs.
+
+    All Heading1 sections in the template are processed:
+    - Matched headings: content replaced with user's text from the form
+    - Unmatched headings (SUMMARY, OBJECTIVE, etc.): heading AND its
+      content paragraphs are removed entirely so no pre-filled text
+      leaks into the exported document.
+    """
     root = etree.fromstring(xml_bytes)
     body = root.find(f'.//{{{WNS}}}body')
     if body is None:
@@ -284,72 +288,143 @@ def _replace_body_sections(xml_bytes, proposal):
 
     paragraphs = list(body.findall(f'{{{WNS}}}p'))
 
-    # Build list of heading positions to replace
-    heading_positions = []
-
-    for i, para in enumerate(paragraphs):
-        style = _get_paragraph_style(para)
-        if style != 'Heading1':
-            continue
-
-        text = _get_paragraph_text(para).lower()
-
-        # Stop at appendices / ancillary sections
-        if any(text.startswith(s) for s in STOP_HEADINGS):
-            break
-
-        for key, field_name in HEADING_TO_FIELD.items():
-            if key in text:
-                heading_positions.append((i, field_name))
-                break
-
-    # All Heading1 indices (for finding boundaries)
+    # All Heading1 indices
     all_heading1_indices = [
         i for i, p in enumerate(paragraphs) if _get_paragraph_style(p) == 'Heading1'
     ]
 
-    # Work backwards to preserve indices
-    for hp_idx in range(len(heading_positions) - 1, -1, -1):
-        start_pos, field_name = heading_positions[hp_idx]
-        content = getattr(proposal, field_name, '')
-
-        # Find end position: next Heading1 after start_pos
-        end_pos = None
-        for hi in all_heading1_indices:
-            if hi > start_pos:
-                end_pos = hi
+    # Classify each Heading1 as matched (has a field) or unmatched
+    heading_info = []  # (index, field_name_or_None)
+    for i in all_heading1_indices:
+        text = _get_paragraph_text(paragraphs[i]).lower()
+        matched_field = None
+        for key, field_name in HEADING_TO_FIELD.items():
+            if key in text:
+                matched_field = field_name
                 break
-        if end_pos is None:
-            end_pos = len(paragraphs)
+        heading_info.append((i, matched_field))
 
-        # Get formatting from first content paragraph (not the heading itself)
-        pPr_template = None
-        rPr_template = None
+    # Extract formatting from first content paragraph of first heading with content
+    pPr_template = None
+    rPr_template = None
+    for hi_idx, (start_pos, _) in enumerate(heading_info):
+        end_pos = heading_info[hi_idx + 1][0] if hi_idx + 1 < len(heading_info) else len(paragraphs)
         for ci in range(start_pos + 1, min(start_pos + 3, end_pos)):
             candidate = paragraphs[ci]
-            # Skip empty paragraphs, look for one with actual text
             if _get_paragraph_text(candidate):
                 pPr_template, rPr_template = _extract_content_formatting(candidate)
                 break
+        if pPr_template is not None:
+            break
 
-        # Remove existing content paragraphs
+    # Work backwards to preserve indices
+    for hi_idx in range(len(heading_info) - 1, -1, -1):
+        start_pos, field_name = heading_info[hi_idx]
+
+        # Find end position: next Heading1 or end of paragraphs
+        end_pos = heading_info[hi_idx + 1][0] if hi_idx + 1 < len(heading_info) else len(paragraphs)
+
+        # Remove existing content paragraphs (between this heading and next)
         for j in range(end_pos - 1, start_pos, -1):
             body.remove(paragraphs[j])
 
+        if field_name is None:
+            # Unmatched heading — remove the heading itself too
+            body.remove(paragraphs[start_pos])
+            continue
+
+        # Matched heading — insert user content
+        content = getattr(proposal, field_name, '')
         if not content:
             continue
 
-        # Insert new paragraphs after the heading
         heading_para = paragraphs[start_pos]
-        for line in content.split('\n'):
-            new_para = _make_content_paragraph(line, pPr_template, rPr_template)
-            heading_para.addnext(new_para)
-            heading_para = new_para
+
+        # Check if content is HTML (from TinyMCE)
+        if '<p>' in content or '<table' in content or '<ul' in content or '<ol' in content:
+            _insert_html_content(body, heading_para, content, pPr_template, rPr_template)
+        else:
+            for line in content.split('\n'):
+                new_para = _make_content_paragraph(line, pPr_template, rPr_template)
+                heading_para.addnext(new_para)
+                heading_para = new_para
 
     # Fill engineering documents table
     _fill_engineering_table(body, proposal)
 
     return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
+
+
+def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_template):
+    """Convert HTML from TinyMCE to DOCX paragraphs and insert after the given element."""
+    import re
+    from html import unescape
+
+    def _strip_tags(text):
+        """Remove HTML tags and decode entities."""
+        return unescape(re.sub(r'<[^>]+>', '', text)).strip()
+
+    current = after_elem
+
+    # Simple HTML parser: split by block-level tags
+    # Handle paragraphs, lists, and tables
+    html_content = html_content.replace('\r\n', '\n').replace('\r', '\n')
+
+    # Split into blocks by closing block tags
+    blocks = re.split(r'(</?(?:p|ul|ol|li|table|tr|td|th|h[1-6]|br\s*/?)(?:\s[^>]*)?>)', html_content)
+
+    in_list = False
+    list_type = None  # 'ul' or 'ol'
+    list_counter = 0
+
+    full_text = ''
+    for block in blocks:
+        if not block:
+            continue
+
+        tag_match = re.match(r'<(/?)(\w+)', block)
+        if tag_match:
+            is_closing = tag_match.group(1) == '/'
+            tag = tag_match.group(2).lower()
+
+            if tag == 'ul' and not is_closing:
+                in_list = True
+                list_type = 'ul'
+                list_counter = 0
+            elif tag == 'ol' and not is_closing:
+                in_list = True
+                list_type = 'ol'
+                list_counter = 0
+            elif tag in ('ul', 'ol') and is_closing:
+                in_list = False
+            elif tag == 'li' and is_closing and full_text.strip():
+                list_counter += 1
+                prefix = f'{list_counter}. ' if list_type == 'ol' else '\u2022 '
+                text = prefix + _strip_tags(full_text)
+                new_para = _make_content_paragraph(text, pPr_template, rPr_template)
+                current.addnext(new_para)
+                current = new_para
+                full_text = ''
+            elif tag == 'p' and is_closing and full_text.strip():
+                text = _strip_tags(full_text)
+                new_para = _make_content_paragraph(text, pPr_template, rPr_template)
+                current.addnext(new_para)
+                current = new_para
+                full_text = ''
+            elif tag in ('p', 'li') and not is_closing:
+                full_text = ''
+            elif tag == 'br':
+                full_text += '\n'
+            continue
+
+        full_text += block
+
+    # Remaining text
+    remaining = _strip_tags(full_text)
+    if remaining:
+        new_para = _make_content_paragraph(remaining, pPr_template, rPr_template)
+        current.addnext(new_para)
+        current = new_para
 
 
 # ── Engineering documents table ───────────────────────────────
