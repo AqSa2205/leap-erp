@@ -369,75 +369,152 @@ def _replace_body_sections(xml_bytes, proposal):
 
 
 def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_template):
-    """Convert HTML from TinyMCE to DOCX paragraphs and insert after the given element."""
+    """Convert HTML from TinyMCE to DOCX elements (paragraphs + tables)
+    and insert them after the given element."""
     import re
     from html import unescape
+    from html.parser import HTMLParser
 
-    def _strip_tags(text):
-        """Remove HTML tags and decode entities."""
-        return unescape(re.sub(r'<[^>]+>', '', text)).strip()
+    class DocxHTMLParser(HTMLParser):
+        """Parse HTML and build a list of DOCX elements (w:p and w:tbl)."""
+
+        def __init__(self):
+            super().__init__()
+            self.elements = []        # final list of etree elements
+            self._text = ''           # current accumulated text
+            self._in_list = False
+            self._list_type = None    # 'ul' or 'ol'
+            self._list_counter = 0
+            self._in_table = False
+            self._table_rows = []     # list of rows, each row = list of cell texts
+            self._current_row = []
+            self._current_cell = ''
+            self._is_header_row = False
+            self._bold = False
+
+        def _flush_text(self, prefix=''):
+            text = unescape(self._text).strip()
+            if text:
+                p = _make_content_paragraph(prefix + text, pPr_template, rPr_template)
+                self.elements.append(p)
+            self._text = ''
+
+        def handle_starttag(self, tag, attrs):
+            tag = tag.lower()
+            if tag == 'p':
+                self._text = ''
+            elif tag == 'ul':
+                self._in_list = True
+                self._list_type = 'ul'
+                self._list_counter = 0
+            elif tag == 'ol':
+                self._in_list = True
+                self._list_type = 'ol'
+                self._list_counter = 0
+            elif tag == 'li':
+                self._text = ''
+            elif tag == 'table':
+                self._in_table = True
+                self._table_rows = []
+            elif tag == 'tr':
+                self._current_row = []
+                self._is_header_row = False
+            elif tag == 'th':
+                self._current_cell = ''
+                self._is_header_row = True
+            elif tag == 'td':
+                self._current_cell = ''
+            elif tag == 'br':
+                self._text += '\n'
+            elif tag in ('strong', 'b'):
+                self._bold = True
+
+        def handle_endtag(self, tag):
+            tag = tag.lower()
+            if tag == 'p':
+                self._flush_text()
+            elif tag in ('ul', 'ol'):
+                self._in_list = False
+            elif tag == 'li':
+                self._list_counter += 1
+                prefix = f'{self._list_counter}. ' if self._list_type == 'ol' else '\u2022 '
+                self._flush_text(prefix)
+            elif tag in ('td', 'th'):
+                self._current_row.append(unescape(self._current_cell).strip())
+                self._current_cell = ''
+            elif tag == 'tr':
+                self._table_rows.append((self._current_row, self._is_header_row))
+            elif tag == 'table':
+                self._in_table = False
+                if self._table_rows:
+                    self.elements.append(self._build_docx_table())
+                self._table_rows = []
+            elif tag in ('strong', 'b'):
+                self._bold = False
+
+        def handle_data(self, data):
+            if self._in_table:
+                self._current_cell += data
+            else:
+                self._text += data
+
+        def _build_docx_table(self):
+            """Build a w:tbl element from parsed rows."""
+            tbl = etree.Element(f'{{{WNS}}}tbl')
+
+            # Table properties: borders, width
+            tblPr = etree.SubElement(tbl, f'{{{WNS}}}tblPr')
+            tblStyle = etree.SubElement(tblPr, f'{{{WNS}}}tblStyle')
+            tblStyle.set(f'{{{WNS}}}val', 'TableGrid')
+            tblW = etree.SubElement(tblPr, f'{{{WNS}}}tblW')
+            tblW.set(f'{{{WNS}}}w', '5000')
+            tblW.set(f'{{{WNS}}}type', 'pct')
+            # Borders
+            tblBorders = etree.SubElement(tblPr, f'{{{WNS}}}tblBorders')
+            for bname in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
+                b = etree.SubElement(tblBorders, f'{{{WNS}}}{bname}')
+                b.set(f'{{{WNS}}}val', 'single')
+                b.set(f'{{{WNS}}}sz', '4')
+                b.set(f'{{{WNS}}}space', '0')
+                b.set(f'{{{WNS}}}color', '999999')
+
+            for cells, is_header in self._table_rows:
+                tr = etree.SubElement(tbl, f'{{{WNS}}}tr')
+                for cell_text in cells:
+                    tc = etree.SubElement(tr, f'{{{WNS}}}tc')
+                    # Cell properties
+                    tcPr = etree.SubElement(tc, f'{{{WNS}}}tcPr')
+                    if is_header:
+                        shd = etree.SubElement(tcPr, f'{{{WNS}}}shd')
+                        shd.set(f'{{{WNS}}}val', 'clear')
+                        shd.set(f'{{{WNS}}}fill', 'F0F0F0')
+                    # Paragraph inside cell
+                    p = etree.SubElement(tc, f'{{{WNS}}}p')
+                    pPr_cell = _make_default_pPr()
+                    # Remove left indent for table cells
+                    ind = pPr_cell.find(f'{{{WNS}}}ind')
+                    if ind is not None:
+                        pPr_cell.remove(ind)
+                    p.insert(0, pPr_cell)
+                    r = etree.SubElement(p, f'{{{WNS}}}r')
+                    rPr_cell = _make_default_rPr()
+                    if is_header:
+                        bold = etree.SubElement(rPr_cell, f'{{{WNS}}}b')
+                    r.insert(0, rPr_cell)
+                    t = etree.SubElement(r, f'{{{WNS}}}t')
+                    t.text = cell_text
+                    t.set(XML_SPACE, 'preserve')
+            return tbl
+
+    parser = DocxHTMLParser()
+    parser.feed(html_content)
+    # Flush any remaining text
+    parser._flush_text()
 
     current = after_elem
-
-    # Simple HTML parser: split by block-level tags
-    # Handle paragraphs, lists, and tables
-    html_content = html_content.replace('\r\n', '\n').replace('\r', '\n')
-
-    # Split into blocks by closing block tags
-    blocks = re.split(r'(</?(?:p|ul|ol|li|table|tr|td|th|h[1-6]|br\s*/?)(?:\s[^>]*)?>)', html_content)
-
-    in_list = False
-    list_type = None  # 'ul' or 'ol'
-    list_counter = 0
-
-    full_text = ''
-    for block in blocks:
-        if not block:
-            continue
-
-        tag_match = re.match(r'<(/?)(\w+)', block)
-        if tag_match:
-            is_closing = tag_match.group(1) == '/'
-            tag = tag_match.group(2).lower()
-
-            if tag == 'ul' and not is_closing:
-                in_list = True
-                list_type = 'ul'
-                list_counter = 0
-            elif tag == 'ol' and not is_closing:
-                in_list = True
-                list_type = 'ol'
-                list_counter = 0
-            elif tag in ('ul', 'ol') and is_closing:
-                in_list = False
-            elif tag == 'li' and is_closing and full_text.strip():
-                list_counter += 1
-                prefix = f'{list_counter}. ' if list_type == 'ol' else '\u2022 '
-                text = prefix + _strip_tags(full_text)
-                new_para = _make_content_paragraph(text, pPr_template, rPr_template)
-                current.addnext(new_para)
-                current = new_para
-                full_text = ''
-            elif tag == 'p' and is_closing and full_text.strip():
-                text = _strip_tags(full_text)
-                new_para = _make_content_paragraph(text, pPr_template, rPr_template)
-                current.addnext(new_para)
-                current = new_para
-                full_text = ''
-            elif tag in ('p', 'li') and not is_closing:
-                full_text = ''
-            elif tag == 'br':
-                full_text += '\n'
-            continue
-
-        full_text += block
-
-    # Remaining text
-    remaining = _strip_tags(full_text)
-    if remaining:
-        new_para = _make_content_paragraph(remaining, pPr_template, rPr_template)
-        current.addnext(new_para)
-        current = new_para
+    for elem in parser.elements:
+        current.addnext(elem)
+        current = elem
 
 
 # ── Engineering documents table ───────────────────────────────
