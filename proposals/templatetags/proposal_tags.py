@@ -23,3 +23,14 @@ def get_field_value(form, field_name):
         return form[field_name].value() or ''
     except (KeyError, AttributeError):
         return ''
+
+
+@register.filter
+def get_item(d, key):
+    """Dict item access by key in templates."""
+    if d is None:
+        return []
+    try:
+        return d.get(key, [])
+    except (AttributeError, TypeError):
+        return []

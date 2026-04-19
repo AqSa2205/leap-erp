@@ -16,6 +16,17 @@ urlpatterns = [
     path('<int:pk>/save-section/', views.ajax_save_section, name='save_section'),
     path('<int:pk>/upload-image/', views.ajax_upload_image, name='upload_image'),
 
+    # Prequalification Documents (PQD)
+    path('pqd/', views.PQDListView.as_view(), name='pqd_list'),
+    path('pqd/create/', views.PQDCreateView.as_view(), name='pqd_create'),
+    path('pqd/<int:pk>/', views.PQDDetailView.as_view(), name='pqd_detail'),
+    path('pqd/<int:pk>/edit/', views.PQDUpdateView.as_view(), name='pqd_edit'),
+    path('pqd/<int:pk>/content/', views.PQDEditContentView.as_view(), name='pqd_content'),
+    path('pqd/<int:pk>/delete/', views.PQDDeleteView.as_view(), name='pqd_delete'),
+    path('pqd/<int:pk>/save-section/', views.ajax_save_pqd_section, name='pqd_save_section'),
+    path('pqd/<int:pk>/upload/', views.ajax_pqd_upload_attachment, name='pqd_upload'),
+    path('pqd/attachment/<int:pk>/delete/', views.ajax_pqd_delete_attachment, name='pqd_delete_attachment'),
+
     # Boilerplate
     path('boilerplate/', views.BoilerplateListView.as_view(), name='boilerplate_list'),
     path('boilerplate/create/', views.BoilerplateCreateView.as_view(), name='boilerplate_create'),

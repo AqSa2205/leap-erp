@@ -739,8 +739,13 @@
                 </a>
             </li>
             <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.app_name == 'proposals' %}active{% endif %}" href="{% url 'proposals:list' %}" data-title="Proposals">
+                <a class="nav-link {% if request.resolver_match.app_name == 'proposals' and 'pqd' not in request.resolver_match.url_name %}active{% endif %}" href="{% url 'proposals:list' %}" data-title="Proposals">
                     <i class="bi bi-file-earmark-richtext"></i> <span>Proposals</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'proposals' and 'pqd' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'proposals:pqd_list' %}" data-title="Prequalification">
+                    <i class="bi bi-file-earmark-check"></i> <span>Prequalification</span>
                 </a>
             </li>
         </ul>

@@ -1,0 +1,111 @@
+{% extends 'base.html' %}
+
+{% block title %}{% if form.instance.pk %}Edit{% else %}New{% endif %} PQD - Leap Networks ERP{% endblock %}
+{% block page_title %}{% if form.instance.pk %}Edit PQD{% else %}New Prequalification Document{% endif %}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-file-earmark-check me-2"></i>
+                {% if form.instance.pk %}Edit{% else %}Create{% endif %} Prequalification Document
+            </div>
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}
+
+                    <div class="row mb-3">
+                        <div class="col-md-8">
+                            <label class="form-label fw-bold">Title</label>
+                            {{ form.title }}
+                            {% if form.title.errors %}<div class="text-danger small">{{ form.title.errors.0 }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Status</label>
+                            {{ form.status }}
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Project (Optional)</label>
+                            {{ form.project }}
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">PQD Reference</label>
+                            {{ form.pqd_reference }}
+                            {% if form.pqd_reference.errors %}<div class="text-danger small">{{ form.pqd_reference.errors.0 }}</div>{% endif %}
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Client Name</label>
+                            {{ form.client_name }}
+                            {% if form.client_name.errors %}<div class="text-danger small">{{ form.client_name.errors.0 }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Document Type</label>
+                            {{ form.document_type }}
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-12">
+                            <label class="form-label fw-bold">Project Description</label>
+                            {{ form.project_description }}
+                            <small class="text-muted">Short description for header/footer block</small>
+                        </div>
+                    </div>
+
+                    <hr>
+                    <h6 class="text-muted mb-3">Revision & Approval</h6>
+
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Region / Entity</label>
+                            {{ form.region_entity }}
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Revision</label>
+                            {{ form.revision }}
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Revision Date</label>
+                            {{ form.revision_date }}
+                            {% if form.revision_date.errors %}<div class="text-danger small">{{ form.revision_date.errors.0 }}</div>{% endif %}
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Prepared By (Initials)</label>
+                            {{ form.prepared_by_initials }}
+                            {% if form.prepared_by_initials.errors %}<div class="text-danger small">{{ form.prepared_by_initials.errors.0 }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Checked By (Initials)</label>
+                            {{ form.checked_by_initials }}
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">Approved By (Initials)</label>
+                            {{ form.approved_by_initials }}
+                        </div>
+                    </div>
+
+                    <div class="d-flex justify-content-between mt-4">
+                        <a href="{% if form.instance.pk %}{% url 'proposals:pqd_detail' form.instance.pk %}{% else %}{% url 'proposals:pqd_list' %}{% endif %}" class="btn btn-outline-secondary">
+                            Cancel
+                        </a>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-lg me-1"></i>
+                            {% if form.instance.pk %}Update{% else %}Create PQD & Add Content{% endif %}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

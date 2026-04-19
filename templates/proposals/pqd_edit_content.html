@@ -1,0 +1,379 @@
+{% extends 'base.html' %}
+{% load static proposal_tags %}
+
+{% block title %}Edit Content - {{ pqd.title }} - Leap Networks ERP{% endblock %}
+{% block page_title %}Edit PQD Content: {{ pqd.title }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .tox-tinymce { border-radius: 4px !important; }
+    .tab-pane .tox-tinymce { min-height: 450px; }
+
+    .upload-dropzone {
+        border: 2px dashed #bbb;
+        border-radius: 6px;
+        padding: 28px;
+        text-align: center;
+        background: #fafafa;
+        transition: all 0.15s;
+        cursor: pointer;
+    }
+    .upload-dropzone.dragging {
+        border-color: var(--leap-red);
+        background: #fff3f3;
+    }
+    .upload-dropzone input[type="file"] { display: none; }
+    .upload-dropzone .bi { font-size: 2rem; color: #888; }
+
+    .attachment-card {
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        padding: 12px;
+        margin-bottom: 12px;
+        background: #fff;
+    }
+    .attachment-card .file-info {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 8px;
+    }
+    .attachment-card .file-name {
+        font-weight: 600;
+        word-break: break-all;
+    }
+    .attachment-card .file-size { color: #888; font-size: 0.8rem; }
+    .attachment-card .file-actions { white-space: nowrap; }
+    .attachment-preview { margin-top: 8px; }
+    .attachment-preview iframe {
+        width: 100%;
+        height: 300px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+    }
+    .attachment-preview img {
+        max-width: 100%;
+        max-height: 240px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+    }
+    .attachment-preview .file-icon {
+        font-size: 3rem;
+        color: #888;
+        padding: 12px;
+    }
+    .file-type-badge {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        padding: 2px 6px;
+        border-radius: 3px;
+        background: #eee;
+        color: #333;
+        margin-left: 4px;
+    }
+    .file-type-badge.pdf { background: #dc3545; color: #fff; }
+    .file-type-badge.word, .file-type-badge.docx, .file-type-badge.doc { background: #2b579a; color: #fff; }
+    .file-type-badge.ppt, .file-type-badge.pptx { background: #d24726; color: #fff; }
+    .file-type-badge.png, .file-type-badge.jpg, .file-type-badge.jpeg, .file-type-badge.gif { background: #198754; color: #fff; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <a href="{% url 'proposals:pqd_detail' pqd.pk %}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-arrow-left me-1"></i> Back to Detail
+        </a>
+        <code class="ms-2">{{ pqd.pqd_reference }}</code>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header p-0">
+        <ul class="nav nav-tabs card-header-tabs" role="tablist" style="flex-wrap: nowrap; overflow-x: auto;">
+            {% for key, label, type in sections %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link {% if forloop.first %}active{% endif %}" id="tab-{{ key }}"
+                        data-bs-toggle="tab" data-bs-target="#pane-{{ key }}"
+                        type="button" role="tab" style="white-space:nowrap;">
+                    {% if type == 'text' %}<i class="bi bi-text-left me-1"></i>{% else %}<i class="bi bi-paperclip me-1"></i>{% endif %}
+                    {{ label }}
+                </button>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <div class="card-body">
+        <div class="tab-content">
+            {% for key, label, type in sections %}
+            <div class="tab-pane fade {% if forloop.first %}show active{% endif %}" id="pane-{{ key }}" role="tabpanel">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <label class="form-label fw-bold mb-0">{{ label }}</label>
+                    {% if type == 'text' %}
+                    <button type="button" class="btn btn-sm btn-outline-primary btn-save-section" data-section="{{ key }}">
+                        <i class="bi bi-cloud-upload"></i> Save
+                    </button>
+                    {% endif %}
+                </div>
+
+                {% if type == 'text' %}
+                {# TinyMCE editor for text sections #}
+                <textarea id="id_{{ key }}" name="{{ key }}" class="tinymce-editor">{% if key == 'company_profile' %}{{ pqd.company_profile }}{% elif key == 'list_of_material' %}{{ pqd.list_of_material }}{% elif key == 'list_of_projects' %}{{ pqd.list_of_projects }}{% endif %}</textarea>
+                {% else %}
+                {# Upload zone + list of attachments for file sections #}
+                <div class="upload-dropzone" data-section="{{ key }}">
+                    <i class="bi bi-cloud-upload"></i>
+                    <div class="mt-2">
+                        <strong>Drop files here</strong> or <a href="#" onclick="event.preventDefault(); this.closest('.upload-dropzone').querySelector('input').click();">click to browse</a>
+                    </div>
+                    <div class="small text-muted mt-1">PDF, Word, PowerPoint, PNG, JPEG — up to 50MB each</div>
+                    <input type="file" accept=".pdf,.doc,.docx,.ppt,.pptx,.png,.jpg,.jpeg,.gif,.webp,.bmp" multiple data-section="{{ key }}">
+                </div>
+                <div class="attachment-list mt-3" data-section="{{ key }}">
+                    {% for att in attachments_by_section|get_item:key %}
+                    <div class="attachment-card" data-attachment-id="{{ att.pk }}">
+                        <div class="file-info">
+                            <div>
+                                <i class="bi bi-file-earmark"></i>
+                                <span class="file-name">{{ att.original_filename }}</span>
+                                <span class="file-type-badge {{ att.extension }}">{{ att.extension }}</span>
+                            </div>
+                            <div class="file-actions">
+                                <a href="{{ att.file.url }}" target="_blank" class="btn btn-sm btn-outline-secondary"><i class="bi bi-download"></i></a>
+                                <button type="button" class="btn btn-sm btn-outline-danger btn-delete-attachment" data-id="{{ att.pk }}"><i class="bi bi-trash"></i></button>
+                            </div>
+                        </div>
+                        <div class="attachment-preview">
+                            {% if att.is_pdf %}
+                            <iframe src="{{ att.file.url }}#toolbar=0" loading="lazy"></iframe>
+                            {% elif att.is_image %}
+                            <img src="{{ att.file.url }}" alt="{{ att.original_filename }}" loading="lazy">
+                            {% elif att.is_word %}
+                            <div class="file-icon"><i class="bi bi-file-earmark-word-fill text-primary"></i> Word document — click download to view</div>
+                            {% elif att.is_powerpoint %}
+                            <div class="file-icon"><i class="bi bi-file-earmark-ppt-fill text-warning"></i> PowerPoint presentation — click download to view</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="card-footer d-flex justify-content-between">
+        <a href="{% url 'proposals:pqd_detail' pqd.pk %}" class="btn btn-outline-secondary">Done</a>
+        <a href="{% url 'proposals:pqd_detail' pqd.pk %}" class="btn btn-primary">
+            <i class="bi bi-check-lg me-1"></i> Done
+        </a>
+    </div>
+</div>
+
+<script src="{% static 'tinymce/tinymce.min.js' %}"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var csrfToken = '{{ csrf_token }}';
+    var saveSectionUrl = "{% url 'proposals:pqd_save_section' pqd.pk %}";
+    var uploadUrl = "{% url 'proposals:pqd_upload' pqd.pk %}";
+
+    // ─── TinyMCE ──────────────────────────────────────────────
+    tinymce.init({
+        selector: 'textarea.tinymce-editor',
+        height: 450,
+        menubar: false,
+        branding: false,
+        promotion: false,
+        plugins: 'table lists autolink link image',
+        toolbar: 'undo redo | blocks | bold italic underline | bullist numlist | table | image | alignleft aligncenter alignright alignjustify | link | removeformat',
+        block_formats: 'Paragraph=p; Heading 2=h2; Heading 3=h3; Heading 4=h4',
+        relative_urls: false,
+        remove_script_host: true,
+        document_base_url: '/',
+        content_style: `
+            body { font-family: 'Trebuchet MS', Trebuchet, Arial, sans-serif !important; font-size: 11pt; line-height: 1.5; color: #333; text-align: justify; margin: 12px; }
+            p { text-align: justify; margin: 0 0 8pt 0; }
+            h2 { font-size: 14pt; font-weight: bold; margin: 12pt 0 6pt 0; }
+            h3 { font-size: 12pt; font-weight: bold; margin: 10pt 0 4pt 0; }
+            h4 { font-size: 11pt; font-weight: bold; margin: 8pt 0 4pt 0; }
+            table { border-collapse: collapse; width: 100%; margin: 8pt 0; }
+            table td, table th { border: 1px solid #999; padding: 4px 8px; }
+            table th { background: #f0f0f0; font-weight: bold; }
+            ul, ol { margin: 4pt 0 8pt 20pt; }
+        `,
+        font_family_formats: '',
+        font_size_formats: '',
+    });
+
+    // ─── Per-section Save (text) ──────────────────────────────
+    document.querySelectorAll('.btn-save-section').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var section = this.dataset.section;
+            var editor = tinymce.get('id_' + section);
+            if (!editor) return;
+            var saveBtn = this;
+            saveBtn.disabled = true;
+            saveBtn.innerHTML = '<i class="bi bi-hourglass"></i> Saving...';
+            var fd = new FormData();
+            fd.append('field', section);
+            fd.append('value', editor.getContent());
+            fetch(saveSectionUrl, { method: 'POST', headers: {'X-CSRFToken': csrfToken}, body: fd })
+                .then(function(r) { return r.json(); })
+                .then(function(resp) {
+                    saveBtn.disabled = false;
+                    if (resp.ok) {
+                        saveBtn.className = 'btn btn-sm btn-success btn-save-section';
+                        saveBtn.innerHTML = '<i class="bi bi-check-lg"></i> Saved!';
+                        setTimeout(function() {
+                            saveBtn.className = 'btn btn-sm btn-outline-primary btn-save-section';
+                            saveBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Save';
+                        }, 2000);
+                    } else {
+                        saveBtn.className = 'btn btn-sm btn-danger btn-save-section';
+                        saveBtn.innerHTML = '<i class="bi bi-x-lg"></i> Error';
+                        setTimeout(function() {
+                            saveBtn.className = 'btn btn-sm btn-outline-primary btn-save-section';
+                            saveBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Save';
+                        }, 2500);
+                    }
+                });
+        });
+    });
+
+    // ─── File uploads (drag-drop + click) ─────────────────────
+    function formatBytes(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+        return (bytes/1024/1024).toFixed(1) + ' MB';
+    }
+
+    function renderAttachmentCard(att) {
+        var ext = att.extension || '';
+        var preview = '';
+        if (att.is_pdf) {
+            preview = '<iframe src="' + att.url + '#toolbar=0" loading="lazy"></iframe>';
+        } else if (att.is_image) {
+            preview = '<img src="' + att.url + '" alt="' + att.name + '" loading="lazy">';
+        } else if (att.is_word) {
+            preview = '<div class="file-icon"><i class="bi bi-file-earmark-word-fill text-primary"></i> Word document — click download to view</div>';
+        } else if (att.is_powerpoint) {
+            preview = '<div class="file-icon"><i class="bi bi-file-earmark-ppt-fill text-warning"></i> PowerPoint presentation — click download to view</div>';
+        }
+        return `
+            <div class="attachment-card" data-attachment-id="${att.id}">
+                <div class="file-info">
+                    <div>
+                        <i class="bi bi-file-earmark"></i>
+                        <span class="file-name">${att.name}</span>
+                        <span class="file-type-badge ${ext}">${ext}</span>
+                    </div>
+                    <div class="file-actions">
+                        <a href="${att.url}" target="_blank" class="btn btn-sm btn-outline-secondary"><i class="bi bi-download"></i></a>
+                        <button type="button" class="btn btn-sm btn-outline-danger btn-delete-attachment" data-id="${att.id}"><i class="bi bi-trash"></i></button>
+                    </div>
+                </div>
+                <div class="attachment-preview">${preview}</div>
+            </div>
+        `;
+    }
+
+    function uploadFile(file, section, listEl, dropzone) {
+        var placeholder = document.createElement('div');
+        placeholder.className = 'attachment-card';
+        placeholder.innerHTML = `
+            <div class="file-info">
+                <div><i class="bi bi-hourglass-split"></i> <span class="file-name">${file.name}</span> <span class="file-size">${formatBytes(file.size)}</span></div>
+                <div class="text-muted small">Uploading...</div>
+            </div>
+            <div class="progress mt-1" style="height: 4px;">
+                <div class="progress-bar bg-primary" role="progressbar" style="width:0%"></div>
+            </div>
+        `;
+        listEl.appendChild(placeholder);
+        var progressBar = placeholder.querySelector('.progress-bar');
+
+        var fd = new FormData();
+        fd.append('section', section);
+        fd.append('file', file, file.name);
+
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', uploadUrl);
+        xhr.setRequestHeader('X-CSRFToken', csrfToken);
+        xhr.upload.onprogress = function(e) {
+            if (e.lengthComputable) {
+                progressBar.style.width = (e.loaded / e.total * 100) + '%';
+            }
+        };
+        xhr.onload = function() {
+            if (xhr.status !== 200) {
+                placeholder.querySelector('.progress').outerHTML = '';
+                placeholder.querySelector('.file-info > div:last-child').innerHTML = '<span class="text-danger">Failed</span>';
+                setTimeout(function() { placeholder.remove(); }, 3000);
+                return;
+            }
+            var resp = JSON.parse(xhr.responseText);
+            if (!resp.ok) {
+                placeholder.querySelector('.progress').outerHTML = '';
+                placeholder.querySelector('.file-info > div:last-child').innerHTML = '<span class="text-danger">' + (resp.error || 'Failed') + '</span>';
+                setTimeout(function() { placeholder.remove(); }, 3500);
+                return;
+            }
+            placeholder.outerHTML = renderAttachmentCard(resp);
+        };
+        xhr.onerror = function() {
+            placeholder.querySelector('.file-info > div:last-child').innerHTML = '<span class="text-danger">Network error</span>';
+        };
+        xhr.send(fd);
+    }
+
+    document.querySelectorAll('.upload-dropzone').forEach(function(dz) {
+        var section = dz.dataset.section;
+        var input = dz.querySelector('input[type="file"]');
+        var listEl = dz.parentElement.querySelector('.attachment-list[data-section="' + section + '"]');
+
+        ['dragenter', 'dragover'].forEach(function(evt) {
+            dz.addEventListener(evt, function(e) {
+                e.preventDefault(); e.stopPropagation();
+                dz.classList.add('dragging');
+            });
+        });
+        ['dragleave', 'drop'].forEach(function(evt) {
+            dz.addEventListener(evt, function(e) {
+                e.preventDefault(); e.stopPropagation();
+                dz.classList.remove('dragging');
+            });
+        });
+        dz.addEventListener('drop', function(e) {
+            var files = Array.from(e.dataTransfer.files || []);
+            files.forEach(function(f) { uploadFile(f, section, listEl, dz); });
+        });
+        input.addEventListener('change', function() {
+            var files = Array.from(this.files || []);
+            files.forEach(function(f) { uploadFile(f, section, listEl, dz); });
+            this.value = '';
+        });
+    });
+
+    // ─── Delete attachment (event delegation) ─────────────────
+    document.body.addEventListener('click', function(e) {
+        var btn = e.target.closest('.btn-delete-attachment');
+        if (!btn) return;
+        if (!confirm('Delete this file?')) return;
+        var id = btn.dataset.id;
+        fetch('/proposals/pqd/attachment/' + id + '/delete/', {
+            method: 'POST', headers: {'X-CSRFToken': csrfToken},
+        }).then(function(r) { return r.json(); })
+          .then(function(resp) {
+              if (resp.ok) {
+                  var card = document.querySelector('.attachment-card[data-attachment-id="' + id + '"]');
+                  if (card) card.remove();
+              } else {
+                  alert(resp.error || 'Delete failed');
+              }
+          });
+    });
+});
+</script>
+{% endblock %}

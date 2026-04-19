@@ -1,6 +1,9 @@
 from django import forms
 from django.forms import inlineformset_factory
-from .models import TechnicalProposal, EngineeringDocument, ProposalBoilerplate
+from .models import (
+    TechnicalProposal, EngineeringDocument, ProposalBoilerplate,
+    PrequalificationDocument,
+)
 from projects.models import Project
 
 
@@ -93,6 +96,51 @@ class ProposalFilterForm(forms.Form):
     status = forms.ChoiceField(
         required=False,
         choices=[('', 'All Statuses')] + TechnicalProposal.STATUS_CHOICES,
+        widget=forms.Select(attrs={'class': 'form-select'}),
+    )
+
+
+class PQDMetadataForm(forms.ModelForm):
+    class Meta:
+        model = PrequalificationDocument
+        fields = [
+            'title', 'project', 'pqd_reference', 'document_type',
+            'client_name', 'project_description', 'region_entity',
+            'revision', 'revision_date',
+            'prepared_by_initials', 'checked_by_initials', 'approved_by_initials',
+            'status',
+        ]
+        widgets = {
+            'revision_date': forms.DateInput(attrs={'type': 'date'}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        self.user = kwargs.pop('user', None)
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            if isinstance(field.widget, forms.Select):
+                field.widget.attrs['class'] = 'form-select'
+            else:
+                field.widget.attrs['class'] = 'form-control'
+        self.fields['project'].required = False
+        self.fields['project'].queryset = Project.objects.select_related('region').all()
+
+        if self.user:
+            if self.user.is_super_admin_user:
+                pass
+            elif self.user.is_admin_user or self.user.is_manager_user:
+                self.fields['project'].queryset = Project.objects.filter(region=self.user.region)
+            else:
+                self.fields['project'].queryset = Project.objects.filter(owner=self.user)
+
+
+class PQDFilterForm(forms.Form):
+    search = forms.CharField(required=False, widget=forms.TextInput(attrs={
+        'class': 'form-control', 'placeholder': 'Search PQDs...',
+    }))
+    status = forms.ChoiceField(
+        required=False,
+        choices=[('', 'All Statuses')] + PrequalificationDocument.STATUS_CHOICES,
         widget=forms.Select(attrs={'class': 'form-select'}),
     )
 

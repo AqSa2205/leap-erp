@@ -8,10 +8,14 @@ from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required
 from django.db.models import Q
 
-from .models import TechnicalProposal, ProposalBoilerplate
+from .models import (
+    TechnicalProposal, ProposalBoilerplate,
+    PrequalificationDocument, PQDAttachment,
+)
 from .forms import (
     ProposalMetadataForm, ProposalContentForm, EngineeringDocumentFormSet,
     ProposalFilterForm, ProposalBoilerplateForm,
+    PQDMetadataForm, PQDFilterForm,
 )
 
 
@@ -305,3 +309,231 @@ class BoilerplateDeleteView(LoginRequiredMixin, DeleteView):
     def form_valid(self, form):
         messages.success(self.request, 'Boilerplate deleted.')
         return super().form_valid(form)
+
+
+# ─── Prequalification Document (PQD) ─────────────────────────
+
+class PQDPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
+    def get_queryset(self):
+        qs = PrequalificationDocument.objects.select_related('project', 'created_by').all()
+        user = self.request.user
+        if user.is_super_admin_user:
+            return qs
+        elif user.is_admin_user or user.is_manager_user:
+            return qs.filter(Q(created_by=user) | Q(project__region=user.region))
+        return qs.filter(created_by=user)
+
+
+class PQDListView(PQDPermissionMixin, ListView):
+    model = PrequalificationDocument
+    template_name = 'proposals/pqd_list.html'
+    context_object_name = 'pqds'
+    paginate_by = 25
+
+    def test_func(self):
+        return True
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        search = self.request.GET.get('search')
+        status = self.request.GET.get('status')
+        if search:
+            qs = qs.filter(
+                Q(title__icontains=search) |
+                Q(pqd_reference__icontains=search) |
+                Q(client_name__icontains=search) |
+                Q(project__project_name__icontains=search)
+            )
+        if status:
+            qs = qs.filter(status=status)
+        return qs.order_by('-updated_at')
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['filter_form'] = PQDFilterForm(self.request.GET)
+        context['total_count'] = self.get_queryset().count()
+        return context
+
+
+class PQDCreateView(LoginRequiredMixin, CreateView):
+    model = PrequalificationDocument
+    form_class = PQDMetadataForm
+    template_name = 'proposals/pqd_form.html'
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs['user'] = self.request.user
+        return kwargs
+
+    def form_valid(self, form):
+        form.instance.created_by = self.request.user
+        messages.success(self.request, 'Prequalification document created.')
+        return super().form_valid(form)
+
+    def get_success_url(self):
+        return reverse('proposals:pqd_content', kwargs={'pk': self.object.pk})
+
+
+class PQDDetailView(PQDPermissionMixin, DetailView):
+    model = PrequalificationDocument
+    template_name = 'proposals/pqd_detail.html'
+    context_object_name = 'pqd'
+
+    def test_func(self):
+        return True
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        attachments_by_section = {}
+        for att in self.object.attachments.all():
+            attachments_by_section.setdefault(att.section, []).append(att)
+        context['attachments_by_section'] = attachments_by_section
+        return context
+
+
+class PQDUpdateView(PQDPermissionMixin, UpdateView):
+    model = PrequalificationDocument
+    form_class = PQDMetadataForm
+    template_name = 'proposals/pqd_form.html'
+    context_object_name = 'pqd'
+
+    def test_func(self):
+        return True
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs['user'] = self.request.user
+        return kwargs
+
+    def form_valid(self, form):
+        messages.success(self.request, 'PQD metadata updated.')
+        return super().form_valid(form)
+
+    def get_success_url(self):
+        return reverse('proposals:pqd_detail', kwargs={'pk': self.object.pk})
+
+
+class PQDDeleteView(PQDPermissionMixin, DeleteView):
+    model = PrequalificationDocument
+    template_name = 'proposals/pqd_confirm_delete.html'
+    success_url = reverse_lazy('proposals:pqd_list')
+    context_object_name = 'pqd'
+
+    def test_func(self):
+        return True
+
+    def form_valid(self, form):
+        messages.success(self.request, 'PQD deleted.')
+        return super().form_valid(form)
+
+
+class PQDEditContentView(PQDPermissionMixin, DetailView):
+    """Tab-based editor for PQD content: 3 text tabs + 4 upload tabs."""
+    model = PrequalificationDocument
+    template_name = 'proposals/pqd_edit_content.html'
+    context_object_name = 'pqd'
+
+    def test_func(self):
+        return True
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # Group attachments by section for rendering
+        attachments_by_section = {k: [] for k in PrequalificationDocument.FILE_SECTION_KEYS}
+        for att in self.object.attachments.all():
+            attachments_by_section.setdefault(att.section, []).append(att)
+        context['attachments_by_section'] = attachments_by_section
+        context['sections'] = PrequalificationDocument.SECTIONS
+        return context
+
+
+@login_required
+@require_POST
+def ajax_save_pqd_section(request, pk):
+    """Save a text section (TinyMCE HTML) to a PQD."""
+    pqd = get_object_or_404(PrequalificationDocument, pk=pk)
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user) and pqd.created_by != user:
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    field = request.POST.get('field', '')
+    value = request.POST.get('value', '')
+
+    allowed = [f[0] for f in PrequalificationDocument.TEXT_SECTION_FIELDS]
+    if field not in allowed:
+        return JsonResponse({'error': 'Invalid field'}, status=400)
+
+    setattr(pqd, field, value)
+    pqd.save(update_fields=[field, 'updated_at'])
+    return JsonResponse({'ok': True})
+
+
+@login_required
+@require_POST
+def ajax_pqd_upload_attachment(request, pk):
+    """Upload a file into one of the 4 attachment sections of a PQD."""
+    pqd = get_object_or_404(PrequalificationDocument, pk=pk)
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user) and pqd.created_by != user:
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    section = request.POST.get('section', '')
+    if section not in PrequalificationDocument.FILE_SECTION_KEYS:
+        return JsonResponse({'error': 'Invalid section'}, status=400)
+
+    uploaded = request.FILES.get('file')
+    if not uploaded:
+        return JsonResponse({'error': 'No file'}, status=400)
+
+    # Size limit 50 MB
+    if uploaded.size > 50 * 1024 * 1024:
+        return JsonResponse({'error': 'File too large (max 50MB)'}, status=400)
+
+    # Type check by extension
+    import os
+    ext = os.path.splitext(uploaded.name)[1].lower().lstrip('.')
+    allowed_ext = {'pdf', 'doc', 'docx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'}
+    if ext not in allowed_ext:
+        return JsonResponse({'error': f'File type .{ext} not allowed'}, status=400)
+
+    # Next order within section
+    last = pqd.attachments.filter(section=section).order_by('-order').values_list('order', flat=True).first() or 0
+
+    att = PQDAttachment.objects.create(
+        pqd=pqd,
+        section=section,
+        file=uploaded,
+        original_filename=uploaded.name,
+        order=last + 1,
+    )
+    return JsonResponse({
+        'ok': True,
+        'id': att.pk,
+        'name': att.original_filename,
+        'url': att.file.url,
+        'section': att.section,
+        'is_pdf': att.is_pdf,
+        'is_image': att.is_image,
+        'is_word': att.is_word,
+        'is_powerpoint': att.is_powerpoint,
+        'extension': att.extension,
+    })
+
+
+@login_required
+@require_POST
+def ajax_pqd_delete_attachment(request, pk):
+    """Delete a PQD attachment."""
+    att = get_object_or_404(PQDAttachment, pk=pk)
+    pqd = att.pqd
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user) and pqd.created_by != user:
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    # Remove the file from disk too
+    try:
+        att.file.delete(save=False)
+    except Exception:
+        pass
+    att.delete()
+    return JsonResponse({'ok': True})

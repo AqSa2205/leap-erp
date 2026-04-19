@@ -1,0 +1,102 @@
+{% extends 'base.html' %}
+{% load proposal_tags %}
+
+{% block title %}{{ pqd.title }} - Leap Networks ERP{% endblock %}
+{% block page_title %}{{ pqd.title }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <span class="badge bg-{% if pqd.status == 'draft' %}warning text-dark{% elif pqd.status == 'review' %}info{% elif pqd.status == 'final' %}success{% else %}primary{% endif %} me-2">
+            {{ pqd.get_status_display }}
+        </span>
+        <code>{{ pqd.pqd_reference }}</code>
+    </div>
+    <div>
+        <a href="{% url 'proposals:pqd_content' pqd.pk %}" class="btn btn-primary">
+            <i class="bi bi-pencil-square me-1"></i> Edit Content
+        </a>
+        <a href="{% url 'proposals:pqd_edit' pqd.pk %}" class="btn btn-outline-secondary">
+            <i class="bi bi-gear me-1"></i> Edit Metadata
+        </a>
+        <a href="{% url 'proposals:pqd_delete' pqd.pk %}" class="btn btn-outline-danger">
+            <i class="bi bi-trash me-1"></i> Delete
+        </a>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header"><i class="bi bi-info-circle me-2"></i>PQD Details</div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-6">
+                <table class="table table-sm">
+                    <tr><th class="text-muted" style="width:40%">Client</th><td>{{ pqd.client_name }}</td></tr>
+                    <tr><th class="text-muted">Project</th><td>{{ pqd.project.project_name|default:"-" }}</td></tr>
+                    <tr><th class="text-muted">Region</th><td>{{ pqd.get_region_entity_display }}</td></tr>
+                    <tr><th class="text-muted">Document Type</th><td>{{ pqd.document_type }}</td></tr>
+                    <tr><th class="text-muted">Description</th><td>{{ pqd.project_description|default:"-" }}</td></tr>
+                </table>
+            </div>
+            <div class="col-md-6">
+                <table class="table table-sm">
+                    <tr><th class="text-muted" style="width:40%">Revision</th><td>{{ pqd.revision }}</td></tr>
+                    <tr><th class="text-muted">Revision Date</th><td>{{ pqd.revision_date|date:"d M Y" }}</td></tr>
+                    <tr><th class="text-muted">Prepared By</th><td>{{ pqd.prepared_by_initials }}</td></tr>
+                    <tr><th class="text-muted">Checked By</th><td>{{ pqd.checked_by_initials|default:"-" }}</td></tr>
+                    <tr><th class="text-muted">Approved By</th><td>{{ pqd.approved_by_initials|default:"-" }}</td></tr>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+{# Text sections #}
+{% for field_name, label in pqd.TEXT_SECTION_FIELDS %}
+{% with content=pqd|getattr_filter:field_name %}
+{% if content %}
+<div class="card mb-3">
+    <div class="card-header"><i class="bi bi-text-left me-2"></i>{{ label }}</div>
+    <div class="card-body">
+        <div style="font-family: 'Trebuchet MS', Trebuchet, Arial, sans-serif; font-size: 11pt; text-align: justify; line-height: 1.5;">{{ content|safe }}</div>
+    </div>
+</div>
+{% endif %}
+{% endwith %}
+{% endfor %}
+
+{# File sections #}
+{% for section_key, items in attachments_by_section.items %}
+{% if items %}
+<div class="card mb-3">
+    <div class="card-header">
+        <i class="bi bi-paperclip me-2"></i>
+        {% if section_key == 'product_catalogues' %}Product Catalogues
+        {% elif section_key == 'government_documents' %}Valid Government Documents
+        {% elif section_key == 'iso_certificates' %}ISO Certificates
+        {% elif section_key == 'qualifications' %}Qualifications (CVs)
+        {% endif %}
+        <span class="badge bg-secondary ms-2">{{ items|length }}</span>
+    </div>
+    <div class="card-body">
+        <ul class="list-group list-group-flush">
+            {% for att in items %}
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-file-earmark me-2"></i>{{ att.original_filename }}</span>
+                <a href="{{ att.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary">
+                    <i class="bi bi-download me-1"></i>Download
+                </a>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+</div>
+{% endif %}
+{% endfor %}
+
+<div class="text-muted small">
+    Created {{ pqd.created_at|date:"d M Y H:i" }} by
+    {% if pqd.created_by %}{{ pqd.created_by.get_full_name|default:pqd.created_by.username }}{% else %}Unknown{% endif %}
+    · Last updated {{ pqd.updated_at|date:"d M Y H:i" }}
+</div>
+{% endblock %}
