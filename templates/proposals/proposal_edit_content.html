@@ -128,8 +128,9 @@
     </div>
 </form>
 
-<!-- TinyMCE from CDN -->
-<script src="https://cdn.tiny.cloud/1/no-api-key/tinymce/6/tinymce.min.js" referrerpolicy="origin"></script>
+<!-- TinyMCE from django-tinymce static files (no API key needed) -->
+{% load static %}
+<script src="{% static 'tinymce/tinymce.min.js' %}"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     var csrfToken = '{{ csrf_token }}';
@@ -138,7 +139,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // ─── TinyMCE Initialization ──────────────────────────────
     tinymce.init({
         selector: 'textarea.tinymce-editor',
-        license_key: 'gpl',
         height: 450,
         menubar: false,
         branding: false,
