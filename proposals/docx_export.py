@@ -564,21 +564,9 @@ def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_templ
             # we actually inject images into the zip
             rid_placeholder = f'__LEAP_IMG_{idx}__'
 
-            # Dimensions in EMU (9525 per pixel at 96 DPI)
-            try:
-                w_px = int(img_info.get('width') or 0)
-            except (TypeError, ValueError):
-                w_px = 0
-            try:
-                h_px = int(img_info.get('height') or 0)
-            except (TypeError, ValueError):
-                h_px = 0
-            if w_px > 0 and h_px > 0:
-                cx = int(w_px * 9525)
-                cy = int(h_px * 9525)
-            else:
-                cx = 5400000
-                cy = 3600000
+            # Force 600 x 300 pixel display size (9525 EMU per pixel at 96 DPI)
+            cx = 600 * 9525   # 5,715,000 EMU ~ 15.9 cm
+            cy = 300 * 9525   # 2,857,500 EMU ~ 7.9 cm
 
             pic_id = idx + 100  # start at 100 to avoid clashing with template pic ids
             alt = img_info.get('alt') or alt_caption or f'Picture {pic_id}'
