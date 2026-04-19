@@ -543,12 +543,16 @@ def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_templ
                 self._text += data
 
         def _build_image_paragraph(self, img_info, alt_caption):
-            """Register the image and build a w:p containing a w:drawing that references it."""
+            """Register the image and build a w:p containing a w:drawing that references it.
+
+            Uses raw XML string (not etree) to ensure proper namespace prefixes
+            (pic:, a:, wp:, r:) that Word expects — lxml would otherwise emit
+            generated prefixes like ns2: which some Word versions reject.
+            """
             src = img_info.get('src', '')
             if not src:
                 return None
 
-            # Register this image in the registry; the index becomes our ref number
             idx = len(image_registry)
             image_registry.append({
                 'src': src,
@@ -556,10 +560,11 @@ def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_templ
                 'width': img_info.get('width'),
                 'height': img_info.get('height'),
             })
-            rid = f'rIdImg{idx}'
+            # Placeholder rId — replaced with a real unique numeric rId when
+            # we actually inject images into the zip
+            rid_placeholder = f'__LEAP_IMG_{idx}__'
 
-            # Determine display size in EMU (914400 per inch).
-            # Default to 15 cm wide (~5.9 in) with proportional height.
+            # Dimensions in EMU (9525 per pixel at 96 DPI)
             try:
                 w_px = int(img_info.get('width') or 0)
             except (TypeError, ValueError):
@@ -569,60 +574,56 @@ def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_templ
             except (TypeError, ValueError):
                 h_px = 0
             if w_px > 0 and h_px > 0:
-                # Convert pixels to EMU (assuming 96 DPI)
                 cx = int(w_px * 9525)
                 cy = int(h_px * 9525)
             else:
-                cx = 5400000  # ~15cm
-                cy = 3600000  # ~10cm
+                cx = 5400000
+                cy = 3600000
 
-            # Build the drawing XML
-            p = etree.Element(f'{{{WNS}}}p')
-            pPr = etree.SubElement(p, f'{{{WNS}}}pPr')
-            jc = etree.SubElement(pPr, f'{{{WNS}}}jc')
-            jc.set(f'{{{WNS}}}val', 'center')
-            r = etree.SubElement(p, f'{{{WNS}}}r')
-            drawing = etree.SubElement(r, f'{{{WNS}}}drawing')
-            inline = etree.SubElement(drawing, f'{{{WP_NS}}}inline')
-            inline.set('distT', '0'); inline.set('distB', '0')
-            inline.set('distL', '0'); inline.set('distR', '0')
+            pic_id = idx + 100  # start at 100 to avoid clashing with template pic ids
+            alt = img_info.get('alt') or alt_caption or f'Picture {pic_id}'
+            # Escape alt text for XML attribute
+            alt_xml = (alt.replace('&', '&amp;').replace('"', '&quot;')
+                          .replace('<', '&lt;').replace('>', '&gt;'))
 
-            extent = etree.SubElement(inline, f'{{{WP_NS}}}extent')
-            extent.set('cx', str(cx)); extent.set('cy', str(cy))
-
-            docPr = etree.SubElement(inline, f'{{{WP_NS}}}docPr')
-            docPr.set('id', str(idx + 1))
-            docPr.set('name', f'Picture {idx + 1}')
-
-            cNvGraphicFramePr = etree.SubElement(inline, f'{{{WP_NS}}}cNvGraphicFramePr')
-
-            graphic = etree.SubElement(inline, f'{{{DRAWING_NS}}}graphic')
-            graphicData = etree.SubElement(graphic, f'{{{DRAWING_NS}}}graphicData')
-            graphicData.set('uri', PIC_NS)
-
-            pic = etree.SubElement(graphicData, f'{{{PIC_NS}}}pic')
-            nvPicPr = etree.SubElement(pic, f'{{{PIC_NS}}}nvPicPr')
-            cNvPr = etree.SubElement(nvPicPr, f'{{{PIC_NS}}}cNvPr')
-            cNvPr.set('id', str(idx + 1)); cNvPr.set('name', f'Picture {idx + 1}')
-            cNvPicPr = etree.SubElement(nvPicPr, f'{{{PIC_NS}}}cNvPicPr')
-
-            blipFill = etree.SubElement(pic, f'{{{PIC_NS}}}blipFill')
-            blip = etree.SubElement(blipFill, f'{{{DRAWING_NS}}}blip')
-            blip.set(f'{{{REL_NS}}}embed', rid)
-            stretch = etree.SubElement(blipFill, f'{{{DRAWING_NS}}}stretch')
-            etree.SubElement(stretch, f'{{{DRAWING_NS}}}fillRect')
-
-            spPr = etree.SubElement(pic, f'{{{PIC_NS}}}spPr')
-            xfrm = etree.SubElement(spPr, f'{{{DRAWING_NS}}}xfrm')
-            off = etree.SubElement(xfrm, f'{{{DRAWING_NS}}}off')
-            off.set('x', '0'); off.set('y', '0')
-            ext = etree.SubElement(xfrm, f'{{{DRAWING_NS}}}ext')
-            ext.set('cx', str(cx)); ext.set('cy', str(cy))
-            prstGeom = etree.SubElement(spPr, f'{{{DRAWING_NS}}}prstGeom')
-            prstGeom.set('prst', 'rect')
-            etree.SubElement(prstGeom, f'{{{DRAWING_NS}}}avLst')
-
-            return p
+            # Raw XML with proper prefixes. The parent document.xml already
+            # declares all required namespaces (w, r, wp, a, pic), so the
+            # prefixes resolve correctly without extra xmlns attributes.
+            xml = (
+                f'<w:p xmlns:w="{WNS}" xmlns:r="{REL_NS}" xmlns:wp="{WP_NS}" '
+                f'xmlns:a="{DRAWING_NS}" xmlns:pic="{PIC_NS}">'
+                f'<w:pPr><w:jc w:val="center"/></w:pPr>'
+                f'<w:r><w:drawing>'
+                f'<wp:inline distT="0" distB="0" distL="0" distR="0">'
+                f'<wp:extent cx="{cx}" cy="{cy}"/>'
+                f'<wp:effectExtent l="0" t="0" r="0" b="0"/>'
+                f'<wp:docPr id="{pic_id}" name="Picture {pic_id}" descr="{alt_xml}"/>'
+                f'<wp:cNvGraphicFramePr>'
+                f'<a:graphicFrameLocks noChangeAspect="1"/>'
+                f'</wp:cNvGraphicFramePr>'
+                f'<a:graphic>'
+                f'<a:graphicData uri="{PIC_NS}">'
+                f'<pic:pic>'
+                f'<pic:nvPicPr>'
+                f'<pic:cNvPr id="{pic_id}" name="Picture {pic_id}"/>'
+                f'<pic:cNvPicPr/>'
+                f'</pic:nvPicPr>'
+                f'<pic:blipFill>'
+                f'<a:blip r:embed="{rid_placeholder}"/>'
+                f'<a:stretch><a:fillRect/></a:stretch>'
+                f'</pic:blipFill>'
+                f'<pic:spPr>'
+                f'<a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
+                f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+                f'</pic:spPr>'
+                f'</pic:pic>'
+                f'</a:graphicData>'
+                f'</a:graphic>'
+                f'</wp:inline>'
+                f'</w:drawing></w:r>'
+                f'</w:p>'
+            )
+            return etree.fromstring(xml)
 
         def _build_caption_paragraph(self, caption_text):
             """Italic centered caption paragraph below an image."""
@@ -764,7 +765,14 @@ def _fill_engineering_table(body, proposal):
 # ── Image injection (post-process ZIP) ────────────────────────
 
 def _resolve_image_path(src):
-    """Resolve an image URL (/media/...) to a local filesystem path."""
+    """Resolve an image URL/path to a local filesystem path.
+
+    Handles:
+    - Absolute URLs (http://host/media/...)
+    - Server-relative URLs (/media/...)
+    - Page-relative URLs with ../ (../../../media/...)
+    - Plain relative paths (media/...)
+    """
     if not src:
         return None
     # Strip origin if present
@@ -775,32 +783,44 @@ def _resolve_image_path(src):
             src = parsed.path
         except Exception:
             return None
-    # Normalize MEDIA_URL to a clean prefix without leading/trailing slashes
+
     media_prefix = settings.MEDIA_URL.strip('/')
-    # Strip any leading slashes from src for comparison
-    src_clean = src.lstrip('/')
-    if media_prefix and src_clean.startswith(media_prefix + '/'):
-        rel_path = src_clean[len(media_prefix) + 1:]
-        return os.path.join(str(settings.MEDIA_ROOT), rel_path.replace('/', os.sep))
-    if media_prefix and src_clean == media_prefix:
-        return None
-    # If src starts with /media but media_prefix is 'media' — handle that
+
+    # Look for the media prefix anywhere in the path (handles ../../../media/...)
+    if media_prefix:
+        # Normalize the path separators
+        src_normalized = src.replace('\\', '/')
+        marker = '/' + media_prefix + '/'
+        idx = src_normalized.find(marker)
+        if idx >= 0:
+            rel_path = src_normalized[idx + len(marker):]
+            return os.path.join(str(settings.MEDIA_ROOT), rel_path.replace('/', os.sep))
+        # Starts with the media prefix
+        src_clean = src_normalized.lstrip('./').lstrip('/')
+        if src_clean.startswith(media_prefix + '/'):
+            rel_path = src_clean[len(media_prefix) + 1:]
+            return os.path.join(str(settings.MEDIA_ROOT), rel_path.replace('/', os.sep))
+
     return None
 
 
 def _inject_images(modified_files, image_registry, all_names):
-    """Add image files to word/media/, update relationships + content types."""
-    # Load existing document.xml.rels
+    """Add image files to word/media/, update relationships + content types,
+    and replace rId placeholders in document.xml with real numeric rIds."""
     rels_name = 'word/_rels/document.xml.rels'
     if rels_name not in modified_files:
         return
     rels_xml = modified_files[rels_name]
     rels_root = etree.fromstring(rels_xml)
-    # Build set of existing rId values
-    existing_rids = set()
+
+    # Find the highest existing numeric rId so we can allocate fresh ones
     ns_rel = 'http://schemas.openxmlformats.org/package/2006/relationships'
+    existing_numeric_ids = []
     for rel in rels_root.findall(f'{{{ns_rel}}}Relationship'):
-        existing_rids.add(rel.get('Id'))
+        rid = rel.get('Id') or ''
+        if rid.startswith('rId') and rid[3:].isdigit():
+            existing_numeric_ids.append(int(rid[3:]))
+    next_rid_num = (max(existing_numeric_ids) + 1) if existing_numeric_ids else 1000
 
     # Content types
     ct_name = '[Content_Types].xml'
@@ -822,30 +842,35 @@ def _inject_images(modified_files, image_registry, all_names):
         'webp': 'image/webp',
     }
 
+    # Map placeholder -> real rId so we can rewrite document.xml at the end
+    rid_map = {}
+
     for idx, img in enumerate(image_registry):
+        placeholder = f'__LEAP_IMG_{idx}__'
         path = _resolve_image_path(img['src'])
         if not path or not os.path.exists(path):
-            continue  # skip missing
+            # Missing file — leave placeholder in document.xml (will error but
+            # easier to debug than mysterious broken image references)
+            continue
 
         ext = os.path.splitext(path)[1].lower().lstrip('.') or 'png'
         if ext not in ext_to_ct:
             ext = 'png'
-        rid = f'rIdImg{idx}'
-        media_name = f'proposal-image-{idx + 1}.{ext}'
+        real_rid = f'rId{next_rid_num}'
+        next_rid_num += 1
+        rid_map[placeholder] = real_rid
+
+        media_name = f'leap-image-{idx + 1}-{next_rid_num}.{ext}'
         zip_path = f'word/media/{media_name}'
 
         with open(path, 'rb') as f:
             modified_files[zip_path] = f.read()
 
-        # Add relationship
-        if rid not in existing_rids:
-            rel = etree.SubElement(rels_root, f'{{{ns_rel}}}Relationship')
-            rel.set('Id', rid)
-            rel.set('Type', 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image')
-            rel.set('Target', f'media/{media_name}')
-            existing_rids.add(rid)
+        rel = etree.SubElement(rels_root, f'{{{ns_rel}}}Relationship')
+        rel.set('Id', real_rid)
+        rel.set('Type', 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image')
+        rel.set('Target', f'media/{media_name}')
 
-        # Add content type default for this extension
         if ct_root is not None and ext not in existing_extensions:
             default = etree.SubElement(ct_root, f'{{{ns_ct}}}Default')
             default.set('Extension', ext)
@@ -855,6 +880,19 @@ def _inject_images(modified_files, image_registry, all_names):
     modified_files[rels_name] = etree.tostring(rels_root, xml_declaration=True, encoding='UTF-8', standalone=True)
     if ct_root is not None:
         modified_files[ct_name] = etree.tostring(ct_root, xml_declaration=True, encoding='UTF-8', standalone=True)
+
+    # Replace rId placeholders in document.xml with real ones
+    if rid_map:
+        doc_name = 'word/document.xml'
+        doc_xml = modified_files.get(doc_name)
+        if doc_xml is not None:
+            if isinstance(doc_xml, bytes):
+                doc_text = doc_xml.decode('utf-8')
+            else:
+                doc_text = doc_xml
+            for placeholder, real_rid in rid_map.items():
+                doc_text = doc_text.replace(placeholder, real_rid)
+            modified_files[doc_name] = doc_text.encode('utf-8')
 
 
 # ── Main entry point ─────────────────────────────────────────
