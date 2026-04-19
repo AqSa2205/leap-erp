@@ -272,31 +272,38 @@ def _make_content_paragraph(text, pPr_template=None, rPr_template=None):
     return p
 
 
+def _is_heading1(elem):
+    """Check if a body child element is a Heading1 paragraph."""
+    if elem.tag != f'{{{WNS}}}p':
+        return False
+    return _get_paragraph_style(elem) == 'Heading1'
+
+
 def _replace_body_sections(xml_bytes, proposal):
     """Replace body section content between Heading1 paragraphs.
 
+    Works with ALL body children (paragraphs, tables, etc.) so that
+    pre-filled tables between headings are also removed.
+
     All Heading1 sections in the template are processed:
     - Matched headings: content replaced with user's text from the form
-    - Unmatched headings (SUMMARY, OBJECTIVE, etc.): heading AND its
-      content paragraphs are removed entirely so no pre-filled text
-      leaks into the exported document.
+    - Unmatched headings (SUMMARY, OBJECTIVE, etc.): heading AND all
+      content between it and the next heading are removed entirely.
     """
     root = etree.fromstring(xml_bytes)
     body = root.find(f'.//{{{WNS}}}body')
     if body is None:
         return xml_bytes
 
-    paragraphs = list(body.findall(f'{{{WNS}}}p'))
+    # Work with ALL body children (paragraphs, tables, sectPr, etc.)
+    children = list(body)
 
-    # All Heading1 indices
-    all_heading1_indices = [
-        i for i, p in enumerate(paragraphs) if _get_paragraph_style(p) == 'Heading1'
-    ]
-
-    # Classify each Heading1 as matched (has a field) or unmatched
-    heading_info = []  # (index, field_name_or_None)
-    for i in all_heading1_indices:
-        text = _get_paragraph_text(paragraphs[i]).lower()
+    # Find all Heading1 positions among body children
+    heading_info = []  # (child_index, field_name_or_None)
+    for i, child in enumerate(children):
+        if not _is_heading1(child):
+            continue
+        text = _get_paragraph_text(child).lower()
         matched_field = None
         for key, field_name in HEADING_TO_FIELD.items():
             if key in text:
@@ -304,14 +311,17 @@ def _replace_body_sections(xml_bytes, proposal):
                 break
         heading_info.append((i, matched_field))
 
-    # Extract formatting from first content paragraph of first heading with content
+    if not heading_info:
+        return xml_bytes
+
+    # Extract formatting from first content paragraph
     pPr_template = None
     rPr_template = None
     for hi_idx, (start_pos, _) in enumerate(heading_info):
-        end_pos = heading_info[hi_idx + 1][0] if hi_idx + 1 < len(heading_info) else len(paragraphs)
+        end_pos = heading_info[hi_idx + 1][0] if hi_idx + 1 < len(heading_info) else len(children)
         for ci in range(start_pos + 1, min(start_pos + 3, end_pos)):
-            candidate = paragraphs[ci]
-            if _get_paragraph_text(candidate):
+            candidate = children[ci]
+            if candidate.tag == f'{{{WNS}}}p' and _get_paragraph_text(candidate):
                 pPr_template, rPr_template = _extract_content_formatting(candidate)
                 break
         if pPr_template is not None:
@@ -321,16 +331,19 @@ def _replace_body_sections(xml_bytes, proposal):
     for hi_idx in range(len(heading_info) - 1, -1, -1):
         start_pos, field_name = heading_info[hi_idx]
 
-        # Find end position: next Heading1 or end of paragraphs
-        end_pos = heading_info[hi_idx + 1][0] if hi_idx + 1 < len(heading_info) else len(paragraphs)
+        # End position: next Heading1 or end of children (but keep sectPr)
+        end_pos = heading_info[hi_idx + 1][0] if hi_idx + 1 < len(heading_info) else len(children)
+        # Don't remove the final sectPr (section properties) element
+        while end_pos > start_pos + 1 and children[end_pos - 1].tag == f'{{{WNS}}}sectPr':
+            end_pos -= 1
 
-        # Remove existing content paragraphs (between this heading and next)
+        # Remove ALL children between this heading and the next (paragraphs, tables, etc.)
         for j in range(end_pos - 1, start_pos, -1):
-            body.remove(paragraphs[j])
+            body.remove(children[j])
 
         if field_name is None:
             # Unmatched heading — remove the heading itself too
-            body.remove(paragraphs[start_pos])
+            body.remove(children[start_pos])
             continue
 
         # Matched heading — insert user content
@@ -338,7 +351,7 @@ def _replace_body_sections(xml_bytes, proposal):
         if not content:
             continue
 
-        heading_para = paragraphs[start_pos]
+        heading_para = children[start_pos]
 
         # Check if content is HTML (from TinyMCE)
         if '<p>' in content or '<table' in content or '<ul' in content or '<ol' in content:
@@ -349,7 +362,7 @@ def _replace_body_sections(xml_bytes, proposal):
                 heading_para.addnext(new_para)
                 heading_para = new_para
 
-    # Fill engineering documents table
+    # Fill engineering documents table (rebuild from user data)
     _fill_engineering_table(body, proposal)
 
     return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
