@@ -521,6 +521,27 @@ def ajax_pqd_upload_attachment(request, pk):
 
 
 @login_required
+def pqd_export(request, pk):
+    """Generate and return the merged PQD PDF (or ZIP fallback)."""
+    pqd = get_object_or_404(PrequalificationDocument, pk=pk)
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user or pqd.created_by == user):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    from .pqd_export import export_pqd_merged_pdf
+    try:
+        content, filename, content_type = export_pqd_merged_pdf(pqd)
+    except RuntimeError as e:
+        messages.error(request, str(e))
+        return JsonResponse({'error': str(e)}, status=500)
+
+    from django.http import HttpResponse
+    response = HttpResponse(content, content_type=content_type)
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response
+
+
+@login_required
 @require_POST
 def ajax_pqd_delete_attachment(request, pk):
     """Delete a PQD attachment."""
