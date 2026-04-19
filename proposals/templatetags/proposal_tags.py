@@ -14,3 +14,12 @@ def get_field(form, field_name):
         return form[field_name]
     except KeyError:
         return ''
+
+
+@register.filter
+def get_field_value(form, field_name):
+    """Return just the value of a form field (not the rendered widget)."""
+    try:
+        return form[field_name].value() or ''
+    except (KeyError, AttributeError):
+        return ''

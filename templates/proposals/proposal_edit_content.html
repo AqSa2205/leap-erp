@@ -4,6 +4,14 @@
 {% block title %}Edit Content - {{ object.title }} - Leap Networks ERP{% endblock %}
 {% block page_title %}Edit Content: {{ object.title }}{% endblock %}
 
+{% block extra_css %}
+<style>
+    /* Make TinyMCE editors fill the tab pane */
+    .tox-tinymce { border-radius: 4px !important; }
+    .tab-pane .tox-tinymce { min-height: 450px; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
@@ -19,18 +27,18 @@
     </div>
 </div>
 
-<form method="post">
+<form method="post" id="contentForm">
     {% csrf_token %}
     {{ eng_formset.management_form }}
 
     <div class="card">
         <div class="card-header p-0">
-            <ul class="nav nav-tabs card-header-tabs" role="tablist">
+            <ul class="nav nav-tabs card-header-tabs" role="tablist" style="flex-wrap: nowrap; overflow-x: auto;">
                 {% for field_name, label in section_fields %}
                 <li class="nav-item" role="presentation">
                     <button class="nav-link {% if forloop.first %}active{% endif %}" id="tab-{{ field_name }}"
                             data-bs-toggle="tab" data-bs-target="#pane-{{ field_name }}"
-                            type="button" role="tab">
+                            type="button" role="tab" style="white-space:nowrap;">
                         {{ label }}
                     </button>
                 </li>
@@ -38,7 +46,7 @@
                 <li class="nav-item" role="presentation">
                     <button class="nav-link" id="tab-eng-docs"
                             data-bs-toggle="tab" data-bs-target="#pane-eng-docs"
-                            type="button" role="tab">
+                            type="button" role="tab" style="white-space:nowrap;">
                         Engineering Docs
                     </button>
                 </li>
@@ -53,7 +61,7 @@
                     <div class="mb-3">
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <label class="form-label fw-bold mb-0">{{ label }}</label>
-                            <div class="d-flex gap-2">
+                            <div class="d-flex gap-2 align-items-center">
                                 <select class="form-select form-select-sm" style="width:auto"
                                         id="bp-select-{{ field_name }}" data-section="{{ field_name }}">
                                     <option value="">Load Boilerplate...</option>
@@ -67,9 +75,13 @@
                                         data-section="{{ field_name }}">
                                     <i class="bi bi-arrow-down-circle"></i> Load
                                 </button>
+                                <button type="button" class="btn btn-sm btn-outline-primary btn-save-section"
+                                        data-section="{{ field_name }}">
+                                    <i class="bi bi-cloud-upload"></i> Save
+                                </button>
                             </div>
                         </div>
-                        {{ form|get_field:field_name }}
+                        <textarea id="id_{{ field_name }}" name="{{ field_name }}" class="tinymce-editor">{{ form|get_field_value:field_name }}</textarea>
                     </div>
                 </div>
                 {% endfor %}
@@ -116,9 +128,134 @@
     </div>
 </form>
 
+<!-- TinyMCE from CDN -->
+<script src="https://cdn.tiny.cloud/1/no-api-key/tinymce/6/tinymce.min.js" referrerpolicy="origin"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // Boilerplate loading
+    var csrfToken = '{{ csrf_token }}';
+    var saveSectionUrl = "{% url 'proposals:save_section' object.pk %}";
+
+    // ─── TinyMCE Initialization ──────────────────────────────
+    tinymce.init({
+        selector: 'textarea.tinymce-editor',
+        license_key: 'gpl',
+        height: 450,
+        menubar: false,
+        branding: false,
+        promotion: false,
+        plugins: 'table lists autolink link',
+        toolbar: 'undo redo | bold italic underline | bullist numlist | table | alignleft aligncenter alignright alignjustify | link | removeformat',
+        // Force Trebuchet MS font and justified text
+        content_style: `
+            @import url('https://fonts.googleapis.com/css2?family=Trebuchet+MS&display=swap');
+            body {
+                font-family: 'Trebuchet MS', Trebuchet, Arial, sans-serif !important;
+                font-size: 11pt;
+                line-height: 1.5;
+                color: #333;
+                text-align: justify;
+                margin: 12px;
+            }
+            p { text-align: justify; margin: 0 0 8pt 0; }
+            table { border-collapse: collapse; width: 100%; margin: 8pt 0; }
+            table td, table th {
+                border: 1px solid #999;
+                padding: 4px 8px;
+                font-family: 'Trebuchet MS', Trebuchet, Arial, sans-serif;
+            }
+            table th { background: #f0f0f0; font-weight: bold; }
+            ul, ol { margin: 4pt 0 8pt 20pt; }
+            li { margin-bottom: 2pt; }
+        `,
+        // Force new content to use Trebuchet MS
+        formats: {
+            p: { block: 'p', styles: { 'text-align': 'justify' } }
+        },
+        // When user presses Enter, create justified paragraphs
+        setup: function(editor) {
+            editor.on('init', function() {
+                editor.getBody().style.fontFamily = "'Trebuchet MS', Trebuchet, Arial, sans-serif";
+                editor.getBody().style.textAlign = 'justify';
+            });
+            // When switching tabs, TinyMCE may need to recalculate size
+            editor.on('init', function() {
+                var tabEl = document.querySelector('[data-bs-target="#pane-' + editor.id.replace('id_', '') + '"]');
+                if (tabEl) {
+                    tabEl.addEventListener('shown.bs.tab', function() {
+                        editor.execCommand('mceAutoResize');
+                    });
+                }
+            });
+        },
+        // Table defaults
+        table_default_styles: {
+            'border-collapse': 'collapse',
+            'width': '100%'
+        },
+        table_default_attributes: {
+            border: '1'
+        },
+        // Paste as plain text but preserve structure
+        paste_as_text: false,
+        // Remove font controls so users can't change from Trebuchet
+        font_family_formats: '',
+        font_size_formats: '',
+    });
+
+    // ─── Sync TinyMCE content to textareas before form submit ───
+    document.getElementById('contentForm').addEventListener('submit', function() {
+        tinymce.triggerSave();
+    });
+
+    // ─── Per-section Save button ─────────────────────────────
+    document.querySelectorAll('.btn-save-section').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var section = this.dataset.section;
+            var editor = tinymce.get('id_' + section);
+            if (!editor) return;
+
+            var content = editor.getContent();
+            var saveBtn = this;
+            saveBtn.disabled = true;
+            saveBtn.innerHTML = '<i class="bi bi-hourglass"></i> Saving...';
+
+            var data = new FormData();
+            data.append('field', section);
+            data.append('value', content);
+
+            fetch(saveSectionUrl, {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrfToken},
+                body: data,
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(resp) {
+                saveBtn.disabled = false;
+                if (resp.ok) {
+                    saveBtn.innerHTML = '<i class="bi bi-check-lg"></i> Saved!';
+                    saveBtn.className = 'btn btn-sm btn-success btn-save-section';
+                    setTimeout(function() {
+                        saveBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Save';
+                        saveBtn.className = 'btn btn-sm btn-outline-primary btn-save-section';
+                    }, 2000);
+                } else {
+                    saveBtn.innerHTML = '<i class="bi bi-x-lg"></i> Error';
+                    saveBtn.className = 'btn btn-sm btn-danger btn-save-section';
+                    setTimeout(function() {
+                        saveBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Save';
+                        saveBtn.className = 'btn btn-sm btn-outline-primary btn-save-section';
+                    }, 2000);
+                }
+            })
+            .catch(function(err) {
+                console.error('Save failed:', err);
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Save';
+            });
+        });
+    });
+
+    // ─── Boilerplate loading ─────────────────────────────────
     document.querySelectorAll('.btn-load-bp').forEach(function(btn) {
         btn.addEventListener('click', function() {
             var section = this.dataset.section;
@@ -127,15 +264,22 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!bpId) return;
 
             fetch("{% url 'proposals:boilerplate_content' 0 %}".replace('0', bpId))
-                .then(r => r.json())
-                .then(data => {
-                    var textarea = document.getElementById('id_' + section);
-                    if (textarea) {
-                        if (textarea.value && !confirm('Replace existing content?')) return;
-                        textarea.value = data.content;
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    var editor = tinymce.get('id_' + section);
+                    if (!editor) return;
+                    var currentContent = editor.getContent().trim();
+                    if (currentContent && !confirm('Replace existing content with boilerplate?')) return;
+                    // Convert plain text to HTML paragraphs if needed
+                    var content = data.content;
+                    if (content && !content.includes('<')) {
+                        content = content.split('\n').filter(function(l) { return l.trim(); }).map(function(l) {
+                            return '<p>' + l + '</p>';
+                        }).join('');
                     }
+                    editor.setContent(content);
                 })
-                .catch(err => console.error('Failed to load boilerplate:', err));
+                .catch(function(err) { console.error('Failed to load boilerplate:', err); });
         });
     });
 });
