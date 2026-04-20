@@ -236,20 +236,18 @@ def _convert_to_pdf(file_bytes, ext):
 # ── Pure-Python body PDF generator (reportlab) ──
 
 def _generate_pqd_body_pdf(pqd):
-    """Generate the PQD body (cover page + text sections) directly as PDF
-    using reportlab — no DOCX conversion required. Returns PDF bytes.
-    Produces a clean, consistent document regardless of platform."""
+    """Generate the PQD body as PDF using reportlab, matching the exact
+    layout of the technical proposal template (outer border, vertical
+    left panels, bottom info table) so the output visually reproduces
+    the reference cover page without requiring MS Word or LibreOffice."""
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import mm
     from reportlab.platypus import (
-        BaseDocTemplate, PageTemplate, Frame, Paragraph, Spacer, PageBreak, Table, TableStyle,
+        BaseDocTemplate, PageTemplate, Frame, Paragraph, Spacer, PageBreak,
     )
     from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.pdfgen.canvas import Canvas
 
     # Locate logo
     try:
@@ -263,112 +261,264 @@ def _generate_pqd_body_pdf(pqd):
             logo_path = candidate
 
     LEAP_RED = colors.HexColor('#C41E3A')
-    GREY = colors.HexColor('#666666')
+    BORDER = colors.black
+    LIGHT = colors.HexColor('#bbbbbb')
+
+    page_w, page_h = A4
+    OUT = 5*mm           # outer border inset
+    LEFT_PANEL = 20*mm   # width of the left vertical strip
+    BOTTOM_BAR = 22*mm   # height of the bottom info table
+    content_left = OUT + LEFT_PANEL + 2*mm
+    content_right = page_w - OUT - 2*mm
+    content_top = page_h - OUT - 10*mm
+    content_bottom = OUT + BOTTOM_BAR + 2*mm
+
+    # Date formatting
+    rev_date = pqd.revision_date
+    date_slash = rev_date.strftime('%b/%Y').upper() if rev_date else ''
+    date_short = rev_date.strftime('%b %Y').upper() if rev_date else ''
+
+    ref = pqd.pqd_reference or ''
+    doc_type_caps = (pqd.document_type or 'Prequalification').upper()
+    # Truncate ref+type to fit the vertical side panel
+    side_doc_label = f'{ref} {doc_type_caps[:15]}'.strip()
+
+    prepared = (pqd.prepared_by_initials or '').upper()
+    checked = (pqd.checked_by_initials or '').upper()
+    approved = (pqd.approved_by_initials or '').upper()
+
+    def _draw_border_frame(canvas):
+        """Draw the outer border + left vertical panel + bottom info
+        table that wraps every content page."""
+        canvas.saveState()
+        canvas.setStrokeColor(BORDER)
+        canvas.setLineWidth(0.75)
+
+        # Outer rectangle
+        canvas.rect(OUT, OUT, page_w - 2*OUT, page_h - 2*OUT, fill=0, stroke=1)
+
+        # Left vertical strip divider
+        canvas.line(OUT + LEFT_PANEL, OUT + BOTTOM_BAR, OUT + LEFT_PANEL, page_h - OUT)
+
+        # Horizontal line above the bottom bar
+        canvas.line(OUT, OUT + BOTTOM_BAR, page_w - OUT, OUT + BOTTOM_BAR)
+
+        # Top banner strip (company name)
+        banner_h = 7*mm
+        canvas.line(OUT, page_h - OUT - banner_h, page_w - OUT, page_h - OUT - banner_h)
+        canvas.setFont('Helvetica-Bold', 9)
+        canvas.drawCentredString(page_w / 2, page_h - OUT - banner_h + 2*mm,
+                                 'LEAP Networks Global Ltd.')
+
+        # ── Left vertical panel: rotated text showing ref info ──
+        # Divide the panel into horizontal bands from bottom-bar up
+        canvas.setFont('Helvetica', 6)
+        band_top = page_h - OUT - banner_h
+        band_bottom = OUT + BOTTOM_BAR
+        panel_h = band_top - band_bottom
+        # Bands (from bottom to top): REV/REPORT, DATE, DESCRIPTION, PROJECT DEP
+        bands = [
+            ('REPORT NO.', ref, 'REV', pqd.revision or 'A'),
+            ('DATE', date_slash, None, None),
+            ('DESCRIPTION', side_doc_label, None, date_slash),
+            ('PROJECT DEP', approved or 'AK', checked or 'ID', prepared or 'AJ'),
+        ]
+        n_bands = len(bands)
+        band_h = panel_h / n_bands
+        for i, band in enumerate(bands):
+            y_bottom = band_bottom + i * band_h
+            y_top = y_bottom + band_h
+            # Draw band separator
+            if i > 0:
+                canvas.line(OUT, y_bottom, OUT + LEFT_PANEL, y_bottom)
+            # Band label rotated 90° at the left edge
+            label_x = OUT + 4*mm
+            canvas.saveState()
+            canvas.translate(label_x, y_bottom + 4*mm)
+            canvas.rotate(90)
+            canvas.setFont('Helvetica-Bold', 6.5)
+            canvas.drawString(0, 0, band[0])
+            canvas.restoreState()
+            # Content values rotated
+            if band[0] == 'PROJECT DEP':
+                # Three initials stacked horizontally in their own sub-cells
+                sub_w = LEFT_PANEL / 4
+                # Sub-columns from left: label | approved | checked | prepared
+                canvas.setFont('Helvetica-Bold', 7)
+                for j, (lbl, val) in enumerate([('APV', band[1]), ('CHK', band[2]), ('PRE', band[3])]):
+                    cx = OUT + sub_w * (j + 1) + sub_w / 2
+                    canvas.saveState()
+                    canvas.translate(cx, y_bottom + 4*mm)
+                    canvas.rotate(90)
+                    canvas.drawString(0, 0, val or '')
+                    canvas.restoreState()
+                    if j < 2:
+                        canvas.line(OUT + sub_w * (j + 2), y_bottom,
+                                    OUT + sub_w * (j + 2), y_top)
+            else:
+                # Value column (right of label column)
+                canvas.setFont('Helvetica-Bold', 7)
+                canvas.saveState()
+                canvas.translate(OUT + LEFT_PANEL - 5*mm, y_bottom + 4*mm)
+                canvas.rotate(90)
+                canvas.drawString(0, 0, (band[1] or '')[:40])
+                canvas.restoreState()
+
+        # ── Bottom info table ──
+        # Columns: description/type | TYPE | PAGE NO. | CONTRACTOR | CLIENT
+        y0 = OUT
+        y1 = OUT + BOTTOM_BAR
+        col_widths = [
+            (page_w - 2*OUT) * 0.48,   # description
+            (page_w - 2*OUT) * 0.08,   # TYPE
+            (page_w - 2*OUT) * 0.10,   # PAGE NO.
+            (page_w - 2*OUT) * 0.17,   # CONTRACTOR
+            (page_w - 2*OUT) * 0.17,   # CLIENT
+        ]
+        x_pos = [OUT]
+        for w in col_widths:
+            x_pos.append(x_pos[-1] + w)
+        # Vertical lines
+        for x in x_pos[1:-1]:
+            canvas.line(x, y0, x, y1)
+        # Header row (top ~5mm)
+        head_h = 5*mm
+        canvas.line(OUT, y1 - head_h, page_w - OUT, y1 - head_h)
+        canvas.setFont('Helvetica-Bold', 7)
+        headers = [pqd.document_type.upper() if pqd.document_type else 'DOCUMENT',
+                   'TYPE', 'PAGE NO.', 'CONTRACTOR', 'CLIENT']
+        for i, h in enumerate(headers):
+            canvas.drawCentredString(x_pos[i] + col_widths[i] / 2, y1 - head_h + 1.5*mm, h)
+        # Second row — data
+        canvas.setFont('Helvetica', 7)
+        # Description lines
+        desc_lines = [
+            (pqd.project_description or '').upper()[:70],
+            (pqd.client_name or '').upper()[:70],
+            pqd.get_region_display_name().upper(),
+        ]
+        desc_y = y1 - head_h - 4*mm
+        for i, line in enumerate(desc_lines):
+            canvas.drawCentredString(x_pos[0] + col_widths[0] / 2,
+                                     desc_y - i * 3.5*mm, line)
+        # TYPE = DOC
+        canvas.drawCentredString(x_pos[1] + col_widths[1] / 2, y0 + BOTTOM_BAR/2 - 4*mm, 'DOC')
+        # PAGE NO. — total pages is attached on the canvas after build pass
+        total = getattr(canvas, '_leap_total_pages', None) or '?'
+        canvas.drawCentredString(x_pos[2] + col_widths[2] / 2, y0 + BOTTOM_BAR/2 - 4*mm,
+                                 f'{canvas.getPageNumber()} / {total}')
+        # Contractor logo
+        if logo_path and os.path.exists(logo_path):
+            try:
+                logo_w, logo_h = 20*mm, 10*mm
+                canvas.drawImage(logo_path,
+                                 x_pos[3] + col_widths[3] / 2 - logo_w / 2,
+                                 y0 + 2*mm,
+                                 width=logo_w, height=logo_h,
+                                 preserveAspectRatio=True, mask='auto')
+            except Exception:
+                pass
+        canvas.restoreState()
+
+    def _on_page(_canvas, _doc):
+        # Border frame is drawn in NumberedCanvas.save() so it can include
+        # the total page count. Nothing to do here.
+        pass
+
+    # Frame for the flowable content (inside the border, to the right of left panel)
+    frame = Frame(
+        content_left, content_bottom,
+        content_right - content_left, content_top - content_bottom,
+        leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0,
+        showBoundary=0,
+    )
 
     buf = io.BytesIO()
     doc = BaseDocTemplate(buf, pagesize=A4,
-                          leftMargin=20*mm, rightMargin=20*mm,
-                          topMargin=25*mm, bottomMargin=22*mm)
-    frame = Frame(20*mm, 22*mm, A4[0]-40*mm, A4[1]-47*mm, showBoundary=0)
-
-    def _on_page(canvas, _doc):
-        page_w, page_h = A4
-        canvas.saveState()
-        # Top banner
-        if logo_path and os.path.exists(logo_path):
-            try:
-                canvas.drawImage(logo_path, 20*mm, page_h - 20*mm,
-                                 width=95, height=32, preserveAspectRatio=True, mask='auto')
-            except Exception:
-                pass
-        canvas.setStrokeColor(LEAP_RED)
-        canvas.setLineWidth(2)
-        canvas.line(20*mm, page_h - 22*mm, page_w - 20*mm, page_h - 22*mm)
-        # Reference in top-right
-        canvas.setFont('Helvetica', 8)
-        canvas.setFillColor(GREY)
-        canvas.drawRightString(page_w - 20*mm, page_h - 15*mm, pqd.pqd_reference or '')
-        # Footer
-        canvas.setFont('Helvetica', 7)
-        canvas.drawString(20*mm, 12*mm,
-            'Confidential. \u00A9 Leap Networks. All rights reserved.')
-        canvas.drawRightString(page_w - 20*mm, 12*mm, f'Page {_doc.page}')
-        canvas.restoreState()
-
+                          leftMargin=0, rightMargin=0, topMargin=0, bottomMargin=0)
     doc.addPageTemplates([PageTemplate(id='main', frames=[frame], onPage=_on_page)])
 
-    # Styles — Trebuchet falls back to Helvetica if not registered
-    title_style = ParagraphStyle('Title', fontName='Helvetica-Bold', fontSize=22,
-                                 leading=26, alignment=TA_CENTER, textColor=LEAP_RED,
-                                 spaceAfter=8)
-    subtitle_style = ParagraphStyle('Subtitle', fontName='Helvetica', fontSize=14,
-                                    leading=18, alignment=TA_CENTER, textColor=colors.black,
-                                    spaceAfter=6)
-    meta_label = ParagraphStyle('MetaLabel', fontName='Helvetica-Bold', fontSize=10,
-                                textColor=GREY, alignment=TA_LEFT)
-    meta_value = ParagraphStyle('MetaValue', fontName='Helvetica', fontSize=10,
-                                textColor=colors.black, alignment=TA_LEFT)
+    # Custom canvas that stamps the total page count after all pages are laid out
+    from reportlab.pdfgen.canvas import Canvas
+    class NumberedCanvas(Canvas):
+        def __init__(self, *args, **kw):
+            Canvas.__init__(self, *args, **kw)
+            self._saved = []
+        def showPage(self):
+            self._saved.append(dict(self.__dict__))
+            self._startPage()
+        def save(self):
+            total = len(self._saved)
+            for state in self._saved:
+                self.__dict__.update(state)
+                self._leap_total_pages = total
+                _draw_border_frame(self)
+                Canvas.showPage(self)
+            Canvas.save(self)
+
+    # Styles
+    ref_style = ParagraphStyle('Ref', fontName='Helvetica-Bold', fontSize=16,
+                               leading=20, alignment=TA_CENTER, spaceAfter=10)
+    title_style = ParagraphStyle('Title', fontName='Helvetica-Bold', fontSize=13,
+                                 leading=17, alignment=TA_CENTER, spaceAfter=6)
+    for_style = ParagraphStyle('For', fontName='Helvetica', fontSize=12,
+                               leading=16, alignment=TA_CENTER, spaceAfter=6)
+    client_style = ParagraphStyle('Client', fontName='Helvetica-Bold', fontSize=13,
+                                  leading=17, alignment=TA_CENTER, spaceAfter=10)
+    doctype_style = ParagraphStyle('DocType', fontName='Helvetica-Bold', fontSize=14,
+                                   leading=18, alignment=TA_CENTER,
+                                   textColor=colors.black, spaceAfter=10,
+                                   underlineWidth=1)
     section_heading = ParagraphStyle('SectionHeading', fontName='Helvetica-Bold',
-                                     fontSize=16, leading=20, textColor=LEAP_RED,
-                                     spaceBefore=12, spaceAfter=8)
-    body_style = ParagraphStyle('Body', fontName='Helvetica', fontSize=11,
-                                leading=16, alignment=TA_JUSTIFY, spaceAfter=6)
+                                     fontSize=14, leading=18, textColor=LEAP_RED,
+                                     spaceBefore=8, spaceAfter=6)
+    body_style = ParagraphStyle('Body', fontName='Helvetica', fontSize=10,
+                                leading=14, alignment=TA_JUSTIFY, spaceAfter=5)
+    small_center = ParagraphStyle('SmallCenter', fontName='Helvetica', fontSize=10,
+                                  alignment=TA_CENTER, spaceAfter=4)
+    conf_style = ParagraphStyle('Conf', fontName='Helvetica', fontSize=9, leading=12,
+                                alignment=TA_CENTER, textColor=LEAP_RED)
 
     elements = []
+    elements.append(Spacer(1, 8*mm))
+    elements.append(Paragraph(ref, ref_style))
+    elements.append(Paragraph((pqd.project_description or pqd.title or '').upper(), title_style))
+    elements.append(Paragraph('FOR', for_style))
+    elements.append(Paragraph((pqd.client_name or '').upper(), client_style))
+    elements.append(Paragraph(f'<u>{doc_type_caps}</u>', doctype_style))
 
-    # COVER PAGE
-    elements.append(Spacer(1, 30*mm))
-    elements.append(Paragraph('PREQUALIFICATION DOCUMENT', title_style))
-    elements.append(Spacer(1, 10*mm))
-    elements.append(Paragraph(pqd.title or '', subtitle_style))
     elements.append(Spacer(1, 20*mm))
-
-    # Metadata table
-    from datetime import datetime
-    rev_date = pqd.revision_date.strftime('%d %B %Y') if pqd.revision_date else ''
-    meta_rows = [
-        [Paragraph('Reference:', meta_label), Paragraph(pqd.pqd_reference or '', meta_value)],
-        [Paragraph('Client:', meta_label), Paragraph(pqd.client_name or '', meta_value)],
-        [Paragraph('Project Description:', meta_label), Paragraph(pqd.project_description or '', meta_value)],
-        [Paragraph('Region:', meta_label), Paragraph(pqd.get_region_display_name() or '', meta_value)],
-        [Paragraph('Document Type:', meta_label), Paragraph(pqd.document_type or '', meta_value)],
-        [Paragraph('Revision:', meta_label), Paragraph(pqd.revision or '', meta_value)],
-        [Paragraph('Revision Date:', meta_label), Paragraph(rev_date, meta_value)],
-        [Paragraph('Prepared By:', meta_label), Paragraph(pqd.prepared_by_initials or '', meta_value)],
-        [Paragraph('Checked By:', meta_label), Paragraph(pqd.checked_by_initials or '—', meta_value)],
-        [Paragraph('Approved By:', meta_label), Paragraph(pqd.approved_by_initials or '—', meta_value)],
-    ]
-    meta_table = Table(meta_rows, colWidths=[50*mm, (A4[0] - 40*mm) - 50*mm])
-    meta_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ('LINEBELOW', (0, 0), (-1, -1), 0.25, colors.HexColor('#dddddd')),
-    ]))
-    elements.append(meta_table)
+    elements.append(Paragraph('Prepared for:', small_center))
     elements.append(Spacer(1, 30*mm))
-    elements.append(Paragraph('Submitted by<br/><b>Leap Networks</b>', subtitle_style))
+    elements.append(Paragraph('Prepared by:', small_center))
+    elements.append(Paragraph('<b>LEAP NETWORKS Global Ltd.</b>', small_center))
+    elements.append(Spacer(1, 6*mm))
+    elements.append(Paragraph(
+        'CONFIDENTIALITY NOTICE: The ideas, data, and information contained in this '
+        'proposal are the proprietary information of Leap Networks Global Ltd. The '
+        'recipient of this proposal agrees to treat it as confidential and shall NOT '
+        'disclose any part of it to third parties without the appropriate authorisation.',
+        conf_style,
+    ))
     elements.append(PageBreak())
 
     # Content sections
     section_number = 1
     for key, label in pqd.TEXT_SECTION_FIELDS:
         content = getattr(pqd, key, '') or ''
-        # Only include sections that have text content (uploads are appended later)
         if not content.strip():
             continue
         elements.append(Paragraph(f'{section_number}. {label}', section_heading))
-        # Strip outer whitespace, replace empty paragraphs
         html = content.replace('&nbsp;', ' ')
-        # reportlab supports a subset of HTML; feed it paragraphs directly
-        # For safety, split on </p> boundaries so each paragraph is a separate flowable
         import re
-        chunks = re.split(r'(<p[^>]*>.*?</p>|<h[1-6][^>]*>.*?</h[1-6]>|<ul[^>]*>.*?</ul>|<ol[^>]*>.*?</ol>|<table[^>]*>.*?</table>)', html, flags=re.DOTALL)
+        chunks = re.split(
+            r'(<p[^>]*>.*?</p>|<h[1-6][^>]*>.*?</h[1-6]>|<ul[^>]*>.*?</ul>|<ol[^>]*>.*?</ol>|<table[^>]*>.*?</table>)',
+            html, flags=re.DOTALL,
+        )
         for chunk in chunks:
             chunk = chunk.strip()
             if not chunk:
                 continue
-            # Strip block-level tags for reportlab and treat as paragraphs
             text = re.sub(r'<h[1-6][^>]*>', '<b>', chunk)
             text = re.sub(r'</h[1-6]>', '</b>', text)
             text = re.sub(r'<ul[^>]*>|</ul>|<ol[^>]*>|</ol>', '', text)
@@ -380,18 +530,13 @@ def _generate_pqd_body_pdf(pqd):
                 try:
                     elements.append(Paragraph(text, body_style))
                 except Exception:
-                    # Fallback: strip all tags
                     plain = re.sub(r'<[^>]+>', '', text)
                     if plain.strip():
                         elements.append(Paragraph(plain, body_style))
         elements.append(Spacer(1, 6))
         section_number += 1
 
-    if not elements or len(elements) < 5:
-        # Always have at least the cover page
-        pass
-
-    doc.build(elements)
+    doc.build(elements, canvasmaker=NumberedCanvas)
     buf.seek(0)
     return buf.getvalue()
 
