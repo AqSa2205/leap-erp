@@ -18,19 +18,53 @@ from django.conf import settings
 from django.utils.text import slugify
 
 from .docx_export import (
-    _find_template, _strip_highlights, _replace_cover_page,
+    _strip_highlights, _replace_in_paragraph_runs,
     _replace_textboxes_in_part, _replace_body_sections,
     _inject_images, WNS,
 )
 from lxml import etree
 
 
-# ── Build body DOCX using PQD data (mirrors TechnicalProposal export) ──
+def _find_pqd_template():
+    """Locate the PQD template (the new one shared by the user)."""
+    from django.contrib.staticfiles import finders
+    result = finders.find('docx_templates/pqd_template.docx')
+    if result:
+        return result
+    path = os.path.join(str(settings.BASE_DIR), 'static', 'docx_templates', 'pqd_template.docx')
+    if os.path.exists(path):
+        return path
+    return None
+
+
+def _replace_pqd_cover_page(body, pqd):
+    """Replace placeholders on the PQD cover page with the actual data."""
+    paragraphs = body.findall(f'{{{WNS}}}p')
+    cover_replacements = {
+        # Reference
+        'TO BE ADDED': pqd.pqd_reference or 'TO BE ADDED',
+        # Sample project description in the template
+        'MOBILE VR & PRACTICAL TRAINING CENTER FOR THE 8 LIFE-SAVING RULES':
+            (pqd.project_description or pqd.title or '').upper(),
+        # Sample client
+        'SAUDI ARAMCO': (pqd.client_name or '').upper(),
+        # Document type (template says "TECHNICAL PROPOSAL")
+        'TECHNICAL PROPOSAL': (pqd.document_type or 'PREQUALIFICATION').upper(),
+    }
+    # Apply longest first so partial matches don't short-circuit
+    sorted_replacements = dict(
+        sorted(cover_replacements.items(), key=lambda x: len(x[0]), reverse=True)
+    )
+    for i in range(min(25, len(paragraphs))):
+        _replace_in_paragraph_runs(paragraphs[i], sorted_replacements)
+
+
+# ── Build body DOCX using PQD template ──
 
 def _build_pqd_docx(pqd):
-    """Generate a DOCX for the PQD body by reusing the template and
-    replacing cover page + section content. Returns bytes."""
-    template_path = _find_template()
+    """Generate a DOCX body for the PQD by filling in the PQD template.
+    Returns bytes, or None if the template is missing."""
+    template_path = _find_pqd_template()
     if template_path is None:
         return None
 
@@ -123,7 +157,7 @@ def _build_pqd_docx(pqd):
                 root = etree.fromstring(data)
                 _strip_highlights(root)
                 body = root.find(f'.//{{{WNS}}}body')
-                _replace_cover_page(body, shim)
+                _replace_pqd_cover_page(body, pqd)
                 _replace_textboxes_in_part(root, textbox_replacements, exact_replacements)
                 data = etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
                 data = _replace_body_sections(data, shim, image_registry)
@@ -671,16 +705,16 @@ def _merge_pdfs(pdf_parts):
 def export_pqd_merged_pdf(pqd):
     """Generate the final merged PDF for a PQD.
 
-    Uses a pure-Python body PDF (reportlab) so the output is ALWAYS a
-    PDF, on any platform, with no MS Word / LibreOffice dependency.
-
     Pipeline:
-    1. Generate body PDF via reportlab (cover page + text sections)
-    2. For each attachment in section order:
-       - PDF: pass through
-       - Image: convert to single-page PDF via PIL
-       - Word/PPT: try docx2pdf / libreoffice; list on placeholder page if both fail
-    3. Merge with pypdf into a single final PDF
+    1. Build body DOCX from the PQD template (pqd_template.docx) with
+       the PQD's data filled in — this preserves the user-designed
+       layout (borders, tables, etc.) exactly.
+    2. Convert body DOCX to PDF via docx2pdf (MS Word) or libreoffice
+       headless. If neither is available, fall back to a reportlab-
+       drawn body PDF so the output is still a PDF.
+    3. Convert each attachment to PDF (PDFs passthrough, images via
+       PIL, Word/PPT via the same converters).
+    4. Merge all parts into a single final PDF with pypdf.
 
     Returns (pdf_bytes, filename, 'application/pdf').
     """
@@ -694,7 +728,15 @@ def export_pqd_merged_pdf(pqd):
         for att in pqd.attachments.filter(section=section).order_by('order', 'pk'):
             attachments.append(att)
 
-    body_pdf = _generate_pqd_body_pdf(pqd)
+    # 1. Build body DOCX from the PQD template
+    body_pdf = None
+    body_docx = _build_pqd_docx(pqd)
+    if body_docx:
+        body_pdf = _convert_to_pdf(body_docx, 'docx')
+
+    # 2. If DOCX-based conversion failed, fall back to reportlab-drawn body
+    if body_pdf is None:
+        body_pdf = _generate_pqd_body_pdf(pqd)
 
     pdf_parts = [body_pdf]
     skipped = []
