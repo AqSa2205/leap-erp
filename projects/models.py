@@ -243,6 +243,62 @@ class ProjectHistory(models.Model):
         return f"{self.project} - {self.old_status} -> {self.new_status}"
 
 
+class ProjectRevision(models.Model):
+    """Point-in-time snapshot of a Commercial Proposal (Project).
+
+    Created explicitly via the "Create Revision" button. The snapshot
+    JSON is immutable — it never gets overwritten, so past states can
+    always be retrieved exactly as they were at the time of the revision.
+    """
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name='revisions',
+    )
+    revision_label = models.CharField(
+        max_length=16,
+        help_text='Auto-assigned label like R00, R01, R02, ...',
+    )
+    snapshot = models.JSONField(
+        help_text='Full snapshot of the project fields at save time',
+    )
+    notes = models.TextField(
+        blank=True,
+        help_text='Optional note about why this revision was created',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='project_revisions_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        unique_together = ('project', 'revision_label')
+        verbose_name = 'Commercial Proposal Revision'
+        verbose_name_plural = 'Commercial Proposal Revisions'
+
+    def __str__(self):
+        return f'{self.project.proposal_reference} — {self.revision_label}'
+
+    @classmethod
+    def next_label_for(cls, project):
+        """Return the next R-label for a given project (R00 if none)."""
+        last = cls.objects.filter(project=project).order_by('-created_at').first()
+        if not last:
+            return 'R00'
+        label = last.revision_label or ''
+        if label.startswith('R') and label[1:].isdigit():
+            n = int(label[1:]) + 1
+            return f'R{n:02d}'
+        # Fallback: count-based
+        count = cls.objects.filter(project=project).count()
+        return f'R{count:02d}'
+
+
 def document_upload_path(instance, filename):
     """Generate upload path for documents"""
     return f'documents/{instance.document_type}/{filename}'

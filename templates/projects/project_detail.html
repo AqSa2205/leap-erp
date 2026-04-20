@@ -337,6 +337,86 @@
                 </table>
             </div>
         </div>
+
+        <!-- Revisions Card -->
+        <div class="card mt-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h6 class="mb-0">
+                    <i class="bi bi-clock-history me-2"></i>Revisions
+                    <span class="badge bg-secondary ms-1">{{ revisions|length }}</span>
+                </h6>
+                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#createRevisionModal">
+                    <i class="bi bi-plus-lg me-1"></i>New
+                </button>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Label</th>
+                                <th>Date</th>
+                                <th>By</th>
+                                <th>Notes</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for rev in revisions %}
+                            <tr>
+                                <td><strong><code>{{ rev.revision_label }}</code></strong></td>
+                                <td class="small">{{ rev.created_at|date:"d M Y H:i" }}</td>
+                                <td class="small">{% if rev.created_by %}{{ rev.created_by.get_full_name|default:rev.created_by.username }}{% else %}-{% endif %}</td>
+                                <td class="small">{{ rev.notes|default:"-"|truncatechars:50 }}</td>
+                                <td class="text-end">
+                                    <a href="{% url 'projects:revision_detail' project.pk rev.pk %}" class="btn btn-sm btn-outline-dark" title="View this revision">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="5" class="text-center text-muted py-3 small">
+                                    No revisions saved yet. Click "New" to save a snapshot.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Create Revision Modal -->
+<div class="modal fade" id="createRevisionModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{% url 'projects:revision_create' project.pk %}">
+                {% csrf_token %}
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-clock-history me-2"></i>Create New Revision</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="small text-muted">
+                        Saves a snapshot of the commercial proposal exactly as it is right now.
+                        You can view this revision later, even after the live proposal is edited.
+                    </p>
+                    <div class="mb-3">
+                        <label for="revisionNotes" class="form-label fw-bold">Notes (optional)</label>
+                        <textarea class="form-control" id="revisionNotes" name="notes" rows="3" placeholder="e.g. 'Submitted to client on 20 Apr' or 'Updated pricing per Monday call'"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-lg me-1"></i>Save Revision
+                    </button>
+                </div>
+            </form>
+        </div>
     </div>
 </div>
 {% endblock %}

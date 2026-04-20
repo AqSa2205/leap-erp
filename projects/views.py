@@ -10,7 +10,7 @@ from django.db.models import Q, Sum, Count
 from django.core.paginator import Paginator
 import openpyxl
 
-from .models import Project, Region, ProjectStatus, ProjectHistory, Document
+from .models import Project, Region, ProjectStatus, ProjectHistory, Document, ProjectRevision
 from .forms import ProjectForm, ProjectFilterForm, DocumentForm, DocumentFilterForm
 from notifications.services import notify_users
 
@@ -115,6 +115,7 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
         context['history'] = self.object.history.select_related(
             'old_status', 'new_status', 'changed_by'
         ).all()[:10]
+        context['revisions'] = self.object.revisions.select_related('created_by').all()
         return context
 
 
@@ -625,3 +626,109 @@ def add_project_document(request, pk):
         'project': project,
         'title': f'Add Document to {project.project_name}'
     })
+
+
+# ─── Commercial Proposal Revisions ───────────────────────────
+
+def _build_project_snapshot(project):
+    """Return a dict capturing the Project's state at this moment.
+
+    Foreign keys are expanded to name/code so the snapshot remains
+    readable even if related rows are later renamed or deleted.
+    """
+    def _dec(v):
+        return None if v is None else str(v)
+
+    return {
+        'snapshot_version': 1,
+        'identity': {
+            'serial_number': project.serial_number,
+            'project_name': project.project_name,
+            'proposal_reference': project.proposal_reference,
+            'client_rfq_reference': project.client_rfq_reference,
+            'po_number': project.po_number,
+        },
+        'parties': {
+            'customer': project.customer,
+            'end_user': project.end_user,
+            'owner': (project.owner.get_full_name() or project.owner.username) if project.owner else None,
+            'owner_username': project.owner.username if project.owner else None,
+            'contact_with': project.contact_with,
+        },
+        'classification': {
+            'project_stage': project.project_stage,
+            'project_stage_display': project.get_project_stage_display() if project.project_stage else None,
+            'region': {
+                'code': project.region.code if project.region else None,
+                'name': project.region.name if project.region else None,
+                'currency': project.region.currency if project.region else None,
+            },
+            'status': {
+                'name': project.status.name if project.status else None,
+                'category': project.status.category if project.status else None,
+                'color': project.status.color if project.status else None,
+            },
+        },
+        'dates': {
+            'submission_deadline': project.submission_deadline.isoformat() if project.submission_deadline else None,
+            'estimated_po_date': project.estimated_po_date.isoformat() if project.estimated_po_date else None,
+            'year': project.year,
+            'po_award_quarter': project.po_award_quarter,
+        },
+        'financials': {
+            'estimated_value': _dec(project.estimated_value),
+            'estimated_value_usd': _dec(project.estimated_value_usd),
+            'estimated_value_per_annum': _dec(project.estimated_value_per_annum),
+            'estimated_gp': _dec(project.estimated_gp),
+            'success_quotient': _dec(project.success_quotient),
+            'minimum_achievement': _dec(project.minimum_achievement),
+            'actual_sales': _dec(project.actual_sales),
+        },
+        'narrative': {
+            'remarks': project.remarks,
+            'notes': project.notes,
+            'portal_url': project.portal_url,
+        },
+        'metadata': {
+            'created_at': project.created_at.isoformat() if project.created_at else None,
+            'updated_at': project.updated_at.isoformat() if project.updated_at else None,
+            'created_by': (project.created_by.get_full_name() or project.created_by.username) if project.created_by else None,
+        },
+    }
+
+
+class ProjectRevisionCreateView(ProjectPermissionMixin, View):
+    """POST: create a new revision of the current project state."""
+
+    def test_func(self):
+        return True
+
+    def post(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        label = ProjectRevision.next_label_for(project)
+        notes = (request.POST.get('notes') or '').strip()
+        ProjectRevision.objects.create(
+            project=project,
+            revision_label=label,
+            snapshot=_build_project_snapshot(project),
+            notes=notes,
+            created_by=request.user,
+        )
+        messages.success(request, f'Revision {label} saved.')
+        return redirect('projects:detail', pk=project.pk)
+
+
+class ProjectRevisionDetailView(ProjectPermissionMixin, View):
+    """GET: render a past revision as a read-only page."""
+
+    def test_func(self):
+        return True
+
+    def get(self, request, pk, revision_pk):
+        project = get_object_or_404(Project, pk=pk)
+        revision = get_object_or_404(ProjectRevision, pk=revision_pk, project=project)
+        return render(request, 'projects/project_revision_detail.html', {
+            'project': project,
+            'revision': revision,
+            'snapshot': revision.snapshot,
+        })

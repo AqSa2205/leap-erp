@@ -14,6 +14,10 @@ urlpatterns = [
     path('import/', views.ProjectImportView.as_view(), name='import_projects'),
     path('<int:pk>/add-document/', views.add_project_document, name='add_document'),
 
+    # Revisions
+    path('<int:pk>/revisions/create/', views.ProjectRevisionCreateView.as_view(), name='revision_create'),
+    path('<int:pk>/revisions/<int:revision_pk>/', views.ProjectRevisionDetailView.as_view(), name='revision_detail'),
+
     # Document URLs
     path('documents/', views.DocumentListView.as_view(), name='document_list'),
     path('documents/upload/', views.DocumentCreateView.as_view(), name='document_create'),
