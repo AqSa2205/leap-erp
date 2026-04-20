@@ -266,7 +266,7 @@ def _generate_pqd_body_pdf(pqd):
 
     page_w, page_h = A4
     OUT = 5*mm           # outer border inset
-    LEFT_PANEL = 20*mm   # width of the left vertical strip
+    LEFT_PANEL = 24*mm   # width of the left vertical strip
     BOTTOM_BAR = 22*mm   # height of the bottom info table
     content_left = OUT + LEFT_PANEL + 2*mm
     content_right = page_w - OUT - 2*mm
@@ -310,59 +310,144 @@ def _generate_pqd_body_pdf(pqd):
         canvas.drawCentredString(page_w / 2, page_h - OUT - banner_h + 2*mm,
                                  'LEAP Networks Global Ltd.')
 
-        # ── Left vertical panel: rotated text showing ref info ──
-        # Divide the panel into horizontal bands from bottom-bar up
-        canvas.setFont('Helvetica', 6)
-        band_top = page_h - OUT - banner_h
-        band_bottom = OUT + BOTTOM_BAR
-        panel_h = band_top - band_bottom
-        # Bands (from bottom to top): REV/REPORT, DATE, DESCRIPTION, PROJECT DEP
-        bands = [
-            ('REPORT NO.', ref, 'REV', pqd.revision or 'A'),
-            ('DATE', date_slash, None, None),
-            ('DESCRIPTION', side_doc_label, None, date_slash),
-            ('PROJECT DEP', approved or 'AK', checked or 'ID', prepared or 'AJ'),
+        # ── Left vertical panel: full layout matching reference template ──
+        panel_top = page_h - OUT - banner_h
+        panel_bottom = OUT + BOTTOM_BAR
+        panel_x_left = OUT
+        panel_x_right = OUT + LEFT_PANEL
+        panel_h_total = panel_top - panel_bottom
+
+        # Section heights (top → bottom, in mm)
+        #   A: rotated info panel (PROJECT DEP / DATE / DESCRIPTION / REV)
+        #   B: LNA PO / CLIENT PO (2 narrow rows)
+        #   C: PREPARED / REVIEWED / APPROVED blocks
+        #   D: REVISION CERTIFICATE text block
+        h_A = panel_h_total * 0.38
+        h_B = 8*mm * 2  # 2 narrow rows
+        h_D = panel_h_total * 0.22
+        h_C = panel_h_total - (h_A + h_B + h_D)
+
+        y_A_bottom = panel_top - h_A
+        y_B_bottom = y_A_bottom - h_B
+        y_C_bottom = y_B_bottom - h_C
+        y_D_bottom = panel_bottom  # D sits on the bottom-bar divider
+
+        # ─── Section A: rotated info bands (top → bottom) ───
+        # PROJECT DEP (sub-split), DATE, DESCRIPTION, REV
+        bands_A = [
+            {'label': 'PROJECT DEP', 'split_initials': (prepared, checked, approved)},
+            {'label': 'DATE', 'value': date_slash},
+            {'label': 'DESCRIPTION', 'value': side_doc_label},
+            {'label': 'REV / REPORT NO.', 'value': pqd.revision or 'A'},
         ]
-        n_bands = len(bands)
-        band_h = panel_h / n_bands
-        for i, band in enumerate(bands):
-            y_bottom = band_bottom + i * band_h
-            y_top = y_bottom + band_h
-            # Draw band separator
+        n_A = len(bands_A)
+        band_h_A = h_A / n_A
+        for i, band in enumerate(bands_A):
+            y_bot = panel_top - (i + 1) * band_h_A
+            y_top = y_bot + band_h_A
             if i > 0:
-                canvas.line(OUT, y_bottom, OUT + LEFT_PANEL, y_bottom)
-            # Band label rotated 90° at the left edge
-            label_x = OUT + 4*mm
+                canvas.line(panel_x_left, y_top, panel_x_right, y_top)
+            # Rotated label on the far left (5mm column)
+            label_col_w = 5*mm
             canvas.saveState()
-            canvas.translate(label_x, y_bottom + 4*mm)
+            canvas.translate(panel_x_left + label_col_w - 1.2*mm, y_bot + 2*mm)
             canvas.rotate(90)
-            canvas.setFont('Helvetica-Bold', 6.5)
-            canvas.drawString(0, 0, band[0])
+            canvas.setFont('Helvetica-Bold', 5.5)
+            canvas.drawString(0, 0, band['label'])
             canvas.restoreState()
-            # Content values rotated
-            if band[0] == 'PROJECT DEP':
-                # Three initials stacked horizontally in their own sub-cells
-                sub_w = LEFT_PANEL / 4
-                # Sub-columns from left: label | approved | checked | prepared
-                canvas.setFont('Helvetica-Bold', 7)
-                for j, (lbl, val) in enumerate([('APV', band[1]), ('CHK', band[2]), ('PRE', band[3])]):
-                    cx = OUT + sub_w * (j + 1) + sub_w / 2
+            # Separator between label and value columns
+            canvas.line(panel_x_left + label_col_w, y_bot,
+                        panel_x_left + label_col_w, y_top)
+            # Value area
+            if 'split_initials' in band:
+                # Split remaining space into 3 sub-columns (prepared / checked / approved)
+                rem_w = LEFT_PANEL - label_col_w
+                sub_w = rem_w / 3
+                canvas.setFont('Helvetica-Bold', 6.5)
+                for j, val in enumerate(band['split_initials']):
+                    cx = panel_x_left + label_col_w + sub_w * j + sub_w / 2
+                    if j > 0:
+                        canvas.line(panel_x_left + label_col_w + sub_w * j, y_bot,
+                                    panel_x_left + label_col_w + sub_w * j, y_top)
                     canvas.saveState()
-                    canvas.translate(cx, y_bottom + 4*mm)
+                    canvas.translate(cx, y_bot + 2*mm)
                     canvas.rotate(90)
-                    canvas.drawString(0, 0, val or '')
+                    canvas.drawString(0, 0, (val or '')[:3])
                     canvas.restoreState()
-                    if j < 2:
-                        canvas.line(OUT + sub_w * (j + 2), y_bottom,
-                                    OUT + sub_w * (j + 2), y_top)
             else:
-                # Value column (right of label column)
-                canvas.setFont('Helvetica-Bold', 7)
+                # Single rotated value
+                val = band.get('value', '') or ''
+                canvas.setFont('Helvetica-Bold', 6.5)
                 canvas.saveState()
-                canvas.translate(OUT + LEFT_PANEL - 5*mm, y_bottom + 4*mm)
+                canvas.translate(panel_x_left + label_col_w + (LEFT_PANEL - label_col_w) / 2,
+                                 y_bot + 2*mm)
                 canvas.rotate(90)
-                canvas.drawString(0, 0, (band[1] or '')[:40])
+                canvas.drawString(0, 0, val[:34])
                 canvas.restoreState()
+
+        # ─── Section B: LNA PO / CLIENT PO rows ───
+        row_h_B = h_B / 2
+        # Top divider
+        canvas.line(panel_x_left, y_A_bottom, panel_x_right, y_A_bottom)
+        canvas.setFont('Helvetica-Bold', 6)
+        for i, lbl in enumerate(['LNA PO', 'CLIENT PO']):
+            y_bot = y_A_bottom - (i + 1) * row_h_B
+            y_top = y_bot + row_h_B
+            if i > 0:
+                canvas.line(panel_x_left, y_top, panel_x_right, y_top)
+            canvas.drawCentredString(panel_x_left + LEFT_PANEL / 2,
+                                     y_bot + row_h_B / 2 - 1*mm, lbl)
+
+        # ─── Section C: PREPARED / REVIEWED / APPROVED blocks ───
+        canvas.line(panel_x_left, y_B_bottom, panel_x_right, y_B_bottom)
+        blocks_C = [
+            ('PREPARED\nBY', prepared or 'AJ'),
+            ('REVIEWED\nBY', checked or 'ID'),
+            ('APPROVED\nBY', approved or 'AK'),
+        ]
+        block_h_C = h_C / len(blocks_C)
+        for i, (label, initials) in enumerate(blocks_C):
+            y_bot = y_B_bottom - (i + 1) * block_h_C
+            y_top = y_bot + block_h_C
+            if i > 0:
+                canvas.line(panel_x_left, y_top, panel_x_right, y_top)
+            cx = panel_x_left + LEFT_PANEL / 2
+            # Top: label (can be 2 lines)
+            canvas.setFont('Helvetica', 5.5)
+            lbl_lines = label.split('\n')
+            for li, line in enumerate(lbl_lines):
+                canvas.drawCentredString(cx, y_top - 2*mm - li * 2.2*mm, line)
+            # Initials (bold, larger)
+            canvas.setFont('Helvetica-Bold', 8)
+            canvas.drawCentredString(cx, y_top - 9*mm, initials[:4])
+            # DATE label + value
+            canvas.setFont('Helvetica', 5.5)
+            canvas.drawCentredString(cx, y_top - 13*mm, 'DATE')
+            canvas.setFont('Helvetica', 6)
+            canvas.drawCentredString(cx, y_top - 16*mm, date_short)
+
+        # ─── Section D: REVISION CERTIFICATE block ───
+        canvas.line(panel_x_left, y_C_bottom, panel_x_right, y_C_bottom)
+        # Heading
+        canvas.setFont('Helvetica-Bold', 5.5)
+        cx = panel_x_left + LEFT_PANEL / 2
+        canvas.drawCentredString(cx, y_C_bottom - 3*mm, 'REVISION CERTIFICATE:')
+        # Wrapped body text — reportlab Paragraph rendered into a mini-frame
+        from reportlab.lib.styles import ParagraphStyle as _PS
+        from reportlab.platypus import Paragraph as _P
+        from reportlab.lib.enums import TA_CENTER as _TC
+        cert_style = _PS('C', fontName='Helvetica', fontSize=4.5, leading=5.5,
+                         alignment=_TC, textColor=colors.black)
+        cert_text = (
+            'THIS INDICATES THAT REV: _______ OF THIS DOCUMENT IS COVERED, FOR '
+            'ALL APPROVAL / CERTIFICATION REQUIREMENT BY THE DOCUMENT COMPLETION '
+            'CERTIFICATE NO: ________ DATE ________'
+        )
+        para = _P(cert_text, cert_style)
+        avail_w = LEFT_PANEL - 2*mm
+        avail_h = y_C_bottom - y_D_bottom - 5*mm
+        w, h = para.wrap(avail_w, avail_h)
+        para.drawOn(canvas, panel_x_left + 1*mm, y_C_bottom - 4*mm - h)
 
         # ── Bottom info table ──
         # Columns: description/type | TYPE | PAGE NO. | CONTRACTOR | CLIENT
