@@ -314,14 +314,14 @@ class BoilerplateDeleteView(LoginRequiredMixin, DeleteView):
 # ─── Prequalification Document (PQD) ─────────────────────────
 
 class PQDPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
+    """PQD access is restricted to super admins only."""
+
+    def test_func(self):
+        return bool(getattr(self.request.user, 'is_super_admin_user', False))
+
     def get_queryset(self):
-        qs = PrequalificationDocument.objects.select_related('project', 'created_by').all()
-        user = self.request.user
-        if user.is_super_admin_user:
-            return qs
-        elif user.is_admin_user or user.is_manager_user:
-            return qs.filter(Q(created_by=user) | Q(project__region=user.region))
-        return qs.filter(created_by=user)
+        # Only super admins reach here (test_func already gates access).
+        return PrequalificationDocument.objects.select_related('project', 'created_by').all()
 
 
 class PQDListView(PQDPermissionMixin, ListView):
@@ -329,9 +329,6 @@ class PQDListView(PQDPermissionMixin, ListView):
     template_name = 'proposals/pqd_list.html'
     context_object_name = 'pqds'
     paginate_by = 25
-
-    def test_func(self):
-        return True
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -355,7 +352,7 @@ class PQDListView(PQDPermissionMixin, ListView):
         return context
 
 
-class PQDCreateView(LoginRequiredMixin, CreateView):
+class PQDCreateView(PQDPermissionMixin, CreateView):
     model = PrequalificationDocument
     form_class = PQDMetadataForm
     template_name = 'proposals/pqd_form.html'
@@ -379,9 +376,6 @@ class PQDDetailView(PQDPermissionMixin, DetailView):
     template_name = 'proposals/pqd_detail.html'
     context_object_name = 'pqd'
 
-    def test_func(self):
-        return True
-
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         attachments_by_section = {}
@@ -396,9 +390,6 @@ class PQDUpdateView(PQDPermissionMixin, UpdateView):
     form_class = PQDMetadataForm
     template_name = 'proposals/pqd_form.html'
     context_object_name = 'pqd'
-
-    def test_func(self):
-        return True
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
@@ -419,9 +410,6 @@ class PQDDeleteView(PQDPermissionMixin, DeleteView):
     success_url = reverse_lazy('proposals:pqd_list')
     context_object_name = 'pqd'
 
-    def test_func(self):
-        return True
-
     def form_valid(self, form):
         messages.success(self.request, 'PQD deleted.')
         return super().form_valid(form)
@@ -433,9 +421,6 @@ class PQDEditContentView(PQDPermissionMixin, DetailView):
     model = PrequalificationDocument
     template_name = 'proposals/pqd_edit_content.html'
     context_object_name = 'pqd'
-
-    def test_func(self):
-        return True
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -454,8 +439,8 @@ def ajax_save_pqd_cover_field(request, pk):
     """Update a single cover-page metadata field on a PQD."""
     pqd = get_object_or_404(PrequalificationDocument, pk=pk)
     user = request.user
-    if not (user.is_super_admin_user or user.is_admin_user) and pqd.created_by != user:
-        return JsonResponse({'error': 'Permission denied'}, status=403)
+    if not getattr(user, 'is_super_admin_user', False):
+        return JsonResponse({'error': 'Permission denied — super admin only'}, status=403)
 
     field = request.POST.get('field', '')
     value = request.POST.get('value', '').strip()
@@ -504,8 +489,8 @@ def ajax_save_pqd_section(request, pk):
     """Save a text section (TinyMCE HTML) to a PQD."""
     pqd = get_object_or_404(PrequalificationDocument, pk=pk)
     user = request.user
-    if not (user.is_super_admin_user or user.is_admin_user) and pqd.created_by != user:
-        return JsonResponse({'error': 'Permission denied'}, status=403)
+    if not getattr(user, 'is_super_admin_user', False):
+        return JsonResponse({'error': 'Permission denied — super admin only'}, status=403)
 
     field = request.POST.get('field', '')
     value = request.POST.get('value', '')
@@ -525,8 +510,8 @@ def ajax_pqd_upload_attachment(request, pk):
     """Upload a file into one of the 4 attachment sections of a PQD."""
     pqd = get_object_or_404(PrequalificationDocument, pk=pk)
     user = request.user
-    if not (user.is_super_admin_user or user.is_admin_user) and pqd.created_by != user:
-        return JsonResponse({'error': 'Permission denied'}, status=403)
+    if not getattr(user, 'is_super_admin_user', False):
+        return JsonResponse({'error': 'Permission denied — super admin only'}, status=403)
 
     section = request.POST.get('section', '')
     if section not in PrequalificationDocument.FILE_SECTION_KEYS:
@@ -574,11 +559,11 @@ def ajax_pqd_upload_attachment(request, pk):
 
 @login_required
 def pqd_export(request, pk):
-    """Generate and return the merged PQD PDF (or ZIP fallback)."""
+    """Generate and return the merged PQD PDF (super admin only)."""
     pqd = get_object_or_404(PrequalificationDocument, pk=pk)
     user = request.user
-    if not (user.is_super_admin_user or user.is_admin_user or pqd.created_by == user):
-        return JsonResponse({'error': 'Permission denied'}, status=403)
+    if not getattr(user, 'is_super_admin_user', False):
+        return JsonResponse({'error': 'Permission denied — super admin only'}, status=403)
 
     from .pqd_export import export_pqd_merged_pdf
     try:
@@ -596,12 +581,11 @@ def pqd_export(request, pk):
 @login_required
 @require_POST
 def ajax_pqd_delete_attachment(request, pk):
-    """Delete a PQD attachment."""
+    """Delete a PQD attachment (super admin only)."""
     att = get_object_or_404(PQDAttachment, pk=pk)
-    pqd = att.pqd
     user = request.user
-    if not (user.is_super_admin_user or user.is_admin_user) and pqd.created_by != user:
-        return JsonResponse({'error': 'Permission denied'}, status=403)
+    if not getattr(user, 'is_super_admin_user', False):
+        return JsonResponse({'error': 'Permission denied — super admin only'}, status=403)
 
     # Remove the file from disk too
     try:
