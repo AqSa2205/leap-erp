@@ -59,13 +59,106 @@ def _user_can_view_sheet(user, sheet):
         return True
     if user.is_admin_user or user.is_manager_user:
         return bool(sheet.project and sheet.project.region_id == user.region_id)
+    # Proposal team sees every sheet as a BOM (no pricing) regardless of region
+    if getattr(user, 'is_proposal_team_user', False):
+        return True
     return False
+
+
+def _user_team(user):
+    """Which team a user belongs to for change-log / notification purposes."""
+    if not getattr(user, 'is_authenticated', False):
+        return 'other'
+    if getattr(user, 'is_proposal_team_user', False):
+        return 'proposal'
+    if getattr(user, 'is_sales_team_user', False):
+        return 'sales'
+    return 'other'
+
+
+def _record_costing_change(sheet, actor, *, scope, scope_label, field, before, after, is_pricing=False):
+    """Persist an entry to CostingSheetChangeLog and notify the opposite team.
+
+    `actor` is the user who made the change. The opposite team (proposal
+    if the actor is sales, and vice-versa) is notified so both sides stay
+    aware of concurrent edits.
+    """
+    from .models import CostingSheetChangeLog
+    from accounts.models import User
+
+    team = _user_team(actor)
+    try:
+        CostingSheetChangeLog.objects.create(
+            sheet=sheet,
+            actor=actor if getattr(actor, 'is_authenticated', False) else None,
+            actor_team=team,
+            scope=scope,
+            scope_label=scope_label[:255] if scope_label else '',
+            field=field[:64] if field else '',
+            before=str(before or '')[:2000],
+            after=str(after or '')[:2000],
+            is_pricing_change=bool(is_pricing),
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning('Failed to record costing change: %s', e)
+        return
+
+    # Notify the opposite team. Resolve recipients via role flags.
+    try:
+        if team == 'proposal':
+            recipients = User.objects.filter(
+                role__name__in=['sales_rep', 'manager', 'admin', 'super_admin'],
+            ).filter(
+                Q(pk=sheet.created_by_id) |
+                Q(region_id=sheet.project.region_id if sheet.project_id else None) |
+                Q(role__name='super_admin')
+            ).distinct()
+            opposite = 'Sales'
+        elif team == 'sales':
+            recipients = User.objects.filter(role__name__in=['proposal_head', 'proposal_rep']).distinct()
+            opposite = 'Proposal'
+        else:
+            return
+
+        actor_name = (actor.get_full_name() or actor.username) if actor else 'Someone'
+        verb = f'edited {scope_label or scope} in "{sheet.title}"'
+        description = (
+            f'Field: {field} · {before or "—"} → {after or "—"}'
+        )
+        notify_users(
+            recipients=list(recipients),
+            verb=verb,
+            actor=actor,
+            target_url=f'/costing/{sheet.pk}/',
+            description=description,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning('Failed to notify cross-team on costing change: %s', e)
+
+
+#: Fields proposal team members CANNOT edit — pricing-related only.
+PRICING_FIELDS = frozenset({
+    'base_unit_cost', 'discount_pct', 'shipping_pct', 'customs_pct',
+    'finances_pct', 'installation_pct', 'margin',
+    'discount_rate', 'shipping_rate', 'customs_rate',
+    'finances_rate', 'installation_rate',
+    'supplier_currency', 'output_currency',
+    'include_optional_in_total',
+})
+
+
+def _field_is_pricing(field):
+    """True if the named field touches pricing/rates/currency."""
+    return field in PRICING_FIELDS
 
 
 def _user_can_edit_sheet(user, sheet):
     """Check whether user has edit access to a costing sheet.
     Edit rules: super_admin can edit anything, admin can edit within region,
     creator can edit their own. Manager-only access is read-only.
+    Proposal team can edit non-pricing fields on every sheet (gated elsewhere).
     """
     if not user.is_authenticated:
         return False
@@ -75,6 +168,8 @@ def _user_can_edit_sheet(user, sheet):
         return True
     if user.is_admin_user and sheet.project and sheet.project.region_id == user.region_id:
         return True
+    if getattr(user, 'is_proposal_team_user', False):
+        return True
     return False
 
 
@@ -82,7 +177,8 @@ class CostingPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
         queryset = CostingSheet.objects.select_related('project', 'created_by').all()
         user = self.request.user
-        if user.is_super_admin_user:
+        if user.is_super_admin_user or getattr(user, 'is_proposal_team_user', False):
+            # Super admins and proposal team see every sheet
             return queryset
         elif user.is_admin_user or user.is_manager_user:
             return queryset.filter(
@@ -277,6 +373,9 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
 
         # PDF revisions (saved snapshots from previous Export PDF clicks)
         context['pdf_revisions'] = sheet.pdf_revisions.select_related('created_by').all()
+
+        # Recent change log (for cross-team visibility)
+        context['change_log'] = sheet.change_log.select_related('actor').all()[:20]
 
         return context
 
@@ -643,6 +742,10 @@ def ajax_update_sheet_params(request, pk):
     if field not in allowed:
         return JsonResponse({'error': 'Invalid field'}, status=400)
 
+    # Proposal team cannot edit pricing/rate fields.
+    if getattr(request.user, 'is_proposal_team_user', False) and _field_is_pricing(field):
+        return JsonResponse({'error': 'Pricing fields are read-only for proposal team — only the sales team can change these.'}, status=403)
+
     # Validate the value before opening a write transaction
     if field == 'output_currency':
         new_value = value
@@ -661,11 +764,20 @@ def ajax_update_sheet_params(request, pk):
         else:
             new_value = max(Decimal('0'), min(new_value, Decimal('100')))
 
+    previous = getattr(sheet, field, '')
     # Single atomic UPDATE WHERE pk=X SET field=value. This only writes
     # the one field, so concurrent edits to other fields on the same sheet
     # cannot clobber each other (the previous bug came from sheet.save()
     # writing the entire in-memory snapshot).
     CostingSheet.objects.filter(pk=sheet.pk).update(**{field: new_value})
+    if str(previous) != str(new_value):
+        _record_costing_change(
+            sheet, request.user,
+            scope='sheet',
+            scope_label=sheet.title or f'Sheet {sheet.pk}',
+            field=field, before=previous, after=new_value,
+            is_pricing=_field_is_pricing(field),
+        )
     return JsonResponse({'ok': True})
 
 
@@ -695,6 +807,8 @@ def ajax_update_item_margin(request, pk):
     item = get_object_or_404(CostingLineItem, pk=pk)
     if not _user_can_edit_sheet(request.user, item.section.costing_sheet):
         return JsonResponse({'error': 'Permission denied'}, status=403)
+    if getattr(request.user, 'is_proposal_team_user', False):
+        return JsonResponse({'error': 'Pricing fields are read-only for proposal team.'}, status=403)
     value = request.POST.get('margin', '').strip()
     if not value:
         new_margin = None  # Clear to use sheet margin
@@ -705,9 +819,17 @@ def ajax_update_item_margin(request, pk):
             return JsonResponse({'error': 'Invalid number'}, status=400)
         # Clamp to [0, 99] to keep the selling-price formula stable.
         new_margin = max(Decimal('0'), min(new_margin, Decimal('99')))
+    previous = item.margin
     # Atomic single-field UPDATE — no read-modify-write race against
     # other concurrent edits to different fields on the same line item.
     CostingLineItem.objects.filter(pk=pk).update(margin=new_margin)
+    if str(previous) != str(new_margin):
+        _record_costing_change(
+            item.section.costing_sheet, request.user,
+            scope='item',
+            scope_label=f'{item.item_number or "item"} — {item.description[:60] if item.description else ""}',
+            field='margin', before=previous, after=new_margin, is_pricing=True,
+        )
     return JsonResponse({'ok': True})
 
 
@@ -728,6 +850,10 @@ def ajax_update_item_field(request, pk):
     allowed_fields = numeric_fields + text_fields + ('supplier_currency', 'quantity')
     if field not in allowed_fields:
         return JsonResponse({'error': 'Invalid field'}, status=400)
+
+    # Proposal team cannot edit pricing/rate fields.
+    if getattr(request.user, 'is_proposal_team_user', False) and _field_is_pricing(field):
+        return JsonResponse({'error': 'Pricing fields are read-only for proposal team — only the sales team can change these.'}, status=403)
 
     # Validate / coerce the value before opening the transaction.
     if field == 'supplier_currency':
@@ -754,12 +880,27 @@ def ajax_update_item_field(request, pk):
         elif field in ('discount_pct', 'shipping_pct', 'customs_pct', 'finances_pct', 'installation_pct'):
             new_value = max(Decimal('0'), min(new_value, Decimal('100')))
 
+    # Capture previous value for the change log.
+    previous_value = getattr(item, field, '')
+
     # Atomic single-field UPDATE — only writes the one field, so it cannot
     # clobber concurrent edits to other fields on the same line item.
     # Re-fetch after the update so computed properties reflect the fresh
     # committed state.
     CostingLineItem.objects.filter(pk=pk).update(**{field: new_value})
     item = CostingLineItem.objects.select_related('section__costing_sheet').get(pk=pk)
+
+    # Log + cross-team notify when the value actually changed
+    if str(previous_value) != str(new_value):
+        _record_costing_change(
+            sheet, request.user,
+            scope='item',
+            scope_label=f'{item.item_number or "item"} — {item.description[:60] if item.description else ""}',
+            field=field,
+            before=previous_value,
+            after=new_value,
+            is_pricing=_field_is_pricing(field),
+        )
 
     # Recompute values with caches and return them
     rates_dict = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
@@ -979,6 +1120,8 @@ def ajax_update_section_rate(request, pk):
     section = get_object_or_404(CostingSection, pk=pk)
     if not _user_can_edit_sheet(request.user, section.costing_sheet):
         return JsonResponse({'error': 'Permission denied'}, status=403)
+    if getattr(request.user, 'is_proposal_team_user', False):
+        return JsonResponse({'error': 'Section rate overrides are read-only for proposal team.'}, status=403)
 
     field = request.POST.get('field', '').strip()
     value = request.POST.get('value', '').strip()
@@ -999,7 +1142,15 @@ def ajax_update_section_rate(request, pk):
         else:
             new_value = max(Decimal('0'), min(new_value, Decimal('100')))
 
+    previous = getattr(section, field, None)
     CostingSection.objects.filter(pk=pk).update(**{field: new_value})
+    if str(previous) != str(new_value):
+        _record_costing_change(
+            section.costing_sheet, request.user,
+            scope='section',
+            scope_label=f'Section {section.section_number} — {section.title}',
+            field=field, before=previous, after=new_value, is_pricing=True,
+        )
     return JsonResponse({'ok': True})
 
 
@@ -1257,6 +1408,9 @@ def costing_export_excel(request, pk):
     if not _user_can_view_sheet(request.user, sheet):
         messages.error(request, 'You do not have permission to export this costing sheet.')
         return redirect('costing:list')
+    if getattr(request.user, 'is_proposal_team_user', False):
+        messages.error(request, 'Excel export includes pricing — only the sales team can download it.')
+        return redirect('costing:detail', pk=pk)
     sections = sheet.sections.prefetch_related('line_items').all()
     rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
 
@@ -1481,6 +1635,9 @@ def costing_export_pdf(request, pk):
     if not _user_can_view_sheet(request.user, sheet):
         messages.error(request, 'You do not have permission to export this costing sheet.')
         return redirect('costing:list')
+    if getattr(request.user, 'is_proposal_team_user', False):
+        messages.error(request, 'PDF export includes pricing — only the sales team can download it.')
+        return redirect('costing:detail', pk=pk)
     sections = list(sheet.sections.prefetch_related('line_items').all())
 
     # Inject caches into all line items to avoid N+1 queries

@@ -2,7 +2,7 @@
 {% load humanize costing_tags %}
 
 {% block title %}{{ sheet.title }} - BOM{% endblock %}
-{% block page_title %}Bill of Material - Commercial{% endblock %}
+{% block page_title %}{% if user.is_proposal_team_user %}Bill of Material{% else %}Bill of Material - Commercial{% endif %}{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -22,6 +22,13 @@
     .grand-total-row { background: var(--leap-red); color: #fff; font-weight: 700; }
     .cost-col { background-color: #d0d0d0 !important; }
     .cost-hdr { background-color: #495057 !important; color: #fff !important; }
+    {% if user.is_proposal_team_user %}
+    /* BOM view for proposal team — all pricing columns hidden */
+    .cost-col, .cost-hdr { display: none !important; }
+    .section-rates-row { display: none !important; }
+    .toggle-section-rates { display: none !important; }
+    .bom-pricing-only { display: none !important; }
+    {% endif %}
     .rate-box { font-size: 0.78rem; }
     .rate-box td { padding: 1px 8px; }
     .inline-edit {
@@ -91,7 +98,7 @@
                     {% endif %}
                 </table>
             </div>
-            <div class="col-lg-5 col-md-4 text-center">
+            <div class="col-lg-5 col-md-4 text-center bom-pricing-only">
                 <div class="d-flex justify-content-center gap-2 flex-wrap align-items-end">
                     <div>
                         <input type="number" class="inline-edit param-edit" data-field="margin"
@@ -130,7 +137,7 @@
                     </div>
                 </div>
             </div>
-            <div class="col-lg-2 col-md-3 d-flex flex-column align-items-center">
+            <div class="col-lg-2 col-md-3 d-flex flex-column align-items-center bom-pricing-only">
                 <div class="mb-1" style="font-size:0.72rem; font-weight:700; color:#212529;">Exchange Rates (ref. USD)</div>
                 <table class="rate-box table table-sm table-bordered border-dark mb-0" style="font-size:0.72rem; width:170px;">
                     <tbody>
@@ -145,7 +152,7 @@
                     </tbody>
                 </table>
             </div>
-            <div class="col-lg-1 col-md-2 text-center">
+            <div class="col-lg-1 col-md-2 text-center bom-pricing-only">
                 <div class="param-label mb-1">Output Currency</div>
                 <select class="form-select form-select-sm" id="outputCurrency" style="font-size:0.8rem; font-weight:700;">
                     {% for rate in exchange_rates %}
@@ -162,8 +169,8 @@
                 <div class="btn-group-vertical btn-group-sm">
                     <a href="{% url 'costing:edit' sheet.pk %}" class="btn btn-outline-secondary"><i class="bi bi-pencil"></i> Edit</a>
                     <a href="{% url 'costing:import_excel' sheet.pk %}" class="btn btn-outline-success"><i class="bi bi-upload"></i> Import Excel</a>
-                    <a href="{% url 'costing:export' sheet.pk %}" class="btn btn-outline-primary"><i class="bi bi-file-earmark-excel"></i> Excel</a>
-                    <a href="{% url 'costing:export_pdf' sheet.pk %}" target="_blank" class="btn btn-outline-danger"><i class="bi bi-file-earmark-pdf"></i> PDF</a>
+                    <a href="{% url 'costing:export' sheet.pk %}" class="btn btn-outline-primary bom-pricing-only"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+                    <a href="{% url 'costing:export_pdf' sheet.pk %}" target="_blank" class="btn btn-outline-danger bom-pricing-only"><i class="bi bi-file-earmark-pdf"></i> PDF</a>
                     <a href="{% url 'costing:delete' sheet.pk %}" class="btn btn-outline-secondary"><i class="bi bi-trash"></i> Delete</a>
                 </div>
             </div>
@@ -172,7 +179,7 @@
 </div>
 
 <!-- Totals Summary Strip -->
-<div class="card mb-3">
+<div class="card mb-3 bom-pricing-only">
     <div class="card-body py-2">
         <div class="d-flex justify-content-center gap-3 flex-wrap">
             <div class="text-center">
@@ -409,7 +416,7 @@
 </div>
 
 <!-- Scope of Work (A.2) -->
-<div class="card mt-3">
+<div class="card mt-3 bom-pricing-only">
     <div class="card-header d-flex justify-content-between align-items-center" style="background:#F1DCDB;">
         <span><i class="bi bi-hammer me-2"></i> <strong>A.2 — Scope of Work</strong></span>
         <button class="btn btn-sm btn-dark" data-bs-toggle="modal" data-bs-target="#addSowModal">
@@ -528,8 +535,66 @@
     </div>
 </div>
 
-<!-- Revisions -->
+<!-- Recent Changes (cross-team visibility) -->
 <div class="card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>
+            <i class="bi bi-activity me-2"></i> Recent Changes
+            <span class="badge bg-secondary ms-1">{{ change_log|length }}</span>
+        </span>
+        <small class="text-muted">Edits from both teams appear here with timestamps.</small>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>When</th>
+                        <th>By</th>
+                        <th>Team</th>
+                        <th>Scope</th>
+                        <th>Field</th>
+                        <th>Change</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in change_log %}
+                    <tr>
+                        <td class="small">{{ log.created_at|date:"d M Y H:i" }}</td>
+                        <td class="small">{% if log.actor %}{{ log.actor.get_full_name|default:log.actor.username }}{% else %}—{% endif %}</td>
+                        <td class="small">
+                            {% if log.actor_team == 'proposal' %}
+                            <span class="badge bg-info">Proposal</span>
+                            {% elif log.actor_team == 'sales' %}
+                            <span class="badge bg-primary">Sales</span>
+                            {% else %}
+                            <span class="badge bg-secondary">Other</span>
+                            {% endif %}
+                        </td>
+                        <td class="small">{{ log.scope_label|default:log.get_scope_display }}</td>
+                        <td class="small"><code>{{ log.field }}</code></td>
+                        <td class="small">
+                            <span class="text-muted">{{ log.before|default:"—"|truncatechars:40 }}</span>
+                            <i class="bi bi-arrow-right mx-1"></i>
+                            <strong>{{ log.after|default:"—"|truncatechars:40 }}</strong>
+                            {% if log.is_pricing_change %}<span class="badge bg-warning text-dark ms-1" style="font-size:0.6rem;">pricing</span>{% endif %}
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="6" class="text-center text-muted py-3 small">
+                            No changes recorded yet.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Revisions -->
+<div class="card mt-3 bom-pricing-only">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>
             <i class="bi bi-clock-history me-2"></i> Revisions
@@ -615,7 +680,7 @@
 </div>
 
 <!-- PDF Terms & Conditions Selection -->
-<div class="card mt-3">
+<div class="card mt-3 bom-pricing-only">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-file-text me-2"></i> PDF Terms & Conditions</span>
         <a href="{% url 'costing:terms_templates' %}" class="btn btn-sm btn-outline-secondary">

@@ -665,3 +665,55 @@ class CostingSheetRevision(models.Model):
         if label.startswith('R') and label[1:].isdigit():
             return f'R{int(label[1:]) + 1:02d}'
         return f'R{cls.objects.filter(sheet=sheet).count():02d}'
+
+
+class CostingSheetChangeLog(models.Model):
+    """Audit trail of edits made to a costing sheet — used to keep the
+    proposal team and the sales team in sync when they work on the same
+    sheet concurrently. Each entry records who made the change, what
+    changed (field name), the before/after values, and which team the
+    actor belongs to so the opposite team can be notified automatically.
+    """
+
+    TEAM_CHOICES = [
+        ('proposal', 'Proposal'),
+        ('sales',    'Sales'),
+        ('other',    'Other'),
+    ]
+
+    SCOPE_CHOICES = [
+        ('sheet',   'Sheet'),
+        ('section', 'Section'),
+        ('item',    'Line item'),
+    ]
+
+    sheet = models.ForeignKey(
+        CostingSheet,
+        on_delete=models.CASCADE,
+        related_name='change_log',
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='costing_changes',
+    )
+    actor_team = models.CharField(max_length=16, choices=TEAM_CHOICES, default='other')
+    scope = models.CharField(max_length=16, choices=SCOPE_CHOICES, default='sheet')
+    scope_label = models.CharField(
+        max_length=255, blank=True,
+        help_text='Short human description of the thing changed (e.g. "Section 2.1 — Camera")',
+    )
+    field = models.CharField(max_length=64, blank=True)
+    before = models.TextField(blank=True)
+    after = models.TextField(blank=True)
+    is_pricing_change = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        who = self.actor.username if self.actor else '?'
+        return f'{who} · {self.scope_label or self.scope} · {self.field}'
