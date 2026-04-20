@@ -594,3 +594,50 @@ class CostingLineItem(models.Model):
     @property
     def display_installation_pct(self):
         return self._display_rate('installation_pct', 'installation_rate', 'installation_rate')
+
+
+class CostingSheetRevision(models.Model):
+    """A saved PDF export of a costing sheet at a point in time.
+
+    A new revision is auto-created every time the user exports the sheet
+    as PDF, so past versions are preserved. Users can download or delete
+    specific revisions from the detail page.
+    """
+    sheet = models.ForeignKey(
+        CostingSheet,
+        on_delete=models.CASCADE,
+        related_name='pdf_revisions',
+    )
+    revision_label = models.CharField(
+        max_length=16,
+        help_text='Auto-assigned label like R00, R01, R02, ...',
+    )
+    file = models.FileField(upload_to='costing/revisions/')
+    original_filename = models.CharField(max_length=255, blank=True)
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='costing_pdf_revisions_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        unique_together = ('sheet', 'revision_label')
+
+    def __str__(self):
+        return f'{self.sheet.title} — {self.revision_label}'
+
+    @classmethod
+    def next_label_for(cls, sheet):
+        """Return the next R-label (R00 if none yet)."""
+        last = cls.objects.filter(sheet=sheet).order_by('-created_at').first()
+        if not last:
+            return 'R00'
+        label = last.revision_label or ''
+        if label.startswith('R') and label[1:].isdigit():
+            return f'R{int(label[1:]) + 1:02d}'
+        return f'R{cls.objects.filter(sheet=sheet).count():02d}'

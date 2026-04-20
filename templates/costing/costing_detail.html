@@ -528,6 +528,61 @@
     </div>
 </div>
 
+<!-- PDF Revisions -->
+<div class="card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>
+            <i class="bi bi-clock-history me-2"></i> PDF Revisions
+            <span class="badge bg-secondary ms-1">{{ pdf_revisions|length }}</span>
+        </span>
+        <small class="text-muted">A copy is saved automatically each time you export a PDF.</small>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width: 80px;">Label</th>
+                        <th>Generated</th>
+                        <th>By</th>
+                        <th>Filename</th>
+                        <th class="text-end" style="width: 160px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for rev in pdf_revisions %}
+                    <tr>
+                        <td><strong><code>{{ rev.revision_label }}</code></strong></td>
+                        <td class="small">{{ rev.created_at|date:"d M Y H:i" }}</td>
+                        <td class="small">{% if rev.created_by %}{{ rev.created_by.get_full_name|default:rev.created_by.username }}{% else %}-{% endif %}</td>
+                        <td class="small text-truncate" style="max-width: 260px;" title="{{ rev.original_filename }}">
+                            {{ rev.original_filename|default:"file.pdf" }}
+                        </td>
+                        <td class="text-end">
+                            <a href="{{ rev.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary" title="Download">
+                                <i class="bi bi-download"></i>
+                            </a>
+                            <form method="post" action="{% url 'costing:delete_revision' rev.pk %}" class="d-inline" onsubmit="return confirm('Delete revision {{ rev.revision_label }}? This cannot be undone.');">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="5" class="text-center text-muted py-3 small">
+                            No PDF revisions yet. Click "PDF" on the header to export — the first revision will appear here.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
 <!-- PDF Terms & Conditions Selection -->
 <div class="card mt-3">
     <div class="card-header d-flex justify-content-between align-items-center">

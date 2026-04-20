@@ -275,6 +275,9 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
         # Scope of Work items (A.2 section)
         context['sow_items'] = sheet.scope_of_work_items.all()
 
+        # PDF revisions (saved snapshots from previous Export PDF clicks)
+        context['pdf_revisions'] = sheet.pdf_revisions.select_related('created_by').all()
+
         return context
 
 
@@ -1059,6 +1062,25 @@ def ajax_delete_sow_item(request, pk):
     return JsonResponse({'ok': True})
 
 
+@require_POST
+def delete_costing_revision(request, pk):
+    """Delete a saved costing-sheet PDF revision."""
+    from .models import CostingSheetRevision
+    rev = get_object_or_404(CostingSheetRevision, pk=pk)
+    sheet = rev.sheet
+    if not _user_can_edit_sheet(request.user, sheet):
+        messages.error(request, 'Permission denied.')
+        return redirect('costing:detail', pk=sheet.pk)
+    label = rev.revision_label
+    try:
+        rev.file.delete(save=False)
+    except Exception:
+        pass
+    rev.delete()
+    messages.success(request, f'Revision {label} deleted.')
+    return redirect('costing:detail', pk=sheet.pk)
+
+
 # ─── Excel Export ─────────────────────────────────────────────
 
 @login_required
@@ -1295,10 +1317,11 @@ def costing_export_pdf(request, pk):
             item.set_exchange_rates_cache(rates_dict)
             item.set_sheet_cache(sheet)
 
-    # Create response
-    response = HttpResponse(content_type='application/pdf')
+    # Build the PDF into a BytesIO so we can both save a revision copy and
+    # return it to the user.
+    import io as _io
+    pdf_buffer = _io.BytesIO()
     filename = _safe_filename(sheet.title, suffix='Commercial_Offer', extension='pdf')
-    response['Content-Disposition'] = f'inline; filename="{filename}"'
 
     import os
     from django.contrib.staticfiles.finders import find as find_static
@@ -1409,7 +1432,7 @@ def costing_export_pdf(request, pk):
     #  - "summary"  = page 1 (topMargin=25mm, no project details header)
     #  - "bom"      = pages 2+ (topMargin=42mm, project details header drawn by canvas)
     doc = BaseDocTemplate(
-        response,
+        pdf_buffer,
         pagesize=A4,
         rightMargin=15*mm,
         leftMargin=15*mm,
@@ -1997,6 +2020,28 @@ def costing_export_pdf(request, pk):
     # NumberedCanvas handles the drawing after all pages are rendered
     # so it knows the total page count for "Page X of Y".
     doc.build(elements, canvasmaker=NumberedCanvas)
+
+    pdf_bytes = pdf_buffer.getvalue()
+
+    # Save this export as a revision so users keep a history of generated PDFs
+    try:
+        from django.core.files.base import ContentFile
+        from .models import CostingSheetRevision
+        rev_label = CostingSheetRevision.next_label_for(sheet)
+        rev = CostingSheetRevision(
+            sheet=sheet,
+            revision_label=rev_label,
+            original_filename=filename,
+            created_by=request.user if request.user.is_authenticated else None,
+        )
+        rev.file.save(f'{sheet.pk}_{rev_label}_{filename}', ContentFile(pdf_bytes), save=True)
+    except Exception as _e:
+        # Don't block the download if saving the revision fails — just log.
+        import logging
+        logging.getLogger(__name__).warning('Failed to save costing PDF revision: %s', _e)
+
+    response = HttpResponse(pdf_bytes, content_type='application/pdf')
+    response['Content-Disposition'] = f'inline; filename="{filename}"'
     return response
 
 
