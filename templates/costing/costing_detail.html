@@ -83,6 +83,102 @@
 {% endblock %}
 
 {% block content %}
+<!-- Workflow Stage banner -->
+{% with stage=sheet.workflow_stage %}
+<div class="card mb-3 border-0 shadow-sm" style="background: {% if stage == 'bom_in_progress' %}#fff3cd{% elif stage == 'ready_for_costing' %}#cfe2ff{% elif stage == 'costing_in_progress' %}#d1e7dd{% else %}#e2e3e5{% endif %};">
+    <div class="card-body py-2">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <div>
+                <strong>Workflow:</strong>
+                {% if stage == 'bom_in_progress' %}
+                <span class="badge bg-warning text-dark"><i class="bi bi-pencil-square me-1"></i>BOM in progress · proposal team</span>
+                {% elif stage == 'ready_for_costing' %}
+                <span class="badge bg-primary"><i class="bi bi-arrow-right-square me-1"></i>Ready for costing · handed over to sales</span>
+                {% if sheet.handed_over_at %}<small class="text-muted ms-2">Handed over {{ sheet.handed_over_at|date:"d M Y H:i" }}{% if sheet.handed_over_by %} by {{ sheet.handed_over_by.get_full_name|default:sheet.handed_over_by.username }}{% endif %}</small>{% endif %}
+                {% elif stage == 'costing_in_progress' %}
+                <span class="badge bg-success"><i class="bi bi-cash-coin me-1"></i>Costing in progress · sales team</span>
+                {% if sheet.costing_started_at %}<small class="text-muted ms-2">Started {{ sheet.costing_started_at|date:"d M Y H:i" }}{% if sheet.costing_started_by %} by {{ sheet.costing_started_by.get_full_name|default:sheet.costing_started_by.username }}{% endif %}</small>{% endif %}
+                {% elif stage == 'finalized' %}
+                <span class="badge bg-dark"><i class="bi bi-check2-circle me-1"></i>Finalized</span>
+                {% if sheet.finalized_at %}<small class="text-muted ms-2">Finalized {{ sheet.finalized_at|date:"d M Y H:i" }}{% if sheet.finalized_by %} by {{ sheet.finalized_by.get_full_name|default:sheet.finalized_by.username }}{% endif %}</small>{% endif %}
+                {% endif %}
+            </div>
+            <div class="d-flex gap-2">
+                {# Hand over: available when sheet is still in BOM phase. Both teams can click; intent is that proposals does. #}
+                {% if stage == 'bom_in_progress' %}
+                <button type="button" class="btn btn-sm btn-warning" data-bs-toggle="modal" data-bs-target="#handoverModal">
+                    <i class="bi bi-send-check me-1"></i>Hand over to Sales
+                </button>
+                {% endif %}
+
+                {# Start costing: sales only, when handed over #}
+                {% if stage == 'ready_for_costing' and user.is_sales_team_user %}
+                <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="start_costing">
+                    <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-play-fill me-1"></i>Start costing</button>
+                </form>
+                {% endif %}
+
+                {# Finalize: sales only #}
+                {% if stage == 'costing_in_progress' and user.is_sales_team_user %}
+                <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="finalize">
+                    <button type="submit" class="btn btn-sm btn-success" onclick="return confirm('Mark this sheet as finalized?');"><i class="bi bi-check2 me-1"></i>Finalize</button>
+                </form>
+                {% endif %}
+
+                {# Reopen: sales can rewind #}
+                {% if stage != 'bom_in_progress' and user.is_sales_team_user %}
+                <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="reopen">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary" onclick="return confirm('Re-open this sheet back to BOM in progress?');"><i class="bi bi-arrow-counterclockwise"></i></button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        {% if sheet.handover_note %}
+        <div class="mt-2 small">
+            <i class="bi bi-sticky me-1"></i><strong>Handover note:</strong> {{ sheet.handover_note }}
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Handover modal -->
+{% if stage == 'bom_in_progress' %}
+<div class="modal fade" id="handoverModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="handover">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-send-check me-2"></i>Hand BOM over to Sales Team</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="small text-muted">
+                        This notifies the sales team that the BOM is ready to price. Both teams can still make changes afterwards — every edit is logged and the opposite team is auto-notified.
+                    </p>
+                    <div class="mb-3">
+                        <label for="handoverNote" class="form-label fw-bold">Handover Note (optional)</label>
+                        <textarea class="form-control" id="handoverNote" name="note" rows="3" placeholder="e.g. 'Client's floor plan confirmed, please price by Friday.'"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-warning"><i class="bi bi-send-check me-1"></i>Hand Over</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endwith %}
+
 <!-- Header Card -->
 <div class="card mb-3">
     <div class="card-body py-2">

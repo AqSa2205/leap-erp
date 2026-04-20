@@ -10,6 +10,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.template.loader import render_to_string
 from django.utils.text import slugify
+from django.utils import timezone
 from decimal import Decimal, InvalidOperation
 import logging
 
@@ -216,6 +217,7 @@ class CostingListView(CostingPermissionMixin, ListView):
         queryset = super().get_queryset()
         search = self.request.GET.get('search')
         status = self.request.GET.get('status')
+        stage = self.request.GET.get('stage')
         if search:
             queryset = queryset.filter(
                 Q(title__icontains=search) |
@@ -224,12 +226,16 @@ class CostingListView(CostingPermissionMixin, ListView):
             )
         if status:
             queryset = queryset.filter(status=status)
+        if stage:
+            queryset = queryset.filter(workflow_stage=stage)
         return queryset.order_by('-updated_at')
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['filter_form'] = CostingFilterForm(self.request.GET)
         context['total_count'] = self.get_queryset().count()
+        context['workflow_stage_choices'] = CostingSheet.WORKFLOW_STAGE_CHOICES
+        context['selected_stage'] = self.request.GET.get('stage', '')
         return context
 
 
@@ -1211,6 +1217,134 @@ def ajax_delete_sow_item(request, pk):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     item.delete()
     return JsonResponse({'ok': True})
+
+
+@login_required
+@require_POST
+def costing_workflow_transition(request, pk):
+    """Advance the workflow stage of a costing sheet.
+
+    Transitions (button-driven, not automatic):
+    - bom_in_progress → ready_for_costing  (proposal hands over to sales)
+    - ready_for_costing → costing_in_progress  (sales starts pricing)
+    - costing_in_progress → finalized  (sales finalises)
+    - any → bom_in_progress  (super-admin only, rewind)
+    """
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+    user = request.user
+    if not _user_can_view_sheet(user, sheet):
+        messages.error(request, 'Permission denied.')
+        return redirect('costing:list')
+
+    action = request.POST.get('action', '').strip()
+    note = (request.POST.get('note') or '').strip()
+    now = timezone.now()
+
+    transitions = {
+        'handover': {
+            'from': {'bom_in_progress'},
+            'to':   'ready_for_costing',
+            'allowed_teams': {'proposal', 'sales'},  # anyone on either team
+            'sets':  lambda: {
+                'workflow_stage': 'ready_for_costing',
+                'handed_over_at': now,
+                'handed_over_by': user,
+                'handover_note':  note or sheet.handover_note,
+            },
+            'verb': 'handed the BOM over to the sales team',
+            'notify_team': 'sales',
+        },
+        'start_costing': {
+            'from': {'ready_for_costing'},
+            'to':   'costing_in_progress',
+            'allowed_teams': {'sales'},
+            'sets':  lambda: {
+                'workflow_stage': 'costing_in_progress',
+                'costing_started_at': now,
+                'costing_started_by': user,
+            },
+            'verb': 'started costing on the sheet',
+            'notify_team': 'proposal',
+        },
+        'finalize': {
+            'from': {'costing_in_progress', 'ready_for_costing'},
+            'to':   'finalized',
+            'allowed_teams': {'sales'},
+            'sets':  lambda: {
+                'workflow_stage': 'finalized',
+                'finalized_at': now,
+                'finalized_by': user,
+            },
+            'verb': 'finalized the sheet',
+            'notify_team': 'proposal',
+        },
+        'reopen': {
+            'from': {'finalized', 'costing_in_progress', 'ready_for_costing'},
+            'to':   'bom_in_progress',
+            'allowed_teams': {'sales'},  # only sales can rewind for now
+            'sets':  lambda: {'workflow_stage': 'bom_in_progress'},
+            'verb': 're-opened the sheet (back to BOM)',
+            'notify_team': 'proposal',
+        },
+    }
+
+    tx = transitions.get(action)
+    if not tx:
+        messages.error(request, f'Unknown action: {action}')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    # Actor-team check
+    team = _user_team(user)
+    if team not in tx['allowed_teams'] and not user.is_super_admin_user:
+        messages.error(request, 'Your role is not allowed to perform this action.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    # Stage pre-condition check
+    if sheet.workflow_stage not in tx['from']:
+        messages.error(request, f'This action requires the sheet to be in one of: {", ".join(tx["from"])}. Current: {sheet.workflow_stage}.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    # Apply
+    updates = tx['sets']()
+    CostingSheet.objects.filter(pk=sheet.pk).update(**updates)
+    sheet.refresh_from_db()
+
+    # Log to the change log
+    _record_costing_change(
+        sheet, user,
+        scope='sheet',
+        scope_label=sheet.title or f'Sheet {sheet.pk}',
+        field='workflow_stage',
+        before='',
+        after=sheet.get_workflow_stage_display(),
+        is_pricing=False,
+    )
+
+    # Notify the opposite team
+    try:
+        from accounts.models import User as _U
+        if tx['notify_team'] == 'proposal':
+            recipients = _U.objects.filter(role__name__in=['proposal_head', 'proposal_rep'])
+        else:
+            recipients = _U.objects.filter(role__name__in=['sales_rep', 'manager', 'admin', 'super_admin']).filter(
+                Q(pk=sheet.created_by_id) |
+                Q(region_id=sheet.project.region_id if sheet.project_id else None) |
+                Q(role__name='super_admin')
+            ).distinct()
+
+        notify_users(
+            recipients=list(recipients),
+            verb=f'{tx["verb"]}: "{sheet.title}"',
+            actor=user,
+            target_url=f'/costing/{sheet.pk}/',
+            description=note or f'Stage is now: {sheet.get_workflow_stage_display()}',
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning('Failed to notify workflow transition: %s', e)
+
+    messages.success(request, f'Sheet is now: {sheet.get_workflow_stage_display()}')
+    return redirect('costing:detail', pk=sheet.pk)
 
 
 @require_POST

@@ -47,6 +47,17 @@ class CostingSheet(models.Model):
         ('final', 'Final'),
     ]
 
+    # Handover workflow — tracks where the sheet is in the
+    # proposal → sales pipeline. Still editable by both teams at every
+    # stage (per existing policy); the stage just gives visibility and
+    # drives the filters/notifications.
+    WORKFLOW_STAGE_CHOICES = [
+        ('bom_in_progress',     'BOM — in progress by Proposal'),
+        ('ready_for_costing',   'Ready for costing (handed over to Sales)'),
+        ('costing_in_progress', 'Costing — in progress by Sales'),
+        ('finalized',           'Finalized'),
+    ]
+
     project = models.ForeignKey(
         'projects.Project',
         on_delete=models.SET_NULL,
@@ -85,6 +96,33 @@ class CostingSheet(models.Model):
     )
 
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='draft')
+
+    # Workflow stage + handover bookkeeping
+    workflow_stage = models.CharField(
+        max_length=24, choices=WORKFLOW_STAGE_CHOICES, default='bom_in_progress',
+    )
+    handed_over_at = models.DateTimeField(null=True, blank=True,
+        help_text='When the proposal team marked the BOM ready for sales')
+    handed_over_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='costing_sheets_handed_over',
+    )
+    handover_note = models.TextField(blank=True)
+    costing_started_at = models.DateTimeField(null=True, blank=True,
+        help_text='When the sales team picked it up and started pricing')
+    costing_started_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='costing_sheets_costing_started',
+    )
+    finalized_at = models.DateTimeField(null=True, blank=True)
+    finalized_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='costing_sheets_finalized',
+    )
+
     include_optional_in_total = models.BooleanField(
         default=False,
         help_text='If checked, optional sections are included in the grand total. Otherwise they are shown but not counted.'

@@ -56,4 +56,7 @@ urlpatterns = [
 
     # PDF revisions
     path('revision/<int:pk>/delete/', login_required(views.delete_costing_revision), name='delete_revision'),
+
+    # Workflow stage transitions (handover BOM → costing → finalize)
+    path('<int:pk>/workflow/', views.costing_workflow_transition, name='workflow_transition'),
 ]
