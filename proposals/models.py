@@ -159,9 +159,13 @@ class PrequalificationDocument(models.Model):
     prepared_by_initials = models.CharField(max_length=10)
     checked_by_initials = models.CharField(max_length=10, blank=True)
     approved_by_initials = models.CharField(max_length=10, blank=True)
-    # Three rich-text sections (HTML, stored from TinyMCE)
+    # Rich-text body for all 7 sections (HTML, stored from TinyMCE)
     company_profile = models.TextField(blank=True)
     list_of_material = models.TextField(blank=True)
+    product_catalogues = models.TextField(blank=True)
+    government_documents = models.TextField(blank=True)
+    iso_certificates = models.TextField(blank=True)
+    qualifications = models.TextField(blank=True)
     list_of_projects = models.TextField(blank=True)
 
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='draft')
@@ -181,40 +185,33 @@ class PrequalificationDocument(models.Model):
     def get_region_display_name(self):
         return dict(self.REGION_CHOICES).get(self.region_entity, self.region_entity)
 
-    # Section list for tab ordering.  (key, label, type):
-    #   type = 'text' (TinyMCE) or 'files' (uploads)
+    # All 7 sections support BOTH rich text AND file uploads.
     SECTIONS = [
-        ('company_profile', 'Company Profile', 'text'),
-        ('list_of_material', 'List of Material', 'text'),
-        ('product_catalogues', 'Product Catalogues', 'files'),
-        ('government_documents', 'Valid Government Documents', 'files'),
-        ('iso_certificates', 'ISO Certificates', 'files'),
-        ('qualifications', 'Qualifications (CVs)', 'files'),
-        ('list_of_projects', 'List of Complete Projects', 'text'),
-    ]
-
-    TEXT_SECTION_FIELDS = [
         ('company_profile', 'Company Profile'),
         ('list_of_material', 'List of Material'),
-        ('list_of_projects', 'List of Complete Projects'),
-    ]
-
-    FILE_SECTION_KEYS = [
-        'product_catalogues',
-        'government_documents',
-        'iso_certificates',
-        'qualifications',
-    ]
-
-
-class PQDAttachment(models.Model):
-    """A file uploaded into one of the PQD's attachment sections."""
-
-    SECTION_CHOICES = [
         ('product_catalogues', 'Product Catalogues'),
         ('government_documents', 'Valid Government Documents'),
         ('iso_certificates', 'ISO Certificates'),
         ('qualifications', 'Qualifications (CVs)'),
+        ('list_of_projects', 'List of Complete Projects'),
+    ]
+
+    TEXT_SECTION_FIELDS = SECTIONS  # every section has a text field
+
+    FILE_SECTION_KEYS = [key for key, _ in SECTIONS]  # every section accepts uploads
+
+
+class PQDAttachment(models.Model):
+    """A file uploaded into one of the PQD's sections."""
+
+    SECTION_CHOICES = [
+        ('company_profile', 'Company Profile'),
+        ('list_of_material', 'List of Material'),
+        ('product_catalogues', 'Product Catalogues'),
+        ('government_documents', 'Valid Government Documents'),
+        ('iso_certificates', 'ISO Certificates'),
+        ('qualifications', 'Qualifications (CVs)'),
+        ('list_of_projects', 'List of Complete Projects'),
     ]
 
     pqd = models.ForeignKey(

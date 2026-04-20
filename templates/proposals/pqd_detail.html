@@ -54,47 +54,35 @@
     </div>
 </div>
 
-{# Text sections #}
+{# Each of the 7 sections: text (if any) + attachment list (if any) #}
 {% for field_name, label in pqd.TEXT_SECTION_FIELDS %}
-{% with content=pqd|getattr_filter:field_name %}
-{% if content %}
+{% with content=pqd|getattr_filter:field_name items=attachments_by_section|get_item:field_name %}
+{% if content or items %}
 <div class="card mb-3">
-    <div class="card-header"><i class="bi bi-text-left me-2"></i>{{ label }}</div>
+    <div class="card-header"><i class="bi bi-bookmark me-2"></i>{{ label }}</div>
     <div class="card-body">
+        {% if content %}
         <div style="font-family: 'Trebuchet MS', Trebuchet, Arial, sans-serif; font-size: 11pt; text-align: justify; line-height: 1.5;">{{ content|safe }}</div>
+        {% endif %}
+        {% if items %}
+        <div class="mt-3">
+            <div class="text-muted small mb-2"><i class="bi bi-paperclip me-1"></i>Attachments ({{ items|length }})</div>
+            <ul class="list-group list-group-flush">
+                {% for att in items %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-file-earmark me-2"></i>{{ att.original_filename }}</span>
+                    <a href="{{ att.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary">
+                        <i class="bi bi-download me-1"></i>Download
+                    </a>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
     </div>
 </div>
 {% endif %}
 {% endwith %}
-{% endfor %}
-
-{# File sections #}
-{% for section_key, items in attachments_by_section.items %}
-{% if items %}
-<div class="card mb-3">
-    <div class="card-header">
-        <i class="bi bi-paperclip me-2"></i>
-        {% if section_key == 'product_catalogues' %}Product Catalogues
-        {% elif section_key == 'government_documents' %}Valid Government Documents
-        {% elif section_key == 'iso_certificates' %}ISO Certificates
-        {% elif section_key == 'qualifications' %}Qualifications (CVs)
-        {% endif %}
-        <span class="badge bg-secondary ms-2">{{ items|length }}</span>
-    </div>
-    <div class="card-body">
-        <ul class="list-group list-group-flush">
-            {% for att in items %}
-            <li class="list-group-item d-flex justify-content-between align-items-center">
-                <span><i class="bi bi-file-earmark me-2"></i>{{ att.original_filename }}</span>
-                <a href="{{ att.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary">
-                    <i class="bi bi-download me-1"></i>Download
-                </a>
-            </li>
-            {% endfor %}
-        </ul>
-    </div>
-</div>
-{% endif %}
 {% endfor %}
 
 <div class="text-muted small">

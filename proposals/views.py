@@ -428,7 +428,8 @@ class PQDDeleteView(PQDPermissionMixin, DeleteView):
 
 
 class PQDEditContentView(PQDPermissionMixin, DetailView):
-    """Tab-based editor for PQD content: 3 text tabs + 4 upload tabs."""
+    """Tab-based editor — every PQD section has both a TinyMCE text area
+    and a file upload zone."""
     model = PrequalificationDocument
     template_name = 'proposals/pqd_edit_content.html'
     context_object_name = 'pqd'
@@ -479,22 +480,23 @@ def ajax_pqd_upload_attachment(request, pk):
 
     section = request.POST.get('section', '')
     if section not in PrequalificationDocument.FILE_SECTION_KEYS:
-        return JsonResponse({'error': 'Invalid section'}, status=400)
+        return JsonResponse({'error': f'Invalid section: {section!r}'}, status=400)
 
     uploaded = request.FILES.get('file')
     if not uploaded:
-        return JsonResponse({'error': 'No file'}, status=400)
+        return JsonResponse({'error': 'No file received by server'}, status=400)
 
-    # Size limit 50 MB
-    if uploaded.size > 50 * 1024 * 1024:
-        return JsonResponse({'error': 'File too large (max 50MB)'}, status=400)
+    # Size limit 150 MB (large scanned PDFs for ISO certs etc.)
+    if uploaded.size > 150 * 1024 * 1024:
+        return JsonResponse({
+            'error': f'File too large ({uploaded.size // (1024*1024)}MB). Max is 150MB.'
+        }, status=400)
 
-    # Type check by extension
     import os
     ext = os.path.splitext(uploaded.name)[1].lower().lstrip('.')
     allowed_ext = {'pdf', 'doc', 'docx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'}
     if ext not in allowed_ext:
-        return JsonResponse({'error': f'File type .{ext} not allowed'}, status=400)
+        return JsonResponse({'error': f'File type ".{ext}" not allowed. Allowed: PDF, Word, PowerPoint, images.'}, status=400)
 
     # Next order within section
     last = pqd.attachments.filter(section=section).order_by('-order').values_list('order', flat=True).first() or 0

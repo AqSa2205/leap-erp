@@ -96,12 +96,11 @@
 <div class="card">
     <div class="card-header p-0">
         <ul class="nav nav-tabs card-header-tabs" role="tablist" style="flex-wrap: nowrap; overflow-x: auto;">
-            {% for key, label, type in sections %}
+            {% for key, label in sections %}
             <li class="nav-item" role="presentation">
                 <button class="nav-link {% if forloop.first %}active{% endif %}" id="tab-{{ key }}"
                         data-bs-toggle="tab" data-bs-target="#pane-{{ key }}"
                         type="button" role="tab" style="white-space:nowrap;">
-                    {% if type == 'text' %}<i class="bi bi-text-left me-1"></i>{% else %}<i class="bi bi-paperclip me-1"></i>{% endif %}
                     {{ label }}
                 </button>
             </li>
@@ -111,28 +110,27 @@
 
     <div class="card-body">
         <div class="tab-content">
-            {% for key, label, type in sections %}
+            {% for key, label in sections %}
             <div class="tab-pane fade {% if forloop.first %}show active{% endif %}" id="pane-{{ key }}" role="tabpanel">
+                {# Rich text editor #}
                 <div class="d-flex justify-content-between align-items-center mb-2">
-                    <label class="form-label fw-bold mb-0">{{ label }}</label>
-                    {% if type == 'text' %}
+                    <label class="form-label fw-bold mb-0"><i class="bi bi-text-left me-1"></i>{{ label }} — Text</label>
                     <button type="button" class="btn btn-sm btn-outline-primary btn-save-section" data-section="{{ key }}">
-                        <i class="bi bi-cloud-upload"></i> Save
+                        <i class="bi bi-cloud-upload"></i> Save Text
                     </button>
-                    {% endif %}
                 </div>
+                <textarea id="id_{{ key }}" name="{{ key }}" class="tinymce-editor">{{ pqd|getattr_filter:key }}</textarea>
 
-                {% if type == 'text' %}
-                {# TinyMCE editor for text sections #}
-                <textarea id="id_{{ key }}" name="{{ key }}" class="tinymce-editor">{% if key == 'company_profile' %}{{ pqd.company_profile }}{% elif key == 'list_of_material' %}{{ pqd.list_of_material }}{% elif key == 'list_of_projects' %}{{ pqd.list_of_projects }}{% endif %}</textarea>
-                {% else %}
-                {# Upload zone + list of attachments for file sections #}
+                {# File upload zone #}
+                <div class="d-flex justify-content-between align-items-center mb-2 mt-4">
+                    <label class="form-label fw-bold mb-0"><i class="bi bi-paperclip me-1"></i>{{ label }} — Attachments</label>
+                </div>
                 <div class="upload-dropzone" data-section="{{ key }}">
                     <i class="bi bi-cloud-upload"></i>
                     <div class="mt-2">
                         <strong>Drop files here</strong> or <a href="#" onclick="event.preventDefault(); this.closest('.upload-dropzone').querySelector('input').click();">click to browse</a>
                     </div>
-                    <div class="small text-muted mt-1">PDF, Word, PowerPoint, PNG, JPEG — up to 50MB each</div>
+                    <div class="small text-muted mt-1">PDF, Word, PowerPoint, PNG, JPEG — up to 150MB each</div>
                     <input type="file" accept=".pdf,.doc,.docx,.ppt,.pptx,.png,.jpg,.jpeg,.gif,.webp,.bmp" multiple data-section="{{ key }}">
                 </div>
                 <div class="attachment-list mt-3" data-section="{{ key }}">
@@ -163,7 +161,6 @@
                     </div>
                     {% endfor %}
                 </div>
-                {% endif %}
             </div>
             {% endfor %}
         </div>
@@ -312,23 +309,24 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         };
         xhr.onload = function() {
-            if (xhr.status !== 200) {
-                placeholder.querySelector('.progress').outerHTML = '';
-                placeholder.querySelector('.file-info > div:last-child').innerHTML = '<span class="text-danger">Failed</span>';
-                setTimeout(function() { placeholder.remove(); }, 3000);
-                return;
-            }
-            var resp = JSON.parse(xhr.responseText);
-            if (!resp.ok) {
-                placeholder.querySelector('.progress').outerHTML = '';
-                placeholder.querySelector('.file-info > div:last-child').innerHTML = '<span class="text-danger">' + (resp.error || 'Failed') + '</span>';
-                setTimeout(function() { placeholder.remove(); }, 3500);
+            var progressEl = placeholder.querySelector('.progress');
+            var statusEl = placeholder.querySelector('.file-info > div:last-child');
+            if (progressEl) progressEl.outerHTML = '';
+            var resp = null;
+            try { resp = JSON.parse(xhr.responseText); } catch (e) {}
+
+            if (xhr.status !== 200 || !resp || !resp.ok) {
+                var msg = (resp && resp.error) ? resp.error : ('HTTP ' + xhr.status + ' ' + xhr.statusText);
+                if (statusEl) statusEl.innerHTML = '<span class="text-danger"><i class="bi bi-exclamation-triangle"></i> ' + msg + '</span>';
+                setTimeout(function() { placeholder.remove(); }, 6000);
                 return;
             }
             placeholder.outerHTML = renderAttachmentCard(resp);
         };
         xhr.onerror = function() {
-            placeholder.querySelector('.file-info > div:last-child').innerHTML = '<span class="text-danger">Network error</span>';
+            var statusEl = placeholder.querySelector('.file-info > div:last-child');
+            if (statusEl) statusEl.innerHTML = '<span class="text-danger">Network error — check connection and try again</span>';
+            setTimeout(function() { placeholder.remove(); }, 6000);
         };
         xhr.send(fd);
     }
@@ -336,7 +334,9 @@ document.addEventListener('DOMContentLoaded', function() {
     document.querySelectorAll('.upload-dropzone').forEach(function(dz) {
         var section = dz.dataset.section;
         var input = dz.querySelector('input[type="file"]');
-        var listEl = dz.parentElement.querySelector('.attachment-list[data-section="' + section + '"]');
+        // Find the attachment-list within the same tab-pane for this section
+        var pane = dz.closest('.tab-pane');
+        var listEl = pane ? pane.querySelector('.attachment-list[data-section="' + section + '"]') : null;
 
         ['dragenter', 'dragover'].forEach(function(evt) {
             dz.addEventListener(evt, function(e) {

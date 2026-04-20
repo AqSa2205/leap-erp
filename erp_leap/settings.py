@@ -196,6 +196,12 @@ LOGGING = {
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# Raise Django's upload limits so PQD attachments (scanned PDFs, etc.)
+# don't get rejected. Individual file size is enforced in the view.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 200 * 1024 * 1024  # 200 MB request body
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB in memory, rest streams to disk
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000
+
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

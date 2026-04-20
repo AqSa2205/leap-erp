@@ -85,16 +85,18 @@ def _build_pqd_docx(pqd):
     #   'covering_letter', 'executive_summary', 'company_overview',
     #   'understanding_of_requirements', 'proposed_technical_solution', ...
     # We repurpose three of them for the PQD text sections:
-    shim.covering_letter = ''  # no covering letter in PQD
+    # Map all 7 PQD text sections onto the technical proposal template's
+    # 10 heading slots. Unused slots are left blank.
+    shim.covering_letter = ''
     shim.executive_summary = ''
-    shim.company_overview = pqd.company_profile or ''  # Company Profile → company overview slot
-    shim.understanding_of_requirements = ''
-    shim.proposed_technical_solution = pqd.list_of_material or ''  # List of Material → Proposed Solution slot
-    shim.delivery_implementation = ''
-    shim.risk_management = ''
-    shim.service_management = ''
+    shim.company_overview = pqd.company_profile or ''
+    shim.understanding_of_requirements = pqd.list_of_material or ''
+    shim.proposed_technical_solution = pqd.product_catalogues or ''
+    shim.delivery_implementation = pqd.government_documents or ''
+    shim.risk_management = pqd.iso_certificates or ''
+    shim.service_management = pqd.qualifications or ''
     shim.data_protection = ''
-    shim.assumptions_constraints = pqd.list_of_projects or ''  # List of Projects → Assumptions slot
+    shim.assumptions_constraints = pqd.list_of_projects or ''
     # Engineering Documents — empty for PQD
     class _EmptyMgr:
         def all(self): return []
@@ -288,12 +290,15 @@ def export_pqd_merged_pdf(pqd):
     # Try to convert the body to PDF
     body_pdf = _convert_to_pdf(body_docx, 'docx')
 
-    # Collect attachments in section order
+    # Collect attachments in section order (all 7 PQD sections)
     ordered_sections = [
+        'company_profile',
+        'list_of_material',
         'product_catalogues',
         'government_documents',
         'iso_certificates',
         'qualifications',
+        'list_of_projects',
     ]
     attachments = []
     for section in ordered_sections:
