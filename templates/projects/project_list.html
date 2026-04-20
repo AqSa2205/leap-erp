@@ -149,9 +149,9 @@
                     <tr>
                         <th>Reference</th>
                         <th>Name</th>
+                        <th>Customer</th>
                         <th>Region</th>
                         <th>Status</th>
-                        <th class="text-end">Est. Value</th>
                         <th class="text-end">Actual Sales</th>
                         <th>Submission Date</th>
                         <th class="text-center">Actions</th>
@@ -171,6 +171,11 @@
                             </span>
                         </td>
                         <td>
+                            <span class="text-truncate d-inline-block" style="max-width: 220px;" title="{{ project.customer }}">
+                                {{ project.customer|default:"-" }}
+                            </span>
+                        </td>
+                        <td>
                             {% if project.region.code == 'UK' or project.region.code == 'GLB' %}
                             <span class="badge region-badge region-lnuk">LNUK</span>
                             {% elif project.region.code == 'LNA' %}
@@ -185,13 +190,6 @@
                             <span class="badge px-2 py-1" style="background-color: {{ project.status.color }}">
                                 {{ project.status.name }}
                             </span>
-                        </td>
-                        <td class="text-end fw-semibold">
-                            {% if project.region.code == 'UK' or project.region.code == 'GLB' %}
-                            £{{ project.estimated_value|floatformat:2|intcomma }}
-                            {% else %}
-                            SAR {{ project.estimated_value|floatformat:2|intcomma }}
-                            {% endif %}
                         </td>
                         <td class="text-end">
                             {% if project.actual_sales and project.actual_sales > 0 %}
