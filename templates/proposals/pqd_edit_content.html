@@ -96,9 +96,15 @@
 <div class="card">
     <div class="card-header p-0">
         <ul class="nav nav-tabs card-header-tabs" role="tablist" style="flex-wrap: nowrap; overflow-x: auto;">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="tab-cover-page" data-bs-toggle="tab"
+                        data-bs-target="#pane-cover-page" type="button" role="tab" style="white-space:nowrap;">
+                    <i class="bi bi-file-earmark-richtext me-1"></i>Cover Page
+                </button>
+            </li>
             {% for key, label in sections %}
             <li class="nav-item" role="presentation">
-                <button class="nav-link {% if forloop.first %}active{% endif %}" id="tab-{{ key }}"
+                <button class="nav-link" id="tab-{{ key }}"
                         data-bs-toggle="tab" data-bs-target="#pane-{{ key }}"
                         type="button" role="tab" style="white-space:nowrap;">
                     {{ label }}
@@ -110,8 +116,76 @@
 
     <div class="card-body">
         <div class="tab-content">
+            {# ── Cover Page tab ── #}
+            <div class="tab-pane fade show active" id="pane-cover-page" role="tabpanel">
+                <div class="alert alert-info py-2 small">
+                    <i class="bi bi-info-circle me-1"></i>
+                    Edit the cover-page fields below. Changes save automatically when you leave a field.
+                    These values appear on the front page of the exported PDF.
+                </div>
+                <div class="row g-3">
+                    <div class="col-md-8">
+                        <label class="form-label fw-bold small">Title</label>
+                        <input type="text" class="form-control cover-field" data-field="title"
+                               value="{{ pqd.title|default_if_none:'' }}">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label fw-bold small">Reference</label>
+                        <input type="text" class="form-control cover-field" data-field="pqd_reference"
+                               value="{{ pqd.pqd_reference|default_if_none:'' }}">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-bold small">Client Name</label>
+                        <input type="text" class="form-control cover-field" data-field="client_name"
+                               value="{{ pqd.client_name|default_if_none:'' }}">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-bold small">Document Type</label>
+                        <input type="text" class="form-control cover-field" data-field="document_type"
+                               value="{{ pqd.document_type|default_if_none:'' }}">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label fw-bold small">Project Description (big title on cover)</label>
+                        <textarea class="form-control cover-field" data-field="project_description" rows="2">{{ pqd.project_description|default_if_none:'' }}</textarea>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label fw-bold small">Region / Entity</label>
+                        <select class="form-select cover-field" data-field="region_entity">
+                            {% for code, name in pqd.REGION_CHOICES %}
+                            <option value="{{ code }}" {% if pqd.region_entity == code %}selected{% endif %}>{{ name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label fw-bold small">Revision</label>
+                        <input type="text" class="form-control cover-field" data-field="revision"
+                               value="{{ pqd.revision|default_if_none:'' }}" maxlength="10">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label fw-bold small">Revision Date</label>
+                        <input type="date" class="form-control cover-field" data-field="revision_date"
+                               value="{{ pqd.revision_date|date:'Y-m-d' }}">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label fw-bold small">Prepared By (initials)</label>
+                        <input type="text" class="form-control cover-field" data-field="prepared_by_initials"
+                               value="{{ pqd.prepared_by_initials|default_if_none:'' }}" maxlength="10">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label fw-bold small">Checked By (initials)</label>
+                        <input type="text" class="form-control cover-field" data-field="checked_by_initials"
+                               value="{{ pqd.checked_by_initials|default_if_none:'' }}" maxlength="10">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label fw-bold small">Approved By (initials)</label>
+                        <input type="text" class="form-control cover-field" data-field="approved_by_initials"
+                               value="{{ pqd.approved_by_initials|default_if_none:'' }}" maxlength="10">
+                    </div>
+                </div>
+                <div id="cover-save-status" class="small text-muted mt-2"></div>
+            </div>
             {% for key, label in sections %}
-            <div class="tab-pane fade {% if forloop.first %}show active{% endif %}" id="pane-{{ key }}" role="tabpanel">
+            <div class="tab-pane fade" id="pane-{{ key }}" role="tabpanel">
                 {# Rich text editor #}
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <label class="form-label fw-bold mb-0"><i class="bi bi-text-left me-1"></i>{{ label }} — Text</label>
@@ -207,6 +281,47 @@ document.addEventListener('DOMContentLoaded', function() {
         `,
         font_family_formats: '',
         font_size_formats: '',
+    });
+
+    // ─── Cover Page: auto-save each field on change/blur ─────
+    var coverSaveUrl = "{% url 'proposals:pqd_save_cover_field' pqd.pk %}";
+    var coverStatusEl = document.getElementById('cover-save-status');
+    function saveCoverField(input) {
+        var field = input.dataset.field;
+        var value = input.value;
+        var fd = new FormData();
+        fd.append('field', field);
+        fd.append('value', value);
+        input.style.borderColor = '';
+        coverStatusEl.textContent = 'Saving ' + field + '…';
+        coverStatusEl.className = 'small text-muted mt-2';
+        fetch(coverSaveUrl, { method: 'POST', headers: {'X-CSRFToken': csrfToken}, body: fd })
+            .then(function(r) { return r.json(); })
+            .then(function(resp) {
+                if (resp.ok) {
+                    input.style.borderColor = '#198754';
+                    coverStatusEl.textContent = '✓ Saved ' + field;
+                    coverStatusEl.className = 'small text-success mt-2';
+                    setTimeout(function() {
+                        input.style.borderColor = '';
+                        coverStatusEl.textContent = '';
+                    }, 1800);
+                } else {
+                    input.style.borderColor = '#dc3545';
+                    coverStatusEl.textContent = '✕ ' + (resp.error || 'Save failed');
+                    coverStatusEl.className = 'small text-danger mt-2';
+                }
+            })
+            .catch(function() {
+                input.style.borderColor = '#dc3545';
+                coverStatusEl.textContent = '✕ Network error';
+                coverStatusEl.className = 'small text-danger mt-2';
+            });
+    }
+    document.querySelectorAll('.cover-field').forEach(function(input) {
+        // Save on blur for text/textarea/date; save on change for select
+        var evt = (input.tagName === 'SELECT') ? 'change' : 'change';
+        input.addEventListener(evt, function() { saveCoverField(input); });
     });
 
     // ─── Per-section Save (text) ──────────────────────────────

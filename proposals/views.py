@@ -450,6 +450,56 @@ class PQDEditContentView(PQDPermissionMixin, DetailView):
 
 @login_required
 @require_POST
+def ajax_save_pqd_cover_field(request, pk):
+    """Update a single cover-page metadata field on a PQD."""
+    pqd = get_object_or_404(PrequalificationDocument, pk=pk)
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user) and pqd.created_by != user:
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    field = request.POST.get('field', '')
+    value = request.POST.get('value', '').strip()
+
+    allowed = {
+        'title', 'pqd_reference', 'document_type', 'client_name',
+        'project_description', 'region_entity', 'revision', 'revision_date',
+        'prepared_by_initials', 'checked_by_initials', 'approved_by_initials',
+    }
+    if field not in allowed:
+        return JsonResponse({'error': f'Invalid field: {field!r}'}, status=400)
+
+    # Validate region against choices
+    if field == 'region_entity':
+        valid = [c for c, _ in PrequalificationDocument.REGION_CHOICES]
+        if value and value not in valid:
+            return JsonResponse({'error': 'Invalid region'}, status=400)
+
+    # Parse date
+    if field == 'revision_date':
+        if not value:
+            return JsonResponse({'error': 'Revision date is required'}, status=400)
+        from datetime import datetime
+        try:
+            parsed = datetime.strptime(value, '%Y-%m-%d').date()
+        except ValueError:
+            return JsonResponse({'error': 'Date must be YYYY-MM-DD'}, status=400)
+        setattr(pqd, field, parsed)
+    else:
+        # Ensure unique reference
+        if field == 'pqd_reference':
+            if not value:
+                return JsonResponse({'error': 'Reference cannot be empty'}, status=400)
+            exists = PrequalificationDocument.objects.exclude(pk=pk).filter(pqd_reference=value).exists()
+            if exists:
+                return JsonResponse({'error': 'Reference already in use'}, status=400)
+        setattr(pqd, field, value)
+
+    pqd.save(update_fields=[field, 'updated_at'])
+    return JsonResponse({'ok': True})
+
+
+@login_required
+@require_POST
 def ajax_save_pqd_section(request, pk):
     """Save a text section (TinyMCE HTML) to a PQD."""
     pqd = get_object_or_404(PrequalificationDocument, pk=pk)

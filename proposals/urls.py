@@ -24,6 +24,7 @@ urlpatterns = [
     path('pqd/<int:pk>/content/', views.PQDEditContentView.as_view(), name='pqd_content'),
     path('pqd/<int:pk>/delete/', views.PQDDeleteView.as_view(), name='pqd_delete'),
     path('pqd/<int:pk>/save-section/', views.ajax_save_pqd_section, name='pqd_save_section'),
+    path('pqd/<int:pk>/save-cover-field/', views.ajax_save_pqd_cover_field, name='pqd_save_cover_field'),
     path('pqd/<int:pk>/export/', views.pqd_export, name='pqd_export'),
     path('pqd/<int:pk>/upload/', views.ajax_pqd_upload_attachment, name='pqd_upload'),
     path('pqd/attachment/<int:pk>/delete/', views.ajax_pqd_delete_attachment, name='pqd_delete_attachment'),
