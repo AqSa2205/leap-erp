@@ -1,14 +1,14 @@
 {% extends 'base.html' %}
 
-{% block title %}{% if object %}Edit{% else %}Create{% endif %} Project - Leap Networks ERP{% endblock %}
-{% block page_title %}{% if object %}Edit{% else %}Create{% endif %} Project{% endblock %}
+{% block title %}{% if object %}Edit{% else %}Create{% endif %} Commercial Proposal - Leap Networks ERP{% endblock %}
+{% block page_title %}{% if object %}Edit{% else %}Create{% endif %} Commercial Proposal{% endblock %}
 
 {% block content %}
 <div class="card">
     <div class="card-header">
         <h5 class="mb-0">
             <i class="bi bi-{% if object %}pencil{% else %}plus{% endif %} me-2"></i>
-            {% if object %}Edit Project: {{ object.proposal_reference }}{% else %}New Project{% endif %}
+            {% if object %}Edit Commercial Proposal: {{ object.proposal_reference }}{% else %}New Commercial Proposal{% endif %}
         </h5>
     </div>
     <div class="card-body">

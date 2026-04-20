@@ -105,7 +105,7 @@
                     </a>
                     {% if document.project %}
                     <a href="{% url 'projects:detail' document.project.pk %}" class="btn btn-outline-dark">
-                        <i class="bi bi-folder me-2"></i>View Project
+                        <i class="bi bi-folder me-2"></i>View Commercial Proposal
                     </a>
                     {% endif %}
                     {% if user.is_super_admin_user or user.is_admin_user or document.uploaded_by == user %}
@@ -148,9 +148,9 @@
 
                     <div class="col-12"><hr class="my-2"></div>
 
-                    <!-- Project Association -->
+                    <!-- Commercial Proposal Association -->
                     <div class="col-md-6">
-                        <div class="info-label">Associated Project</div>
+                        <div class="info-label">Associated Commercial Proposal</div>
                         <div class="info-value">
                             {% if document.project %}
                             <a href="{% url 'projects:detail' document.project.pk %}" class="text-decoration-none" style="color: #C41E3A;">

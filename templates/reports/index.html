@@ -26,7 +26,7 @@
                                 <h6 class="mb-2">Quick Export</h6>
                                 <div class="d-flex flex-wrap gap-2 mb-4">
                                     <a href="{% url 'reports:export' %}" class="btn btn-outline-primary">
-                                        <i class="bi bi-file-earmark-excel me-1"></i>All Projects
+                                        <i class="bi bi-file-earmark-excel me-1"></i>All Commercial Proposals
                                     </a>
                                     <a href="{% url 'reports:export' %}?category=active" class="btn btn-outline-primary">
                                         Active Only
@@ -87,7 +87,7 @@
                 <div class="row text-center">
                     <div class="col">
                         <h3 class="text-primary mb-0">{{ stats.total }}</h3>
-                        <small class="text-muted">Total Projects</small>
+                        <small class="text-muted">Total Commercial Proposals</small>
                     </div>
                     <div class="col">
                         <h3 class="text-info mb-0">{{ stats.active }}</h3>

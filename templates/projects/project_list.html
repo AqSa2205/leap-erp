@@ -1,8 +1,8 @@
 {% extends 'base.html' %}
 {% load humanize %}
 
-{% block title %}Projects - Leap Networks ERP{% endblock %}
-{% block page_title %}Projects{% endblock %}
+{% block title %}Commercial Proposals - Leap Networks ERP{% endblock %}
+{% block page_title %}Commercial Proposals{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -59,7 +59,7 @@
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h6 class="text-muted mb-1">Total Projects</h6>
+                        <h6 class="text-muted mb-1">Total Commercial Proposals</h6>
                         <h3 class="mb-0" style="color: #1a1a1a;">{{ total_count|intcomma }}</h3>
                     </div>
                     <i class="bi bi-folder-fill fs-1 opacity-25" style="color: #1a1a1a;"></i>
@@ -125,7 +125,7 @@
 <!-- Projects Table -->
 <div class="card projects-table-card">
     <div class="card-header d-flex justify-content-between align-items-center">
-        <h5 class="mb-0"><i class="bi bi-folder-fill me-2"></i>Projects</h5>
+        <h5 class="mb-0"><i class="bi bi-folder-fill me-2"></i>Commercial Proposals</h5>
         <div class="d-flex gap-2">
             {% if user.can_delete_project %}
             <button type="button" class="btn btn-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deleteAllModal">
@@ -138,7 +138,7 @@
             </button>
             {% endif %}
             <a href="{% url 'projects:create' %}" class="btn btn-light btn-sm">
-                <i class="bi bi-plus-lg me-1"></i>New Project
+                <i class="bi bi-plus-lg me-1"></i>New Commercial Proposal
             </a>
         </div>
     </div>
@@ -148,7 +148,7 @@
                 <thead class="table-light">
                     <tr>
                         <th>Reference</th>
-                        <th>Project Name</th>
+                        <th>Name</th>
                         <th>Region</th>
                         <th>Status</th>
                         <th class="text-end">Est. Value</th>
@@ -225,7 +225,7 @@
                     <tr>
                         <td colspan="8" class="text-center text-muted py-5">
                             <i class="bi bi-folder-x fs-1 d-block mb-2"></i>
-                            No projects found.
+                            No commercial proposals found.
                         </td>
                     </tr>
                     {% endfor %}
@@ -274,7 +274,7 @@
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <p class="mb-1">Are you sure you want to delete all <strong>{{ total_count }}</strong> filtered project(s)?</p>
+                <p class="mb-1">Are you sure you want to delete all <strong>{{ total_count }}</strong> filtered commercial proposal(s)?</p>
                 <p class="text-danger fw-semibold mb-0"><i class="bi bi-exclamation-circle me-1"></i>This action cannot be undone.</p>
             </div>
             <div class="modal-footer">
@@ -289,7 +289,7 @@
                     <input type="hidden" name="quarter" value="{{ request.GET.quarter }}">
                     <input type="hidden" name="owner" value="{{ request.GET.owner }}">
                     <button type="submit" class="btn btn-danger">
-                        <i class="bi bi-trash me-1"></i>Delete All Projects
+                        <i class="bi bi-trash me-1"></i>Delete All
                     </button>
                 </form>
             </div>
@@ -307,7 +307,7 @@
                 {% csrf_token %}
                 <div class="modal-header" style="background: linear-gradient(135deg, #198754 0%, #20c997 100%); color: #fff;">
                     <h5 class="modal-title" id="importModalLabel">
-                        <i class="bi bi-file-earmark-arrow-up me-2"></i>Import Projects from Excel
+                        <i class="bi bi-file-earmark-arrow-up me-2"></i>Import Commercial Proposals from Excel
                     </h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
@@ -330,7 +330,7 @@
                         <ul class="mb-0 mt-1">
                             <li>File must be in <strong>.xlsx</strong> or <strong>.xls</strong> format</li>
                             <li>The header row must contain <strong>"Leap Proposal Reference"</strong> column</li>
-                            <li>Existing projects with the same reference will be <strong>updated</strong></li>
+                            <li>Existing commercial proposals with the same reference will be <strong>updated</strong></li>
                             <li>Supported columns: Project Name, Client RFQ Ref Number, Submission Date, Owner, EPC, Bid Status, Est. Value (SAR), Est. Value ($USD), Est. Value (SAR) - Per Annum, Est. GP, PO Award - Q, Success Quotient, Minimum Achievement, Contact With, Remarks</li>
                         </ul>
                     </div>
