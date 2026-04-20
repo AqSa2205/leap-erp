@@ -1064,7 +1064,7 @@ def ajax_delete_sow_item(request, pk):
 
 @require_POST
 def delete_costing_revision(request, pk):
-    """Delete a saved costing-sheet PDF revision."""
+    """Delete a saved costing-sheet revision (PDF or Excel)."""
     from .models import CostingSheetRevision
     rev = get_object_or_404(CostingSheetRevision, pk=pk)
     sheet = rev.sheet
@@ -1079,6 +1079,167 @@ def delete_costing_revision(request, pk):
     rev.delete()
     messages.success(request, f'Revision {label} deleted.')
     return redirect('costing:detail', pk=sheet.pk)
+
+
+# ── Revision helpers: snapshot + diff ─────────────────────────
+
+def _build_costing_snapshot(sheet):
+    """Capture key state of a costing sheet for change tracking.
+    Kept compact: top-level numbers + per-section/item counts +
+    rate values. Enough to produce a useful diff summary."""
+    from decimal import Decimal
+    def _d(v):
+        return None if v is None else str(v)
+
+    sections_data = []
+    total_items = 0
+    for section in sheet.sections.all():
+        items = list(section.line_items.all())
+        total_items += len(items)
+        sections_data.append({
+            'section_number': section.section_number,
+            'title': section.title,
+            'is_optional': section.is_optional,
+            'item_count': len(items),
+            'subtotal': _d(section.subtotal),
+        })
+
+    return {
+        'snapshot_version': 1,
+        'totals': {
+            'grand_total': _d(sheet.grand_total),
+            'total_cost': _d(sheet.total_cost),
+            'total_margin_amount': _d(sheet.total_margin_amount),
+            'total_discount': _d(sheet.total_discount),
+            'total_shipping_amount': _d(sheet.total_shipping_amount),
+            'total_customs_amount': _d(sheet.total_customs_amount),
+            'total_finances_amount': _d(sheet.total_finances_amount),
+            'total_installation_amount': _d(sheet.total_installation_amount),
+            'optional_subtotal': _d(sheet.optional_subtotal),
+        },
+        'sheet_rates': {
+            'margin': _d(sheet.margin),
+            'discount_rate': _d(sheet.discount_rate),
+            'shipping_rate': _d(sheet.shipping_rate),
+            'customs_rate': _d(sheet.customs_rate),
+            'finances_rate': _d(sheet.finances_rate),
+            'installation_rate': _d(sheet.installation_rate),
+        },
+        'output_currency': sheet.output_currency,
+        'include_optional_in_total': sheet.include_optional_in_total,
+        'status': sheet.status,
+        'section_count': len(sections_data),
+        'item_count': total_items,
+        'sections': sections_data,
+    }
+
+
+def _compute_costing_diff(prev, current):
+    """Compare two costing snapshots. Returns (summary_text, details_list).
+    `prev` may be None (means first revision)."""
+    if not prev:
+        return '(initial export)', []
+
+    from decimal import Decimal, InvalidOperation
+    details = []
+
+    def _dec(v):
+        try: return Decimal(v)
+        except (TypeError, ValueError, InvalidOperation): return None
+
+    # Totals
+    for key in ('grand_total', 'total_cost', 'total_margin_amount',
+                'total_discount', 'optional_subtotal'):
+        old_v = (prev.get('totals') or {}).get(key)
+        new_v = (current.get('totals') or {}).get(key)
+        if old_v != new_v:
+            od, nd = _dec(old_v), _dec(new_v)
+            if od is not None and nd is not None:
+                delta = nd - od
+                sign = '+' if delta >= 0 else ''
+                details.append({
+                    'field': key, 'before': str(od), 'after': str(nd),
+                    'delta': f'{sign}{delta}', 'label': key.replace('_', ' ').title(),
+                })
+            else:
+                details.append({'field': key, 'before': old_v, 'after': new_v, 'label': key.replace('_', ' ').title()})
+
+    # Rates
+    for key in ('margin', 'discount_rate', 'shipping_rate',
+                'customs_rate', 'finances_rate', 'installation_rate'):
+        old_v = (prev.get('sheet_rates') or {}).get(key)
+        new_v = (current.get('sheet_rates') or {}).get(key)
+        if old_v != new_v:
+            details.append({
+                'field': f'rate.{key}', 'before': old_v, 'after': new_v,
+                'label': key.replace('_', ' ').title() + ' %',
+            })
+
+    # Currency / flags
+    for key in ('output_currency', 'status'):
+        if prev.get(key) != current.get(key):
+            details.append({'field': key, 'before': prev.get(key), 'after': current.get(key), 'label': key.replace('_', ' ').title()})
+    if prev.get('include_optional_in_total') != current.get('include_optional_in_total'):
+        details.append({
+            'field': 'include_optional_in_total',
+            'before': prev.get('include_optional_in_total'),
+            'after': current.get('include_optional_in_total'),
+            'label': 'Include Optional in Total',
+        })
+
+    # Section / item counts
+    if prev.get('section_count') != current.get('section_count'):
+        delta = (current.get('section_count') or 0) - (prev.get('section_count') or 0)
+        sign = '+' if delta >= 0 else ''
+        details.append({
+            'field': 'section_count', 'before': prev.get('section_count'),
+            'after': current.get('section_count'), 'delta': f'{sign}{delta}',
+            'label': 'Sections',
+        })
+    if prev.get('item_count') != current.get('item_count'):
+        delta = (current.get('item_count') or 0) - (prev.get('item_count') or 0)
+        sign = '+' if delta >= 0 else ''
+        details.append({
+            'field': 'item_count', 'before': prev.get('item_count'),
+            'after': current.get('item_count'), 'delta': f'{sign}{delta}',
+            'label': 'Line items',
+        })
+
+    # Build a short summary line (top ~3 changes, with deltas where available)
+    if not details:
+        return 'no changes vs previous', []
+    summary_bits = []
+    for d in details[:3]:
+        if 'delta' in d:
+            summary_bits.append(f"{d['label']} {d['delta']}")
+        else:
+            summary_bits.append(f"{d['label']}: {d.get('before')} → {d.get('after')}")
+    summary = ' · '.join(summary_bits)
+    if len(details) > 3:
+        summary += f' · +{len(details) - 3} more'
+    return summary, details
+
+
+def _save_costing_revision(sheet, file_bytes, filename, export_format, user):
+    """Helper: save a new CostingSheetRevision with snapshot + diff."""
+    from django.core.files.base import ContentFile
+    from .models import CostingSheetRevision
+    snapshot = _build_costing_snapshot(sheet)
+    prev = CostingSheetRevision.objects.filter(sheet=sheet).order_by('-created_at').first()
+    summary, details = _compute_costing_diff(prev.snapshot if prev else None, snapshot)
+    rev_label = CostingSheetRevision.next_label_for(sheet)
+    rev = CostingSheetRevision(
+        sheet=sheet,
+        revision_label=rev_label,
+        export_format=export_format,
+        original_filename=filename,
+        created_by=user if getattr(user, 'is_authenticated', False) else None,
+        snapshot=snapshot,
+        change_summary=summary[:500],
+        change_details=details,
+    )
+    rev.file.save(f'{sheet.pk}_{rev_label}_{filename}', ContentFile(file_bytes), save=True)
+    return rev
 
 
 # ─── Excel Export ─────────────────────────────────────────────
@@ -1273,12 +1434,24 @@ def costing_export_excel(request, pk):
     for col_letter, w in widths.items():
         ws.column_dimensions[col_letter].width = w
 
-    response = HttpResponse(
-        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    )
     filename = _safe_filename(sheet.title, suffix='BOM', extension='xlsx')
+    # Write to a buffer so we can both save a revision copy and return it
+    import io as _io
+    xlsx_buffer = _io.BytesIO()
+    wb.save(xlsx_buffer)
+    xlsx_bytes = xlsx_buffer.getvalue()
+
+    try:
+        _save_costing_revision(sheet, xlsx_bytes, filename, export_format='excel', user=request.user)
+    except Exception as _e:
+        import logging
+        logging.getLogger(__name__).warning('Failed to save costing Excel revision: %s', _e)
+
+    response = HttpResponse(
+        xlsx_bytes,
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
-    wb.save(response)
     return response
 
 
@@ -2023,20 +2196,10 @@ def costing_export_pdf(request, pk):
 
     pdf_bytes = pdf_buffer.getvalue()
 
-    # Save this export as a revision so users keep a history of generated PDFs
+    # Save this export as a revision (with state snapshot + diff vs previous)
     try:
-        from django.core.files.base import ContentFile
-        from .models import CostingSheetRevision
-        rev_label = CostingSheetRevision.next_label_for(sheet)
-        rev = CostingSheetRevision(
-            sheet=sheet,
-            revision_label=rev_label,
-            original_filename=filename,
-            created_by=request.user if request.user.is_authenticated else None,
-        )
-        rev.file.save(f'{sheet.pk}_{rev_label}_{filename}', ContentFile(pdf_bytes), save=True)
+        _save_costing_revision(sheet, pdf_bytes, filename, export_format='pdf', user=request.user)
     except Exception as _e:
-        # Don't block the download if saving the revision fails — just log.
         import logging
         logging.getLogger(__name__).warning('Failed to save costing PDF revision: %s', _e)
 

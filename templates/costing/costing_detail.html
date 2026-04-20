@@ -528,39 +528,70 @@
     </div>
 </div>
 
-<!-- PDF Revisions -->
+<!-- Revisions -->
 <div class="card mt-3">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>
-            <i class="bi bi-clock-history me-2"></i> PDF Revisions
+            <i class="bi bi-clock-history me-2"></i> Revisions
             <span class="badge bg-secondary ms-1">{{ pdf_revisions|length }}</span>
         </span>
-        <small class="text-muted">A copy is saved automatically each time you export a PDF.</small>
+        <small class="text-muted">A copy is saved automatically each time you export as PDF or Excel.</small>
     </div>
     <div class="card-body p-0">
         <div class="table-responsive">
             <table class="table table-sm table-hover mb-0">
                 <thead class="table-light">
                     <tr>
-                        <th style="width: 80px;">Label</th>
+                        <th style="width: 70px;">Label</th>
+                        <th style="width: 70px;">Type</th>
                         <th>Generated</th>
                         <th>By</th>
-                        <th>Filename</th>
-                        <th class="text-end" style="width: 160px;">Actions</th>
+                        <th>Changes vs previous</th>
+                        <th class="text-end" style="width: 140px;">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for rev in pdf_revisions %}
                     <tr>
                         <td><strong><code>{{ rev.revision_label }}</code></strong></td>
+                        <td>
+                            {% if rev.export_format == 'pdf' %}
+                            <span class="badge bg-danger"><i class="bi bi-file-earmark-pdf me-1"></i>PDF</span>
+                            {% elif rev.export_format == 'excel' %}
+                            <span class="badge bg-success"><i class="bi bi-file-earmark-excel me-1"></i>Excel</span>
+                            {% else %}
+                            <span class="badge bg-secondary">{{ rev.export_format }}</span>
+                            {% endif %}
+                        </td>
                         <td class="small">{{ rev.created_at|date:"d M Y H:i" }}</td>
                         <td class="small">{% if rev.created_by %}{{ rev.created_by.get_full_name|default:rev.created_by.username }}{% else %}-{% endif %}</td>
-                        <td class="small text-truncate" style="max-width: 260px;" title="{{ rev.original_filename }}">
-                            {{ rev.original_filename|default:"file.pdf" }}
+                        <td class="small">
+                            {% if rev.change_summary %}
+                                {{ rev.change_summary }}
+                                {% if rev.change_details %}
+                                <button class="btn btn-link btn-sm p-0 ms-1 small" type="button"
+                                        data-bs-toggle="collapse" data-bs-target="#rev-details-{{ rev.pk }}" style="font-size:0.75rem;">
+                                    details
+                                </button>
+                                <div class="collapse mt-1" id="rev-details-{{ rev.pk }}">
+                                    <ul class="mb-0 ps-3" style="font-size:0.75rem;">
+                                        {% for d in rev.change_details %}
+                                        <li>
+                                            <strong>{{ d.label }}:</strong>
+                                            {{ d.before|default:"—" }} → {{ d.after|default:"—" }}
+                                            {% if d.delta %}<span class="text-muted">({{ d.delta }})</span>{% endif %}
+                                        </li>
+                                        {% endfor %}
+                                    </ul>
+                                </div>
+                                {% endif %}
+                            {% else %}
+                            <span class="text-muted">-</span>
+                            {% endif %}
                         </td>
                         <td class="text-end">
-                            <a href="{{ rev.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary" title="Download">
-                                <i class="bi bi-download"></i>
+                            <a href="{{ rev.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary" title="Preview / download">
+                                <i class="bi bi-eye"></i>
                             </a>
                             <form method="post" action="{% url 'costing:delete_revision' rev.pk %}" class="d-inline" onsubmit="return confirm('Delete revision {{ rev.revision_label }}? This cannot be undone.');">
                                 {% csrf_token %}
@@ -572,8 +603,8 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="5" class="text-center text-muted py-3 small">
-                            No PDF revisions yet. Click "PDF" on the header to export — the first revision will appear here.
+                        <td colspan="6" class="text-center text-muted py-3 small">
+                            No revisions yet. Click Excel or PDF in the header to export — the first revision will appear here.
                         </td>
                     </tr>
                     {% endfor %}

@@ -597,12 +597,19 @@ class CostingLineItem(models.Model):
 
 
 class CostingSheetRevision(models.Model):
-    """A saved PDF export of a costing sheet at a point in time.
+    """A saved export of a costing sheet at a point in time.
 
-    A new revision is auto-created every time the user exports the sheet
-    as PDF, so past versions are preserved. Users can download or delete
-    specific revisions from the detail page.
+    Auto-created every time the user exports the sheet as PDF or Excel,
+    so past versions are preserved. Users can preview or delete specific
+    revisions from the detail page. Also captures a state snapshot and
+    an auto-computed diff vs the previous revision.
     """
+
+    FORMAT_CHOICES = [
+        ('pdf',   'PDF'),
+        ('excel', 'Excel'),
+    ]
+
     sheet = models.ForeignKey(
         CostingSheet,
         on_delete=models.CASCADE,
@@ -612,9 +619,25 @@ class CostingSheetRevision(models.Model):
         max_length=16,
         help_text='Auto-assigned label like R00, R01, R02, ...',
     )
+    export_format = models.CharField(
+        max_length=10, choices=FORMAT_CHOICES, default='pdf',
+        help_text='Which export produced this revision',
+    )
     file = models.FileField(upload_to='costing/revisions/')
     original_filename = models.CharField(max_length=255, blank=True)
     notes = models.TextField(blank=True)
+    snapshot = models.JSONField(
+        null=True, blank=True,
+        help_text='Key sheet state at save time (for change tracking)',
+    )
+    change_summary = models.CharField(
+        max_length=500, blank=True,
+        help_text='Short one-line summary of changes vs previous revision',
+    )
+    change_details = models.JSONField(
+        null=True, blank=True,
+        help_text='Full list of field-level changes vs previous revision',
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -633,7 +656,8 @@ class CostingSheetRevision(models.Model):
 
     @classmethod
     def next_label_for(cls, sheet):
-        """Return the next R-label (R00 if none yet)."""
+        """Return the next R-label (R00 if none yet). Shared sequence
+        across PDF and Excel exports so the order reads naturally."""
         last = cls.objects.filter(sheet=sheet).order_by('-created_at').first()
         if not last:
             return 'R00'
