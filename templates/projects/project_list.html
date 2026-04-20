@@ -48,6 +48,8 @@
     .region-lnuk { background: #1a1a1a !important; }
     .region-lna { background: #C41E3A !important; }
     .region-pa { background: #fd7e14 !important; }
+    .clickable-row { cursor: pointer; transition: background-color 0.15s; }
+    .clickable-row:hover { background-color: rgba(196, 30, 58, 0.06); }
 </style>
 {% endblock %}
 
@@ -159,7 +161,7 @@
                 </thead>
                 <tbody>
                     {% for project in projects %}
-                    <tr>
+                    <tr class="clickable-row" data-href="{% url 'projects:detail' project.pk %}">
                         <td>
                             <a href="{% url 'projects:detail' project.pk %}" class="text-decoration-none fw-bold" style="color: #C41E3A;">
                                 {{ project.proposal_reference }}
@@ -203,7 +205,7 @@
                             {% endif %}
                         </td>
                         <td>{% if project.submission_deadline %}{{ project.submission_deadline|date:"d M Y" }}{% else %}-{% endif %}</td>
-                        <td class="text-center">
+                        <td class="text-center" data-no-row-click>
                             <div class="btn-group btn-group-sm">
                                 <a href="{% url 'projects:detail' project.pk %}" class="btn btn-outline-dark" title="View">
                                     <i class="bi bi-eye"></i>
@@ -344,4 +346,16 @@
     </div>
 </div>
 {% endif %}
+
+<script>
+// Make rows clickable — navigate to detail page, but skip clicks on
+// action buttons/links/inputs so the existing controls keep working.
+document.querySelectorAll('tr.clickable-row').forEach(function(row) {
+    row.addEventListener('click', function(e) {
+        if (e.target.closest('a, button, input, select, [data-no-row-click]')) return;
+        var href = row.dataset.href;
+        if (href) window.location.href = href;
+    });
+});
+</script>
 {% endblock %}
