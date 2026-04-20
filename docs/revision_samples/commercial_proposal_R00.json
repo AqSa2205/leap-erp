@@ -1,0 +1,51 @@
+{
+  "revision_meta": {
+    "revision_label": "R00",
+    "created_at": "2026-04-20T10:35:12+00:00",
+    "created_by": "aqsa.ahmed",
+    "notes": "Initial submission to client.",
+    "proposal_pk": 47,
+    "snapshot_version": 1
+  },
+  "proposal": {
+    "serial_number": 12,
+    "project_name": "Provisioning of CCTV, Access Control and Intruder Detection Systems for Dublin Data Centre Facility",
+    "proposal_reference": "LNIRL02126030",
+    "client_rfq_reference": "MRD-DUB-2026-RFQ-0418",
+    "po_number": "",
+    "submission_deadline": "2026-05-15",
+    "estimated_po_date": "2026-06-30",
+    "project_stage": "tender",
+    "region": {
+      "code": "IRL",
+      "name": "Ireland"
+    },
+    "status": {
+      "name": "Submitted",
+      "category": "active",
+      "color": "#0dcaf0"
+    },
+    "owner": {
+      "username": "amir.fida",
+      "full_name": "Amir Fida"
+    },
+    "customer": "Meridian Construction Ltd",
+    "end_user": "Dublin Data Centre Facility",
+    "contact_with": "Ciaran O'Brien — Project Director",
+    "year": "2026",
+    "po_award_quarter": "Q2",
+    "estimated_value": "1450000.00",
+    "estimated_value_usd": "1580000.00",
+    "estimated_value_per_annum": "0.00",
+    "estimated_gp": "28.00",
+    "success_quotient": "65.00",
+    "minimum_achievement": "0.00",
+    "actual_sales": "0.00",
+    "remarks": "Client indicated preference for Axis IP cameras and HID ACS. Redundant FTTH to each dwelling required.",
+    "notes": "Discussed with Aamna on 15 Apr: focus on 99.95% availability and 30-day retention. Awaiting go/no-go decision by 20 May.",
+    "portal_url": "https://clientportal.meridian.ie/rfq/MRD-DUB-2026-RFQ-0418",
+    "created_at": "2026-04-02T09:14:22+00:00",
+    "updated_at": "2026-04-20T10:33:00+00:00",
+    "created_by": "aqsa.ahmed"
+  }
+}
