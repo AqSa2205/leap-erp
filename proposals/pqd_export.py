@@ -233,6 +233,169 @@ def _convert_to_pdf(file_bytes, ext):
     return None
 
 
+# ── Pure-Python body PDF generator (reportlab) ──
+
+def _generate_pqd_body_pdf(pqd):
+    """Generate the PQD body (cover page + text sections) directly as PDF
+    using reportlab — no DOCX conversion required. Returns PDF bytes.
+    Produces a clean, consistent document regardless of platform."""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        BaseDocTemplate, PageTemplate, Frame, Paragraph, Spacer, PageBreak, Table, TableStyle,
+    )
+    from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.pdfgen.canvas import Canvas
+
+    # Locate logo
+    try:
+        from django.contrib.staticfiles import finders
+        logo_path = finders.find('images/leap_logo.jpg') or finders.find('images/leap_logo.png')
+    except Exception:
+        logo_path = None
+    if not logo_path:
+        candidate = os.path.join(str(settings.BASE_DIR), 'static', 'images', 'leap_logo.jpg')
+        if os.path.exists(candidate):
+            logo_path = candidate
+
+    LEAP_RED = colors.HexColor('#C41E3A')
+    GREY = colors.HexColor('#666666')
+
+    buf = io.BytesIO()
+    doc = BaseDocTemplate(buf, pagesize=A4,
+                          leftMargin=20*mm, rightMargin=20*mm,
+                          topMargin=25*mm, bottomMargin=22*mm)
+    frame = Frame(20*mm, 22*mm, A4[0]-40*mm, A4[1]-47*mm, showBoundary=0)
+
+    def _on_page(canvas, _doc):
+        page_w, page_h = A4
+        canvas.saveState()
+        # Top banner
+        if logo_path and os.path.exists(logo_path):
+            try:
+                canvas.drawImage(logo_path, 20*mm, page_h - 20*mm,
+                                 width=95, height=32, preserveAspectRatio=True, mask='auto')
+            except Exception:
+                pass
+        canvas.setStrokeColor(LEAP_RED)
+        canvas.setLineWidth(2)
+        canvas.line(20*mm, page_h - 22*mm, page_w - 20*mm, page_h - 22*mm)
+        # Reference in top-right
+        canvas.setFont('Helvetica', 8)
+        canvas.setFillColor(GREY)
+        canvas.drawRightString(page_w - 20*mm, page_h - 15*mm, pqd.pqd_reference or '')
+        # Footer
+        canvas.setFont('Helvetica', 7)
+        canvas.drawString(20*mm, 12*mm,
+            'Confidential. \u00A9 Leap Networks. All rights reserved.')
+        canvas.drawRightString(page_w - 20*mm, 12*mm, f'Page {_doc.page}')
+        canvas.restoreState()
+
+    doc.addPageTemplates([PageTemplate(id='main', frames=[frame], onPage=_on_page)])
+
+    # Styles — Trebuchet falls back to Helvetica if not registered
+    title_style = ParagraphStyle('Title', fontName='Helvetica-Bold', fontSize=22,
+                                 leading=26, alignment=TA_CENTER, textColor=LEAP_RED,
+                                 spaceAfter=8)
+    subtitle_style = ParagraphStyle('Subtitle', fontName='Helvetica', fontSize=14,
+                                    leading=18, alignment=TA_CENTER, textColor=colors.black,
+                                    spaceAfter=6)
+    meta_label = ParagraphStyle('MetaLabel', fontName='Helvetica-Bold', fontSize=10,
+                                textColor=GREY, alignment=TA_LEFT)
+    meta_value = ParagraphStyle('MetaValue', fontName='Helvetica', fontSize=10,
+                                textColor=colors.black, alignment=TA_LEFT)
+    section_heading = ParagraphStyle('SectionHeading', fontName='Helvetica-Bold',
+                                     fontSize=16, leading=20, textColor=LEAP_RED,
+                                     spaceBefore=12, spaceAfter=8)
+    body_style = ParagraphStyle('Body', fontName='Helvetica', fontSize=11,
+                                leading=16, alignment=TA_JUSTIFY, spaceAfter=6)
+
+    elements = []
+
+    # COVER PAGE
+    elements.append(Spacer(1, 30*mm))
+    elements.append(Paragraph('PREQUALIFICATION DOCUMENT', title_style))
+    elements.append(Spacer(1, 10*mm))
+    elements.append(Paragraph(pqd.title or '', subtitle_style))
+    elements.append(Spacer(1, 20*mm))
+
+    # Metadata table
+    from datetime import datetime
+    rev_date = pqd.revision_date.strftime('%d %B %Y') if pqd.revision_date else ''
+    meta_rows = [
+        [Paragraph('Reference:', meta_label), Paragraph(pqd.pqd_reference or '', meta_value)],
+        [Paragraph('Client:', meta_label), Paragraph(pqd.client_name or '', meta_value)],
+        [Paragraph('Project Description:', meta_label), Paragraph(pqd.project_description or '', meta_value)],
+        [Paragraph('Region:', meta_label), Paragraph(pqd.get_region_display_name() or '', meta_value)],
+        [Paragraph('Document Type:', meta_label), Paragraph(pqd.document_type or '', meta_value)],
+        [Paragraph('Revision:', meta_label), Paragraph(pqd.revision or '', meta_value)],
+        [Paragraph('Revision Date:', meta_label), Paragraph(rev_date, meta_value)],
+        [Paragraph('Prepared By:', meta_label), Paragraph(pqd.prepared_by_initials or '', meta_value)],
+        [Paragraph('Checked By:', meta_label), Paragraph(pqd.checked_by_initials or '—', meta_value)],
+        [Paragraph('Approved By:', meta_label), Paragraph(pqd.approved_by_initials or '—', meta_value)],
+    ]
+    meta_table = Table(meta_rows, colWidths=[50*mm, (A4[0] - 40*mm) - 50*mm])
+    meta_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('LINEBELOW', (0, 0), (-1, -1), 0.25, colors.HexColor('#dddddd')),
+    ]))
+    elements.append(meta_table)
+    elements.append(Spacer(1, 30*mm))
+    elements.append(Paragraph('Submitted by<br/><b>Leap Networks</b>', subtitle_style))
+    elements.append(PageBreak())
+
+    # Content sections
+    section_number = 1
+    for key, label in pqd.TEXT_SECTION_FIELDS:
+        content = getattr(pqd, key, '') or ''
+        # Only include sections that have text content (uploads are appended later)
+        if not content.strip():
+            continue
+        elements.append(Paragraph(f'{section_number}. {label}', section_heading))
+        # Strip outer whitespace, replace empty paragraphs
+        html = content.replace('&nbsp;', ' ')
+        # reportlab supports a subset of HTML; feed it paragraphs directly
+        # For safety, split on </p> boundaries so each paragraph is a separate flowable
+        import re
+        chunks = re.split(r'(<p[^>]*>.*?</p>|<h[1-6][^>]*>.*?</h[1-6]>|<ul[^>]*>.*?</ul>|<ol[^>]*>.*?</ol>|<table[^>]*>.*?</table>)', html, flags=re.DOTALL)
+        for chunk in chunks:
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            # Strip block-level tags for reportlab and treat as paragraphs
+            text = re.sub(r'<h[1-6][^>]*>', '<b>', chunk)
+            text = re.sub(r'</h[1-6]>', '</b>', text)
+            text = re.sub(r'<ul[^>]*>|</ul>|<ol[^>]*>|</ol>', '', text)
+            text = re.sub(r'<li[^>]*>', '&bull; ', text)
+            text = re.sub(r'</li>', '<br/>', text)
+            text = re.sub(r'<p[^>]*>|</p>', '', text)
+            text = re.sub(r'<table[^>]*>.*?</table>', '[Table — see source document]', text, flags=re.DOTALL)
+            if text.strip():
+                try:
+                    elements.append(Paragraph(text, body_style))
+                except Exception:
+                    # Fallback: strip all tags
+                    plain = re.sub(r'<[^>]+>', '', text)
+                    if plain.strip():
+                        elements.append(Paragraph(plain, body_style))
+        elements.append(Spacer(1, 6))
+        section_number += 1
+
+    if not elements or len(elements) < 5:
+        # Always have at least the cover page
+        pass
+
+    doc.build(elements)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def _image_to_pdf(image_bytes):
     """Convert an image to a single-page PDF using PIL."""
     try:
@@ -278,26 +441,22 @@ def _merge_pdfs(pdf_parts):
 def export_pqd_merged_pdf(pqd):
     """Generate the final merged PDF for a PQD.
 
-    Returns a tuple (content_bytes, filename, content_type) or
-    (zip_bytes, zip_filename, 'application/zip') if PDF conversion
-    isn't available (fallback).
+    Uses a pure-Python body PDF (reportlab) so the output is ALWAYS a
+    PDF, on any platform, with no MS Word / LibreOffice dependency.
+
+    Pipeline:
+    1. Generate body PDF via reportlab (cover page + text sections)
+    2. For each attachment in section order:
+       - PDF: pass through
+       - Image: convert to single-page PDF via PIL
+       - Word/PPT: try docx2pdf / libreoffice; list on placeholder page if both fail
+    3. Merge with pypdf into a single final PDF
+
+    Returns (pdf_bytes, filename, 'application/pdf').
     """
-    body_docx = _build_pqd_docx(pqd)
-    if body_docx is None:
-        # Template missing — cannot produce body
-        raise RuntimeError('PQD template not found')
-
-    # Try to convert the body to PDF
-    body_pdf = _convert_to_pdf(body_docx, 'docx')
-
-    # Collect attachments in section order (all 7 PQD sections)
     ordered_sections = [
-        'company_profile',
-        'list_of_material',
-        'product_catalogues',
-        'government_documents',
-        'iso_certificates',
-        'qualifications',
+        'company_profile', 'list_of_material', 'product_catalogues',
+        'government_documents', 'iso_certificates', 'qualifications',
         'list_of_projects',
     ]
     attachments = []
@@ -305,35 +464,70 @@ def export_pqd_merged_pdf(pqd):
         for att in pqd.attachments.filter(section=section).order_by('order', 'pk'):
             attachments.append(att)
 
-    # If body conversion failed, fall back to ZIP
-    if body_pdf is None:
-        return _fallback_zip(pqd, body_docx, attachments)
+    body_pdf = _generate_pqd_body_pdf(pqd)
 
-    # Convert each attachment to PDF and collect any that can't be converted
     pdf_parts = [body_pdf]
-    failed_attachments = []
+    skipped = []
     for att in attachments:
         try:
             with open(att.file.path, 'rb') as f:
                 data = f.read()
         except Exception:
-            failed_attachments.append(att)
+            skipped.append(att)
             continue
         pdf = _convert_to_pdf(data, att.extension)
         if pdf:
             pdf_parts.append(pdf)
         else:
-            failed_attachments.append(att)
+            skipped.append(att)
+
+    if skipped:
+        placeholder = _generate_skipped_placeholder_pdf(skipped)
+        if placeholder:
+            pdf_parts.append(placeholder)
 
     merged = _merge_pdfs(pdf_parts)
     safe_ref = slugify(pqd.pqd_reference or '')[:80] or 'pqd'
+    return merged, f'{safe_ref}.pdf', 'application/pdf'
 
-    if failed_attachments:
-        # Return a ZIP: merged PDF + any attachments that couldn't be converted
-        return _zip_merged_plus_failed(pqd, merged, safe_ref, failed_attachments)
 
-    filename = f'{safe_ref}.pdf'
-    return merged, filename, 'application/pdf'
+def _generate_skipped_placeholder_pdf(skipped_attachments):
+    """Generate a single-page PDF listing attachments that couldn't be converted."""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.enums import TA_LEFT
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=20*mm, rightMargin=20*mm,
+                            topMargin=20*mm, bottomMargin=20*mm)
+    heading = ParagraphStyle('H', fontName='Helvetica-Bold', fontSize=14,
+                             textColor=colors.HexColor('#C41E3A'), spaceAfter=10)
+    body = ParagraphStyle('B', fontName='Helvetica', fontSize=10,
+                          leading=14, alignment=TA_LEFT, spaceAfter=4)
+    els = [
+        Paragraph('Supplementary Attachments', heading),
+        Paragraph(
+            'The following files were uploaded with this PQD but could not be '
+            'embedded directly in this merged PDF (usually Word or PowerPoint '
+            'files require MS Office or LibreOffice on the server). Download '
+            'them individually from the PQD detail page:',
+            body,
+        ),
+        Spacer(1, 8),
+    ]
+    for att in skipped_attachments:
+        els.append(Paragraph(
+            f'&bull; <b>{att.get_section_display()}</b>: {att.original_filename or att.file.name} '
+            f'(.{att.extension})',
+            body,
+        ))
+    doc.build(els)
+    buf.seek(0)
+    return buf.getvalue()
 
 
 def _fallback_zip(pqd, body_docx, attachments):
