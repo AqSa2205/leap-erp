@@ -653,7 +653,7 @@ def add_project_document(request, pk):
     })
 
 
-# ─── Commercial Proposal Revisions ───────────────────────────
+# ─── Commercial Pipeline Revisions ───────────────────────────
 
 def _build_project_snapshot(project):
     """Return a dict capturing the Project's state at this moment.
