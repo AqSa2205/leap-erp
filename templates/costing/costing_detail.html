@@ -76,6 +76,24 @@
     .bom-table th.sticky-col { background: #212529; z-index: 3; }
     .bom-table td.sticky-col-1, .bom-table th.sticky-col-1 { left: 0; min-width: 45px; }
     .bom-table td.sticky-col-2, .bom-table th.sticky-col-2 { left: 45px; min-width: 180px; max-width: 220px; white-space: normal; }
+    /* Bulletproof sticky header: apply to every th so cells don't leak through */
+    .bom-table thead.sticky-top { z-index: 5; top: 0; }
+    .bom-table thead.sticky-top th {
+        position: sticky; top: 0; background: #212529; color: #fff;
+        box-shadow: 0 2px 0 rgba(0,0,0,0.08);
+    }
+    .bom-table thead.sticky-top th.cost-hdr { background: #495057 !important; }
+    /* Corner cells (sticky-top + sticky-col) need to beat both layers */
+    .bom-table thead.sticky-top th.sticky-col { z-index: 6; }
+    /* Section header rows stay visible below the thead while scrolling within a section.
+       Each td is made sticky individually — Safari won't stick a <tr> on its own. */
+    .bom-table tr.section-header-row > td {
+        position: sticky; top: 28px; z-index: 1;
+        background: #f0f0f0;
+    }
+    .bom-table tr.section-header-row:hover > td { background: #e4e4e4; }
+    /* Keep section-divider banners (A.3 Optional etc.) sticky too */
+    .bom-table tr.section-divider-row > td { position: sticky; top: 28px; z-index: 1; }
     .section-chevron { transition: transform 0.15s; display: inline-block; }
     .section-chevron.expanded { transform: rotate(90deg); }
     .section-item-count { font-weight: 400; font-size: 0.7rem; color: #6c757d; }
