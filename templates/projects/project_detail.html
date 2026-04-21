@@ -4,10 +4,208 @@
 {% block title %}{{ project.proposal_reference }} - Leap Networks ERP{% endblock %}
 {% block page_title %}Commercial Proposal Details{% endblock %}
 
+{% block extra_css %}
+<style>
+    .workflow-card .wf-col-header {
+        font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px;
+        font-weight: 700; color: #6c757d; padding: 0.5rem 0.75rem;
+        border-bottom: 2px solid #e0e0e0; margin-bottom: 0.5rem;
+    }
+    .workflow-card .wf-col-header.technical { color: #0dcaf0; border-bottom-color: #0dcaf0; }
+    .workflow-card .wf-col-header.commercial { color: #198754; border-bottom-color: #198754; }
+    .workflow-card .wf-item {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 0.65rem 0.75rem; border-radius: 6px; margin-bottom: 0.35rem;
+        background: #f8f9fa; transition: background 0.15s;
+    }
+    .workflow-card .wf-item:hover { background: #eef2f5; }
+    .workflow-card .wf-item .wf-status {
+        width: 10px; height: 10px; border-radius: 50%; display: inline-block;
+        margin-right: 8px; vertical-align: middle;
+    }
+    .workflow-card .wf-item .wf-status.present { background: #198754; box-shadow: 0 0 0 3px rgba(25,135,84,0.15); }
+    .workflow-card .wf-item .wf-status.missing { background: #c0c0c0; }
+    .workflow-card .wf-item .wf-label { font-weight: 600; color: #212529; }
+    .workflow-card .wf-item .wf-sub  { font-size: 0.72rem; color: #6c757d; margin-top: 2px; }
+    .workflow-card .wf-item a { text-decoration: none; color: inherit; flex-grow: 1; }
+    .workflow-card .wf-item a:hover { color: #C41E3A; }
+    .workflow-card .wf-action { font-size: 0.72rem; padding: 3px 8px; white-space: nowrap; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="row">
     <!-- Main Info -->
     <div class="col-lg-8">
+        <!-- Workflow Card — unified view of everything tied to this reference -->
+        <div class="card mb-4 workflow-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-diagram-3 me-2"></i>Workflow — <code>{{ project.proposal_reference }}</code></h5>
+                <small class="text-muted">Every piece of work tied to this reference</small>
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <!-- Technical column -->
+                    <div class="col-md-6">
+                        <div class="wf-col-header technical"><i class="bi bi-cpu me-1"></i>Technical</div>
+
+                        <!-- Client RFQ -->
+                        <div class="wf-item">
+                            <a href="{% url 'projects:document_list' %}?project={{ project.pk }}&document_type=rfq">
+                                <div>
+                                    <span class="wf-status {% if workflow.rfq_count %}present{% else %}missing{% endif %}"></span>
+                                    <span class="wf-label">Client RFQ</span>
+                                </div>
+                                <div class="wf-sub">{% if workflow.rfq_count %}{{ workflow.rfq_count }} document{{ workflow.rfq_count|pluralize }}{% else %}No RFQ uploaded yet{% endif %}</div>
+                            </a>
+                            <a href="{% url 'projects:add_document' project.pk %}" class="btn btn-outline-secondary wf-action ms-2">
+                                <i class="bi bi-upload"></i> Upload
+                            </a>
+                        </div>
+
+                        <!-- BOM (CostingSheet when stage = bom/ready) -->
+                        <div class="wf-item">
+                            {% if workflow.costing_sheets %}
+                                {% with sheet=workflow.costing_sheets.0 %}
+                                <a href="{% url 'costing:detail' sheet.pk %}?view=bom">
+                                    <div>
+                                        <span class="wf-status present"></span>
+                                        <span class="wf-label">Bill of Material (BOM)</span>
+                                    </div>
+                                    <div class="wf-sub">{{ sheet.title|truncatechars:55 }} · {{ sheet.get_workflow_stage_display }}</div>
+                                </a>
+                                <a href="{% url 'costing:detail' sheet.pk %}?view=bom" class="btn btn-outline-secondary wf-action ms-2">
+                                    <i class="bi bi-eye"></i> Open
+                                </a>
+                                {% endwith %}
+                            {% else %}
+                                <div>
+                                    <div><span class="wf-status missing"></span><span class="wf-label">Bill of Material (BOM)</span></div>
+                                    <div class="wf-sub">No costing sheet linked yet</div>
+                                </div>
+                                <a href="{% url 'costing:create' %}?project={{ project.pk }}" class="btn btn-outline-secondary wf-action ms-2">
+                                    <i class="bi bi-plus-lg"></i> Create
+                                </a>
+                            {% endif %}
+                        </div>
+
+                        <!-- Technical Proposal -->
+                        <div class="wf-item">
+                            {% if workflow.tech_proposals %}
+                                {% with tp=workflow.tech_proposals.0 %}
+                                <a href="{% url 'proposals:detail' tp.pk %}">
+                                    <div>
+                                        <span class="wf-status present"></span>
+                                        <span class="wf-label">Technical Proposal</span>
+                                    </div>
+                                    <div class="wf-sub">{{ tp.title|truncatechars:55 }} · {{ tp.get_status_display }}{% if workflow.tech_proposals|length > 1 %} · +{{ workflow.tech_proposals|length|add:-1 }} more{% endif %}</div>
+                                </a>
+                                <a href="{% url 'proposals:content' tp.pk %}" class="btn btn-outline-secondary wf-action ms-2">
+                                    <i class="bi bi-pencil"></i> Edit
+                                </a>
+                                {% endwith %}
+                            {% else %}
+                                <div>
+                                    <div><span class="wf-status missing"></span><span class="wf-label">Technical Proposal</span></div>
+                                    <div class="wf-sub">No technical write-up yet</div>
+                                </div>
+                                <a href="{% url 'proposals:create' %}?project={{ project.pk }}" class="btn btn-outline-secondary wf-action ms-2">
+                                    <i class="bi bi-plus-lg"></i> Create
+                                </a>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <!-- Commercial column -->
+                    <div class="col-md-6">
+                        <div class="wf-col-header commercial"><i class="bi bi-cash-stack me-1"></i>Commercial</div>
+
+                        <!-- Vendor Quotes -->
+                        <div class="wf-item">
+                            {% if workflow.costing_sheets %}
+                                {% with sheet=workflow.costing_sheets.0 %}
+                                <a href="{% url 'costing:detail' sheet.pk %}">
+                                    <div>
+                                        <span class="wf-status {% if workflow.vendor_quote_count %}present{% else %}missing{% endif %}"></span>
+                                        <span class="wf-label">Vendor Quotes</span>
+                                    </div>
+                                    <div class="wf-sub">{% if workflow.vendor_quote_count %}{{ workflow.vendor_quote_count }} quote{{ workflow.vendor_quote_count|pluralize }}{% else %}No vendor quotes uploaded{% endif %}</div>
+                                </a>
+                                <a href="{% url 'costing:detail' sheet.pk %}#uploadVendorQuoteModal" class="btn btn-outline-secondary wf-action ms-2">
+                                    <i class="bi bi-upload"></i> Upload
+                                </a>
+                                {% endwith %}
+                            {% else %}
+                                <div>
+                                    <div><span class="wf-status missing"></span><span class="wf-label">Vendor Quotes</span></div>
+                                    <div class="wf-sub">Link a costing sheet first</div>
+                                </div>
+                            {% endif %}
+                        </div>
+
+                        <!-- Costing -->
+                        <div class="wf-item">
+                            {% if workflow.costing_sheets %}
+                                {% with sheet=workflow.costing_sheets.0 %}
+                                <a href="{% url 'costing:detail' sheet.pk %}">
+                                    <div>
+                                        <span class="wf-status present"></span>
+                                        <span class="wf-label">Costing</span>
+                                    </div>
+                                    <div class="wf-sub">{{ sheet.get_workflow_stage_display }} · Grand Total {{ sheet.grand_total|floatformat:2 }} {{ sheet.output_currency }}</div>
+                                </a>
+                                <a href="{% url 'costing:detail' sheet.pk %}" class="btn btn-outline-secondary wf-action ms-2">
+                                    <i class="bi bi-calculator"></i> Open
+                                </a>
+                                {% endwith %}
+                            {% else %}
+                                <div>
+                                    <div><span class="wf-status missing"></span><span class="wf-label">Costing</span></div>
+                                    <div class="wf-sub">No costing sheet linked yet</div>
+                                </div>
+                                <a href="{% url 'costing:create' %}?project={{ project.pk }}" class="btn btn-outline-secondary wf-action ms-2">
+                                    <i class="bi bi-plus-lg"></i> Create
+                                </a>
+                            {% endif %}
+                        </div>
+
+                        <!-- Commercial Proposal (PDF exports = revisions) -->
+                        <div class="wf-item">
+                            {% if workflow.costing_sheets %}
+                                {% with sheet=workflow.costing_sheets.0 %}
+                                <a href="{% url 'costing:detail' sheet.pk %}">
+                                    <div>
+                                        <span class="wf-status {% if workflow.commercial_pdf_count %}present{% else %}missing{% endif %}"></span>
+                                        <span class="wf-label">Commercial Proposal (PDF)</span>
+                                    </div>
+                                    <div class="wf-sub">{% if workflow.commercial_pdf_count %}{{ workflow.commercial_pdf_count }} revision{{ workflow.commercial_pdf_count|pluralize }} saved{% else %}No PDF exported yet{% endif %}</div>
+                                </a>
+                                <a href="{% url 'costing:export_pdf' sheet.pk %}" target="_blank" class="btn btn-outline-secondary wf-action ms-2">
+                                    <i class="bi bi-file-earmark-pdf"></i> Export
+                                </a>
+                                {% endwith %}
+                            {% else %}
+                                <div>
+                                    <div><span class="wf-status missing"></span><span class="wf-label">Commercial Proposal (PDF)</span></div>
+                                    <div class="wf-sub">Link a costing sheet first</div>
+                                </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                {% if workflow.costing_sheets|length > 1 %}
+                <div class="mt-3 small text-muted">
+                    <i class="bi bi-info-circle me-1"></i>
+                    This reference has {{ workflow.costing_sheets|length }} costing sheets. Showing the most recent — all linked sheets:
+                    {% for s in workflow.costing_sheets %}
+                    <a href="{% url 'costing:detail' s.pk %}" class="text-decoration-none me-1">{{ s.title|truncatechars:30 }}</a>{% if not forloop.last %},{% endif %}
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
         <div class="card mb-4">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0">

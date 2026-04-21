@@ -112,10 +112,35 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['history'] = self.object.history.select_related(
+        project = self.object
+        context['history'] = project.history.select_related(
             'old_status', 'new_status', 'changed_by'
         ).all()[:10]
-        context['revisions'] = self.object.revisions.select_related('created_by').all()
+        context['revisions'] = project.revisions.select_related('created_by').all()
+
+        # ── Workflow data: everything linked to this proposal_reference ──
+        # RFQ documents
+        rfq_docs = Document.objects.filter(project=project, document_type='rfq')
+        # Costing sheets (BOM and Costing are the same record)
+        costing_sheets = list(project.costing_sheets.select_related('created_by').all())
+        # Technical proposals (write-ups)
+        from proposals.models import TechnicalProposal
+        tech_proposals = list(
+            TechnicalProposal.objects.filter(project=project).order_by('-updated_at')
+        )
+        # Vendor quotes + Commercial Proposal PDFs reached via any linked costing sheet
+        from costing.models import VendorQuote, CostingSheetRevision
+        vendor_quotes = VendorQuote.objects.filter(sheet__in=costing_sheets).count()
+        commercial_pdfs = CostingSheetRevision.objects.filter(sheet__in=costing_sheets).count()
+
+        context['workflow'] = {
+            'rfq_count':            rfq_docs.count(),
+            'rfq_first_url':        rfq_docs.first().file.url if rfq_docs.exists() else None,
+            'costing_sheets':       costing_sheets,
+            'tech_proposals':       tech_proposals,
+            'vendor_quote_count':   vendor_quotes,
+            'commercial_pdf_count': commercial_pdfs,
+        }
         return context
 
 
