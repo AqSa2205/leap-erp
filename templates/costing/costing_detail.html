@@ -65,6 +65,21 @@
     .margin-edit { text-align: center; width: 60px; }
     .cost-edit:focus, .margin-edit:focus, .text-edit:focus { background: #fff; border-color: var(--leap-red); outline: none; }
     .cost-edit.saved, .margin-edit.saved, .text-edit.saved { border-color: #198754; background: rgba(25,135,84,0.08); }
+    /* In-flight save state: subtle blue pulsing ring so users know the
+       AJAX save is still in progress. Applied by saveField() in JS. */
+    @keyframes inline-saving-pulse {
+        0%, 100% { box-shadow: 0 0 0 2px rgba(13,110,253,0.2); }
+        50%      { box-shadow: 0 0 0 2px rgba(13,110,253,0.55); }
+    }
+    .inline-edit.saving,
+    .rate-edit.saving,
+    .currency-select.saving,
+    .cost-edit.saving,
+    .margin-edit.saving,
+    .text-edit.saving {
+        animation: inline-saving-pulse 0.9s ease-in-out infinite;
+        border-color: #0d6efd !important;
+    }
     /* Highlight the row currently being edited so users don't lose context when scrolling right */
     .bom-table tr.row-editing > td { background: #fff9c4 !important; }
     .bom-table tr.row-editing > td.sticky-col { background: #fff9c4 !important; }
