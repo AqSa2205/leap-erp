@@ -36,13 +36,17 @@ from notifications.services import notify_users
 
 
 def _conversion_rate(output_currency, rates_dict):
-    """Return factor to convert SAR values to the given output currency."""
+    """Return factor to multiply a SAR amount by to get `output_currency`.
+
+    rates_dict holds rate_to_usd values, i.e. 1 USD = rates_dict[code] code.
+    So 1 SAR = (1/sar_rate) USD = (target_rate/sar_rate) target_currency.
+    """
     if output_currency == 'SAR':
         return Decimal('1')
     sar_rate = rates_dict.get('SAR')
     target_rate = rates_dict.get(output_currency)
     if sar_rate and target_rate:
-        return (sar_rate / target_rate).quantize(Decimal('0.000001'))
+        return (target_rate / sar_rate).quantize(Decimal('0.000001'))
     return Decimal('1')
 from .forms import (
     CostingSheetForm, CostingSectionForm, CostingLineItemForm,
@@ -323,11 +327,21 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
                 item.set_sheet_cache(sheet)
                 item_count += 1
                 qty = item.quantity
+                # Convert per-item supplier-currency values to SAR so the
+                # aggregates are unit-consistent regardless of how many
+                # different supplier currencies are in play. Everything below
+                # is in SAR; the template multiplies by conversion_rate once
+                # at display time to show in output_currency.
+                ex2sar = item.exchange_rate_to_sar
+                total_cost_sar   = item.unit_cost_sar * qty
+                base_cost_sar    = (item.base_unit_cost * ex2sar) * qty
+                discount_sar     = (item.discount_amount * ex2sar) * qty
+
                 section_sub['subtotal'] += item.final_total_price
-                section_sub['total_cost'] += item.total_cost
-                section_sub['base_unit_cost'] += item.base_unit_cost * qty
-                section_sub['discount'] += item.discount_amount * qty
-                section_sub['unit_cost'] += item.unit_cost * qty
+                section_sub['total_cost'] += total_cost_sar
+                section_sub['base_unit_cost'] += base_cost_sar
+                section_sub['discount'] += discount_sar
+                section_sub['unit_cost'] += total_cost_sar
                 section_sub['base_unit_price'] += item.base_unit_price * qty
                 section_sub['base_total_price'] += item.base_total_price
 
@@ -340,10 +354,10 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
 
                 ucs = item.unit_cost_sar
                 sheet_totals['grand_total'] += item.final_total_price
-                sheet_totals['total_cost'] += item.total_cost
-                sheet_totals['total_base_cost'] += item.base_unit_cost * qty
-                sheet_totals['total_discount'] += item.discount_amount * qty
-                sheet_totals['total_margin_amount'] += item.base_total_price - item.total_cost
+                sheet_totals['total_cost'] += total_cost_sar
+                sheet_totals['total_base_cost'] += base_cost_sar
+                sheet_totals['total_discount'] += discount_sar
+                sheet_totals['total_margin_amount'] += item.base_total_price - total_cost_sar
                 sheet_totals['total_shipping_amount'] += ucs * item.effective_shipping_pct * qty
                 sheet_totals['total_customs_amount'] += ucs * item.effective_customs_pct * qty
                 sheet_totals['total_finances_amount'] += ucs * item.effective_finances_pct * qty
@@ -911,20 +925,24 @@ def ajax_update_item_field(request, pk):
             is_pricing=_field_is_pricing(field),
         )
 
-    # Recompute values with caches and return them
+    # Recompute values with caches and return them. Cost columns stay in
+    # the item's supplier currency; price columns convert SAR → output_currency
+    # so the updated cells match what the template originally rendered.
     rates_dict = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
     item.set_exchange_rates_cache(rates_dict)
     item.set_sheet_cache(item.section.costing_sheet)
+    conv = _conversion_rate(sheet.output_currency, rates_dict)
+    q = Decimal('0.01')
 
     return JsonResponse({
         'ok': True,
         'computed': {
-            'unit_cost': str(item.unit_cost),
-            'total_cost': str(item.total_cost),
-            'base_unit_price': str(item.base_unit_price),
-            'base_total_price': str(item.base_total_price),
-            'final_unit_price': str(item.final_unit_price),
-            'final_total_price': str(item.final_total_price),
+            'unit_cost':        str(item.unit_cost),
+            'total_cost':       str(item.total_cost),
+            'base_unit_price':  str((item.base_unit_price * conv).quantize(q)),
+            'base_total_price': str((item.base_total_price * conv).quantize(q)),
+            'final_unit_price': str((item.final_unit_price * conv).quantize(q)),
+            'final_total_price':str((item.final_total_price * conv).quantize(q)),
         },
     })
 
