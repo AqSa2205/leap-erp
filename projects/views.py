@@ -141,6 +141,135 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
             'vendor_quote_count':   vendor_quotes,
             'commercial_pdf_count': commercial_pdfs,
         }
+
+        # ── Timeline: flat, chronologically sorted event stream ─────────
+        # Each event: {when, icon, color, title, subtitle, actor, url}
+        events = []
+
+        def _actor_name(u):
+            return (u.get_full_name() or u.username) if u else ''
+
+        # Project created
+        if project.created_at:
+            events.append({
+                'when':     project.created_at,
+                'icon':     'bi-folder-plus',
+                'color':    '#1a1a1a',
+                'title':    'Pipeline entry created',
+                'subtitle': project.project_name or project.proposal_reference,
+                'actor':    _actor_name(project.owner),
+                'url':      '',
+            })
+
+        # RFQ documents uploaded
+        for doc in rfq_docs.select_related('uploaded_by'):
+            events.append({
+                'when':     doc.uploaded_at,
+                'icon':     'bi-file-earmark-arrow-up',
+                'color':    '#0dcaf0',
+                'title':    'Client RFQ uploaded',
+                'subtitle': doc.name,
+                'actor':    _actor_name(doc.uploaded_by),
+                'url':      reverse_lazy('projects:document_detail', kwargs={'pk': doc.pk}),
+            })
+
+        # Costing sheet lifecycle
+        for sheet in costing_sheets:
+            if sheet.created_at:
+                events.append({
+                    'when':     sheet.created_at,
+                    'icon':     'bi-list-check',
+                    'color':    '#ffc107',
+                    'title':    'BOM started',
+                    'subtitle': sheet.title,
+                    'actor':    _actor_name(sheet.created_by),
+                    'url':      reverse_lazy('costing:detail', kwargs={'pk': sheet.pk}) + '?view=bom',
+                })
+            if getattr(sheet, 'handed_over_at', None):
+                events.append({
+                    'when':     sheet.handed_over_at,
+                    'icon':     'bi-arrow-right-square',
+                    'color':    '#0d6efd',
+                    'title':    'BOM handed over to sales',
+                    'subtitle': sheet.title,
+                    'actor':    _actor_name(getattr(sheet, 'handed_over_by', None)),
+                    'url':      reverse_lazy('costing:detail', kwargs={'pk': sheet.pk}),
+                })
+            if getattr(sheet, 'costing_started_at', None):
+                events.append({
+                    'when':     sheet.costing_started_at,
+                    'icon':     'bi-cash-coin',
+                    'color':    '#198754',
+                    'title':    'Costing in progress',
+                    'subtitle': sheet.title,
+                    'actor':    _actor_name(getattr(sheet, 'costing_started_by', None)),
+                    'url':      reverse_lazy('costing:detail', kwargs={'pk': sheet.pk}),
+                })
+            if getattr(sheet, 'finalized_at', None):
+                events.append({
+                    'when':     sheet.finalized_at,
+                    'icon':     'bi-check2-circle',
+                    'color':    '#212529',
+                    'title':    'Costing finalized',
+                    'subtitle': f'{sheet.title} · Grand total {sheet.grand_total:.2f} {sheet.output_currency}',
+                    'actor':    _actor_name(getattr(sheet, 'finalized_by', None)),
+                    'url':      reverse_lazy('costing:detail', kwargs={'pk': sheet.pk}),
+                })
+
+        # Commercial Proposal PDF exports
+        from costing.models import CostingSheetRevision as _Rev
+        for rev in _Rev.objects.filter(sheet__in=costing_sheets, export_format='pdf').select_related('created_by', 'sheet'):
+            events.append({
+                'when':     rev.created_at,
+                'icon':     'bi-file-earmark-pdf',
+                'color':    '#C41E3A',
+                'title':    f'Commercial Proposal {rev.revision_label} exported',
+                'subtitle': rev.change_summary or rev.sheet.title,
+                'actor':    _actor_name(rev.created_by),
+                'url':      rev.file.url if rev.file else reverse_lazy('costing:detail', kwargs={'pk': rev.sheet_id}),
+            })
+
+        # Vendor quotes uploaded
+        from costing.models import VendorQuote as _VQ
+        for vq in _VQ.objects.filter(sheet__in=costing_sheets).select_related('uploaded_by', 'sheet'):
+            events.append({
+                'when':     vq.uploaded_at,
+                'icon':     'bi-receipt',
+                'color':    '#6f42c1',
+                'title':    f'Vendor quote from {vq.vendor_name}',
+                'subtitle': f'{vq.quote_reference or "no ref"} · {vq.sheet.title}',
+                'actor':    _actor_name(vq.uploaded_by),
+                'url':      reverse_lazy('costing:detail', kwargs={'pk': vq.sheet_id}),
+            })
+
+        # Technical proposals
+        for tp in tech_proposals:
+            if tp.created_at:
+                events.append({
+                    'when':     tp.created_at,
+                    'icon':     'bi-file-earmark-richtext',
+                    'color':    '#0dcaf0',
+                    'title':    'Technical Proposal created',
+                    'subtitle': tp.title,
+                    'actor':    _actor_name(tp.created_by),
+                    'url':      reverse_lazy('proposals:detail', kwargs={'pk': tp.pk}),
+                })
+
+        # Pipeline-entry revisions
+        for rev in project.revisions.select_related('created_by'):
+            events.append({
+                'when':     rev.created_at,
+                'icon':     'bi-bookmark-star',
+                'color':    '#fd7e14',
+                'title':    f'Revision {rev.revision_label} saved',
+                'subtitle': rev.notes or 'Snapshot of pipeline state',
+                'actor':    _actor_name(rev.created_by),
+                'url':      reverse_lazy('projects:revision_detail', kwargs={'pk': project.pk, 'revision_pk': rev.pk}),
+            })
+
+        # Sort newest first
+        events.sort(key=lambda e: e['when'] or project.created_at, reverse=True)
+        context['timeline'] = events
         return context
 
 
