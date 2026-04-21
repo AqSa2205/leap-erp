@@ -994,6 +994,11 @@
                 <div class="date" id="clockDate">Loading...</div>
             </div>
             <div class="d-flex align-items-center gap-2">
+            <button class="gsearch-trigger" id="gsearchTrigger" type="button" title="Search everything (Ctrl+K)">
+                <i class="bi bi-search"></i>
+                <span class="gsearch-trigger-label d-none d-md-inline">Search…</span>
+                <span class="gsearch-kbd d-none d-md-inline">Ctrl K</span>
+            </button>
             <div class="notif-wrapper" id="notifWrapper">
                 <button class="notif-bell" id="notifBell" title="Notifications">
                     <i class="bi bi-bell"></i>
@@ -1305,5 +1310,189 @@
     </script>
     {% endif %}
     {% block extra_js %}{% endblock %}
+
+    <!-- Global Search Modal -->
+    <div class="gsearch-overlay" id="gsearchOverlay" aria-hidden="true">
+        <div class="gsearch-modal" role="dialog" aria-label="Global search">
+            <div class="gsearch-input-wrap">
+                <i class="bi bi-search gsearch-input-icon"></i>
+                <input type="text" id="gsearchInput" class="gsearch-input" placeholder="Search proposals, projects, vendors, clients…" autocomplete="off" spellcheck="false" />
+                <span class="gsearch-esc">Esc</span>
+            </div>
+            <div class="gsearch-results" id="gsearchResults">
+                <div class="gsearch-hint">
+                    <i class="bi bi-lightbulb"></i>
+                    Type at least 2 characters. Try a proposal reference, vendor, client or project name.
+                </div>
+            </div>
+        </div>
+    </div>
+    <style>
+        .gsearch-trigger {
+            display: inline-flex; align-items: center; gap: 0.5rem;
+            background: #f1f3f5; border: 1px solid #e3e6ea; color: #495057;
+            padding: 0.35rem 0.7rem; border-radius: 8px;
+            font-size: 0.875rem; cursor: pointer; transition: all 0.15s;
+        }
+        .gsearch-trigger:hover { background: #e9ecef; border-color: #ced4da; }
+        .gsearch-trigger-label { color: #868e96; }
+        .gsearch-kbd {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.7rem; background: #fff; border: 1px solid #dee2e6;
+            border-radius: 4px; padding: 1px 5px; color: #868e96;
+        }
+        [data-theme="dark"] .gsearch-trigger { background: #2d2d2d; border-color: #404040; color: #e0e0e0; }
+        [data-theme="dark"] .gsearch-trigger:hover { background: #3a3a3a; }
+        [data-theme="dark"] .gsearch-kbd { background: #1a1a1a; border-color: #404040; color: #868e96; }
+
+        .gsearch-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+            display: none; align-items: flex-start; justify-content: center;
+            z-index: 2000; padding-top: 10vh;
+        }
+        .gsearch-overlay.show { display: flex; }
+        .gsearch-modal {
+            width: 640px; max-width: 92vw; max-height: 70vh;
+            background: #fff; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+            display: flex; flex-direction: column; overflow: hidden;
+        }
+        [data-theme="dark"] .gsearch-modal { background: #1e1e1e; color: #e0e0e0; }
+        .gsearch-input-wrap { display: flex; align-items: center; gap: 0.6rem; padding: 0.9rem 1.1rem; border-bottom: 1px solid #eee; }
+        [data-theme="dark"] .gsearch-input-wrap { border-color: #333; }
+        .gsearch-input-icon { color: #868e96; font-size: 1.1rem; }
+        .gsearch-input { flex: 1; border: none; outline: none; background: transparent; font-size: 1rem; color: inherit; }
+        .gsearch-esc { font-family: ui-monospace, monospace; font-size: 0.72rem; color: #868e96; border: 1px solid #dee2e6; border-radius: 4px; padding: 1px 6px; }
+        [data-theme="dark"] .gsearch-esc { border-color: #404040; }
+        .gsearch-results { flex: 1; overflow-y: auto; padding: 0.5rem; }
+        .gsearch-hint { padding: 1rem; color: #868e96; font-size: 0.875rem; text-align: center; }
+        .gsearch-hint i { color: #ffc107; margin-right: 0.3rem; }
+        .gsearch-group-label {
+            font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px;
+            color: #868e96; padding: 0.6rem 0.8rem 0.25rem; font-weight: 600;
+        }
+        .gsearch-hit {
+            display: flex; align-items: center; gap: 0.7rem;
+            padding: 0.55rem 0.8rem; border-radius: 8px;
+            cursor: pointer; text-decoration: none; color: inherit;
+        }
+        .gsearch-hit:hover, .gsearch-hit.active { background: #f1f3f5; }
+        [data-theme="dark"] .gsearch-hit:hover, [data-theme="dark"] .gsearch-hit.active { background: #2a2a2a; }
+        .gsearch-hit-icon { width: 32px; height: 32px; border-radius: 6px; background: #f8f9fa; display: flex; align-items: center; justify-content: center; color: #C41E3A; flex-shrink: 0; }
+        [data-theme="dark"] .gsearch-hit-icon { background: #2a2a2a; }
+        .gsearch-hit-body { flex: 1; min-width: 0; }
+        .gsearch-hit-title { font-weight: 600; font-size: 0.92rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gsearch-hit-subtitle { font-size: 0.78rem; color: #868e96; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gsearch-empty { padding: 2rem 1rem; text-align: center; color: #868e96; }
+    </style>
+    <script>
+    (function () {
+        var overlay = document.getElementById('gsearchOverlay');
+        var input   = document.getElementById('gsearchInput');
+        var results = document.getElementById('gsearchResults');
+        var trigger = document.getElementById('gsearchTrigger');
+        if (!overlay || !input || !results || !trigger) return;
+
+        var debounceId, lastQuery = '', activeIdx = -1, flatHits = [];
+
+        function open() {
+            overlay.classList.add('show');
+            setTimeout(function () { input.focus(); input.select(); }, 30);
+        }
+        function close() {
+            overlay.classList.remove('show');
+            activeIdx = -1;
+        }
+
+        trigger.addEventListener('click', open);
+        overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+
+        document.addEventListener('keydown', function (e) {
+            var isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+            if ((isMac ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === 'k') {
+                e.preventDefault();
+                open();
+                return;
+            }
+            if (!overlay.classList.contains('show')) return;
+            if (e.key === 'Escape') { close(); return; }
+            if (e.key === 'ArrowDown' && flatHits.length) {
+                e.preventDefault();
+                activeIdx = (activeIdx + 1) % flatHits.length;
+                highlight();
+            } else if (e.key === 'ArrowUp' && flatHits.length) {
+                e.preventDefault();
+                activeIdx = (activeIdx - 1 + flatHits.length) % flatHits.length;
+                highlight();
+            } else if (e.key === 'Enter' && activeIdx >= 0 && flatHits[activeIdx]) {
+                window.location.href = flatHits[activeIdx].url;
+            }
+        });
+
+        function highlight() {
+            var els = results.querySelectorAll('.gsearch-hit');
+            els.forEach(function (el, i) {
+                el.classList.toggle('active', i === activeIdx);
+                if (i === activeIdx) el.scrollIntoView({ block: 'nearest' });
+            });
+        }
+
+        input.addEventListener('input', function () {
+            clearTimeout(debounceId);
+            var q = input.value.trim();
+            if (q.length < 2) {
+                lastQuery = '';
+                results.innerHTML = '<div class="gsearch-hint"><i class="bi bi-lightbulb"></i>Type at least 2 characters.</div>';
+                flatHits = []; activeIdx = -1;
+                return;
+            }
+            debounceId = setTimeout(function () { doSearch(q); }, 180);
+        });
+
+        function doSearch(q) {
+            if (q === lastQuery) return;
+            lastQuery = q;
+            fetch('/api/search/?q=' + encodeURIComponent(q))
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (data.q !== lastQuery) return; // stale
+                    render(data.groups || []);
+                })
+                .catch(function () {
+                    results.innerHTML = '<div class="gsearch-empty">Search failed. Try again.</div>';
+                });
+        }
+
+        function render(groups) {
+            if (!groups.length) {
+                results.innerHTML = '<div class="gsearch-empty">No matches for "' + escapeHtml(lastQuery) + '"</div>';
+                flatHits = []; activeIdx = -1;
+                return;
+            }
+            var html = '';
+            flatHits = [];
+            groups.forEach(function (g) {
+                html += '<div class="gsearch-group-label">' + escapeHtml(g.label) + '</div>';
+                g.hits.forEach(function (h) {
+                    flatHits.push(h);
+                    html += '<a class="gsearch-hit" href="' + h.url + '">' +
+                            '<div class="gsearch-hit-icon"><i class="bi ' + (g.icon || 'bi-box') + '"></i></div>' +
+                            '<div class="gsearch-hit-body">' +
+                            '<div class="gsearch-hit-title">' + escapeHtml(h.title || '') + '</div>' +
+                            '<div class="gsearch-hit-subtitle">' + escapeHtml(h.subtitle || '') + '</div>' +
+                            '</div></a>';
+                });
+            });
+            results.innerHTML = html;
+            activeIdx = flatHits.length ? 0 : -1;
+            highlight();
+        }
+
+        function escapeHtml(str) {
+            var d = document.createElement('div');
+            d.textContent = str || '';
+            return d.innerHTML;
+        }
+    })();
+    </script>
 </body>
 </html>
