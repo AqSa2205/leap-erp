@@ -724,8 +724,8 @@
                 </a>
             </li>
             <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.app_name == 'projects' and 'document' not in request.resolver_match.url_name %}active{% endif %}" href="{% url 'projects:list' %}" data-title="Commercial Proposals">
-                    <i class="bi bi-folder"></i> <span>Commercial Proposals</span>
+                <a class="nav-link {% if request.resolver_match.app_name == 'projects' and 'document' not in request.resolver_match.url_name %}active{% endif %}" href="{% url 'projects:list' %}" data-title="Commercial Pipeline">
+                    <i class="bi bi-folder"></i> <span>Commercial Pipeline</span>
                 </a>
             </li>
             <li class="nav-item">
@@ -733,16 +733,93 @@
                     <i class="bi bi-file-earmark-text"></i> <span>Documents</span>
                 </a>
             </li>
+
+            {# ─── Proposals (clickable + collapsible sub-groups) ─── #}
             <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.app_name == 'costing' %}active{% endif %}" href="{% url 'costing:list' %}" data-title="Costing">
-                    <i class="bi bi-calculator"></i> <span>Costing</span>
-                </a>
+                <div class="d-flex align-items-stretch">
+                    <a class="nav-link flex-grow-1 {% if request.resolver_match.url_name == 'dashboard' and request.resolver_match.app_name == 'proposals' %}active{% endif %}" href="{% url 'proposals:dashboard' %}" data-title="Proposals">
+                        <i class="bi bi-kanban"></i> <span>Proposals</span>
+                    </a>
+                    <a class="nav-link px-2 d-flex align-items-center" data-bs-toggle="collapse" href="#proposalsSubmenu" role="button" title="Show sub-items"
+                       aria-expanded="{% if request.resolver_match.app_name == 'costing' or request.resolver_match.app_name == 'proposals' %}true{% else %}false{% endif %}" style="border-left: 1px solid rgba(0,0,0,0.08);">
+                        <i class="bi bi-chevron-down small"></i>
+                    </a>
+                </div>
+                <div class="collapse {% if request.resolver_match.app_name == 'costing' or request.resolver_match.app_name == 'proposals' or request.resolver_match.url_name == 'dashboard' %}show{% endif %}" id="proposalsSubmenu">
+                    <ul class="nav flex-column ms-2">
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'dashboard' and request.resolver_match.app_name == 'proposals' %}active{% endif %}" href="{% url 'proposals:dashboard' %}">
+                                <i class="bi bi-speedometer2"></i> <span>Dashboard</span>
+                            </a>
+                        </li>
+
+                        {# ─── Technical sub-group ─── #}
+                        <li class="nav-item">
+                            <div class="d-flex align-items-stretch">
+                                <a class="nav-link py-1 flex-grow-1" href="{% url 'costing:list' %}?view=bom" title="Technical: Client RFQ · BOM · Technical Proposal">
+                                    <i class="bi bi-cpu text-info"></i> <span>Technical</span>
+                                </a>
+                                <a class="nav-link py-1 px-2 d-flex align-items-center" data-bs-toggle="collapse" href="#proposalsTechnical" role="button"
+                                   aria-expanded="{% if request.GET.view == 'bom' %}true{% else %}false{% endif %}" style="border-left: 1px solid rgba(0,0,0,0.08);">
+                                    <i class="bi bi-chevron-down small"></i>
+                                </a>
+                            </div>
+                            <div class="collapse {% if request.GET.view == 'bom' %}show{% endif %}" id="proposalsTechnical">
+                                <ul class="nav flex-column ms-3">
+                                    <li class="nav-item">
+                                        <a class="nav-link py-1" href="{% url 'projects:document_list' %}?document_type=rfq">
+                                            <i class="bi bi-file-earmark-arrow-up"></i> <span>Client RFQ</span>
+                                        </a>
+                                    </li>
+                                    <li class="nav-item">
+                                        <a class="nav-link py-1 {% if request.resolver_match.app_name == 'costing' and request.GET.view == 'bom' %}active{% endif %}" href="{% url 'costing:list' %}?view=bom">
+                                            <i class="bi bi-list-check"></i> <span>BOM</span>
+                                        </a>
+                                    </li>
+                                    <li class="nav-item">
+                                        <a class="nav-link py-1 {% if request.resolver_match.app_name == 'proposals' and 'pqd' not in request.resolver_match.url_name and request.resolver_match.url_name != 'dashboard' %}active{% endif %}" href="{% url 'proposals:list' %}">
+                                            <i class="bi bi-file-earmark-richtext"></i> <span>Technical Proposal</span>
+                                        </a>
+                                    </li>
+                                </ul>
+                            </div>
+                        </li>
+
+                        {# ─── Commercial sub-group ─── #}
+                        <li class="nav-item">
+                            <div class="d-flex align-items-stretch">
+                                <a class="nav-link py-1 flex-grow-1" href="{% url 'costing:list' %}" title="Commercial: Vendor Quotes · Costing · Commercial Proposal">
+                                    <i class="bi bi-cash-stack text-success"></i> <span>Commercial</span>
+                                </a>
+                                <a class="nav-link py-1 px-2 d-flex align-items-center" data-bs-toggle="collapse" href="#proposalsCommercial" role="button"
+                                   aria-expanded="{% if request.resolver_match.app_name == 'costing' and request.GET.view != 'bom' %}true{% else %}false{% endif %}" style="border-left: 1px solid rgba(0,0,0,0.08);">
+                                    <i class="bi bi-chevron-down small"></i>
+                                </a>
+                            </div>
+                            <div class="collapse {% if request.resolver_match.app_name == 'costing' and request.GET.view != 'bom' %}show{% endif %}" id="proposalsCommercial">
+                                <ul class="nav flex-column ms-3">
+                                    <li class="nav-item">
+                                        <a class="nav-link py-1 {% if request.resolver_match.url_name == 'vendor_quote_list' %}active{% endif %}" href="{% url 'costing:vendor_quote_list' %}">
+                                            <i class="bi bi-receipt"></i> <span>Vendor Quotes</span>
+                                        </a>
+                                    </li>
+                                    <li class="nav-item">
+                                        <a class="nav-link py-1 {% if request.resolver_match.app_name == 'costing' and request.GET.view != 'bom' and request.GET.view != 'commercial' and request.resolver_match.url_name != 'vendor_quote_list' %}active{% endif %}" href="{% url 'costing:list' %}">
+                                            <i class="bi bi-calculator"></i> <span>Costing</span>
+                                        </a>
+                                    </li>
+                                    <li class="nav-item">
+                                        <a class="nav-link py-1 {% if request.GET.view == 'commercial' %}active{% endif %}" href="{% url 'costing:list' %}?view=commercial">
+                                            <i class="bi bi-file-earmark-pdf"></i> <span>Commercial Proposal</span>
+                                        </a>
+                                    </li>
+                                </ul>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
             </li>
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.app_name == 'proposals' and 'pqd' not in request.resolver_match.url_name %}active{% endif %}" href="{% url 'proposals:list' %}" data-title="Technical Proposals">
-                    <i class="bi bi-file-earmark-richtext"></i> <span>Technical Proposals</span>
-                </a>
-            </li>
+
             {% if user.is_super_admin_user %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'proposals' and 'pqd' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'proposals:pqd_list' %}" data-title="Prequalification">

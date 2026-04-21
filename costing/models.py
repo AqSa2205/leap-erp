@@ -47,6 +47,17 @@ class CostingSheet(models.Model):
         ('final', 'Final'),
     ]
 
+    # Handover workflow — tracks where the sheet is in the
+    # proposal → sales pipeline. Still editable by both teams at every
+    # stage (per existing policy); the stage just gives visibility and
+    # drives the filters/notifications.
+    WORKFLOW_STAGE_CHOICES = [
+        ('bom_in_progress',     'BOM — in progress by Proposal'),
+        ('ready_for_costing',   'Ready for costing (handed over to Sales)'),
+        ('costing_in_progress', 'Costing — in progress by Sales'),
+        ('finalized',           'Finalized'),
+    ]
+
     project = models.ForeignKey(
         'projects.Project',
         on_delete=models.SET_NULL,
@@ -64,6 +75,10 @@ class CostingSheet(models.Model):
     finances_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
     installation_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
     output_currency = models.CharField(max_length=10, default='SAR')
+    default_supplier_currency = models.CharField(
+        max_length=10, default='SAR',
+        help_text='The currency the team is entering costs in. New line items default to this currency; use the "Apply to all" action to bulk-update existing items.',
+    )
     # PDF header fields
     customer_name = models.CharField(max_length=255, blank=True)
     end_user = models.CharField(max_length=255, blank=True)
@@ -85,6 +100,33 @@ class CostingSheet(models.Model):
     )
 
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='draft')
+
+    # Workflow stage + handover bookkeeping
+    workflow_stage = models.CharField(
+        max_length=24, choices=WORKFLOW_STAGE_CHOICES, default='bom_in_progress',
+    )
+    handed_over_at = models.DateTimeField(null=True, blank=True,
+        help_text='When the proposal team marked the BOM ready for sales')
+    handed_over_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='costing_sheets_handed_over',
+    )
+    handover_note = models.TextField(blank=True)
+    costing_started_at = models.DateTimeField(null=True, blank=True,
+        help_text='When the sales team picked it up and started pricing')
+    costing_started_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='costing_sheets_costing_started',
+    )
+    finalized_at = models.DateTimeField(null=True, blank=True)
+    finalized_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='costing_sheets_finalized',
+    )
+
     include_optional_in_total = models.BooleanField(
         default=False,
         help_text='If checked, optional sections are included in the grand total. Otherwise they are shown but not counted.'
@@ -594,3 +636,169 @@ class CostingLineItem(models.Model):
     @property
     def display_installation_pct(self):
         return self._display_rate('installation_pct', 'installation_rate', 'installation_rate')
+
+
+class CostingSheetRevision(models.Model):
+    """A saved export of a costing sheet at a point in time.
+
+    Auto-created every time the user exports the sheet as PDF or Excel,
+    so past versions are preserved. Users can preview or delete specific
+    revisions from the detail page. Also captures a state snapshot and
+    an auto-computed diff vs the previous revision.
+    """
+
+    FORMAT_CHOICES = [
+        ('pdf',   'PDF'),
+        ('excel', 'Excel'),
+    ]
+
+    sheet = models.ForeignKey(
+        CostingSheet,
+        on_delete=models.CASCADE,
+        related_name='pdf_revisions',
+    )
+    revision_label = models.CharField(
+        max_length=16,
+        help_text='Auto-assigned label like R00, R01, R02, ...',
+    )
+    export_format = models.CharField(
+        max_length=10, choices=FORMAT_CHOICES, default='pdf',
+        help_text='Which export produced this revision',
+    )
+    file = models.FileField(upload_to='costing/revisions/')
+    original_filename = models.CharField(max_length=255, blank=True)
+    notes = models.TextField(blank=True)
+    snapshot = models.JSONField(
+        null=True, blank=True,
+        help_text='Key sheet state at save time (for change tracking)',
+    )
+    change_summary = models.CharField(
+        max_length=500, blank=True,
+        help_text='Short one-line summary of changes vs previous revision',
+    )
+    change_details = models.JSONField(
+        null=True, blank=True,
+        help_text='Full list of field-level changes vs previous revision',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='costing_pdf_revisions_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        unique_together = ('sheet', 'revision_label')
+
+    def __str__(self):
+        return f'{self.sheet.title} — {self.revision_label}'
+
+    @classmethod
+    def next_label_for(cls, sheet):
+        """Return the next R-label (R00 if none yet). Shared sequence
+        across PDF and Excel exports so the order reads naturally."""
+        last = cls.objects.filter(sheet=sheet).order_by('-created_at').first()
+        if not last:
+            return 'R00'
+        label = last.revision_label or ''
+        if label.startswith('R') and label[1:].isdigit():
+            return f'R{int(label[1:]) + 1:02d}'
+        return f'R{cls.objects.filter(sheet=sheet).count():02d}'
+
+
+class VendorQuote(models.Model):
+    """A supplier/vendor quote file uploaded against a costing sheet.
+
+    Used by the sales team to keep vendor pricing documents alongside
+    the sheet they informed. Standalone from line items — this is just
+    a reference archive (PDF / Word / Excel / image).
+    """
+    sheet = models.ForeignKey(
+        CostingSheet,
+        on_delete=models.CASCADE,
+        related_name='vendor_quotes',
+    )
+    vendor_name = models.CharField(max_length=255)
+    quote_reference = models.CharField(max_length=100, blank=True)
+    file = models.FileField(upload_to='costing/vendor_quotes/')
+    original_filename = models.CharField(max_length=255, blank=True)
+    amount = models.DecimalField(
+        max_digits=15, decimal_places=2, null=True, blank=True,
+        help_text='Optional quoted amount (for reference)',
+    )
+    currency = models.CharField(max_length=10, blank=True, default='SAR')
+    notes = models.TextField(blank=True)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='vendor_quotes_uploaded',
+    )
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-uploaded_at']
+
+    def __str__(self):
+        return f'{self.vendor_name} — {self.sheet.title}'
+
+    @property
+    def extension(self):
+        import os
+        _, ext = os.path.splitext((self.original_filename or self.file.name).lower())
+        return ext.lstrip('.')
+
+
+class CostingSheetChangeLog(models.Model):
+    """Audit trail of edits made to a costing sheet — used to keep the
+    proposal team and the sales team in sync when they work on the same
+    sheet concurrently. Each entry records who made the change, what
+    changed (field name), the before/after values, and which team the
+    actor belongs to so the opposite team can be notified automatically.
+    """
+
+    TEAM_CHOICES = [
+        ('proposal', 'Proposal'),
+        ('sales',    'Sales'),
+        ('other',    'Other'),
+    ]
+
+    SCOPE_CHOICES = [
+        ('sheet',   'Sheet'),
+        ('section', 'Section'),
+        ('item',    'Line item'),
+    ]
+
+    sheet = models.ForeignKey(
+        CostingSheet,
+        on_delete=models.CASCADE,
+        related_name='change_log',
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='costing_changes',
+    )
+    actor_team = models.CharField(max_length=16, choices=TEAM_CHOICES, default='other')
+    scope = models.CharField(max_length=16, choices=SCOPE_CHOICES, default='sheet')
+    scope_label = models.CharField(
+        max_length=255, blank=True,
+        help_text='Short human description of the thing changed (e.g. "Section 2.1 — Camera")',
+    )
+    field = models.CharField(max_length=64, blank=True)
+    before = models.TextField(blank=True)
+    after = models.TextField(blank=True)
+    is_pricing_change = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        who = self.actor.username if self.actor else '?'
+        return f'{who} · {self.scope_label or self.scope} · {self.field}'

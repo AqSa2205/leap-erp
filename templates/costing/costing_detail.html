@@ -2,7 +2,7 @@
 {% load humanize costing_tags %}
 
 {% block title %}{{ sheet.title }} - BOM{% endblock %}
-{% block page_title %}Bill of Material - Commercial{% endblock %}
+{% block page_title %}{% if user.is_proposal_team_user %}Bill of Material{% else %}Bill of Material - Commercial{% endif %}{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -22,6 +22,13 @@
     .grand-total-row { background: var(--leap-red); color: #fff; font-weight: 700; }
     .cost-col { background-color: #d0d0d0 !important; }
     .cost-hdr { background-color: #495057 !important; color: #fff !important; }
+    {% if user.is_proposal_team_user %}
+    /* BOM view for proposal team — all pricing columns hidden */
+    .cost-col, .cost-hdr { display: none !important; }
+    .section-rates-row { display: none !important; }
+    .toggle-section-rates { display: none !important; }
+    .bom-pricing-only { display: none !important; }
+    {% endif %}
     .rate-box { font-size: 0.78rem; }
     .rate-box td { padding: 1px 8px; }
     .inline-edit {
@@ -76,6 +83,102 @@
 {% endblock %}
 
 {% block content %}
+<!-- Workflow Stage banner -->
+{% with stage=sheet.workflow_stage %}
+<div class="card mb-3 border-0 shadow-sm" style="background: {% if stage == 'bom_in_progress' %}#fff3cd{% elif stage == 'ready_for_costing' %}#cfe2ff{% elif stage == 'costing_in_progress' %}#d1e7dd{% else %}#e2e3e5{% endif %};">
+    <div class="card-body py-2">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <div>
+                <strong>Workflow:</strong>
+                {% if stage == 'bom_in_progress' %}
+                <span class="badge bg-warning text-dark"><i class="bi bi-pencil-square me-1"></i>BOM in progress · proposal team</span>
+                {% elif stage == 'ready_for_costing' %}
+                <span class="badge bg-primary"><i class="bi bi-arrow-right-square me-1"></i>Ready for costing · handed over to sales</span>
+                {% if sheet.handed_over_at %}<small class="text-muted ms-2">Handed over {{ sheet.handed_over_at|date:"d M Y H:i" }}{% if sheet.handed_over_by %} by {{ sheet.handed_over_by.get_full_name|default:sheet.handed_over_by.username }}{% endif %}</small>{% endif %}
+                {% elif stage == 'costing_in_progress' %}
+                <span class="badge bg-success"><i class="bi bi-cash-coin me-1"></i>Costing in progress · sales team</span>
+                {% if sheet.costing_started_at %}<small class="text-muted ms-2">Started {{ sheet.costing_started_at|date:"d M Y H:i" }}{% if sheet.costing_started_by %} by {{ sheet.costing_started_by.get_full_name|default:sheet.costing_started_by.username }}{% endif %}</small>{% endif %}
+                {% elif stage == 'finalized' %}
+                <span class="badge bg-dark"><i class="bi bi-check2-circle me-1"></i>Finalized</span>
+                {% if sheet.finalized_at %}<small class="text-muted ms-2">Finalized {{ sheet.finalized_at|date:"d M Y H:i" }}{% if sheet.finalized_by %} by {{ sheet.finalized_by.get_full_name|default:sheet.finalized_by.username }}{% endif %}</small>{% endif %}
+                {% endif %}
+            </div>
+            <div class="d-flex gap-2">
+                {# Hand over: available when sheet is still in BOM phase. Both teams can click; intent is that proposals does. #}
+                {% if stage == 'bom_in_progress' %}
+                <button type="button" class="btn btn-sm btn-warning" data-bs-toggle="modal" data-bs-target="#handoverModal">
+                    <i class="bi bi-send-check me-1"></i>Hand over to Sales
+                </button>
+                {% endif %}
+
+                {# Start costing: sales only, when handed over #}
+                {% if stage == 'ready_for_costing' and user.is_sales_team_user %}
+                <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="start_costing">
+                    <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-play-fill me-1"></i>Start costing</button>
+                </form>
+                {% endif %}
+
+                {# Finalize: sales only #}
+                {% if stage == 'costing_in_progress' and user.is_sales_team_user %}
+                <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="finalize">
+                    <button type="submit" class="btn btn-sm btn-success" onclick="return confirm('Mark this sheet as finalized?');"><i class="bi bi-check2 me-1"></i>Finalize</button>
+                </form>
+                {% endif %}
+
+                {# Reopen: sales can rewind #}
+                {% if stage != 'bom_in_progress' and user.is_sales_team_user %}
+                <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="reopen">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary" onclick="return confirm('Re-open this sheet back to BOM in progress?');"><i class="bi bi-arrow-counterclockwise"></i></button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        {% if sheet.handover_note %}
+        <div class="mt-2 small">
+            <i class="bi bi-sticky me-1"></i><strong>Handover note:</strong> {{ sheet.handover_note }}
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Handover modal -->
+{% if stage == 'bom_in_progress' %}
+<div class="modal fade" id="handoverModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="handover">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-send-check me-2"></i>Hand BOM over to Sales Team</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="small text-muted">
+                        This notifies the sales team that the BOM is ready to price. Both teams can still make changes afterwards — every edit is logged and the opposite team is auto-notified.
+                    </p>
+                    <div class="mb-3">
+                        <label for="handoverNote" class="form-label fw-bold">Handover Note (optional)</label>
+                        <textarea class="form-control" id="handoverNote" name="note" rows="3" placeholder="e.g. 'Client's floor plan confirmed, please price by Friday.'"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-warning"><i class="bi bi-send-check me-1"></i>Hand Over</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endwith %}
+
 <!-- Header Card -->
 <div class="card mb-3">
     <div class="card-body py-2">
@@ -84,6 +187,7 @@
                 <h5 class="mb-1">{{ sheet.title }}</h5>
                 <table class="small text-muted mb-0">
                     {% if sheet.project %}
+                    <tr><td class="pe-2 fw-bold">Reference:</td><td><a href="{% url 'projects:detail' sheet.project.pk %}" class="text-decoration-none" title="Open workflow hub"><code>{{ sheet.project.proposal_reference }}</code></a></td></tr>
                     <tr><td class="pe-2 fw-bold">Project:</td><td>{{ sheet.project.project_name }}</td></tr>
                     {% endif %}
                     {% if sheet.customer_reference %}
@@ -91,7 +195,7 @@
                     {% endif %}
                 </table>
             </div>
-            <div class="col-lg-5 col-md-4 text-center">
+            <div class="col-lg-5 col-md-4 text-center bom-pricing-only">
                 <div class="d-flex justify-content-center gap-2 flex-wrap align-items-end">
                     <div>
                         <input type="number" class="inline-edit param-edit" data-field="margin"
@@ -130,7 +234,7 @@
                     </div>
                 </div>
             </div>
-            <div class="col-lg-2 col-md-3 d-flex flex-column align-items-center">
+            <div class="col-lg-2 col-md-3 d-flex flex-column align-items-center bom-pricing-only">
                 <div class="mb-1" style="font-size:0.72rem; font-weight:700; color:#212529;">Exchange Rates (ref. USD)</div>
                 <table class="rate-box table table-sm table-bordered border-dark mb-0" style="font-size:0.72rem; width:170px;">
                     <tbody>
@@ -145,13 +249,30 @@
                     </tbody>
                 </table>
             </div>
-            <div class="col-lg-1 col-md-2 text-center">
-                <div class="param-label mb-1">Output Currency</div>
+            <div class="col-lg-1 col-md-2 text-center bom-pricing-only">
+                <div class="param-label mb-1" title="Currency the team types line-item costs in">Input Currency</div>
+                <select class="form-select form-select-sm" id="inputCurrency" style="font-size:0.8rem; font-weight:700;">
+                    {% for rate in exchange_rates %}
+                    <option value="{{ rate.currency_code }}" {% if sheet.default_supplier_currency == rate.currency_code %}selected{% endif %}>{{ rate.currency_code }}</option>
+                    {% endfor %}
+                </select>
+                <button type="button" class="btn btn-sm btn-outline-dark mt-1 w-100" id="applyDefaultCurrencyBtn" title="Set every existing line item to the input currency"
+                        style="font-size:0.68rem; padding:1px 4px;">
+                    <i class="bi bi-arrow-down-up"></i> Apply to all
+                </button>
+            </div>
+            <div class="col-lg-1 col-md-2 text-center bom-pricing-only">
+                <div class="param-label mb-1" title="Currency all totals and the PDF will be shown in">Output Currency</div>
                 <select class="form-select form-select-sm" id="outputCurrency" style="font-size:0.8rem; font-weight:700;">
                     {% for rate in exchange_rates %}
                     <option value="{{ rate.currency_code }}" {% if sheet.output_currency == rate.currency_code %}selected{% endif %}>{{ rate.currency_code }}</option>
                     {% endfor %}
                 </select>
+                {% if sheet.default_supplier_currency != sheet.output_currency %}
+                <div class="text-muted mt-1" style="font-size:0.65rem; line-height:1.1;">
+                    Entering {{ sheet.default_supplier_currency }} · Totals in {{ sheet.output_currency }}
+                </div>
+                {% endif %}
             </div>
             <div class="col-lg-1 col-md-2 text-end">
                 {% if sheet.status == 'draft' %}
@@ -162,8 +283,8 @@
                 <div class="btn-group-vertical btn-group-sm">
                     <a href="{% url 'costing:edit' sheet.pk %}" class="btn btn-outline-secondary"><i class="bi bi-pencil"></i> Edit</a>
                     <a href="{% url 'costing:import_excel' sheet.pk %}" class="btn btn-outline-success"><i class="bi bi-upload"></i> Import Excel</a>
-                    <a href="{% url 'costing:export' sheet.pk %}" class="btn btn-outline-primary"><i class="bi bi-file-earmark-excel"></i> Excel</a>
-                    <a href="{% url 'costing:export_pdf' sheet.pk %}" target="_blank" class="btn btn-outline-danger"><i class="bi bi-file-earmark-pdf"></i> PDF</a>
+                    <a href="{% url 'costing:export' sheet.pk %}" class="btn btn-outline-primary bom-pricing-only"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+                    <a href="{% url 'costing:export_pdf' sheet.pk %}" target="_blank" class="btn btn-outline-danger bom-pricing-only"><i class="bi bi-file-earmark-pdf"></i> PDF</a>
                     <a href="{% url 'costing:delete' sheet.pk %}" class="btn btn-outline-secondary"><i class="bi bi-trash"></i> Delete</a>
                 </div>
             </div>
@@ -172,7 +293,7 @@
 </div>
 
 <!-- Totals Summary Strip -->
-<div class="card mb-3">
+<div class="card mb-3 bom-pricing-only">
     <div class="card-body py-2">
         <div class="d-flex justify-content-center gap-3 flex-wrap">
             <div class="text-center">
@@ -409,7 +530,7 @@
 </div>
 
 <!-- Scope of Work (A.2) -->
-<div class="card mt-3">
+<div class="card mt-3 bom-pricing-only">
     <div class="card-header d-flex justify-content-between align-items-center" style="background:#F1DCDB;">
         <span><i class="bi bi-hammer me-2"></i> <strong>A.2 — Scope of Work</strong></span>
         <button class="btn btn-sm btn-dark" data-bs-toggle="modal" data-bs-target="#addSowModal">
@@ -528,8 +649,258 @@
     </div>
 </div>
 
-<!-- PDF Terms & Conditions Selection -->
+<!-- Recent Changes (cross-team visibility) -->
 <div class="card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>
+            <i class="bi bi-activity me-2"></i> Recent Changes
+            <span class="badge bg-secondary ms-1">{{ change_log|length }}</span>
+        </span>
+        <small class="text-muted">Edits from both teams appear here with timestamps.</small>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>When</th>
+                        <th>By</th>
+                        <th>Team</th>
+                        <th>Scope</th>
+                        <th>Field</th>
+                        <th>Change</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in change_log %}
+                    <tr>
+                        <td class="small">{{ log.created_at|date:"d M Y H:i" }}</td>
+                        <td class="small">{% if log.actor %}{{ log.actor.get_full_name|default:log.actor.username }}{% else %}—{% endif %}</td>
+                        <td class="small">
+                            {% if log.actor_team == 'proposal' %}
+                            <span class="badge bg-info">Proposal</span>
+                            {% elif log.actor_team == 'sales' %}
+                            <span class="badge bg-primary">Sales</span>
+                            {% else %}
+                            <span class="badge bg-secondary">Other</span>
+                            {% endif %}
+                        </td>
+                        <td class="small">{{ log.scope_label|default:log.get_scope_display }}</td>
+                        <td class="small"><code>{{ log.field }}</code></td>
+                        <td class="small">
+                            <span class="text-muted">{{ log.before|default:"—"|truncatechars:40 }}</span>
+                            <i class="bi bi-arrow-right mx-1"></i>
+                            <strong>{{ log.after|default:"—"|truncatechars:40 }}</strong>
+                            {% if log.is_pricing_change %}<span class="badge bg-warning text-dark ms-1" style="font-size:0.6rem;">pricing</span>{% endif %}
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="6" class="text-center text-muted py-3 small">
+                            No changes recorded yet.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Vendor Quotes -->
+<div class="card mt-3 bom-pricing-only">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>
+            <i class="bi bi-receipt me-2"></i> Vendor Quotes
+            <span class="badge bg-secondary ms-1">{{ vendor_quotes|length }}</span>
+        </span>
+        <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#uploadVendorQuoteModal">
+            <i class="bi bi-upload me-1"></i>Upload Vendor Quote
+        </button>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Vendor</th>
+                        <th>Reference</th>
+                        <th>Amount</th>
+                        <th>Uploaded</th>
+                        <th>By</th>
+                        <th>File</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="vendorQuotesTbody">
+                    {% for q in vendor_quotes %}
+                    <tr data-quote-id="{{ q.pk }}">
+                        <td>{{ q.vendor_name }}</td>
+                        <td class="small"><code>{{ q.quote_reference|default:"—" }}</code></td>
+                        <td class="small">{% if q.amount %}{{ q.currency }} {{ q.amount|floatformat:2 }}{% else %}—{% endif %}</td>
+                        <td class="small">{{ q.uploaded_at|date:"d M Y H:i" }}</td>
+                        <td class="small">{% if q.uploaded_by %}{{ q.uploaded_by.get_full_name|default:q.uploaded_by.username }}{% else %}—{% endif %}</td>
+                        <td class="small">
+                            <span class="text-truncate d-inline-block" style="max-width: 200px;" title="{{ q.original_filename }}">
+                                <span class="badge bg-secondary text-uppercase me-1" style="font-size: 0.65rem;">{{ q.extension }}</span>
+                                {{ q.original_filename|default:"file" }}
+                            </span>
+                        </td>
+                        <td class="text-end">
+                            <a href="{{ q.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary" title="Preview"><i class="bi bi-eye"></i></a>
+                            <button type="button" class="btn btn-sm btn-outline-danger btn-delete-vendor-quote" data-id="{{ q.pk }}" title="Delete"><i class="bi bi-trash"></i></button>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr id="noVendorQuotesRow">
+                        <td colspan="7" class="text-center text-muted py-3 small">No vendor quotes uploaded yet.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Upload Vendor Quote Modal -->
+<div class="modal fade" id="uploadVendorQuoteModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form id="vendorQuoteUploadForm" enctype="multipart/form-data">
+                {% csrf_token %}
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-upload me-2"></i>Upload Vendor Quote</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Vendor Name *</label>
+                            <input type="text" name="vendor_name" class="form-control" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Quote Reference</label>
+                            <input type="text" name="quote_reference" class="form-control" placeholder="e.g. Q-2026-0418">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Quoted Amount (optional)</label>
+                            <input type="number" name="amount" class="form-control" step="0.01" min="0">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Currency</label>
+                            <input type="text" name="currency" class="form-control" value="{{ sheet.default_supplier_currency|default:'SAR' }}" maxlength="10">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-bold">Notes</label>
+                            <textarea name="notes" class="form-control" rows="2" placeholder="Any relevant context about this quote"></textarea>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-bold">File *</label>
+                            <input type="file" name="file" class="form-control" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.png,.jpg,.jpeg,.gif,.webp,.bmp" required>
+                            <small class="text-muted">PDF, Word, Excel, PowerPoint, or image · max 150MB</small>
+                        </div>
+                    </div>
+                    <div id="vendorQuoteUploadStatus" class="small mt-2"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-upload me-1"></i>Upload
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Revisions -->
+<div class="card mt-3 bom-pricing-only">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>
+            <i class="bi bi-clock-history me-2"></i> Revisions
+            <span class="badge bg-secondary ms-1">{{ pdf_revisions|length }}</span>
+        </span>
+        <small class="text-muted">A copy is saved automatically each time you export as PDF or Excel.</small>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width: 70px;">Label</th>
+                        <th style="width: 70px;">Type</th>
+                        <th>Generated</th>
+                        <th>By</th>
+                        <th>Changes vs previous</th>
+                        <th class="text-end" style="width: 140px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for rev in pdf_revisions %}
+                    <tr>
+                        <td><strong><code>{{ rev.revision_label }}</code></strong></td>
+                        <td>
+                            {% if rev.export_format == 'pdf' %}
+                            <span class="badge bg-danger"><i class="bi bi-file-earmark-pdf me-1"></i>PDF</span>
+                            {% elif rev.export_format == 'excel' %}
+                            <span class="badge bg-success"><i class="bi bi-file-earmark-excel me-1"></i>Excel</span>
+                            {% else %}
+                            <span class="badge bg-secondary">{{ rev.export_format }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="small">{{ rev.created_at|date:"d M Y H:i" }}</td>
+                        <td class="small">{% if rev.created_by %}{{ rev.created_by.get_full_name|default:rev.created_by.username }}{% else %}-{% endif %}</td>
+                        <td class="small">
+                            {% if rev.change_summary %}
+                                {{ rev.change_summary }}
+                                {% if rev.change_details %}
+                                <button class="btn btn-link btn-sm p-0 ms-1 small" type="button"
+                                        data-bs-toggle="collapse" data-bs-target="#rev-details-{{ rev.pk }}" style="font-size:0.75rem;">
+                                    details
+                                </button>
+                                <div class="collapse mt-1" id="rev-details-{{ rev.pk }}">
+                                    <ul class="mb-0 ps-3" style="font-size:0.75rem;">
+                                        {% for d in rev.change_details %}
+                                        <li>
+                                            <strong>{{ d.label }}:</strong>
+                                            {{ d.before|default:"—" }} → {{ d.after|default:"—" }}
+                                            {% if d.delta %}<span class="text-muted">({{ d.delta }})</span>{% endif %}
+                                        </li>
+                                        {% endfor %}
+                                    </ul>
+                                </div>
+                                {% endif %}
+                            {% else %}
+                            <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <a href="{{ rev.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary" title="Preview / download">
+                                <i class="bi bi-eye"></i>
+                            </a>
+                            <form method="post" action="{% url 'costing:delete_revision' rev.pk %}" class="d-inline" onsubmit="return confirm('Delete revision {{ rev.revision_label }}? This cannot be undone.');">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="6" class="text-center text-muted py-3 small">
+                            No revisions yet. Click Excel or PDF in the header to export — the first revision will appear here.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- PDF Terms & Conditions Selection -->
+<div class="card mt-3 bom-pricing-only">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-file-text me-2"></i> PDF Terms & Conditions</span>
         <a href="{% url 'costing:terms_templates' %}" class="btn btn-sm btn-outline-secondary">
@@ -926,6 +1297,103 @@ var _csrfToken = '{{ csrf_token }}';
             });
         });
     }
+
+    // ─── Input currency (default for new items; change does NOT touch existing items) ─
+    var inputCurrencySelect = document.getElementById('inputCurrency');
+    if (inputCurrencySelect) {
+        inputCurrencySelect.addEventListener('change', function() {
+            saveField(updateParamsUrl, 'field=default_supplier_currency&value=' + encodeURIComponent(this.value), this, function() {
+                location.reload();
+            });
+        });
+    }
+
+    // ─── "Apply to all items" button — bulk-updates every line item's
+    // supplier_currency to match the sheet default.
+    var applyBtn = document.getElementById('applyDefaultCurrencyBtn');
+    if (applyBtn) {
+        applyBtn.addEventListener('click', function() {
+            var target = inputCurrencySelect ? inputCurrencySelect.value : '';
+            if (!target) return;
+            if (!confirm('Set every existing line item to ' + target + '? Item costs will keep their numeric values — only the currency label changes.')) return;
+            applyBtn.disabled = true;
+            applyBtn.innerHTML = '<i class="bi bi-hourglass"></i> Applying…';
+            fetch('/costing/' + sheetPk + '/apply-default-currency/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/x-www-form-urlencoded'},
+                body: '',
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(resp) {
+                if (!resp.ok) {
+                    alert(resp.error || 'Failed to apply default currency');
+                    applyBtn.disabled = false;
+                    applyBtn.innerHTML = '<i class="bi bi-arrow-down-up"></i> Apply to all';
+                    return;
+                }
+                // Reload so every item row shows the new currency + computed prices refresh
+                location.reload();
+            })
+            .catch(function() {
+                alert('Network error while applying currency');
+                applyBtn.disabled = false;
+                applyBtn.innerHTML = '<i class="bi bi-arrow-down-up"></i> Apply to all';
+            });
+        });
+    }
+
+    // ─── Vendor Quote upload ──────────────────────────────────
+    var vqForm = document.getElementById('vendorQuoteUploadForm');
+    if (vqForm) {
+        vqForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            var statusEl = document.getElementById('vendorQuoteUploadStatus');
+            statusEl.className = 'small mt-2 text-muted';
+            statusEl.textContent = 'Uploading...';
+            var fd = new FormData(vqForm);
+            fetch('/costing/' + sheetPk + '/vendor-quotes/upload/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrfToken},
+                body: fd,
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(resp) {
+                if (!resp.ok) {
+                    statusEl.className = 'small mt-2 text-danger';
+                    statusEl.textContent = resp.error || 'Upload failed';
+                    return;
+                }
+                statusEl.className = 'small mt-2 text-success';
+                statusEl.textContent = '✓ Uploaded. Reloading…';
+                setTimeout(function() { location.reload(); }, 600);
+            })
+            .catch(function() {
+                statusEl.className = 'small mt-2 text-danger';
+                statusEl.textContent = 'Network error';
+            });
+        });
+    }
+
+    // ─── Vendor Quote delete ──────────────────────────────────
+    document.querySelectorAll('.btn-delete-vendor-quote').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            if (!confirm('Delete this vendor quote? This cannot be undone.')) return;
+            var id = this.dataset.id;
+            var row = this.closest('tr');
+            fetch('/costing/vendor-quote/' + id + '/delete/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrfToken},
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(resp) {
+                if (resp.ok) {
+                    if (row) row.remove();
+                } else {
+                    alert(resp.error || 'Delete failed');
+                }
+            });
+        });
+    });
 
     // ─── Exchange rates (reload — affects all items) ───────────
     document.querySelectorAll('.rate-edit').forEach(function(input) {

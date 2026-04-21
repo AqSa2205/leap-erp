@@ -1,0 +1,52 @@
+{
+  "revision_meta": {
+    "revision_label": "R00",
+    "created_at": "2026-04-20T10:52:00+00:00",
+    "created_by": "aqsa.ahmed",
+    "notes": "Initial technical proposal sent to client.",
+    "proposal_pk": 23,
+    "proposal_type": "technical",
+    "snapshot_version": 1
+  },
+  "proposal": {
+    "title": "Dublin DC Facility — Security & FTTH Technical Proposal",
+    "proposal_reference": "LNIRL02126030",
+    "document_type": "Technical Proposal",
+    "client_name": "Meridian Construction Ltd",
+    "project_description": "Provisioning of CCTV, Access Control and Intruder Detection Systems for Dublin Data Centre Facility",
+    "region_entity": "LNIRL",
+    "region_display": "Ireland",
+    "revision": "A",
+    "revision_date": "2026-05-01",
+    "prepared_by_initials": "AJ",
+    "checked_by_initials": "ID",
+    "approved_by_initials": "AK",
+    "status": "final",
+    "linked_project_pk": 47,
+    "content_sections": {
+      "covering_letter": "<p>Dear Meridian Construction team,</p><p>Please find enclosed our technical proposal for the Dublin Data Centre Facility...</p>",
+      "executive_summary": "<h2>Overview</h2><p>LNG proposes a centrally managed, standards-compliant platform...</p><ul><li>≥99.95% availability</li><li>≥30% faster incident response</li><li>30-day retention</li></ul>",
+      "company_overview": "<p>Leap Networks is a specialist...</p>",
+      "understanding_of_requirements": "<p>The facility comprises 138 apartments (G+5)...</p>",
+      "proposed_technical_solution": "<h2>Architecture</h2><p>Resilient IP core with segregated VLANs...</p><table><tr><th>System</th><th>Qty</th></tr><tr><td>Cameras</td><td>48</td></tr></table>",
+      "delivery_implementation": "<p>10-12 week programme...</p>",
+      "risk_management": "<p>Risks include...</p>",
+      "service_management": "<p>24/7 SLA-backed support...</p>",
+      "data_protection": "<p>GDPR-compliant 30-day retention...</p>",
+      "assumptions_constraints": "<p>This proposal assumes...</p>"
+    },
+    "engineering_documents": [
+      {"doc_type": "Drawing", "doc_number": "ENG-CCTV-001", "doc_title": "CCTV System Layout Plan", "order": 1},
+      {"doc_type": "Drawing", "doc_number": "ENG-ACS-002",  "doc_title": "Access Control Point Layout", "order": 2},
+      {"doc_type": "Spec",    "doc_number": "SPEC-NET-003", "doc_title": "Network Design Specification", "order": 3}
+    ],
+    "created_at": "2026-04-10T14:02:11+00:00",
+    "updated_at": "2026-04-20T10:50:33+00:00",
+    "created_by": "aqsa.ahmed"
+  },
+  "frozen_outputs": {
+    "note": "When a revision is created, the rendered DOCX/PDF as of this revision is saved so future downloads reproduce the exact document.",
+    "docx_path": "revisions/technical_proposals/23/R00/LNIRL02126030_R00.docx",
+    "pdf_path":  "revisions/technical_proposals/23/R00/LNIRL02126030_R00.pdf"
+  }
+}

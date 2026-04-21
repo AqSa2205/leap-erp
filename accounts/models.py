@@ -10,6 +10,8 @@ class Role(models.Model):
     SALES_REP = 'sales_rep'
     PROCUREMENT_MGR = 'procurement_mgr'
     PROCUREMENT_OFF = 'procurement_off'
+    PROPOSAL_HEAD = 'proposal_head'
+    PROPOSAL_REP = 'proposal_rep'
 
     ROLE_CHOICES = [
         (SUPER_ADMIN, 'Super Administrator'),
@@ -18,6 +20,8 @@ class Role(models.Model):
         (SALES_REP, 'Sales Representative'),
         (PROCUREMENT_MGR, 'Procurement Manager'),
         (PROCUREMENT_OFF, 'Procurement Officer'),
+        (PROPOSAL_HEAD, 'Proposal Team Head'),
+        (PROPOSAL_REP, 'Proposal Representative'),
     ]
 
     name = models.CharField(max_length=20, choices=ROLE_CHOICES, unique=True)
@@ -53,6 +57,14 @@ class Role(models.Model):
     @property
     def is_procurement_officer(self):
         return self.name == self.PROCUREMENT_OFF
+
+    @property
+    def is_proposal_head(self):
+        return self.name == self.PROPOSAL_HEAD
+
+    @property
+    def is_proposal_rep(self):
+        return self.name == self.PROPOSAL_REP
 
 
 class User(AbstractUser):
@@ -108,6 +120,29 @@ class User(AbstractUser):
     def is_procurement_user(self):
         """Either procurement manager or officer."""
         return self.is_procurement_manager_user or self.is_procurement_officer_user
+
+    @property
+    def is_proposal_head_user(self):
+        return self.role and self.role.is_proposal_head
+
+    @property
+    def is_proposal_rep_user(self):
+        return self.role and self.role.is_proposal_rep
+
+    @property
+    def is_proposal_team_user(self):
+        """Either proposal team head or representative.
+        Used to decide if a user should see BOM view vs full costing."""
+        return self.is_proposal_head_user or self.is_proposal_rep_user
+
+    @property
+    def is_sales_team_user(self):
+        """Sales side: reps, managers, admins, super admins.
+        These users see the full costing sheet (including pricing)."""
+        return (
+            self.is_sales_rep_user or self.is_manager_user or
+            self.is_admin_user or self.is_super_admin_user
+        )
 
     def can_view_all_projects(self):
         """Super admins can view all projects"""

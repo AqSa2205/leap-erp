@@ -1,0 +1,162 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}{{ revision.revision_label }} — {{ project.proposal_reference }} - Leap Networks ERP{% endblock %}
+{% block page_title %}Revision {{ revision.revision_label }}{% endblock %}
+
+{% block content %}
+<div class="alert alert-info d-flex align-items-center justify-content-between mb-4">
+    <div>
+        <i class="bi bi-clock-history me-2"></i>
+        <strong>Viewing <code>{{ revision.revision_label }}</code></strong>
+        — snapshot from {{ revision.created_at|date:"d M Y H:i" }}
+        {% if revision.created_by %}by {{ revision.created_by.get_full_name|default:revision.created_by.username }}{% endif %}.
+        This is a read-only view of the proposal as it was at that point in time.
+    </div>
+    <a href="{% url 'projects:detail' project.pk %}" class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i> Back to current
+    </a>
+</div>
+
+{% if revision.notes %}
+<div class="card mb-4">
+    <div class="card-header"><i class="bi bi-sticky me-2"></i>Notes</div>
+    <div class="card-body mb-0">
+        <p class="mb-0">{{ revision.notes|linebreaks }}</p>
+    </div>
+</div>
+{% endif %}
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>
+                    <i class="bi bi-folder me-2"></i>
+                    <strong>{{ snapshot.identity.proposal_reference }}</strong>
+                </span>
+                {% if snapshot.classification.status.color %}
+                <span class="badge" style="background-color: {{ snapshot.classification.status.color }}">
+                    {{ snapshot.classification.status.name|default:"—" }}
+                </span>
+                {% endif %}
+            </div>
+            <div class="card-body">
+                <h4 class="mb-4">{{ snapshot.identity.project_name }}</h4>
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <table class="table table-sm mb-0">
+                            <tr><th class="text-muted" style="width: 45%">Client RFQ Ref</th><td>{{ snapshot.identity.client_rfq_reference|default:"-" }}</td></tr>
+                            <tr><th class="text-muted">PO Number</th><td>{{ snapshot.identity.po_number|default:"-" }}</td></tr>
+                            <tr><th class="text-muted">Region</th><td>{{ snapshot.classification.region.name|default:"-" }}</td></tr>
+                            <tr><th class="text-muted">Owner</th><td>{{ snapshot.parties.owner|default:"-" }}</td></tr>
+                            <tr><th class="text-muted">Customer</th><td>{{ snapshot.parties.customer|default:"-" }}</td></tr>
+                            <tr><th class="text-muted">End User</th><td>{{ snapshot.parties.end_user|default:"-" }}</td></tr>
+                            {% if snapshot.classification.project_stage %}
+                            <tr><th class="text-muted">Stage</th><td>{{ snapshot.classification.project_stage_display|default:snapshot.classification.project_stage }}</td></tr>
+                            {% endif %}
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <table class="table table-sm mb-0">
+                            <tr><th class="text-muted" style="width: 45%">Submission Deadline</th><td>{{ snapshot.dates.submission_deadline|default:"-" }}</td></tr>
+                            <tr><th class="text-muted">Estimated PO Date</th><td>{{ snapshot.dates.estimated_po_date|default:"-" }}</td></tr>
+                            <tr><th class="text-muted">Year</th><td>{{ snapshot.dates.year|default:"-" }}</td></tr>
+                            <tr><th class="text-muted">PO Award Q</th><td>{{ snapshot.dates.po_award_quarter|default:"-" }}</td></tr>
+                            <tr><th class="text-muted">Contact With</th><td>{{ snapshot.parties.contact_with|default:"-" }}</td></tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Financials -->
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-cash-stack me-2"></i>Financials</div>
+            <div class="card-body">
+                <table class="table table-sm mb-0">
+                    <tr>
+                        <th class="text-muted" style="width: 40%">Estimated Value</th>
+                        <td>{{ snapshot.classification.region.currency|default:"" }} {{ snapshot.financials.estimated_value|default:"0.00" }}</td>
+                    </tr>
+                    <tr>
+                        <th class="text-muted">Estimated Value (USD)</th>
+                        <td>USD {{ snapshot.financials.estimated_value_usd|default:"0.00" }}</td>
+                    </tr>
+                    <tr>
+                        <th class="text-muted">Estimated Value / Annum</th>
+                        <td>{{ snapshot.financials.estimated_value_per_annum|default:"0.00" }}</td>
+                    </tr>
+                    <tr>
+                        <th class="text-muted">Estimated GP %</th>
+                        <td>{{ snapshot.financials.estimated_gp|default:"0.00" }}</td>
+                    </tr>
+                    <tr>
+                        <th class="text-muted">Success Quotient</th>
+                        <td>{{ snapshot.financials.success_quotient|default:"0.00" }}</td>
+                    </tr>
+                    <tr>
+                        <th class="text-muted">Minimum Achievement</th>
+                        <td>{{ snapshot.financials.minimum_achievement|default:"0.00" }}</td>
+                    </tr>
+                    <tr>
+                        <th class="text-muted">Actual Sales</th>
+                        <td>{{ snapshot.financials.actual_sales|default:"0.00" }}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        {% if snapshot.narrative.remarks %}
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-chat-quote me-2"></i>Remarks</div>
+            <div class="card-body">
+                <p class="mb-0">{{ snapshot.narrative.remarks|linebreaks }}</p>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if snapshot.narrative.notes %}
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-journal-text me-2"></i>Notes</div>
+            <div class="card-body">
+                <p class="mb-0">{{ snapshot.narrative.notes|linebreaks }}</p>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if snapshot.narrative.portal_url %}
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-link-45deg me-2"></i>Portal</div>
+            <div class="card-body">
+                <a href="{{ snapshot.narrative.portal_url }}" target="_blank">{{ snapshot.narrative.portal_url }}</a>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-info-circle me-2"></i>Snapshot Info</div>
+            <div class="card-body">
+                <table class="table table-sm mb-0">
+                    <tr><th class="text-muted">Label</th><td><code>{{ revision.revision_label }}</code></td></tr>
+                    <tr><th class="text-muted">Created</th><td>{{ revision.created_at|date:"d M Y H:i" }}</td></tr>
+                    <tr><th class="text-muted">Created By</th><td>{% if revision.created_by %}{{ revision.created_by.get_full_name|default:revision.created_by.username }}{% else %}-{% endif %}</td></tr>
+                </table>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-clock me-2"></i>Original Record Metadata</div>
+            <div class="card-body">
+                <table class="table table-sm mb-0">
+                    <tr><th class="text-muted">Original Created</th><td class="small">{{ snapshot.metadata.created_at|default:"-" }}</td></tr>
+                    <tr><th class="text-muted">Last Updated (at snapshot time)</th><td class="small">{{ snapshot.metadata.updated_at|default:"-" }}</td></tr>
+                    <tr><th class="text-muted">Originally Created By</th><td>{{ snapshot.metadata.created_by|default:"-" }}</td></tr>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -65,7 +65,15 @@
                                 {{ proposal.title }}
                             </a>
                         </td>
-                        <td><code>{{ proposal.proposal_reference }}</code></td>
+                        <td>
+                            {% if proposal.project %}
+                            <a href="{% url 'projects:detail' proposal.project.pk %}" class="text-decoration-none" title="Open full workflow for this reference">
+                                <code>{{ proposal.proposal_reference }}</code>
+                            </a>
+                            {% else %}
+                            <code>{{ proposal.proposal_reference }}</code>
+                            {% endif %}
+                        </td>
                         <td>{{ proposal.client_name }}</td>
                         <td>{{ proposal.get_region_entity_display }}</td>
                         <td>{{ proposal.revision }}</td>

@@ -1,0 +1,81 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Vendor Quotes - Leap Networks ERP{% endblock %}
+{% block page_title %}Vendor Quotes{% endblock %}
+
+{% block content %}
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <form method="get" class="row g-2 align-items-center">
+            <div class="col-md-8">
+                <input type="text" name="search" class="form-control" placeholder="Search by vendor / reference / sheet title / notes" value="{{ search }}">
+            </div>
+            <div class="col-md-4 text-end">
+                <button type="submit" class="btn btn-primary"><i class="bi bi-search me-1"></i>Search</button>
+                <a href="{% url 'costing:vendor_quote_list' %}" class="btn btn-outline-secondary ms-1">Clear</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-receipt me-2"></i>Vendor Quotes <span class="badge bg-secondary ms-1">{{ quotes|length }}</span></span>
+        <small class="text-muted">Upload a vendor quote from the relevant costing sheet's detail page.</small>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Vendor</th>
+                        <th>Quote Ref</th>
+                        <th>Amount</th>
+                        <th>Proposal Ref</th>
+                        <th>Costing Sheet</th>
+                        <th>Uploaded</th>
+                        <th>By</th>
+                        <th>File</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for q in quotes %}
+                    <tr>
+                        <td>{{ q.vendor_name }}</td>
+                        <td class="small"><code>{{ q.quote_reference|default:"—" }}</code></td>
+                        <td class="small">{% if q.amount %}{{ q.currency }} {{ q.amount|floatformat:2|intcomma }}{% else %}—{% endif %}</td>
+                        <td class="small">
+                            {% if q.sheet.project %}
+                            <a href="{% url 'projects:detail' q.sheet.project.pk %}" class="text-decoration-none" title="Open full workflow for this reference">
+                                <code>{{ q.sheet.project.proposal_reference }}</code>
+                            </a>
+                            {% else %}—{% endif %}
+                        </td>
+                        <td><a href="{% url 'costing:detail' q.sheet.pk %}" class="text-decoration-none">{{ q.sheet.title|truncatechars:50 }}</a></td>
+                        <td class="small">{{ q.uploaded_at|date:"d M Y H:i" }}</td>
+                        <td class="small">{% if q.uploaded_by %}{{ q.uploaded_by.get_full_name|default:q.uploaded_by.username }}{% else %}—{% endif %}</td>
+                        <td class="small">
+                            <span class="text-truncate d-inline-block" style="max-width: 200px;" title="{{ q.original_filename }}">
+                                <span class="badge bg-secondary text-uppercase me-1">{{ q.extension }}</span>
+                                {{ q.original_filename|default:"file" }}
+                            </span>
+                        </td>
+                        <td class="text-end">
+                            <a href="{{ q.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary" title="Preview"><i class="bi bi-eye"></i></a>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="9" class="text-center text-muted py-4">
+                            No vendor quotes yet. Open a costing sheet → Vendor Quotes card → upload.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -10,16 +10,24 @@
         <div class="row align-items-center">
             <div class="col-md-8">
                 <form method="get" class="row g-2">
-                    <div class="col-md-5">
+                    <div class="col-md-4">
                         {{ filter_form.search }}
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         {{ filter_form.status }}
+                    </div>
+                    <div class="col-md-3">
+                        <select name="stage" class="form-select">
+                            <option value="">All workflow stages</option>
+                            {% for code, label in workflow_stage_choices %}
+                            <option value="{{ code }}" {% if selected_stage == code %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
                     </div>
                     <div class="col-md-2">
                         <button type="submit" class="btn btn-primary w-100">Filter</button>
                     </div>
-                    <div class="col-md-2">
+                    <div class="col-md-1">
                         <a href="{% url 'costing:list' %}" class="btn btn-outline-secondary w-100">Clear</a>
                     </div>
                 </form>
@@ -50,8 +58,10 @@
                 <thead>
                     <tr>
                         <th>Title</th>
+                        <th>Reference</th>
                         <th>Project</th>
                         <th>Customer Ref</th>
+                        <th>Stage</th>
                         <th>Margin</th>
                         <th>Currency</th>
                         <th>Status</th>
@@ -68,8 +78,26 @@
                                 {{ sheet.title }}
                             </a>
                         </td>
+                        <td>
+                            {% if sheet.project %}
+                            <a href="{% url 'projects:detail' sheet.project.pk %}" class="text-decoration-none" title="Open full workflow for this reference">
+                                <code>{{ sheet.project.proposal_reference }}</code>
+                            </a>
+                            {% else %}—{% endif %}
+                        </td>
                         <td>{{ sheet.project.project_name|default:"-" }}</td>
                         <td>{{ sheet.customer_reference|default:"-" }}</td>
+                        <td>
+                            {% if sheet.workflow_stage == 'bom_in_progress' %}
+                            <span class="badge bg-warning text-dark"><i class="bi bi-pencil-square me-1"></i>BOM</span>
+                            {% elif sheet.workflow_stage == 'ready_for_costing' %}
+                            <span class="badge bg-primary"><i class="bi bi-arrow-right-square me-1"></i>Ready</span>
+                            {% elif sheet.workflow_stage == 'costing_in_progress' %}
+                            <span class="badge bg-success"><i class="bi bi-cash-coin me-1"></i>Costing</span>
+                            {% elif sheet.workflow_stage == 'finalized' %}
+                            <span class="badge bg-dark"><i class="bi bi-check2-circle me-1"></i>Final</span>
+                            {% endif %}
+                        </td>
                         <td>{{ sheet.margin }}%</td>
                         <td>{{ sheet.output_currency }}</td>
                         <td>
@@ -92,7 +120,7 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="9" class="text-center py-4 text-muted">
+                        <td colspan="11" class="text-center py-4 text-muted">
                             No costing sheets found. <a href="{% url 'costing:create' %}">Create one</a>.
                         </td>
                     </tr>

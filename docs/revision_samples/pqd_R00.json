@@ -1,0 +1,76 @@
+{
+  "revision_meta": {
+    "revision_label": "R00",
+    "created_at": "2026-04-20T11:01:14+00:00",
+    "created_by": "aqsa.ahmed",
+    "notes": "Initial PQD submission with all certificates and catalogues.",
+    "pqd_pk": 5,
+    "proposal_type": "pqd",
+    "snapshot_version": 1
+  },
+  "pqd": {
+    "title": "Yuksel Telecom System — Prequalification",
+    "pqd_reference": "LNA-2747-YUKSEL-TELECOM-SYSTEM-R03",
+    "document_type": "Prequalification",
+    "client_name": "Yuksel Saudi",
+    "project_description": "STC/CCA Saudi F-15 Fleet Modernization Program, RSAF — Active & Passive Components",
+    "region_entity": "LNKSA",
+    "region_display": "Saudi Arabia",
+    "revision": "0",
+    "revision_date": "2026-03-16",
+    "prepared_by_initials": "KA",
+    "checked_by_initials": "AF",
+    "approved_by_initials": "AK",
+    "status": "submitted",
+    "content_sections": {
+      "company_profile": "<h2>About Leap Networks Arabia</h2><p>Leap Networks Arabia is a well-established Telecommunication Systems Engineering & Integration company...</p>",
+      "list_of_material": "<p>Key equipment includes...</p>",
+      "product_catalogues": "<p>Refer to attached manufacturer catalogues.</p>",
+      "government_documents": "<p>Commercial Registration, Zakat Certificate, Saudization Certificate attached.</p>",
+      "iso_certificates": "<p>ISO 9001, 14001, 45001 certificates attached.</p>",
+      "qualifications": "<p>CVs of key personnel attached.</p>",
+      "list_of_projects": "<p>50+ completed projects including Tanajib Gas Plant, Khursaniyah, Fadhili Gas Plant...</p>"
+    },
+    "attachments": [
+      {
+        "section": "product_catalogues",
+        "original_filename": "avigilon-h5a-catalogue.pdf",
+        "order": 1,
+        "revision_file_path": "revisions/pqds/5/R00/attachments/001_product_catalogues_avigilon-h5a-catalogue.pdf",
+        "size_bytes": 2458213,
+        "extension": "pdf"
+      },
+      {
+        "section": "government_documents",
+        "original_filename": "commercial-registration-2026.pdf",
+        "order": 1,
+        "revision_file_path": "revisions/pqds/5/R00/attachments/002_government_documents_commercial-registration-2026.pdf",
+        "size_bytes": 512432,
+        "extension": "pdf"
+      },
+      {
+        "section": "iso_certificates",
+        "original_filename": "iso-9001-2015-cert.pdf",
+        "order": 1,
+        "revision_file_path": "revisions/pqds/5/R00/attachments/003_iso_certificates_iso-9001-2015-cert.pdf",
+        "size_bytes": 384102,
+        "extension": "pdf"
+      },
+      {
+        "section": "qualifications",
+        "original_filename": "cv-abdul-mabood-khaledi.pdf",
+        "order": 1,
+        "revision_file_path": "revisions/pqds/5/R00/attachments/004_qualifications_cv-abdul-mabood-khaledi.pdf",
+        "size_bytes": 248109,
+        "extension": "pdf"
+      }
+    ],
+    "created_at": "2026-03-10T08:22:14+00:00",
+    "updated_at": "2026-04-20T10:58:02+00:00",
+    "created_by": "aqsa.ahmed"
+  },
+  "frozen_outputs": {
+    "note": "The full merged PDF (body + all attachments) as of this revision is saved, so R00 can always be reproduced byte-for-byte.",
+    "merged_pdf_path": "revisions/pqds/5/R00/LNA-2747-YUKSEL-TELECOM-SYSTEM-R03_R00.pdf"
+  }
+}

@@ -5,6 +5,9 @@ from . import views
 app_name = 'proposals'
 
 urlpatterns = [
+    # Dashboard (landing page for the Proposals section)
+    path('dashboard/', views.proposals_dashboard, name='dashboard'),
+
     # Proposals
     path('', views.ProposalListView.as_view(), name='list'),
     path('create/', views.ProposalCreateView.as_view(), name='create'),

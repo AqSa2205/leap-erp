@@ -10,6 +10,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.template.loader import render_to_string
 from django.utils.text import slugify
+from django.utils import timezone
 from decimal import Decimal, InvalidOperation
 import logging
 
@@ -59,13 +60,106 @@ def _user_can_view_sheet(user, sheet):
         return True
     if user.is_admin_user or user.is_manager_user:
         return bool(sheet.project and sheet.project.region_id == user.region_id)
+    # Proposal team sees every sheet as a BOM (no pricing) regardless of region
+    if getattr(user, 'is_proposal_team_user', False):
+        return True
     return False
+
+
+def _user_team(user):
+    """Which team a user belongs to for change-log / notification purposes."""
+    if not getattr(user, 'is_authenticated', False):
+        return 'other'
+    if getattr(user, 'is_proposal_team_user', False):
+        return 'proposal'
+    if getattr(user, 'is_sales_team_user', False):
+        return 'sales'
+    return 'other'
+
+
+def _record_costing_change(sheet, actor, *, scope, scope_label, field, before, after, is_pricing=False):
+    """Persist an entry to CostingSheetChangeLog and notify the opposite team.
+
+    `actor` is the user who made the change. The opposite team (proposal
+    if the actor is sales, and vice-versa) is notified so both sides stay
+    aware of concurrent edits.
+    """
+    from .models import CostingSheetChangeLog
+    from accounts.models import User
+
+    team = _user_team(actor)
+    try:
+        CostingSheetChangeLog.objects.create(
+            sheet=sheet,
+            actor=actor if getattr(actor, 'is_authenticated', False) else None,
+            actor_team=team,
+            scope=scope,
+            scope_label=scope_label[:255] if scope_label else '',
+            field=field[:64] if field else '',
+            before=str(before or '')[:2000],
+            after=str(after or '')[:2000],
+            is_pricing_change=bool(is_pricing),
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning('Failed to record costing change: %s', e)
+        return
+
+    # Notify the opposite team. Resolve recipients via role flags.
+    try:
+        if team == 'proposal':
+            recipients = User.objects.filter(
+                role__name__in=['sales_rep', 'manager', 'admin', 'super_admin'],
+            ).filter(
+                Q(pk=sheet.created_by_id) |
+                Q(region_id=sheet.project.region_id if sheet.project_id else None) |
+                Q(role__name='super_admin')
+            ).distinct()
+            opposite = 'Sales'
+        elif team == 'sales':
+            recipients = User.objects.filter(role__name__in=['proposal_head', 'proposal_rep']).distinct()
+            opposite = 'Proposal'
+        else:
+            return
+
+        actor_name = (actor.get_full_name() or actor.username) if actor else 'Someone'
+        verb = f'edited {scope_label or scope} in "{sheet.title}"'
+        description = (
+            f'Field: {field} · {before or "—"} → {after or "—"}'
+        )
+        notify_users(
+            recipients=list(recipients),
+            verb=verb,
+            actor=actor,
+            target_url=f'/costing/{sheet.pk}/',
+            description=description,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning('Failed to notify cross-team on costing change: %s', e)
+
+
+#: Fields proposal team members CANNOT edit — pricing-related only.
+PRICING_FIELDS = frozenset({
+    'base_unit_cost', 'discount_pct', 'shipping_pct', 'customs_pct',
+    'finances_pct', 'installation_pct', 'margin',
+    'discount_rate', 'shipping_rate', 'customs_rate',
+    'finances_rate', 'installation_rate',
+    'supplier_currency', 'output_currency',
+    'include_optional_in_total',
+})
+
+
+def _field_is_pricing(field):
+    """True if the named field touches pricing/rates/currency."""
+    return field in PRICING_FIELDS
 
 
 def _user_can_edit_sheet(user, sheet):
     """Check whether user has edit access to a costing sheet.
     Edit rules: super_admin can edit anything, admin can edit within region,
     creator can edit their own. Manager-only access is read-only.
+    Proposal team can edit non-pricing fields on every sheet (gated elsewhere).
     """
     if not user.is_authenticated:
         return False
@@ -75,6 +169,8 @@ def _user_can_edit_sheet(user, sheet):
         return True
     if user.is_admin_user and sheet.project and sheet.project.region_id == user.region_id:
         return True
+    if getattr(user, 'is_proposal_team_user', False):
+        return True
     return False
 
 
@@ -82,7 +178,8 @@ class CostingPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
         queryset = CostingSheet.objects.select_related('project', 'created_by').all()
         user = self.request.user
-        if user.is_super_admin_user:
+        if user.is_super_admin_user or getattr(user, 'is_proposal_team_user', False):
+            # Super admins and proposal team see every sheet
             return queryset
         elif user.is_admin_user or user.is_manager_user:
             return queryset.filter(
@@ -120,6 +217,7 @@ class CostingListView(CostingPermissionMixin, ListView):
         queryset = super().get_queryset()
         search = self.request.GET.get('search')
         status = self.request.GET.get('status')
+        stage = self.request.GET.get('stage')
         if search:
             queryset = queryset.filter(
                 Q(title__icontains=search) |
@@ -128,12 +226,16 @@ class CostingListView(CostingPermissionMixin, ListView):
             )
         if status:
             queryset = queryset.filter(status=status)
+        if stage:
+            queryset = queryset.filter(workflow_stage=stage)
         return queryset.order_by('-updated_at')
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['filter_form'] = CostingFilterForm(self.request.GET)
         context['total_count'] = self.get_queryset().count()
+        context['workflow_stage_choices'] = CostingSheet.WORKFLOW_STAGE_CHOICES
+        context['selected_stage'] = self.request.GET.get('stage', '')
         return context
 
 
@@ -274,6 +376,15 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
 
         # Scope of Work items (A.2 section)
         context['sow_items'] = sheet.scope_of_work_items.all()
+
+        # PDF revisions (saved snapshots from previous Export PDF clicks)
+        context['pdf_revisions'] = sheet.pdf_revisions.select_related('created_by').all()
+
+        # Recent change log (for cross-team visibility)
+        context['change_log'] = sheet.change_log.select_related('actor').all()[:20]
+
+        # Vendor quotes attached to this sheet
+        context['vendor_quotes'] = sheet.vendor_quotes.select_related('uploaded_by').all()
 
         return context
 
@@ -636,13 +747,17 @@ def ajax_update_sheet_params(request, pk):
     field = request.POST.get('field')
     value = request.POST.get('value', '').strip()
 
-    allowed = ('margin', 'discount_rate', 'shipping_rate', 'customs_rate', 'finances_rate', 'installation_rate', 'output_currency', 'include_optional_in_total')
+    allowed = ('margin', 'discount_rate', 'shipping_rate', 'customs_rate', 'finances_rate', 'installation_rate', 'output_currency', 'default_supplier_currency', 'include_optional_in_total')
     if field not in allowed:
         return JsonResponse({'error': 'Invalid field'}, status=400)
 
+    # Proposal team cannot edit pricing/rate fields.
+    if getattr(request.user, 'is_proposal_team_user', False) and _field_is_pricing(field):
+        return JsonResponse({'error': 'Pricing fields are read-only for proposal team — only the sales team can change these.'}, status=403)
+
     # Validate the value before opening a write transaction
-    if field == 'output_currency':
-        new_value = value
+    if field in ('output_currency', 'default_supplier_currency'):
+        new_value = (value or 'SAR').upper()[:10]
     elif field == 'include_optional_in_total':
         new_value = value in ('1', 'true', 'True', 'on')
     else:
@@ -658,11 +773,20 @@ def ajax_update_sheet_params(request, pk):
         else:
             new_value = max(Decimal('0'), min(new_value, Decimal('100')))
 
+    previous = getattr(sheet, field, '')
     # Single atomic UPDATE WHERE pk=X SET field=value. This only writes
     # the one field, so concurrent edits to other fields on the same sheet
     # cannot clobber each other (the previous bug came from sheet.save()
     # writing the entire in-memory snapshot).
     CostingSheet.objects.filter(pk=sheet.pk).update(**{field: new_value})
+    if str(previous) != str(new_value):
+        _record_costing_change(
+            sheet, request.user,
+            scope='sheet',
+            scope_label=sheet.title or f'Sheet {sheet.pk}',
+            field=field, before=previous, after=new_value,
+            is_pricing=_field_is_pricing(field),
+        )
     return JsonResponse({'ok': True})
 
 
@@ -692,6 +816,8 @@ def ajax_update_item_margin(request, pk):
     item = get_object_or_404(CostingLineItem, pk=pk)
     if not _user_can_edit_sheet(request.user, item.section.costing_sheet):
         return JsonResponse({'error': 'Permission denied'}, status=403)
+    if getattr(request.user, 'is_proposal_team_user', False):
+        return JsonResponse({'error': 'Pricing fields are read-only for proposal team.'}, status=403)
     value = request.POST.get('margin', '').strip()
     if not value:
         new_margin = None  # Clear to use sheet margin
@@ -702,9 +828,17 @@ def ajax_update_item_margin(request, pk):
             return JsonResponse({'error': 'Invalid number'}, status=400)
         # Clamp to [0, 99] to keep the selling-price formula stable.
         new_margin = max(Decimal('0'), min(new_margin, Decimal('99')))
+    previous = item.margin
     # Atomic single-field UPDATE — no read-modify-write race against
     # other concurrent edits to different fields on the same line item.
     CostingLineItem.objects.filter(pk=pk).update(margin=new_margin)
+    if str(previous) != str(new_margin):
+        _record_costing_change(
+            item.section.costing_sheet, request.user,
+            scope='item',
+            scope_label=f'{item.item_number or "item"} — {item.description[:60] if item.description else ""}',
+            field='margin', before=previous, after=new_margin, is_pricing=True,
+        )
     return JsonResponse({'ok': True})
 
 
@@ -725,6 +859,10 @@ def ajax_update_item_field(request, pk):
     allowed_fields = numeric_fields + text_fields + ('supplier_currency', 'quantity')
     if field not in allowed_fields:
         return JsonResponse({'error': 'Invalid field'}, status=400)
+
+    # Proposal team cannot edit pricing/rate fields.
+    if getattr(request.user, 'is_proposal_team_user', False) and _field_is_pricing(field):
+        return JsonResponse({'error': 'Pricing fields are read-only for proposal team — only the sales team can change these.'}, status=403)
 
     # Validate / coerce the value before opening the transaction.
     if field == 'supplier_currency':
@@ -751,12 +889,27 @@ def ajax_update_item_field(request, pk):
         elif field in ('discount_pct', 'shipping_pct', 'customs_pct', 'finances_pct', 'installation_pct'):
             new_value = max(Decimal('0'), min(new_value, Decimal('100')))
 
+    # Capture previous value for the change log.
+    previous_value = getattr(item, field, '')
+
     # Atomic single-field UPDATE — only writes the one field, so it cannot
     # clobber concurrent edits to other fields on the same line item.
     # Re-fetch after the update so computed properties reflect the fresh
     # committed state.
     CostingLineItem.objects.filter(pk=pk).update(**{field: new_value})
     item = CostingLineItem.objects.select_related('section__costing_sheet').get(pk=pk)
+
+    # Log + cross-team notify when the value actually changed
+    if str(previous_value) != str(new_value):
+        _record_costing_change(
+            sheet, request.user,
+            scope='item',
+            scope_label=f'{item.item_number or "item"} — {item.description[:60] if item.description else ""}',
+            field=field,
+            before=previous_value,
+            after=new_value,
+            is_pricing=_field_is_pricing(field),
+        )
 
     # Recompute values with caches and return them
     rates_dict = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
@@ -824,7 +977,7 @@ def ajax_paste_line_items(request, pk):
             qty_raw = cols[3].strip().replace(',', '') or '1'
             unit = cols[4].strip() or 'EA'
             cost_raw = cols[5].strip().replace(',', '') or '0'
-            currency = cols[6].strip().upper() or 'SAR'
+            currency = cols[6].strip().upper() or (sheet.default_supplier_currency or 'SAR')
 
             try:
                 qty = Decimal(qty_raw) if qty_raw else Decimal('1')
@@ -903,7 +1056,7 @@ def ajax_add_line_item(request, pk):
         description='',
         quantity=Decimal('1'),
         unit='EA',
-        supplier_currency='SAR',
+        supplier_currency=sheet.default_supplier_currency or 'SAR',
         base_unit_cost=Decimal('0'),
         order=next_order,
     )
@@ -976,6 +1129,8 @@ def ajax_update_section_rate(request, pk):
     section = get_object_or_404(CostingSection, pk=pk)
     if not _user_can_edit_sheet(request.user, section.costing_sheet):
         return JsonResponse({'error': 'Permission denied'}, status=403)
+    if getattr(request.user, 'is_proposal_team_user', False):
+        return JsonResponse({'error': 'Section rate overrides are read-only for proposal team.'}, status=403)
 
     field = request.POST.get('field', '').strip()
     value = request.POST.get('value', '').strip()
@@ -996,7 +1151,15 @@ def ajax_update_section_rate(request, pk):
         else:
             new_value = max(Decimal('0'), min(new_value, Decimal('100')))
 
+    previous = getattr(section, field, None)
     CostingSection.objects.filter(pk=pk).update(**{field: new_value})
+    if str(previous) != str(new_value):
+        _record_costing_change(
+            section.costing_sheet, request.user,
+            scope='section',
+            scope_label=f'Section {section.section_number} — {section.title}',
+            field=field, before=previous, after=new_value, is_pricing=True,
+        )
     return JsonResponse({'ok': True})
 
 
@@ -1059,6 +1222,459 @@ def ajax_delete_sow_item(request, pk):
     return JsonResponse({'ok': True})
 
 
+@login_required
+@require_POST
+def ajax_upload_vendor_quote(request, pk):
+    """Attach a vendor quote file to a costing sheet (sales team only)."""
+    from .models import VendorQuote
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    if getattr(request.user, 'is_proposal_team_user', False):
+        return JsonResponse({'error': 'Vendor quotes are sales-team only.'}, status=403)
+
+    uploaded = request.FILES.get('file')
+    if not uploaded:
+        return JsonResponse({'error': 'No file received'}, status=400)
+    if uploaded.size > 150 * 1024 * 1024:
+        return JsonResponse({'error': 'File too large (max 150MB)'}, status=400)
+
+    import os
+    ext = os.path.splitext(uploaded.name)[1].lower().lstrip('.')
+    allowed_ext = {'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+                   'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'}
+    if ext not in allowed_ext:
+        return JsonResponse({'error': f'File type ".{ext}" not allowed.'}, status=400)
+
+    vendor_name = (request.POST.get('vendor_name') or '').strip() or 'Unnamed Vendor'
+    quote_ref = (request.POST.get('quote_reference') or '').strip()
+    amount_raw = (request.POST.get('amount') or '').strip()
+    currency = (request.POST.get('currency') or sheet.default_supplier_currency or 'SAR').upper()
+    notes = (request.POST.get('notes') or '').strip()
+    amount = None
+    if amount_raw:
+        try:
+            amount = Decimal(amount_raw)
+        except (InvalidOperation, ValueError):
+            pass
+
+    vq = VendorQuote.objects.create(
+        sheet=sheet,
+        vendor_name=vendor_name[:255],
+        quote_reference=quote_ref[:100],
+        file=uploaded,
+        original_filename=uploaded.name[:255],
+        amount=amount,
+        currency=currency[:10],
+        notes=notes,
+        uploaded_by=request.user if request.user.is_authenticated else None,
+    )
+    return JsonResponse({
+        'ok': True,
+        'id': vq.pk,
+        'vendor_name': vq.vendor_name,
+        'quote_reference': vq.quote_reference,
+        'amount': str(vq.amount) if vq.amount else None,
+        'currency': vq.currency,
+        'original_filename': vq.original_filename,
+        'url': vq.file.url,
+        'uploaded_at': vq.uploaded_at.strftime('%d %b %Y %H:%M'),
+    })
+
+
+@login_required
+@require_POST
+def ajax_delete_vendor_quote(request, pk):
+    """Delete a vendor quote (sales team only)."""
+    from .models import VendorQuote
+    vq = get_object_or_404(VendorQuote, pk=pk)
+    sheet = vq.sheet
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    if getattr(request.user, 'is_proposal_team_user', False):
+        return JsonResponse({'error': 'Vendor quotes are sales-team only.'}, status=403)
+    try:
+        vq.file.delete(save=False)
+    except Exception:
+        pass
+    vq.delete()
+    return JsonResponse({'ok': True})
+
+
+@login_required
+def vendor_quote_list(request):
+    """Standalone list of every vendor quote the user can see."""
+    from .models import VendorQuote
+    user = request.user
+    qs = VendorQuote.objects.select_related('sheet', 'sheet__project', 'uploaded_by').all()
+    # Scope to sheets the user can view
+    if not user.is_super_admin_user:
+        from django.db.models import Q as _Q
+        if user.is_admin_user or user.is_manager_user:
+            qs = qs.filter(_Q(sheet__created_by=user) | _Q(sheet__project__region=user.region))
+        elif getattr(user, 'is_proposal_team_user', False):
+            # Proposal team does not see vendor quotes
+            qs = qs.none()
+        else:
+            qs = qs.filter(sheet__created_by=user)
+
+    search = request.GET.get('search', '').strip()
+    if search:
+        from django.db.models import Q as _Q
+        qs = qs.filter(
+            _Q(vendor_name__icontains=search) |
+            _Q(quote_reference__icontains=search) |
+            _Q(sheet__title__icontains=search) |
+            _Q(notes__icontains=search)
+        )
+    return render(request, 'costing/vendor_quote_list.html', {
+        'quotes': qs.order_by('-uploaded_at'),
+        'search': search,
+    })
+
+
+@login_required
+@require_POST
+def ajax_apply_default_currency(request, pk):
+    """Bulk-set every line item's supplier_currency to the sheet's default.
+
+    One-click helper for teams that set up a sheet in (e.g.) SAR and then
+    realise they actually enter costs in GBP — switches every existing item
+    without manual re-entry. Audit: one change-log row records the bulk op.
+    """
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    if getattr(request.user, 'is_proposal_team_user', False):
+        return JsonResponse({'error': 'Currency changes are sales-team only.'}, status=403)
+
+    target_currency = (sheet.default_supplier_currency or 'SAR').upper()
+    # Update every line item across every section in this sheet
+    updated = CostingLineItem.objects.filter(section__costing_sheet=sheet).exclude(
+        supplier_currency=target_currency,
+    ).update(supplier_currency=target_currency)
+
+    if updated:
+        _record_costing_change(
+            sheet, request.user,
+            scope='sheet',
+            scope_label=sheet.title or f'Sheet {sheet.pk}',
+            field='bulk_supplier_currency',
+            before='(mixed)',
+            after=f'{target_currency} on {updated} item(s)',
+            is_pricing=True,
+        )
+    return JsonResponse({'ok': True, 'updated': updated, 'currency': target_currency})
+
+
+@login_required
+@require_POST
+def costing_workflow_transition(request, pk):
+    """Advance the workflow stage of a costing sheet.
+
+    Transitions (button-driven, not automatic):
+    - bom_in_progress → ready_for_costing  (proposal hands over to sales)
+    - ready_for_costing → costing_in_progress  (sales starts pricing)
+    - costing_in_progress → finalized  (sales finalises)
+    - any → bom_in_progress  (super-admin only, rewind)
+    """
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+    user = request.user
+    if not _user_can_view_sheet(user, sheet):
+        messages.error(request, 'Permission denied.')
+        return redirect('costing:list')
+
+    action = request.POST.get('action', '').strip()
+    note = (request.POST.get('note') or '').strip()
+    now = timezone.now()
+
+    transitions = {
+        'handover': {
+            'from': {'bom_in_progress'},
+            'to':   'ready_for_costing',
+            'allowed_teams': {'proposal', 'sales'},  # anyone on either team
+            'sets':  lambda: {
+                'workflow_stage': 'ready_for_costing',
+                'handed_over_at': now,
+                'handed_over_by': user,
+                'handover_note':  note or sheet.handover_note,
+            },
+            'verb': 'handed the BOM over to the sales team',
+            'notify_team': 'sales',
+        },
+        'start_costing': {
+            'from': {'ready_for_costing'},
+            'to':   'costing_in_progress',
+            'allowed_teams': {'sales'},
+            'sets':  lambda: {
+                'workflow_stage': 'costing_in_progress',
+                'costing_started_at': now,
+                'costing_started_by': user,
+            },
+            'verb': 'started costing on the sheet',
+            'notify_team': 'proposal',
+        },
+        'finalize': {
+            'from': {'costing_in_progress', 'ready_for_costing'},
+            'to':   'finalized',
+            'allowed_teams': {'sales'},
+            'sets':  lambda: {
+                'workflow_stage': 'finalized',
+                'finalized_at': now,
+                'finalized_by': user,
+            },
+            'verb': 'finalized the sheet',
+            'notify_team': 'proposal',
+        },
+        'reopen': {
+            'from': {'finalized', 'costing_in_progress', 'ready_for_costing'},
+            'to':   'bom_in_progress',
+            'allowed_teams': {'sales'},  # only sales can rewind for now
+            'sets':  lambda: {'workflow_stage': 'bom_in_progress'},
+            'verb': 're-opened the sheet (back to BOM)',
+            'notify_team': 'proposal',
+        },
+    }
+
+    tx = transitions.get(action)
+    if not tx:
+        messages.error(request, f'Unknown action: {action}')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    # Actor-team check
+    team = _user_team(user)
+    if team not in tx['allowed_teams'] and not user.is_super_admin_user:
+        messages.error(request, 'Your role is not allowed to perform this action.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    # Stage pre-condition check
+    if sheet.workflow_stage not in tx['from']:
+        messages.error(request, f'This action requires the sheet to be in one of: {", ".join(tx["from"])}. Current: {sheet.workflow_stage}.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    # Apply
+    updates = tx['sets']()
+    CostingSheet.objects.filter(pk=sheet.pk).update(**updates)
+    sheet.refresh_from_db()
+
+    # Log to the change log
+    _record_costing_change(
+        sheet, user,
+        scope='sheet',
+        scope_label=sheet.title or f'Sheet {sheet.pk}',
+        field='workflow_stage',
+        before='',
+        after=sheet.get_workflow_stage_display(),
+        is_pricing=False,
+    )
+
+    # Notify the opposite team
+    try:
+        from accounts.models import User as _U
+        if tx['notify_team'] == 'proposal':
+            recipients = _U.objects.filter(role__name__in=['proposal_head', 'proposal_rep'])
+        else:
+            recipients = _U.objects.filter(role__name__in=['sales_rep', 'manager', 'admin', 'super_admin']).filter(
+                Q(pk=sheet.created_by_id) |
+                Q(region_id=sheet.project.region_id if sheet.project_id else None) |
+                Q(role__name='super_admin')
+            ).distinct()
+
+        notify_users(
+            recipients=list(recipients),
+            verb=f'{tx["verb"]}: "{sheet.title}"',
+            actor=user,
+            target_url=f'/costing/{sheet.pk}/',
+            description=note or f'Stage is now: {sheet.get_workflow_stage_display()}',
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning('Failed to notify workflow transition: %s', e)
+
+    messages.success(request, f'Sheet is now: {sheet.get_workflow_stage_display()}')
+    return redirect('costing:detail', pk=sheet.pk)
+
+
+@require_POST
+def delete_costing_revision(request, pk):
+    """Delete a saved costing-sheet revision (PDF or Excel)."""
+    from .models import CostingSheetRevision
+    rev = get_object_or_404(CostingSheetRevision, pk=pk)
+    sheet = rev.sheet
+    if not _user_can_edit_sheet(request.user, sheet):
+        messages.error(request, 'Permission denied.')
+        return redirect('costing:detail', pk=sheet.pk)
+    label = rev.revision_label
+    try:
+        rev.file.delete(save=False)
+    except Exception:
+        pass
+    rev.delete()
+    messages.success(request, f'Revision {label} deleted.')
+    return redirect('costing:detail', pk=sheet.pk)
+
+
+# ── Revision helpers: snapshot + diff ─────────────────────────
+
+def _build_costing_snapshot(sheet):
+    """Capture key state of a costing sheet for change tracking.
+    Kept compact: top-level numbers + per-section/item counts +
+    rate values. Enough to produce a useful diff summary."""
+    from decimal import Decimal
+    def _d(v):
+        return None if v is None else str(v)
+
+    sections_data = []
+    total_items = 0
+    for section in sheet.sections.all():
+        items = list(section.line_items.all())
+        total_items += len(items)
+        sections_data.append({
+            'section_number': section.section_number,
+            'title': section.title,
+            'is_optional': section.is_optional,
+            'item_count': len(items),
+            'subtotal': _d(section.subtotal),
+        })
+
+    return {
+        'snapshot_version': 1,
+        'totals': {
+            'grand_total': _d(sheet.grand_total),
+            'total_cost': _d(sheet.total_cost),
+            'total_margin_amount': _d(sheet.total_margin_amount),
+            'total_discount': _d(sheet.total_discount),
+            'total_shipping_amount': _d(sheet.total_shipping_amount),
+            'total_customs_amount': _d(sheet.total_customs_amount),
+            'total_finances_amount': _d(sheet.total_finances_amount),
+            'total_installation_amount': _d(sheet.total_installation_amount),
+            'optional_subtotal': _d(sheet.optional_subtotal),
+        },
+        'sheet_rates': {
+            'margin': _d(sheet.margin),
+            'discount_rate': _d(sheet.discount_rate),
+            'shipping_rate': _d(sheet.shipping_rate),
+            'customs_rate': _d(sheet.customs_rate),
+            'finances_rate': _d(sheet.finances_rate),
+            'installation_rate': _d(sheet.installation_rate),
+        },
+        'output_currency': sheet.output_currency,
+        'include_optional_in_total': sheet.include_optional_in_total,
+        'status': sheet.status,
+        'section_count': len(sections_data),
+        'item_count': total_items,
+        'sections': sections_data,
+    }
+
+
+def _compute_costing_diff(prev, current):
+    """Compare two costing snapshots. Returns (summary_text, details_list).
+    `prev` may be None (means first revision)."""
+    if not prev:
+        return '(initial export)', []
+
+    from decimal import Decimal, InvalidOperation
+    details = []
+
+    def _dec(v):
+        try: return Decimal(v)
+        except (TypeError, ValueError, InvalidOperation): return None
+
+    # Totals
+    for key in ('grand_total', 'total_cost', 'total_margin_amount',
+                'total_discount', 'optional_subtotal'):
+        old_v = (prev.get('totals') or {}).get(key)
+        new_v = (current.get('totals') or {}).get(key)
+        if old_v != new_v:
+            od, nd = _dec(old_v), _dec(new_v)
+            if od is not None and nd is not None:
+                delta = nd - od
+                sign = '+' if delta >= 0 else ''
+                details.append({
+                    'field': key, 'before': str(od), 'after': str(nd),
+                    'delta': f'{sign}{delta}', 'label': key.replace('_', ' ').title(),
+                })
+            else:
+                details.append({'field': key, 'before': old_v, 'after': new_v, 'label': key.replace('_', ' ').title()})
+
+    # Rates
+    for key in ('margin', 'discount_rate', 'shipping_rate',
+                'customs_rate', 'finances_rate', 'installation_rate'):
+        old_v = (prev.get('sheet_rates') or {}).get(key)
+        new_v = (current.get('sheet_rates') or {}).get(key)
+        if old_v != new_v:
+            details.append({
+                'field': f'rate.{key}', 'before': old_v, 'after': new_v,
+                'label': key.replace('_', ' ').title() + ' %',
+            })
+
+    # Currency / flags
+    for key in ('output_currency', 'status'):
+        if prev.get(key) != current.get(key):
+            details.append({'field': key, 'before': prev.get(key), 'after': current.get(key), 'label': key.replace('_', ' ').title()})
+    if prev.get('include_optional_in_total') != current.get('include_optional_in_total'):
+        details.append({
+            'field': 'include_optional_in_total',
+            'before': prev.get('include_optional_in_total'),
+            'after': current.get('include_optional_in_total'),
+            'label': 'Include Optional in Total',
+        })
+
+    # Section / item counts
+    if prev.get('section_count') != current.get('section_count'):
+        delta = (current.get('section_count') or 0) - (prev.get('section_count') or 0)
+        sign = '+' if delta >= 0 else ''
+        details.append({
+            'field': 'section_count', 'before': prev.get('section_count'),
+            'after': current.get('section_count'), 'delta': f'{sign}{delta}',
+            'label': 'Sections',
+        })
+    if prev.get('item_count') != current.get('item_count'):
+        delta = (current.get('item_count') or 0) - (prev.get('item_count') or 0)
+        sign = '+' if delta >= 0 else ''
+        details.append({
+            'field': 'item_count', 'before': prev.get('item_count'),
+            'after': current.get('item_count'), 'delta': f'{sign}{delta}',
+            'label': 'Line items',
+        })
+
+    # Build a short summary line (top ~3 changes, with deltas where available)
+    if not details:
+        return 'no changes vs previous', []
+    summary_bits = []
+    for d in details[:3]:
+        if 'delta' in d:
+            summary_bits.append(f"{d['label']} {d['delta']}")
+        else:
+            summary_bits.append(f"{d['label']}: {d.get('before')} → {d.get('after')}")
+    summary = ' · '.join(summary_bits)
+    if len(details) > 3:
+        summary += f' · +{len(details) - 3} more'
+    return summary, details
+
+
+def _save_costing_revision(sheet, file_bytes, filename, export_format, user):
+    """Helper: save a new CostingSheetRevision with snapshot + diff."""
+    from django.core.files.base import ContentFile
+    from .models import CostingSheetRevision
+    snapshot = _build_costing_snapshot(sheet)
+    prev = CostingSheetRevision.objects.filter(sheet=sheet).order_by('-created_at').first()
+    summary, details = _compute_costing_diff(prev.snapshot if prev else None, snapshot)
+    rev_label = CostingSheetRevision.next_label_for(sheet)
+    rev = CostingSheetRevision(
+        sheet=sheet,
+        revision_label=rev_label,
+        export_format=export_format,
+        original_filename=filename,
+        created_by=user if getattr(user, 'is_authenticated', False) else None,
+        snapshot=snapshot,
+        change_summary=summary[:500],
+        change_details=details,
+    )
+    rev.file.save(f'{sheet.pk}_{rev_label}_{filename}', ContentFile(file_bytes), save=True)
+    return rev
+
+
 # ─── Excel Export ─────────────────────────────────────────────
 
 @login_required
@@ -1074,6 +1690,9 @@ def costing_export_excel(request, pk):
     if not _user_can_view_sheet(request.user, sheet):
         messages.error(request, 'You do not have permission to export this costing sheet.')
         return redirect('costing:list')
+    if getattr(request.user, 'is_proposal_team_user', False):
+        messages.error(request, 'Excel export includes pricing — only the sales team can download it.')
+        return redirect('costing:detail', pk=pk)
     sections = sheet.sections.prefetch_related('line_items').all()
     rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
 
@@ -1251,12 +1870,24 @@ def costing_export_excel(request, pk):
     for col_letter, w in widths.items():
         ws.column_dimensions[col_letter].width = w
 
-    response = HttpResponse(
-        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    )
     filename = _safe_filename(sheet.title, suffix='BOM', extension='xlsx')
+    # Write to a buffer so we can both save a revision copy and return it
+    import io as _io
+    xlsx_buffer = _io.BytesIO()
+    wb.save(xlsx_buffer)
+    xlsx_bytes = xlsx_buffer.getvalue()
+
+    try:
+        _save_costing_revision(sheet, xlsx_bytes, filename, export_format='excel', user=request.user)
+    except Exception as _e:
+        import logging
+        logging.getLogger(__name__).warning('Failed to save costing Excel revision: %s', _e)
+
+    response = HttpResponse(
+        xlsx_bytes,
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
-    wb.save(response)
     return response
 
 
@@ -1286,6 +1917,9 @@ def costing_export_pdf(request, pk):
     if not _user_can_view_sheet(request.user, sheet):
         messages.error(request, 'You do not have permission to export this costing sheet.')
         return redirect('costing:list')
+    if getattr(request.user, 'is_proposal_team_user', False):
+        messages.error(request, 'PDF export includes pricing — only the sales team can download it.')
+        return redirect('costing:detail', pk=pk)
     sections = list(sheet.sections.prefetch_related('line_items').all())
 
     # Inject caches into all line items to avoid N+1 queries
@@ -1295,10 +1929,11 @@ def costing_export_pdf(request, pk):
             item.set_exchange_rates_cache(rates_dict)
             item.set_sheet_cache(sheet)
 
-    # Create response
-    response = HttpResponse(content_type='application/pdf')
+    # Build the PDF into a BytesIO so we can both save a revision copy and
+    # return it to the user.
+    import io as _io
+    pdf_buffer = _io.BytesIO()
     filename = _safe_filename(sheet.title, suffix='Commercial_Offer', extension='pdf')
-    response['Content-Disposition'] = f'inline; filename="{filename}"'
 
     import os
     from django.contrib.staticfiles.finders import find as find_static
@@ -1409,7 +2044,7 @@ def costing_export_pdf(request, pk):
     #  - "summary"  = page 1 (topMargin=25mm, no project details header)
     #  - "bom"      = pages 2+ (topMargin=42mm, project details header drawn by canvas)
     doc = BaseDocTemplate(
-        response,
+        pdf_buffer,
         pagesize=A4,
         rightMargin=15*mm,
         leftMargin=15*mm,
@@ -1997,6 +2632,18 @@ def costing_export_pdf(request, pk):
     # NumberedCanvas handles the drawing after all pages are rendered
     # so it knows the total page count for "Page X of Y".
     doc.build(elements, canvasmaker=NumberedCanvas)
+
+    pdf_bytes = pdf_buffer.getvalue()
+
+    # Save this export as a revision (with state snapshot + diff vs previous)
+    try:
+        _save_costing_revision(sheet, pdf_bytes, filename, export_format='pdf', user=request.user)
+    except Exception as _e:
+        import logging
+        logging.getLogger(__name__).warning('Failed to save costing PDF revision: %s', _e)
+
+    response = HttpResponse(pdf_bytes, content_type='application/pdf')
+    response['Content-Disposition'] = f'inline; filename="{filename}"'
     return response
 
 

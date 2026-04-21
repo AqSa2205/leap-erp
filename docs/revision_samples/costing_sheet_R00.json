@@ -1,0 +1,171 @@
+{
+  "revision_meta": {
+    "revision_label": "R00",
+    "created_at": "2026-04-20T10:40:08+00:00",
+    "created_by": "aqsa.ahmed",
+    "notes": "Baseline costing for client review.",
+    "costing_sheet_pk": 11,
+    "snapshot_version": 1
+  },
+  "sheet": {
+    "title": "Dublin DC CCTV & ACS — Commercial Costing",
+    "proposal_reference": "LNIRL02126030",
+    "project_name": "Provisioning of CCTV, Access Control and Intruder Detection Systems for Dublin Data Centre Facility",
+    "customer_name": "Meridian Construction Ltd",
+    "end_user": "Dublin Data Centre Facility",
+    "customer_reference": "MRD-DUB-2026-RFQ-0418",
+    "contact_person": "Ciaran O'Brien",
+    "telephone": "+353 1 450 4567",
+    "fax": "",
+    "output_currency": "EUR",
+    "status": "final",
+    "sheet_rates": {
+      "margin": "40.00",
+      "discount_rate": "5.00",
+      "shipping_rate": "3.00",
+      "customs_rate": "0.00",
+      "finances_rate": "2.00",
+      "installation_rate": "10.00"
+    },
+    "include_optional_in_total": false,
+    "totals": {
+      "grand_total": "1448620.70",
+      "total_cost": "724310.35",
+      "total_base_cost": "652750.00",
+      "total_discount": "32637.50",
+      "total_margin_amount": "579484.28",
+      "total_shipping_amount": "19582.50",
+      "total_customs_amount": "0.00",
+      "total_finances_amount": "13055.00",
+      "total_installation_amount": "65275.00",
+      "optional_subtotal": "125000.00"
+    },
+    "sections": [
+      {
+        "section_number": "1",
+        "title": "CCTV System",
+        "order": 1,
+        "is_optional": false,
+        "section_rates": {
+          "margin": null,
+          "discount_rate": null,
+          "shipping_rate": null,
+          "customs_rate": null,
+          "finances_rate": null,
+          "installation_rate": null
+        },
+        "subtotal": "892450.00",
+        "line_items": [
+          {
+            "item_number": "1.1",
+            "description": "Dome Camera 4K with IR",
+            "make": "Avigilon",
+            "model_number": "H5A-DO-IR-DOME",
+            "vendor_name": "3M Saudi",
+            "quantity": 48,
+            "unit": "EA",
+            "supplier_currency": "USD",
+            "base_unit_cost": "420.00",
+            "rate_overrides": {
+              "discount_pct": null,
+              "margin": null,
+              "shipping_pct": null,
+              "customs_pct": null,
+              "finances_pct": null,
+              "installation_pct": null
+            },
+            "computed": {
+              "effective_margin": "0.40",
+              "unit_cost": "399.00",
+              "total_cost": "19152.00",
+              "base_unit_price": "665.00",
+              "base_total_price": "31920.00",
+              "final_unit_price": "776.38",
+              "final_total_price": "37266.24"
+            }
+          },
+          {
+            "item_number": "1.2",
+            "description": "NVR Server 64 Channel",
+            "make": "Avigilon",
+            "model_number": "HD-NVR4-64-PRM",
+            "vendor_name": "3M Saudi",
+            "quantity": 2,
+            "unit": "EA",
+            "supplier_currency": "USD",
+            "base_unit_cost": "8500.00",
+            "rate_overrides": {
+              "discount_pct": null, "margin": null,
+              "shipping_pct": null, "customs_pct": null,
+              "finances_pct": null, "installation_pct": null
+            },
+            "computed": {
+              "effective_margin": "0.40",
+              "unit_cost": "8075.00",
+              "total_cost": "16150.00",
+              "base_unit_price": "13458.33",
+              "base_total_price": "26916.67",
+              "final_unit_price": "15714.67",
+              "final_total_price": "31429.33"
+            }
+          }
+        ]
+      },
+      {
+        "section_number": "2",
+        "title": "Access Control System",
+        "order": 2,
+        "is_optional": false,
+        "section_rates": {"margin": null, "discount_rate": null, "shipping_rate": null, "customs_rate": null, "finances_rate": null, "installation_rate": null},
+        "subtotal": "431170.70",
+        "line_items": [
+          {
+            "item_number": "2.1",
+            "description": "Card Reader HID iClass SE",
+            "make": "HID",
+            "model_number": "R10",
+            "vendor_name": "HID Global",
+            "quantity": 24, "unit": "EA",
+            "supplier_currency": "USD", "base_unit_cost": "180.00",
+            "rate_overrides": {"discount_pct": null, "margin": null, "shipping_pct": null, "customs_pct": null, "finances_pct": null, "installation_pct": null},
+            "computed": {"effective_margin": "0.40", "unit_cost": "171.00", "total_cost": "4104.00", "base_unit_price": "285.00", "base_total_price": "6840.00", "final_unit_price": "332.72", "final_total_price": "7985.28"}
+          }
+        ]
+      },
+      {
+        "section_number": "3",
+        "title": "Optional — Extended Warranty",
+        "order": 3,
+        "is_optional": true,
+        "section_rates": {"margin": null, "discount_rate": null, "shipping_rate": null, "customs_rate": null, "finances_rate": null, "installation_rate": null},
+        "subtotal": "125000.00",
+        "line_items": [
+          {
+            "item_number": "3.1",
+            "description": "3-year extended warranty — all hardware",
+            "make": "", "model_number": "", "vendor_name": "",
+            "quantity": 1, "unit": "LOT",
+            "supplier_currency": "EUR", "base_unit_cost": "62500.00",
+            "rate_overrides": {"discount_pct": null, "margin": null, "shipping_pct": null, "customs_pct": null, "finances_pct": null, "installation_pct": null},
+            "computed": {"effective_margin": "0.40", "unit_cost": "59375.00", "total_cost": "59375.00", "base_unit_price": "98958.33", "base_total_price": "98958.33", "final_unit_price": "125000.00", "final_total_price": "125000.00"}
+          }
+        ]
+      }
+    ],
+    "scope_of_work_items": [
+      {"serial_number": 1, "description": "Site survey and design finalisation", "quantity": 1, "uom": "LOT", "total_price": "15000.00", "price_text": ""},
+      {"serial_number": 2, "description": "Installation & commissioning", "quantity": 1, "uom": "LOT", "total_price": "85000.00", "price_text": ""},
+      {"serial_number": 3, "description": "User training & handover", "quantity": 1, "uom": "LOT", "total_price": "0.00", "price_text": "Included"}
+    ],
+    "terms_templates_selected": [
+      {"category": "terms_and_conditions", "name": "Standard Ireland Terms", "content": "1. Prices valid for 60 days..."},
+      {"category": "exclusions", "name": "Standard Exclusions", "content": "Civil works, pole foundations..."},
+      {"category": "payment_terms", "name": "50-40-10", "content": "50% advance, 40% on delivery, 10% on commissioning."}
+    ],
+    "exchange_rates_used": {
+      "USD": "0.92", "EUR": "1.00", "GBP": "1.17", "SAR": "0.245"
+    },
+    "created_at": "2026-04-02T09:18:11+00:00",
+    "updated_at": "2026-04-20T10:38:40+00:00"
+  }
+}

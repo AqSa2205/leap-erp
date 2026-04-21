@@ -53,4 +53,18 @@ urlpatterns = [
     # Scope of Work items
     path('<int:pk>/add-sow-item/', views.ajax_add_sow_item, name='add_sow_item'),
     path('sow-item/<int:pk>/delete/', views.ajax_delete_sow_item, name='delete_sow_item'),
+
+    # PDF revisions
+    path('revision/<int:pk>/delete/', login_required(views.delete_costing_revision), name='delete_revision'),
+
+    # Workflow stage transitions (handover BOM → costing → finalize)
+    path('<int:pk>/workflow/', views.costing_workflow_transition, name='workflow_transition'),
+
+    # Bulk-apply the sheet's default supplier currency to every line item
+    path('<int:pk>/apply-default-currency/', views.ajax_apply_default_currency, name='apply_default_currency'),
+
+    # Vendor Quotes
+    path('vendor-quotes/', login_required(views.vendor_quote_list), name='vendor_quote_list'),
+    path('<int:pk>/vendor-quotes/upload/', views.ajax_upload_vendor_quote, name='vendor_quote_upload'),
+    path('vendor-quote/<int:pk>/delete/', views.ajax_delete_vendor_quote, name='vendor_quote_delete'),
 ]
