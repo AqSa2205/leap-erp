@@ -3,6 +3,13 @@
 
 {% block title %}{{ project.proposal_reference }} - Leap Networks ERP{% endblock %}
 {% block page_title %}Pipeline Entry Details{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'projects:list' %}">Commercial Pipeline</a>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current"><code>{{ project.proposal_reference }}</code></span>
+</nav>
+{% endblock %}
 
 {% block extra_css %}
 <style>

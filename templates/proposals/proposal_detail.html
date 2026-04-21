@@ -3,6 +3,19 @@
 
 {% block title %}{{ proposal.title }} - Leap Networks ERP{% endblock %}
 {% block page_title %}{{ proposal.title }}{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'proposals:dashboard' %}">Proposals</a>
+    <span class="crumb-sep">›</span>
+    <a href="{% url 'proposals:list' %}">Technical Proposals</a>
+    {% if proposal.project %}
+    <span class="crumb-sep">›</span>
+    <a href="{% url 'projects:detail' proposal.project.pk %}"><code>{{ proposal.proposal_reference }}</code></a>
+    {% endif %}
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">{{ proposal.title|truncatechars:60 }}</span>
+</nav>
+{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">

@@ -3,6 +3,15 @@
 
 {% block title %}Edit Content - {{ object.title }} - Leap Networks ERP{% endblock %}
 {% block page_title %}Edit Content: {{ object.title }}{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'proposals:list' %}">Technical Proposals</a>
+    <span class="crumb-sep">›</span>
+    <a href="{% url 'proposals:detail' object.pk %}">{{ object.title|truncatechars:40 }}</a>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">Edit Content</span>
+</nav>
+{% endblock %}
 
 {% block extra_css %}
 <style>

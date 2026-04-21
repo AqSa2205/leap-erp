@@ -3,6 +3,17 @@
 
 {% block title %}{{ sheet.title }} - BOM{% endblock %}
 {% block page_title %}{% if user.is_proposal_team_user %}Bill of Material{% else %}Bill of Material - Commercial{% endif %}{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'costing:list' %}">Costing Sheets</a>
+    {% if sheet.project %}
+    <span class="crumb-sep">›</span>
+    <a href="{% url 'projects:detail' sheet.project.pk %}"><code>{{ sheet.project.proposal_reference }}</code></a>
+    {% endif %}
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">{{ sheet.title|truncatechars:60 }}</span>
+</nav>
+{% endblock %}
 
 {% block extra_css %}
 <style>

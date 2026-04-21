@@ -118,6 +118,16 @@
         .main-content.expanded {
             margin-left: var(--sidebar-collapsed-width);
         }
+        /* Breadcrumb trail shown at top of content area */
+        .crumb-trail {
+            display: flex; align-items: center; gap: 0.35rem;
+            font-size: 0.82rem; color: #6c757d;
+            margin-bottom: 0.85rem; flex-wrap: wrap;
+        }
+        .crumb-trail a { color: #6c757d; text-decoration: none; border-bottom: 1px dashed transparent; }
+        .crumb-trail a:hover { color: #C41E3A; border-bottom-color: #C41E3A; }
+        .crumb-trail .crumb-current { color: #212529; font-weight: 600; }
+        .crumb-trail .crumb-sep { color: #adb5bd; font-size: 0.7rem; }
         .top-navbar {
             background: #fff;
             box-shadow: 0 2px 4px rgba(0,0,0,0.08);
@@ -1048,6 +1058,7 @@
 
         <!-- Page Content -->
         <div class="container-fluid p-4">
+            {% block breadcrumbs %}{% endblock %}
             {% if messages %}
             {% for message in messages %}
             <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">

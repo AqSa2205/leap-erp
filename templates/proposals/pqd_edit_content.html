@@ -3,6 +3,15 @@
 
 {% block title %}Edit Content - {{ pqd.title }} - Leap Networks ERP{% endblock %}
 {% block page_title %}Edit PQD Content: {{ pqd.title }}{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'proposals:pqd_list' %}">Prequalification</a>
+    <span class="crumb-sep">›</span>
+    <a href="{% url 'proposals:pqd_detail' pqd.pk %}">{{ pqd.title|truncatechars:40 }}</a>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">Edit Content</span>
+</nav>
+{% endblock %}
 
 {% block extra_css %}
 <style>
