@@ -59,4 +59,7 @@ urlpatterns = [
 
     # Workflow stage transitions (handover BOM → costing → finalize)
     path('<int:pk>/workflow/', views.costing_workflow_transition, name='workflow_transition'),
+
+    # Bulk-apply the sheet's default supplier currency to every line item
+    path('<int:pk>/apply-default-currency/', views.ajax_apply_default_currency, name='apply_default_currency'),
 ]

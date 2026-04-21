@@ -75,6 +75,10 @@ class CostingSheet(models.Model):
     finances_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
     installation_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
     output_currency = models.CharField(max_length=10, default='SAR')
+    default_supplier_currency = models.CharField(
+        max_length=10, default='SAR',
+        help_text='The currency the team is entering costs in. New line items default to this currency; use the "Apply to all" action to bulk-update existing items.',
+    )
     # PDF header fields
     customer_name = models.CharField(max_length=255, blank=True)
     end_user = models.CharField(max_length=255, blank=True)

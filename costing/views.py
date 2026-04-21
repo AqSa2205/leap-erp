@@ -744,7 +744,7 @@ def ajax_update_sheet_params(request, pk):
     field = request.POST.get('field')
     value = request.POST.get('value', '').strip()
 
-    allowed = ('margin', 'discount_rate', 'shipping_rate', 'customs_rate', 'finances_rate', 'installation_rate', 'output_currency', 'include_optional_in_total')
+    allowed = ('margin', 'discount_rate', 'shipping_rate', 'customs_rate', 'finances_rate', 'installation_rate', 'output_currency', 'default_supplier_currency', 'include_optional_in_total')
     if field not in allowed:
         return JsonResponse({'error': 'Invalid field'}, status=400)
 
@@ -753,8 +753,8 @@ def ajax_update_sheet_params(request, pk):
         return JsonResponse({'error': 'Pricing fields are read-only for proposal team — only the sales team can change these.'}, status=403)
 
     # Validate the value before opening a write transaction
-    if field == 'output_currency':
-        new_value = value
+    if field in ('output_currency', 'default_supplier_currency'):
+        new_value = (value or 'SAR').upper()[:10]
     elif field == 'include_optional_in_total':
         new_value = value in ('1', 'true', 'True', 'on')
     else:
@@ -974,7 +974,7 @@ def ajax_paste_line_items(request, pk):
             qty_raw = cols[3].strip().replace(',', '') or '1'
             unit = cols[4].strip() or 'EA'
             cost_raw = cols[5].strip().replace(',', '') or '0'
-            currency = cols[6].strip().upper() or 'SAR'
+            currency = cols[6].strip().upper() or (sheet.default_supplier_currency or 'SAR')
 
             try:
                 qty = Decimal(qty_raw) if qty_raw else Decimal('1')
@@ -1053,7 +1053,7 @@ def ajax_add_line_item(request, pk):
         description='',
         quantity=Decimal('1'),
         unit='EA',
-        supplier_currency='SAR',
+        supplier_currency=sheet.default_supplier_currency or 'SAR',
         base_unit_cost=Decimal('0'),
         order=next_order,
     )
@@ -1217,6 +1217,40 @@ def ajax_delete_sow_item(request, pk):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     item.delete()
     return JsonResponse({'ok': True})
+
+
+@login_required
+@require_POST
+def ajax_apply_default_currency(request, pk):
+    """Bulk-set every line item's supplier_currency to the sheet's default.
+
+    One-click helper for teams that set up a sheet in (e.g.) SAR and then
+    realise they actually enter costs in GBP — switches every existing item
+    without manual re-entry. Audit: one change-log row records the bulk op.
+    """
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    if getattr(request.user, 'is_proposal_team_user', False):
+        return JsonResponse({'error': 'Currency changes are sales-team only.'}, status=403)
+
+    target_currency = (sheet.default_supplier_currency or 'SAR').upper()
+    # Update every line item across every section in this sheet
+    updated = CostingLineItem.objects.filter(section__costing_sheet=sheet).exclude(
+        supplier_currency=target_currency,
+    ).update(supplier_currency=target_currency)
+
+    if updated:
+        _record_costing_change(
+            sheet, request.user,
+            scope='sheet',
+            scope_label=sheet.title or f'Sheet {sheet.pk}',
+            field='bulk_supplier_currency',
+            before='(mixed)',
+            after=f'{target_currency} on {updated} item(s)',
+            is_pricing=True,
+        )
+    return JsonResponse({'ok': True, 'updated': updated, 'currency': target_currency})
 
 
 @login_required

@@ -249,12 +249,29 @@
                 </table>
             </div>
             <div class="col-lg-1 col-md-2 text-center bom-pricing-only">
-                <div class="param-label mb-1">Output Currency</div>
+                <div class="param-label mb-1" title="Currency the team types line-item costs in">Input Currency</div>
+                <select class="form-select form-select-sm" id="inputCurrency" style="font-size:0.8rem; font-weight:700;">
+                    {% for rate in exchange_rates %}
+                    <option value="{{ rate.currency_code }}" {% if sheet.default_supplier_currency == rate.currency_code %}selected{% endif %}>{{ rate.currency_code }}</option>
+                    {% endfor %}
+                </select>
+                <button type="button" class="btn btn-sm btn-outline-dark mt-1 w-100" id="applyDefaultCurrencyBtn" title="Set every existing line item to the input currency"
+                        style="font-size:0.68rem; padding:1px 4px;">
+                    <i class="bi bi-arrow-down-up"></i> Apply to all
+                </button>
+            </div>
+            <div class="col-lg-1 col-md-2 text-center bom-pricing-only">
+                <div class="param-label mb-1" title="Currency all totals and the PDF will be shown in">Output Currency</div>
                 <select class="form-select form-select-sm" id="outputCurrency" style="font-size:0.8rem; font-weight:700;">
                     {% for rate in exchange_rates %}
                     <option value="{{ rate.currency_code }}" {% if sheet.output_currency == rate.currency_code %}selected{% endif %}>{{ rate.currency_code }}</option>
                     {% endfor %}
                 </select>
+                {% if sheet.default_supplier_currency != sheet.output_currency %}
+                <div class="text-muted mt-1" style="font-size:0.65rem; line-height:1.1;">
+                    Entering {{ sheet.default_supplier_currency }} · Totals in {{ sheet.output_currency }}
+                </div>
+                {% endif %}
             </div>
             <div class="col-lg-1 col-md-2 text-end">
                 {% if sheet.status == 'draft' %}
@@ -1170,6 +1187,50 @@ var _csrfToken = '{{ csrf_token }}';
         currencySelect.addEventListener('change', function() {
             saveField(updateParamsUrl, 'field=output_currency&value=' + encodeURIComponent(this.value), this, function() {
                 location.reload();
+            });
+        });
+    }
+
+    // ─── Input currency (default for new items; change does NOT touch existing items) ─
+    var inputCurrencySelect = document.getElementById('inputCurrency');
+    if (inputCurrencySelect) {
+        inputCurrencySelect.addEventListener('change', function() {
+            saveField(updateParamsUrl, 'field=default_supplier_currency&value=' + encodeURIComponent(this.value), this, function() {
+                location.reload();
+            });
+        });
+    }
+
+    // ─── "Apply to all items" button — bulk-updates every line item's
+    // supplier_currency to match the sheet default.
+    var applyBtn = document.getElementById('applyDefaultCurrencyBtn');
+    if (applyBtn) {
+        applyBtn.addEventListener('click', function() {
+            var target = inputCurrencySelect ? inputCurrencySelect.value : '';
+            if (!target) return;
+            if (!confirm('Set every existing line item to ' + target + '? Item costs will keep their numeric values — only the currency label changes.')) return;
+            applyBtn.disabled = true;
+            applyBtn.innerHTML = '<i class="bi bi-hourglass"></i> Applying…';
+            fetch('/costing/' + sheetPk + '/apply-default-currency/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/x-www-form-urlencoded'},
+                body: '',
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(resp) {
+                if (!resp.ok) {
+                    alert(resp.error || 'Failed to apply default currency');
+                    applyBtn.disabled = false;
+                    applyBtn.innerHTML = '<i class="bi bi-arrow-down-up"></i> Apply to all';
+                    return;
+                }
+                // Reload so every item row shows the new currency + computed prices refresh
+                location.reload();
+            })
+            .catch(function() {
+                alert('Network error while applying currency');
+                applyBtn.disabled = false;
+                applyBtn.innerHTML = '<i class="bi bi-arrow-down-up"></i> Apply to all';
             });
         });
     }
