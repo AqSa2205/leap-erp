@@ -58,6 +58,7 @@
                 <thead>
                     <tr>
                         <th>Title</th>
+                        <th>Reference</th>
                         <th>Project</th>
                         <th>Customer Ref</th>
                         <th>Stage</th>
@@ -76,6 +77,13 @@
                             <a href="{% url 'costing:detail' sheet.pk %}" class="text-decoration-none fw-bold">
                                 {{ sheet.title }}
                             </a>
+                        </td>
+                        <td>
+                            {% if sheet.project %}
+                            <a href="{% url 'projects:detail' sheet.project.pk %}" class="text-decoration-none" title="Open full workflow for this reference">
+                                <code>{{ sheet.project.proposal_reference }}</code>
+                            </a>
+                            {% else %}—{% endif %}
                         </td>
                         <td>{{ sheet.project.project_name|default:"-" }}</td>
                         <td>{{ sheet.customer_reference|default:"-" }}</td>
@@ -112,7 +120,7 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="10" class="text-center py-4 text-muted">
+                        <td colspan="11" class="text-center py-4 text-muted">
                             No costing sheets found. <a href="{% url 'costing:create' %}">Create one</a>.
                         </td>
                     </tr>

@@ -10,7 +10,11 @@
         <span class="badge bg-{% if proposal.status == 'draft' %}warning text-dark{% elif proposal.status == 'review' %}info{% elif proposal.status == 'final' %}success{% else %}primary{% endif %} me-2">
             {{ proposal.get_status_display }}
         </span>
+        {% if proposal.project %}
+        <a href="{% url 'projects:detail' proposal.project.pk %}" class="text-decoration-none" title="Open workflow hub"><code>{{ proposal.proposal_reference }}</code></a>
+        {% else %}
         <code>{{ proposal.proposal_reference }}</code>
+        {% endif %}
     </div>
     <div>
         <a href="{% url 'proposals:content' proposal.pk %}" class="btn btn-primary">

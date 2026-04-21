@@ -30,8 +30,9 @@
                 <thead class="table-light">
                     <tr>
                         <th>Vendor</th>
-                        <th>Reference</th>
+                        <th>Quote Ref</th>
                         <th>Amount</th>
+                        <th>Proposal Ref</th>
                         <th>Costing Sheet</th>
                         <th>Uploaded</th>
                         <th>By</th>
@@ -45,6 +46,13 @@
                         <td>{{ q.vendor_name }}</td>
                         <td class="small"><code>{{ q.quote_reference|default:"—" }}</code></td>
                         <td class="small">{% if q.amount %}{{ q.currency }} {{ q.amount|floatformat:2|intcomma }}{% else %}—{% endif %}</td>
+                        <td class="small">
+                            {% if q.sheet.project %}
+                            <a href="{% url 'projects:detail' q.sheet.project.pk %}" class="text-decoration-none" title="Open full workflow for this reference">
+                                <code>{{ q.sheet.project.proposal_reference }}</code>
+                            </a>
+                            {% else %}—{% endif %}
+                        </td>
                         <td><a href="{% url 'costing:detail' q.sheet.pk %}" class="text-decoration-none">{{ q.sheet.title|truncatechars:50 }}</a></td>
                         <td class="small">{{ q.uploaded_at|date:"d M Y H:i" }}</td>
                         <td class="small">{% if q.uploaded_by %}{{ q.uploaded_by.get_full_name|default:q.uploaded_by.username }}{% else %}—{% endif %}</td>
@@ -60,7 +68,7 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="8" class="text-center text-muted py-4">
+                        <td colspan="9" class="text-center text-muted py-4">
                             No vendor quotes yet. Open a costing sheet → Vendor Quotes card → upload.
                         </td>
                     </tr>

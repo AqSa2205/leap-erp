@@ -187,6 +187,7 @@
                 <h5 class="mb-1">{{ sheet.title }}</h5>
                 <table class="small text-muted mb-0">
                     {% if sheet.project %}
+                    <tr><td class="pe-2 fw-bold">Reference:</td><td><a href="{% url 'projects:detail' sheet.project.pk %}" class="text-decoration-none" title="Open workflow hub"><code>{{ sheet.project.proposal_reference }}</code></a></td></tr>
                     <tr><td class="pe-2 fw-bold">Project:</td><td>{{ sheet.project.project_name }}</td></tr>
                     {% endif %}
                     {% if sheet.customer_reference %}
