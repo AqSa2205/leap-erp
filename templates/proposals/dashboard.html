@@ -12,8 +12,10 @@
     .section-block { border-left: 4px solid transparent; padding-left: 1rem; }
     .section-block.technical { border-left-color: #0dcaf0; }
     .section-block.commercial { border-left-color: #198754; }
-    .stat-card { border: none; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); transition: transform 0.15s; }
-    .stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 14px rgba(0,0,0,0.10); }
+    .stat-card { border: none; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); transition: transform 0.15s, box-shadow 0.15s; }
+    .stat-card:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(196, 30, 58, 0.18); }
+    .stat-link { display: block; text-decoration: none; color: inherit; height: 100%; }
+    .stat-link:hover { color: inherit; }
     .stat-number { font-size: 1.8rem; font-weight: 800; line-height: 1; }
     .stat-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px; color: #6c757d; margin-top: 0.25rem; }
     .quick-link { display: block; padding: 10px 14px; border-radius: 8px; text-decoration: none; color: #212529; border: 1px solid #e0e0e0; transition: all 0.15s; }
@@ -33,55 +35,67 @@
     <p>All proposal-related work organized in one place — technical write-ups, BOMs, costing, vendor quotes and PDFs.</p>
 </div>
 
-<!-- Stats -->
+<!-- Stats (clickable — each tile drills into its filtered list) -->
 <div class="row g-3 mb-4">
     <div class="col-6 col-md-3 col-lg-2">
-        <div class="card stat-card h-100">
-            <div class="card-body">
-                <div class="stat-number text-info">{{ tp_counts.total|intcomma }}</div>
-                <div class="stat-label">Technical Proposals</div>
+        <a href="{% url 'proposals:list' %}" class="stat-link">
+            <div class="card stat-card h-100">
+                <div class="card-body">
+                    <div class="stat-number text-info">{{ tp_counts.total|intcomma }}</div>
+                    <div class="stat-label">Technical Proposals</div>
+                </div>
             </div>
-        </div>
+        </a>
     </div>
     <div class="col-6 col-md-3 col-lg-2">
-        <div class="card stat-card h-100">
-            <div class="card-body">
-                <div class="stat-number text-warning">{{ cs_counts.bom|intcomma }}</div>
-                <div class="stat-label">BOMs in progress</div>
+        <a href="{% url 'costing:list' %}?stage=bom_in_progress" class="stat-link">
+            <div class="card stat-card h-100">
+                <div class="card-body">
+                    <div class="stat-number text-warning">{{ cs_counts.bom|intcomma }}</div>
+                    <div class="stat-label">BOMs in progress</div>
+                </div>
             </div>
-        </div>
+        </a>
     </div>
     <div class="col-6 col-md-3 col-lg-2">
-        <div class="card stat-card h-100">
-            <div class="card-body">
-                <div class="stat-number text-primary">{{ cs_counts.ready|intcomma }}</div>
-                <div class="stat-label">Ready for costing</div>
+        <a href="{% url 'costing:list' %}?stage=ready_for_costing" class="stat-link">
+            <div class="card stat-card h-100">
+                <div class="card-body">
+                    <div class="stat-number text-primary">{{ cs_counts.ready|intcomma }}</div>
+                    <div class="stat-label">Ready for costing</div>
+                </div>
             </div>
-        </div>
+        </a>
     </div>
     <div class="col-6 col-md-3 col-lg-2">
-        <div class="card stat-card h-100">
-            <div class="card-body">
-                <div class="stat-number text-success">{{ cs_counts.costing|intcomma }}</div>
-                <div class="stat-label">Costing in progress</div>
+        <a href="{% url 'costing:list' %}?stage=costing_in_progress" class="stat-link">
+            <div class="card stat-card h-100">
+                <div class="card-body">
+                    <div class="stat-number text-success">{{ cs_counts.costing|intcomma }}</div>
+                    <div class="stat-label">Costing in progress</div>
+                </div>
             </div>
-        </div>
+        </a>
     </div>
     <div class="col-6 col-md-3 col-lg-2">
-        <div class="card stat-card h-100">
-            <div class="card-body">
-                <div class="stat-number text-dark">{{ cs_counts.finalized|intcomma }}</div>
-                <div class="stat-label">Finalized</div>
+        <a href="{% url 'costing:list' %}?stage=finalized" class="stat-link">
+            <div class="card stat-card h-100">
+                <div class="card-body">
+                    <div class="stat-number text-dark">{{ cs_counts.finalized|intcomma }}</div>
+                    <div class="stat-label">Finalized</div>
+                </div>
             </div>
-        </div>
+        </a>
     </div>
     <div class="col-6 col-md-3 col-lg-2">
-        <div class="card stat-card h-100">
-            <div class="card-body">
-                <div class="stat-number">{{ vq_count|intcomma }}</div>
-                <div class="stat-label">Vendor Quotes</div>
+        <a href="{% url 'costing:vendor_quote_list' %}" class="stat-link">
+            <div class="card stat-card h-100">
+                <div class="card-body">
+                    <div class="stat-number">{{ vq_count|intcomma }}</div>
+                    <div class="stat-label">Vendor Quotes</div>
+                </div>
             </div>
-        </div>
+        </a>
     </div>
 </div>
 
