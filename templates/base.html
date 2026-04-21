@@ -119,15 +119,32 @@
             margin-left: var(--sidebar-collapsed-width);
         }
         /* Breadcrumb trail shown at top of content area */
-        .crumb-trail {
-            display: flex; align-items: center; gap: 0.35rem;
-            font-size: 0.82rem; color: #6c757d;
-            margin-bottom: 0.85rem; flex-wrap: wrap;
+        nav.crumb-trail {
+            display: flex !important;
+            align-items: center;
+            gap: 0.4rem;
+            flex-wrap: wrap;
+            font-size: 0.85rem;
+            color: #495057;
+            background: #fff;
+            padding: 0.55rem 0.9rem;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.03);
         }
-        .crumb-trail a { color: #6c757d; text-decoration: none; border-bottom: 1px dashed transparent; }
-        .crumb-trail a:hover { color: #C41E3A; border-bottom-color: #C41E3A; }
-        .crumb-trail .crumb-current { color: #212529; font-weight: 600; }
-        .crumb-trail .crumb-sep { color: #adb5bd; font-size: 0.7rem; }
+        nav.crumb-trail a {
+            color: #495057;
+            text-decoration: none;
+            border-bottom: 1px dashed transparent;
+        }
+        nav.crumb-trail a:hover { color: #C41E3A; border-bottom-color: #C41E3A; }
+        nav.crumb-trail .crumb-current { color: #212529; font-weight: 600; }
+        nav.crumb-trail .crumb-sep { color: #adb5bd; font-size: 0.75rem; }
+        nav.crumb-trail code { background: transparent; color: inherit; font-weight: 600; padding: 0; }
+        [data-theme="dark"] nav.crumb-trail { background: #1e1e1e; border-color: #333; color: #adb5bd; }
+        [data-theme="dark"] nav.crumb-trail a { color: #adb5bd; }
+        [data-theme="dark"] nav.crumb-trail .crumb-current { color: #e0e0e0; }
         .top-navbar {
             background: #fff;
             box-shadow: 0 2px 4px rgba(0,0,0,0.08);
