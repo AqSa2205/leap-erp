@@ -1146,6 +1146,36 @@ var _csrfToken = '{{ csrf_token }}';
             }
         });
 
+        // Excel-like keyboard flow: Enter jumps down the same column,
+        // Shift+Enter jumps up. Tab keeps its native left-to-right
+        // behaviour because the inputs are already in DOM order.
+        bomTable.addEventListener('keydown', function (e) {
+            var el = e.target;
+            if (!el.matches('.cost-edit, .text-edit, .currency-select')) return;
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+
+            // All editables in the same column (same data-field, or all
+            // currency selects if this is a select)
+            var selector = el.matches('.currency-select')
+                ? '.currency-select'
+                : '[data-field="' + el.dataset.field + '"]';
+            var list = Array.prototype.slice.call(bomTable.querySelectorAll(selector))
+                .filter(function (x) { return !x.disabled && x.offsetParent !== null; });
+            var idx = list.indexOf(el);
+            if (idx < 0) return;
+            var target = list[idx + (e.shiftKey ? -1 : 1)];
+            if (!target) return;
+
+            // Blur first so the pending value saves via the existing
+            // change handler, then focus the next cell.
+            el.blur();
+            setTimeout(function () {
+                target.focus();
+                try { if (target.select) target.select(); } catch (ex) {}
+            }, 0);
+        });
+
         // Paste from Excel — open modal scoped to this section
         bomTable.addEventListener('click', function(e) {
             var pasteBtn = e.target.closest('.paste-excel-btn');
