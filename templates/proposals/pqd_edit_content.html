@@ -298,8 +298,8 @@ document.addEventListener('DOMContentLoaded', function() {
         font_family_formats: '',
         font_size_formats: '',
         setup: function (editor) {
-            editor.on('change keyup SetContent', function () {
-                if (window.__autosave) window.__autosave.markDirty();
+            editor.on('input keyup SetContent paste', function () {
+                if (window.__autosave) window.__autosave.markDirty(editor.id);
             });
         },
     });
@@ -385,8 +385,9 @@ document.addEventListener('DOMContentLoaded', function() {
         var statusEl = document.getElementById('autosaveStatus');
         var textEl   = statusEl ? statusEl.querySelector('.autosave-text') : null;
         var iconEl   = statusEl ? statusEl.querySelector('i') : null;
-        var dirty = false;
+        var dirtyIds = new Set();
         var lastSaved = null;
+        var saveInFlight = false;
 
         function setState(state, text, icon) {
             if (!statusEl) return;
@@ -402,13 +403,16 @@ document.addEventListener('DOMContentLoaded', function() {
             return Math.floor(s / 3600) + ' h ago';
         }
         function refreshIdleLabel() {
-            if (!dirty && lastSaved) setState('idle', 'Saved ' + formatAgo(lastSaved), 'bi-cloud-check');
+            if (dirtyIds.size === 0 && !saveInFlight && lastSaved) {
+                setState('idle', 'Saved ' + formatAgo(lastSaved), 'bi-cloud-check');
+            }
         }
         setInterval(refreshIdleLabel, 20000);
 
-        function saveOne(section) {
-            var editor = tinymce.get('id_' + section);
-            if (!editor) return Promise.resolve();
+        function saveOne(editorId) {
+            var editor = tinymce.get(editorId);
+            if (!editor) return Promise.reject(new Error('editor missing'));
+            var section = editorId.replace(/^id_/, '');
             var fd = new FormData();
             fd.append('field', section);
             fd.append('value', editor.getContent());
@@ -417,33 +421,36 @@ document.addEventListener('DOMContentLoaded', function() {
                 headers: {'X-CSRFToken': csrfToken},
                 body: fd,
             }).then(function (r) { return r.json(); }).then(function (resp) {
-                if (resp && resp.ok) editor.setDirty(false);
-                else throw new Error('save rejected');
+                if (!resp || !resp.ok) throw new Error('save rejected');
             });
         }
         function saveAllDirty() {
-            if (!window.tinymce) return;
-            var editors = tinymce.editors || [];
-            var dirtyOnes = editors.filter(function (e) { return e.isDirty(); });
-            if (!dirtyOnes.length) { dirty = false; refreshIdleLabel(); return; }
+            if (saveInFlight || dirtyIds.size === 0) return;
+            saveInFlight = true;
+            var toSave = Array.from(dirtyIds);
+            dirtyIds.clear();
             setState('saving', 'Saving…', 'bi-cloud-upload');
-            Promise.all(dirtyOnes.map(function (e) { return saveOne(e.id.replace('id_', '')); }))
-                .then(function () {
-                    dirty = false;
-                    lastSaved = Date.now();
-                    setState('idle', 'Saved just now', 'bi-cloud-check');
-                })
-                .catch(function () { setState('error', 'Save failed — will retry', 'bi-exclamation-triangle'); });
+            Promise.all(toSave.map(saveOne)).then(function () {
+                saveInFlight = false;
+                lastSaved = Date.now();
+                if (dirtyIds.size === 0) setState('idle', 'Saved just now', 'bi-cloud-check');
+                else setState('dirty', 'Unsaved changes', 'bi-cloud-slash');
+            }).catch(function () {
+                saveInFlight = false;
+                toSave.forEach(function (id) { dirtyIds.add(id); });
+                setState('error', 'Save failed — will retry', 'bi-exclamation-triangle');
+            });
         }
-        setInterval(saveAllDirty, 30000);
+        setInterval(saveAllDirty, 5000);
         window.addEventListener('beforeunload', function (e) {
-            if (!window.tinymce) return;
-            var anyDirty = (tinymce.editors || []).some(function (ed) { return ed.isDirty(); });
-            if (anyDirty) { e.preventDefault(); e.returnValue = ''; }
+            if (dirtyIds.size > 0 || saveInFlight) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
         });
         return {
-            markDirty: function () {
-                dirty = true;
+            markDirty: function (editorId) {
+                if (editorId) dirtyIds.add(editorId);
                 setState('dirty', 'Unsaved changes', 'bi-cloud-slash');
             },
             saveAllNow: saveAllDirty,
