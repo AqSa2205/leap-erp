@@ -1352,6 +1352,24 @@ def vendor_quote_list(request):
 
 
 @login_required
+@require_POST
+def clear_changelog(request, pk):
+    """Wipe every CostingSheetChangeLog row for one sheet.
+
+    Reserved for super-admin and admin users - a destructive action that
+    erases cross-team audit history, so keep the gate tight.
+    """
+    from .models import CostingSheetChangeLog
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+    user = request.user
+    if not (getattr(user, 'is_super_admin_user', False) or getattr(user, 'is_admin_user', False)):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    deleted, _ = CostingSheetChangeLog.objects.filter(sheet=sheet).delete()
+    messages.success(request, f'Cleared {deleted} change-log entries.')
+    return redirect('costing:detail', pk=sheet.pk)
+
+
+@login_required
 def commercial_proposal_pdf_list(request):
     """List every Commercial Proposal PDF generated from a costing sheet.
 
