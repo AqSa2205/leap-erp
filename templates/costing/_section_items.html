@@ -24,13 +24,13 @@
     <td colspan="8" class="text-end">Sub-Total ({{ output_currency }})</td>
     <td class="num fw-bold">{{ section.subtotal|mul:conversion_rate|floatformat:2|intcomma }}</td>
     <td class="cost-col"></td>
-    <td class="cost-col num fw-bold">{{ section.subtotal_base_unit_cost|floatformat:2|intcomma }}</td>
-    <td class="cost-col num fw-bold">{{ section.subtotal_discount|floatformat:2|intcomma }}</td>
-    <td class="cost-col num fw-bold">{{ section.subtotal_unit_cost|floatformat:2|intcomma }}</td>
-    <td class="cost-col num fw-bold">{{ section.total_cost|floatformat:2|intcomma }}</td>
+    <td class="cost-col num fw-bold">{{ section.subtotal_base_unit_cost|mul:conversion_rate|floatformat:2|intcomma }}</td>
+    <td class="cost-col num fw-bold">{{ section.subtotal_discount|mul:conversion_rate|floatformat:2|intcomma }}</td>
+    <td class="cost-col num fw-bold">{{ section.subtotal_unit_cost|mul:conversion_rate|floatformat:2|intcomma }}</td>
+    <td class="cost-col num fw-bold">{{ section.total_cost|mul:conversion_rate|floatformat:2|intcomma }}</td>
     <td class="cost-col"></td>
-    <td class="cost-col num fw-bold">{{ section.subtotal_base_unit_price|floatformat:2|intcomma }}</td>
-    <td class="cost-col num fw-bold">{{ section.subtotal_base_total_price|floatformat:2|intcomma }}</td>
+    <td class="cost-col num fw-bold">{{ section.subtotal_base_unit_price|mul:conversion_rate|floatformat:2|intcomma }}</td>
+    <td class="cost-col num fw-bold">{{ section.subtotal_base_total_price|mul:conversion_rate|floatformat:2|intcomma }}</td>
     <td class="cost-col" colspan="4"></td>
     <td class="cost-col num fw-bold">{{ section.subtotal|mul:conversion_rate|floatformat:2|intcomma }}</td>
     <td class="cost-col num fw-bold">{{ section.subtotal|mul:conversion_rate|floatformat:2|intcomma }}</td>
