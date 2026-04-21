@@ -178,9 +178,9 @@
                 </a>
             </div>
             <div class="col-12">
-                <a href="{% url 'costing:list' %}?view=commercial" class="quick-link">
+                <a href="{% url 'costing:commercial_proposal_list' %}" class="quick-link">
                     <i class="bi bi-file-earmark-pdf"></i>Commercial Proposal (PDFs)
-                    <span class="badge bg-light text-dark float-end">{{ cs_counts.finalized }}</span>
+                    <span class="badge bg-light text-dark float-end">{{ cp_pdf_count|default:0 }}</span>
                 </a>
             </div>
         </div>

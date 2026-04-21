@@ -24,7 +24,7 @@ def proposals_dashboard(request):
     """Landing page for the Proposals menu — shows stats + recent activity
     across Technical (proposals), BOMs/Costing (costing sheets), Vendor
     Quotes, and Client RFQs."""
-    from costing.models import CostingSheet, VendorQuote
+    from costing.models import CostingSheet, VendorQuote, CostingSheetRevision
     from projects.models import Document
     user = request.user
 
@@ -58,6 +58,7 @@ def proposals_dashboard(request):
     }
 
     vq_count = VendorQuote.objects.filter(sheet__in=cs_qs).count()
+    cp_pdf_count = CostingSheetRevision.objects.filter(sheet__in=cs_qs, export_format='pdf').count()
     rfq_count = Document.objects.filter(document_type='rfq').count()
 
     recent_tp = tp_qs.order_by('-updated_at')[:5]
@@ -68,6 +69,7 @@ def proposals_dashboard(request):
         'tp_counts': tp_counts,
         'cs_counts': cs_counts,
         'vq_count': vq_count,
+        'cp_pdf_count': cp_pdf_count,
         'rfq_count': rfq_count,
         'recent_tp': recent_tp,
         'recent_bom': recent_bom,

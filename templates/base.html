@@ -804,12 +804,12 @@
                                         </a>
                                     </li>
                                     <li class="nav-item">
-                                        <a class="nav-link py-1 {% if request.resolver_match.app_name == 'costing' and request.GET.view != 'bom' and request.GET.view != 'commercial' and request.resolver_match.url_name != 'vendor_quote_list' %}active{% endif %}" href="{% url 'costing:list' %}">
+                                        <a class="nav-link py-1 {% if request.resolver_match.app_name == 'costing' and request.GET.view != 'bom' and request.resolver_match.url_name != 'vendor_quote_list' and request.resolver_match.url_name != 'commercial_proposal_list' %}active{% endif %}" href="{% url 'costing:list' %}">
                                             <i class="bi bi-calculator"></i> <span>Costing</span>
                                         </a>
                                     </li>
                                     <li class="nav-item">
-                                        <a class="nav-link py-1 {% if request.GET.view == 'commercial' %}active{% endif %}" href="{% url 'costing:list' %}?view=commercial">
+                                        <a class="nav-link py-1 {% if request.resolver_match.url_name == 'commercial_proposal_list' %}active{% endif %}" href="{% url 'costing:commercial_proposal_list' %}">
                                             <i class="bi bi-file-earmark-pdf"></i> <span>Commercial Proposal</span>
                                         </a>
                                     </li>

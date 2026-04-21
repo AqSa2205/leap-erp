@@ -63,6 +63,9 @@ urlpatterns = [
     # Bulk-apply the sheet's default supplier currency to every line item
     path('<int:pk>/apply-default-currency/', views.ajax_apply_default_currency, name='apply_default_currency'),
 
+    # Commercial Proposal PDFs (generated from costing sheet exports)
+    path('commercial-proposals/', login_required(views.commercial_proposal_pdf_list), name='commercial_proposal_list'),
+
     # Vendor Quotes
     path('vendor-quotes/', login_required(views.vendor_quote_list), name='vendor_quote_list'),
     path('<int:pk>/vendor-quotes/upload/', views.ajax_upload_vendor_quote, name='vendor_quote_upload'),
