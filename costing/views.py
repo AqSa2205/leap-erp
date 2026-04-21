@@ -1334,6 +1334,46 @@ def vendor_quote_list(request):
 
 
 @login_required
+def commercial_proposal_pdf_list(request):
+    """List every Commercial Proposal PDF generated from a costing sheet.
+
+    A Commercial Proposal PDF is a CostingSheetRevision with
+    export_format='pdf'. Shown under Proposals → Commercial → Commercial
+    Proposal so users can browse / download prior exports without
+    wading through the costing list itself.
+    """
+    from .models import CostingSheetRevision
+    user = request.user
+    qs = CostingSheetRevision.objects.filter(export_format='pdf').select_related(
+        'sheet', 'sheet__project', 'created_by',
+    )
+    if not user.is_super_admin_user:
+        from django.db.models import Q as _Q
+        if user.is_admin_user or user.is_manager_user:
+            qs = qs.filter(_Q(sheet__created_by=user) | _Q(sheet__project__region=user.region))
+        elif getattr(user, 'is_proposal_team_user', False):
+            # Proposal team sees every sheet (same as CostingPermissionMixin)
+            pass
+        else:
+            qs = qs.filter(sheet__created_by=user)
+
+    search = (request.GET.get('search') or '').strip()
+    if search:
+        from django.db.models import Q as _Q
+        qs = qs.filter(
+            _Q(revision_label__icontains=search) |
+            _Q(sheet__title__icontains=search) |
+            _Q(sheet__project__proposal_reference__icontains=search) |
+            _Q(sheet__project__project_name__icontains=search) |
+            _Q(change_summary__icontains=search)
+        )
+    return render(request, 'costing/commercial_proposal_list.html', {
+        'revisions': qs.order_by('-created_at'),
+        'search': search,
+    })
+
+
+@login_required
 @require_POST
 def ajax_apply_default_currency(request, pk):
     """Bulk-set every line item's supplier_currency to the sheet's default.

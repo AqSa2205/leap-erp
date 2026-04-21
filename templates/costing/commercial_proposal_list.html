@@ -1,0 +1,78 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Commercial Proposal PDFs - Leap Networks ERP{% endblock %}
+{% block page_title %}Commercial Proposal PDFs{% endblock %}
+
+{% block content %}
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <form method="get" class="row g-2 align-items-center">
+            <div class="col-md-8">
+                <input type="text" name="search" class="form-control" placeholder="Search by revision / sheet title / proposal reference / project name / change summary" value="{{ search }}">
+            </div>
+            <div class="col-md-4 text-end">
+                <button type="submit" class="btn btn-primary"><i class="bi bi-search me-1"></i>Search</button>
+                <a href="{% url 'costing:commercial_proposal_list' %}" class="btn btn-outline-secondary ms-1">Clear</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-file-earmark-pdf me-2"></i>Commercial Proposal PDFs <span class="badge bg-secondary ms-1">{{ revisions|length }}</span></span>
+        <small class="text-muted">Every PDF export of a costing sheet is saved here as a revision.</small>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Revision</th>
+                        <th>Proposal Ref</th>
+                        <th>Costing Sheet</th>
+                        <th>Change Summary</th>
+                        <th>Exported</th>
+                        <th>By</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for rev in revisions %}
+                    <tr>
+                        <td><span class="badge bg-dark">{{ rev.revision_label }}</span></td>
+                        <td class="small">
+                            {% if rev.sheet.project %}
+                            <a href="{% url 'projects:detail' rev.sheet.project.pk %}" class="text-decoration-none" title="Open workflow hub">
+                                <code>{{ rev.sheet.project.proposal_reference }}</code>
+                            </a>
+                            {% else %}—{% endif %}
+                        </td>
+                        <td>
+                            <a href="{% url 'costing:detail' rev.sheet.pk %}" class="text-decoration-none">
+                                {{ rev.sheet.title|truncatechars:60 }}
+                            </a>
+                        </td>
+                        <td class="small text-muted">{{ rev.change_summary|default:"—"|truncatechars:80 }}</td>
+                        <td class="small">{{ rev.created_at|date:"d M Y H:i" }}</td>
+                        <td class="small">{% if rev.created_by %}{{ rev.created_by.get_full_name|default:rev.created_by.username }}{% else %}—{% endif %}</td>
+                        <td class="text-end">
+                            {% if rev.file %}
+                            <a href="{{ rev.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary" title="Preview / Download"><i class="bi bi-eye"></i></a>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="7" class="text-center text-muted py-4">
+                            No Commercial Proposal PDFs yet. Export a costing sheet as PDF to create one.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
