@@ -1,0 +1,203 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}My Work - Leap Networks ERP{% endblock %}
+{% block page_title %}My Work{% endblock %}
+
+{% block extra_css %}
+<style>
+    .mw-card { border: none; box-shadow: 0 2px 8px rgba(0,0,0,0.06); border-radius: 12px; }
+    .mw-card .card-header {
+        background: #fff; border-bottom: 1px solid #f0f0f0;
+        padding: 1rem 1.25rem; border-radius: 12px 12px 0 0;
+    }
+    .mw-card .card-header h5 { font-size: 1rem; margin: 0; font-weight: 700; }
+    .mw-card .card-header .count-pill {
+        background: #212529; color: #fff; padding: 1px 9px;
+        border-radius: 999px; font-size: 0.72rem; font-weight: 600;
+    }
+    .mw-card.action-card .card-header { border-left: 4px solid #C41E3A; }
+    .mw-card.drafts-card .card-header { border-left: 4px solid #0dcaf0; }
+    .mw-card.stale-card  .card-header { border-left: 4px solid #fd7e14; }
+    .mw-card.pricing-card .card-header { border-left: 4px solid #dc3545; }
+    .mw-card.notif-card  .card-header { border-left: 4px solid #6f42c1; }
+
+    .mw-body { max-height: 360px; overflow-y: auto; padding: 0.25rem 0.5rem; }
+    .mw-item {
+        display: flex; align-items: center; gap: 0.7rem;
+        padding: 0.6rem 0.75rem; border-radius: 8px;
+        text-decoration: none; color: inherit;
+        transition: background 0.12s;
+    }
+    .mw-item:hover { background: #f1f3f5; color: inherit; }
+    .mw-item-icon {
+        width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        background: #f8f9fa; font-size: 0.95rem;
+    }
+    .mw-item-body { flex: 1; min-width: 0; }
+    .mw-item-title { font-weight: 600; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mw-item-sub   { font-size: 0.75rem; color: #868e96; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mw-item-meta  { font-size: 0.7rem; color: #adb5bd; flex-shrink: 0; }
+    .mw-empty { padding: 1.5rem 1rem; text-align: center; color: #adb5bd; font-size: 0.85rem; }
+    .mw-hero {
+        background: linear-gradient(135deg, #1a1a1a 0%, #C41E3A 100%);
+        color: #fff; border-radius: 14px; padding: 1.6rem 1.8rem;
+        margin-bottom: 1.2rem;
+    }
+    .mw-hero h4 { margin: 0; font-weight: 700; }
+    .mw-hero p { margin: 0.2rem 0 0; opacity: 0.85; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mw-hero">
+    <h4>Hey {{ user.first_name|default:user.username }} — here's what needs you.</h4>
+    <p>
+        {{ action_items|length }} action{{ action_items|length|pluralize }},
+        {{ drafts|length }} draft{{ drafts|length|pluralize }},
+        {{ stale|length }} stale,
+        {% if pricing_changes %}{{ pricing_changes|length }} pricing change{{ pricing_changes|length|pluralize }},{% endif %}
+        {{ notifications|length }} notification{{ notifications|length|pluralize }}
+    </p>
+</div>
+
+<div class="row g-3">
+    <!-- Needs your attention -->
+    <div class="col-lg-6">
+        <div class="card mw-card action-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5><i class="bi bi-lightning-charge-fill me-2 text-danger"></i>Needs your attention</h5>
+                <span class="count-pill">{{ action_items|length }}</span>
+            </div>
+            <div class="mw-body">
+                {% for it in action_items %}
+                <a class="mw-item" href="{{ it.url }}">
+                    <div class="mw-item-icon" style="color: {{ it.color }};">
+                        <i class="bi {{ it.icon }}"></i>
+                    </div>
+                    <div class="mw-item-body">
+                        <div class="mw-item-title">{{ it.title }}</div>
+                        <div class="mw-item-sub">{{ it.subtitle }}</div>
+                    </div>
+                    <div class="mw-item-meta">{{ it.meta|naturaltime }}</div>
+                </a>
+                {% empty %}
+                <div class="mw-empty"><i class="bi bi-check2-circle fs-4 d-block mb-1 text-success"></i>Nothing waiting on you right now — nice.</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Drafts -->
+    <div class="col-lg-6">
+        <div class="card mw-card drafts-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5><i class="bi bi-pencil-square me-2 text-info"></i>Your drafts</h5>
+                <span class="count-pill">{{ drafts|length }}</span>
+            </div>
+            <div class="mw-body">
+                {% for it in drafts %}
+                <a class="mw-item" href="{{ it.url }}">
+                    <div class="mw-item-icon" style="color: {{ it.color }};">
+                        <i class="bi {{ it.icon }}"></i>
+                    </div>
+                    <div class="mw-item-body">
+                        <div class="mw-item-title">{{ it.title }}</div>
+                        <div class="mw-item-sub">{{ it.subtitle }}</div>
+                    </div>
+                    <div class="mw-item-meta">{{ it.meta|naturaltime }}</div>
+                </a>
+                {% empty %}
+                <div class="mw-empty">No drafts to pick up.</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Stale -->
+    <div class="col-lg-6">
+        <div class="card mw-card stale-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5><i class="bi bi-hourglass-split me-2 text-warning"></i>Stale · no update in 14+ days</h5>
+                <span class="count-pill">{{ stale|length }}</span>
+            </div>
+            <div class="mw-body">
+                {% for it in stale %}
+                <a class="mw-item" href="{{ it.url }}">
+                    <div class="mw-item-icon" style="color: {{ it.color }};">
+                        <i class="bi {{ it.icon }}"></i>
+                    </div>
+                    <div class="mw-item-body">
+                        <div class="mw-item-title">{{ it.title }}</div>
+                        <div class="mw-item-sub">{{ it.subtitle }}</div>
+                    </div>
+                    <div class="mw-item-meta">{{ it.meta|naturaltime }}</div>
+                </a>
+                {% empty %}
+                <div class="mw-empty">Everything you own is moving.</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Pricing changes (sales only) -->
+    {% if pricing_changes or flags.is_sales or flags.is_admin %}
+    <div class="col-lg-6">
+        <div class="card mw-card pricing-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5><i class="bi bi-graph-up-arrow me-2 text-danger"></i>Pricing changes to review</h5>
+                <span class="count-pill">{{ pricing_changes|length }}</span>
+            </div>
+            <div class="mw-body">
+                {% for it in pricing_changes %}
+                <a class="mw-item" href="{{ it.url }}">
+                    <div class="mw-item-icon" style="color: {{ it.color }};">
+                        <i class="bi {{ it.icon }}"></i>
+                    </div>
+                    <div class="mw-item-body">
+                        <div class="mw-item-title">{{ it.title }}</div>
+                        <div class="mw-item-sub">{{ it.subtitle }}</div>
+                    </div>
+                    <div class="mw-item-meta">{{ it.meta|naturaltime }}</div>
+                </a>
+                {% empty %}
+                <div class="mw-empty">No recent pricing changes from the proposal team.</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Notifications -->
+    <div class="col-lg-6">
+        <div class="card mw-card notif-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5><i class="bi bi-bell-fill me-2 text-purple" style="color:#6f42c1;"></i>Unread notifications</h5>
+                <span class="count-pill">{{ notifications|length }}</span>
+            </div>
+            <div class="mw-body">
+                {% for n in notifications %}
+                <a class="mw-item" href="{{ n.target_url|default:'#' }}">
+                    <div class="mw-item-icon" style="color: #6f42c1;">
+                        <i class="bi bi-bell"></i>
+                    </div>
+                    <div class="mw-item-body">
+                        <div class="mw-item-title">{% if n.actor %}{{ n.actor.get_full_name|default:n.actor.username }} {% endif %}{{ n.verb }}</div>
+                        <div class="mw-item-sub">{{ n.description|default:"" }}</div>
+                    </div>
+                    <div class="mw-item-meta">{{ n.created_at|naturaltime }}</div>
+                </a>
+                {% empty %}
+                <div class="mw-empty">All caught up.</div>
+                {% endfor %}
+                {% if notifications %}
+                <div class="text-center pt-2">
+                    <a href="{% url 'notifications:list' %}" class="small text-muted">View all notifications →</a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
