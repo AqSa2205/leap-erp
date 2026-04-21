@@ -20,12 +20,28 @@
         </a>
         <code class="ms-2">{{ object.proposal_reference }}</code>
     </div>
-    <div>
+    <div class="d-flex align-items-center gap-2">
+        <span id="autosaveStatus" class="autosave-pill autosave-idle">
+            <i class="bi bi-cloud-check"></i>
+            <span class="autosave-text">All changes saved</span>
+        </span>
         <a href="{% url 'proposals:export_docx' object.pk %}" class="btn btn-success btn-sm">
             <i class="bi bi-file-earmark-word me-1"></i> Export DOCX
         </a>
     </div>
 </div>
+
+<style>
+    .autosave-pill {
+        display: inline-flex; align-items: center; gap: 0.35rem;
+        padding: 0.3rem 0.7rem; border-radius: 999px;
+        font-size: 0.78rem; font-weight: 500; transition: all 0.2s;
+    }
+    .autosave-idle   { background: #e8f5e9; color: #2e7d32; }
+    .autosave-dirty  { background: #fff3e0; color: #e65100; }
+    .autosave-saving { background: #e3f2fd; color: #0d47a1; }
+    .autosave-error  { background: #ffebee; color: #c62828; }
+</style>
 
 <form method="post" id="contentForm">
     {% csrf_token %}
@@ -234,6 +250,10 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                 }
             });
+            // Autosave: mark dirty on any change so the poller will pick it up
+            editor.on('change keyup SetContent', function() {
+                if (window.__autosave) window.__autosave.markDirty();
+            });
         },
         // Table defaults
         table_default_styles: {
@@ -302,6 +322,93 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     });
+
+    // ─── Autosave controller ────────────────────────────────
+    // Every 30s, silently POST any dirty editor's content to the same
+    // save_section endpoint the manual Save button uses. Shows a pill
+    // in the header reflecting state: idle / dirty / saving / error.
+    window.__autosave = (function () {
+        var statusEl = document.getElementById('autosaveStatus');
+        var textEl   = statusEl ? statusEl.querySelector('.autosave-text') : null;
+        var iconEl   = statusEl ? statusEl.querySelector('i') : null;
+        var dirty = false;
+        var lastSaved = null;
+
+        function setState(state, text, icon) {
+            if (!statusEl) return;
+            statusEl.className = 'autosave-pill autosave-' + state;
+            if (textEl) textEl.textContent = text;
+            if (iconEl) iconEl.className = 'bi ' + icon;
+        }
+        function formatAgo(ts) {
+            if (!ts) return '';
+            var s = Math.round((Date.now() - ts) / 1000);
+            if (s < 60) return 'just now';
+            if (s < 3600) return Math.floor(s / 60) + ' min ago';
+            return Math.floor(s / 3600) + ' h ago';
+        }
+        function refreshIdleLabel() {
+            if (!dirty && lastSaved) {
+                setState('idle', 'Saved ' + formatAgo(lastSaved), 'bi-cloud-check');
+            }
+        }
+        setInterval(refreshIdleLabel, 20000);
+
+        function saveOne(section) {
+            var editor = tinymce.get('id_' + section);
+            if (!editor) return Promise.resolve();
+            var content = editor.getContent();
+            var data = new FormData();
+            data.append('field', section);
+            data.append('value', content);
+            return fetch(saveSectionUrl, {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrfToken},
+                body: data,
+            }).then(function (r) { return r.json(); }).then(function (resp) {
+                if (resp && resp.ok) editor.setDirty(false);
+                else throw new Error('save rejected');
+            });
+        }
+
+        function saveAllDirty() {
+            if (!window.tinymce) return;
+            var editors = tinymce.editors || [];
+            var dirtyOnes = editors.filter(function (e) { return e.isDirty(); });
+            if (!dirtyOnes.length) { dirty = false; refreshIdleLabel(); return; }
+            setState('saving', 'Saving…', 'bi-cloud-upload');
+            var promises = dirtyOnes.map(function (e) {
+                return saveOne(e.id.replace('id_', ''));
+            });
+            Promise.all(promises).then(function () {
+                dirty = false;
+                lastSaved = Date.now();
+                setState('idle', 'Saved just now', 'bi-cloud-check');
+            }).catch(function () {
+                setState('error', 'Save failed — will retry', 'bi-exclamation-triangle');
+            });
+        }
+
+        setInterval(saveAllDirty, 30000);
+
+        // Warn before leaving with unsaved work
+        window.addEventListener('beforeunload', function (e) {
+            if (!window.tinymce) return;
+            var anyDirty = (tinymce.editors || []).some(function (ed) { return ed.isDirty(); });
+            if (anyDirty) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
+        });
+
+        return {
+            markDirty: function () {
+                dirty = true;
+                setState('dirty', 'Unsaved changes', 'bi-cloud-slash');
+            },
+            saveAllNow: saveAllDirty,
+        };
+    })();
 
     // ─── Boilerplate loading ─────────────────────────────────
     document.querySelectorAll('.btn-load-bp').forEach(function(btn) {
