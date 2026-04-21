@@ -728,12 +728,6 @@
                     <i class="bi bi-folder"></i> <span>Commercial Pipeline</span>
                 </a>
             </li>
-            <li class="nav-item">
-                <a class="nav-link {% if 'document' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'projects:document_list' %}" data-title="Documents">
-                    <i class="bi bi-file-earmark-text"></i> <span>Documents</span>
-                </a>
-            </li>
-
             {# ─── Proposals (clickable + collapsible sub-groups) ─── #}
             <li class="nav-item">
                 <div class="d-flex align-items-stretch">
@@ -835,30 +829,8 @@
         <div class="nav-section" data-section="reports"><span>Reports</span><i class="bi bi-chevron-down section-chevron"></i></div>
         <ul class="nav flex-column nav-section-items" data-section-items="reports">
             <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'index' and request.resolver_match.app_name == 'reports' %}active{% endif %}" href="{% url 'reports:index' %}" data-title="Reports">
-                    <i class="bi bi-file-earmark-bar-graph"></i> <span>Reports</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'annual_report' %}active{% endif %}" href="{% url 'reports:annual_report' %}" data-title="Annual Report">
-                    <i class="bi bi-journal-text"></i> <span>Annual Report</span>
-                </a>
-            </li>
-            <li class="nav-item">
                 <a class="nav-link {% if 'sales_call' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'reports:sales_call_list' %}" data-title="Sales Call Reports">
                     <i class="bi bi-telephone"></i> <span>Sales Call Reports</span>
-                </a>
-            </li>
-            {% if user.can_import_excel %}
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'import' %}active{% endif %}" href="{% url 'reports:import' %}" data-title="Import Excel">
-                    <i class="bi bi-upload"></i> <span>Import Excel</span>
-                </a>
-            </li>
-            {% endif %}
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'export' %}active{% endif %}" href="{% url 'reports:export' %}" data-title="Export Excel">
-                    <i class="bi bi-download"></i> <span>Export Excel</span>
                 </a>
             </li>
         </ul>
