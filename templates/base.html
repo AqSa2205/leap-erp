@@ -734,13 +734,17 @@
                 </a>
             </li>
 
-            {# ─── Proposals (collapsible, with Technical / Commercial sub-groups) ─── #}
+            {# ─── Proposals (clickable + collapsible sub-groups) ─── #}
             <li class="nav-item">
-                <a class="nav-link d-flex justify-content-between align-items-center" data-bs-toggle="collapse" href="#proposalsSubmenu" role="button"
-                   aria-expanded="{% if 'dashboard' in request.path and request.resolver_match.app_name == 'proposals' or request.resolver_match.app_name == 'costing' or request.resolver_match.app_name == 'proposals' %}true{% else %}false{% endif %}">
-                    <span><i class="bi bi-kanban"></i> <span>Proposals</span></span>
-                    <i class="bi bi-chevron-down small"></i>
-                </a>
+                <div class="d-flex align-items-stretch">
+                    <a class="nav-link flex-grow-1 {% if request.resolver_match.url_name == 'dashboard' and request.resolver_match.app_name == 'proposals' %}active{% endif %}" href="{% url 'proposals:dashboard' %}" data-title="Proposals">
+                        <i class="bi bi-kanban"></i> <span>Proposals</span>
+                    </a>
+                    <a class="nav-link px-2 d-flex align-items-center" data-bs-toggle="collapse" href="#proposalsSubmenu" role="button" title="Show sub-items"
+                       aria-expanded="{% if request.resolver_match.app_name == 'costing' or request.resolver_match.app_name == 'proposals' %}true{% else %}false{% endif %}" style="border-left: 1px solid rgba(0,0,0,0.08);">
+                        <i class="bi bi-chevron-down small"></i>
+                    </a>
+                </div>
                 <div class="collapse {% if request.resolver_match.app_name == 'costing' or request.resolver_match.app_name == 'proposals' or request.resolver_match.url_name == 'dashboard' %}show{% endif %}" id="proposalsSubmenu">
                     <ul class="nav flex-column ms-2">
                         <li class="nav-item">
