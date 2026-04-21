@@ -709,6 +709,49 @@ class CostingSheetRevision(models.Model):
         return f'R{cls.objects.filter(sheet=sheet).count():02d}'
 
 
+class VendorQuote(models.Model):
+    """A supplier/vendor quote file uploaded against a costing sheet.
+
+    Used by the sales team to keep vendor pricing documents alongside
+    the sheet they informed. Standalone from line items — this is just
+    a reference archive (PDF / Word / Excel / image).
+    """
+    sheet = models.ForeignKey(
+        CostingSheet,
+        on_delete=models.CASCADE,
+        related_name='vendor_quotes',
+    )
+    vendor_name = models.CharField(max_length=255)
+    quote_reference = models.CharField(max_length=100, blank=True)
+    file = models.FileField(upload_to='costing/vendor_quotes/')
+    original_filename = models.CharField(max_length=255, blank=True)
+    amount = models.DecimalField(
+        max_digits=15, decimal_places=2, null=True, blank=True,
+        help_text='Optional quoted amount (for reference)',
+    )
+    currency = models.CharField(max_length=10, blank=True, default='SAR')
+    notes = models.TextField(blank=True)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='vendor_quotes_uploaded',
+    )
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-uploaded_at']
+
+    def __str__(self):
+        return f'{self.vendor_name} — {self.sheet.title}'
+
+    @property
+    def extension(self):
+        import os
+        _, ext = os.path.splitext((self.original_filename or self.file.name).lower())
+        return ext.lstrip('.')
+
+
 class CostingSheetChangeLog(models.Model):
     """Audit trail of edits made to a costing sheet — used to keep the
     proposal team and the sales team in sync when they work on the same

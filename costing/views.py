@@ -383,6 +383,9 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
         # Recent change log (for cross-team visibility)
         context['change_log'] = sheet.change_log.select_related('actor').all()[:20]
 
+        # Vendor quotes attached to this sheet
+        context['vendor_quotes'] = sheet.vendor_quotes.select_related('uploaded_by').all()
+
         return context
 
 
@@ -1217,6 +1220,117 @@ def ajax_delete_sow_item(request, pk):
         return JsonResponse({'error': 'Permission denied'}, status=403)
     item.delete()
     return JsonResponse({'ok': True})
+
+
+@login_required
+@require_POST
+def ajax_upload_vendor_quote(request, pk):
+    """Attach a vendor quote file to a costing sheet (sales team only)."""
+    from .models import VendorQuote
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    if getattr(request.user, 'is_proposal_team_user', False):
+        return JsonResponse({'error': 'Vendor quotes are sales-team only.'}, status=403)
+
+    uploaded = request.FILES.get('file')
+    if not uploaded:
+        return JsonResponse({'error': 'No file received'}, status=400)
+    if uploaded.size > 150 * 1024 * 1024:
+        return JsonResponse({'error': 'File too large (max 150MB)'}, status=400)
+
+    import os
+    ext = os.path.splitext(uploaded.name)[1].lower().lstrip('.')
+    allowed_ext = {'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+                   'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'}
+    if ext not in allowed_ext:
+        return JsonResponse({'error': f'File type ".{ext}" not allowed.'}, status=400)
+
+    vendor_name = (request.POST.get('vendor_name') or '').strip() or 'Unnamed Vendor'
+    quote_ref = (request.POST.get('quote_reference') or '').strip()
+    amount_raw = (request.POST.get('amount') or '').strip()
+    currency = (request.POST.get('currency') or sheet.default_supplier_currency or 'SAR').upper()
+    notes = (request.POST.get('notes') or '').strip()
+    amount = None
+    if amount_raw:
+        try:
+            amount = Decimal(amount_raw)
+        except (InvalidOperation, ValueError):
+            pass
+
+    vq = VendorQuote.objects.create(
+        sheet=sheet,
+        vendor_name=vendor_name[:255],
+        quote_reference=quote_ref[:100],
+        file=uploaded,
+        original_filename=uploaded.name[:255],
+        amount=amount,
+        currency=currency[:10],
+        notes=notes,
+        uploaded_by=request.user if request.user.is_authenticated else None,
+    )
+    return JsonResponse({
+        'ok': True,
+        'id': vq.pk,
+        'vendor_name': vq.vendor_name,
+        'quote_reference': vq.quote_reference,
+        'amount': str(vq.amount) if vq.amount else None,
+        'currency': vq.currency,
+        'original_filename': vq.original_filename,
+        'url': vq.file.url,
+        'uploaded_at': vq.uploaded_at.strftime('%d %b %Y %H:%M'),
+    })
+
+
+@login_required
+@require_POST
+def ajax_delete_vendor_quote(request, pk):
+    """Delete a vendor quote (sales team only)."""
+    from .models import VendorQuote
+    vq = get_object_or_404(VendorQuote, pk=pk)
+    sheet = vq.sheet
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    if getattr(request.user, 'is_proposal_team_user', False):
+        return JsonResponse({'error': 'Vendor quotes are sales-team only.'}, status=403)
+    try:
+        vq.file.delete(save=False)
+    except Exception:
+        pass
+    vq.delete()
+    return JsonResponse({'ok': True})
+
+
+@login_required
+def vendor_quote_list(request):
+    """Standalone list of every vendor quote the user can see."""
+    from .models import VendorQuote
+    user = request.user
+    qs = VendorQuote.objects.select_related('sheet', 'sheet__project', 'uploaded_by').all()
+    # Scope to sheets the user can view
+    if not user.is_super_admin_user:
+        from django.db.models import Q as _Q
+        if user.is_admin_user or user.is_manager_user:
+            qs = qs.filter(_Q(sheet__created_by=user) | _Q(sheet__project__region=user.region))
+        elif getattr(user, 'is_proposal_team_user', False):
+            # Proposal team does not see vendor quotes
+            qs = qs.none()
+        else:
+            qs = qs.filter(sheet__created_by=user)
+
+    search = request.GET.get('search', '').strip()
+    if search:
+        from django.db.models import Q as _Q
+        qs = qs.filter(
+            _Q(vendor_name__icontains=search) |
+            _Q(quote_reference__icontains=search) |
+            _Q(sheet__title__icontains=search) |
+            _Q(notes__icontains=search)
+        )
+    return render(request, 'costing/vendor_quote_list.html', {
+        'quotes': qs.order_by('-uploaded_at'),
+        'search': search,
+    })
 
 
 @login_required

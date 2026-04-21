@@ -1,0 +1,190 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Proposals Dashboard - Leap Networks ERP{% endblock %}
+{% block page_title %}Proposals{% endblock %}
+
+{% block extra_css %}
+<style>
+    .proposals-hero { background: linear-gradient(135deg, #1a1a1a 0%, #C41E3A 100%); color: #fff; border-radius: 10px; padding: 1.75rem 2rem; margin-bottom: 1.5rem; }
+    .proposals-hero h3 { margin-bottom: 0.3rem; font-weight: 700; }
+    .proposals-hero p { opacity: 0.85; margin-bottom: 0; }
+    .section-block { border-left: 4px solid transparent; padding-left: 1rem; }
+    .section-block.technical { border-left-color: #0dcaf0; }
+    .section-block.commercial { border-left-color: #198754; }
+    .stat-card { border: none; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); transition: transform 0.15s; }
+    .stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 14px rgba(0,0,0,0.10); }
+    .stat-number { font-size: 1.8rem; font-weight: 800; line-height: 1; }
+    .stat-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px; color: #6c757d; margin-top: 0.25rem; }
+    .quick-link { display: block; padding: 10px 14px; border-radius: 8px; text-decoration: none; color: #212529; border: 1px solid #e0e0e0; transition: all 0.15s; }
+    .quick-link:hover { border-color: #C41E3A; color: #C41E3A; transform: translateX(2px); }
+    .quick-link .bi { margin-right: 8px; color: #C41E3A; }
+    .recent-list { list-style: none; padding: 0; margin: 0; }
+    .recent-list li { padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
+    .recent-list li:last-child { border-bottom: none; }
+    .recent-list a { color: #212529; text-decoration: none; font-weight: 500; }
+    .recent-list a:hover { color: #C41E3A; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="proposals-hero">
+    <h3>Proposals</h3>
+    <p>All proposal-related work organized in one place — technical write-ups, BOMs, costing, vendor quotes and PDFs.</p>
+</div>
+
+<!-- Stats -->
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="card stat-card h-100">
+            <div class="card-body">
+                <div class="stat-number text-info">{{ tp_counts.total|intcomma }}</div>
+                <div class="stat-label">Technical Proposals</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="card stat-card h-100">
+            <div class="card-body">
+                <div class="stat-number text-warning">{{ cs_counts.bom|intcomma }}</div>
+                <div class="stat-label">BOMs in progress</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="card stat-card h-100">
+            <div class="card-body">
+                <div class="stat-number text-primary">{{ cs_counts.ready|intcomma }}</div>
+                <div class="stat-label">Ready for costing</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="card stat-card h-100">
+            <div class="card-body">
+                <div class="stat-number text-success">{{ cs_counts.costing|intcomma }}</div>
+                <div class="stat-label">Costing in progress</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="card stat-card h-100">
+            <div class="card-body">
+                <div class="stat-number text-dark">{{ cs_counts.finalized|intcomma }}</div>
+                <div class="stat-label">Finalized</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="card stat-card h-100">
+            <div class="card-body">
+                <div class="stat-number">{{ vq_count|intcomma }}</div>
+                <div class="stat-label">Vendor Quotes</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Technical block -->
+<div class="row g-4 mb-4">
+    <div class="col-lg-6">
+        <div class="section-block technical mb-3">
+            <h5 class="mb-1"><i class="bi bi-cpu me-2 text-info"></i>Technical</h5>
+            <small class="text-muted">Client RFQ → BOM → Technical Proposal</small>
+        </div>
+        <div class="row g-2 mb-3">
+            <div class="col-12">
+                <a href="{% url 'projects:document_list' %}?document_type=rfq" class="quick-link">
+                    <i class="bi bi-file-earmark-arrow-up"></i>Client RFQ
+                    <span class="badge bg-light text-dark float-end">{{ rfq_count }}</span>
+                </a>
+            </div>
+            <div class="col-12">
+                <a href="{% url 'costing:list' %}?view=bom" class="quick-link">
+                    <i class="bi bi-list-check"></i>Bill of Material (BOM)
+                    <span class="badge bg-light text-dark float-end">{{ cs_counts.bom|add:cs_counts.ready }}</span>
+                </a>
+            </div>
+            <div class="col-12">
+                <a href="{% url 'proposals:list' %}" class="quick-link">
+                    <i class="bi bi-file-earmark-richtext"></i>Technical Proposal (Write-up)
+                    <span class="badge bg-light text-dark float-end">{{ tp_counts.total }}</span>
+                </a>
+            </div>
+        </div>
+
+        <h6 class="text-muted mb-2 mt-4">Recent Technical Proposals</h6>
+        <ul class="recent-list">
+            {% for tp in recent_tp %}
+            <li class="d-flex justify-content-between align-items-center">
+                <div>
+                    <a href="{% url 'proposals:detail' tp.pk %}">{{ tp.title|truncatechars:50 }}</a>
+                    <div class="small text-muted"><code>{{ tp.proposal_reference }}</code> · {{ tp.client_name|truncatechars:30 }}</div>
+                </div>
+                <small class="text-muted">{{ tp.updated_at|date:"d M" }}</small>
+            </li>
+            {% empty %}
+            <li class="text-muted small">No technical proposals yet.</li>
+            {% endfor %}
+        </ul>
+
+        <h6 class="text-muted mb-2 mt-4">Recent BOMs</h6>
+        <ul class="recent-list">
+            {% for sheet in recent_bom %}
+            <li class="d-flex justify-content-between align-items-center">
+                <div>
+                    <a href="{% url 'costing:detail' sheet.pk %}">{{ sheet.title|truncatechars:50 }}</a>
+                    <div class="small text-muted">{{ sheet.get_workflow_stage_display }}</div>
+                </div>
+                <small class="text-muted">{{ sheet.updated_at|date:"d M" }}</small>
+            </li>
+            {% empty %}
+            <li class="text-muted small">No BOMs in progress.</li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <!-- Commercial block -->
+    <div class="col-lg-6">
+        <div class="section-block commercial mb-3">
+            <h5 class="mb-1"><i class="bi bi-cash-stack me-2 text-success"></i>Commercial</h5>
+            <small class="text-muted">Vendor Quotes → Costing → Commercial Proposal</small>
+        </div>
+        <div class="row g-2 mb-3">
+            <div class="col-12">
+                <a href="{% url 'costing:vendor_quote_list' %}" class="quick-link">
+                    <i class="bi bi-receipt"></i>Vendor Quotes
+                    <span class="badge bg-light text-dark float-end">{{ vq_count }}</span>
+                </a>
+            </div>
+            <div class="col-12">
+                <a href="{% url 'costing:list' %}" class="quick-link">
+                    <i class="bi bi-calculator"></i>Costing Sheets
+                    <span class="badge bg-light text-dark float-end">{{ cs_counts.total }}</span>
+                </a>
+            </div>
+            <div class="col-12">
+                <a href="{% url 'costing:list' %}?view=commercial" class="quick-link">
+                    <i class="bi bi-file-earmark-pdf"></i>Commercial Proposal (PDFs)
+                    <span class="badge bg-light text-dark float-end">{{ cs_counts.finalized }}</span>
+                </a>
+            </div>
+        </div>
+
+        <h6 class="text-muted mb-2 mt-4">Recent Costing</h6>
+        <ul class="recent-list">
+            {% for sheet in recent_costing %}
+            <li class="d-flex justify-content-between align-items-center">
+                <div>
+                    <a href="{% url 'costing:detail' sheet.pk %}">{{ sheet.title|truncatechars:50 }}</a>
+                    <div class="small text-muted">{{ sheet.get_workflow_stage_display }}</div>
+                </div>
+                <small class="text-muted">{{ sheet.updated_at|date:"d M" }}</small>
+            </li>
+            {% empty %}
+            <li class="text-muted small">No costing activity yet.</li>
+            {% endfor %}
+        </ul>
+    </div>
+</div>
+{% endblock %}

@@ -706,6 +706,112 @@
     </div>
 </div>
 
+<!-- Vendor Quotes -->
+<div class="card mt-3 bom-pricing-only">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>
+            <i class="bi bi-receipt me-2"></i> Vendor Quotes
+            <span class="badge bg-secondary ms-1">{{ vendor_quotes|length }}</span>
+        </span>
+        <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#uploadVendorQuoteModal">
+            <i class="bi bi-upload me-1"></i>Upload Vendor Quote
+        </button>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Vendor</th>
+                        <th>Reference</th>
+                        <th>Amount</th>
+                        <th>Uploaded</th>
+                        <th>By</th>
+                        <th>File</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="vendorQuotesTbody">
+                    {% for q in vendor_quotes %}
+                    <tr data-quote-id="{{ q.pk }}">
+                        <td>{{ q.vendor_name }}</td>
+                        <td class="small"><code>{{ q.quote_reference|default:"—" }}</code></td>
+                        <td class="small">{% if q.amount %}{{ q.currency }} {{ q.amount|floatformat:2 }}{% else %}—{% endif %}</td>
+                        <td class="small">{{ q.uploaded_at|date:"d M Y H:i" }}</td>
+                        <td class="small">{% if q.uploaded_by %}{{ q.uploaded_by.get_full_name|default:q.uploaded_by.username }}{% else %}—{% endif %}</td>
+                        <td class="small">
+                            <span class="text-truncate d-inline-block" style="max-width: 200px;" title="{{ q.original_filename }}">
+                                <span class="badge bg-secondary text-uppercase me-1" style="font-size: 0.65rem;">{{ q.extension }}</span>
+                                {{ q.original_filename|default:"file" }}
+                            </span>
+                        </td>
+                        <td class="text-end">
+                            <a href="{{ q.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary" title="Preview"><i class="bi bi-eye"></i></a>
+                            <button type="button" class="btn btn-sm btn-outline-danger btn-delete-vendor-quote" data-id="{{ q.pk }}" title="Delete"><i class="bi bi-trash"></i></button>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr id="noVendorQuotesRow">
+                        <td colspan="7" class="text-center text-muted py-3 small">No vendor quotes uploaded yet.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Upload Vendor Quote Modal -->
+<div class="modal fade" id="uploadVendorQuoteModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form id="vendorQuoteUploadForm" enctype="multipart/form-data">
+                {% csrf_token %}
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-upload me-2"></i>Upload Vendor Quote</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Vendor Name *</label>
+                            <input type="text" name="vendor_name" class="form-control" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Quote Reference</label>
+                            <input type="text" name="quote_reference" class="form-control" placeholder="e.g. Q-2026-0418">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Quoted Amount (optional)</label>
+                            <input type="number" name="amount" class="form-control" step="0.01" min="0">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Currency</label>
+                            <input type="text" name="currency" class="form-control" value="{{ sheet.default_supplier_currency|default:'SAR' }}" maxlength="10">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-bold">Notes</label>
+                            <textarea name="notes" class="form-control" rows="2" placeholder="Any relevant context about this quote"></textarea>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-bold">File *</label>
+                            <input type="file" name="file" class="form-control" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.png,.jpg,.jpeg,.gif,.webp,.bmp" required>
+                            <small class="text-muted">PDF, Word, Excel, PowerPoint, or image · max 150MB</small>
+                        </div>
+                    </div>
+                    <div id="vendorQuoteUploadStatus" class="small mt-2"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-upload me-1"></i>Upload
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <!-- Revisions -->
 <div class="card mt-3 bom-pricing-only">
     <div class="card-header d-flex justify-content-between align-items-center">
@@ -1234,6 +1340,59 @@ var _csrfToken = '{{ csrf_token }}';
             });
         });
     }
+
+    // ─── Vendor Quote upload ──────────────────────────────────
+    var vqForm = document.getElementById('vendorQuoteUploadForm');
+    if (vqForm) {
+        vqForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            var statusEl = document.getElementById('vendorQuoteUploadStatus');
+            statusEl.className = 'small mt-2 text-muted';
+            statusEl.textContent = 'Uploading...';
+            var fd = new FormData(vqForm);
+            fetch('/costing/' + sheetPk + '/vendor-quotes/upload/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrfToken},
+                body: fd,
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(resp) {
+                if (!resp.ok) {
+                    statusEl.className = 'small mt-2 text-danger';
+                    statusEl.textContent = resp.error || 'Upload failed';
+                    return;
+                }
+                statusEl.className = 'small mt-2 text-success';
+                statusEl.textContent = '✓ Uploaded. Reloading…';
+                setTimeout(function() { location.reload(); }, 600);
+            })
+            .catch(function() {
+                statusEl.className = 'small mt-2 text-danger';
+                statusEl.textContent = 'Network error';
+            });
+        });
+    }
+
+    // ─── Vendor Quote delete ──────────────────────────────────
+    document.querySelectorAll('.btn-delete-vendor-quote').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            if (!confirm('Delete this vendor quote? This cannot be undone.')) return;
+            var id = this.dataset.id;
+            var row = this.closest('tr');
+            fetch('/costing/vendor-quote/' + id + '/delete/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrfToken},
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(resp) {
+                if (resp.ok) {
+                    if (row) row.remove();
+                } else {
+                    alert(resp.error || 'Delete failed');
+                }
+            });
+        });
+    });
 
     // ─── Exchange rates (reload — affects all items) ───────────
     document.querySelectorAll('.rate-edit').forEach(function(input) {

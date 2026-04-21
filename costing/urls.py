@@ -62,4 +62,9 @@ urlpatterns = [
 
     # Bulk-apply the sheet's default supplier currency to every line item
     path('<int:pk>/apply-default-currency/', views.ajax_apply_default_currency, name='apply_default_currency'),
+
+    # Vendor Quotes
+    path('vendor-quotes/', login_required(views.vendor_quote_list), name='vendor_quote_list'),
+    path('<int:pk>/vendor-quotes/upload/', views.ajax_upload_vendor_quote, name='vendor_quote_upload'),
+    path('vendor-quote/<int:pk>/delete/', views.ajax_delete_vendor_quote, name='vendor_quote_delete'),
 ]

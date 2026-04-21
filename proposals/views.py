@@ -1,6 +1,6 @@
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, render
 from django.urls import reverse_lazy, reverse
 from django.contrib import messages
 from django.http import JsonResponse
@@ -17,6 +17,62 @@ from .forms import (
     ProposalFilterForm, ProposalBoilerplateForm,
     PQDMetadataForm, PQDFilterForm,
 )
+
+
+@login_required
+def proposals_dashboard(request):
+    """Landing page for the Proposals menu — shows stats + recent activity
+    across Technical (proposals), BOMs/Costing (costing sheets), Vendor
+    Quotes, and Client RFQs."""
+    from costing.models import CostingSheet, VendorQuote
+    from projects.models import Document
+    user = request.user
+
+    # Counts + recent items, scoped to what the user can see
+    tp_qs = TechnicalProposal.objects.select_related('project', 'created_by')
+    if not user.is_super_admin_user:
+        tp_qs = tp_qs.filter(
+            Q(created_by=user) |
+            Q(project__region=user.region)
+        ) if (user.is_admin_user or user.is_manager_user) else tp_qs.filter(created_by=user)
+    tp_counts = {
+        'total':     tp_qs.count(),
+        'draft':     tp_qs.filter(status='draft').count(),
+        'review':    tp_qs.filter(status='review').count(),
+        'final':     tp_qs.filter(status='final').count(),
+        'submitted': tp_qs.filter(status='submitted').count(),
+    }
+
+    cs_qs = CostingSheet.objects.select_related('project', 'created_by')
+    if not user.is_super_admin_user and not getattr(user, 'is_proposal_team_user', False):
+        if user.is_admin_user or user.is_manager_user:
+            cs_qs = cs_qs.filter(Q(created_by=user) | Q(project__region=user.region))
+        else:
+            cs_qs = cs_qs.filter(created_by=user)
+    cs_counts = {
+        'total':           cs_qs.count(),
+        'bom':             cs_qs.filter(workflow_stage='bom_in_progress').count(),
+        'ready':           cs_qs.filter(workflow_stage='ready_for_costing').count(),
+        'costing':         cs_qs.filter(workflow_stage='costing_in_progress').count(),
+        'finalized':       cs_qs.filter(workflow_stage='finalized').count(),
+    }
+
+    vq_count = VendorQuote.objects.filter(sheet__in=cs_qs).count()
+    rfq_count = Document.objects.filter(document_type='rfq').count()
+
+    recent_tp = tp_qs.order_by('-updated_at')[:5]
+    recent_bom = cs_qs.filter(workflow_stage__in=['bom_in_progress', 'ready_for_costing']).order_by('-updated_at')[:5]
+    recent_costing = cs_qs.filter(workflow_stage__in=['costing_in_progress', 'finalized']).order_by('-updated_at')[:5]
+
+    return render(request, 'proposals/dashboard.html', {
+        'tp_counts': tp_counts,
+        'cs_counts': cs_counts,
+        'vq_count': vq_count,
+        'rfq_count': rfq_count,
+        'recent_tp': recent_tp,
+        'recent_bom': recent_bom,
+        'recent_costing': recent_costing,
+    })
 
 
 class ProposalPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):

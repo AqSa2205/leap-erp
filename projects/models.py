@@ -307,6 +307,7 @@ def document_upload_path(instance, filename):
 class Document(models.Model):
     """Document management for projects"""
     DOCUMENT_TYPE_CHOICES = [
+        ('rfq', 'Client RFQ'),
         ('vendor_quotation', 'Vendor Quotation'),
         ('proposal', 'Proposal'),
         ('customer_document', 'Customer Document'),
