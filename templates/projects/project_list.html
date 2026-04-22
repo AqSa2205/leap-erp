@@ -139,6 +139,12 @@
                 <i class="bi bi-file-earmark-arrow-up me-1"></i>Import
             </button>
             {% endif %}
+            <a href="{% url 'projects:print_pdf' %}{% if request.GET.urlencode %}?{{ request.GET.urlencode }}{% endif %}"
+               target="_blank"
+               class="btn btn-outline-light btn-sm"
+               title="Print the current filtered list as PDF">
+                <i class="bi bi-file-earmark-pdf me-1"></i>Print PDF
+            </a>
             <a href="{% url 'projects:create' %}" class="btn btn-light btn-sm">
                 <i class="bi bi-plus-lg me-1"></i>New Pipeline Entry
             </a>
