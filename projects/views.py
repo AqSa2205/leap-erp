@@ -886,3 +886,156 @@ class ProjectRevisionDetailView(ProjectPermissionMixin, View):
             'revision': revision,
             'snapshot': revision.snapshot,
         })
+
+
+# ─── Pipeline Print to PDF ───────────────────────────────────
+def _apply_pipeline_filters(request, queryset):
+    """Apply the same filter parameters ProjectListView uses.
+
+    Kept here so the print view renders exactly what the user sees on
+    screen after clicking Filter, without rebuilding the logic.
+    """
+    region_map = {
+        'LNUK':      ['UK', 'GLB', 'LNUK'],
+        'LNA':       ['LNA'],
+        'PA':        ['PA'],
+        'NEO-Dubai': ['NEO-Dubai'],
+        'NEO-KSA':   ['NEO-KSA'],
+    }
+    g = request.GET
+    search   = g.get('search')
+    region   = g.get('region')
+    year     = g.get('year')
+    status   = g.get('status')
+    category = g.get('category')
+    quarter  = g.get('quarter')
+    owner    = g.get('owner')
+    if search:
+        queryset = queryset.filter(
+            Q(project_name__icontains=search) |
+            Q(proposal_reference__icontains=search) |
+            Q(client_rfq_reference__icontains=search)
+        )
+    if region:
+        codes = region_map.get(region, [])
+        if codes:
+            queryset = queryset.filter(region__code__in=codes)
+    if year:
+        queryset = queryset.filter(year=year)
+    if status:
+        queryset = queryset.filter(status_id=status)
+    if category:
+        queryset = queryset.filter(status__category=category)
+    if quarter:
+        queryset = queryset.filter(po_award_quarter=quarter)
+    if owner:
+        queryset = queryset.filter(owner_id=owner)
+    return queryset.order_by('-updated_at')
+
+
+@login_required
+def pipeline_print_pdf(request):
+    """Render the currently-filtered Commercial Pipeline list as PDF.
+
+    Honors the same ?search=/region/status/category/owner/year/quarter
+    querystring as the on-screen list view so users can preview in the
+    browser then "Print PDF" and get the exact same rows.
+    """
+    from io import BytesIO
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    )
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+    from django.http import HttpResponse
+    from django.utils import timezone
+
+    # Permission scoping — mirror ProjectPermissionMixin.get_queryset
+    user = request.user
+    qs = Project.objects.select_related('status', 'region', 'owner').all()
+    if not user.is_super_admin_user:
+        if user.is_admin_user or user.is_manager_user:
+            qs = qs.filter(region=user.region)
+        else:
+            qs = qs.filter(owner=user)
+    qs = _apply_pipeline_filters(request, qs)
+
+    total_value = sum((p.estimated_value or Decimal('0')) for p in qs)
+
+    # Filter summary line for the PDF header
+    summary_parts = []
+    for key in ('search', 'region', 'year', 'status', 'category', 'quarter', 'owner'):
+        val = request.GET.get(key)
+        if val:
+            summary_parts.append(f'{key}={val}')
+    filter_summary = ' · '.join(summary_parts) if summary_parts else 'All entries (no filter)'
+
+    # Build PDF
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(A4),
+        leftMargin=10*mm, rightMargin=10*mm,
+        topMargin=12*mm, bottomMargin=12*mm,
+        title='Commercial Pipeline',
+    )
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle('h1', parent=styles['Heading1'], fontSize=16, alignment=TA_LEFT, textColor=colors.HexColor('#1a1a1a'))
+    meta = ParagraphStyle('meta', parent=styles['Normal'], fontSize=8, textColor=colors.HexColor('#6c757d'))
+    small = ParagraphStyle('small', parent=styles['Normal'], fontSize=8, leading=10)
+
+    elements = []
+    elements.append(Paragraph('Commercial Pipeline', h1))
+    elements.append(Paragraph(
+        f'Generated {timezone.localtime().strftime("%d %b %Y %H:%M")} · {qs.count()} entries · Filter: {filter_summary}',
+        meta,
+    ))
+    elements.append(Spacer(1, 6))
+
+    header = ['Reference', 'Project', 'Client', 'Region', 'Status', 'Value', 'Owner', 'Updated']
+    data = [header]
+    for p in qs:
+        data.append([
+            Paragraph(p.proposal_reference or '—', small),
+            Paragraph((p.project_name or '')[:80], small),
+            Paragraph((p.customer or '')[:40], small),
+            p.region.code if p.region_id else '—',
+            p.status.name if p.status_id else '—',
+            f'{(p.estimated_value or 0):,.0f}',
+            (p.owner.get_full_name() or p.owner.username) if p.owner_id else '—',
+            p.updated_at.strftime('%d %b %Y') if p.updated_at else '—',
+        ])
+    data.append([
+        Paragraph('<b>TOTAL</b>', small), '', '', '', '',
+        f'{total_value:,.0f}', '', '',
+    ])
+
+    tbl = Table(
+        data,
+        colWidths=[28*mm, 70*mm, 45*mm, 18*mm, 28*mm, 24*mm, 32*mm, 22*mm],
+        repeatRows=1,
+    )
+    tbl.setStyle(TableStyle([
+        ('BACKGROUND',  (0, 0), (-1, 0), colors.HexColor('#1a1a1a')),
+        ('TEXTCOLOR',   (0, 0), (-1, 0), colors.white),
+        ('FONTNAME',    (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE',    (0, 0), (-1, 0), 8),
+        ('ALIGN',       (0, 0), (-1, 0), 'CENTER'),
+        ('ALIGN',       (5, 1), (5, -1), 'RIGHT'),
+        ('VALIGN',      (0, 0), (-1, -1), 'MIDDLE'),
+        ('FONTSIZE',    (0, 1), (-1, -1), 8),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8f9fa')]),
+        ('BACKGROUND',  (0, -1), (-1, -1), colors.HexColor('#C41E3A')),
+        ('TEXTCOLOR',   (0, -1), (-1, -1), colors.white),
+        ('FONTNAME',    (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('GRID',        (0, 0), (-1, -1), 0.3, colors.HexColor('#dee2e6')),
+    ]))
+    elements.append(tbl)
+
+    doc.build(elements)
+    resp = HttpResponse(buf.getvalue(), content_type='application/pdf')
+    stamp = timezone.localtime().strftime('%Y%m%d_%H%M')
+    resp['Content-Disposition'] = f'inline; filename="commercial_pipeline_{stamp}.pdf"'
+    return resp
