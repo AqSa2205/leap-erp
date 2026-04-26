@@ -759,8 +759,19 @@ def sales_call_print_pdf(request):
     qs = _scoped_sales_calls(request)
 
     # ── Logo + page numbers via two-pass NumberedCanvas ──────────
-    logo_path = os.path.join(settings.BASE_DIR, 'static', 'images', 'logo.jpg')
-    logo_img = ImageReader(logo_path) if os.path.exists(logo_path) else None
+    # Try common locations: collectstatic output first, then source dir.
+    candidate_paths = [
+        os.path.join(getattr(settings, 'STATIC_ROOT', '') or '', 'images', 'logo.jpg'),
+        os.path.join(settings.BASE_DIR, 'static', 'images', 'logo.jpg'),
+    ]
+    logo_img = None
+    for p in candidate_paths:
+        if p and os.path.exists(p):
+            try:
+                logo_img = ImageReader(p)
+                break
+            except Exception:
+                continue
 
     class NumberedCanvas(Canvas):
         def __init__(self, *args, **kwargs):
@@ -783,27 +794,33 @@ def sales_call_print_pdf(request):
         def _draw_logo(self):
             if not logo_img:
                 return
-            page_w, page_h = self._pagesize
-            logo_h = 12 * mm
-            iw, ih = logo_img.getSize()
-            logo_w = (iw / ih) * logo_h if ih else 30 * mm
-            # Top-right with a small inset
-            self.drawImage(
-                logo_img,
-                page_w - logo_w - 10 * mm,
-                page_h - logo_h - 5 * mm,
-                width=logo_w, height=logo_h,
-                mask='auto', preserveAspectRatio=True,
-            )
+            try:
+                page_w, page_h = self._pagesize
+                logo_h = 12 * mm
+                iw, ih = logo_img.getSize()
+                logo_w = (iw / ih) * logo_h if ih else 30 * mm
+                self.drawImage(
+                    logo_img,
+                    page_w - logo_w - 10 * mm,
+                    page_h - logo_h - 5 * mm,
+                    width=logo_w, height=logo_h,
+                    mask='auto', preserveAspectRatio=True,
+                )
+            except Exception:
+                # Logo drawing should never block the PDF
+                pass
 
         def _draw_page_number(self, total):
-            page_w, _ = self._pagesize
-            self.setFont('Helvetica', 8)
-            self.setFillColor(colors.HexColor('#6c757d'))
-            self.drawCentredString(
-                page_w / 2, 6 * mm,
-                f'Page {self._pageNumber} of {total}',
-            )
+            try:
+                page_w, _ = self._pagesize
+                self.setFont('Helvetica', 8)
+                self.setFillColor(colors.HexColor('#6c757d'))
+                self.drawCentredString(
+                    page_w / 2, 6 * mm,
+                    f'Page {self._pageNumber} of {total}',
+                )
+            except Exception:
+                pass
 
     summary_parts = []
     for key in ('search', 'region', 'date_from', 'date_to', 'action_type',
@@ -839,24 +856,46 @@ def sales_call_print_pdf(request):
 
     header = ['Date', 'Company', 'Contact', 'Action', 'Goal', 'Sales Rep', 'Region', 'Comments']
     data = [header]
-    for r in qs:
+    rows = list(qs)
+    for r in rows:
         rep = r.sales_rep
         if rep:
             rep_name = rep.get_full_name() or rep.username
-            region = rep.region.code if rep.region_id else '—'
+            region = rep.region.code if rep.region_id else '-'
         else:
-            rep_name = '—'
-            region = '—'
+            rep_name = '-'
+            region = '-'
         data.append([
-            r.call_date.strftime('%d %b %Y') if r.call_date else '—',
+            r.call_date.strftime('%d %b %Y') if r.call_date else '-',
             Paragraph((r.company_name or '')[:60], small),
             Paragraph((r.contact_name or '')[:40], small),
-            Paragraph(r.get_action_type_display() if r.action_type else '—', small),
-            Paragraph(r.get_goal_display() if r.goal else '—', small),
+            Paragraph(r.get_action_type_display() if r.action_type else '-', small),
+            Paragraph(r.get_goal_display() if r.goal else '-', small),
             Paragraph(rep_name, small),
             region,
             Paragraph((r.comments or '')[:200], small),
         ])
+
+    if not rows:
+        # Empty queryset still gets a placeholder row so TableStyle ranges
+        # don't reference missing rows.
+        data.append([Paragraph('<i>No reports match the current filter.</i>', small),
+                     '', '', '', '', '', '', ''])
+
+    style_cmds = [
+        ('BACKGROUND', (0, 0), (-1, 0),  colors.HexColor('#1a1a1a')),
+        ('TEXTCOLOR',  (0, 0), (-1, 0),  colors.white),
+        ('FONTNAME',   (0, 0), (-1, 0),  'Helvetica-Bold'),
+        ('FONTSIZE',   (0, 0), (-1, 0),  8),
+        ('ALIGN',      (0, 0), (-1, 0),  'CENTER'),
+        ('VALIGN',     (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID',       (0, 0), (-1, -1), 0.3, colors.HexColor('#dee2e6')),
+    ]
+    if rows:
+        style_cmds += [
+            ('FONTSIZE',       (0, 1), (-1, -1), 8),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+        ]
 
     tbl = Table(
         data,
@@ -865,20 +904,27 @@ def sales_call_print_pdf(request):
         colWidths=[20*mm, 48*mm, 36*mm, 26*mm, 32*mm, 32*mm, 18*mm, 65*mm],
         repeatRows=1,
     )
-    tbl.setStyle(TableStyle([
-        ('BACKGROUND',     (0, 0), (-1, 0),  colors.HexColor('#1a1a1a')),
-        ('TEXTCOLOR',      (0, 0), (-1, 0),  colors.white),
-        ('FONTNAME',       (0, 0), (-1, 0),  'Helvetica-Bold'),
-        ('FONTSIZE',       (0, 0), (-1, 0),  8),
-        ('ALIGN',          (0, 0), (-1, 0),  'CENTER'),
-        ('VALIGN',         (0, 0), (-1, -1), 'MIDDLE'),
-        ('FONTSIZE',       (0, 1), (-1, -1), 8),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
-        ('GRID',           (0, 0), (-1, -1), 0.3, colors.HexColor('#dee2e6')),
-    ]))
+    tbl.setStyle(TableStyle(style_cmds))
     elements.append(tbl)
 
-    doc.build(elements, canvasmaker=NumberedCanvas)
+    try:
+        doc.build(elements, canvasmaker=NumberedCanvas)
+    except Exception:
+        # Surface to Render logs while still returning a usable PDF without
+        # the canvas decorations (logo / page numbers).
+        import logging, traceback
+        logging.getLogger(__name__).error(
+            'Sales-call PDF NumberedCanvas build failed:\n%s', traceback.format_exc()
+        )
+        buf.seek(0); buf.truncate()
+        doc = SimpleDocTemplate(
+            buf, pagesize=landscape(A4),
+            leftMargin=10*mm, rightMargin=10*mm,
+            topMargin=12*mm, bottomMargin=12*mm,
+            title='Sales Call Reports',
+        )
+        doc.build(elements)
+
     resp = HttpResponse(buf.getvalue(), content_type='application/pdf')
     stamp = timezone.localtime().strftime('%Y%m%d_%H%M')
     resp['Content-Disposition'] = f'inline; filename="sales_call_reports_{stamp}.pdf"'
