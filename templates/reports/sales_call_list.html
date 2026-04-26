@@ -42,6 +42,12 @@
             <a href="{% url 'reports:sales_call_export' %}?{{ request.GET.urlencode }}" class="btn btn-outline-secondary me-2">
                 <i class="bi bi-download"></i> Export
             </a>
+            <a href="{% url 'reports:sales_call_print_pdf' %}{% if request.GET.urlencode %}?{{ request.GET.urlencode }}{% endif %}"
+               target="_blank"
+               class="btn btn-outline-danger me-2"
+               title="Print the current filtered list as PDF">
+                <i class="bi bi-file-earmark-pdf"></i> Print PDF
+            </a>
             <a href="{% url 'reports:sales_call_create' %}" class="btn btn-primary">
                 <i class="bi bi-plus-lg"></i> Add Report
             </a>

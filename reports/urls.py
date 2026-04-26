@@ -17,4 +17,5 @@ urlpatterns = [
     path('sales-calls/<int:pk>/edit/', views.SalesCallReportUpdateView.as_view(), name='sales_call_update'),
     path('sales-calls/<int:pk>/delete/', views.SalesCallReportDeleteView.as_view(), name='sales_call_delete'),
     path('sales-calls/export/', views.export_sales_call_reports, name='sales_call_export'),
+    path('sales-calls/print/pdf/', views.sales_call_print_pdf, name='sales_call_print_pdf'),
 ]
