@@ -800,16 +800,18 @@ def sales_call_print_pdf(request):
             r.call_date.strftime('%d %b %Y') if r.call_date else '—',
             Paragraph((r.company_name or '')[:60], small),
             Paragraph((r.contact_name or '')[:40], small),
-            r.get_action_type_display() if r.action_type else '—',
-            r.get_goal_display() if r.goal else '—',
-            rep_name,
+            Paragraph(r.get_action_type_display() if r.action_type else '—', small),
+            Paragraph(r.get_goal_display() if r.goal else '—', small),
+            Paragraph(rep_name, small),
             region,
             Paragraph((r.comments or '')[:200], small),
         ])
 
     tbl = Table(
         data,
-        colWidths=[20*mm, 50*mm, 40*mm, 22*mm, 25*mm, 32*mm, 18*mm, 70*mm],
+        # widths (mm): Date 20 · Company 48 · Contact 36 · Action 26 ·
+        # Goal 32 · Sales Rep 32 · Region 18 · Comments 65 = 277mm
+        colWidths=[20*mm, 48*mm, 36*mm, 26*mm, 32*mm, 32*mm, 18*mm, 65*mm],
         repeatRows=1,
     )
     tbl.setStyle(TableStyle([
