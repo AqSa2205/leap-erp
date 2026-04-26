@@ -994,18 +994,28 @@ def pipeline_print_pdf(request):
     ))
     elements.append(Spacer(1, 6))
 
+    # Paragraph parses input as mini-XML, so any '<' or '&' in user-typed
+    # fields would crash the parser ("unclosed tags"). Escape first.
+    from xml.sax.saxutils import escape as _xml_escape
+    def _safe(text, limit=None):
+        s = '' if text is None else str(text)
+        if limit:
+            s = s[:limit]
+        return _xml_escape(s) or '-'
+
     header = ['Reference', 'Project', 'Client', 'Region', 'Status', 'Value', 'Owner', 'Updated']
     data = [header]
     for p in qs:
+        owner_name = (p.owner.get_full_name() or p.owner.username) if p.owner_id else '-'
         data.append([
-            Paragraph(p.proposal_reference or '—', small),
-            Paragraph((p.project_name or '')[:80], small),
-            Paragraph((p.customer or '')[:40], small),
-            p.region.code if p.region_id else '—',
-            p.status.name if p.status_id else '—',
+            Paragraph(_safe(p.proposal_reference), small),
+            Paragraph(_safe(p.project_name, 80), small),
+            Paragraph(_safe(p.customer, 40), small),
+            _safe(p.region.code) if p.region_id else '-',
+            _safe(p.status.name) if p.status_id else '-',
             f'{(p.estimated_value or 0):,.0f}',
-            (p.owner.get_full_name() or p.owner.username) if p.owner_id else '—',
-            p.updated_at.strftime('%d %b %Y') if p.updated_at else '—',
+            _safe(owner_name),
+            p.updated_at.strftime('%d %b %Y') if p.updated_at else '-',
         ])
     data.append([
         Paragraph('<b>TOTAL</b>', small), '', '', '', '',
