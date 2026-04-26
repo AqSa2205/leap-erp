@@ -684,3 +684,149 @@ def export_sales_call_reports(request):
     wb.save(response)
 
     return response
+
+
+def _scoped_sales_calls(request):
+    """Apply the same role + querystring filters as SalesCallReportListView."""
+    user = request.user
+    if user.is_super_admin_user or user.is_admin_user or user.is_manager_user:
+        qs = SalesCallReport.objects.all()
+    else:
+        qs = SalesCallReport.objects.filter(sales_rep=user)
+    qs = qs.select_related('sales_rep', 'sales_rep__region')
+
+    g = request.GET
+    region_code     = g.get('region')
+    search          = g.get('search')
+    date_from       = g.get('date_from')
+    date_to         = g.get('date_to')
+    action_type     = g.get('action_type')
+    contact_type    = g.get('contact_type')
+    system_category = g.get('system_category')
+    goal            = g.get('goal')
+    sales_rep_id    = g.get('sales_rep')
+
+    is_admin = user.is_super_admin_user or user.is_admin_user or user.is_manager_user
+    if region_code and is_admin:
+        qs = qs.filter(sales_rep__region__code=region_code)
+    if search:
+        qs = qs.filter(
+            Q(company_name__icontains=search) |
+            Q(contact_name__icontains=search) |
+            Q(email__icontains=search) |
+            Q(comments__icontains=search)
+        )
+    if date_from:
+        qs = qs.filter(call_date__gte=date_from)
+    if date_to:
+        qs = qs.filter(call_date__lte=date_to)
+    if action_type:
+        qs = qs.filter(action_type=action_type)
+    if contact_type:
+        qs = qs.filter(contact_type=contact_type)
+    if system_category:
+        qs = qs.filter(system_categories__icontains=system_category)
+    if goal:
+        qs = qs.filter(goal=goal)
+    if sales_rep_id and is_admin:
+        qs = qs.filter(sales_rep_id=sales_rep_id)
+
+    return qs.order_by('-call_date', '-created_at')
+
+
+@login_required
+def sales_call_print_pdf(request):
+    """Print the currently filtered Sales Call Reports list as a PDF.
+
+    Honors the same querystring as the list view so the PDF matches
+    exactly what the user sees on screen after clicking Filter.
+    """
+    from io import BytesIO
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    )
+    from reportlab.lib.enums import TA_LEFT
+    from django.utils import timezone
+
+    qs = _scoped_sales_calls(request)
+
+    summary_parts = []
+    for key in ('search', 'region', 'date_from', 'date_to', 'action_type',
+                'contact_type', 'system_category', 'goal', 'sales_rep'):
+        val = request.GET.get(key)
+        if val:
+            summary_parts.append(f'{key}={val}')
+    filter_summary = ' · '.join(summary_parts) if summary_parts else 'All entries (no filter)'
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(A4),
+        leftMargin=10*mm, rightMargin=10*mm,
+        topMargin=12*mm, bottomMargin=12*mm,
+        title='Sales Call Reports',
+    )
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle('h1', parent=styles['Heading1'], fontSize=16,
+                        alignment=TA_LEFT, textColor=colors.HexColor('#1a1a1a'))
+    meta = ParagraphStyle('meta', parent=styles['Normal'], fontSize=8,
+                          textColor=colors.HexColor('#6c757d'))
+    small = ParagraphStyle('small', parent=styles['Normal'], fontSize=8, leading=10)
+
+    elements = [
+        Paragraph('Sales Call Reports', h1),
+        Paragraph(
+            f'Generated {timezone.localtime().strftime("%d %b %Y %H:%M")} · '
+            f'{qs.count()} entries · Filter: {filter_summary}',
+            meta,
+        ),
+        Spacer(1, 6),
+    ]
+
+    header = ['Date', 'Company', 'Contact', 'Action', 'Goal', 'Sales Rep', 'Region', 'Comments']
+    data = [header]
+    for r in qs:
+        rep = r.sales_rep
+        if rep:
+            rep_name = rep.get_full_name() or rep.username
+            region = rep.region.code if rep.region_id else '—'
+        else:
+            rep_name = '—'
+            region = '—'
+        data.append([
+            r.call_date.strftime('%d %b %Y') if r.call_date else '—',
+            Paragraph((r.company_name or '')[:60], small),
+            Paragraph((r.contact_name or '')[:40], small),
+            r.get_action_type_display() if r.action_type else '—',
+            r.get_goal_display() if r.goal else '—',
+            rep_name,
+            region,
+            Paragraph((r.comments or '')[:200], small),
+        ])
+
+    tbl = Table(
+        data,
+        colWidths=[20*mm, 50*mm, 40*mm, 22*mm, 25*mm, 32*mm, 18*mm, 70*mm],
+        repeatRows=1,
+    )
+    tbl.setStyle(TableStyle([
+        ('BACKGROUND',     (0, 0), (-1, 0),  colors.HexColor('#1a1a1a')),
+        ('TEXTCOLOR',      (0, 0), (-1, 0),  colors.white),
+        ('FONTNAME',       (0, 0), (-1, 0),  'Helvetica-Bold'),
+        ('FONTSIZE',       (0, 0), (-1, 0),  8),
+        ('ALIGN',          (0, 0), (-1, 0),  'CENTER'),
+        ('VALIGN',         (0, 0), (-1, -1), 'MIDDLE'),
+        ('FONTSIZE',       (0, 1), (-1, -1), 8),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+        ('GRID',           (0, 0), (-1, -1), 0.3, colors.HexColor('#dee2e6')),
+    ]))
+    elements.append(tbl)
+
+    doc.build(elements)
+    resp = HttpResponse(buf.getvalue(), content_type='application/pdf')
+    stamp = timezone.localtime().strftime('%Y%m%d_%H%M')
+    resp['Content-Disposition'] = f'inline; filename="sales_call_reports_{stamp}.pdf"'
+    return resp
