@@ -741,18 +741,69 @@ def sales_call_print_pdf(request):
     Honors the same querystring as the list view so the PDF matches
     exactly what the user sees on screen after clicking Filter.
     """
+    import os
     from io import BytesIO
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import mm
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen.canvas import Canvas
     from reportlab.platypus import (
         SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
     )
     from reportlab.lib.enums import TA_LEFT
+    from django.conf import settings
     from django.utils import timezone
 
     qs = _scoped_sales_calls(request)
+
+    # ── Logo + page numbers via two-pass NumberedCanvas ──────────
+    logo_path = os.path.join(settings.BASE_DIR, 'static', 'images', 'logo.jpg')
+    logo_img = ImageReader(logo_path) if os.path.exists(logo_path) else None
+
+    class NumberedCanvas(Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._saved_pages = []
+
+        def showPage(self):
+            self._saved_pages.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            page_count = len(self._saved_pages)
+            for state in self._saved_pages:
+                self.__dict__.update(state)
+                self._draw_logo()
+                self._draw_page_number(page_count)
+                super().showPage()
+            super().save()
+
+        def _draw_logo(self):
+            if not logo_img:
+                return
+            page_w, page_h = self._pagesize
+            logo_h = 12 * mm
+            iw, ih = logo_img.getSize()
+            logo_w = (iw / ih) * logo_h if ih else 30 * mm
+            # Top-right with a small inset
+            self.drawImage(
+                logo_img,
+                page_w - logo_w - 10 * mm,
+                page_h - logo_h - 5 * mm,
+                width=logo_w, height=logo_h,
+                mask='auto', preserveAspectRatio=True,
+            )
+
+        def _draw_page_number(self, total):
+            page_w, _ = self._pagesize
+            self.setFont('Helvetica', 8)
+            self.setFillColor(colors.HexColor('#6c757d'))
+            self.drawCentredString(
+                page_w / 2, 6 * mm,
+                f'Page {self._pageNumber} of {total}',
+            )
 
     summary_parts = []
     for key in ('search', 'region', 'date_from', 'date_to', 'action_type',
@@ -766,7 +817,7 @@ def sales_call_print_pdf(request):
     doc = SimpleDocTemplate(
         buf, pagesize=landscape(A4),
         leftMargin=10*mm, rightMargin=10*mm,
-        topMargin=12*mm, bottomMargin=12*mm,
+        topMargin=22*mm, bottomMargin=14*mm,
         title='Sales Call Reports',
     )
     styles = getSampleStyleSheet()
@@ -827,7 +878,7 @@ def sales_call_print_pdf(request):
     ]))
     elements.append(tbl)
 
-    doc.build(elements)
+    doc.build(elements, canvasmaker=NumberedCanvas)
     resp = HttpResponse(buf.getvalue(), content_type='application/pdf')
     stamp = timezone.localtime().strftime('%Y%m%d_%H%M')
     resp['Content-Disposition'] = f'inline; filename="sales_call_reports_{stamp}.pdf"'
