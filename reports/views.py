@@ -756,6 +756,20 @@ def sales_call_print_pdf(request):
     from django.conf import settings
     from django.utils import timezone
 
+    from xml.sax.saxutils import escape as _xml_escape
+
+    def _safe(text, limit=None):
+        """HTML-escape user text for ReportLab Paragraph.
+
+        Paragraph parses its input as mini-XML, so a stray '<' or '&'
+        from a comments field crashes the whole PDF with an "unclosed
+        tags" error. Escape first, then optionally truncate.
+        """
+        s = '' if text is None else str(text)
+        if limit:
+            s = s[:limit]
+        return _xml_escape(s) or '-'
+
     qs = _scoped_sales_calls(request)
 
     # ── Logo + page numbers via two-pass NumberedCanvas ──────────
@@ -867,13 +881,13 @@ def sales_call_print_pdf(request):
             region = '-'
         data.append([
             r.call_date.strftime('%d %b %Y') if r.call_date else '-',
-            Paragraph((r.company_name or '')[:60], small),
-            Paragraph((r.contact_name or '')[:40], small),
-            Paragraph(r.get_action_type_display() if r.action_type else '-', small),
-            Paragraph(r.get_goal_display() if r.goal else '-', small),
-            Paragraph(rep_name, small),
-            region,
-            Paragraph((r.comments or '')[:200], small),
+            Paragraph(_safe(r.company_name, 60), small),
+            Paragraph(_safe(r.contact_name, 40), small),
+            Paragraph(_safe(r.get_action_type_display() if r.action_type else '-'), small),
+            Paragraph(_safe(r.get_goal_display() if r.goal else '-'), small),
+            Paragraph(_safe(rep_name), small),
+            _safe(region),
+            Paragraph(_safe(r.comments, 200), small),
         ])
 
     if not rows:

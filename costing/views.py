@@ -882,7 +882,14 @@ def ajax_update_item_field(request, pk):
     if field == 'supplier_currency':
         new_value = value if value else 'SAR'
     elif field in text_fields:
-        new_value = value  # plain text — stored as-is (may be empty string)
+        # Truncate to the model field's max_length so a long paste from
+        # Excel doesn't blow up Postgres with "value too long for type
+        # character varying(N)".
+        try:
+            max_len = CostingLineItem._meta.get_field(field).max_length
+        except Exception:
+            max_len = None
+        new_value = value if max_len is None else value[:max_len]
     elif field == 'quantity':
         try:
             new_value = Decimal(value) if value else Decimal('1')
