@@ -12,14 +12,14 @@
         </div>
         <div>
             <button type="button" class="btn btn-outline-success me-2" data-bs-toggle="modal" data-bs-target="#importModal"><i class="bi bi-upload"></i> Import</button>
-            <a href="{% url 'procurement:frc_create' %}" class="btn btn-primary"><i class="bi bi-plus-lg"></i> New Report</a>
+            <a href="{% url 'procurement:frc_create' %}" class="btn btn-danger"><i class="bi bi-plus-lg"></i> New Report</a>
         </div>
     </div>
 
     <div class="card mb-4"><div class="card-body">
         <form method="get" class="row g-3">
             <div class="col-md-9"><input type="text" name="search" value="{{ request.GET.search }}" class="form-control" placeholder="Search report title..."></div>
-            <div class="col-md-3"><button type="submit" class="btn btn-primary w-100">Search</button></div>
+            <div class="col-md-3"><button type="submit" class="btn btn-danger w-100">Search</button></div>
         </form>
     </div></div>
 
@@ -39,7 +39,7 @@
                                 <li><a class="dropdown-item" href="{% url 'procurement:frc_detail' r.pk %}"><i class="bi bi-eye me-2"></i>View</a></li>
                                 <li><a class="dropdown-item" href="{% url 'procurement:frc_update' r.pk %}"><i class="bi bi-pencil me-2"></i>Edit</a></li>
                                 <li><a class="dropdown-item" href="{% url 'procurement:frc_export' r.pk %}"><i class="bi bi-file-earmark-excel me-2"></i>Excel</a></li>
-                                <li><a class="dropdown-item" href="{% url 'procurement:frc_export_pdf' r.pk %}"><i class="bi bi-file-earmark-pdf me-2"></i>PDF</a></li>
+                                <li><a class="dropdown-item" href="{% url 'procurement:frc_export_pdf' r.pk %}" target="_blank"><i class="bi bi-file-earmark-pdf me-2"></i>Preview PDF</a></li>
                                 <li><hr class="dropdown-divider"></li>
                                 <li><a class="dropdown-item text-danger" href="{% url 'procurement:frc_delete' r.pk %}"><i class="bi bi-trash me-2"></i>Delete</a></li>
                             </ul>
@@ -73,7 +73,7 @@
         <div class="col-12 text-center py-5">
             <i class="bi bi-shield-check display-4 text-muted"></i>
             <p class="text-muted mt-3">No FRC/PPE reports yet.</p>
-            <a href="{% url 'procurement:frc_create' %}" class="btn btn-primary me-2"><i class="bi bi-plus-lg"></i> Create</a>
+            <a href="{% url 'procurement:frc_create' %}" class="btn btn-danger me-2"><i class="bi bi-plus-lg"></i> Create</a>
             <button class="btn btn-outline-success" data-bs-toggle="modal" data-bs-target="#importModal"><i class="bi bi-upload"></i> Import</button>
         </div>
         {% endfor %}

@@ -3,6 +3,15 @@
 
 {% block title %}{{ revision.revision_label }} — {{ project.proposal_reference }} - Leap Networks ERP{% endblock %}
 {% block page_title %}Revision {{ revision.revision_label }}{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'projects:list' %}">Commercial Pipeline</a>
+    <span class="crumb-sep">›</span>
+    <a href="{% url 'projects:detail' project.pk %}"><code>{{ project.proposal_reference }}</code></a>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">Revision {{ revision.revision_label }}</span>
+</nav>
+{% endblock %}
 
 {% block content %}
 <div class="alert alert-info d-flex align-items-center justify-content-between mb-4">

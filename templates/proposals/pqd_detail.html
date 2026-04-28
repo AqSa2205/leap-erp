@@ -3,6 +3,17 @@
 
 {% block title %}{{ pqd.title }} - Leap Networks ERP{% endblock %}
 {% block page_title %}{{ pqd.title }}{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'proposals:pqd_list' %}">Prequalification</a>
+    {% if pqd.project %}
+    <span class="crumb-sep">›</span>
+    <a href="{% url 'projects:detail' pqd.project.pk %}"><code>{{ pqd.pqd_reference }}</code></a>
+    {% endif %}
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">{{ pqd.title|truncatechars:60 }}</span>
+</nav>
+{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">

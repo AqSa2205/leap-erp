@@ -22,11 +22,64 @@
         display: inline-flex; align-items: center; gap: 4px;
         padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: 600;
     }
-    .ppe-badge.shirt { background: #e8f4fd; color: #0d6efd; }
+    .ppe-badge.shirt { background: #fbe8ec; color: #C41E3A; }
     .ppe-badge.pants { background: #fff3cd; color: #856404; }
     .ppe-badge.shoes { background: #d1e7dd; color: #0f5132; }
     .ppe-badge.glasses { background: #e2e3e5; color: #41464b; }
     .ppe-badge.helmet { background: #f8d7da; color: #842029; }
+    /* Receiving-date group header */
+    .date-group {
+        margin-bottom: 1.25rem;
+    }
+    .date-group-header {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 10px 14px;
+        background: #fff;
+        border: 1px solid #f1d6dc;
+        border-left: 4px solid #C41E3A;
+        border-radius: 10px;
+        margin-bottom: 10px;
+    }
+    .date-group-header .date-day {
+        font-size: 1.7rem;
+        font-weight: 800;
+        color: #C41E3A;
+        line-height: 1;
+        min-width: 42px;
+        text-align: center;
+    }
+    .date-group-header .date-meta .month {
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        color: #6c757d;
+    }
+    .date-group-header .date-meta .full {
+        font-size: 1rem;
+        font-weight: 700;
+        color: #212529;
+    }
+    .date-group-header .date-meta .weekday {
+        font-size: 0.78rem;
+        color: #6c757d;
+    }
+    .date-group-header .count-pill {
+        margin-left: auto;
+        background: #FBE8EC;
+        color: #C41E3A;
+        font-weight: 700;
+        font-size: 0.78rem;
+        padding: 4px 12px;
+        border-radius: 20px;
+    }
+    .date-group-header.no-date {
+        border-left-color: #adb5bd;
+    }
+    .date-group-header.no-date .date-day { color: #adb5bd; }
+    .date-group-header.no-date .count-pill { background: #e9ecef; color: #6c757d; }
     .emp-name { font-weight: 700; font-size: 0.95rem; }
     .emp-meta { font-size: 0.78rem; color: #6c757d; }
     .export-btn { border-radius: 8px; font-size: 0.82rem; font-weight: 600; }
@@ -123,62 +176,77 @@
         </div>
     </div>
 
-    <!-- Employee Cards -->
+    <!-- Date-grouped employee cards (receiving / handed-over date is the primary key) -->
     <div id="entries-container">
-        {% for e in entries %}
-        <div class="employee-card"
-             data-name="{{ e.employee_name|lower }}"
-             data-project="{{ e.project_name|lower }}"
-             data-shirt="{{ e.shirt_size|lower }}"
-             data-pants="{{ e.pants_size|lower }}"
-             data-shoes="{{ e.safety_shoes|lower }}">
-            <div class="row align-items-center">
-                <div class="col-md-3">
-                    <div class="d-flex align-items-center gap-2">
-                        <div class="rounded-circle bg-dark text-white d-flex align-items-center justify-content-center" style="width:36px; height:36px; font-size:0.8rem; font-weight:700; flex-shrink:0;">{{ e.serial_number }}</div>
-                        <div>
-                            <div class="emp-name">{{ e.employee_name }}</div>
-                            <div class="emp-meta">{{ e.designation|default:"-" }}</div>
+        {% for key, group in entries_by_date.items %}
+        <div class="date-group" data-date-group="{{ key }}">
+            <div class="date-group-header {% if not group.parsed %}no-date{% endif %}">
+                <div class="date-day">{{ group.day }}</div>
+                <div class="date-meta">
+                    {% if group.parsed %}
+                    <div class="month">{{ group.month }}</div>
+                    <div class="full">{{ group.label }}</div>
+                    <div class="weekday">{{ group.weekday }}</div>
+                    {% else %}
+                    <div class="full">{{ group.label }}</div>
+                    <div class="weekday text-muted">Receiving date missing or unparseable</div>
+                    {% endif %}
+                </div>
+                <span class="count-pill"><i class="bi bi-people me-1"></i>{{ group.entries|length }} issuance{{ group.entries|length|pluralize }}</span>
+            </div>
+
+            {% for e in group.entries %}
+            <div class="employee-card"
+                 data-name="{{ e.employee_name|lower }}"
+                 data-project="{{ e.project_name|lower }}"
+                 data-shirt="{{ e.shirt_size|lower }}"
+                 data-pants="{{ e.pants_size|lower }}"
+                 data-shoes="{{ e.safety_shoes|lower }}">
+                <div class="row align-items-center">
+                    <div class="col-md-3">
+                        <div class="d-flex align-items-center gap-2">
+                            <div class="rounded-circle bg-dark text-white d-flex align-items-center justify-content-center" style="width:36px; height:36px; font-size:0.8rem; font-weight:700; flex-shrink:0;">{{ e.serial_number }}</div>
+                            <div>
+                                <div class="emp-name">{{ e.employee_name }}</div>
+                                <div class="emp-meta">{{ e.designation|default:"-" }}</div>
+                            </div>
                         </div>
                     </div>
-                </div>
-                <div class="col-md-1">
-                    <small class="text-muted d-block" style="font-size:0.65rem; text-transform:uppercase;">Project</small>
-                    <span class="fw-semibold" style="font-size:0.85rem;">{{ e.project_name|default:"-" }}</span>
-                </div>
-                <div class="col-md-5">
-                    <div class="d-flex flex-wrap gap-1">
-                        {% if e.shirt_qty > 0 %}
-                        <span class="ppe-badge shirt"><i class="bi bi-person-badge"></i> {{ e.shirt_qty }} Shirt{{ e.shirt_qty|pluralize }} {% if e.shirt_size %}({{ e.shirt_size }}){% endif %}</span>
-                        {% endif %}
-                        {% if e.pants_qty > 0 %}
-                        <span class="ppe-badge pants"><i class="bi bi-rulers"></i> {{ e.pants_qty }} Pant{{ e.pants_qty|pluralize }} {% if e.pants_size %}({{ e.pants_size }}){% endif %}</span>
-                        {% endif %}
-                        {% if e.safety_glasses and e.safety_glasses != 'N/A' and e.safety_glasses != 'n/a' %}
-                        <span class="ppe-badge glasses"><i class="bi bi-eyeglasses"></i> Glasses: {{ e.safety_glasses }}</span>
-                        {% endif %}
-                        {% if e.shoes_qty > 0 or e.safety_shoes and e.safety_shoes != 'N/A' %}
-                        <span class="ppe-badge shoes"><i class="bi bi-boot"></i> {% if e.shoes_qty %}{{ e.shoes_qty }} {% endif %}Shoes {% if e.safety_shoes and e.safety_shoes != 'N/A' %}({{ e.safety_shoes }}){% endif %}</span>
-                        {% endif %}
-                        {% if e.safety_helmet and e.safety_helmet != 'N/A' and e.safety_helmet != 'n/a' %}
-                        <span class="ppe-badge helmet"><i class="bi bi-shield-fill"></i> Helmet: {{ e.safety_helmet }}</span>
-                        {% endif %}
-                        {% if e.total_items_issued == 0 %}
-                        <span class="text-muted" style="font-size:0.8rem;">No PPE issued</span>
+                    <div class="col-md-2">
+                        <small class="text-muted d-block" style="font-size:0.65rem; text-transform:uppercase;">Project</small>
+                        <span class="fw-semibold" style="font-size:0.85rem;">{{ e.project_name|default:"-" }}</span>
+                    </div>
+                    <div class="col-md-5">
+                        <div class="d-flex flex-wrap gap-1">
+                            {% if e.shirt_qty > 0 %}
+                            <span class="ppe-badge shirt"><i class="bi bi-person-badge"></i> {{ e.shirt_qty }} Shirt{{ e.shirt_qty|pluralize }} {% if e.shirt_size %}({{ e.shirt_size }}){% endif %}</span>
+                            {% endif %}
+                            {% if e.pants_qty > 0 %}
+                            <span class="ppe-badge pants"><i class="bi bi-rulers"></i> {{ e.pants_qty }} Pant{{ e.pants_qty|pluralize }} {% if e.pants_size %}({{ e.pants_size }}){% endif %}</span>
+                            {% endif %}
+                            {% if e.safety_glasses and e.safety_glasses != 'N/A' and e.safety_glasses != 'n/a' %}
+                            <span class="ppe-badge glasses"><i class="bi bi-eyeglasses"></i> Glasses: {{ e.safety_glasses }}</span>
+                            {% endif %}
+                            {% if e.shoes_qty > 0 or e.safety_shoes and e.safety_shoes != 'N/A' %}
+                            <span class="ppe-badge shoes"><i class="bi bi-boot"></i> {% if e.shoes_qty %}{{ e.shoes_qty }} {% endif %}Shoes {% if e.safety_shoes and e.safety_shoes != 'N/A' %}({{ e.safety_shoes }}){% endif %}</span>
+                            {% endif %}
+                            {% if e.safety_helmet and e.safety_helmet != 'N/A' and e.safety_helmet != 'n/a' %}
+                            <span class="ppe-badge helmet"><i class="bi bi-shield-fill"></i> Helmet: {{ e.safety_helmet }}</span>
+                            {% endif %}
+                            {% if e.total_items_issued == 0 %}
+                            <span class="text-muted" style="font-size:0.8rem;">No PPE issued</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        {% if e.handed_to %}
+                        <small class="text-muted d-block" style="font-size:0.65rem; text-transform:uppercase;">Handed To</small>
+                        <span style="font-size:0.82rem;">{{ e.handed_to|truncatechars:40 }}</span>
                         {% endif %}
                     </div>
                 </div>
-                <div class="col-md-3">
-                    {% if e.receiving_date %}
-                    <small class="text-muted d-block" style="font-size:0.65rem; text-transform:uppercase;">Received</small>
-                    <span style="font-size:0.82rem;">{{ e.receiving_date }}</span>
-                    {% endif %}
-                    {% if e.handed_to %}
-                    <small class="text-muted d-block mt-1" style="font-size:0.65rem; text-transform:uppercase;">Handed To</small>
-                    <span style="font-size:0.82rem;">{{ e.handed_to|truncatechars:30 }}</span>
-                    {% endif %}
-                </div>
             </div>
+            {% endfor %}
         </div>
         {% empty %}
         <div class="text-center py-5 text-muted">
@@ -209,6 +277,8 @@ document.addEventListener('DOMContentLoaded', function() {
     let activeShoes = 'all';
     let searchQuery = '';
 
+    const dateGroups = document.querySelectorAll('.date-group');
+
     function applyFilters() {
         let visible = 0;
         cards.forEach(card => {
@@ -228,6 +298,13 @@ document.addEventListener('DOMContentLoaded', function() {
             card.style.display = show ? '' : 'none';
             if (show) visible++;
         });
+
+        // Hide a whole date group if none of its cards are visible
+        dateGroups.forEach(grp => {
+            const anyVisible = grp.querySelectorAll('.employee-card:not([style*="display: none"])').length > 0;
+            grp.style.display = anyVisible ? '' : 'none';
+        });
+
         countBadge.textContent = visible + ' of ' + cards.length + ' shown';
     }
 

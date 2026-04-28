@@ -1249,6 +1249,49 @@ def ajax_delete_sow_item(request, pk):
 
 @login_required
 @require_POST
+def ajax_update_sow_item(request, pk):
+    """Update an existing Scope of Work line item."""
+    item = get_object_or_404(ScopeOfWorkItem, pk=pk)
+    if not _user_can_edit_sheet(request.user, item.costing_sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    description = request.POST.get('description', '').strip()
+    if not description:
+        return JsonResponse({'error': 'Description required'}, status=400)
+
+    try:
+        qty = Decimal(request.POST.get('quantity', '1'))
+        total_price = Decimal(request.POST.get('total_price', '0'))
+    except (InvalidOperation, ValueError):
+        return JsonResponse({'error': 'Invalid number'}, status=400)
+
+    uom = request.POST.get('uom', 'LOT').strip() or 'LOT'
+    price_text = request.POST.get('price_text', '').strip()
+
+    item.description = description
+    item.quantity = qty
+    item.uom = uom
+    item.total_price = total_price
+    item.price_text = price_text
+    item.save()
+
+    return JsonResponse({
+        'ok': True,
+        'item': {
+            'pk': item.pk,
+            'serial_number': item.serial_number,
+            'description': item.description,
+            'quantity': str(item.quantity),
+            'uom': item.uom,
+            'total_price': str(item.total_price),
+            'price_text': item.price_text,
+            'display_price': item.display_price,
+        },
+    })
+
+
+@login_required
+@require_POST
 def ajax_upload_vendor_quote(request, pk):
     """Attach a vendor quote file to a costing sheet (sales team only)."""
     from .models import VendorQuote

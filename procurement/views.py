@@ -3,7 +3,9 @@ from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy, reverse
 from django.contrib import messages
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
+from django.views.decorators.http import require_POST
+from django.db import transaction
 from django.db.models import Q
 from decimal import Decimal
 
@@ -41,6 +43,43 @@ def _safe_filename(name, prefix='', suffix='', extension=''):
     if extension and not extension.startswith('.'):
         extension = f'.{extension}'
     return f'{base}{extension}'
+
+
+def _make_numbered_canvas():
+    """Return a two-pass Canvas subclass that draws "Page X of Y" at the
+    bottom of every page. Used by procurement PDF exports for consistent
+    pagination across PO / DN / Inventory / Summary outputs."""
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen.canvas import Canvas
+
+    class NumberedCanvas(Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._saved_pages = []
+
+        def showPage(self):
+            self._saved_pages.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            page_count = len(self._saved_pages)
+            for state in self._saved_pages:
+                self.__dict__.update(state)
+                try:
+                    page_w, _ = self._pagesize
+                    self.setFont('Helvetica', 8)
+                    self.setFillColor(colors.HexColor('#6c757d'))
+                    self.drawCentredString(
+                        page_w / 2, 8 * mm,
+                        f'Page {self._pageNumber} of {page_count}',
+                    )
+                except Exception:
+                    pass
+                super().showPage()
+            super().save()
+
+    return NumberedCanvas
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -175,6 +214,20 @@ class POListView(ProcurementPermissionMixin, ListView):
         return context
 
 
+def _po_terms_by_category(selected_ids):
+    """Build the terms_by_category structure used in PO create/edit/detail."""
+    from costing.models import TermsTemplate
+    selected_ids = set(selected_ids or [])
+    all_terms = TermsTemplate.objects.all()
+    terms_by_category = {}
+    for cat_value, cat_label in TermsTemplate.CATEGORY_CHOICES:
+        terms_by_category[cat_label] = [
+            {'template': t, 'selected': t.pk in selected_ids}
+            for t in all_terms if t.category == cat_value
+        ]
+    return terms_by_category
+
+
 class POCreateView(ProcurementPermissionMixin, CreateView):
     model = PurchaseOrder
     form_class = PurchaseOrderForm
@@ -192,8 +245,11 @@ class POCreateView(ProcurementPermissionMixin, CreateView):
         context = super().get_context_data(**kwargs)
         if self.request.POST:
             context['item_formset'] = POItemFormSet(self.request.POST, prefix='items')
+            posted_term_ids = [int(x) for x in self.request.POST.getlist('selected_terms') if x.isdigit()]
+            context['terms_by_category'] = _po_terms_by_category(posted_term_ids)
         else:
             context['item_formset'] = POItemFormSet(prefix='items')
+            context['terms_by_category'] = _po_terms_by_category([])
         context['title'] = 'Create Purchase Order'
         return context
 
@@ -206,6 +262,8 @@ class POCreateView(ProcurementPermissionMixin, CreateView):
             self.object.save()
             item_formset.instance = self.object
             item_formset.save()
+            term_ids = [int(x) for x in self.request.POST.getlist('selected_terms') if x.isdigit()]
+            self.object.selected_terms.set(term_ids)
             messages.success(self.request, f'Purchase Order {self.object.po_number} created successfully.')
             return redirect(self.get_success_url())
         else:
@@ -226,6 +284,9 @@ class PODetailView(ProcurementPermissionMixin, DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['items'] = self.object.items.all()
+        context['terms_by_category'] = _po_terms_by_category(
+            self.object.selected_terms.values_list('pk', flat=True)
+        )
         return context
 
 
@@ -250,8 +311,12 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
         context = super().get_context_data(**kwargs)
         if self.request.POST:
             context['item_formset'] = POItemFormSet(self.request.POST, instance=self.object, prefix='items')
+            posted_term_ids = [int(x) for x in self.request.POST.getlist('selected_terms') if x.isdigit()]
+            context['terms_by_category'] = _po_terms_by_category(posted_term_ids)
         else:
             context['item_formset'] = POItemFormSet(instance=self.object, prefix='items')
+            current_ids = list(self.object.selected_terms.values_list('pk', flat=True))
+            context['terms_by_category'] = _po_terms_by_category(current_ids)
         context['title'] = f'Edit PO: {self.object.po_number}'
         return context
 
@@ -262,6 +327,8 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
             self.object = form.save()
             item_formset.instance = self.object
             item_formset.save()
+            term_ids = [int(x) for x in self.request.POST.getlist('selected_terms') if x.isdigit()]
+            self.object.selected_terms.set(term_ids)
             messages.success(self.request, f'Purchase Order {self.object.po_number} updated successfully.')
             return redirect(self.get_success_url())
         else:
@@ -393,14 +460,23 @@ def po_export_excel(request, pk):
         row += 1
 
     # ── T&C ──
-    if po.terms_and_conditions:
+    selected_terms_xl = list(po.selected_terms.all())
+    if po.terms_and_conditions or selected_terms_xl:
         row += 2
         ws.cell(row=row, column=1, value='TERMS AND CONDITIONS').font = bold_red
         row += 1
-        for line in po.terms_and_conditions.split('\n'):
-            if line.strip():
-                ws.cell(row=row, column=2, value=line.strip()).alignment = wrap
-                row += 1
+        for tmpl in selected_terms_xl:
+            ws.cell(row=row, column=2, value=tmpl.name).font = bold
+            row += 1
+            for line in tmpl.content.split('\n'):
+                if line.strip():
+                    ws.cell(row=row, column=2, value=line.strip()).alignment = wrap
+                    row += 1
+        if po.terms_and_conditions:
+            for line in po.terms_and_conditions.split('\n'):
+                if line.strip():
+                    ws.cell(row=row, column=2, value=line.strip()).alignment = wrap
+                    row += 1
 
     # Column widths
     widths = [8, 18, 15, 15, 15, 10, 8, 14, 14, 18]
@@ -427,11 +503,14 @@ def po_export_pdf(request, pk):
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
     from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+    from reportlab.pdfgen.canvas import Canvas
     from io import BytesIO
     from django.contrib.staticfiles.finders import find as find_static
 
     po = get_object_or_404(PurchaseOrder, pk=pk)
     items = po.items.all()
+
+    NumberedCanvas = _make_numbered_canvas()
 
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
@@ -439,7 +518,7 @@ def po_export_pdf(request, pk):
     styles = getSampleStyleSheet()
 
     # Custom styles
-    title_style = ParagraphStyle('POTitle', parent=styles['Heading1'], fontSize=14, textColor=colors.HexColor('#1F4E79'), spaceAfter=6)
+    title_style = ParagraphStyle('POTitle', parent=styles['Heading1'], fontSize=14, textColor=colors.HexColor('#C41E3A'), spaceAfter=6)
     label_style = ParagraphStyle('Label', parent=styles['Normal'], fontSize=8, textColor=colors.grey)
     value_style = ParagraphStyle('Value', parent=styles['Normal'], fontSize=9, fontName='Helvetica-Bold')
     normal_style = ParagraphStyle('Norm', parent=styles['Normal'], fontSize=8)
@@ -496,8 +575,17 @@ def po_export_pdf(request, pk):
     header_table = Table(header_data, colWidths=[22*mm, 60*mm, 5*mm, 22*mm, 60*mm])
     header_table.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('TOPPADDING', (0, 0), (-1, -1), 1),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+        ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#D0D0D0')),
+        # Vertical lines: only between label↔value pairs (left and right groups).
+        # Skip the center spacer column so there's no line through the middle.
+        ('LINEAFTER', (0, 0), (0, -1), 0.4, colors.HexColor('#E0E0E0')),
+        ('LINEAFTER', (3, 0), (3, -1), 0.4, colors.HexColor('#E0E0E0')),
+        # Horizontal lines between rows
+        ('LINEBELOW', (0, 0), (-1, -2), 0.4, colors.HexColor('#E0E0E0')),
     ]))
     elements.append(header_table)
     elements.append(Spacer(1, 5*mm))
@@ -516,7 +604,7 @@ def po_export_pdf(request, pk):
     ]
     item_data = [item_header]
 
-    dark_blue = colors.HexColor('#1F4E79')
+    dark_blue = colors.HexColor('#C41E3A')
 
     for item in items:
         item_data.append([
@@ -532,8 +620,9 @@ def po_export_pdf(request, pk):
 
     item_table = Table(item_data, colWidths=col_widths, repeatRows=1)
     item_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), dark_blue),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F5D7DC')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#495057')),
+        ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#C41E3A')),
         ('FONTSIZE', (0, 0), (-1, -1), 7),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
@@ -562,41 +651,95 @@ def po_export_pdf(request, pk):
         ('ALIGN', (6, 0), (6, -1), 'RIGHT'),
         ('LINEABOVE', (2, -1), (6, -1), 1, dark_blue),
         ('LINEBELOW', (2, -1), (6, -1), 1.5, dark_blue),
-        ('BACKGROUND', (2, -1), (6, -1), colors.HexColor('#E8EEF4')),
+        ('BACKGROUND', (2, -1), (6, -1), colors.HexColor('#FBE8EC')),
         ('TOPPADDING', (0, 0), (-1, -1), 2),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
     ]))
     elements.append(totals_table)
 
+    # ── Approvals (5 signatures) ──
+    from xml.sax.saxutils import escape as _xml_escape
+
+    elements.append(Spacer(1, 8*mm))
+    approvals = [
+        ('PO Issuer', po.po_issued_by or ''),
+        ('Checked / Verified by', ''),
+        ('PM Approval', 'Ali Sultan'),
+        ('COO Approval', 'Babar Zulfiqar'),
+        ('CEO Approval', 'Asif Imam'),
+    ]
+    sig_line = '___________________'
+    label_row = [Paragraph(f'<para align="center">{sig_line}<br/><b>{_xml_escape(role)}</b></para>',
+                           ParagraphStyle('AppRole', parent=styles['Normal'], fontSize=8, leading=10))
+                 for role, _ in approvals]
+    name_row = [Paragraph(f'<para align="center">Name: <u>{_xml_escape(name) if name else "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"}</u></para>',
+                          ParagraphStyle('AppName', parent=styles['Normal'], fontSize=8, leading=10))
+                for _, name in approvals]
+    approval_table = Table([label_row, name_row], colWidths=[37*mm]*5)
+    approval_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING', (0, 0), (-1, 0), 4),
+        ('TOPPADDING', (0, 1), (-1, 1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('LEFTPADDING', (0, 0), (-1, -1), 2),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+        ('LINEBELOW', (0, -1), (-1, -1), 1, colors.HexColor('#C41E3A')),
+    ]))
+    elements.append(approval_table)
+    elements.append(Spacer(1, 4*mm))
+
     # ── Terms & Conditions ──
-    if po.terms_and_conditions:
+    from costing.models import TermsTemplate as _TermsTemplate
+
+    selected_terms = list(po.selected_terms.all())
+    legacy_tc = (po.terms_and_conditions or '').strip()
+
+    if selected_terms or legacy_tc:
         elements.append(Spacer(1, 6*mm))
-        elements.append(Paragraph('<b>TERMS AND CONDITIONS</b>', ParagraphStyle('TCHead', parent=styles['Heading2'], fontSize=10, textColor=colors.HexColor('#C41E3A'))))
+        elements.append(Paragraph(
+            '<b>TERMS AND CONDITIONS</b>',
+            ParagraphStyle('TCHead', parent=styles['Heading2'], fontSize=10, textColor=colors.HexColor('#C41E3A'))
+        ))
         elements.append(Spacer(1, 2*mm))
-        for line in po.terms_and_conditions.split('\n'):
-            if line.strip():
-                elements.append(Paragraph(line.strip(), tc_style))
+
+        sub_hdr_style = ParagraphStyle('TCSubHdr', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8, leading=10, spaceAfter=1)
+
+        terms_grouped = {}
+        for cat_value, _cat_label in _TermsTemplate.CATEGORY_CHOICES:
+            items_in_cat = [t for t in selected_terms if t.category == cat_value]
+            if items_in_cat:
+                terms_grouped[cat_value] = items_in_cat
+
+        for cat_value, _cat_label in _TermsTemplate.CATEGORY_CHOICES:
+            for tmpl in terms_grouped.get(cat_value, []):
+                elements.append(Paragraph(f'<b>{_xml_escape(tmpl.name)}</b>', sub_hdr_style))
+                for line in [l.strip() for l in tmpl.content.splitlines() if l.strip()]:
+                    elements.append(Paragraph(_xml_escape(line), tc_style))
                 elements.append(Spacer(1, 1*mm))
 
-    # ── Ratification / Signatures ──
-    elements.append(Spacer(1, 8*mm))
-    sig_data = [
-        ['Prepared By: _______________', '', 'Approved By: _______________', '', 'Vendor Acknowledgment: _______________'],
-        ['Date: _______________', '', 'Date: _______________', '', 'Date: _______________'],
-    ]
-    sig_table = Table(sig_data, colWidths=[55*mm, 5*mm, 55*mm, 5*mm, 55*mm])
-    sig_table.setStyle(TableStyle([
-        ('FONTSIZE', (0, 0), (-1, -1), 8),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
-    ]))
-    elements.append(sig_table)
+        if legacy_tc:
+            for line in legacy_tc.split('\n'):
+                if line.strip():
+                    elements.append(Paragraph(_xml_escape(line.strip()), tc_style))
+                    elements.append(Spacer(1, 1*mm))
 
-    doc.build(elements)
+    try:
+        doc.build(elements, canvasmaker=NumberedCanvas)
+    except Exception:
+        # Fallback build without page numbers if canvas decoration fails
+        import logging, traceback
+        logging.getLogger(__name__).warning(
+            'PO PDF NumberedCanvas build failed:\n%s', traceback.format_exc()
+        )
+        buf.seek(0)
+        buf.truncate()
+        doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
+        doc.build(elements)
     buf.seek(0)
 
     response = HttpResponse(buf.read(), content_type='application/pdf')
     filename = _safe_filename(po.po_number, prefix='PO', extension='pdf')
-    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    response['Content-Disposition'] = f'inline; filename="{filename}"'
     return response
 
 
@@ -725,16 +868,18 @@ def po_import_excel(request):
         )
 
         # ── Parse line items (starting at row 12 until blank/totals) ──
+        TOTALS_LABELS = ('base amount', 'discount', 'gross value', 'vat', 'total value')
         item_count = 0
         for r in range(12, 30):
             sn = cell_raw(r, 1)
             desc = cell(r, 3)
-            if not desc or (isinstance(sn, str) and not sn.isdigit() and sn != ''):
-                # Check if we hit totals section
-                if 'base amount' in desc.lower() or 'discount' in desc.lower():
-                    break
-                if not desc:
-                    continue
+
+            # Stop the moment we hit the totals section.
+            if desc and any(t in desc.lower() for t in TOTALS_LABELS):
+                break
+
+            if not desc:
+                continue
 
             qty = cell_raw(r, 6)
             rate = cell_raw(r, 8)
@@ -1018,7 +1163,7 @@ def summary_export_pdf(request, pk):
     elements = []
     styles = getSampleStyleSheet()
 
-    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=13, textColor=colors.HexColor('#1F4E79'), spaceAfter=2)
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=13, textColor=colors.HexColor('#C41E3A'), spaceAfter=2)
     sub_style = ParagraphStyle('Sub', parent=styles['Normal'], fontSize=10, spaceAfter=4)
     small = ParagraphStyle('Sm', parent=styles['Normal'], fontSize=6, leading=7)
     small_r = ParagraphStyle('SmR', parent=styles['Normal'], fontSize=6, leading=7, alignment=TA_RIGHT)
@@ -1040,7 +1185,7 @@ def summary_export_pdf(request, pk):
     elements.append(Spacer(1, 3*mm))
 
     # Table
-    dark_blue = colors.HexColor('#1F4E79')
+    dark_blue = colors.HexColor('#C41E3A')
     col_widths = [8*mm, 35*mm, 22*mm, 14*mm, 16*mm, 25*mm, 20*mm, 14*mm,
                   25*mm, 18*mm, 18*mm, 18*mm, 18*mm, 28*mm, 10*mm]
 
@@ -1087,14 +1232,15 @@ def summary_export_pdf(request, pk):
 
     table = Table(data, colWidths=col_widths, repeatRows=1)
     table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), dark_blue),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F5D7DC')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#495057')),
+        ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#C41E3A')),
         ('GRID', (0, 0), (-1, -1), 0.4, colors.grey),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ('TOPPADDING', (0, 0), (-1, -1), 1),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
         ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#F5F5F5')]),
-        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#E8EEF4')),
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#FBE8EC')),
         ('LINEABOVE', (0, -1), (-1, -1), 1, dark_blue),
     ]))
     elements.append(table)
@@ -1455,12 +1601,14 @@ def dn_export_pdf(request, pk):
     dn = get_object_or_404(DeliveryNote, pk=pk)
     items = dn.items.all()
 
+    NumberedCanvas = _make_numbered_canvas()
+
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
     elements = []
     styles = getSampleStyleSheet()
 
-    title_style = ParagraphStyle('DNTitle', parent=styles['Heading1'], fontSize=16, textColor=colors.HexColor('#1F4E79'), alignment=TA_CENTER, spaceAfter=4)
+    title_style = ParagraphStyle('DNTitle', parent=styles['Heading1'], fontSize=16, textColor=colors.HexColor('#C41E3A'), alignment=TA_CENTER, spaceAfter=4)
     label_style = ParagraphStyle('Lbl', parent=styles['Normal'], fontSize=8, textColor=colors.grey)
     value_style = ParagraphStyle('Val', parent=styles['Normal'], fontSize=9, fontName='Helvetica-Bold')
     small = ParagraphStyle('Sm', parent=styles['Normal'], fontSize=8)
@@ -1492,14 +1640,21 @@ def dn_export_pdf(request, pk):
     ht = Table(header_data, colWidths=[22*mm, 60*mm, 5*mm, 22*mm, 60*mm])
     ht.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('TOPPADDING', (0, 0), (-1, -1), 1),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+        ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#D0D0D0')),
+        # Vertical lines: only between label↔value pairs (left and right groups).
+        ('LINEAFTER', (0, 0), (0, -1), 0.4, colors.HexColor('#E0E0E0')),
+        ('LINEAFTER', (3, 0), (3, -1), 0.4, colors.HexColor('#E0E0E0')),
+        ('LINEBELOW', (0, 0), (-1, -2), 0.4, colors.HexColor('#E0E0E0')),
     ]))
     elements.append(ht)
     elements.append(Spacer(1, 5*mm))
 
     # Items table
-    dark_blue = colors.HexColor('#1F4E79')
+    dark_blue = colors.HexColor('#C41E3A')
     col_widths = [12*mm, 35*mm, 60*mm, 18*mm, 15*mm, 35*mm]
     item_header = [
         Paragraph('<b>S.No.</b>', small), Paragraph('<b>Make/Part No.</b>', small),
@@ -1519,8 +1674,9 @@ def dn_export_pdf(request, pk):
 
     table = Table(data, colWidths=col_widths, repeatRows=1)
     table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), dark_blue),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F5D7DC')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#495057')),
+        ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#C41E3A')),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ('TOPPADDING', (0, 0), (-1, -1), 2),
@@ -1554,12 +1710,41 @@ def dn_export_pdf(request, pk):
     ]))
     elements.append(sig_table)
 
-    doc.build(elements)
+    # Leap Networks Supply Chain Management stamp at the bottom-right
+    stamp_path = find_static('images/leap_stamp.png')
+    if stamp_path:
+        from reportlab.platypus import Image
+        elements.append(Spacer(1, 4*mm))
+        try:
+            stamp_img = Image(stamp_path, width=40*mm, height=30*mm)
+            # Right-align: empty cell on the left so the stamp sits under the
+            # "ITEM VERIFIED/AUTHORIZED BY" column.
+            stamp_table = Table([['', '', stamp_img]], colWidths=[75*mm, 20*mm, 75*mm])
+            stamp_table.setStyle(TableStyle([
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('ALIGN', (2, 0), (2, 0), 'CENTER'),
+            ]))
+            elements.append(stamp_table)
+        except Exception:
+            # Stamp drawing should never block the PDF
+            pass
+
+    try:
+        doc.build(elements, canvasmaker=NumberedCanvas)
+    except Exception:
+        import logging, traceback
+        logging.getLogger(__name__).warning(
+            'DN PDF NumberedCanvas build failed:\n%s', traceback.format_exc()
+        )
+        buf.seek(0)
+        buf.truncate()
+        doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
+        doc.build(elements)
     buf.seek(0)
     response = HttpResponse(buf.read(), content_type='application/pdf')
     raw = dn.dn_number or f'DN-{dn.pk}'
     filename = _safe_filename(raw, extension='pdf')
-    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    response['Content-Disposition'] = f'inline; filename="{filename}"'
     return response
 
 
@@ -1924,7 +2109,7 @@ def inventory_export_pdf(request, pk):
     elements = []
     styles = getSampleStyleSheet()
 
-    title_style = ParagraphStyle('InvTitle', parent=styles['Heading1'], fontSize=13, textColor=colors.HexColor('#1F4E79'), spaceAfter=2)
+    title_style = ParagraphStyle('InvTitle', parent=styles['Heading1'], fontSize=13, textColor=colors.HexColor('#C41E3A'), spaceAfter=2)
     sub_style = ParagraphStyle('Sub', parent=styles['Normal'], fontSize=9, spaceAfter=4)
     s = ParagraphStyle('S', parent=styles['Normal'], fontSize=5.5, leading=6.5)
     sr = ParagraphStyle('SR', parent=styles['Normal'], fontSize=5.5, leading=6.5, alignment=TA_RIGHT)
@@ -1946,7 +2131,7 @@ def inventory_export_pdf(request, pk):
     elements.append(Paragraph(f'<b>Items:</b> {report.total_items} | <b>Low Stock:</b> {report.low_stock_count} | <b>Total Value:</b> SAR {report.total_stock_value:,.2f}', sub_style))
     elements.append(Spacer(1, 2*mm))
 
-    dark_blue = colors.HexColor('#1F4E79')
+    dark_blue = colors.HexColor('#C41E3A')
     col_widths = [7*mm, 12*mm, 30*mm, 12*mm, 12*mm, 14*mm, 11*mm, 8*mm,
                   10*mm, 10*mm, 10*mm, 10*mm, 10*mm, 12*mm,
                   10*mm, 8*mm, 14*mm, 16*mm, 14*mm, 18*mm, 14*mm]
@@ -1994,8 +2179,9 @@ def inventory_export_pdf(request, pk):
 
     table = Table(data, colWidths=col_widths, repeatRows=1)
     style_cmds = [
-        ('BACKGROUND', (0, 0), (-1, 0), dark_blue),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F5D7DC')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#495057')),
+        ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#C41E3A')),
         ('GRID', (0, 0), (-1, -1), 0.3, colors.grey),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ('TOPPADDING', (0, 0), (-1, -1), 1),
@@ -2201,8 +2387,11 @@ class FRCDetailView(FRCPermissionMixin, DetailView):
         return True
 
     def get_context_data(self, **kwargs):
+        from collections import OrderedDict
+        from datetime import datetime
+
         context = super().get_context_data(**kwargs)
-        entries = self.object.entries.all()
+        entries = list(self.object.entries.all())
         context['entries'] = entries
 
         # Collect unique projects and sizes for filters
@@ -2224,6 +2413,55 @@ class FRCDetailView(FRCPermissionMixin, DetailView):
         context['shirt_sizes'] = sorted(shirt_sizes)
         context['pants_sizes'] = sorted(pants_sizes)
         context['shoe_sizes'] = sorted(shoe_sizes)
+
+        # ── Group entries by receiving_date (the date PPE was handed over).
+        # receiving_date is a CharField — try a few common formats so we can
+        # sort newest-first; fall back to the raw string if parsing fails.
+        DATE_FORMATS = (
+            '%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%d %b %Y', '%d %B %Y',
+            '%d/%m/%y', '%d-%m-%y', '%m/%d/%Y',
+        )
+
+        def _parse_date(raw):
+            if not raw:
+                return None
+            s = raw.strip()
+            for fmt in DATE_FORMATS:
+                try:
+                    return datetime.strptime(s, fmt).date()
+                except ValueError:
+                    continue
+            return None
+
+        groups = {}
+        for e in entries:
+            raw = (e.receiving_date or '').strip()
+            parsed = _parse_date(raw)
+            key = parsed.isoformat() if parsed else (raw or '__nodate__')
+            label = parsed.strftime('%d %B %Y') if parsed else (raw or 'Date not recorded')
+            day_label = parsed.strftime('%d') if parsed else '—'
+            month_label = parsed.strftime('%b %Y').upper() if parsed else ''
+            weekday_label = parsed.strftime('%A') if parsed else ''
+            if key not in groups:
+                groups[key] = {
+                    'parsed': parsed,
+                    'label': label,
+                    'day': day_label,
+                    'month': month_label,
+                    'weekday': weekday_label,
+                    'entries': [],
+                }
+            groups[key]['entries'].append(e)
+
+        # Sort groups newest-first; entries with unparseable / missing dates
+        # bubble to the bottom.
+        sorted_groups = OrderedDict()
+        for key, g in sorted(
+            groups.items(),
+            key=lambda kv: (kv[1]['parsed'] is None, -(kv[1]['parsed'].toordinal() if kv[1]['parsed'] else 0)),
+        ):
+            sorted_groups[key] = g
+        context['entries_by_date'] = sorted_groups
         return context
 
 
@@ -2388,8 +2626,9 @@ def frc_export_pdf(request, pk):
 
     table = Table(data, colWidths=col_widths, repeatRows=1)
     table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), leap_red),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F5D7DC')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#495057')),
+        ('LINEBELOW', (0, 0), (-1, 0), 1, leap_red),
         ('GRID', (0, 0), (-1, -1), 0.4, colors.grey),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ('TOPPADDING', (0, 0), (-1, -1), 2),
@@ -2612,3 +2851,36 @@ class FRCInventoryDeleteView(LoginRequiredMixin, UserPassesTestMixin, DeleteView
     def form_valid(self, form):
         messages.success(self.request, 'PPE stock item deleted.')
         return super().form_valid(form)
+
+
+# ─── PO Terms Toggle (AJAX) ──────────────────────────────────
+
+@login_required
+@require_POST
+def ajax_po_toggle_term(request, pk):
+    """Toggle a TermsTemplate on/off for a Purchase Order."""
+    from costing.models import TermsTemplate
+    po = get_object_or_404(PurchaseOrder, pk=pk)
+
+    user = request.user
+    can_edit = (
+        user.is_super_admin_user or user.is_admin_user or user.is_procurement_user
+        or po.created_by_id == user.id
+    )
+    if not can_edit:
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    term_id = request.POST.get('term_id')
+    if not term_id:
+        return JsonResponse({'error': 'term_id required'}, status=400)
+    term = get_object_or_404(TermsTemplate, pk=term_id)
+
+    with transaction.atomic():
+        locked_po = PurchaseOrder.objects.select_for_update().get(pk=po.pk)
+        if locked_po.selected_terms.filter(pk=term.pk).exists():
+            locked_po.selected_terms.remove(term)
+            selected = False
+        else:
+            locked_po.selected_terms.add(term)
+            selected = True
+    return JsonResponse({'ok': True, 'selected': selected})

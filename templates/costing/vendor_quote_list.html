@@ -3,6 +3,13 @@
 
 {% block title %}Vendor Quotes - Leap Networks ERP{% endblock %}
 {% block page_title %}Vendor Quotes{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'proposals:dashboard' %}">Proposals</a>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">Vendor Quotes</span>
+</nav>
+{% endblock %}
 
 {% block content %}
 <div class="card mb-3">

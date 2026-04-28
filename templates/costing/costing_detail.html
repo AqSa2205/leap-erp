@@ -3,6 +3,17 @@
 
 {% block title %}{{ sheet.title }} - BOM{% endblock %}
 {% block page_title %}{% if user.is_proposal_team_user %}Bill of Material{% else %}Bill of Material - Commercial{% endif %}{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'costing:list' %}">Costing Sheets</a>
+    {% if sheet.project %}
+    <span class="crumb-sep">›</span>
+    <a href="{% url 'projects:detail' sheet.project.pk %}"><code>{{ sheet.project.proposal_reference }}</code></a>
+    {% endif %}
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">{{ sheet.title|truncatechars:60 }}</span>
+</nav>
+{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -65,6 +76,21 @@
     .margin-edit { text-align: center; width: 60px; }
     .cost-edit:focus, .margin-edit:focus, .text-edit:focus { background: #fff; border-color: var(--leap-red); outline: none; }
     .cost-edit.saved, .margin-edit.saved, .text-edit.saved { border-color: #198754; background: rgba(25,135,84,0.08); }
+    /* In-flight save state: subtle blue pulsing ring so users know the
+       AJAX save is still in progress. Applied by saveField() in JS. */
+    @keyframes inline-saving-pulse {
+        0%, 100% { box-shadow: 0 0 0 2px rgba(13,110,253,0.2); }
+        50%      { box-shadow: 0 0 0 2px rgba(13,110,253,0.55); }
+    }
+    .inline-edit.saving,
+    .rate-edit.saving,
+    .currency-select.saving,
+    .cost-edit.saving,
+    .margin-edit.saving,
+    .text-edit.saving {
+        animation: inline-saving-pulse 0.9s ease-in-out infinite;
+        border-color: #0d6efd !important;
+    }
     /* Highlight the row currently being edited so users don't lose context when scrolling right */
     .bom-table tr.row-editing > td { background: #fff9c4 !important; }
     .bom-table tr.row-editing > td.sticky-col { background: #fff9c4 !important; }
@@ -76,6 +102,24 @@
     .bom-table th.sticky-col { background: #212529; z-index: 3; }
     .bom-table td.sticky-col-1, .bom-table th.sticky-col-1 { left: 0; min-width: 45px; }
     .bom-table td.sticky-col-2, .bom-table th.sticky-col-2 { left: 45px; min-width: 180px; max-width: 220px; white-space: normal; }
+    /* Bulletproof sticky header: apply to every th so cells don't leak through */
+    .bom-table thead.sticky-top { z-index: 5; top: 0; }
+    .bom-table thead.sticky-top th {
+        position: sticky; top: 0; background: #212529; color: #fff;
+        box-shadow: 0 2px 0 rgba(0,0,0,0.08);
+    }
+    .bom-table thead.sticky-top th.cost-hdr { background: #495057 !important; }
+    /* Corner cells (sticky-top + sticky-col) need to beat both layers */
+    .bom-table thead.sticky-top th.sticky-col { z-index: 6; }
+    /* Section header rows stay visible below the thead while scrolling within a section.
+       Each td is made sticky individually — Safari won't stick a <tr> on its own. */
+    .bom-table tr.section-header-row > td {
+        position: sticky; top: 28px; z-index: 1;
+        background: #f0f0f0;
+    }
+    .bom-table tr.section-header-row:hover > td { background: #e4e4e4; }
+    /* Keep section-divider banners (A.3 Optional etc.) sticky too */
+    .bom-table tr.section-divider-row > td { position: sticky; top: 28px; z-index: 1; }
     .section-chevron { transition: transform 0.15s; display: inline-block; }
     .section-chevron.expanded { transform: rotate(90deg); }
     .section-item-count { font-weight: 400; font-size: 0.7rem; color: #6c757d; }
@@ -551,13 +595,21 @@
             </thead>
             <tbody>
                 {% for item in sow_items %}
-                <tr>
-                    <td>{{ item.serial_number }}</td>
-                    <td>{{ item.description }}</td>
-                    <td>{{ item.quantity|floatformat:0 }}</td>
-                    <td>{{ item.uom }}</td>
-                    <td class="text-end fw-bold">{{ item.display_price }}</td>
-                    <td>
+                <tr data-sow-pk="{{ item.pk }}"
+                    data-description="{{ item.description }}"
+                    data-quantity="{{ item.quantity }}"
+                    data-uom="{{ item.uom }}"
+                    data-total-price="{{ item.total_price }}"
+                    data-price-text="{{ item.price_text }}">
+                    <td class="sow-cell-sn">{{ item.serial_number }}</td>
+                    <td class="sow-cell-desc">{{ item.description }}</td>
+                    <td class="sow-cell-qty">{{ item.quantity|floatformat:0 }}</td>
+                    <td class="sow-cell-uom">{{ item.uom }}</td>
+                    <td class="sow-cell-price text-end fw-bold">{{ item.display_price }}</td>
+                    <td class="text-nowrap">
+                        <button class="btn btn-sm btn-outline-secondary py-0 px-1 edit-sow me-1" data-pk="{{ item.pk }}" title="Edit">
+                            <i class="bi bi-pencil"></i>
+                        </button>
                         <button class="btn btn-sm btn-outline-danger py-0 px-1 delete-sow" data-pk="{{ item.pk }}" title="Delete">
                             <i class="bi bi-trash"></i>
                         </button>
@@ -578,9 +630,10 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-hammer me-2"></i>Add Scope of Work Item</h5>
+                <h5 class="modal-title"><i class="bi bi-hammer me-2"></i><span id="sowModalTitle">Add Scope of Work Item</span></h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
+            <input type="hidden" id="sowEditingId" value="">
             <div class="modal-body">
                 <div class="mb-3">
                     <label class="form-label fw-bold">Description *</label>
@@ -609,7 +662,7 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-primary" id="saveSowItem">
-                    <i class="bi bi-check-lg me-1"></i> Add
+                    <i class="bi bi-check-lg me-1"></i> <span id="sowSaveBtnText">Add</span>
                 </button>
             </div>
         </div>
@@ -1124,6 +1177,36 @@ var _csrfToken = '{{ csrf_token }}';
             }
         });
 
+        // Excel-like keyboard flow: Enter jumps down the same column,
+        // Shift+Enter jumps up. Tab keeps its native left-to-right
+        // behaviour because the inputs are already in DOM order.
+        bomTable.addEventListener('keydown', function (e) {
+            var el = e.target;
+            if (!el.matches('.cost-edit, .text-edit, .currency-select')) return;
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+
+            // All editables in the same column (same data-field, or all
+            // currency selects if this is a select)
+            var selector = el.matches('.currency-select')
+                ? '.currency-select'
+                : '[data-field="' + el.dataset.field + '"]';
+            var list = Array.prototype.slice.call(bomTable.querySelectorAll(selector))
+                .filter(function (x) { return !x.disabled && x.offsetParent !== null; });
+            var idx = list.indexOf(el);
+            if (idx < 0) return;
+            var target = list[idx + (e.shiftKey ? -1 : 1)];
+            if (!target) return;
+
+            // Blur first so the pending value saves via the existing
+            // change handler, then focus the next cell.
+            el.blur();
+            setTimeout(function () {
+                target.focus();
+                try { if (target.select) target.select(); } catch (ex) {}
+            }, 0);
+        });
+
         // Paste from Excel — open modal scoped to this section
         bomTable.addEventListener('click', function(e) {
             var pasteBtn = e.target.closest('.paste-excel-btn');
@@ -1513,77 +1596,144 @@ var _csrfToken = '{{ csrf_token }}';
 // ─── Scope of Work AJAX ──────────────────────────────────────
 (function() {
     const tbody = document.querySelector('#sowTable tbody');
+    const modalEl = document.getElementById('addSowModal');
+    const modal = new bootstrap.Modal(modalEl);
+    const editingIdInput = document.getElementById('sowEditingId');
+    const titleSpan = document.getElementById('sowModalTitle');
+    const saveBtnText = document.getElementById('sowSaveBtnText');
+    const descInput = document.getElementById('sowDescription');
+    const qtyInput = document.getElementById('sowQty');
+    const uomInput = document.getElementById('sowUom');
+    const priceInput = document.getElementById('sowPrice');
+    const priceTextInput = document.getElementById('sowPriceText');
 
-    // Add SOW item
+    function resetModal() {
+        editingIdInput.value = '';
+        titleSpan.textContent = 'Add Scope of Work Item';
+        saveBtnText.textContent = 'Add';
+        descInput.value = '';
+        qtyInput.value = '1';
+        uomInput.value = 'LOT';
+        priceInput.value = '0';
+        priceTextInput.value = '';
+    }
+
+    // When the modal is opened via the Add button (data-bs-toggle), reset to add mode.
+    document.querySelector('[data-bs-target="#addSowModal"]').addEventListener('click', resetModal);
+
+    function actionRowHtml(pk) {
+        return `
+            <button class="btn btn-sm btn-outline-secondary py-0 px-1 edit-sow me-1" data-pk="${pk}" title="Edit"><i class="bi bi-pencil"></i></button>
+            <button class="btn btn-sm btn-outline-danger py-0 px-1 delete-sow" data-pk="${pk}" title="Delete"><i class="bi bi-trash"></i></button>
+        `;
+    }
+
+    // Save (Add or Update depending on editingIdInput)
     document.getElementById('saveSowItem').addEventListener('click', function() {
-        const desc = document.getElementById('sowDescription').value.trim();
+        const desc = descInput.value.trim();
         if (!desc) { alert('Description is required.'); return; }
 
         const data = new FormData();
         data.append('description', desc);
-        data.append('quantity', document.getElementById('sowQty').value);
-        data.append('uom', document.getElementById('sowUom').value);
-        data.append('total_price', document.getElementById('sowPrice').value);
-        data.append('price_text', document.getElementById('sowPriceText').value);
+        data.append('quantity', qtyInput.value);
+        data.append('uom', uomInput.value);
+        data.append('total_price', priceInput.value);
+        data.append('price_text', priceTextInput.value);
 
-        fetch('{% url "costing:add_sow_item" sheet.pk %}', {
+        const editingId = editingIdInput.value;
+        const url = editingId
+            ? `/costing/sow-item/${editingId}/update/`
+            : '{% url "costing:add_sow_item" sheet.pk %}';
+
+        fetch(url, {
             method: 'POST',
             headers: {'X-CSRFToken': _csrfToken},
             body: data,
         })
         .then(r => r.json())
         .then(function(resp) {
-            if (resp.ok) {
-                // Remove empty row if present
+            if (!resp.ok) {
+                alert(resp.error || 'Failed to save item.');
+                return;
+            }
+            const item = resp.item;
+            if (editingId) {
+                // In-place update of the existing row
+                const tr = tbody.querySelector(`tr[data-sow-pk="${editingId}"]`);
+                if (tr) {
+                    tr.dataset.description = item.description;
+                    tr.dataset.quantity = item.quantity;
+                    tr.dataset.uom = item.uom;
+                    tr.dataset.totalPrice = item.total_price;
+                    tr.dataset.priceText = item.price_text;
+                    tr.querySelector('.sow-cell-desc').textContent = item.description;
+                    tr.querySelector('.sow-cell-qty').textContent = parseFloat(item.quantity).toFixed(0);
+                    tr.querySelector('.sow-cell-uom').textContent = item.uom;
+                    tr.querySelector('.sow-cell-price').textContent = item.display_price;
+                }
+            } else {
+                // Append new row
                 const emptyRow = tbody.querySelector('.sow-empty-row');
                 if (emptyRow) emptyRow.remove();
 
                 const tr = document.createElement('tr');
+                tr.dataset.sowPk = item.pk;
+                tr.dataset.description = item.description;
+                tr.dataset.quantity = item.quantity;
+                tr.dataset.uom = item.uom;
+                tr.dataset.totalPrice = item.total_price || '0';
+                tr.dataset.priceText = item.price_text || '';
                 tr.innerHTML = `
-                    <td>${resp.item.serial_number}</td>
-                    <td>${resp.item.description}</td>
-                    <td>${parseFloat(resp.item.quantity).toFixed(0)}</td>
-                    <td>${resp.item.uom}</td>
-                    <td class="text-end fw-bold">${resp.item.display_price}</td>
-                    <td><button class="btn btn-sm btn-outline-danger py-0 px-1 delete-sow" data-pk="${resp.item.pk}" title="Delete"><i class="bi bi-trash"></i></button></td>
+                    <td class="sow-cell-sn">${item.serial_number}</td>
+                    <td class="sow-cell-desc">${item.description}</td>
+                    <td class="sow-cell-qty">${parseFloat(item.quantity).toFixed(0)}</td>
+                    <td class="sow-cell-uom">${item.uom}</td>
+                    <td class="sow-cell-price text-end fw-bold">${item.display_price}</td>
+                    <td class="text-nowrap">${actionRowHtml(item.pk)}</td>
                 `;
                 tbody.appendChild(tr);
-
-                // Reset form and close modal
-                document.getElementById('sowDescription').value = '';
-                document.getElementById('sowQty').value = '1';
-                document.getElementById('sowUom').value = 'LOT';
-                document.getElementById('sowPrice').value = '0';
-                document.getElementById('sowPriceText').value = '';
-                bootstrap.Modal.getInstance(document.getElementById('addSowModal')).hide();
-            } else {
-                alert(resp.error || 'Failed to add item.');
             }
+            modal.hide();
+            resetModal();
         })
-        .catch(err => console.error('Add SOW failed:', err));
+        .catch(err => console.error('Save SOW failed:', err));
     });
 
-    // Delete SOW item (event delegation)
+    // Edit + Delete (event delegation on tbody)
     tbody.addEventListener('click', function(e) {
-        const btn = e.target.closest('.delete-sow');
-        if (!btn) return;
-        if (!confirm('Delete this scope of work item?')) return;
+        const editBtn = e.target.closest('.edit-sow');
+        if (editBtn) {
+            const tr = editBtn.closest('tr');
+            editingIdInput.value = editBtn.dataset.pk;
+            titleSpan.textContent = 'Edit Scope of Work Item';
+            saveBtnText.textContent = 'Save';
+            descInput.value = tr.dataset.description || '';
+            qtyInput.value = tr.dataset.quantity || '1';
+            uomInput.value = tr.dataset.uom || 'LOT';
+            priceInput.value = tr.dataset.totalPrice || '0';
+            priceTextInput.value = tr.dataset.priceText || '';
+            modal.show();
+            return;
+        }
 
-        fetch(`/costing/sow-item/${btn.dataset.pk}/delete/`, {
-            method: 'POST',
-            headers: {'X-CSRFToken': _csrfToken},
-        })
-        .then(r => r.json())
-        .then(function(resp) {
-            if (resp.ok) {
-                btn.closest('tr').remove();
-                // Show empty message if no rows left
-                if (!tbody.querySelectorAll('tr').length) {
-                    tbody.innerHTML = '<tr class="sow-empty-row"><td colspan="6" class="text-center text-muted py-3">No scope of work items.</td></tr>';
+        const delBtn = e.target.closest('.delete-sow');
+        if (delBtn) {
+            if (!confirm('Delete this scope of work item?')) return;
+            fetch(`/costing/sow-item/${delBtn.dataset.pk}/delete/`, {
+                method: 'POST',
+                headers: {'X-CSRFToken': _csrfToken},
+            })
+            .then(r => r.json())
+            .then(function(resp) {
+                if (resp.ok) {
+                    delBtn.closest('tr').remove();
+                    if (!tbody.querySelectorAll('tr').length) {
+                        tbody.innerHTML = '<tr class="sow-empty-row"><td colspan="6" class="text-center text-muted py-3">No scope of work items.</td></tr>';
+                    }
                 }
-            }
-        })
-        .catch(err => console.error('Delete SOW failed:', err));
+            })
+            .catch(err => console.error('Delete SOW failed:', err));
+        }
     });
 })();
 </script>

@@ -3,6 +3,15 @@
 
 {% block title %}Edit Content - {{ object.title }} - Leap Networks ERP{% endblock %}
 {% block page_title %}Edit Content: {{ object.title }}{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'proposals:list' %}">Technical Proposals</a>
+    <span class="crumb-sep">›</span>
+    <a href="{% url 'proposals:detail' object.pk %}">{{ object.title|truncatechars:40 }}</a>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">Edit Content</span>
+</nav>
+{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -20,12 +29,28 @@
         </a>
         <code class="ms-2">{{ object.proposal_reference }}</code>
     </div>
-    <div>
+    <div class="d-flex align-items-center gap-2">
+        <span id="autosaveStatus" class="autosave-pill autosave-idle">
+            <i class="bi bi-cloud-check"></i>
+            <span class="autosave-text">All changes saved</span>
+        </span>
         <a href="{% url 'proposals:export_docx' object.pk %}" class="btn btn-success btn-sm">
             <i class="bi bi-file-earmark-word me-1"></i> Export DOCX
         </a>
     </div>
 </div>
+
+<style>
+    .autosave-pill {
+        display: inline-flex; align-items: center; gap: 0.35rem;
+        padding: 0.3rem 0.7rem; border-radius: 999px;
+        font-size: 0.78rem; font-weight: 500; transition: all 0.2s;
+    }
+    .autosave-idle   { background: #e8f5e9; color: #2e7d32; }
+    .autosave-dirty  { background: #fff3e0; color: #e65100; }
+    .autosave-saving { background: #e3f2fd; color: #0d47a1; }
+    .autosave-error  { background: #ffebee; color: #c62828; }
+</style>
 
 <form method="post" id="contentForm">
     {% csrf_token %}
@@ -234,6 +259,10 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                 }
             });
+            // Autosave: mark this specific editor dirty on any change
+            editor.on('input keyup SetContent paste', function() {
+                if (window.__autosave) window.__autosave.markDirty(editor.id);
+            });
         },
         // Table defaults
         table_default_styles: {
@@ -302,6 +331,96 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     });
+
+    // ─── Autosave controller ────────────────────────────────
+    // Tracks editor IDs that need saving in a Set. Every 5s, if
+    // anything is in the set, POSTs each dirty editor's content to
+    // save_section. Uses our own tracking instead of TinyMCE's
+    // editor.isDirty() — that flag doesn't reliably flip on keyup.
+    window.__autosave = (function () {
+        var statusEl = document.getElementById('autosaveStatus');
+        var textEl   = statusEl ? statusEl.querySelector('.autosave-text') : null;
+        var iconEl   = statusEl ? statusEl.querySelector('i') : null;
+        var dirtyIds = new Set();       // editor ids with unsaved changes
+        var lastSaved = null;
+        var saveInFlight = false;
+
+        function setState(state, text, icon) {
+            if (!statusEl) return;
+            statusEl.className = 'autosave-pill autosave-' + state;
+            if (textEl) textEl.textContent = text;
+            if (iconEl) iconEl.className = 'bi ' + icon;
+        }
+        function formatAgo(ts) {
+            if (!ts) return '';
+            var s = Math.round((Date.now() - ts) / 1000);
+            if (s < 60) return 'just now';
+            if (s < 3600) return Math.floor(s / 60) + ' min ago';
+            return Math.floor(s / 3600) + ' h ago';
+        }
+        function refreshIdleLabel() {
+            if (dirtyIds.size === 0 && !saveInFlight && lastSaved) {
+                setState('idle', 'Saved ' + formatAgo(lastSaved), 'bi-cloud-check');
+            }
+        }
+        setInterval(refreshIdleLabel, 20000);
+
+        function saveOne(editorId) {
+            var editor = tinymce.get(editorId);
+            if (!editor) return Promise.reject(new Error('editor missing'));
+            var section = editorId.replace(/^id_/, '');
+            var data = new FormData();
+            data.append('field', section);
+            data.append('value', editor.getContent());
+            return fetch(saveSectionUrl, {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrfToken},
+                body: data,
+            }).then(function (r) { return r.json(); }).then(function (resp) {
+                if (!resp || !resp.ok) throw new Error('save rejected');
+            });
+        }
+
+        function saveAllDirty() {
+            if (saveInFlight || dirtyIds.size === 0) return;
+            saveInFlight = true;
+            var toSave = Array.from(dirtyIds);
+            dirtyIds.clear();   // typing during save will re-add
+            setState('saving', 'Saving…', 'bi-cloud-upload');
+            Promise.all(toSave.map(saveOne)).then(function () {
+                saveInFlight = false;
+                lastSaved = Date.now();
+                if (dirtyIds.size === 0) {
+                    setState('idle', 'Saved just now', 'bi-cloud-check');
+                } else {
+                    setState('dirty', 'Unsaved changes', 'bi-cloud-slash');
+                }
+            }).catch(function () {
+                saveInFlight = false;
+                // Re-queue all for retry
+                toSave.forEach(function (id) { dirtyIds.add(id); });
+                setState('error', 'Save failed — will retry', 'bi-exclamation-triangle');
+            });
+        }
+
+        setInterval(saveAllDirty, 5000);
+
+        // Warn before leaving with unsaved work
+        window.addEventListener('beforeunload', function (e) {
+            if (dirtyIds.size > 0 || saveInFlight) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
+        });
+
+        return {
+            markDirty: function (editorId) {
+                if (editorId) dirtyIds.add(editorId);
+                setState('dirty', 'Unsaved changes', 'bi-cloud-slash');
+            },
+            saveAllNow: saveAllDirty,
+        };
+    })();
 
     // ─── Boilerplate loading ─────────────────────────────────
     document.querySelectorAll('.btn-load-bp').forEach(function(btn) {
