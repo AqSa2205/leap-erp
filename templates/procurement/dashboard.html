@@ -116,13 +116,13 @@
                         <div class="progress progress-thin mt-3">
                             {% if po_total > 0 %}
                             <div class="progress-bar bg-success" style="width: {% widthratio po_by_status.completed po_total 100 %}%"></div>
-                            <div class="progress-bar bg-primary" style="width: {% widthratio po_by_status.issued po_total 100 %}%"></div>
+                            <div class="progress-bar bg-dark" style="width: {% widthratio po_by_status.issued po_total 100 %}%"></div>
                             <div class="progress-bar bg-warning" style="width: {% widthratio po_by_status.draft po_total 100 %}%"></div>
                             {% endif %}
                         </div>
                         <div class="d-flex justify-content-between mt-2" style="font-size: 0.7rem;">
                             <span class="text-success">{{ po_by_status.completed }} done</span>
-                            <span class="text-primary">{{ po_by_status.issued }} issued</span>
+                            <span class="text-dark">{{ po_by_status.issued }} issued</span>
                             <span class="text-warning">{{ po_by_status.draft }} draft</span>
                         </div>
                     </div>
@@ -135,7 +135,7 @@
                 <div class="card kpi-card h-100">
                     <div class="card-body">
                         <div class="d-flex align-items-center mb-3">
-                            <div class="kpi-icon bg-info bg-opacity-10 text-info">
+                            <div class="kpi-icon bg-secondary bg-opacity-10 text-secondary">
                                 <i class="bi bi-clipboard-data"></i>
                             </div>
                         </div>
@@ -247,13 +247,13 @@
                                 {% if po.status == 'draft' %}
                                 <span class="badge bg-warning text-dark">Draft</span>
                                 {% elif po.status == 'issued' %}
-                                <span class="badge bg-primary">Issued</span>
+                                <span class="badge bg-dark">Issued</span>
                                 {% elif po.status == 'completed' %}
                                 <span class="badge bg-success">Completed</span>
                                 {% elif po.status == 'cancelled' %}
                                 <span class="badge bg-danger">Cancelled</span>
                                 {% else %}
-                                <span class="badge bg-info">{{ po.get_status_display }}</span>
+                                <span class="badge bg-secondary">{{ po.get_status_display }}</span>
                                 {% endif %}
                                 <div class="text-muted" style="font-size: 0.75rem;">{{ po.po_date|date:"d M Y" }}</div>
                             </div>

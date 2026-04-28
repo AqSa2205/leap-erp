@@ -111,7 +111,7 @@
             <div class="row align-items-center">
                 <div class="col-md-3">
                     <div class="d-flex align-items-center gap-2">
-                        {% if item.item_type == 'shirt' %}<span class="badge bg-primary" style="border-radius:6px;">Shirt</span>
+                        {% if item.item_type == 'shirt' %}<span class="badge bg-dark" style="border-radius:6px;">Shirt</span>
                         {% elif item.item_type == 'pants' %}<span class="badge bg-warning text-dark" style="border-radius:6px;">Pants</span>
                         {% elif item.item_type == 'shoes' %}<span class="badge bg-success" style="border-radius:6px;">Shoes</span>
                         {% elif item.item_type == 'helmet' %}<span class="badge bg-danger" style="border-radius:6px;">Helmet</span>
@@ -133,7 +133,7 @@
                         </div>
                         <div class="text-center">
                             <div style="font-size:0.65rem; text-transform:uppercase; color:#999; font-weight:600;">Issued</div>
-                            <div class="fw-bold text-info">{{ item.total_issued }}</div>
+                            <div class="fw-bold text-secondary">{{ item.total_issued }}</div>
                         </div>
                         <div class="text-center">
                             <div style="font-size:0.65rem; text-transform:uppercase; color:#999; font-weight:600;">Lost</div>

@@ -15,7 +15,7 @@
             <button type="button" class="btn btn-outline-success me-2" data-bs-toggle="modal" data-bs-target="#importModal">
                 <i class="bi bi-upload"></i> Import Excel
             </button>
-            <a href="{% url 'procurement:po_create' %}" class="btn btn-primary">
+            <a href="{% url 'procurement:po_create' %}" class="btn btn-danger">
                 <i class="bi bi-plus-lg"></i> New PO
             </a>
         </div>
@@ -32,7 +32,7 @@
                     {{ filter_form.status }}
                 </div>
                 <div class="col-md-3">
-                    <button type="submit" class="btn btn-primary w-100">Filter</button>
+                    <button type="submit" class="btn btn-danger w-100">Filter</button>
                 </div>
             </form>
             {% if request.GET.search or request.GET.status %}
@@ -48,7 +48,7 @@
         <div class="card-body p-0">
             <div class="table-responsive">
                 <table class="table table-hover mb-0">
-                    <thead class="table-dark">
+                    <thead class="leap-thead">
                         <tr>
                             <th>PO Number</th>
                             <th>Vendor</th>
@@ -76,9 +76,9 @@
                                 {% if po.status == 'draft' %}
                                 <span class="badge bg-warning text-dark">Draft</span>
                                 {% elif po.status == 'issued' %}
-                                <span class="badge bg-primary">Issued</span>
+                                <span class="badge bg-dark">Issued</span>
                                 {% elif po.status == 'acknowledged' %}
-                                <span class="badge bg-info">Acknowledged</span>
+                                <span class="badge bg-secondary">Acknowledged</span>
                                 {% elif po.status == 'completed' %}
                                 <span class="badge bg-success">Completed</span>
                                 {% elif po.status == 'cancelled' %}
@@ -88,7 +88,7 @@
                             <td>{{ po.created_by.get_full_name|default:po.created_by.username }}</td>
                             <td>
                                 <div class="btn-group btn-group-sm">
-                                    <a href="{% url 'procurement:po_detail' po.pk %}" class="btn btn-outline-primary" title="View">
+                                    <a href="{% url 'procurement:po_detail' po.pk %}" class="btn btn-outline-danger" title="View">
                                         <i class="bi bi-eye"></i>
                                     </a>
                                     <a href="{% url 'procurement:po_update' po.pk %}" class="btn btn-outline-secondary" title="Edit">
@@ -97,7 +97,7 @@
                                     <a href="{% url 'procurement:po_export' po.pk %}" class="btn btn-outline-success" title="Export Excel">
                                         <i class="bi bi-file-earmark-excel"></i>
                                     </a>
-                                    <a href="{% url 'procurement:po_export_pdf' po.pk %}" class="btn btn-outline-danger" title="Export PDF">
+                                    <a href="{% url 'procurement:po_export_pdf' po.pk %}" target="_blank" class="btn btn-outline-danger" title="Preview PDF">
                                         <i class="bi bi-file-earmark-pdf"></i>
                                     </a>
                                 </div>
@@ -108,7 +108,7 @@
                             <td colspan="8" class="text-center py-5">
                                 <i class="bi bi-box-seam display-4 text-muted"></i>
                                 <p class="text-muted mt-3">No purchase orders found.</p>
-                                <a href="{% url 'procurement:po_create' %}" class="btn btn-primary">
+                                <a href="{% url 'procurement:po_create' %}" class="btn btn-danger">
                                     <i class="bi bi-plus-lg"></i> Create First PO
                                 </a>
                             </td>

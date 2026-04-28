@@ -83,6 +83,9 @@ class PurchaseOrder(models.Model):
 
     # Terms & Conditions
     terms_and_conditions = models.TextField(blank=True, verbose_name="Terms & Conditions")
+    selected_terms = models.ManyToManyField(
+        'costing.TermsTemplate', blank=True, related_name='purchase_orders'
+    )
 
     # Metadata
     created_by = models.ForeignKey(

@@ -721,6 +721,19 @@
         [data-theme="dark"] .brand-logo-full {
             filter: brightness(0.9);
         }
+        /* Subtle light-red table header (Leap brand) */
+        .leap-thead th {
+            background-color: #F5D7DC !important;
+            color: #495057 !important;
+            border-bottom: 1px solid #e3b3bb !important;
+            font-weight: 600;
+            font-size: 0.82rem;
+        }
+        [data-theme="dark"] .leap-thead th {
+            background-color: #3a2429 !important;
+            color: #d0d0d0 !important;
+            border-bottom: 1px solid #5a2e36 !important;
+        }
     </style>
     {% block extra_css %}{% endblock %}
 </head>
