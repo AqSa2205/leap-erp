@@ -109,7 +109,7 @@ POItemFormSet = inlineformset_factory(
     PurchaseOrder,
     PurchaseOrderItem,
     form=PurchaseOrderItemForm,
-    extra=1,
+    extra=0,
     can_delete=True,
 )
 

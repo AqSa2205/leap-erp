@@ -230,6 +230,34 @@
                                     {% endfor %}
                                 </tbody>
                             </table>
+
+                            {# Hidden template row used by Add Item — clones use index __prefix__ #}
+                            <template id="item-row-template">
+                                <tr class="item-row">
+                                    <td>
+                                        {{ item_formset.empty_form.serial_number }}
+                                        {{ item_formset.empty_form.order.as_hidden }}
+                                        {{ item_formset.empty_form.id }}
+                                    </td>
+                                    <td>{{ item_formset.empty_form.system }}</td>
+                                    <td>{{ item_formset.empty_form.make_model }}</td>
+                                    <td>{{ item_formset.empty_form.description }}</td>
+                                    <td>{{ item_formset.empty_form.quantity }}</td>
+                                    <td>{{ item_formset.empty_form.uom }}</td>
+                                    <td>{{ item_formset.empty_form.rate_per_unit }}</td>
+                                    <td>{{ item_formset.empty_form.po_value_usd }}</td>
+                                    <td>{{ item_formset.empty_form.advance_payment_sar }}</td>
+                                    <td>{{ item_formset.empty_form.delivery_status }}</td>
+                                    <td>{{ item_formset.empty_form.scm }}</td>
+                                    <td>{{ item_formset.empty_form.remarks }}</td>
+                                    <td class="text-center">
+                                        <span class="d-none">{{ item_formset.empty_form.DELETE }}</span>
+                                        <button type="button" class="btn btn-sm btn-outline-danger remove-row" title="Remove">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            </template>
                         </div>
                     </div>
                 </div>
@@ -300,38 +328,22 @@ document.addEventListener('DOMContentLoaded', function() {
     const addBtn = document.getElementById('add-item');
     const totalForms = document.getElementById('id_items-TOTAL_FORMS');
 
+    const tmpl = document.getElementById('item-row-template');
+
     addBtn.addEventListener('click', function() {
-        const formIdx = parseInt(totalForms.value);
-        const firstRow = tbody.querySelector('.item-row');
-        if (!firstRow) return;
+        const formIdx = parseInt(totalForms.value, 10);
+        // Always clone from the empty-form template so we never inherit
+        // values from an existing row.
+        const html = tmpl.innerHTML.replace(/__prefix__/g, formIdx);
+        const tempTr = document.createElement('tbody');
+        tempTr.innerHTML = html.trim();
+        const newRow = tempTr.querySelector('tr');
 
-        const newRow = firstRow.cloneNode(true);
-        // Update all input/textarea/select names and ids
-        newRow.querySelectorAll('input, textarea, select').forEach(function(el) {
-            if (el.name) {
-                el.name = el.name.replace(/items-\d+/, 'items-' + formIdx);
-                el.id = el.id.replace(/items-\d+/, 'items-' + formIdx);
-                if (el.type === 'checkbox') {
-                    el.checked = false;
-                } else if (el.tagName === 'SELECT') {
-                    el.selectedIndex = 0;
-                } else {
-                    el.value = '';
-                }
-            }
-        });
-
-        // Set serial number
+        // Friendly defaults for the visible inputs
         const snInput = newRow.querySelector('[name$="-serial_number"]');
         if (snInput) snInput.value = formIdx + 1;
-
-        // Set order
         const orderInput = newRow.querySelector('[name$="-order"]');
         if (orderInput) orderInput.value = formIdx;
-
-        // Replace delete column with remove button (new rows get a plain remove)
-        const lastTd = newRow.querySelector('td:last-child');
-        lastTd.innerHTML = '<button type="button" class="btn btn-sm btn-outline-danger remove-row" title="Remove"><i class="bi bi-trash"></i></button>';
 
         tbody.appendChild(newRow);
         totalForms.value = formIdx + 1;
