@@ -31,7 +31,7 @@ def _safe_filename(name, suffix='', extension=''):
         extension = f'.{extension}'
     return f'{safe}{extension}'
 
-from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, TermsTemplate, ScopeOfWorkItem
+from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, TermsTemplate, ScopeOfWorkItem, ClientRemarkTemplate, ClientRemarkPair
 from notifications.services import notify_users
 
 
@@ -51,6 +51,7 @@ def _conversion_rate(output_currency, rates_dict):
 from .forms import (
     CostingSheetForm, CostingSectionForm, CostingLineItemForm,
     ExchangeRateForm, CostingFilterForm, TermsTemplateForm,
+    ClientRemarkTemplateForm, ClientRemarkPairFormSet,
 )
 
 
@@ -388,6 +389,17 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
             ]
         context['terms_by_category'] = terms_by_category
 
+        # Client remark Q&A bundles for PDF selection
+        selected_remark_ids = set(sheet.selected_client_remarks.values_list('pk', flat=True))
+        context['client_remark_templates'] = [
+            {
+                'template': t,
+                'selected': t.pk in selected_remark_ids,
+                'pair_count': t.pairs.count(),
+            }
+            for t in ClientRemarkTemplate.objects.all().prefetch_related('pairs')
+        ]
+
         # Scope of Work items (A.2 section)
         context['sow_items'] = sheet.scope_of_work_items.all()
 
@@ -714,6 +726,97 @@ def ajax_toggle_term(request, pk):
             selected = False
         else:
             locked_sheet.selected_terms.add(term)
+            selected = True
+    return JsonResponse({'ok': True, 'selected': selected})
+
+
+class ClientRemarkTemplateListView(LoginRequiredMixin, ListView):
+    model = ClientRemarkTemplate
+    template_name = 'costing/client_remark_templates.html'
+    context_object_name = 'templates'
+
+    def get_queryset(self):
+        return ClientRemarkTemplate.objects.all().prefetch_related('pairs')
+
+
+@login_required
+def client_remark_template_edit(request, pk=None):
+    """Create or edit a ClientRemarkTemplate (bundle of Q&A pairs).
+    Single function-based view so we can save the parent + inline formset
+    in one transaction."""
+    if pk is None:
+        template = ClientRemarkTemplate(created_by=request.user)
+        is_new = True
+    else:
+        template = get_object_or_404(ClientRemarkTemplate, pk=pk)
+        is_new = False
+
+    if request.method == 'POST':
+        form = ClientRemarkTemplateForm(request.POST, instance=template)
+        # Bind the formset against an in-memory parent for new templates;
+        # we save the parent first below, then re-bind if necessary.
+        if form.is_valid():
+            with transaction.atomic():
+                template = form.save(commit=False)
+                if is_new and not template.created_by:
+                    template.created_by = request.user
+                template.save()
+                formset = ClientRemarkPairFormSet(request.POST, instance=template)
+                if formset.is_valid():
+                    formset.save()
+                    messages.success(
+                        request,
+                        'Client remarks bundle created.' if is_new else 'Client remarks bundle updated.',
+                    )
+                    return redirect('costing:client_remark_templates')
+                # Rollback parent save if the formset rejects.
+                transaction.set_rollback(True)
+        else:
+            formset = ClientRemarkPairFormSet(request.POST, instance=template)
+        for field, errs in form.errors.items():
+            messages.error(request, f'{field}: {errs[0]}')
+    else:
+        form = ClientRemarkTemplateForm(instance=template)
+        formset = ClientRemarkPairFormSet(instance=template)
+
+    return render(request, 'costing/client_remark_template_form.html', {
+        'form': form,
+        'formset': formset,
+        'template_obj': template if not is_new else None,
+        'is_new': is_new,
+    })
+
+
+class ClientRemarkTemplateDeleteView(LoginRequiredMixin, DeleteView):
+    model = ClientRemarkTemplate
+    template_name = 'costing/costing_confirm_delete.html'
+    success_url = reverse_lazy('costing:client_remark_templates')
+
+    def form_valid(self, form):
+        messages.success(self.request, 'Client remarks bundle deleted.')
+        return super().form_valid(form)
+
+
+@login_required
+@require_POST
+def ajax_toggle_client_remark(request, pk):
+    """Toggle a ClientRemarkTemplate on/off for a costing sheet."""
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    remark_id = request.POST.get('remark_id')
+    if not remark_id:
+        return JsonResponse({'error': 'remark_id required'}, status=400)
+    remark = get_object_or_404(ClientRemarkTemplate, pk=remark_id)
+
+    with transaction.atomic():
+        locked_sheet = CostingSheet.objects.select_for_update().get(pk=sheet.pk)
+        if locked_sheet.selected_client_remarks.filter(pk=remark.pk).exists():
+            locked_sheet.selected_client_remarks.remove(remark)
+            selected = False
+        else:
+            locked_sheet.selected_client_remarks.add(remark)
             selected = True
     return JsonResponse({'ok': True, 'selected': selected})
 
@@ -2533,6 +2636,64 @@ def costing_export_pdf(request, pk):
         if conc_legacy and not conc_templates:
             for line in [l.strip() for l in conc_legacy.splitlines() if l.strip()]:
                 elements.append(Paragraph(line, body_style))
+        elements.append(Spacer(1, 3 * mm))
+
+    # ─── CLIENT REMARKS & LEAP'S ANSWERS ───
+    # Two-column table; iterates every pair across every selected bundle.
+    # Each cell uses its own color (pair.remark_color / pair.answer_color).
+    from xml.sax.saxutils import escape as _xml_escape
+    client_pairs = list(
+        ClientRemarkPair.objects.filter(template__in=sheet.selected_client_remarks.all())
+        .select_related('template')
+        .order_by('template__name', 'order', 'pk')
+    )
+    if client_pairs:
+        elements.append(Paragraph("Client Remarks &amp; Leap's Answers", section_hdr_style))
+
+        cr_header_style = ParagraphStyle(
+            'CRHeader', fontName='Helvetica-Bold', fontSize=9, leading=11,
+            alignment=TA_CENTER, textColor=colors.HexColor('#333333'),
+        )
+        cr_rows = [[
+            Paragraph('Client Remark', cr_header_style),
+            Paragraph("Leap's Answer", cr_header_style),
+        ]]
+        cr_styles = [
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F5D7DC')),
+            ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#C41E3A')),
+            ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#CCCCCC')),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 5),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]
+
+        def _hex(value, fallback=colors.black):
+            try:
+                return colors.HexColor(value or '#000000')
+            except Exception:
+                return fallback
+
+        for pair in client_pairs:
+            remark_style = ParagraphStyle(
+                f'CRRemark-{pair.pk}', fontName='Helvetica', fontSize=9,
+                leading=12, textColor=_hex(pair.remark_color),
+            )
+            answer_style = ParagraphStyle(
+                f'CRAnswer-{pair.pk}', fontName='Helvetica', fontSize=9,
+                leading=12, textColor=_hex(pair.answer_color),
+            )
+            remark_html = _xml_escape(pair.remark or '').replace('\n', '<br/>')
+            answer_html = _xml_escape(pair.answer or '').replace('\n', '<br/>')
+            cr_rows.append([
+                Paragraph(remark_html, remark_style),
+                Paragraph(answer_html, answer_style),
+            ])
+
+        cr_table = Table(cr_rows, colWidths=[PAGE_WIDTH * 0.5, PAGE_WIDTH * 0.5])
+        cr_table.setStyle(TableStyle(cr_styles))
+        elements.append(cr_table)
         elements.append(Spacer(1, 3 * mm))
 
     # ─── PAGE 2+: DETAILED BOM WITH ALL LINE ITEMS ───

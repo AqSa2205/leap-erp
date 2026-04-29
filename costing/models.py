@@ -28,6 +28,46 @@ class TermsTemplate(models.Model):
         return f"{self.get_category_display()} - {self.name}"
 
 
+class ClientRemarkTemplate(models.Model):
+    """Named bundle of Q&A pairs for the 'Client Remarks & Leap's Answers'
+    PDF section. Each bundle holds many ClientRemarkPair rows that the
+    user can edit as a table (paste-from-Excel friendly). Sheets attach
+    one or more bundles via CostingSheet.selected_client_remarks (M2M)."""
+    name = models.CharField(max_length=255)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='client_remark_templates',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
+class ClientRemarkPair(models.Model):
+    """One row in a ClientRemarkTemplate: a client remark + Leap's answer,
+    with independently-colored text in each cell."""
+    template = models.ForeignKey(
+        ClientRemarkTemplate, on_delete=models.CASCADE, related_name='pairs',
+    )
+    remark = models.TextField()
+    answer = models.TextField(blank=True)
+    remark_color = models.CharField(max_length=7, default='#000000')
+    answer_color = models.CharField(max_length=7, default='#000000')
+    order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order', 'pk']
+
+    def __str__(self):
+        return f"{self.template.name} #{self.order}"
+
+
 class ExchangeRate(models.Model):
     currency_code = models.CharField(max_length=10, unique=True)
     currency_name = models.CharField(max_length=50)
@@ -91,6 +131,9 @@ class CostingSheet(models.Model):
     payment_terms = models.TextField(blank=True)
     conclusion = models.TextField(blank=True)
     selected_terms = models.ManyToManyField('TermsTemplate', blank=True, related_name='costing_sheets')
+    selected_client_remarks = models.ManyToManyField(
+        'ClientRemarkTemplate', blank=True, related_name='costing_sheets',
+    )
 
     # Scope of Work (A.2 section in the commercial offer)
     scope_of_work_total = models.DecimalField(
