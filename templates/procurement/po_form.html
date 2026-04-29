@@ -367,6 +367,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Saved (existing) row — tick the hidden DELETE checkbox so the
         // formset deletes it on save; mark the row visually + offer Undo.
+        // CRITICAL: do NOT use innerHTML on the cell — that destroys the
+        // DELETE checkbox sibling and the row never actually gets deleted.
         const delBtn = e.target.closest('.delete-saved-row');
         if (delBtn) {
             const row = delBtn.closest('tr');
@@ -376,8 +378,11 @@ document.addEventListener('DOMContentLoaded', function() {
             row.classList.add('row-marked-deleted');
             row.style.opacity = '0.45';
             row.style.textDecoration = 'line-through';
-            const actionTd = row.cells[row.cells.length - 1];
-            actionTd.innerHTML = '<button type="button" class="btn btn-sm btn-outline-secondary undo-delete-row" title="Undo delete"><i class="bi bi-arrow-counterclockwise"></i></button>';
+            // Swap classes + icon on the existing button (keep the checkbox alive)
+            delBtn.classList.remove('btn-outline-danger', 'delete-saved-row');
+            delBtn.classList.add('btn-outline-secondary', 'undo-delete-row');
+            delBtn.title = 'Undo delete';
+            delBtn.innerHTML = '<i class="bi bi-arrow-counterclockwise"></i>';
             return;
         }
 
@@ -390,8 +395,10 @@ document.addEventListener('DOMContentLoaded', function() {
             row.classList.remove('row-marked-deleted');
             row.style.opacity = '';
             row.style.textDecoration = '';
-            const actionTd = row.cells[row.cells.length - 1];
-            actionTd.innerHTML = '<button type="button" class="btn btn-sm btn-outline-danger delete-saved-row" title="Mark for delete"><i class="bi bi-trash"></i></button>';
+            undoBtn.classList.remove('btn-outline-secondary', 'undo-delete-row');
+            undoBtn.classList.add('btn-outline-danger', 'delete-saved-row');
+            undoBtn.title = 'Mark for delete';
+            undoBtn.innerHTML = '<i class="bi bi-trash"></i>';
         }
     });
 });
