@@ -895,8 +895,13 @@
                 </a>
             </li>
             <li class="nav-item">
-                <a class="nav-link {% if 'summary' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'procurement:summary_list' %}" data-title="Summary">
-                    <i class="bi bi-clipboard-data"></i> <span>Summary</span>
+                <a class="nav-link {% if request.resolver_match.url_name == 'summary_internal' %}active{% endif %}" href="{% url 'procurement:summary_internal' %}" data-title="Summary (Internal)">
+                    <i class="bi bi-clipboard-data"></i> <span>Summary (Internal)</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'summary_external' %}active{% endif %}" href="{% url 'procurement:summary_external' %}" data-title="Summary (External)">
+                    <i class="bi bi-clipboard-check"></i> <span>Summary (External)</span>
                 </a>
             </li>
             <li class="nav-item">

@@ -131,7 +131,7 @@
         </div>
 
         <div class="col-lg-3 col-md-6">
-            <a href="{% url 'procurement:summary_list' %}" class="text-decoration-none">
+            <a href="{% url 'procurement:summary_internal' %}" class="text-decoration-none">
                 <div class="card kpi-card h-100">
                     <div class="card-body">
                         <div class="d-flex align-items-center mb-3">
@@ -140,7 +140,7 @@
                             </div>
                         </div>
                         <div class="kpi-value text-dark">{{ summary_total }}</div>
-                        <div class="kpi-label mt-1">Procurement Summaries</div>
+                        <div class="kpi-label mt-1">Internal Summary (POs)</div>
                     </div>
                 </div>
             </a>
@@ -196,9 +196,9 @@
             </a>
         </div>
         <div class="col-lg-2 col-md-4 col-6">
-            <a href="{% url 'procurement:summary_create' %}" class="quick-action">
-                <i class="bi bi-clipboard-plus"></i>
-                <small class="fw-semibold">New Summary</small>
+            <a href="{% url 'procurement:summary_internal' %}" class="quick-action">
+                <i class="bi bi-clipboard-data"></i>
+                <small class="fw-semibold">Open Summary</small>
             </a>
         </div>
         <div class="col-lg-2 col-md-4 col-6">

@@ -203,6 +203,7 @@
                                     <thead>
                                         <tr>
                                             <th width="50">#</th>
+                                            <th width="100">System</th>
                                             <th>Description</th>
                                             <th>Make/Model</th>
                                             <th class="text-end">Qty</th>
@@ -215,6 +216,7 @@
                                         {% for item in items %}
                                         <tr>
                                             <td class="text-muted">{{ item.serial_number }}</td>
+                                            <td>{% if item.system %}<span class="badge bg-secondary">{{ item.system }}</span>{% else %}<span class="text-muted small">—</span>{% endif %}</td>
                                             <td>
                                                 <strong>{{ item.description }}</strong>
                                                 {% if item.remarks %}<br><small class="text-muted">{{ item.remarks }}</small>{% endif %}
@@ -226,7 +228,7 @@
                                             <td class="text-end fw-bold">{{ item.total_value|floatformat:2|intcomma }}</td>
                                         </tr>
                                         {% empty %}
-                                        <tr><td colspan="7" class="text-center py-4 text-muted">No line items.</td></tr>
+                                        <tr><td colspan="8" class="text-center py-4 text-muted">No line items.</td></tr>
                                         {% endfor %}
                                     </tbody>
                                 </table>

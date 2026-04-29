@@ -18,15 +18,13 @@ urlpatterns = [
     path('po/<int:pk>/export-pdf/', views.po_export_pdf, name='po_export_pdf'),
     path('po/<int:pk>/toggle-term/', views.ajax_po_toggle_term, name='po_toggle_term'),
 
-    # Procurement Summary
-    path('summary/', views.SummaryListView.as_view(), name='summary_list'),
-    path('summary/create/', views.SummaryCreateView.as_view(), name='summary_create'),
-    path('summary/import/', views.summary_import_excel, name='summary_import'),
-    path('summary/<int:pk>/', views.SummaryDetailView.as_view(), name='summary_detail'),
-    path('summary/<int:pk>/edit/', views.SummaryUpdateView.as_view(), name='summary_update'),
-    path('summary/<int:pk>/delete/', views.SummaryDeleteView.as_view(), name='summary_delete'),
-    path('summary/<int:pk>/export/', views.summary_export_excel, name='summary_export'),
-    path('summary/<int:pk>/export-pdf/', views.summary_export_pdf, name='summary_export_pdf'),
+    # Procurement Summary (Internal / External)
+    path('summary/internal/', views.internal_summary, name='summary_internal'),
+    path('summary/internal/export/', views.internal_summary_export, name='summary_internal_export'),
+    path('summary-entry/<int:pk>/update-field/', views.ajax_summary_entry_update, name='summary_entry_update'),
+    path('summary/external/', views.external_summary, name='summary_external'),
+    path('summary/external/export/', views.external_summary_export, name='summary_external_export'),
+    path('po-item/<int:pk>/update-field/', views.ajax_po_item_field_update, name='po_item_update_field'),
 
     # Delivery Notes
     path('dn/', views.DNListView.as_view(), name='dn_list'),

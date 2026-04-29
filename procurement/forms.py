@@ -2,7 +2,6 @@ from django import forms
 from django.forms import inlineformset_factory
 from .models import (
     PurchaseOrder, PurchaseOrderItem,
-    ProcurementSummary, ProcurementSummaryItem,
     DeliveryNote, DeliveryNoteItem,
     InventoryReport, InventoryItem,
     FRCReport, FRCEntry, FRCInventory,
@@ -19,12 +18,14 @@ class PurchaseOrderForm(forms.ModelForm):
             'po_issued_by', 'issuer_email',
             'project', 'project_name', 'end_user', 'mr_item_number',
             'delivery_incoterms', 'delivery_location',
+            'lead_time', 'payment_terms_text', 'warranty',
             'discount_rate', 'vat_rate',
             'terms_and_conditions',
         ]
         widgets = {
             'po_date': forms.DateInput(attrs={'type': 'date'}),
             'terms_and_conditions': forms.Textarea(attrs={'rows': 8}),
+            'payment_terms_text': forms.Textarea(attrs={'rows': 3, 'placeholder': 'e.g. 30% Advance\n70% upon Delivery'}),
             'discount_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '100', 'placeholder': 'e.g. 5 for 5%'}),
             'vat_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '100', 'placeholder': 'e.g. 15 for 15%'}),
         }
@@ -60,12 +61,23 @@ class PurchaseOrderItemForm(forms.ModelForm):
     class Meta:
         model = PurchaseOrderItem
         fields = [
-            'serial_number', 'make_model', 'description',
-            'quantity', 'uom', 'rate_per_unit', 'remarks', 'order',
+            'serial_number', 'system', 'make_model', 'description',
+            'quantity', 'uom', 'rate_per_unit', 'remarks',
+            'po_value_usd', 'advance_payment_sar', 'delivery_status', 'scm',
+            'order',
         ]
         widgets = {
             'description': forms.Textarea(attrs={'rows': 2}),
             'remarks': forms.Textarea(attrs={'rows': 1}),
+            'delivery_status': forms.Textarea(attrs={'rows': 1, 'placeholder': 'Delivered HO / At LNA-HO ...'}),
+            'system': forms.TextInput(attrs={
+                'list': 'po-system-suggestions',
+                'placeholder': 'System',
+                'autocomplete': 'off',
+            }),
+            'po_value_usd': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'placeholder': 'USD/EUR'}),
+            'advance_payment_sar': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'placeholder': 'Advance SAR'}),
+            'scm': forms.TextInput(attrs={'placeholder': 'ST / ZH', 'maxlength': '10'}),
         }
 
     def __init__(self, *args, **kwargs):
@@ -99,67 +111,6 @@ class POFilterForm(forms.Form):
         choices=[('', 'All Statuses')] + PurchaseOrder.STATUS_CHOICES,
         widget=forms.Select(attrs={'class': 'form-select'})
     )
-
-
-# ─── Procurement Summary Forms ────────────────────────────────
-
-class ProcurementSummaryForm(forms.ModelForm):
-    class Meta:
-        model = ProcurementSummary
-        fields = ['project_name', 'package_name', 'project']
-
-    def __init__(self, *args, **kwargs):
-        self.user = kwargs.pop('user', None)
-        super().__init__(*args, **kwargs)
-        for field in self.fields.values():
-            if isinstance(field.widget, forms.Select):
-                field.widget.attrs['class'] = 'form-select'
-            else:
-                field.widget.attrs['class'] = 'form-control'
-        self.fields['project'].required = False
-        self.fields['project'].queryset = Project.objects.select_related('region').all()
-
-        if self.user:
-            if self.user.is_super_admin_user:
-                pass
-            elif self.user.is_admin_user or self.user.is_manager_user:
-                self.fields['project'].queryset = Project.objects.filter(region=self.user.region)
-            else:
-                self.fields['project'].queryset = Project.objects.filter(owner=self.user)
-
-
-class ProcurementSummaryItemForm(forms.ModelForm):
-    class Meta:
-        model = ProcurementSummaryItem
-        fields = [
-            'serial_number', 'system_item', 'po_number', 'po_status', 'po_qty',
-            'supplier', 'lead_time', 'incoterm', 'payment_terms', 'warranty',
-            'po_value_sar', 'po_value_usd', 'advance_payment',
-            'delivery_status', 'scm', 'order',
-        ]
-        widgets = {
-            'payment_terms': forms.Textarea(attrs={'rows': 1}),
-            'delivery_status': forms.Textarea(attrs={'rows': 1}),
-        }
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        for field in self.fields.values():
-            if isinstance(field.widget, forms.Select):
-                field.widget.attrs['class'] = 'form-select form-select-sm'
-            elif isinstance(field.widget, forms.Textarea):
-                field.widget.attrs['class'] = 'form-control form-control-sm'
-            else:
-                field.widget.attrs['class'] = 'form-control form-control-sm'
-
-
-SummaryItemFormSet = inlineformset_factory(
-    ProcurementSummary,
-    ProcurementSummaryItem,
-    form=ProcurementSummaryItemForm,
-    extra=1,
-    can_delete=True,
-)
 
 
 # ─── Delivery Note Forms ─────────────────────────────────────

@@ -35,6 +35,17 @@ class PurchaseOrder(models.Model):
         ('DAT', 'DAT - Delivered at Terminal'),
     ]
 
+    # Suggested values for the `system` datalist on the PO form.
+    # Stored as free text so users can pick from these or type their own.
+    SYSTEM_SUGGESTIONS = [
+        'Siren',
+        'PAGA',
+        'PICS',
+        'GSM Repeater',
+        'CCTV',
+        'UPS',
+    ]
+
     # PO Header
     po_date = models.DateField(verbose_name="PO Date")
     po_number = models.CharField(max_length=100, unique=True, verbose_name="PO S. No.")
@@ -79,6 +90,22 @@ class PurchaseOrder(models.Model):
     vat_rate = models.DecimalField(
         max_digits=5, decimal_places=2, default=Decimal('15'),
         verbose_name="VAT %", help_text="e.g. 15 for 15%"
+    )
+
+    # Procurement Tracking (drives the External summary)
+    lead_time = models.CharField(
+        max_length=255, blank=True, verbose_name="Lead Time",
+        help_text='e.g. "4-6 weeks from PO & payment", "10-15 days"',
+    )
+    payment_terms_text = models.TextField(
+        blank=True, verbose_name="Payment Terms (Summary)",
+        help_text='Short payment-terms summary used in procurement reports — '
+                  'e.g. "30% Advance\\n70% upon Delivery". '
+                  'Separate from the longer Terms & Conditions text below.',
+    )
+    warranty = models.CharField(
+        max_length=255, blank=True, verbose_name="Warranty",
+        help_text='e.g. "Standard", "24 Months after delivery", "3 Years"',
     )
 
     # Terms & Conditions
@@ -134,12 +161,37 @@ class PurchaseOrderItem(models.Model):
         PurchaseOrder, on_delete=models.CASCADE, related_name='items'
     )
     serial_number = models.PositiveIntegerField(default=1, verbose_name="S.No.")
+    system = models.CharField(
+        max_length=100, blank=True, verbose_name="System",
+        help_text='Pick from the suggestion list (Siren / PAGA / PICS / GSM Repeater / CCTV / UPS) '
+                  'or type a custom value. Drives grouping in the procurement summary.',
+    )
     make_model = models.CharField(max_length=255, blank=True, verbose_name="Make/Model")
     description = models.TextField(verbose_name="Item Description / Specification")
     quantity = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('1'), verbose_name="Quantity")
     uom = models.CharField(max_length=50, default='Nos', verbose_name="UOM")
     rate_per_unit = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'), verbose_name="Rate/Unit (SAR)")
     remarks = models.TextField(blank=True, verbose_name="Remarks")
+
+    # Procurement-tracking fields (drive the External summary; also editable
+    # inline from the External summary table)
+    po_value_usd = models.DecimalField(
+        max_digits=14, decimal_places=2, null=True, blank=True,
+        verbose_name="PO Value (USD/EUR)",
+    )
+    advance_payment_sar = models.DecimalField(
+        max_digits=14, decimal_places=2, null=True, blank=True,
+        verbose_name="Advance Payment (SAR)",
+    )
+    delivery_status = models.TextField(
+        blank=True, verbose_name="Delivery Status",
+        help_text='Free-text status, e.g. "Delivered HO", "Received at LNA 04-12-2025".',
+    )
+    scm = models.CharField(
+        max_length=10, blank=True, verbose_name="SCM",
+        help_text='Initials of the SCM team member responsible (e.g. ST, ZH).',
+    )
+
     order = models.PositiveIntegerField(default=0)
 
     class Meta:
@@ -153,100 +205,56 @@ class PurchaseOrderItem(models.Model):
         return (self.quantity * self.rate_per_unit).quantize(Decimal('0.01'))
 
 
-# ─── Procurement Summary ──────────────────────────────────────
+# ─── Procurement Summary (Internal / External) ────────────────
 
 
-class ProcurementSummary(models.Model):
-    """Procurement Summary Report - tracks items across packages/projects."""
+class POSummaryEntry(models.Model):
+    """One row of the Internal / External procurement summary, attached
+    to a single PurchaseOrderItem. Columns A-F are derived live from the
+    line item + its parent PO; everything below is the procurement team's
+    tracking data (dates + remarks)."""
 
-    project_name = models.CharField(max_length=500, verbose_name="Project Name")
-    package_name = models.CharField(max_length=255, blank=True, verbose_name="Package Name")
-    project = models.ForeignKey(
-        'projects.Project', on_delete=models.SET_NULL,
-        null=True, blank=True, related_name='procurement_summaries',
+    SUMMARY_TYPE_CHOICES = [
+        ('internal', 'Internal'),
+        ('external', 'External'),
+    ]
+
+    purchase_order_item = models.OneToOneField(
+        PurchaseOrderItem, on_delete=models.CASCADE,
+        related_name='summary_entry',
     )
-    created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
-        null=True, blank=True, related_name='created_procurement_summaries'
+    summary_type = models.CharField(
+        max_length=20, choices=SUMMARY_TYPE_CHOICES, default='internal',
     )
+
+    # PO milestone dates (separate from po_date which is the issuance date)
+    po_plan = models.DateField(null=True, blank=True, verbose_name='PO Plan')
+    po_forecast = models.DateField(null=True, blank=True, verbose_name='PO Forecast')
+    po_actual = models.DateField(null=True, blank=True, verbose_name='PO Actual')
+
+    # Delivery — Plan / Readiness / Forecast / Actual
+    delivery_plan = models.DateField(null=True, blank=True, verbose_name='Delivery Plan')
+    delivery_readiness = models.DateField(null=True, blank=True, verbose_name='Readiness Date')
+    delivery_forecast = models.DateField(null=True, blank=True, verbose_name='Delivery Forecast')
+    delivery_actual = models.DateField(null=True, blank=True, verbose_name='Delivery Actual')
+
+    remarks = models.TextField(blank=True, verbose_name='Remarks')
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-updated_at']
-        verbose_name = "Procurement Summary"
-        verbose_name_plural = "Procurement Summaries"
+        ordering = [
+            'purchase_order_item__system',
+            'purchase_order_item__purchase_order__po_number',
+            'purchase_order_item__serial_number',
+        ]
+        verbose_name = 'PO Summary Entry'
+        verbose_name_plural = 'PO Summary Entries'
 
     def __str__(self):
-        if self.package_name:
-            return f"{self.project_name} - {self.package_name}"
-        return self.project_name
-
-    @property
-    def total_po_value_sar(self):
-        return sum(
-            (i.po_value_sar or Decimal('0')) for i in self.items.all()
-        )
-
-    @property
-    def total_po_value_usd(self):
-        return sum(
-            (i.po_value_usd or Decimal('0')) for i in self.items.all()
-        )
-
-    @property
-    def total_advance_payment(self):
-        return sum(
-            (i.advance_payment or Decimal('0')) for i in self.items.all()
-        )
-
-
-class ProcurementSummaryItem(models.Model):
-    """Individual line item in a Procurement Summary."""
-
-    PO_STATUS_CHOICES = [
-        ('', '-'),
-        ('draft', 'Draft'),
-        ('issued', 'Issued'),
-        ('acknowledged', 'Acknowledged'),
-        ('completed', 'Completed'),
-        ('cancelled', 'Cancelled'),
-    ]
-
-    summary = models.ForeignKey(
-        ProcurementSummary, on_delete=models.CASCADE, related_name='items'
-    )
-    serial_number = models.PositiveIntegerField(default=1, verbose_name="Sr.")
-    system_item = models.CharField(max_length=500, verbose_name="System / Item")
-    po_number = models.CharField(max_length=100, blank=True, verbose_name="PO Number")
-    po_status = models.CharField(max_length=20, choices=PO_STATUS_CHOICES, blank=True, verbose_name="PO Status")
-    po_qty = models.CharField(max_length=100, blank=True, verbose_name="PO QTY")
-    supplier = models.CharField(max_length=255, blank=True, verbose_name="Supplier")
-    lead_time = models.CharField(max_length=255, blank=True, verbose_name="Lead Time")
-    incoterm = models.CharField(max_length=100, blank=True, verbose_name="Incoterm")
-    payment_terms = models.TextField(blank=True, verbose_name="Payment Terms")
-    warranty = models.CharField(max_length=255, blank=True, verbose_name="Warranty")
-    po_value_sar = models.DecimalField(
-        max_digits=14, decimal_places=2, null=True, blank=True,
-        verbose_name="PO Value (SAR)"
-    )
-    po_value_usd = models.DecimalField(
-        max_digits=14, decimal_places=2, null=True, blank=True,
-        verbose_name="PO Value (USD/EUR)"
-    )
-    advance_payment = models.DecimalField(
-        max_digits=14, decimal_places=2, null=True, blank=True,
-        verbose_name="Advance Payment"
-    )
-    delivery_status = models.TextField(blank=True, verbose_name="Delivery Status")
-    scm = models.CharField(max_length=50, blank=True, verbose_name="SCM")
-    order = models.PositiveIntegerField(default=0)
-
-    class Meta:
-        ordering = ['order', 'serial_number']
-
-    def __str__(self):
-        return f"#{self.serial_number} - {self.system_item[:50]}"
+        item = self.purchase_order_item
+        return f'{item.purchase_order.po_number} #{item.serial_number} ({self.get_summary_type_display()})'
 
 
 # ─── Delivery Note ────────────────────────────────────────────
