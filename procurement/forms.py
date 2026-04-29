@@ -88,6 +88,22 @@ class PurchaseOrderItemForm(forms.ModelForm):
             else:
                 field.widget.attrs['class'] = 'form-control form-control-sm'
 
+    def has_changed(self):
+        """An unsaved row is only considered "real" if the user typed
+        something in the description.
+
+        Without this, the empty extra row that Django adds at the end of
+        the formset always reports has_changed=True (because the model
+        defaults for quantity/uom/rate render as empty strings in the
+        widget), which makes the row fail required-field validation and
+        blocks the entire form save — including DELETE flags on saved rows.
+        """
+        if not self.instance.pk:
+            description = (self.data.get(self.add_prefix('description')) or '').strip()
+            if not description:
+                return False
+        return super().has_changed()
+
 
 POItemFormSet = inlineformset_factory(
     PurchaseOrder,
