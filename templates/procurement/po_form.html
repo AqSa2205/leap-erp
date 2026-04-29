@@ -115,6 +115,36 @@
                     </div>
                 </div>
 
+                <!-- Procurement Tracking (drives the External summary) -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="bi bi-clipboard-data"></i> Procurement Tracking</h5>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small mb-3">
+                            These fields appear in the External procurement summary. Lead time, payment terms and warranty are PO-level
+                            (they apply to every line item in this PO). Per-line-item fields like Delivery Status / SCM / USD value live in the items table below.
+                        </p>
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label fw-bold">Lead Time</label>
+                                {{ form.lead_time }}
+                                <small class="text-muted">e.g. "4-6 weeks from PO &amp; payment"</small>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label fw-bold">Payment Terms (Summary)</label>
+                                {{ form.payment_terms_text }}
+                                <small class="text-muted">Short. Long form goes in T&amp;C below.</small>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label fw-bold">Warranty</label>
+                                {{ form.warranty }}
+                                <small class="text-muted">e.g. "Standard", "24 Months after delivery"</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Financial -->
                 <div class="card mb-4">
                     <div class="card-header">
@@ -145,17 +175,27 @@
                     <div class="card-body p-0">
                         {{ item_formset.management_form }}
                         <div class="table-responsive">
+                            <datalist id="po-system-suggestions">
+                                {% for s in system_suggestions %}
+                                <option value="{{ s }}"></option>
+                                {% endfor %}
+                            </datalist>
                             <table class="table table-sm mb-0" id="item-table">
                                 <thead class="leap-thead">
                                     <tr>
-                                        <th width="60">S.No.</th>
-                                        <th width="120">Make/Model</th>
+                                        <th width="50">S.No.</th>
+                                        <th width="100">System</th>
+                                        <th width="110">Make/Model</th>
                                         <th>Description</th>
-                                        <th width="80">Qty</th>
-                                        <th width="70">UOM</th>
-                                        <th width="110">Rate/Unit</th>
-                                        <th width="120">Remarks</th>
-                                        <th width="50">Del</th>
+                                        <th width="70">Qty</th>
+                                        <th width="60">UOM</th>
+                                        <th width="100">Rate/Unit</th>
+                                        <th width="100">USD/EUR</th>
+                                        <th width="100">Advance SAR</th>
+                                        <th width="130">Delivery Status</th>
+                                        <th width="60">SCM</th>
+                                        <th width="110">Remarks</th>
+                                        <th width="40">Del</th>
                                     </tr>
                                 </thead>
                                 <tbody id="item-rows">
@@ -165,24 +205,26 @@
                                             {{ item_form.serial_number }}
                                             {{ item_form.order.as_hidden }}
                                             {{ item_form.id }}
-                                            {% if item_form.instance.pk %}{{ item_form.DELETE }}{% endif %}
                                         </td>
+                                        <td>{{ item_form.system }}</td>
                                         <td>{{ item_form.make_model }}</td>
                                         <td>{{ item_form.description }}</td>
                                         <td>{{ item_form.quantity }}</td>
                                         <td>{{ item_form.uom }}</td>
                                         <td>{{ item_form.rate_per_unit }}</td>
+                                        <td>{{ item_form.po_value_usd }}</td>
+                                        <td>{{ item_form.advance_payment_sar }}</td>
+                                        <td>{{ item_form.delivery_status }}</td>
+                                        <td>{{ item_form.scm }}</td>
                                         <td>{{ item_form.remarks }}</td>
                                         <td class="text-center">
-                                            {% if item_form.instance.pk %}
-                                            <label class="text-danger" title="Delete">
-                                                {{ item_form.DELETE }}
-                                            </label>
-                                            {% else %}
-                                            <button type="button" class="btn btn-sm btn-outline-danger remove-row" title="Remove">
-                                                <i class="bi bi-x"></i>
+                                            {# DELETE checkbox always rendered (hidden) so the formset always sees a value. #}
+                                            <span class="d-none">{{ item_form.DELETE }}</span>
+                                            <button type="button"
+                                                    class="btn btn-sm btn-outline-danger {% if item_form.instance.pk %}delete-saved-row{% else %}remove-row{% endif %}"
+                                                    title="{% if item_form.instance.pk %}Mark for delete{% else %}Remove{% endif %}">
+                                                <i class="bi bi-trash"></i>
                                             </button>
-                                            {% endif %}
                                         </td>
                                     </tr>
                                     {% endfor %}
@@ -287,19 +329,57 @@ document.addEventListener('DOMContentLoaded', function() {
         const orderInput = newRow.querySelector('[name$="-order"]');
         if (orderInput) orderInput.value = formIdx;
 
-        // Replace delete column with remove button
+        // Replace delete column with remove button (new rows get a plain remove)
         const lastTd = newRow.querySelector('td:last-child');
-        lastTd.innerHTML = '<button type="button" class="btn btn-sm btn-outline-danger remove-row" title="Remove"><i class="bi bi-x"></i></button>';
+        lastTd.innerHTML = '<button type="button" class="btn btn-sm btn-outline-danger remove-row" title="Remove"><i class="bi bi-trash"></i></button>';
 
         tbody.appendChild(newRow);
         totalForms.value = formIdx + 1;
     });
 
-    // Remove row handler
+    // Click handler for both flavours of delete:
+    //   .remove-row       → unsaved row, just nuke it from the DOM
+    //   .delete-saved-row → saved row, tick the hidden DELETE checkbox so
+    //                       the formset removes it on save; visually mark
+    //                       the row as deleted with an Undo affordance.
     tbody.addEventListener('click', function(e) {
-        const btn = e.target.closest('.remove-row');
-        if (btn) {
-            btn.closest('tr').remove();
+        // Brand-new (unsaved) row — just remove from DOM and shuffle TOTAL_FORMS.
+        const removeBtn = e.target.closest('.remove-row');
+        if (removeBtn) {
+            removeBtn.closest('tr').remove();
+            // Keep TOTAL_FORMS in sync so Django doesn't complain about an
+            // unexpected count when the user saves.
+            totalForms.value = parseInt(totalForms.value, 10) - 1;
+            return;
+        }
+
+        // Saved (existing) row — tick the hidden DELETE checkbox so the
+        // formset deletes it on save; mark the row visually + offer Undo.
+        const delBtn = e.target.closest('.delete-saved-row');
+        if (delBtn) {
+            const row = delBtn.closest('tr');
+            const checkbox = row.querySelector('input[type="checkbox"][name$="-DELETE"]');
+            if (!checkbox) return;
+            checkbox.checked = true;
+            row.classList.add('row-marked-deleted');
+            row.style.opacity = '0.45';
+            row.style.textDecoration = 'line-through';
+            const actionTd = row.cells[row.cells.length - 1];
+            actionTd.innerHTML = '<button type="button" class="btn btn-sm btn-outline-secondary undo-delete-row" title="Undo delete"><i class="bi bi-arrow-counterclockwise"></i></button>';
+            return;
+        }
+
+        // Undo on a saved row.
+        const undoBtn = e.target.closest('.undo-delete-row');
+        if (undoBtn) {
+            const row = undoBtn.closest('tr');
+            const checkbox = row.querySelector('input[type="checkbox"][name$="-DELETE"]');
+            if (checkbox) checkbox.checked = false;
+            row.classList.remove('row-marked-deleted');
+            row.style.opacity = '';
+            row.style.textDecoration = '';
+            const actionTd = row.cells[row.cells.length - 1];
+            actionTd.innerHTML = '<button type="button" class="btn btn-sm btn-outline-danger delete-saved-row" title="Mark for delete"><i class="bi bi-trash"></i></button>';
         }
     });
 });

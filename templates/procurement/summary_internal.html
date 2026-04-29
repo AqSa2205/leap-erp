@@ -1,0 +1,545 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Procurement Summary — Internal{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* ── Page-level chrome ───────────────────────────── */
+    .summary-tabs {
+        margin-bottom: 1rem;
+        border-bottom: 2px solid #f1d6dc;
+    }
+    .summary-tabs a {
+        padding: 8px 18px;
+        font-weight: 600;
+        font-size: 0.88rem;
+        text-decoration: none;
+        color: #6c757d;
+        border-bottom: 3px solid transparent;
+        margin-bottom: -2px;
+        display: inline-block;
+    }
+    .summary-tabs a.active { color: #C41E3A; border-bottom-color: #C41E3A; }
+    .summary-tabs a.disabled { color: #ced4da; cursor: not-allowed; }
+
+    /* ── KPI strip ──────────────────────────────────── */
+    .kpi-strip {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 1rem;
+        flex-wrap: wrap;
+    }
+    .kpi-pill {
+        background: #fff;
+        border: 1px solid #e9ecef;
+        border-left: 4px solid #6c757d;
+        border-radius: 8px;
+        padding: 10px 14px;
+        min-width: 140px;
+        flex: 1;
+        max-width: 220px;
+    }
+    .kpi-pill.kpi-delivered { border-left-color: #198754; }
+    .kpi-pill.kpi-inprogress { border-left-color: #ffc107; }
+    .kpi-pill.kpi-pending { border-left-color: #adb5bd; }
+    .kpi-pill.kpi-total { border-left-color: #C41E3A; }
+    .kpi-pill .label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        font-weight: 600;
+        color: #6c757d;
+    }
+    .kpi-pill .value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        line-height: 1.1;
+        color: #212529;
+    }
+
+    /* ── System-breakdown chips ─────────────────────── */
+    .system-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 1rem;
+    }
+    .system-chip {
+        background: #fff;
+        border: 1px solid #e9ecef;
+        border-radius: 20px;
+        padding: 4px 12px;
+        font-size: 0.8rem;
+        text-decoration: none;
+        color: #495057;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .system-chip:hover { border-color: #C41E3A; color: #C41E3A; }
+    .system-chip strong { color: #C41E3A; font-weight: 700; }
+    .system-chip .mini-stats { color: #6c757d; font-size: 0.7rem; }
+
+    /* ── Table shell ────────────────────────────────── */
+    .summary-shell {
+        background: #fff;
+        border: 1px solid #e9ecef;
+        border-radius: 10px;
+        overflow: hidden;
+    }
+    .summary-scroll {
+        overflow-x: auto;
+        max-width: 100%;
+        max-height: calc(100vh - 280px);
+        overflow-y: auto;
+    }
+    table.summary-table {
+        width: max-content;
+        min-width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 0.82rem;
+    }
+    table.summary-table th,
+    table.summary-table td {
+        padding: 6px 10px;
+        border-right: 1px solid #ececec;
+        border-bottom: 1px solid #ececec;
+        vertical-align: middle;
+        background: #fff;
+    }
+    table.summary-table thead th {
+        background: #F5D7DC;
+        color: #495057;
+        text-align: center;
+        font-weight: 700;
+        font-size: 0.78rem;
+        position: sticky;
+        top: 0;
+        z-index: 4;
+        white-space: nowrap;
+    }
+    table.summary-table thead tr.sub th {
+        background: #FBE8EC;
+        font-size: 0.72rem;
+        font-weight: 600;
+        top: 33px;
+    }
+
+    /* Sticky-left columns (SN, Sub Item, PO #, Vendor) */
+    table.summary-table th.sticky-col,
+    table.summary-table td.sticky-col {
+        position: sticky;
+        background: #fff;
+        z-index: 2;
+    }
+    table.summary-table thead th.sticky-col { z-index: 5; }
+    .sticky-1 { left: 0; min-width: 50px; }
+    .sticky-2 { left: 50px; min-width: 220px; max-width: 260px; white-space: normal; }
+    .sticky-3 { left: 270px; min-width: 150px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .sticky-4 { left: 420px; min-width: 130px; }
+    /* Last sticky col gets a subtle right shadow so the boundary is visible while scrolling */
+    .sticky-4::after {
+        content: '';
+        position: absolute;
+        right: -6px;
+        top: 0;
+        bottom: 0;
+        width: 6px;
+        background: linear-gradient(to right, rgba(0,0,0,0.06), transparent);
+        pointer-events: none;
+    }
+
+    /* Group header row (replaces the old "blank cell" pattern) */
+    tr.group-row td {
+        background: #fff5f6;
+        border-top: 2px solid #C41E3A;
+        font-weight: 700;
+        color: #C41E3A;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        font-size: 0.78rem;
+        padding: 8px 12px;
+    }
+    tr.group-row td .group-name { font-size: 0.95rem; letter-spacing: 0.4px; }
+    tr.group-row td .group-meta {
+        color: #6c757d;
+        font-weight: 500;
+        text-transform: none;
+        letter-spacing: 0;
+        margin-left: 8px;
+        font-size: 0.75rem;
+    }
+    tr.group-row td .group-meta .dot {
+        display: inline-block;
+        width: 8px; height: 8px;
+        border-radius: 50%;
+        margin-right: 3px;
+        vertical-align: middle;
+    }
+    tr.group-row td .group-meta .dot.d { background: #198754; }
+    tr.group-row td .group-meta .dot.i { background: #ffc107; }
+    tr.group-row td .group-meta .dot.p { background: #adb5bd; }
+
+    /* Status-tinted rows (very subtle, for at-a-glance scanning) */
+    tr.row-delivered td { background: #f3fbf5; }
+    tr.row-delivered td.sticky-col { background: #f3fbf5; }
+    tr.row-inprogress td { background: #fffaf0; }
+    tr.row-inprogress td.sticky-col { background: #fffaf0; }
+    tr.row-pending td { background: #fff; }
+    tr.row-pending td.sticky-col { background: #fff; }
+    tr.row-delivered:hover td,
+    tr.row-delivered:hover td.sticky-col { background: #e7f6ec; }
+    tr.row-inprogress:hover td,
+    tr.row-inprogress:hover td.sticky-col { background: #fff3e0; }
+    tr.row-pending:hover td,
+    tr.row-pending:hover td.sticky-col { background: #fafafa; }
+
+    .col-sn { text-align: center; color: #6c757d; }
+    .col-vendor { text-align: left; }
+    .col-issuance { text-align: center; }
+
+    /* Status badges */
+    .badge-status {
+        font-size: 0.7rem;
+        padding: 3px 8px;
+        border-radius: 12px;
+        font-weight: 600;
+    }
+    .badge-issued { background: #1a1a1a; color: #fff; }
+    .badge-acknowledged { background: #6c757d; color: #fff; }
+    .badge-completed { background: #198754; color: #fff; }
+    .badge-cancelled { background: #C41E3A; color: #fff; }
+    .badge-draft { background: #ffc107; color: #1a1a1a; }
+
+    /* Editable cells */
+    .editable-date, .editable-remarks {
+        min-width: 95px;
+        cursor: pointer;
+        text-align: center;
+        color: #212529;
+        white-space: nowrap;
+    }
+    .editable-date.empty { color: #ced4da; }
+    .editable-date.empty::before { content: '\2014'; }  /* em-dash placeholder */
+    .editable-date:hover, .editable-remarks:hover {
+        background: #fff5f5 !important;
+        outline: 1px dashed #f1d6dc;
+    }
+    .editable-date input,
+    .editable-remarks input {
+        width: 100%;
+        border: 1px solid #C41E3A;
+        border-radius: 4px;
+        padding: 2px 4px;
+        font-size: 0.82rem;
+        background: #fffafb;
+    }
+    .editable-remarks {
+        min-width: 220px;
+        max-width: 320px;
+        white-space: normal;
+        text-align: left;
+    }
+    .editable-remarks.empty { color: #ced4da; font-style: italic; }
+    .editable-remarks.empty::before { content: 'Click to add'; }
+
+    /* Highlight Actual columns slightly */
+    th.col-actual, td.col-actual { background: rgba(25, 135, 84, 0.04); }
+    tr.row-delivered td.col-actual { background: rgba(25, 135, 84, 0.10); }
+
+    /* Summary scrollbar */
+    .summary-scroll::-webkit-scrollbar { height: 10px; width: 10px; }
+    .summary-scroll::-webkit-scrollbar-thumb { background: #d6d6d6; border-radius: 5px; }
+    .summary-scroll::-webkit-scrollbar-thumb:hover { background: #C41E3A; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h1 class="h3 mb-1"><i class="bi bi-clipboard-data me-2"></i>Procurement Summary</h1>
+            <p class="text-muted mb-0" style="font-size: 0.85rem;">
+                Auto-derived columns (SN, system, sub-item, PO, vendor, issuance) come live from each PO line item.
+                The date columns + remarks are editable inline — click a cell, pick a date, blur to save.
+            </p>
+        </div>
+        <div>
+            <a href="{% url 'procurement:summary_internal_export' %}" class="btn btn-outline-success"><i class="bi bi-file-earmark-excel me-1"></i>Export Excel</a>
+        </div>
+    </div>
+
+    <div class="summary-tabs">
+        <a href="{% url 'procurement:summary_internal' %}" class="active">Internal</a>
+        <a href="{% url 'procurement:summary_external' %}">External</a>
+        <a class="disabled" title="Coming next">Overall</a>
+    </div>
+
+    <!-- KPIs -->
+    <div class="kpi-strip">
+        <div class="kpi-pill kpi-total">
+            <div class="label">Line Items</div>
+            <div class="value">{{ po_count }}</div>
+        </div>
+        <div class="kpi-pill kpi-delivered">
+            <div class="label">Delivered</div>
+            <div class="value">{{ totals.delivered }}</div>
+        </div>
+        <div class="kpi-pill kpi-inprogress">
+            <div class="label">In Progress</div>
+            <div class="value">{{ totals.inprogress }}</div>
+        </div>
+        <div class="kpi-pill kpi-pending">
+            <div class="label">Pending</div>
+            <div class="value">{{ totals.pending }}</div>
+        </div>
+        <div class="kpi-pill" style="border-left-color:#6c757d;">
+            <div class="label">Systems</div>
+            <div class="value">{{ group_count }}</div>
+        </div>
+    </div>
+
+    <!-- System chips -->
+    {% if group_summary %}
+    <div class="system-chips">
+        {% for g in group_summary %}
+        <a href="#sys-{{ forloop.counter }}" class="system-chip">
+            <strong>{{ g.key }}</strong>
+            <span class="mini-stats">{{ g.count }} item{{ g.count|pluralize }}</span>
+            {% if g.delivered %}<span class="mini-stats" title="Delivered"><span style="color:#198754;">●</span> {{ g.delivered }}</span>{% endif %}
+            {% if g.inprogress %}<span class="mini-stats" title="In progress"><span style="color:#ffc107;">●</span> {{ g.inprogress }}</span>{% endif %}
+            {% if g.pending %}<span class="mini-stats" title="Pending"><span style="color:#adb5bd;">●</span> {{ g.pending }}</span>{% endif %}
+        </a>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Table -->
+    <div class="summary-shell">
+        <div class="summary-scroll">
+            <table class="summary-table">
+                <thead>
+                    <tr>
+                        <th rowspan="2" class="sticky-col sticky-1">#</th>
+                        <th rowspan="2" class="sticky-col sticky-2">Sub Item</th>
+                        <th rowspan="2" class="sticky-col sticky-3">PO #</th>
+                        <th rowspan="2" class="sticky-col sticky-4">Vendor</th>
+                        <th rowspan="2">Issuance</th>
+                        <th colspan="3">PO Dates</th>
+                        <th colspan="4">Delivery Dates</th>
+                        <th rowspan="2">Remarks</th>
+                    </tr>
+                    <tr class="sub">
+                        <th>Plan</th><th>Forecast</th><th class="col-actual">Actual</th>
+                        <th>Plan</th><th>Readiness</th><th>Forecast</th><th class="col-actual">Actual</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% regroup rows by group_key as groups %}
+                    {% for grp in groups %}
+                    <tr class="group-row" id="sys-{{ forloop.counter }}">
+                        <td colspan="13">
+                            <span class="group-name">{{ grp.grouper }}</span>
+                            <span class="group-meta">
+                                {{ grp.list|length }} item{{ grp.list|length|pluralize }}
+                                {% with d=grp.list|length %}{% endwith %}
+                            </span>
+                        </td>
+                    </tr>
+                    {% for r in grp.list %}
+                    <tr class="row-{{ r.status }}" data-entry-pk="{{ r.entry.pk }}">
+                        <td class="col-sn sticky-col sticky-1">{{ r.sn }}</td>
+                        <td class="sticky-col sticky-2">
+                            <a href="{% url 'procurement:po_detail' r.po.pk %}" class="text-decoration-none text-dark fw-semibold">{{ r.item.description|default:"—"|truncatechars:80 }}</a>
+                            {% if r.item.make_model %}<div class="text-muted" style="font-size:0.72rem;">{{ r.item.make_model }}</div>{% endif %}
+                        </td>
+                        <td class="sticky-col sticky-3">
+                            <a href="{% url 'procurement:po_detail' r.po.pk %}" class="text-decoration-none">{{ r.po.po_number }}</a>
+                        </td>
+                        <td class="col-vendor sticky-col sticky-4">{{ r.po.vendor_name }}</td>
+                        <td class="col-issuance"><span class="badge-status badge-{{ r.po.status }}">{{ r.po.get_status_display }}</span></td>
+
+                        {% for c in r.date_cells %}
+                        <td class="editable-date{% if c.empty %} empty{% endif %}{% if c.field == 'po_actual' or c.field == 'delivery_actual' %} col-actual{% endif %}"
+                            data-field="{{ c.field }}" data-pk="{{ r.entry.pk }}" data-value="{{ c.iso }}">{% if not c.empty %}{{ c.display }}{% endif %}</td>
+                        {% endfor %}
+
+                        <td class="editable-remarks {% if not r.entry.remarks %}empty{% endif %}" data-field="remarks" data-pk="{{ r.entry.pk }}">{{ r.entry.remarks }}</td>
+                    </tr>
+                    {% endfor %}
+                    {% endfor %}
+                    {% if not rows %}
+                    <tr><td colspan="13" class="text-center text-muted py-4">No purchase orders yet. <a href="{% url 'procurement:po_create' %}">Create one</a> to populate the summary.</td></tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    var csrfToken = '{{ csrf_token }}';
+    var updateUrlBase = '/procurement/summary-entry/';
+
+    function isEditable(td) {
+        return td && (td.classList.contains('editable-date') || td.classList.contains('editable-remarks'));
+    }
+
+    /**
+     * Find the next editable cell relative to `td` in the given direction.
+     * Skips group header rows. For 'up'/'down' we keep the same column
+     * (cellIndex). For 'next'/'prev' we walk in document order across
+     * editable cells.
+     */
+    function findCell(td, direction) {
+        if (direction === 'next' || direction === 'prev') {
+            var all = Array.prototype.slice.call(
+                document.querySelectorAll('.editable-date, .editable-remarks')
+            );
+            var idx = all.indexOf(td);
+            if (idx === -1) return null;
+            return direction === 'next' ? all[idx + 1] : all[idx - 1];
+        }
+        if (direction === 'down' || direction === 'up') {
+            var col = td.cellIndex;
+            var tr = td.parentElement;
+            var step = direction === 'down' ? 'nextElementSibling' : 'previousElementSibling';
+            var sibling = tr[step];
+            while (sibling) {
+                if (!sibling.classList.contains('group-row')) {
+                    var candidate = sibling.cells[col];
+                    if (isEditable(candidate)) return candidate;
+                    // If same column isn't editable in this row (shouldn't
+                    // happen since rows are uniform), bail.
+                    return null;
+                }
+                sibling = sibling[step];
+            }
+        }
+        return null;
+    }
+
+    function openEditor(td) {
+        if (!td || !isEditable(td)) return;
+        if (td.querySelector('input')) return;  // already editing
+        td.dataset.oldDisplay = td.innerHTML;
+        buildEditor(td, td.classList.contains('editable-date'));
+        // Scroll into view so the user sees the next cell — block: 'nearest'
+        // avoids jumpy behaviour when the cell is already visible.
+        td.scrollIntoView({block: 'nearest', inline: 'nearest'});
+    }
+
+    function buildEditor(td, isDate) {
+        var current = td.dataset.value || '';
+        var input = document.createElement('input');
+        input.type = isDate ? 'date' : 'text';
+        if (isDate) {
+            input.value = current;
+        } else {
+            input.value = td.classList.contains('empty') ? '' : td.textContent.trim();
+        }
+        td.innerHTML = '';
+        td.appendChild(input);
+        input.focus();
+        if (!isDate) input.select();
+
+        var saved = false;
+        function save(nextTarget) {
+            if (saved) return;
+            saved = true;
+            var newValue = input.value.trim();
+            var oldDisplay = td.dataset.oldDisplay || '';
+            function thenOpen() {
+                if (nextTarget) openEditor(nextTarget);
+            }
+            if (newValue === current) {
+                td.innerHTML = oldDisplay;
+                thenOpen();
+                return;
+            }
+            var data = new FormData();
+            data.append('field', td.dataset.field);
+            data.append('value', newValue);
+            fetch(updateUrlBase + td.dataset.pk + '/update-field/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrfToken},
+                body: data,
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(resp) {
+                if (!resp.ok) {
+                    alert('Error: ' + (resp.error || 'Failed to save'));
+                    td.innerHTML = oldDisplay;
+                    return;
+                }
+                if (isDate) {
+                    td.dataset.value = resp.value || '';
+                    td.innerHTML = resp.display || '';
+                    td.classList.toggle('empty', !resp.value);
+                } else {
+                    td.innerHTML = resp.value || '';
+                    td.classList.toggle('empty', !resp.value);
+                }
+                thenOpen();
+            })
+            .catch(function(err) {
+                console.error('Save failed:', err);
+                td.innerHTML = oldDisplay;
+                thenOpen();
+            });
+        }
+
+        input.addEventListener('blur', function() {
+            // Only save on blur if no explicit navigation already saved.
+            // The keydown handler sets `saved=true` before triggering save
+            // so this no-ops in that case.
+            save(null);
+        });
+
+        input.addEventListener('keydown', function(e) {
+            var target = null;
+            switch (e.key) {
+                case 'Enter':
+                    target = findCell(td, e.shiftKey ? 'up' : 'down');
+                    e.preventDefault();
+                    save(target);
+                    break;
+                case 'Tab':
+                    target = findCell(td, e.shiftKey ? 'prev' : 'next');
+                    e.preventDefault();
+                    save(target);
+                    break;
+                case 'Escape':
+                    saved = true;
+                    td.innerHTML = td.dataset.oldDisplay || '';
+                    break;
+            }
+        });
+    }
+
+    document.querySelectorAll('.editable-date, .editable-remarks').forEach(function(td) {
+        td.addEventListener('click', function() {
+            openEditor(td);
+        });
+    });
+
+    // Smooth scroll when clicking system chips
+    document.querySelectorAll('.system-chip').forEach(function(chip) {
+        chip.addEventListener('click', function(e) {
+            var href = chip.getAttribute('href');
+            if (!href || href.charAt(0) !== '#') return;
+            var target = document.querySelector(href);
+            if (target) {
+                e.preventDefault();
+                target.scrollIntoView({behavior: 'smooth', block: 'start'});
+            }
+        });
+    });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,510 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Procurement Summary — External{% endblock %}
+
+{% block extra_css %}
+<style>
+    .summary-tabs { margin-bottom: 1rem; border-bottom: 2px solid #f1d6dc; }
+    .summary-tabs a {
+        padding: 8px 18px;
+        font-weight: 600;
+        font-size: 0.88rem;
+        text-decoration: none;
+        color: #6c757d;
+        border-bottom: 3px solid transparent;
+        margin-bottom: -2px;
+        display: inline-block;
+    }
+    .summary-tabs a.active { color: #C41E3A; border-bottom-color: #C41E3A; }
+    .summary-tabs a.disabled { color: #ced4da; cursor: not-allowed; }
+
+    .kpi-strip {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 1rem;
+        flex-wrap: wrap;
+    }
+    .kpi-pill {
+        background: #fff;
+        border: 1px solid #e9ecef;
+        border-left: 4px solid #6c757d;
+        border-radius: 8px;
+        padding: 10px 14px;
+        min-width: 150px;
+        flex: 1;
+        max-width: 240px;
+    }
+    .kpi-pill.kpi-sar { border-left-color: #198754; }
+    .kpi-pill.kpi-usd { border-left-color: #0d6efd; }
+    .kpi-pill.kpi-adv { border-left-color: #ffc107; }
+    .kpi-pill.kpi-total { border-left-color: #C41E3A; }
+    .kpi-pill .label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        font-weight: 600;
+        color: #6c757d;
+    }
+    .kpi-pill .value {
+        font-size: 1.4rem;
+        font-weight: 700;
+        line-height: 1.2;
+        color: #212529;
+    }
+    .kpi-pill .unit { font-size: 0.7rem; color: #adb5bd; font-weight: 600; margin-left: 4px; }
+
+    /* Project filter bar */
+    .project-bar {
+        background: #fff;
+        border: 1px solid #e9ecef;
+        border-radius: 10px;
+        padding: 10px 14px;
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+    .project-bar label {
+        font-weight: 600;
+        font-size: 0.82rem;
+        color: #495057;
+        margin: 0;
+    }
+    .project-bar select {
+        min-width: 280px;
+        font-size: 0.88rem;
+    }
+    .project-bar .pkg-pill {
+        font-size: 0.78rem;
+        font-weight: 600;
+        padding: 4px 10px;
+        background: #FBE8EC;
+        color: #C41E3A;
+        border-radius: 14px;
+    }
+
+    /* Table shell */
+    .summary-shell {
+        background: #fff;
+        border: 1px solid #e9ecef;
+        border-radius: 10px;
+        overflow: hidden;
+    }
+    .summary-scroll {
+        overflow-x: auto;
+        max-width: 100%;
+        max-height: calc(100vh - 320px);
+        overflow-y: auto;
+    }
+    table.summary-table {
+        width: max-content;
+        min-width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 0.82rem;
+    }
+    table.summary-table th,
+    table.summary-table td {
+        padding: 6px 10px;
+        border-right: 1px solid #ececec;
+        border-bottom: 1px solid #ececec;
+        vertical-align: middle;
+        background: #fff;
+    }
+    table.summary-table thead th {
+        background: #F5D7DC;
+        color: #495057;
+        text-align: center;
+        font-weight: 700;
+        font-size: 0.78rem;
+        position: sticky;
+        top: 0;
+        z-index: 4;
+        white-space: nowrap;
+    }
+
+    /* Sticky-left columns: Sr, Item, PO #, Vendor */
+    table.summary-table th.sticky-col,
+    table.summary-table td.sticky-col {
+        position: sticky;
+        background: #fff;
+        z-index: 2;
+    }
+    table.summary-table thead th.sticky-col { z-index: 5; }
+    .sticky-1 { left: 0; min-width: 50px; text-align: center; }
+    .sticky-2 { left: 50px; min-width: 240px; max-width: 320px; white-space: normal; }
+    .sticky-3 { left: 290px; min-width: 150px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .sticky-4 { left: 440px; min-width: 130px; }
+    .sticky-4::after {
+        content: '';
+        position: absolute;
+        right: -6px;
+        top: 0;
+        bottom: 0;
+        width: 6px;
+        background: linear-gradient(to right, rgba(0,0,0,0.06), transparent);
+        pointer-events: none;
+    }
+
+    .col-status { text-align: center; }
+    .col-qty { text-align: center; min-width: 90px; }
+    .col-incoterm { text-align: center; min-width: 80px; }
+    .col-money { text-align: right; min-width: 110px; font-variant-numeric: tabular-nums; }
+    .col-money.empty { color: #ced4da; }
+    .col-text { min-width: 150px; max-width: 240px; white-space: normal; }
+    .col-scm { text-align: center; min-width: 60px; }
+    .col-project { min-width: 130px; }
+
+    /* Status badges */
+    .badge-status {
+        font-size: 0.7rem;
+        padding: 3px 8px;
+        border-radius: 12px;
+        font-weight: 600;
+    }
+    .badge-issued { background: #1a1a1a; color: #fff; }
+    .badge-acknowledged { background: #6c757d; color: #fff; }
+    .badge-completed { background: #198754; color: #fff; }
+    .badge-cancelled { background: #C41E3A; color: #fff; }
+    .badge-draft { background: #ffc107; color: #1a1a1a; }
+
+    /* Editable cells */
+    .editable {
+        cursor: pointer;
+        color: #212529;
+    }
+    .editable.empty { color: #ced4da; }
+    .editable.empty.col-text::before { content: 'Click to add'; font-style: italic; }
+    .editable.empty.col-money::before { content: '\2014'; }
+    .editable.empty.col-scm::before { content: '\2014'; }
+    .editable.empty.col-header-text::before { content: 'Click to add'; font-style: italic; }
+    .editable:hover {
+        background: #fff5f5 !important;
+        outline: 1px dashed #f1d6dc;
+    }
+    .editable input, .editable textarea {
+        width: 100%;
+        border: 1px solid #C41E3A;
+        border-radius: 4px;
+        padding: 2px 4px;
+        font-size: 0.82rem;
+        background: #fffafb;
+    }
+    .editable textarea { min-height: 50px; resize: vertical; }
+
+    /* Total row */
+    tr.total-row td {
+        background: #FBE8EC;
+        font-weight: 700;
+        color: #C41E3A;
+        border-top: 2px solid #C41E3A;
+    }
+    tr.total-row td.sticky-col { background: #FBE8EC; }
+
+    .summary-scroll::-webkit-scrollbar { height: 10px; width: 10px; }
+    .summary-scroll::-webkit-scrollbar-thumb { background: #d6d6d6; border-radius: 5px; }
+    .summary-scroll::-webkit-scrollbar-thumb:hover { background: #C41E3A; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h1 class="h3 mb-1"><i class="bi bi-clipboard-data me-2"></i>Procurement Summary</h1>
+            <p class="text-muted mb-0" style="font-size: 0.85rem;">
+                External-facing summary. SR · Item · PO · Status · Qty · Supplier · Incoterm · SAR value are auto-derived from each line item.
+                Lead Time / Payment Terms / Warranty / USD / Advance / Delivery Status / SCM are editable inline — click any cell, type, Enter to save and jump down, Tab to jump right.
+            </p>
+        </div>
+        <div>
+            <a href="{% url 'procurement:summary_external_export' %}{% if selected %}?project={{ selected }}{% endif %}" class="btn btn-outline-success"><i class="bi bi-file-earmark-excel me-1"></i>Export Excel</a>
+        </div>
+    </div>
+
+    <div class="summary-tabs">
+        <a href="{% url 'procurement:summary_internal' %}">Internal</a>
+        <a href="{% url 'procurement:summary_external' %}" class="active">External</a>
+        <a class="disabled" title="Coming next">Overall</a>
+    </div>
+
+    <!-- Project filter -->
+    <div class="project-bar">
+        <label for="project-select"><i class="bi bi-folder me-1"></i>Project</label>
+        <select id="project-select" class="form-select form-select-sm" onchange="window.location.href=this.value">
+            <option value="{% url 'procurement:summary_external' %}?project=all" {% if selected == 'all' %}selected{% endif %}>All projects (Daily Status view)</option>
+            {% for p in projects %}
+            <option value="{% url 'procurement:summary_external' %}?project={{ p.pk }}" {% if selected == p.pk|stringformat:'s' %}selected{% endif %}>
+                {{ p.project_name }}
+            </option>
+            {% endfor %}
+        </select>
+        {% if selected_project %}
+        <span class="pkg-pill">{{ selected_project.project_name }}</span>
+        {% endif %}
+        <span class="text-muted small ms-auto">{{ po_count }} line item{{ po_count|pluralize }}</span>
+    </div>
+
+    <!-- KPIs -->
+    <div class="kpi-strip">
+        <div class="kpi-pill kpi-total">
+            <div class="label">Line Items</div>
+            <div class="value">{{ po_count }}</div>
+        </div>
+        <div class="kpi-pill kpi-sar">
+            <div class="label">PO Value</div>
+            <div class="value">{{ totals.sar|floatformat:2|intcomma }}<span class="unit">SAR</span></div>
+        </div>
+        <div class="kpi-pill kpi-usd">
+            <div class="label">PO Value</div>
+            <div class="value">{{ totals.usd|floatformat:2|intcomma }}<span class="unit">USD/EUR</span></div>
+        </div>
+        <div class="kpi-pill kpi-adv">
+            <div class="label">Advance Paid</div>
+            <div class="value">{{ totals.advance|floatformat:2|intcomma }}<span class="unit">SAR</span></div>
+        </div>
+    </div>
+
+    <!-- Table -->
+    <div class="summary-shell">
+        <div class="summary-scroll">
+            <table class="summary-table">
+                <thead>
+                    <tr>
+                        <th class="sticky-col sticky-1">Sr.</th>
+                        <th class="sticky-col sticky-2">System / Item</th>
+                        <th class="sticky-col sticky-3">PO Number</th>
+                        <th class="sticky-col sticky-4">Supplier</th>
+                        <th>Status</th>
+                        <th>PO QTY</th>
+                        <th>Lead Time</th>
+                        <th>Incoterm</th>
+                        <th>Payment Terms</th>
+                        <th>Warranty</th>
+                        <th>PO Value (SAR)</th>
+                        <th>PO Value (USD/EUR)</th>
+                        <th>Advance Payment</th>
+                        <th>Delivery Status</th>
+                        <th>SCM</th>
+                        {% if show_project_column %}<th>Project</th>{% endif %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in rows %}
+                    <tr>
+                        <td class="sticky-col sticky-1">{{ r.sn }}</td>
+                        <td class="sticky-col sticky-2">
+                            <a href="{% url 'procurement:po_detail' r.po.pk %}" class="text-decoration-none text-dark fw-semibold">
+                                {% if r.item.system %}<span class="badge bg-secondary me-1" style="font-size:0.65rem;">{{ r.item.system }}</span>{% endif %}{{ r.item.description|default:'—' }}
+                            </a>
+                            {% if r.item.make_model %}<div class="text-muted" style="font-size:0.72rem;">{{ r.item.make_model }}</div>{% endif %}
+                        </td>
+                        <td class="sticky-col sticky-3">
+                            <a href="{% url 'procurement:po_detail' r.po.pk %}" class="text-decoration-none">{{ r.po.po_number }}</a>
+                        </td>
+                        <td class="sticky-col sticky-4">{{ r.po.vendor_name }}</td>
+                        <td class="col-status"><span class="badge-status badge-{{ r.po.status }}">{{ r.po.get_status_display }}</span></td>
+                        <td class="col-qty">{{ r.qty_text }}</td>
+
+                        <td class="editable col-text {% if not r.po.lead_time %}empty col-header-text{% endif %}"
+                            data-field="lead_time" data-pk="{{ r.item.pk }}" data-edit-type="text">{{ r.po.lead_time }}</td>
+                        <td class="col-incoterm">{{ r.po.delivery_incoterms|default:'—' }}</td>
+                        <td class="editable col-text {% if not r.po.payment_terms_text %}empty col-header-text{% endif %}"
+                            data-field="payment_terms_text" data-pk="{{ r.item.pk }}" data-edit-type="textarea">{{ r.po.payment_terms_text|linebreaksbr }}</td>
+                        <td class="editable col-text {% if not r.po.warranty %}empty col-header-text{% endif %}"
+                            data-field="warranty" data-pk="{{ r.item.pk }}" data-edit-type="text">{{ r.po.warranty }}</td>
+
+                        <td class="col-money">{% if r.po_value_sar %}{{ r.po_value_sar|floatformat:2|intcomma }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+
+                        <td class="editable col-money {% if not r.item.po_value_usd %}empty{% endif %}"
+                            data-field="po_value_usd" data-pk="{{ r.item.pk }}" data-edit-type="number"
+                            data-value="{% if r.item.po_value_usd %}{{ r.item.po_value_usd }}{% endif %}">{% if r.item.po_value_usd %}{{ r.item.po_value_usd|floatformat:2|intcomma }}{% endif %}</td>
+
+                        <td class="editable col-money {% if not r.item.advance_payment_sar %}empty{% endif %}"
+                            data-field="advance_payment_sar" data-pk="{{ r.item.pk }}" data-edit-type="number"
+                            data-value="{% if r.item.advance_payment_sar %}{{ r.item.advance_payment_sar }}{% endif %}">{% if r.item.advance_payment_sar %}{{ r.item.advance_payment_sar|floatformat:2|intcomma }}{% endif %}</td>
+
+                        <td class="editable col-text {% if not r.item.delivery_status %}empty{% endif %}"
+                            data-field="delivery_status" data-pk="{{ r.item.pk }}" data-edit-type="textarea">{{ r.item.delivery_status|linebreaksbr }}</td>
+
+                        <td class="editable col-scm {% if not r.item.scm %}empty{% endif %}"
+                            data-field="scm" data-pk="{{ r.item.pk }}" data-edit-type="text">{{ r.item.scm }}</td>
+
+                        {% if show_project_column %}
+                        <td class="col-project">{% if r.po.project %}<a href="{% url 'projects:detail' r.po.project.pk %}" class="text-decoration-none">{{ r.po.project.project_name|truncatechars:30 }}</a>{% else %}{{ r.po.project_name|default:'—' }}{% endif %}</td>
+                        {% endif %}
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="{% if show_project_column %}16{% else %}15{% endif %}" class="text-center text-muted py-4">
+                            No purchase orders for this project yet.
+                            <a href="{% url 'procurement:po_create' %}">Create one</a>.
+                        </td>
+                    </tr>
+                    {% endfor %}
+
+                    {% if rows %}
+                    <tr class="total-row">
+                        <td class="sticky-col sticky-1"></td>
+                        <td class="sticky-col sticky-2"></td>
+                        <td class="sticky-col sticky-3"></td>
+                        <td class="sticky-col sticky-4 text-end">Total</td>
+                        <td colspan="6"></td>
+                        <td class="col-money">{{ totals.sar|floatformat:2|intcomma }}</td>
+                        <td class="col-money">{{ totals.usd|floatformat:2|intcomma }}</td>
+                        <td class="col-money">{{ totals.advance|floatformat:2|intcomma }}</td>
+                        <td colspan="{% if show_project_column %}3{% else %}2{% endif %}"></td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    var csrfToken = '{{ csrf_token }}';
+    var updateUrlBase = '/procurement/po-item/';
+
+    function isEditable(td) { return td && td.classList.contains('editable'); }
+
+    function findCell(td, direction) {
+        if (direction === 'next' || direction === 'prev') {
+            var all = Array.prototype.slice.call(document.querySelectorAll('.editable'));
+            var idx = all.indexOf(td);
+            if (idx === -1) return null;
+            return direction === 'next' ? all[idx + 1] : all[idx - 1];
+        }
+        if (direction === 'down' || direction === 'up') {
+            var col = td.cellIndex;
+            var tr = td.parentElement;
+            var step = direction === 'down' ? 'nextElementSibling' : 'previousElementSibling';
+            var sibling = tr[step];
+            while (sibling) {
+                if (!sibling.classList.contains('total-row')) {
+                    var candidate = sibling.cells[col];
+                    if (isEditable(candidate)) return candidate;
+                    return null;
+                }
+                sibling = sibling[step];
+            }
+        }
+        return null;
+    }
+
+    function openEditor(td) {
+        if (!td || !isEditable(td)) return;
+        if (td.querySelector('input, textarea')) return;
+        td.dataset.oldDisplay = td.innerHTML;
+        buildEditor(td);
+        td.scrollIntoView({block: 'nearest', inline: 'nearest'});
+    }
+
+    function buildEditor(td) {
+        var editType = td.dataset.editType || 'text';
+        var current;
+        if (editType === 'number') {
+            current = td.dataset.value || '';
+        } else {
+            current = td.classList.contains('empty') ? '' : td.textContent.trim();
+        }
+
+        var input;
+        if (editType === 'textarea') {
+            input = document.createElement('textarea');
+            input.rows = 3;
+        } else {
+            input = document.createElement('input');
+            input.type = (editType === 'number') ? 'number' : 'text';
+            if (editType === 'number') input.step = '0.01';
+        }
+        input.value = current;
+        td.innerHTML = '';
+        td.appendChild(input);
+        input.focus();
+        if (input.select) input.select();
+
+        var saved = false;
+        function save(nextTarget) {
+            if (saved) return;
+            saved = true;
+            var newValue = input.value;
+            var oldDisplay = td.dataset.oldDisplay || '';
+            function thenOpen() { if (nextTarget) openEditor(nextTarget); }
+            if (newValue.trim() === current.toString().trim()) {
+                td.innerHTML = oldDisplay;
+                thenOpen();
+                return;
+            }
+            var data = new FormData();
+            data.append('field', td.dataset.field);
+            data.append('value', newValue);
+            fetch(updateUrlBase + td.dataset.pk + '/update-field/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrfToken},
+                body: data,
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(resp) {
+                if (!resp.ok) {
+                    alert('Error: ' + (resp.error || 'Failed to save'));
+                    td.innerHTML = oldDisplay;
+                    return;
+                }
+                if (editType === 'number') {
+                    td.dataset.value = resp.value || '';
+                    td.innerHTML = resp.display || '';
+                } else if (editType === 'textarea') {
+                    // Render with line breaks preserved
+                    td.textContent = resp.value || '';
+                    td.innerHTML = (resp.value || '').replace(/\n/g, '<br>');
+                } else {
+                    td.innerHTML = resp.value || '';
+                }
+                td.classList.toggle('empty', !resp.value);
+                thenOpen();
+            })
+            .catch(function(err) {
+                console.error('Save failed:', err);
+                td.innerHTML = oldDisplay;
+                thenOpen();
+            });
+        }
+
+        input.addEventListener('blur', function() { save(null); });
+        input.addEventListener('keydown', function(e) {
+            // For textareas, Enter inserts a newline unless Ctrl is held
+            if (editType === 'textarea' && e.key === 'Enter' && !e.ctrlKey && !e.shiftKey) {
+                return;  // let native newline insertion happen
+            }
+            var target = null;
+            switch (e.key) {
+                case 'Enter':
+                    target = findCell(td, e.shiftKey ? 'up' : 'down');
+                    e.preventDefault();
+                    save(target);
+                    break;
+                case 'Tab':
+                    target = findCell(td, e.shiftKey ? 'prev' : 'next');
+                    e.preventDefault();
+                    save(target);
+                    break;
+                case 'Escape':
+                    saved = true;
+                    td.innerHTML = td.dataset.oldDisplay || '';
+                    break;
+            }
+        });
+    }
+
+    document.querySelectorAll('.editable').forEach(function(td) {
+        td.addEventListener('click', function() { openEditor(td); });
+    });
+})();
+</script>
+{% endblock %}

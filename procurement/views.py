@@ -7,18 +7,17 @@ from django.http import HttpResponse, JsonResponse
 from django.views.decorators.http import require_POST
 from django.db import transaction
 from django.db.models import Q
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from .models import (
     PurchaseOrder, PurchaseOrderItem,
-    ProcurementSummary, ProcurementSummaryItem,
+    POSummaryEntry,
     DeliveryNote, DeliveryNoteItem,
     InventoryReport, InventoryItem,
     FRCReport, FRCEntry, FRCInventory,
 )
 from .forms import (
     PurchaseOrderForm, POItemFormSet, POFilterForm,
-    ProcurementSummaryForm, SummaryItemFormSet,
     DeliveryNoteForm, DNItemFormSet,
     InventoryReportForm, InventoryItemFormSet,
     FRCReportForm, FRCEntryFormSet, FRCInventoryForm,
@@ -116,14 +115,9 @@ def procurement_dashboard(request):
             dn_qs = dn_qs.filter(created_by=user)
     dn_total = dn_qs.count()
 
-    # Summary stats
-    summary_qs = ProcurementSummary.objects.all()
-    if not has_full_access:
-        if user.is_admin_user or user.is_manager_user:
-            summary_qs = summary_qs.filter(Q(created_by=user) | Q(project__region=user.region))
-        else:
-            summary_qs = summary_qs.filter(created_by=user)
-    summary_total = summary_qs.count()
+    # Summary stats — counted as the number of POs visible to the user
+    # (the summary itself is a derived view of POs, not a separate record).
+    summary_total = po_qs.count()
 
     # Inventory stats
     inv_qs = InventoryReport.objects.all()
@@ -251,6 +245,7 @@ class POCreateView(ProcurementPermissionMixin, CreateView):
             context['item_formset'] = POItemFormSet(prefix='items')
             context['terms_by_category'] = _po_terms_by_category([])
         context['title'] = 'Create Purchase Order'
+        context['system_suggestions'] = PurchaseOrder.SYSTEM_SUGGESTIONS
         return context
 
     def form_valid(self, form):
@@ -318,6 +313,7 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
             current_ids = list(self.object.selected_terms.values_list('pk', flat=True))
             context['terms_by_category'] = _po_terms_by_category(current_ids)
         context['title'] = f'Edit PO: {self.object.po_number}'
+        context['system_suggestions'] = PurchaseOrder.SYSTEM_SUGGESTIONS
         return context
 
     def form_valid(self, form):
@@ -909,443 +905,650 @@ def po_import_excel(request):
 
 
 # ═══════════════════════════════════════════════════════════════
-# PROCUREMENT SUMMARY
+# PROCUREMENT SUMMARY (Internal / External)
 # ═══════════════════════════════════════════════════════════════
 
-class SummaryPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
-    def get_queryset(self):
-        queryset = ProcurementSummary.objects.select_related('project', 'created_by').all()
-        user = self.request.user
-        if user.is_super_admin_user:
-            return queryset
-        elif user.is_admin_user or user.is_manager_user:
-            return queryset.filter(
-                Q(created_by=user) | Q(project__region=user.region)
+SUMMARY_ENTRY_DATE_FIELDS = {
+    'po_plan', 'po_forecast', 'po_actual',
+    'delivery_plan', 'delivery_readiness', 'delivery_forecast', 'delivery_actual',
+}
+
+
+def _scoped_items_for_summary(request):
+    """PO line items the user can see — scoped through the parent PO."""
+    user = request.user
+    qs = PurchaseOrderItem.objects.select_related(
+        'purchase_order', 'purchase_order__project', 'purchase_order__project__region',
+        'purchase_order__created_by',
+    ).all()
+    if user.is_super_admin_user or user.is_procurement_user:
+        return qs
+    elif user.is_admin_user or user.is_manager_user:
+        return qs.filter(
+            Q(purchase_order__created_by=user)
+            | Q(purchase_order__project__region=user.region)
+        )
+    return qs.filter(purchase_order__created_by=user)
+
+
+def _ensure_summary_entries(items, summary_type):
+    """Make sure every line item in `items` has a matching POSummaryEntry of the given type."""
+    item_ids = [i.id for i in items]
+    existing = {
+        e.purchase_order_item_id: e
+        for e in POSummaryEntry.objects.filter(
+            purchase_order_item_id__in=item_ids, summary_type=summary_type
+        )
+    }
+    missing = [i for i in items if i.id not in existing]
+    if missing:
+        POSummaryEntry.objects.bulk_create([
+            POSummaryEntry(purchase_order_item=i, summary_type=summary_type)
+            for i in missing
+        ])
+        existing = {
+            e.purchase_order_item_id: e
+            for e in POSummaryEntry.objects.filter(
+                purchase_order_item_id__in=item_ids, summary_type=summary_type
             )
-        else:
-            return queryset.filter(created_by=user)
+        }
+    return existing
 
 
-class SummaryListView(SummaryPermissionMixin, ListView):
-    model = ProcurementSummary
-    template_name = 'procurement/summary_list.html'
-    context_object_name = 'summaries'
-    paginate_by = 25
-
-    def test_func(self):
-        return True
-
-    def get_queryset(self):
-        queryset = super().get_queryset()
-        search = self.request.GET.get('search')
-        if search:
-            queryset = queryset.filter(
-                Q(project_name__icontains=search) |
-                Q(package_name__icontains=search)
-            )
-        return queryset
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['total_count'] = self.get_queryset().count()
-        return context
+DATE_FIELD_ORDER = (
+    'po_plan', 'po_forecast', 'po_actual',
+    'delivery_plan', 'delivery_readiness', 'delivery_forecast', 'delivery_actual',
+)
 
 
-class SummaryCreateView(SummaryPermissionMixin, CreateView):
-    model = ProcurementSummary
-    form_class = ProcurementSummaryForm
-    template_name = 'procurement/summary_form.html'
+def _row_status(entry):
+    """Classify a summary row for visual treatment.
+    delivered  — Delivery Actual filled
+    inprogress — Delivery Plan/Forecast set, no Actual yet
+    pending    — nothing on the delivery side, or no entry at all"""
+    if not entry:
+        return 'pending'
+    if entry.delivery_actual:
+        return 'delivered'
+    if entry.delivery_plan or entry.delivery_forecast or entry.delivery_readiness:
+        return 'inprogress'
+    return 'pending'
 
-    def test_func(self):
-        return True
-
-    def get_form_kwargs(self):
-        kwargs = super().get_form_kwargs()
-        kwargs['user'] = self.request.user
-        return kwargs
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        if self.request.POST:
-            context['item_formset'] = SummaryItemFormSet(self.request.POST, prefix='items')
-        else:
-            context['item_formset'] = SummaryItemFormSet(prefix='items')
-        context['title'] = 'Create Procurement Summary'
-        return context
-
-    def form_valid(self, form):
-        context = self.get_context_data()
-        item_formset = context['item_formset']
-        if item_formset.is_valid():
-            self.object = form.save(commit=False)
-            self.object.created_by = self.request.user
-            self.object.save()
-            item_formset.instance = self.object
-            item_formset.save()
-            messages.success(self.request, 'Procurement Summary created successfully.')
-            return redirect(self.get_success_url())
-        else:
-            return self.form_invalid(form)
-
-    def get_success_url(self):
-        return reverse('procurement:summary_detail', kwargs={'pk': self.object.pk})
-
-
-class SummaryDetailView(SummaryPermissionMixin, DetailView):
-    model = ProcurementSummary
-    template_name = 'procurement/summary_detail.html'
-    context_object_name = 'summary'
-
-    def test_func(self):
-        return True
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['items'] = self.object.items.all()
-        return context
-
-
-class SummaryUpdateView(SummaryPermissionMixin, UpdateView):
-    model = ProcurementSummary
-    form_class = ProcurementSummaryForm
-    template_name = 'procurement/summary_form.html'
-
-    def test_func(self):
-        user = self.request.user
-        if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
-            return True
-        return self.get_object().created_by == user
-
-    def get_form_kwargs(self):
-        kwargs = super().get_form_kwargs()
-        kwargs['user'] = self.request.user
-        return kwargs
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        if self.request.POST:
-            context['item_formset'] = SummaryItemFormSet(self.request.POST, instance=self.object, prefix='items')
-        else:
-            context['item_formset'] = SummaryItemFormSet(instance=self.object, prefix='items')
-        context['title'] = f'Edit: {self.object}'
-        return context
-
-    def form_valid(self, form):
-        context = self.get_context_data()
-        item_formset = context['item_formset']
-        if item_formset.is_valid():
-            self.object = form.save()
-            item_formset.instance = self.object
-            item_formset.save()
-            messages.success(self.request, 'Procurement Summary updated.')
-            return redirect(self.get_success_url())
-        else:
-            return self.form_invalid(form)
-
-    def get_success_url(self):
-        return reverse('procurement:summary_detail', kwargs={'pk': self.object.pk})
-
-
-class SummaryDeleteView(SummaryPermissionMixin, DeleteView):
-    model = ProcurementSummary
-    template_name = 'procurement/summary_confirm_delete.html'
-    success_url = reverse_lazy('procurement:summary_list')
-
-    def test_func(self):
-        user = self.request.user
-        if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
-            return True
-        return self.get_object().created_by == user
-
-    def form_valid(self, form):
-        messages.success(self.request, 'Procurement Summary deleted.')
-        return super().form_valid(form)
-
-
-# ─── Summary Export (Excel) ───────────────────────────────────
 
 @login_required
-def summary_export_excel(request, pk):
-    summary = get_object_or_404(ProcurementSummary, pk=pk)
-    items = summary.items.all()
+def internal_summary(request):
+    """Internal procurement summary — every PO line item grouped by its
+    `system`, with editable date / remarks columns added per row."""
+    items = list(_scoped_items_for_summary(request).order_by(
+        'system', 'purchase_order__po_number', 'serial_number',
+    ))
+    entries_by_item = _ensure_summary_entries(items, 'internal')
 
-    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from collections import OrderedDict
+    groups = OrderedDict()
+    for it in items:
+        key = (it.system or '').strip() or '— Unassigned —'
+        groups.setdefault(key, []).append({
+            'item': it,
+            'entry': entries_by_item.get(it.id),
+        })
+
+    rows = []
+    group_summary = []
+    sn = 0
+    total_delivered = 0
+    total_inprogress = 0
+    total_pending = 0
+    for group_key, members in groups.items():
+        g_delivered = g_inprogress = g_pending = 0
+        for idx, m in enumerate(members):
+            sn += 1
+            entry = m['entry']
+            status = _row_status(entry)
+            if status == 'delivered':
+                g_delivered += 1
+                total_delivered += 1
+            elif status == 'inprogress':
+                g_inprogress += 1
+                total_inprogress += 1
+            else:
+                g_pending += 1
+                total_pending += 1
+            date_cells = []
+            for field in DATE_FIELD_ORDER:
+                val = getattr(entry, field, None) if entry else None
+                date_cells.append({
+                    'field': field,
+                    'iso': val.strftime('%Y-%m-%d') if val else '',
+                    'display': val.strftime('%d %b %Y') if val else '',
+                    'empty': val is None,
+                })
+            rows.append({
+                'group_key': group_key,
+                'is_first_in_group': idx == 0,
+                'group_size': len(members),
+                'sn': sn,
+                'item': m['item'],
+                'po': m['item'].purchase_order,
+                'entry': entry,
+                'date_cells': date_cells,
+                'status': status,
+            })
+        group_summary.append({
+            'key': group_key,
+            'count': len(members),
+            'delivered': g_delivered,
+            'inprogress': g_inprogress,
+            'pending': g_pending,
+        })
+
+    return render(request, 'procurement/summary_internal.html', {
+        'rows': rows,
+        'po_count': len(items),
+        'group_count': len(groups),
+        'group_summary': group_summary,
+        'totals': {
+            'delivered': total_delivered,
+            'inprogress': total_inprogress,
+            'pending': total_pending,
+        },
+        'summary_type': 'internal',
+    })
+
+
+@login_required
+@require_POST
+def ajax_summary_entry_update(request, pk):
+    """AJAX update of one date or remarks cell on a POSummaryEntry."""
+    entry = get_object_or_404(
+        POSummaryEntry.objects.select_related('purchase_order_item__purchase_order'),
+        pk=pk,
+    )
+    po = entry.purchase_order_item.purchase_order
+
+    user = request.user
+    can_edit = (
+        user.is_super_admin_user or user.is_admin_user or user.is_procurement_user
+        or po.created_by_id == user.id
+    )
+    if not can_edit:
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    field = request.POST.get('field', '').strip()
+    raw = (request.POST.get('value') or '').strip()
+
+    if field == 'remarks':
+        entry.remarks = raw
+        entry.save(update_fields=['remarks', 'updated_at'])
+        return JsonResponse({'ok': True, 'value': entry.remarks})
+
+    if field not in SUMMARY_ENTRY_DATE_FIELDS:
+        return JsonResponse({'error': f'Unknown field {field!r}'}, status=400)
+
+    if not raw:
+        parsed = None
+    else:
+        from datetime import datetime
+        parsed = None
+        for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y'):
+            try:
+                parsed = datetime.strptime(raw, fmt).date()
+                break
+            except ValueError:
+                continue
+        if parsed is None:
+            return JsonResponse({'error': f'Unparseable date: {raw!r}'}, status=400)
+
+    setattr(entry, field, parsed)
+    entry.save(update_fields=[field, 'updated_at'])
+    return JsonResponse({
+        'ok': True,
+        'value': parsed.isoformat() if parsed else '',
+        'display': parsed.strftime('%d %b %Y') if parsed else '',
+    })
+
+
+# ─── External Summary ────────────────────────────────────────
+
+# Per-line-item fields editable inline from the External summary table.
+# Maps the cell `data-field` -> a tuple of (model attribute, parser).
+def _to_decimal_or_none(raw):
+    if raw is None or str(raw).strip() == '':
+        return None
+    return Decimal(str(raw))
+
+
+PO_ITEM_INLINE_FIELDS = {
+    'po_value_usd': ('po_value_usd', _to_decimal_or_none),
+    'advance_payment_sar': ('advance_payment_sar', _to_decimal_or_none),
+    'delivery_status': ('delivery_status', lambda v: ('' if v is None else str(v))),
+    'scm': ('scm', lambda v: ('' if v is None else str(v))[:10]),
+}
+
+# PO-level fields editable inline (when the same value applies to every
+# line item under that PO — e.g. lead time, payment terms, warranty).
+PO_HEADER_INLINE_FIELDS = {
+    'lead_time': 'lead_time',
+    'payment_terms_text': 'payment_terms_text',
+    'warranty': 'warranty',
+}
+
+
+@login_required
+@require_POST
+def ajax_po_item_field_update(request, pk):
+    """AJAX update of a single field on a PurchaseOrderItem.
+    Used by the External summary's inline-editable cells."""
+    item = get_object_or_404(
+        PurchaseOrderItem.objects.select_related('purchase_order'), pk=pk,
+    )
+    po = item.purchase_order
+
+    user = request.user
+    can_edit = (
+        user.is_super_admin_user or user.is_admin_user or user.is_procurement_user
+        or po.created_by_id == user.id
+    )
+    if not can_edit:
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    field = request.POST.get('field', '').strip()
+    raw = request.POST.get('value', '')
+
+    # PO-level fields go on the parent PO record
+    if field in PO_HEADER_INLINE_FIELDS:
+        attr = PO_HEADER_INLINE_FIELDS[field]
+        setattr(po, attr, (raw or '').strip())
+        po.save(update_fields=[attr, 'updated_at'])
+        return JsonResponse({'ok': True, 'value': getattr(po, attr) or ''})
+
+    if field not in PO_ITEM_INLINE_FIELDS:
+        return JsonResponse({'error': f'Unknown field {field!r}'}, status=400)
+
+    attr, parser = PO_ITEM_INLINE_FIELDS[field]
+    try:
+        parsed = parser(raw)
+    except (InvalidOperation, ValueError):
+        return JsonResponse({'error': f'Invalid value for {field!r}'}, status=400)
+
+    setattr(item, attr, parsed)
+    item.save(update_fields=[attr])
+
+    if isinstance(parsed, Decimal):
+        display = f'{parsed:,.2f}'
+    else:
+        display = parsed or ''
+    return JsonResponse({
+        'ok': True,
+        'value': str(parsed) if parsed not in (None, '') else '',
+        'display': display,
+    })
+
+
+def _po_qty_text(item):
+    """Format quantity + uom like the sample: '4 Nos'."""
+    q = item.quantity
+    if q is None:
+        return ''
+    # Drop trailing zeros for whole numbers
+    qstr = f'{q:.0f}' if q == q.to_integral() else f'{q:,.2f}'
+    return f'{qstr} {item.uom}'.strip()
+
+
+def _build_external_rows(items):
+    """Pre-compute display data for each row of the External summary."""
+    rows = []
+    sn = 0
+    for it in items:
+        sn += 1
+        po = it.purchase_order
+        item_label_parts = []
+        if it.system:
+            item_label_parts.append(it.system)
+        if it.description:
+            item_label_parts.append(it.description)
+        item_label = ' — '.join(item_label_parts) if item_label_parts else (it.description or '—')
+
+        rows.append({
+            'sn': sn,
+            'item': it,
+            'po': po,
+            'item_label': item_label,
+            'po_value_sar': it.total_value,
+            'qty_text': _po_qty_text(it),
+        })
+    return rows
+
+
+def _external_totals(items):
+    """Sum SAR / USD / Advance Payment across the visible items."""
+    total_sar = Decimal('0')
+    total_usd = Decimal('0')
+    total_advance = Decimal('0')
+    for it in items:
+        total_sar += it.total_value or Decimal('0')
+        if it.po_value_usd:
+            total_usd += it.po_value_usd
+        if it.advance_payment_sar:
+            total_advance += it.advance_payment_sar
+    return {
+        'sar': total_sar,
+        'usd': total_usd,
+        'advance': total_advance,
+    }
+
+
+def _external_projects_for_user(request):
+    """Distinct projects with at least one PO line item the user can see,
+    plus a sentinel 'all' option for the Daily-Status-style view."""
+    items = _scoped_items_for_summary(request)
+    project_ids = (
+        items.exclude(purchase_order__project__isnull=True)
+        .values_list('purchase_order__project_id', flat=True).distinct()
+    )
+    from projects.models import Project
+    projects = list(Project.objects.filter(pk__in=list(project_ids))
+                    .order_by('project_name'))
+    return projects
+
+
+@login_required
+def external_summary(request):
+    """External procurement summary — line items grouped by Project, with
+    procurement-tracking columns. Filterable to a single project (matching
+    the sample's per-package tabs); 'all' shows the Daily-Status view."""
+    items_qs = _scoped_items_for_summary(request)
+    selected = request.GET.get('project', '').strip()  # 'all' or a project pk
+    if selected and selected != 'all':
+        try:
+            items_qs = items_qs.filter(purchase_order__project_id=int(selected))
+        except (TypeError, ValueError):
+            selected = ''
+    if not selected:
+        # Default to "all" if no filter passed.
+        selected = 'all'
+
+    items = list(items_qs.order_by(
+        'purchase_order__project__project_name',
+        'purchase_order__po_number',
+        'serial_number',
+    ))
+    rows = _build_external_rows(items)
+    totals = _external_totals(items)
+    projects = _external_projects_for_user(request)
+
+    selected_project = None
+    if selected != 'all':
+        for p in projects:
+            if str(p.pk) == selected:
+                selected_project = p
+                break
+
+    return render(request, 'procurement/summary_external.html', {
+        'rows': rows,
+        'totals': totals,
+        'projects': projects,
+        'selected': selected,
+        'selected_project': selected_project,
+        'show_project_column': selected == 'all',
+        'po_count': len(items),
+    })
+
+
+@login_required
+def external_summary_export(request):
+    """Excel export of the external summary, matching the sample layout."""
+    items_qs = _scoped_items_for_summary(request)
+    selected = request.GET.get('project', '').strip()
+    if selected and selected != 'all':
+        try:
+            items_qs = items_qs.filter(purchase_order__project_id=int(selected))
+        except (TypeError, ValueError):
+            selected = 'all'
+
+    items = list(items_qs.order_by(
+        'purchase_order__project__project_name',
+        'purchase_order__po_number',
+        'serial_number',
+    ))
 
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = summary.package_name or 'Summary'
+    ws.title = 'External Summary'
+
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
 
     bold = Font(bold=True)
-    header_font = Font(bold=True, color='FFFFFF', size=9)
-    header_fill = PatternFill(start_color='1F4E79', end_color='1F4E79', fill_type='solid')
-    thin_border = Border(
-        left=Side(style='thin'), right=Side(style='thin'),
-        top=Side(style='thin'), bottom=Side(style='thin')
-    )
-    wrap = Alignment(wrap_text=True, vertical='top')
+    bold_red = Font(bold=True, color='C41E3A')
+    center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    left = Alignment(horizontal='left', vertical='top', wrap_text=True)
+    right = Alignment(horizontal='right', vertical='center')
+    head_fill = PatternFill('solid', fgColor='F5D7DC')
+    total_fill = PatternFill('solid', fgColor='FBE8EC')
+    thin = Side(style='thin', color='CCCCCC')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    # Project header
+    show_project_col = (selected == 'all')
+
+    # Project header row
+    project_label = 'All projects (Daily Status)'
+    if not show_project_col:
+        from projects.models import Project
+        try:
+            p = Project.objects.get(pk=int(selected))
+            project_label = p.project_name
+        except (Project.DoesNotExist, ValueError):
+            pass
     ws.cell(row=1, column=2, value='Project:').font = bold
-    ws.cell(row=1, column=3, value=summary.project_name).font = bold
+    ws.cell(row=1, column=3, value=project_label).font = bold
 
-    # Column headers (row 3)
-    headers = ['Sr.', 'System / Item', 'PO Number', 'PO Status', 'PO QTY',
-               'Supplier', 'Lead Time', 'Incoterm', 'Payment Terms', 'Warranty',
-               'PO Value (SAR)', 'PO Value (USD/EUR)', 'Advance Payment',
-               'Delivery Status', 'SCM']
-    for col, h in enumerate(headers, 1):
-        cell = ws.cell(row=3, column=col, value=h)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.border = thin_border
-        cell.alignment = Alignment(horizontal='center', wrap_text=True)
+    # Header row
+    headers = [
+        (1, 'Sr.'),
+        (2, 'System / Item'),
+        (3, 'PO Number'),
+        (4, 'PO Status'),
+        (5, 'PO QTY'),
+        (6, 'Supplier'),
+        (7, 'Lead Time'),
+        (8, 'Incoterm'),
+        (9, 'Payment Terms'),
+        (10, 'Warranty'),
+        (11, 'PO Value (SAR)'),
+        (12, 'PO Value (USD/EUR)'),
+        (13, 'Advance Payment'),
+        (14, 'Delivery Status'),
+        (15, 'SCM'),
+    ]
+    if show_project_col:
+        headers.append((16, 'Project'))
 
-    # Data rows
-    for row_num, item in enumerate(items, 4):
-        data = [
-            item.serial_number, item.system_item, item.po_number,
-            item.get_po_status_display() if item.po_status else '',
-            item.po_qty, item.supplier, item.lead_time, item.incoterm,
-            item.payment_terms, item.warranty,
-            float(item.po_value_sar) if item.po_value_sar else '',
-            float(item.po_value_usd) if item.po_value_usd else '',
-            float(item.advance_payment) if item.advance_payment else '',
-            item.delivery_status, item.scm,
+    for col, label in headers:
+        c = ws.cell(row=3, column=col, value=label)
+        c.font = bold
+        c.alignment = center
+        c.fill = head_fill
+        c.border = border
+
+    row = 4
+    sn = 0
+    for it in items:
+        sn += 1
+        po = it.purchase_order
+        item_label = ' — '.join([p for p in [it.system, it.description] if p]) or (it.description or '')
+
+        cells = [
+            (1, sn),
+            (2, item_label),
+            (3, po.po_number),
+            (4, po.get_status_display()),
+            (5, _po_qty_text(it)),
+            (6, po.vendor_name),
+            (7, po.lead_time or ''),
+            (8, po.delivery_incoterms or ''),
+            (9, po.payment_terms_text or ''),
+            (10, po.warranty or ''),
+            (11, float(it.total_value) if it.total_value else 0),
+            (12, float(it.po_value_usd) if it.po_value_usd else None),
+            (13, float(it.advance_payment_sar) if it.advance_payment_sar else None),
+            (14, it.delivery_status or ''),
+            (15, it.scm or ''),
         ]
-        for col, val in enumerate(data, 1):
-            cell = ws.cell(row=row_num, column=col, value=val)
-            cell.border = thin_border
-            cell.alignment = wrap
+        if show_project_col:
+            cells.append((16, po.project.project_name if po.project_id else (po.project_name or '')))
 
-    # Totals row
-    total_row = 4 + items.count() + 1
-    ws.cell(row=total_row, column=9, value='Total').font = bold
-    ws.cell(row=total_row, column=11, value=float(summary.total_po_value_sar)).font = bold
+        for col, val in cells:
+            c = ws.cell(row=row, column=col, value=val)
+            c.border = border
+            if col in (1, 4, 5, 8, 15, 16):
+                c.alignment = center
+            elif col in (11, 12, 13):
+                c.alignment = right
+                c.number_format = '#,##0.00'
+            else:
+                c.alignment = left
+        row += 1
+
+    # Total row
+    totals = _external_totals(items)
+    total_row = row
+    for col in range(1, max(c for c, _ in headers) + 1):
+        c = ws.cell(row=total_row, column=col)
+        c.fill = total_fill
+        c.border = border
+    ws.cell(row=total_row, column=9, value='Total').font = bold_red
+    ws.cell(row=total_row, column=9).alignment = right
+    ws.cell(row=total_row, column=11, value=float(totals['sar'])).font = bold_red
+    ws.cell(row=total_row, column=11).alignment = right
     ws.cell(row=total_row, column=11).number_format = '#,##0.00'
-    ws.cell(row=total_row, column=12, value=float(summary.total_po_value_usd)).font = bold
+    ws.cell(row=total_row, column=12, value=float(totals['usd'])).font = bold_red
+    ws.cell(row=total_row, column=12).alignment = right
     ws.cell(row=total_row, column=12).number_format = '#,##0.00'
-    ws.cell(row=total_row, column=13, value=float(summary.total_advance_payment)).font = bold
+    ws.cell(row=total_row, column=13, value=float(totals['advance'])).font = bold_red
+    ws.cell(row=total_row, column=13).alignment = right
     ws.cell(row=total_row, column=13).number_format = '#,##0.00'
 
-    # Column widths
-    widths = [6, 28, 18, 12, 12, 18, 16, 10, 18, 14, 14, 14, 14, 22, 8]
-    for i, w in enumerate(widths, 1):
-        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    widths = {1: 5, 2: 32, 3: 22, 4: 14, 5: 14, 6: 22, 7: 22, 8: 12,
+              9: 22, 10: 18, 11: 14, 12: 14, 13: 14, 14: 28, 15: 8, 16: 18}
+    for col, w in widths.items():
+        ws.column_dimensions[get_column_letter(col)].width = w
 
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
-    raw_name = summary.package_name or summary.project_name
-    filename = _safe_filename(raw_name, prefix='Summary', extension='xlsx')
+    suffix = 'all' if show_project_col else f'project_{selected}'
+    filename = _safe_filename('external_summary', suffix=suffix, extension='xlsx')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)
     return response
 
 
-# ─── Summary Export (PDF) ─────────────────────────────────────
-
 @login_required
-def summary_export_pdf(request, pk):
-    from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4, landscape
-    from reportlab.lib.units import mm
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-    from reportlab.lib.enums import TA_RIGHT
-    from io import BytesIO
-    from django.contrib.staticfiles.finders import find as find_static
+def internal_summary_export(request):
+    """Excel export of the internal summary, matching the sample layout."""
+    items = list(_scoped_items_for_summary(request).order_by(
+        'system', 'purchase_order__po_number', 'serial_number',
+    ))
+    entries_by_item = _ensure_summary_entries(items, 'internal')
 
-    summary = get_object_or_404(ProcurementSummary, pk=pk)
-    items = summary.items.all()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Internal Summary'
 
-    buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=landscape(A4), topMargin=12*mm, bottomMargin=12*mm, leftMargin=10*mm, rightMargin=10*mm)
-    elements = []
-    styles = getSampleStyleSheet()
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
+    bold = Font(bold=True)
+    center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    left = Alignment(horizontal='left', vertical='center', wrap_text=True)
+    head_fill = PatternFill('solid', fgColor='F5D7DC')
+    thin = Side(style='thin', color='CCCCCC')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=13, textColor=colors.HexColor('#C41E3A'), spaceAfter=2)
-    sub_style = ParagraphStyle('Sub', parent=styles['Normal'], fontSize=10, spaceAfter=4)
-    small = ParagraphStyle('Sm', parent=styles['Normal'], fontSize=6, leading=7)
-    small_r = ParagraphStyle('SmR', parent=styles['Normal'], fontSize=6, leading=7, alignment=TA_RIGHT)
-    small_b = ParagraphStyle('SmB', parent=styles['Normal'], fontSize=6, leading=7, fontName='Helvetica-Bold')
+    # Layout (1-indexed):
+    # B=2 SN | C=3 ITEM DESCRIPTION | D=4 SUB ITEM DESCRIPTION | E=5 PO # |
+    # F=6 VENDOR | G=7 PO Issuance | H-J = PO Plan/Forecast/Actual |
+    # K-N = Delivery Plan/Readiness/Forecast/Actual | O=15 Remarks
+    ws.cell(row=1, column=2, value='SN').font = bold
+    ws.cell(row=1, column=3, value='ITEM DESCRIPTION').font = bold
+    ws.cell(row=1, column=4, value='SUB ITEM DESCRIPTION').font = bold
+    ws.cell(row=1, column=5, value='PO #').font = bold
+    ws.cell(row=1, column=6, value='VENDOR').font = bold
+    ws.cell(row=1, column=7, value='PO Issuance').font = bold
 
-    # Logo + Title
-    logo_path = find_static('images/leap_logo.jpg')
-    if logo_path:
-        from reportlab.platypus import Image
-        logo = Image(logo_path, width=45*mm, height=13*mm)
-        t = Table([[logo, Paragraph('PROCUREMENT SUMMARY REPORT', title_style)]], colWidths=[50*mm, 220*mm])
-        t.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
-        elements.append(t)
-    else:
-        elements.append(Paragraph('PROCUREMENT SUMMARY REPORT', title_style))
-
-    pkg = f' - {summary.package_name}' if summary.package_name else ''
-    elements.append(Paragraph(f'<b>Project:</b> {summary.project_name}{pkg}', sub_style))
-    elements.append(Spacer(1, 3*mm))
-
-    # Table
-    dark_blue = colors.HexColor('#C41E3A')
-    col_widths = [8*mm, 35*mm, 22*mm, 14*mm, 16*mm, 25*mm, 20*mm, 14*mm,
-                  25*mm, 18*mm, 18*mm, 18*mm, 18*mm, 28*mm, 10*mm]
-
-    header = [
-        Paragraph('<b>Sr.</b>', small), Paragraph('<b>System / Item</b>', small),
-        Paragraph('<b>PO Number</b>', small), Paragraph('<b>Status</b>', small),
-        Paragraph('<b>PO QTY</b>', small), Paragraph('<b>Supplier</b>', small),
-        Paragraph('<b>Lead Time</b>', small), Paragraph('<b>Incoterm</b>', small),
-        Paragraph('<b>Payment Terms</b>', small), Paragraph('<b>Warranty</b>', small),
-        Paragraph('<b>PO Value SAR</b>', small), Paragraph('<b>PO Value USD</b>', small),
-        Paragraph('<b>Advance Pmt</b>', small), Paragraph('<b>Delivery Status</b>', small),
-        Paragraph('<b>SCM</b>', small),
+    group_headers = [
+        ('PO', 8, 3),
+        ('DELIVERY', 11, 4),
     ]
-    data = [header]
+    for label, col, span in group_headers:
+        c = ws.cell(row=1, column=col, value=label)
+        c.font = bold
+        c.alignment = center
+        ws.merge_cells(start_row=1, start_column=col, end_row=1, end_column=col + span - 1)
 
+    ws.cell(row=1, column=15, value='Remarks').font = bold
+
+    sub_headers = [
+        (8, 'PLAN'), (9, 'FORECAST'), (10, 'ACTUAL'),
+        (11, 'PLAN'), (12, 'READINESS'), (13, 'FORECAST'), (14, 'ACTUAL'),
+    ]
+    for col, label in sub_headers:
+        c = ws.cell(row=2, column=col, value=label)
+        c.font = bold
+        c.alignment = center
+        c.fill = head_fill
+
+    for col in [2, 3, 4, 5, 6, 7, 15] + [c for c, _ in sub_headers]:
+        ws.cell(row=1, column=col).fill = head_fill
+        ws.cell(row=1, column=col).alignment = center
+    for col in range(2, 16):
+        ws.cell(row=1, column=col).border = border
+        ws.cell(row=2, column=col).border = border
+
+    row = 3
+    sn = 0
+    last_system = None
     for item in items:
-        data.append([
-            Paragraph(str(item.serial_number), small),
-            Paragraph(item.system_item, small),
-            Paragraph(item.po_number, small),
-            Paragraph(item.get_po_status_display() if item.po_status else '', small),
-            Paragraph(item.po_qty, small),
-            Paragraph(item.supplier, small),
-            Paragraph(item.lead_time, small),
-            Paragraph(item.incoterm, small),
-            Paragraph(item.payment_terms, small),
-            Paragraph(item.warranty, small),
-            Paragraph(f'{item.po_value_sar:,.2f}' if item.po_value_sar else '-', small_r),
-            Paragraph(f'{item.po_value_usd:,.2f}' if item.po_value_usd else '-', small_r),
-            Paragraph(f'{item.advance_payment:,.2f}' if item.advance_payment else '-', small_r),
-            Paragraph(item.delivery_status, small),
-            Paragraph(item.scm, small),
-        ])
+        po = item.purchase_order
+        sn += 1
+        entry = entries_by_item.get(item.id)
+        sys_label = (item.system or '').strip() or '— Unassigned —'
+        ws.cell(row=row, column=2, value=sn).alignment = center
+        ws.cell(row=row, column=3, value=sys_label if sys_label != last_system else '').alignment = left
+        ws.cell(row=row, column=4, value=item.description or '').alignment = left
+        ws.cell(row=row, column=5, value=po.po_number).alignment = left
+        ws.cell(row=row, column=6, value=po.vendor_name).alignment = left
+        ws.cell(row=row, column=7, value=po.get_status_display()).alignment = left
+        last_system = sys_label
 
-    # Totals row
-    data.append([
-        '', '', '', '', '', '', '', '',
-        Paragraph('<b>Total</b>', small_b), '',
-        Paragraph(f'<b>{summary.total_po_value_sar:,.2f}</b>', small_r),
-        Paragraph(f'<b>{summary.total_po_value_usd:,.2f}</b>', small_r),
-        Paragraph(f'<b>{summary.total_advance_payment:,.2f}</b>', small_r),
-        '', '',
-    ])
+        if entry:
+            date_cells = [
+                (8, entry.po_plan), (9, entry.po_forecast), (10, entry.po_actual),
+                (11, entry.delivery_plan), (12, entry.delivery_readiness),
+                (13, entry.delivery_forecast), (14, entry.delivery_actual),
+            ]
+            for col, val in date_cells:
+                if val:
+                    c = ws.cell(row=row, column=col, value=val)
+                    c.number_format = 'dd-mmm-yyyy'
+                    c.alignment = center
+            ws.cell(row=row, column=15, value=entry.remarks or '').alignment = left
 
-    table = Table(data, colWidths=col_widths, repeatRows=1)
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F5D7DC')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#495057')),
-        ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#C41E3A')),
-        ('GRID', (0, 0), (-1, -1), 0.4, colors.grey),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('TOPPADDING', (0, 0), (-1, -1), 1),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#F5F5F5')]),
-        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#FBE8EC')),
-        ('LINEABOVE', (0, -1), (-1, -1), 1, dark_blue),
-    ]))
-    elements.append(table)
+        for col in range(2, 16):
+            ws.cell(row=row, column=col).border = border
+        row += 1
 
-    doc.build(elements)
-    buf.seek(0)
-    response = HttpResponse(buf.read(), content_type='application/pdf')
-    raw_name = summary.package_name or summary.project_name
-    filename = _safe_filename(raw_name, prefix='Summary', extension='pdf')
+    widths = {2: 5, 3: 22, 4: 30, 5: 25, 6: 18, 7: 14, 15: 35}
+    for c in range(8, 15):
+        widths[c] = 12
+    for col, w in widths.items():
+        ws.column_dimensions[get_column_letter(col)].width = w
+
+    response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    filename = _safe_filename('internal_summary', extension='xlsx')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    wb.save(response)
     return response
-
-
-# ─── Summary Import (Excel) ──────────────────────────────────
-
-@login_required
-def summary_import_excel(request):
-    """Import a Procurement Summary from an Excel file (multi-sheet supported)."""
-    if request.method != 'POST':
-        return redirect('procurement:summary_list')
-
-    excel_file = request.FILES.get('excel_file')
-    if not excel_file:
-        messages.error(request, 'Please select an Excel file.')
-        return redirect('procurement:summary_list')
-
-    try:
-        wb = openpyxl.load_workbook(excel_file, data_only=True)
-        created_count = 0
-
-        for ws in wb.worksheets:
-            # Skip sheets that don't look like summary data
-            if ws.max_row < 4:
-                continue
-
-            # Parse project name from row 1
-            project_name = ''
-            for col in range(1, 10):
-                v = ws.cell(row=1, column=col).value
-                if v and 'project' not in str(v).lower().strip().rstrip(':'):
-                    project_name = str(v).strip()
-                    break
-
-            if not project_name:
-                project_name = ws.title
-
-            summary = ProcurementSummary.objects.create(
-                project_name=project_name,
-                package_name=ws.title,
-                created_by=request.user,
-            )
-
-            # Parse items starting from row 4
-            item_count = 0
-            for r in range(4, ws.max_row + 1):
-                cell_b = ws.cell(row=r, column=2).value
-                if not cell_b:
-                    continue
-                b_str = str(cell_b).strip()
-                if not b_str or b_str.lower() == 'total':
-                    continue
-
-                def cv(col):
-                    v = ws.cell(row=r, column=col).value
-                    return str(v).strip() if v is not None else ''
-
-                def nv(col):
-                    v = ws.cell(row=r, column=col).value
-                    if isinstance(v, (int, float)):
-                        return Decimal(str(v))
-                    return None
-
-                sn = ws.cell(row=r, column=1).value
-                ProcurementSummaryItem.objects.create(
-                    summary=summary,
-                    serial_number=int(sn) if isinstance(sn, (int, float)) else item_count + 1,
-                    system_item=b_str,
-                    po_number=cv(3),
-                    po_status='issued' if 'issued' in cv(4).lower() else '',
-                    po_qty=cv(5),
-                    supplier=cv(6),
-                    lead_time=cv(7),
-                    incoterm=cv(8),
-                    payment_terms=cv(9),
-                    warranty=cv(10),
-                    po_value_sar=nv(11),
-                    po_value_usd=nv(12),
-                    advance_payment=nv(13),
-                    delivery_status=cv(14),
-                    scm=cv(15),
-                    order=item_count,
-                )
-                item_count += 1
-
-            if item_count == 0:
-                summary.delete()
-            else:
-                created_count += 1
-
-        messages.success(request, f'Imported {created_count} summary sheet(s).')
-        return redirect('procurement:summary_list')
-
-    except Exception as e:
-        messages.error(request, f'Error importing file: {str(e)}')
-        return redirect('procurement:summary_list')
 
 
 # ═══════════════════════════════════════════════════════════════
