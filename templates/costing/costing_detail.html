@@ -998,6 +998,44 @@
     </div>
 </div>
 
+<!-- PDF Additional Contacts (Sales team only, grouped by region) -->
+<div class="card mt-3 bom-pricing-only">
+    <div class="card-header">
+        <i class="bi bi-people me-2"></i> PDF Additional Contacts
+    </div>
+    <div class="card-body">
+        <p class="text-muted small mb-2">
+            The PDF auto-credits the sheet creator. Tick any Sales-team member who also worked on this sheet —
+            their name &amp; email are added as extra <em>Contact / Email</em> rows in the PDF header.
+            Only Sales-team contacts (Sales Rep, Manager, Admin, Super Admin) are eligible — the PDF goes to clients.
+        </p>
+        {% if additional_contacts_by_region %}
+            {% for region_name, items in additional_contacts_by_region.items %}
+            <h6 class="text-muted mb-2 mt-2"><i class="bi bi-geo-alt me-1"></i>{{ region_name }}</h6>
+            <div class="row mb-2">
+                {% for item in items %}
+                <div class="col-md-6 col-lg-4 mb-2">
+                    <div class="form-check">
+                        <input class="form-check-input additional-contact-checkbox" type="checkbox"
+                               id="additional-contact-{{ item.user.pk }}"
+                               data-user-id="{{ item.user.pk }}"
+                               {% if item.selected %}checked{% endif %}>
+                        <label class="form-check-label" for="additional-contact-{{ item.user.pk }}">
+                            <strong>{{ item.user.get_full_name|default:item.user.username }}</strong>
+                            {% if item.user.role %}<span class="badge bg-secondary ms-1">{{ item.user.role.get_name_display }}</span>{% endif %}
+                            <br><small class="text-muted">{{ item.user.email }}</small>
+                        </label>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+        {% else %}
+        <p class="text-muted mb-0">No other Sales-team users available to credit.</p>
+        {% endif %}
+    </div>
+</div>
+
 <!-- PDF Client Remarks & Leap's Answers Selection -->
 <div class="card mt-3 bom-pricing-only">
     <div class="card-header d-flex justify-content-between align-items-center">
@@ -1545,6 +1583,34 @@ var _csrfToken = '{{ csrf_token }}';
                     'X-CSRFToken': csrfToken,
                 },
                 body: 'term_id=' + termId,
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data.ok) {
+                    checkbox.checked = !checkbox.checked;
+                    alert('Error: ' + (data.error || 'Unknown'));
+                }
+            })
+            .catch(function(err) {
+                checkbox.checked = !checkbox.checked;
+                console.error('Toggle failed:', err);
+            });
+        });
+    });
+
+    // ─── Additional-contact toggle ──────────────────────────────
+    var toggleAdditionalContactUrl = '{% url "costing:toggle_additional_contact" sheet.pk %}';
+    document.querySelectorAll('.additional-contact-checkbox').forEach(function(cb) {
+        cb.addEventListener('change', function() {
+            var userId = this.dataset.userId;
+            var checkbox = this;
+            fetch(toggleAdditionalContactUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRFToken': csrfToken,
+                },
+                body: 'user_id=' + userId,
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {

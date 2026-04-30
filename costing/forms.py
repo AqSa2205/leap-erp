@@ -135,10 +135,10 @@ class ClientRemarkPairForm(forms.ModelForm):
         model = ClientRemarkPair
         fields = ['remark', 'answer', 'remark_color', 'answer_color', 'order']
         widgets = {
-            'remark': forms.Textarea(attrs={'rows': 2, 'class': 'form-control form-control-sm pair-remark'}),
-            'answer': forms.Textarea(attrs={'rows': 2, 'class': 'form-control form-control-sm pair-answer'}),
-            'remark_color': forms.TextInput(attrs={'type': 'color', 'class': 'form-control form-control-color form-control-sm'}),
-            'answer_color': forms.TextInput(attrs={'type': 'color', 'class': 'form-control form-control-color form-control-sm'}),
+            'remark': forms.Textarea(attrs={'rows': 2, 'class': 'pair-input pair-remark'}),
+            'answer': forms.Textarea(attrs={'rows': 2, 'class': 'pair-input pair-answer'}),
+            'remark_color': forms.TextInput(attrs={'type': 'color'}),
+            'answer_color': forms.TextInput(attrs={'type': 'color'}),
             'order': forms.HiddenInput(),
         }
 
