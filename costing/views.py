@@ -401,8 +401,9 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
         ]
 
         # Additional contacts: only Sales-team users (the only people whose
-        # contact info is acceptable to show on a client-facing PDF). Group
-        # them by region so the picker mirrors the sales-org layout.
+        # contact info is acceptable to show on a client-facing PDF). Region
+        # scoping mirrors the rest of the app — super admins see every
+        # region; everyone else only sees their own region's sales team.
         from accounts.models import User, Role
         selected_contact_ids = set(sheet.additional_contacts.values_list('pk', flat=True))
         sales_role_names = [
@@ -415,6 +416,11 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
             .select_related('region', 'role')
             .order_by('region__name', 'first_name', 'last_name', 'email')
         )
+        if not self.request.user.is_super_admin_user:
+            if self.request.user.region_id:
+                sales_users = sales_users.filter(region=self.request.user.region)
+            else:
+                sales_users = sales_users.none()
         contacts_by_region = {}
         for u in sales_users:
             region_name = u.region.name if u.region else 'Unassigned region'
@@ -867,6 +873,15 @@ def ajax_toggle_additional_contact(request, pk):
             {'error': 'Only Sales-team users can be added as PDF contacts'},
             status=400,
         )
+
+    # Region scoping: non-super-admins can only credit users from their
+    # own region. Mirrors the picker filter on the costing detail view.
+    if not request.user.is_super_admin_user:
+        if not request.user.region_id or user.region_id != request.user.region_id:
+            return JsonResponse(
+                {'error': 'You can only add contacts from your own region'},
+                status=403,
+            )
 
     with transaction.atomic():
         locked_sheet = CostingSheet.objects.select_for_update().get(pk=sheet.pk)
