@@ -56,6 +56,7 @@ urlpatterns = [
     path('client-remarks/<int:pk>/edit/', views.client_remark_template_edit, name='client_remark_template_edit'),
     path('client-remarks/<int:pk>/delete/', views.ClientRemarkTemplateDeleteView.as_view(), name='client_remark_template_delete'),
     path('<int:pk>/toggle-client-remark/', views.ajax_toggle_client_remark, name='toggle_client_remark'),
+    path('<int:pk>/toggle-additional-contact/', views.ajax_toggle_additional_contact, name='toggle_additional_contact'),
 
     # Scope of Work items
     path('<int:pk>/add-sow-item/', views.ajax_add_sow_item, name='add_sow_item'),

@@ -4,6 +4,35 @@
 {% block page_title %}{% if is_new %}New{% else %}Edit{% endif %} Client Remarks Bundle{% endblock %}
 
 {% block content %}
+<style>
+    /* Excel-like cell editing: kill the textarea's own border so the cell IS the input. */
+    #pairs-table { table-layout: fixed; }
+    #pairs-table thead th { background: #F5D7DC; color: #333; font-weight: 600; }
+    #pairs-table td { padding: 0; vertical-align: top; }
+    #pairs-table td.cell-num,
+    #pairs-table td.cell-actions { padding: 6px; vertical-align: middle; text-align: center; }
+    #pairs-table td.cell-color { padding: 4px; vertical-align: middle; text-align: center; }
+    #pairs-table textarea.pair-input {
+        border: 0;
+        box-shadow: none;
+        background: transparent;
+        resize: vertical;
+        width: 100%;
+        min-height: 38px;
+        padding: 6px 8px;
+        border-radius: 0;
+        font-size: 0.875rem;
+        line-height: 1.35;
+    }
+    #pairs-table textarea.pair-input:focus {
+        background: #FFF8F9;
+        outline: 2px solid #C41E3A;
+        outline-offset: -2px;
+    }
+    #pairs-table input[type="color"] {
+        width: 36px; height: 28px; padding: 0; border: 1px solid #ccc; cursor: pointer;
+    }
+</style>
 <form method="post" id="bundle-form">
     {% csrf_token %}
     <div class="card">
@@ -56,18 +85,18 @@
                             <tr class="pair-row {% if pair_form.DELETE.value %}d-none{% endif %}">
                                 {{ pair_form.id }}
                                 {{ pair_form.order }}
-                                <td class="text-muted small text-center row-num"></td>
+                                <td class="cell-num text-muted small row-num"></td>
                                 <td>
                                     {{ pair_form.remark }}
-                                    {% if pair_form.remark.errors %}<div class="text-danger small">{{ pair_form.remark.errors.0 }}</div>{% endif %}
+                                    {% if pair_form.remark.errors %}<div class="text-danger small px-2 pb-1">{{ pair_form.remark.errors.0 }}</div>{% endif %}
                                 </td>
-                                <td>{{ pair_form.remark_color }}</td>
+                                <td class="cell-color">{{ pair_form.remark_color }}</td>
                                 <td>
                                     {{ pair_form.answer }}
-                                    {% if pair_form.answer.errors %}<div class="text-danger small">{{ pair_form.answer.errors.0 }}</div>{% endif %}
+                                    {% if pair_form.answer.errors %}<div class="text-danger small px-2 pb-1">{{ pair_form.answer.errors.0 }}</div>{% endif %}
                                 </td>
-                                <td>{{ pair_form.answer_color }}</td>
-                                <td class="text-center">
+                                <td class="cell-color">{{ pair_form.answer_color }}</td>
+                                <td class="cell-actions">
                                     <span class="d-none">{{ pair_form.DELETE }}</span>
                                     <button type="button" class="btn btn-sm btn-outline-danger btn-delete-row" title="Remove">
                                         <i class="bi bi-trash"></i>
@@ -94,12 +123,12 @@
     <tr class="pair-row">
         {{ formset.empty_form.id }}
         {{ formset.empty_form.order }}
-        <td class="text-muted small text-center row-num"></td>
+        <td class="cell-num text-muted small row-num"></td>
         <td>{{ formset.empty_form.remark }}</td>
-        <td>{{ formset.empty_form.remark_color }}</td>
+        <td class="cell-color">{{ formset.empty_form.remark_color }}</td>
         <td>{{ formset.empty_form.answer }}</td>
-        <td>{{ formset.empty_form.answer_color }}</td>
-        <td class="text-center">
+        <td class="cell-color">{{ formset.empty_form.answer_color }}</td>
+        <td class="cell-actions">
             <span class="d-none">{{ formset.empty_form.DELETE }}</span>
             <button type="button" class="btn btn-sm btn-outline-danger btn-delete-row" title="Remove">
                 <i class="bi bi-trash"></i>

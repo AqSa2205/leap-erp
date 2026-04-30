@@ -400,6 +400,30 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
             for t in ClientRemarkTemplate.objects.all().prefetch_related('pairs')
         ]
 
+        # Additional contacts: only Sales-team users (the only people whose
+        # contact info is acceptable to show on a client-facing PDF). Group
+        # them by region so the picker mirrors the sales-org layout.
+        from accounts.models import User, Role
+        selected_contact_ids = set(sheet.additional_contacts.values_list('pk', flat=True))
+        sales_role_names = [
+            Role.SALES_REP, Role.MANAGER, Role.ADMIN, Role.SUPER_ADMIN,
+        ]
+        sales_users = (
+            User.objects
+            .filter(is_active=True, role__name__in=sales_role_names)
+            .exclude(pk=sheet.created_by_id or 0)
+            .select_related('region', 'role')
+            .order_by('region__name', 'first_name', 'last_name', 'email')
+        )
+        contacts_by_region = {}
+        for u in sales_users:
+            region_name = u.region.name if u.region else 'Unassigned region'
+            contacts_by_region.setdefault(region_name, []).append({
+                'user': u,
+                'selected': u.pk in selected_contact_ids,
+            })
+        context['additional_contacts_by_region'] = contacts_by_region
+
         # Scope of Work items (A.2 section)
         context['sow_items'] = sheet.scope_of_work_items.all()
 
@@ -817,6 +841,40 @@ def ajax_toggle_client_remark(request, pk):
             selected = False
         else:
             locked_sheet.selected_client_remarks.add(remark)
+            selected = True
+    return JsonResponse({'ok': True, 'selected': selected})
+
+
+@login_required
+@require_POST
+def ajax_toggle_additional_contact(request, pk):
+    """Toggle a User in the costing sheet's additional_contacts M2M
+    (people credited in the PDF header alongside the auto-creator).
+    Only Sales-team users are eligible — the PDF is client-facing."""
+    from accounts.models import User, Role
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    user_id = request.POST.get('user_id')
+    if not user_id:
+        return JsonResponse({'error': 'user_id required'}, status=400)
+    user = get_object_or_404(User, pk=user_id)
+
+    sales_role_names = [Role.SALES_REP, Role.MANAGER, Role.ADMIN, Role.SUPER_ADMIN]
+    if not user.role or user.role.name not in sales_role_names:
+        return JsonResponse(
+            {'error': 'Only Sales-team users can be added as PDF contacts'},
+            status=400,
+        )
+
+    with transaction.atomic():
+        locked_sheet = CostingSheet.objects.select_for_update().get(pk=sheet.pk)
+        if locked_sheet.additional_contacts.filter(pk=user.pk).exists():
+            locked_sheet.additional_contacts.remove(user)
+            selected = False
+        else:
+            locked_sheet.additional_contacts.add(user)
             selected = True
     return JsonResponse({'ok': True, 'selected': selected})
 
@@ -2267,6 +2325,18 @@ def costing_export_pdf(request, pk):
                 'Confidential. \u00A9 Leap Networks. All rights reserved.')
             self.drawRightString(page_w - 15*mm, footer_y,
                 f'Page {page_num} of {total_pages}')
+
+            # ── Summary page 1: fill the empty "Page X of Y" cell in the
+            #    flowable project-details header. The value is unknown at
+            #    flowable-build time so it's overlaid by the canvas here.
+            #    Coordinates come from the actual layout of header_table
+            #    (computed in the enclosing scope after wrap()), so they
+            #    track row-wrapping (e.g. LN Ref taking two lines). ──
+            if template_id == 'summary' and page_num == 1:
+                self.setFont('Helvetica', 8)
+                self.setFillColor(colors.black)
+                self.drawString(_page_cell_x, _page_row_baseline_y,
+                    f'Page {page_num} of {total_pages}')
             self.restoreState()
 
     # Create PDF document — use BaseDocTemplate with two page templates:
@@ -2363,11 +2433,29 @@ def costing_export_pdf(request, pk):
          Paragraph(ln_ref, cell_style), '',
          Paragraph('<b>Email:</b>', cell_style),
          Paragraph(created_by_email, cell_style), ''],
-        [Paragraph('<b>Date:</b>', cell_style),
-         Paragraph(current_date, cell_style), '',
-         Paragraph('<b>Page</b>', cell_style),
-         Paragraph('Page 1 of ...', cell_style), ''],
     ]
+
+    # Insert one additional Contact/Email row per extra contributor selected
+    # on the sheet. Labels are numbered (Contact 2 / Email 2, ...) so the
+    # auto creator stays as the unnumbered "Contact Person / Email" above.
+    extra_contacts = list(sheet.additional_contacts.all().order_by('first_name', 'last_name', 'email'))
+    for idx, u in enumerate(extra_contacts, start=2):
+        full_name = u.get_full_name() or u.username
+        header_data.append([
+            Paragraph(f'<b>Contact {idx}:</b>', cell_style),
+            Paragraph(full_name, cell_style), '',
+            Paragraph(f'<b>Email {idx}:</b>', cell_style),
+            Paragraph(u.email or '', cell_style), '',
+        ])
+
+    header_data.append([
+        Paragraph('<b>Date:</b>', cell_style),
+        Paragraph(current_date, cell_style), '',
+        Paragraph('<b>Page</b>', cell_style),
+        # Value drawn by NumberedCanvas overlay (needs total pages from
+        # second pass). Leaving empty Paragraph keeps cell width stable.
+        Paragraph('', cell_style), '',
+    ])
 
     # Split page width into 6 columns for the info block
     header_table = Table(header_data, colWidths=[70, PAGE_WIDTH*0.35, 10, 70, PAGE_WIDTH*0.35, None])
@@ -2379,6 +2467,18 @@ def costing_export_pdf(request, pk):
         ('LINEBELOW', (0, 0), (-1, -2), 0.25, colors.HexColor('#CCCCCC')),
         ('LINEAFTER', (1, 0), (1, -1), 0.25, colors.HexColor('#CCCCCC')),
     ]))
+
+    # Pre-layout the header table so we know its actual row heights (some
+    # rows wrap to two lines, e.g. LN Ref). The NumberedCanvas overlay for
+    # "Page X of Y" needs the real Y of the last row.
+    header_table.wrap(PAGE_WIDTH, A4[1])
+    _hdr_row_heights = list(header_table._rowHeights)
+    _page_row_top_y = (A4[1] - 25*mm) - sum(_hdr_row_heights[:-1])
+    _page_row_baseline_y = _page_row_top_y - _hdr_row_heights[-1] + 4
+    # Column 4 (the value cell) starts at: leftMargin + col0(70) + col1(PAGE_WIDTH*0.35)
+    # + col2(10) + col3(70) + default LEFTPADDING(6).
+    _page_cell_x = 15*mm + 70 + PAGE_WIDTH*0.35 + 10 + 70 + 6
+
     elements.append(header_table)
     elements.append(Spacer(1, 5 * mm))
 
@@ -2659,14 +2759,20 @@ def costing_export_pdf(request, pk):
             Paragraph("Leap's Answer", cr_header_style),
         ]]
         cr_styles = [
+            # Header
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F5D7DC')),
-            ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#C41E3A')),
-            ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#CCCCCC')),
+            ('LINEBELOW', (0, 0), (-1, 0), 1.2, colors.HexColor('#C41E3A')),
+            # Heavy outer box
+            ('BOX', (0, 0), (-1, -1), 1.0, colors.HexColor('#333333')),
+            # Strong horizontal dividers between every row (emphasise "row" structure)
+            ('LINEBELOW', (0, 0), (-1, -2), 0.9, colors.HexColor('#555555')),
+            # Vertical line between remark and answer columns
+            ('LINEAFTER', (0, 0), (0, -1), 0.7, colors.HexColor('#888888')),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 5),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
         ]
 
         def _hex(value, fallback=colors.black):
@@ -2691,7 +2797,16 @@ def costing_export_pdf(request, pk):
                 Paragraph(answer_html, answer_style),
             ])
 
-        cr_table = Table(cr_rows, colWidths=[PAGE_WIDTH * 0.5, PAGE_WIDTH * 0.5])
+        # splitInRow=1 lets a single tall cell (e.g. a long pasted remark)
+        # break across pages instead of raising LayoutError; repeatRows=1
+        # re-prints the header on subsequent pages.
+        cr_table = Table(
+            cr_rows,
+            colWidths=[PAGE_WIDTH * 0.5, PAGE_WIDTH * 0.5],
+            repeatRows=1,
+            splitByRow=1,
+            splitInRow=1,
+        )
         cr_table.setStyle(TableStyle(cr_styles))
         elements.append(cr_table)
         elements.append(Spacer(1, 3 * mm))

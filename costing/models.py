@@ -125,6 +125,13 @@ class CostingSheet(models.Model):
     contact_person = models.CharField(max_length=255, blank=True)
     telephone = models.CharField(max_length=100, blank=True)
     fax = models.CharField(max_length=100, blank=True)
+    # Additional Leap contributors credited on the PDF (above and beyond the
+    # auto "Contact Person / Email" row that comes from sheet.created_by).
+    additional_contacts = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        blank=True,
+        related_name='additional_contact_costing_sheets',
+    )
     # PDF content sections
     terms_and_conditions = models.TextField(blank=True)
     exclusions = models.TextField(blank=True)
