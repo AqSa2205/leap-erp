@@ -12,6 +12,9 @@ class Role(models.Model):
     PROCUREMENT_OFF = 'procurement_off'
     PROPOSAL_HEAD = 'proposal_head'
     PROPOSAL_REP = 'proposal_rep'
+    FINANCE_HEAD = 'finance_head'
+    FINANCE_MANAGER = 'finance_manager'
+    FINANCE_REP = 'finance_rep'
 
     ROLE_CHOICES = [
         (SUPER_ADMIN, 'Super Administrator'),
@@ -22,6 +25,9 @@ class Role(models.Model):
         (PROCUREMENT_OFF, 'Procurement Officer'),
         (PROPOSAL_HEAD, 'Proposal Team Head'),
         (PROPOSAL_REP, 'Proposal Representative'),
+        (FINANCE_HEAD, 'Finance Head'),
+        (FINANCE_MANAGER, 'Finance Manager'),
+        (FINANCE_REP, 'Finance Representative'),
     ]
 
     name = models.CharField(max_length=20, choices=ROLE_CHOICES, unique=True)
@@ -65,6 +71,18 @@ class Role(models.Model):
     @property
     def is_proposal_rep(self):
         return self.name == self.PROPOSAL_REP
+
+    @property
+    def is_finance_head(self):
+        return self.name == self.FINANCE_HEAD
+
+    @property
+    def is_finance_manager(self):
+        return self.name == self.FINANCE_MANAGER
+
+    @property
+    def is_finance_rep(self):
+        return self.name == self.FINANCE_REP
 
 
 class User(AbstractUser):
@@ -134,6 +152,28 @@ class User(AbstractUser):
         """Either proposal team head or representative.
         Used to decide if a user should see BOM view vs full costing."""
         return self.is_proposal_head_user or self.is_proposal_rep_user
+
+    @property
+    def is_finance_head_user(self):
+        return self.role and self.role.is_finance_head
+
+    @property
+    def is_finance_manager_user(self):
+        return self.role and self.role.is_finance_manager
+
+    @property
+    def is_finance_rep_user(self):
+        return self.role and self.role.is_finance_rep
+
+    @property
+    def is_finance_team_user(self):
+        """Any finance role — head, manager, or rep. Used to gate access
+        to the Finance module (which is restricted to this team)."""
+        return (
+            self.is_finance_head_user
+            or self.is_finance_manager_user
+            or self.is_finance_rep_user
+        )
 
     @property
     def is_sales_team_user(self):
