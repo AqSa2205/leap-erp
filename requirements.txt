@@ -33,3 +33,7 @@ Pillow>=10.0.0
 # Utilities
 python-dateutil==2.8.2
 python-dotenv==1.0.0
+
+# File storage — Cloudflare R2 (S3-compatible) for persistent uploads.
+# Activated when USE_R2=True env var is set; otherwise local filesystem is used.
+django-storages[s3]==1.14.4

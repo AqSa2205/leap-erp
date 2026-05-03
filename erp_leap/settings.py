@@ -159,13 +159,35 @@ STATIC_URL = "static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-# WhiteNoise for static file serving in production
+# File storage configuration.
+# - Static: WhiteNoise in all envs (compressed manifest in production).
+# - Default (uploads): Cloudflare R2 when USE_R2=True, else local filesystem.
+#   R2 is required in production because Render's free disk is ephemeral and
+#   user-uploaded documents would otherwise be wiped on every redeploy.
+USE_R2 = os.environ.get('USE_R2', 'False').lower() == 'true'
+
+if USE_R2:
+    AWS_ACCESS_KEY_ID = os.environ['R2_ACCESS_KEY_ID']
+    AWS_SECRET_ACCESS_KEY = os.environ['R2_SECRET_ACCESS_KEY']
+    AWS_STORAGE_BUCKET_NAME = os.environ['R2_BUCKET_NAME']
+    AWS_S3_ENDPOINT_URL = os.environ['R2_ENDPOINT_URL']
+    AWS_S3_REGION_NAME = 'auto'
+    AWS_S3_SIGNATURE_VERSION = 's3v4'
+    AWS_S3_ADDRESSING_STYLE = 'virtual'
+    AWS_DEFAULT_ACL = None
+    AWS_S3_FILE_OVERWRITE = False
+    AWS_QUERYSTRING_AUTH = True
+    AWS_QUERYSTRING_EXPIRE = 3600
+    _DEFAULT_FILE_STORAGE = 'storages.backends.s3.S3Storage'
+else:
+    _DEFAULT_FILE_STORAGE = 'django.core.files.storage.FileSystemStorage'
+
 STORAGES = {
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
     "default": {
-        "BACKEND": "django.core.files.storage.FileSystemStorage",
+        "BACKEND": _DEFAULT_FILE_STORAGE,
     },
 }
 

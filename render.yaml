@@ -24,3 +24,16 @@ services:
         value: "False"
       - key: PYTHON_VERSION
         value: "3.11.0"
+      # Cloudflare R2 (object storage for uploaded documents).
+      # USE_R2 toggles the S3 backend on. The four R2 secrets are set via
+      # the Render dashboard → Environment, never committed to git.
+      - key: USE_R2
+        value: "True"
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: R2_ENDPOINT_URL
+        sync: false
