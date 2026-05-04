@@ -5,7 +5,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib import messages
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView, View
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 from django.db.models import Q, Sum, Count
 from django.core.paginator import Paginator
 import openpyxl
@@ -762,6 +762,40 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
 
     def get_queryset(self):
         return _documents_visible_to(self.request.user)
+
+
+class DocumentUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
+    """Edit document metadata (and optionally replace the file)."""
+    model = Document
+    form_class = DocumentForm
+    template_name = 'projects/document_form.html'
+
+    def get_queryset(self):
+        return _documents_visible_to(self.request.user)
+
+    def test_func(self):
+        document = self.get_object()
+        user = self.request.user
+        return (
+            user.is_super_admin_user
+            or user.is_admin_user
+            or document.uploaded_by == user
+        )
+
+    def get_success_url(self):
+        return reverse('projects:document_detail', kwargs={'pk': self.object.pk})
+
+    def form_valid(self, form):
+        # If the user replaced the file, delete the previous R2 object so we
+        # don't accumulate orphans on every edit.
+        old_file = None
+        if 'file' in form.changed_data and self.object.pk:
+            old_file = Document.objects.get(pk=self.object.pk).file
+        response = super().form_valid(form)
+        if old_file and old_file.name and old_file.name != self.object.file.name:
+            old_file.storage.delete(old_file.name)
+        messages.success(self.request, 'Document updated successfully.')
+        return response
 
 
 class DocumentDeleteView(LoginRequiredMixin, UserPassesTestMixin, DeleteView):
