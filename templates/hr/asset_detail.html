@@ -29,6 +29,15 @@
                     <a href="{% url 'hr:asset_list' %}" class="btn btn-outline-secondary me-2">
                         <i class="bi bi-arrow-left"></i> Back
                     </a>
+                    {% if asset.active_assignment %}
+                    <a href="{% url 'hr:asset_return' asset.pk %}" class="btn btn-warning me-2">
+                        <i class="bi bi-arrow-return-left"></i> Return Asset
+                    </a>
+                    {% else %}
+                    <a href="{% url 'hr:asset_issue' asset.pk %}" class="btn btn-success me-2">
+                        <i class="bi bi-person-plus"></i> Issue to Employee
+                    </a>
+                    {% endif %}
                     <a href="{% url 'hr:asset_update' asset.pk %}" class="btn btn-primary me-2">
                         <i class="bi bi-pencil"></i> Edit
                     </a>
@@ -37,6 +46,32 @@
                     </a>
                 </div>
             </div>
+
+            {% if asset.has_duplicate_serial_conflict %}
+            <div class="alert alert-danger d-flex align-items-start mb-4">
+                <i class="bi bi-exclamation-triangle-fill fs-4 me-2"></i>
+                <div>
+                    <strong>Duplicate serial conflict.</strong>
+                    Serial <code>{{ asset.serial_number }}</code> is on
+                    <strong>{{ asset.duplicate_active_assignments.count|add:1 }}</strong>
+                    different asset records, all currently assigned. This usually means
+                    either a duplicate row was created for the same physical device, or
+                    a previous handover was never closed out. Review the other open
+                    assignments and either return the stale one or fix the duplicate.
+                    <ul class="mb-0 mt-2 small">
+                        {% for other in asset.duplicate_active_assignments %}
+                        <li>
+                            <a href="{% url 'hr:asset_detail' other.pk %}" class="text-decoration-none">
+                                {{ other.asset_name }}
+                            </a>
+                            — held by {{ other.current_holder.full_name|default:"Unknown" }}
+                            since {{ other.active_assignment.assigned_at|date:"d M Y" }}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+            {% endif %}
 
             <div class="row">
                 <!-- Main Info -->
@@ -76,44 +111,155 @@
                         </div>
                     </div>
 
-                    <!-- Employee / Handover Details -->
+                    {% with active=asset.active_assignment %}
+                    <!-- Current Assignment -->
                     <div class="card mb-4">
-                        <div class="card-header">
-                            <h5 class="mb-0"><i class="bi bi-person"></i> Assignment Details</h5>
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0"><i class="bi bi-person"></i> Current Assignment</h5>
+                            {% if active %}
+                            <span class="badge bg-warning text-dark">Active since {{ active.assigned_at|date:"d M Y" }}</span>
+                            {% else %}
+                            <span class="badge bg-success">In Stock</span>
+                            {% endif %}
                         </div>
                         <div class="card-body">
+                            {% if active %}
                             <div class="row">
                                 <div class="col-md-6 mb-3">
-                                    <label class="text-muted small">Employee Name</label>
-                                    <p class="mb-0">{{ asset.employee_name|default:"-" }}</p>
+                                    <label class="text-muted small">Issued To</label>
+                                    <p class="mb-0">
+                                        <a href="{% url 'hr:employee_detail' active.employee.pk %}" class="fw-semibold">
+                                            {{ active.employee.full_name }}
+                                        </a>
+                                        {% if active.employee.designation %}
+                                        <div class="small text-muted">{{ active.employee.designation }}</div>
+                                        {% endif %}
+                                    </p>
                                 </div>
                                 <div class="col-md-6 mb-3">
-                                    <label class="text-muted small">Department</label>
-                                    <p class="mb-0">{{ asset.department|default:"-" }}</p>
-                                </div>
-                                <div class="col-md-6 mb-3">
-                                    <label class="text-muted small">Designation</label>
-                                    <p class="mb-0">{{ asset.designation|default:"-" }}</p>
+                                    <label class="text-muted small">Iqama / Passport</label>
+                                    <p class="mb-0">{{ active.employee.iqama_number }}</p>
                                 </div>
                                 <div class="col-md-6 mb-3">
                                     <label class="text-muted small">Handover Date</label>
-                                    <p class="mb-0">{{ asset.handover_date|date:"d F Y"|default:"-" }}</p>
+                                    <p class="mb-0">{{ active.assigned_at|date:"d F Y" }}</p>
                                 </div>
                                 <div class="col-md-6 mb-3">
                                     <label class="text-muted small">Handover By</label>
-                                    <p class="mb-0">{{ asset.handover_by|default:"-" }}</p>
+                                    <p class="mb-0">{{ active.assigned_by|default:"-" }}</p>
                                 </div>
                                 <div class="col-md-6 mb-3">
-                                    <label class="text-muted small">Return Date</label>
-                                    <p class="mb-0">{{ asset.return_date|default:"-" }}</p>
+                                    <label class="text-muted small">Condition at Handover</label>
+                                    <p class="mb-0">
+                                        <span class="badge {% if active.condition_out == 'new' %}bg-success{% elif active.condition_out == 'damaged' %}bg-danger{% else %}bg-warning text-dark{% endif %}">
+                                            {{ active.get_condition_out_display }}
+                                        </span>
+                                    </p>
                                 </div>
+                                {% if active.handover_form %}
                                 <div class="col-md-6 mb-3">
-                                    <label class="text-muted small">Return To</label>
-                                    <p class="mb-0">{{ asset.return_to|default:"-" }}</p>
+                                    <label class="text-muted small">Signed Handover Form</label>
+                                    <p class="mb-0">
+                                        <a href="{{ active.handover_form.url }}" target="_blank" class="text-decoration-none">
+                                            <i class="bi bi-file-earmark-pdf"></i> View / Download
+                                        </a>
+                                    </p>
                                 </div>
+                                {% endif %}
+                                {% if active.issue_notes %}
+                                <div class="col-12 mb-3">
+                                    <label class="text-muted small">Notes</label>
+                                    <p class="mb-0">{{ active.issue_notes|linebreaksbr }}</p>
+                                </div>
+                                {% endif %}
                             </div>
+                            <div class="d-flex justify-content-end">
+                                <a href="{% url 'hr:asset_return' asset.pk %}" class="btn btn-warning">
+                                    <i class="bi bi-arrow-return-left"></i> Record Return
+                                </a>
+                            </div>
+                            {% else %}
+                            <p class="text-muted mb-3">This asset is not currently assigned to anyone.</p>
+                            <a href="{% url 'hr:asset_issue' asset.pk %}" class="btn btn-success">
+                                <i class="bi bi-person-plus"></i> Issue to Employee
+                            </a>
+                            {% endif %}
                         </div>
                     </div>
+                    {% endwith %}
+
+                    <!-- Assignment History -->
+                    {% with history=asset.assignments.all %}
+                    {% if history %}
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-clock-history"></i> Assignment History</h5>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-sm mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Employee</th>
+                                        <th>Issued</th>
+                                        <th>Returned</th>
+                                        <th>Condition Out → In</th>
+                                        <th>Form</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for a in history %}
+                                    <tr>
+                                        <td>
+                                            <a href="{% url 'hr:employee_detail' a.employee.pk %}" class="text-decoration-none">
+                                                {{ a.employee.full_name }}
+                                            </a>
+                                        </td>
+                                        <td>{{ a.assigned_at|date:"d M Y" }}</td>
+                                        <td>
+                                            {% if a.returned_at %}{{ a.returned_at|date:"d M Y" }}
+                                            {% else %}<span class="badge bg-warning text-dark">Active</span>{% endif %}
+                                        </td>
+                                        <td class="small">
+                                            {{ a.get_condition_out_display }}
+                                            {% if a.condition_in %} → {{ a.get_condition_in_display }}{% endif %}
+                                        </td>
+                                        <td>
+                                            {% if a.handover_form %}
+                                            <a href="{{ a.handover_form.url }}" target="_blank" title="View handover form">
+                                                <i class="bi bi-paperclip"></i>
+                                            </a>
+                                            {% else %}-{% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% endwith %}
+
+                    {% if asset.employee_name and not asset.active_assignment %}
+                    <!-- Legacy fields, only shown for pre-workflow records -->
+                    <div class="card mb-4 border-secondary">
+                        <div class="card-header bg-light">
+                            <h6 class="mb-0 text-muted"><i class="bi bi-archive"></i> Legacy Handover Record</h6>
+                        </div>
+                        <div class="card-body small">
+                            <div class="row">
+                                <div class="col-md-6"><strong>Employee:</strong> {{ asset.employee_name }}</div>
+                                <div class="col-md-6"><strong>Department:</strong> {{ asset.department|default:"-" }}</div>
+                                <div class="col-md-6"><strong>Designation:</strong> {{ asset.designation|default:"-" }}</div>
+                                <div class="col-md-6"><strong>Handover Date:</strong> {{ asset.handover_date|date:"d M Y"|default:"-" }}</div>
+                                <div class="col-md-6"><strong>Handover By:</strong> {{ asset.handover_by|default:"-" }}</div>
+                                <div class="col-md-6"><strong>Return:</strong> {{ asset.return_date|default:"-" }}</div>
+                            </div>
+                            <p class="text-muted small mb-0 mt-2">
+                                <i class="bi bi-info-circle"></i> Imported from before the assignment workflow. Use "Issue to Employee" above to track future handovers.
+                            </p>
+                        </div>
+                    </div>
+                    {% endif %}
                 </div>
 
                 <!-- Sidebar -->
