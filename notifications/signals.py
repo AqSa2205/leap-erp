@@ -1,11 +1,12 @@
 import logging
 
+from django.db.models import Q
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.urls import reverse
 
 from accounts.models import User, Role
-from reports.models import SalesCallReport, SalesCallResponse
+from reports.models import SalesCallResponse
 from projects.models import ProjectHistory
 
 from .services import notify_users
@@ -13,8 +14,17 @@ from .services import notify_users
 logger = logging.getLogger(__name__)
 
 
-def _get_admins():
-    return User.objects.filter(role__name__in=[Role.SUPER_ADMIN, Role.ADMIN], is_active=True)
+def _get_admins(region=None):
+    """Admin recipients for a notification.
+
+    Super admins always receive (cross-region oversight). Regional admins
+    receive only when their region matches the event's region — passing
+    region=None means *no* regional admins are included.
+    """
+    q = Q(role__name=Role.SUPER_ADMIN)
+    if region is not None:
+        q |= Q(role__name=Role.ADMIN, region=region)
+    return User.objects.filter(is_active=True).filter(q).distinct()
 
 
 def _get_region_managers(region):
@@ -23,37 +33,9 @@ def _get_region_managers(region):
     return User.objects.filter(role__name=Role.MANAGER, region=region, is_active=True)
 
 
-# ─── Sales Call Report Created ────────────────────────────────
-
-@receiver(post_save, sender=SalesCallReport)
-def notify_on_sales_call_report(sender, instance, created, **kwargs):
-    if not created:
-        return
-    try:
-        report = instance
-        actor = report.sales_rep
-        target_url = reverse('reports:sales_call_detail', kwargs={'pk': report.pk})
-
-        # Recipients: admins + managers in the same region as the sales rep
-        admins = set(_get_admins())
-        region_managers = set(_get_region_managers(actor.region if actor else None))
-        recipients = admins | region_managers
-
-        notify_users(
-            recipients=recipients,
-            verb='submitted a new sales call report',
-            actor=actor,
-            target=report,
-            target_url=target_url,
-            description=f'Sales call report for {report.company_name} ({report.get_action_type_display()})',
-            level='info',
-            send_email=True,
-        )
-    except Exception:
-        logger.exception('Error sending sales call report notification')
-
-
 # ─── Sales Call Response Added ────────────────────────────────
+# Note: creating a sales call report itself no longer triggers a
+# notification (in-app or email). Only management replies notify.
 
 @receiver(post_save, sender=SalesCallResponse)
 def notify_on_sales_call_response(sender, instance, created, **kwargs):
@@ -65,13 +47,16 @@ def notify_on_sales_call_response(sender, instance, created, **kwargs):
         actor = response.responder
         target_url = reverse('reports:sales_call_detail', kwargs={'pk': report.pk})
 
-        # Recipients: the original sales rep + admins + managers (excluding responder)
+        # Recipients: original sales rep + super admins + region admins +
+        # region managers — all scoped to the sales rep's region so
+        # admins/managers don't receive activity from regions they don't
+        # cover.
+        rep_region = report.sales_rep.region if report.sales_rep else None
         recipients = set()
         if report.sales_rep:
             recipients.add(report.sales_rep)
-        recipients |= set(_get_admins())
-        if report.sales_rep and report.sales_rep.region:
-            recipients |= set(_get_region_managers(report.sales_rep.region))
+        recipients |= set(_get_admins(region=rep_region))
+        recipients |= set(_get_region_managers(rep_region))
 
         notify_users(
             recipients=recipients,
