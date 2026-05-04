@@ -27,46 +27,52 @@
     <!-- Stat Cards -->
     <div class="row mb-4">
         <div class="col-md-3 mb-3">
-            <div class="card stat-card primary">
-                <div class="card-body py-3">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <div class="text-muted small">Total Assets</div>
-                            <div class="h4 mb-0">{{ total_count }}</div>
+            <a href="{% url 'hr:asset_list' %}" class="text-decoration-none text-reset stat-card-link">
+                <div class="card stat-card primary h-100">
+                    <div class="card-body py-3">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <div class="text-muted small">Total Assets</div>
+                                <div class="h4 mb-0">{{ total_count }}</div>
+                            </div>
+                            <i class="bi bi-laptop fs-2 text-muted"></i>
                         </div>
-                        <i class="bi bi-laptop fs-2 text-muted"></i>
                     </div>
                 </div>
-            </div>
+            </a>
         </div>
         <div class="col-md-3 mb-3">
-            <div class="card stat-card success">
-                <div class="card-body py-3">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <div class="text-muted small">In Stock</div>
-                            <div class="h4 mb-0">{{ in_stock_count }}</div>
+            <a href="{% url 'hr:asset_list' %}?in_stock=true" class="text-decoration-none text-reset stat-card-link">
+                <div class="card stat-card success h-100">
+                    <div class="card-body py-3">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <div class="text-muted small">In Stock</div>
+                                <div class="h4 mb-0">{{ in_stock_count }}</div>
+                            </div>
+                            <i class="bi bi-box-seam fs-2 text-muted"></i>
                         </div>
-                        <i class="bi bi-box-seam fs-2 text-muted"></i>
                     </div>
                 </div>
-            </div>
+            </a>
         </div>
         <div class="col-md-3 mb-3">
-            <div class="card stat-card warning">
-                <div class="card-body py-3">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <div class="text-muted small">Assigned</div>
-                            <div class="h4 mb-0">{{ assigned_count }}</div>
+            <a href="{% url 'hr:asset_list' %}?in_stock=false" class="text-decoration-none text-reset stat-card-link">
+                <div class="card stat-card warning h-100">
+                    <div class="card-body py-3">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <div class="text-muted small">Assigned</div>
+                                <div class="h4 mb-0">{{ assigned_count }}</div>
+                            </div>
+                            <i class="bi bi-person-badge fs-2 text-muted"></i>
                         </div>
-                        <i class="bi bi-person-badge fs-2 text-muted"></i>
                     </div>
                 </div>
-            </div>
+            </a>
         </div>
         <div class="col-md-3 mb-3">
-            <div class="card stat-card danger">
+            <div class="card stat-card danger h-100">
                 <div class="card-body py-3">
                     <div class="d-flex justify-content-between align-items-center">
                         <div>
@@ -79,6 +85,12 @@
             </div>
         </div>
     </div>
+
+    <style>
+        .stat-card-link { display: block; }
+        .stat-card-link .card { transition: transform 0.12s ease, box-shadow 0.12s ease; }
+        .stat-card-link:hover .card { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,0.10); }
+    </style>
 
     <!-- Filters -->
     <div class="card mb-4">
@@ -105,6 +117,19 @@
             </form>
         </div>
     </div>
+
+    {% if conflict_count %}
+    <div class="alert alert-warning d-flex align-items-center mb-3">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+        <div>
+            <strong>{{ conflict_count }}</strong>
+            serial number{{ conflict_count|pluralize }} appear{{ conflict_count|pluralize:"s," }}
+            on multiple actively-assigned asset records. Rows below are flagged with
+            <span class="badge bg-warning text-dark">⚠ duplicate</span> — review them
+            to confirm the right device is with the right person.
+        </div>
+    </div>
+    {% endif %}
 
     <!-- Assets Table -->
     <div class="card">
@@ -135,7 +160,12 @@
                                 </a>
                             </td>
                             <td>{{ asset.asset_type|default:"-" }}</td>
-                            <td>{{ asset.serial_number|default:"-"|truncatechars:20 }}</td>
+                            <td>
+                                {{ asset.serial_number|default:"-"|truncatechars:20 }}
+                                {% if asset.serial_number and asset.serial_number|lower in conflict_serials %}
+                                <span class="badge bg-warning text-dark ms-1" title="This serial is on another currently-assigned asset record">⚠ duplicate</span>
+                                {% endif %}
+                            </td>
                             <td>{{ asset.employee_name|default:"-" }}</td>
                             <td>
                                 {% if asset.condition %}

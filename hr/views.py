@@ -10,10 +10,10 @@ from datetime import datetime, date
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-from .models import Employee, Asset, Vehicle, EmployeeDocument
+from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
-    AssetForm, AssetFilterForm, AssetImportForm,
+    AssetForm, AssetFilterForm, AssetImportForm, AssetIssueForm, AssetReturnForm,
     VehicleForm, VehicleFilterForm, EmployeeDocumentForm,
 )
 
@@ -554,6 +554,21 @@ class AssetListView(AdminRequiredMixin, ListView):
         ).order_by('-count')[:5]
         context['type_counts'] = type_counts
 
+        # Set of serial numbers (lower-cased) that appear on more than one
+        # currently-assigned asset. The list template uses this to flag rows
+        # at a glance instead of running an .exists() query per row.
+        conflict_serials = (
+            Asset.objects
+            .exclude(serial_number='')
+            .filter(assignments__returned_at__isnull=True)
+            .values('serial_number')
+            .annotate(c=Count('id', distinct=True))
+            .filter(c__gt=1)
+            .values_list('serial_number', flat=True)
+        )
+        context['conflict_serials'] = {s.lower() for s in conflict_serials}
+        context['conflict_count'] = len(context['conflict_serials'])
+
         return context
 
 
@@ -606,6 +621,116 @@ class AssetDeleteView(AdminRequiredMixin, DeleteView):
     def delete(self, request, *args, **kwargs):
         messages.success(request, 'Asset deleted successfully.')
         return super().delete(request, *args, **kwargs)
+
+
+# ─── Asset Assignment (Issue / Return) ───────────────────────────────────────
+
+
+class AssetIssueView(AdminRequiredMixin, CreateView):
+    """Issue an asset to an employee.
+
+    Creates a new active AssetAssignment row and flips the asset's in_stock
+    flag off so existing list filters keep working. Refuses if the asset
+    already has an open assignment (defended by the unique partial index
+    on AssetAssignment as well).
+    """
+    model = AssetAssignment
+    form_class = AssetIssueForm
+    template_name = 'hr/asset_issue_form.html'
+
+    def dispatch(self, request, *args, **kwargs):
+        self.asset = get_object_or_404(Asset, pk=kwargs['pk'])
+        if self.asset.active_assignment is not None:
+            messages.error(
+                request,
+                f'{self.asset.asset_name} is already assigned to '
+                f'{self.asset.current_holder.full_name}. Return it first.',
+            )
+            return redirect('hr:asset_detail', pk=self.asset.pk)
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_initial(self):
+        return {'assigned_at': date.today(), 'condition_out': self.asset.condition or 'used'}
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['asset'] = self.asset
+        return context
+
+    def form_valid(self, form):
+        form.instance.asset = self.asset
+        form.instance.assigned_by = self.request.user
+        response = super().form_valid(form)
+        # Mirror state to legacy fields so the existing list/filter UI is
+        # consistent without forcing a wider refactor.
+        self.asset.in_stock = False
+        self.asset.employee_name = self.object.employee.full_name
+        self.asset.handover_date = self.object.assigned_at
+        self.asset.handover_by = (
+            self.request.user.get_full_name() or self.request.user.username
+        )
+        self.asset.condition = self.object.condition_out
+        self.asset.save(update_fields=[
+            'in_stock', 'employee_name', 'handover_date', 'handover_by',
+            'condition', 'updated_at',
+        ])
+        messages.success(
+            self.request,
+            f'{self.asset.asset_name} issued to {self.object.employee.full_name}.',
+        )
+        return response
+
+    def get_success_url(self):
+        return reverse_lazy('hr:asset_detail', kwargs={'pk': self.asset.pk})
+
+
+class AssetReturnView(AdminRequiredMixin, UpdateView):
+    """Close the asset's active assignment by recording the return."""
+    model = AssetAssignment
+    form_class = AssetReturnForm
+    template_name = 'hr/asset_return_form.html'
+
+    def get_object(self, queryset=None):
+        asset = get_object_or_404(Asset, pk=self.kwargs['pk'])
+        active = asset.active_assignment
+        if active is None:
+            return None
+        self.asset = asset
+        return active
+
+    def dispatch(self, request, *args, **kwargs):
+        active = self.get_object()
+        if active is None:
+            messages.error(request, 'No active assignment to return.')
+            return redirect('hr:asset_detail', pk=kwargs['pk'])
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_initial(self):
+        return {'returned_at': date.today(), 'condition_in': self.object.condition_out or 'used'}
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['asset'] = self.asset
+        return context
+
+    def form_valid(self, form):
+        form.instance.returned_by = self.request.user
+        response = super().form_valid(form)
+        # Flip the asset back into stock so the list filters reflect reality.
+        self.asset.in_stock = True
+        self.asset.employee_name = ''
+        self.asset.condition = self.object.condition_in or self.asset.condition
+        self.asset.save(update_fields=[
+            'in_stock', 'employee_name', 'condition', 'updated_at',
+        ])
+        messages.success(
+            self.request,
+            f'{self.asset.asset_name} returned by {self.object.employee.full_name}.',
+        )
+        return response
+
+    def get_success_url(self):
+        return reverse_lazy('hr:asset_detail', kwargs={'pk': self.asset.pk})
 
 
 @login_required
