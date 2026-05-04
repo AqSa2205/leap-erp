@@ -662,6 +662,29 @@ class ProjectImportView(LoginRequiredMixin, UserPassesTestMixin, View):
 
 
 # Document Views
+def _documents_visible_to(user):
+    """Scoped Document queryset, mirroring ProjectPermissionMixin.
+
+    - Super admin: every document.
+    - Admin/manager: documents on projects in their region, plus any
+      standalone (project=None) documents they uploaded themselves.
+    - Anyone else: documents on projects they own, plus their own uploads
+      (standalone or otherwise).
+    """
+    qs = Document.objects.select_related('project', 'project__region', 'uploaded_by')
+    if user.is_super_admin_user:
+        return qs
+    if user.is_admin_user or user.is_manager_user:
+        return qs.filter(
+            Q(project__region=user.region) |
+            Q(project__isnull=True, uploaded_by=user)
+        ).distinct()
+    return qs.filter(
+        Q(project__owner=user) |
+        Q(uploaded_by=user)
+    ).distinct()
+
+
 class DocumentListView(LoginRequiredMixin, ListView):
     """List all documents with filtering"""
     model = Document
@@ -670,7 +693,7 @@ class DocumentListView(LoginRequiredMixin, ListView):
     paginate_by = 25
 
     def get_queryset(self):
-        queryset = Document.objects.select_related('project', 'uploaded_by').all()
+        queryset = _documents_visible_to(self.request.user)
 
         # Apply filters
         search = self.request.GET.get('search')
@@ -696,8 +719,9 @@ class DocumentListView(LoginRequiredMixin, ListView):
         context['filter_form'] = DocumentFilterForm(self.request.GET)
         context['total_count'] = self.get_queryset().count()
 
-        # Group by document type for summary
-        type_counts = Document.objects.values('document_type').annotate(count=Count('id'))
+        # Group by document type for summary, scoped to what the user can see
+        scoped = _documents_visible_to(self.request.user)
+        type_counts = scoped.values('document_type').annotate(count=Count('id'))
         context['type_counts'] = {t['document_type']: t['count'] for t in type_counts}
 
         return context
@@ -735,6 +759,9 @@ class DocumentDetailView(LoginRequiredMixin, DetailView):
     model = Document
     template_name = 'projects/document_detail.html'
     context_object_name = 'document'
+
+    def get_queryset(self):
+        return _documents_visible_to(self.request.user)
 
 
 class DocumentDeleteView(LoginRequiredMixin, UserPassesTestMixin, DeleteView):
