@@ -23,5 +23,6 @@ urlpatterns = [
     path('documents/', views.DocumentListView.as_view(), name='document_list'),
     path('documents/upload/', views.DocumentCreateView.as_view(), name='document_create'),
     path('documents/<int:pk>/', views.DocumentDetailView.as_view(), name='document_detail'),
+    path('documents/<int:pk>/edit/', views.DocumentUpdateView.as_view(), name='document_edit'),
     path('documents/<int:pk>/delete/', views.DocumentDeleteView.as_view(), name='document_delete'),
 ]
