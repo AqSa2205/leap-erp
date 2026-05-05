@@ -2231,6 +2231,12 @@ def costing_export_pdf(request, pk):
             item.set_exchange_rates_cache(rates_dict)
             item.set_sheet_cache(sheet)
 
+    # SAR → output_currency factor for everything the PDF prints. Computed
+    # aggregates (line items, section.subtotal, sheet.grand_total) are stored
+    # in SAR; the user enters Scope-of-Work totals already in output_currency,
+    # so SOW values are NOT multiplied by `conv`.
+    conv = _conversion_rate(sheet.output_currency, rates_dict)
+
     # Build the PDF into a BytesIO so we can both save a revision copy and
     # return it to the user.
     import io as _io
@@ -2412,6 +2418,18 @@ def costing_export_pdf(request, pk):
         except (TypeError, ValueError):
             return ''
 
+    def fmt_money(val):
+        """Format a SAR-denominated value into the sheet's output currency.
+
+        Use this for any aggregate computed from line-item costs (which are
+        stored in SAR). Use plain fmt_num for values the user already
+        entered in the output currency (Scope-of-Work item totals).
+        """
+        try:
+            return f'{float(Decimal(str(val)) * conv):,.2f}'
+        except (TypeError, ValueError, InvalidOperation):
+            return ''
+
     # ─── HEADER SECTION (logo drawn by on_page callback, info table here) ───
     project_name = sheet.project.project_name if sheet.project else sheet.title
     region_name = sheet.project.region.name if sheet.project and sheet.project.region else 'N/A'
@@ -2528,23 +2546,27 @@ def costing_export_pdf(request, pk):
     ]
     data = [hdr]
 
-    # Scope of Work items & total
+    # Scope of Work items & total — SOW values are user-entered in
+    # output_currency already, so no conversion is applied to them.
     sow_items = list(sheet.scope_of_work_items.all())
     sow_total = sum(i.total_price for i in sow_items) if sow_items else sheet.scope_of_work_total
-    optional_total = sheet.optional_subtotal
-    has_optional = optional_total and optional_total > 0
+    # SAR aggregates → output_currency once, here, so the rest of the table
+    # can mix them with the SOW values consistently.
+    optional_total_oc = (sheet.optional_subtotal * conv).quantize(Decimal('0.01'))
+    grand_total_oc = (sheet.grand_total * conv).quantize(Decimal('0.01'))
+    has_optional = optional_total_oc and optional_total_oc > 0
     # A.1 always shows the non-optional supply subtotal.
     # sheet.grand_total already excludes optional when include_optional_in_total=False,
     # and includes them when True — so we subtract the optional piece back out to get
     # the stable "non-optional supply" figure for A.1.
     if sheet.include_optional_in_total:
-        non_optional_supply = sheet.grand_total - optional_total
+        non_optional_supply_oc = grand_total_oc - optional_total_oc
     else:
-        non_optional_supply = sheet.grand_total
+        non_optional_supply_oc = grand_total_oc
     # Contract total: A.1 + A.2 always, plus A.3 only when the flag is on.
-    contract_total = non_optional_supply + sow_total
+    contract_total_oc = non_optional_supply_oc + Decimal(str(sow_total))
     if sheet.include_optional_in_total and has_optional:
-        contract_total += optional_total
+        contract_total_oc += optional_total_oc
 
     # Row A: MAIN - TOTAL CONTRACT PRICE
     contract_label_parts = 'A.1+A.2+A.3' if (has_optional and sheet.include_optional_in_total) else 'A.1+A.2'
@@ -2553,7 +2575,7 @@ def costing_export_pdf(request, pk):
         Paragraph('<b>A</b>', cell_bold),
         Paragraph(f'<b>{contract_label}</b>', cell_bold),
         '', '',
-        Paragraph(f'<b>{fmt_num(contract_total)}</b>', cell_right),
+        Paragraph(f'<b>{fmt_num(contract_total_oc)}</b>', cell_right),
     ])
 
     # Row A.1: SCOPE OF SUPPLY (pink bg) — always non-optional
@@ -2561,7 +2583,7 @@ def costing_export_pdf(request, pk):
         Paragraph('<b>A.1</b>', cell_bold),
         Paragraph('<b>SCOPE OF SUPPLY</b>', cell_bold),
         '', '',
-        Paragraph(f'<b>{fmt_num(non_optional_supply)}</b>', cell_right),
+        Paragraph(f'<b>{fmt_num(non_optional_supply_oc)}</b>', cell_right),
     ])
 
     # Consolidate sections with the same title so that duplicate
@@ -2592,13 +2614,13 @@ def costing_export_pdf(request, pk):
             Paragraph(f' {group["title"]}', cell_style),
             Paragraph('1', cell_center),
             Paragraph('LOT', cell_center),
-            Paragraph(fmt_num(group['subtotal']), cell_right),
+            Paragraph(fmt_money(group['subtotal']), cell_right),
         ])
 
     # Blank separator row
     data.append(['', '', '', '', ''])
 
-    # Row A.2: SCOPE OF WORK (pink bg)
+    # Row A.2: SCOPE OF WORK (pink bg) — sow_total is already in output_currency
     data.append([
         Paragraph('<b>A.2</b>', cell_bold),
         Paragraph('<b>SCOPE OF WORK</b>', cell_bold),
@@ -2633,7 +2655,7 @@ def costing_export_pdf(request, pk):
             Paragraph('<b>A.3</b>', cell_bold),
             Paragraph('<b>OPTIONAL ITEMS</b>', cell_bold),
             '', '',
-            Paragraph(f'<b>{fmt_num(optional_total)}</b>', cell_right),
+            Paragraph(f'<b>{fmt_num(optional_total_oc)}</b>', cell_right),
         ])
         # Optional section line items (renumbered starting from 1 within this block)
         for idx, (title_key, group) in enumerate(optional_groups.items(), 1):
@@ -2642,7 +2664,7 @@ def costing_export_pdf(request, pk):
                 Paragraph(f' {group["title"]}', cell_style),
                 Paragraph('1', cell_center),
                 Paragraph('LOT', cell_center),
-                Paragraph(fmt_num(group['subtotal']), cell_right),
+                Paragraph(fmt_money(group['subtotal']), cell_right),
             ])
 
     main_table = Table(data, colWidths=col_widths, repeatRows=1)
@@ -2906,7 +2928,7 @@ def costing_export_pdf(request, pk):
                 '', '', '', '', '',
                 Paragraph('<b>Total</b>', batch_total_style),
                 '',
-                Paragraph(f'<b>{fmt_num(batch_running_total)}</b>', cell_right_bold),
+                Paragraph(f'<b>{fmt_money(batch_running_total)}</b>', cell_right_bold),
             ])
             section_rows.append((row_idx, 'batch_total'))
             row_idx += 1
@@ -2962,8 +2984,8 @@ def costing_export_pdf(request, pk):
                     Paragraph(item.model_number or '', cell_sm),
                     Paragraph(str(int(item.quantity) if item.quantity == int(item.quantity) else item.quantity), cell_sm_center),
                     Paragraph(item.unit, cell_sm_center),
-                    Paragraph(fmt_num(item.final_unit_price), cell_sm_right),
-                    Paragraph(fmt_num(item.final_total_price), cell_sm_right),
+                    Paragraph(fmt_money(item.final_unit_price), cell_sm_right),
+                    Paragraph(fmt_money(item.final_total_price), cell_sm_right),
                 ])
                 section_rows.append((row_idx, 'subheading'))
             else:
@@ -2974,8 +2996,8 @@ def costing_export_pdf(request, pk):
                     Paragraph(item.model_number or '', cell_sm),
                     Paragraph(str(int(item.quantity) if item.quantity == int(item.quantity) else item.quantity), cell_sm_center),
                     Paragraph(item.unit, cell_sm_center),
-                    Paragraph(fmt_num(item.final_unit_price), cell_sm_right),
-                    Paragraph(fmt_num(item.final_total_price), cell_sm_right),
+                    Paragraph(fmt_money(item.final_unit_price), cell_sm_right),
+                    Paragraph(fmt_money(item.final_total_price), cell_sm_right),
                 ])
             row_idx += 1
 
@@ -2983,7 +3005,7 @@ def costing_export_pdf(request, pk):
         bom_data.append([
             '', '', '', '', '', '',
             Paragraph('<b>Sub-Total</b>', cell_right_bold),
-            Paragraph(f'<b>{fmt_num(section.subtotal)}</b>', cell_right_bold),
+            Paragraph(f'<b>{fmt_money(section.subtotal)}</b>', cell_right_bold),
         ])
         section_rows.append((row_idx, 'subtotal'))
         row_idx += 1
