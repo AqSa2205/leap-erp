@@ -313,47 +313,6 @@
                     </div>
                 </div>
 
-                <!-- Quick-Add Terms Template Modal (inline, no navigation away) -->
-                <div class="modal fade" id="quickAddTermsModal" tabindex="-1" aria-hidden="true">
-                    <div class="modal-dialog modal-dialog-centered">
-                        <div class="modal-content">
-                            <div class="modal-header">
-                                <h5 class="modal-title"><i class="bi bi-plus-lg me-2"></i>Quick Add Terms Template</h5>
-                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                            </div>
-                            <form id="quickAddTermsForm" action="{% url 'costing:terms_template_ajax_create' %}" method="post">
-                                {% csrf_token %}
-                                <div class="modal-body">
-                                    <div class="mb-3">
-                                        <label class="form-label fw-bold">Name</label>
-                                        <input type="text" name="name" class="form-control" required maxlength="255" placeholder="e.g. Standard Payment Terms">
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label fw-bold">Category</label>
-                                        <select name="category" class="form-select" required>
-                                            <option value="terms_and_conditions">Terms &amp; Conditions</option>
-                                            <option value="exclusions">Exclusions</option>
-                                            <option value="payment_terms">Payment Terms</option>
-                                            <option value="conclusion">Conclusion</option>
-                                        </select>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label fw-bold">Content</label>
-                                        <textarea name="content" class="form-control" rows="6" required placeholder="One item per line — they'll be numbered/lettered in the PDF."></textarea>
-                                    </div>
-                                    <div id="quickAddTermsError" class="alert alert-danger d-none mb-0"></div>
-                                </div>
-                                <div class="modal-footer">
-                                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-                                    <button type="submit" class="btn btn-success">
-                                        <i class="bi bi-plus-lg me-1"></i> Add &amp; Select
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                </div>
-
                 <!-- Additional T&C / Notes (free-text) -->
                 <div class="card mb-4">
                     <div class="card-header">
@@ -372,6 +331,50 @@
                         <i class="bi bi-check-lg"></i> Save Purchase Order
                     </button>
                     <a href="{% url 'procurement:po_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Quick-Add Terms Template Modal — kept OUTSIDE the main PO <form>. -->
+<!-- Nested forms aren't allowed in HTML; the inner <form> tag would be -->
+<!-- dropped by browsers and the modal's submit button would post the -->
+<!-- outer PO form with only the modal's fields, breaking PO save. -->
+<div class="modal fade" id="quickAddTermsModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-plus-lg me-2"></i>Quick Add Terms Template</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form id="quickAddTermsForm" action="{% url 'costing:terms_template_ajax_create' %}" method="post">
+                {% csrf_token %}
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Name</label>
+                        <input type="text" name="name" class="form-control" required maxlength="255" placeholder="e.g. Standard Payment Terms">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Category</label>
+                        <select name="category" class="form-select" required>
+                            <option value="terms_and_conditions">Terms &amp; Conditions</option>
+                            <option value="exclusions">Exclusions</option>
+                            <option value="payment_terms">Payment Terms</option>
+                            <option value="conclusion">Conclusion</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Content</label>
+                        <textarea name="content" class="form-control" rows="6" required placeholder="One item per line — they'll be numbered/lettered in the PDF."></textarea>
+                    </div>
+                    <div id="quickAddTermsError" class="alert alert-danger d-none mb-0"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success">
+                        <i class="bi bi-plus-lg me-1"></i> Add &amp; Select
+                    </button>
                 </div>
             </form>
         </div>
