@@ -378,6 +378,16 @@
                 <div class="total-value text-danger fw-bold">{{ sheet.grand_total|mul:conversion_rate|floatformat:2|intcomma }}</div>
                 <div class="total-label">Grand Total ({{ sheet.output_currency }})</div>
             </div>
+            {% if sow_total %}
+            <div class="text-center">
+                <div class="total-value text-secondary fw-bold">{{ sow_total|floatformat:2|intcomma }}</div>
+                <div class="total-label">Scope of Work (A.2)</div>
+            </div>
+            <div class="text-center">
+                <div class="total-value text-success fw-bold">{{ contract_total|floatformat:2|intcomma }}</div>
+                <div class="total-label">Contract Total ({{ sheet.output_currency }})</div>
+            </div>
+            {% endif %}
         </div>
         {% if sheet.optional_subtotal %}
         <div class="text-center mt-2 pt-2 border-top">

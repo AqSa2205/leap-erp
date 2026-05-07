@@ -430,8 +430,22 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
             })
         context['additional_contacts_by_region'] = contacts_by_region
 
-        # Scope of Work items (A.2 section)
-        context['sow_items'] = sheet.scope_of_work_items.all()
+        # Scope of Work items (A.2 section). Sum line totals if any items
+        # exist; fall back to the sheet's flat scope_of_work_total field.
+        sow_items = list(sheet.scope_of_work_items.all())
+        context['sow_items'] = sow_items
+        sow_total_oc = (
+            sum((i.total_price for i in sow_items), Decimal('0'))
+            if sow_items else sheet.scope_of_work_total
+        )
+        context['sow_total'] = sow_total_oc
+
+        # Contract total = (line-item grand total in output currency) + SOW.
+        # The detail page Grand Total column already reflects the user's
+        # "include optional in total" toggle via sheet.grand_total, so we just
+        # add SOW on top to mirror the PDF's MAIN — TOTAL CONTRACT PRICE row.
+        grand_total_oc = (sheet.grand_total * conversion_rate).quantize(Decimal('0.01'))
+        context['contract_total'] = grand_total_oc + Decimal(str(sow_total_oc))
 
         # PDF revisions (saved snapshots from previous Export PDF clicks)
         context['pdf_revisions'] = sheet.pdf_revisions.select_related('created_by').all()
