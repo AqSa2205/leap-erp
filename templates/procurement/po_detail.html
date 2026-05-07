@@ -284,15 +284,21 @@
             <div class="card mb-4">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span><i class="bi bi-file-text me-2"></i> PDF Terms & Conditions</span>
-                    <a href="{% url 'costing:terms_templates' %}" class="btn btn-sm btn-outline-secondary">
-                        <i class="bi bi-gear me-1"></i> Manage Templates
-                    </a>
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#quickAddTermsModal">
+                            <i class="bi bi-plus-lg me-1"></i> Quick Add
+                        </button>
+                        <a href="{% url 'costing:terms_templates' %}?next={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-secondary">
+                            <i class="bi bi-gear me-1"></i> Manage Templates
+                        </a>
+                    </div>
                 </div>
-                <div class="card-body">
+                <div class="card-body" id="poTermsCardBody">
                     {% for category_label, items_list in terms_by_category.items %}
                     {% if items_list %}
-                    <h6 class="text-muted mb-2">{{ category_label }}</h6>
-                    <div class="row mb-3">
+                    {% with first=items_list.0 %}
+                    <h6 class="text-muted mb-2 terms-category-heading" data-category="{{ first.template.category }}">{{ category_label }}</h6>
+                    <div class="row mb-3 terms-category-row" data-category="{{ first.template.category }}">
                         {% for item in items_list %}
                         <div class="col-md-6 col-lg-4 mb-2">
                             <div class="form-check">
@@ -308,10 +314,52 @@
                         </div>
                         {% endfor %}
                     </div>
+                    {% endwith %}
                     {% endif %}
                     {% empty %}
-                    <p class="text-muted mb-0">No templates defined yet. <a href="{% url 'costing:terms_templates' %}">Create some templates</a> to select from.</p>
+                    <p class="text-muted mb-0" id="poTermsEmpty">No templates defined yet. Click <strong>Quick Add</strong> above to create one.</p>
                     {% endfor %}
+                </div>
+            </div>
+
+            <!-- Quick-Add Terms Template Modal (inline, no navigation away) -->
+            <div class="modal fade" id="quickAddTermsModal" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title"><i class="bi bi-plus-lg me-2"></i>Quick Add Terms Template</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <form id="quickAddTermsForm" action="{% url 'costing:terms_template_ajax_create' %}" method="post">
+                            {% csrf_token %}
+                            <div class="modal-body">
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold">Name</label>
+                                    <input type="text" name="name" class="form-control" required maxlength="255" placeholder="e.g. Standard Payment Terms">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold">Category</label>
+                                    <select name="category" class="form-select" required>
+                                        <option value="terms_and_conditions">Terms &amp; Conditions</option>
+                                        <option value="exclusions">Exclusions</option>
+                                        <option value="payment_terms">Payment Terms</option>
+                                        <option value="conclusion">Conclusion</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold">Content</label>
+                                    <textarea name="content" class="form-control" rows="6" required placeholder="One item per line — they'll be numbered/lettered in the PDF."></textarea>
+                                </div>
+                                <div id="quickAddTermsError" class="alert alert-danger d-none mb-0"></div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                                <button type="submit" class="btn btn-success">
+                                    <i class="bi bi-plus-lg me-1"></i> Add &amp; Select
+                                </button>
+                            </div>
+                        </form>
+                    </div>
                 </div>
             </div>
 
@@ -332,7 +380,8 @@
 (function() {
     var csrfToken = '{{ csrf_token }}';
     var toggleUrl = '{% url "procurement:po_toggle_term" po.pk %}';
-    document.querySelectorAll('.po-term-checkbox').forEach(function(cb) {
+
+    function wireToggle(cb) {
         cb.addEventListener('change', function() {
             var termId = this.dataset.termId;
             var checkbox = this;
@@ -356,6 +405,116 @@
                 console.error('Toggle failed:', err);
             });
         });
+    }
+
+    document.querySelectorAll('.po-term-checkbox').forEach(wireToggle);
+
+    // ─── Quick-add Terms Template (inline, no navigation away) ───
+    const form = document.getElementById('quickAddTermsForm');
+    if (!form) return;
+    const errBox = document.getElementById('quickAddTermsError');
+    const modalEl = document.getElementById('quickAddTermsModal');
+    const CATEGORY_ORDER = ['terms_and_conditions', 'exclusions', 'payment_terms', 'conclusion'];
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        })[c]);
+    }
+
+    function getOrCreateCategorySection(category, categoryLabel) {
+        const cardBody = document.getElementById('poTermsCardBody');
+        let row = cardBody.querySelector(`.terms-category-row[data-category="${category}"]`);
+        if (row) return row;
+        const empty = document.getElementById('poTermsEmpty');
+        if (empty) empty.remove();
+        const heading = document.createElement('h6');
+        heading.className = 'text-muted mb-2 terms-category-heading';
+        heading.dataset.category = category;
+        heading.textContent = categoryLabel;
+        row = document.createElement('div');
+        row.className = 'row mb-3 terms-category-row';
+        row.dataset.category = category;
+        const myIdx = CATEGORY_ORDER.indexOf(category);
+        let inserted = false;
+        if (myIdx !== -1) {
+            const existingHeadings = cardBody.querySelectorAll('.terms-category-heading');
+            for (const h of existingHeadings) {
+                const otherIdx = CATEGORY_ORDER.indexOf(h.dataset.category);
+                if (otherIdx > myIdx) {
+                    cardBody.insertBefore(heading, h);
+                    cardBody.insertBefore(row, h);
+                    inserted = true;
+                    break;
+                }
+            }
+        }
+        if (!inserted) {
+            cardBody.appendChild(heading);
+            cardBody.appendChild(row);
+        }
+        return row;
+    }
+
+    function insertAndToggle(t) {
+        const row = getOrCreateCategorySection(t.category, t.category_label);
+        const col = document.createElement('div');
+        col.className = 'col-md-6 col-lg-4 mb-2';
+        col.innerHTML = `
+            <div class="form-check">
+                <input class="form-check-input po-term-checkbox" type="checkbox"
+                       id="po-term-${t.pk}" data-term-id="${t.pk}" checked>
+                <label class="form-check-label" for="po-term-${t.pk}">
+                    <strong>${escapeHtml(t.name)}</strong>
+                    <br><small class="text-muted">${escapeHtml(t.content_preview)}</small>
+                </label>
+            </div>
+        `;
+        row.appendChild(col);
+        const newCb = col.querySelector('.po-term-checkbox');
+        wireToggle(newCb);
+        // Persist the auto-checked state immediately so the PDF reflects it.
+        fetch(toggleUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-CSRFToken': csrfToken,
+            },
+            body: 'term_id=' + encodeURIComponent(t.pk),
+        }).catch(function(err) {
+            console.error('Auto-select after quick-add failed:', err);
+            newCb.checked = false;
+        });
+    }
+
+    form.addEventListener('submit', async function(ev) {
+        ev.preventDefault();
+        errBox.classList.add('d-none');
+        errBox.textContent = '';
+        const submitBtn = form.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        try {
+            const fd = new FormData(form);
+            const resp = await fetch(form.action, {
+                method: 'POST',
+                body: fd,
+                headers: { 'X-CSRFToken': fd.get('csrfmiddlewaretoken') },
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) {
+                errBox.textContent = data.error || 'Could not add template.';
+                errBox.classList.remove('d-none');
+                return;
+            }
+            insertAndToggle(data);
+            form.reset();
+            bootstrap.Modal.getInstance(modalEl).hide();
+        } catch (err) {
+            errBox.textContent = 'Network error — please try again.';
+            errBox.classList.remove('d-none');
+        } finally {
+            submitBtn.disabled = false;
+        }
     });
 })();
 </script>

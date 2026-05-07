@@ -9,6 +9,7 @@ from django.contrib.auth.decorators import login_required
 from django.db import transaction
 from django.db.models import Q
 from django.template.loader import render_to_string
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.text import slugify
 from django.utils import timezone
 from decimal import Decimal, InvalidOperation
@@ -68,6 +69,10 @@ def _user_can_view_sheet(user, sheet):
     # Proposal team sees every sheet as a BOM (no pricing) regardless of region
     if getattr(user, 'is_proposal_team_user', False):
         return True
+    # Procurement team sees BOMs (no pricing) in their own region only —
+    # they issue POs against region-scoped projects.
+    if getattr(user, 'is_procurement_user', False):
+        return bool(sheet.project and sheet.project.region_id == user.region_id)
     return False
 
 
@@ -183,14 +188,21 @@ class CostingPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
         queryset = CostingSheet.objects.select_related('project', 'created_by').all()
         user = self.request.user
-        if user.is_super_admin_user or getattr(user, 'is_proposal_team_user', False):
-            # Super admins and proposal team see every sheet
+        if (
+            user.is_super_admin_user
+            or getattr(user, 'is_proposal_team_user', False)
+        ):
+            # Super admins and proposal team see every sheet (proposal team
+            # is the source of BOMs, so they need full visibility).
             return queryset
         elif user.is_admin_user or user.is_manager_user:
             return queryset.filter(
                 Q(created_by=user) |
                 Q(project__region=user.region)
             )
+        elif getattr(user, 'is_procurement_user', False):
+            # Procurement sees BOMs (no pricing) in their own region only.
+            return queryset.filter(project__region=user.region)
         else:
             return queryset.filter(created_by=user)
 
@@ -699,6 +711,21 @@ class ExchangeRateDeleteView(LoginRequiredMixin, DeleteView):
 
 # ─── Terms Template CRUD ─────────────────────────────────────
 
+def _safe_next_url(request, candidate):
+    """Only return `candidate` if it's a same-origin path. Falls back to None.
+
+    Prevents the next-redirect from being abused as an open redirect to an
+    external site.
+    """
+    if not candidate:
+        return None
+    return candidate if url_has_allowed_host_and_scheme(
+        url=candidate,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ) else None
+
+
 class TermsTemplateListView(LoginRequiredMixin, ListView):
     model = TermsTemplate
     template_name = 'costing/terms_templates.html'
@@ -707,6 +734,9 @@ class TermsTemplateListView(LoginRequiredMixin, ListView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['form'] = TermsTemplateForm()
+        # Pass through ?next=… so the form (and Back button) can return the
+        # user to wherever they came from (e.g. a PO edit page).
+        context['next_url'] = _safe_next_url(self.request, self.request.GET.get('next'))
         return context
 
 
@@ -716,6 +746,10 @@ class TermsTemplateCreateView(LoginRequiredMixin, CreateView):
     template_name = 'costing/terms_templates.html'
     success_url = reverse_lazy('costing:terms_templates')
 
+    def get_success_url(self):
+        nxt = _safe_next_url(self.request, self.request.POST.get('next'))
+        return nxt or str(self.success_url)
+
     def form_valid(self, form):
         form.instance.created_by = self.request.user
         messages.success(self.request, 'Terms template added.')
@@ -723,7 +757,41 @@ class TermsTemplateCreateView(LoginRequiredMixin, CreateView):
 
     def form_invalid(self, form):
         messages.error(self.request, 'Error adding terms template.')
-        return redirect('costing:terms_templates')
+        nxt = _safe_next_url(self.request, self.request.POST.get('next'))
+        return redirect(nxt or 'costing:terms_templates')
+
+
+@login_required
+@require_POST
+def ajax_create_terms_template(request):
+    """Create a TermsTemplate inline (no page navigation).
+
+    Used by the PO form / detail page so HR-style "create the template I
+    realised I need right now" flow doesn't blow away unsaved PO data via a
+    full-page navigation.
+    """
+    name = (request.POST.get('name') or '').strip()
+    category = (request.POST.get('category') or '').strip()
+    content = (request.POST.get('content') or '').strip()
+    if not name or not category or not content:
+        return JsonResponse({'error': 'name, category, and content are all required.'}, status=400)
+    if category not in dict(TermsTemplate.CATEGORY_CHOICES):
+        return JsonResponse({'error': 'Invalid category.'}, status=400)
+    template = TermsTemplate.objects.create(
+        name=name, category=category, content=content,
+        created_by=request.user,
+    )
+    preview = ' '.join(template.content.split()[:15])
+    if len(template.content.split()) > 15:
+        preview += '…'
+    return JsonResponse({
+        'pk': template.pk,
+        'name': template.name,
+        'category': template.category,
+        'category_label': template.get_category_display(),
+        'content': template.content,
+        'content_preview': preview,
+    })
 
 
 class TermsTemplateUpdateView(LoginRequiredMixin, UpdateView):

@@ -60,6 +60,7 @@
             <div class="card-body">
                 <form method="post" action="{% url 'costing:terms_template_create' %}">
                     {% csrf_token %}
+                    {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
                     <div class="mb-3">
                         <label class="form-label fw-bold">Name</label>
                         {{ form.name }}
@@ -84,8 +85,14 @@
 </div>
 
 <div class="mt-3">
+    {% if next_url %}
+    <a href="{{ next_url }}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i> Back
+    </a>
+    {% else %}
     <a href="{% url 'costing:list' %}" class="btn btn-outline-secondary">
         <i class="bi bi-arrow-left me-1"></i> Back to Costing
     </a>
+    {% endif %}
 </div>
 {% endblock %}

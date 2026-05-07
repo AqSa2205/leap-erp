@@ -44,6 +44,7 @@ urlpatterns = [
     # Terms templates
     path('terms-templates/', views.TermsTemplateListView.as_view(), name='terms_templates'),
     path('terms-templates/create/', views.TermsTemplateCreateView.as_view(), name='terms_template_create'),
+    path('terms-templates/ajax-create/', views.ajax_create_terms_template, name='terms_template_ajax_create'),
     path('terms-templates/<int:pk>/edit/', views.TermsTemplateUpdateView.as_view(), name='terms_template_edit'),
     path('terms-templates/<int:pk>/delete/', views.TermsTemplateDeleteView.as_view(), name='terms_template_delete'),
 
