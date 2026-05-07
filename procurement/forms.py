@@ -57,6 +57,12 @@ class PurchaseOrderForm(forms.ModelForm):
         if self.user:
             if self.user.is_super_admin_user:
                 pass
+            elif getattr(self.user, 'is_procurement_user', False):
+                # Procurement only ever issues POs against Won projects.
+                self.fields['project'].queryset = Project.objects.filter(
+                    region=self.user.region,
+                    status__category='won',
+                )
             elif self.user.is_admin_user or self.user.is_manager_user:
                 self.fields['project'].queryset = Project.objects.filter(
                     region=self.user.region
