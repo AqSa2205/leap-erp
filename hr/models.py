@@ -20,6 +20,10 @@ class Employee(models.Model):
     ]
 
     iqama_number = models.CharField(max_length=50, unique=True, verbose_name='Iqama/Passport No.')
+    iqama_issued_on = models.DateField(null=True, blank=True, verbose_name='Iqama Issue Date')
+    iqama_expires_on = models.DateField(null=True, blank=True, verbose_name='Iqama Expiry Date')
+    medical_insurance_issued_on = models.DateField(null=True, blank=True, verbose_name='Medical Insurance Issue Date')
+    medical_insurance_expires_on = models.DateField(null=True, blank=True, verbose_name='Medical Insurance Expiry Date')
     full_name = models.CharField(max_length=255, verbose_name='Full Name')
     designation = models.CharField(max_length=255, blank=True, verbose_name='Designation')
     qualification = models.CharField(max_length=255, blank=True, verbose_name='Qualification')
@@ -44,6 +48,9 @@ class Employee(models.Model):
         related_name='created_employees',
     )
 
+    # Threshold (days) below which an upcoming expiry is considered "expiring soon".
+    EXPIRY_WARN_DAYS = 30
+
     class Meta:
         ordering = ['full_name']
         indexes = [
@@ -51,10 +58,45 @@ class Employee(models.Model):
             models.Index(fields=['nationality']),
             models.Index(fields=['deployment']),
             models.Index(fields=['contract_type']),
+            models.Index(fields=['iqama_expires_on']),
+            models.Index(fields=['medical_insurance_expires_on']),
         ]
 
     def __str__(self):
         return self.full_name
+
+    @staticmethod
+    def _days_until(target):
+        if not target:
+            return None
+        from django.utils import timezone
+        return (target - timezone.now().date()).days
+
+    @staticmethod
+    def _expiry_status(days):
+        if days is None:
+            return 'unknown'
+        if days < 0:
+            return 'expired'
+        if days <= Employee.EXPIRY_WARN_DAYS:
+            return 'expiring_soon'
+        return 'valid'
+
+    @property
+    def iqama_days_until_expiry(self):
+        return self._days_until(self.iqama_expires_on)
+
+    @property
+    def iqama_status(self):
+        return self._expiry_status(self.iqama_days_until_expiry)
+
+    @property
+    def medical_insurance_days_until_expiry(self):
+        return self._days_until(self.medical_insurance_expires_on)
+
+    @property
+    def medical_insurance_status(self):
+        return self._expiry_status(self.medical_insurance_days_until_expiry)
 
 
 class EmployeeDocument(models.Model):

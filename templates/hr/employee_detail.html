@@ -76,6 +76,58 @@
                         </div>
                     </div>
 
+                    {# ─── Iqama & Medical Insurance Validity ─── #}
+                    {% with iqama_days=employee.iqama_days_until_expiry medical_days=employee.medical_insurance_days_until_expiry %}
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-shield-check"></i> Iqama &amp; Medical Insurance Validity</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <!-- Iqama -->
+                                <div class="col-md-6">
+                                    <h6 class="text-muted mb-3"><i class="bi bi-card-text"></i> Iqama</h6>
+                                    <p class="mb-2"><strong>Issued On:</strong> {{ employee.iqama_issued_on|date:"d M Y"|default:"-" }}</p>
+                                    <p class="mb-2"><strong>Expires On:</strong> {{ employee.iqama_expires_on|date:"d M Y"|default:"-" }}</p>
+                                    {% if iqama_days is not None %}
+                                    <p class="mb-0"><strong>Days Until Renewal:</strong>
+                                        {% if employee.iqama_status == 'expired' %}
+                                        <span class="badge bg-danger">Expired {{ iqama_days|stringformat:"d"|cut:"-" }} day{{ iqama_days|stringformat:"d"|cut:"-"|pluralize }} ago</span>
+                                        {% elif employee.iqama_status == 'expiring_soon' %}
+                                        <span class="badge bg-warning text-dark">{{ iqama_days }} day{{ iqama_days|pluralize }} left — renew soon</span>
+                                        {% else %}
+                                        <span class="badge bg-success">{{ iqama_days }} day{{ iqama_days|pluralize }} left</span>
+                                        {% endif %}
+                                    </p>
+                                    {% else %}
+                                    <p class="mb-0 text-muted small">Set issue and expiry dates to track renewal.</p>
+                                    {% endif %}
+                                </div>
+
+                                <!-- Medical Insurance -->
+                                <div class="col-md-6">
+                                    <h6 class="text-muted mb-3"><i class="bi bi-heart-pulse"></i> Medical Insurance</h6>
+                                    <p class="mb-2"><strong>Issued On:</strong> {{ employee.medical_insurance_issued_on|date:"d M Y"|default:"-" }}</p>
+                                    <p class="mb-2"><strong>Expires On:</strong> {{ employee.medical_insurance_expires_on|date:"d M Y"|default:"-" }}</p>
+                                    {% if medical_days is not None %}
+                                    <p class="mb-0"><strong>Days Until Renewal:</strong>
+                                        {% if employee.medical_insurance_status == 'expired' %}
+                                        <span class="badge bg-danger">Expired {{ medical_days|stringformat:"d"|cut:"-" }} day{{ medical_days|stringformat:"d"|cut:"-"|pluralize }} ago</span>
+                                        {% elif employee.medical_insurance_status == 'expiring_soon' %}
+                                        <span class="badge bg-warning text-dark">{{ medical_days }} day{{ medical_days|pluralize }} left — renew soon</span>
+                                        {% else %}
+                                        <span class="badge bg-success">{{ medical_days }} day{{ medical_days|pluralize }} left</span>
+                                        {% endif %}
+                                    </p>
+                                    {% else %}
+                                    <p class="mb-0 text-muted small">Set issue and expiry dates to track renewal.</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endwith %}
+
                     <!-- Contact Details -->
                     <div class="card mb-4">
                         <div class="card-header">
