@@ -69,10 +69,14 @@ def _user_can_view_sheet(user, sheet):
     # Proposal team sees every sheet as a BOM (no pricing) regardless of region
     if getattr(user, 'is_proposal_team_user', False):
         return True
-    # Procurement team sees BOMs (no pricing) in their own region only —
-    # they issue POs against region-scoped projects.
+    # Procurement only sees BOMs whose project is Won and in their region.
     if getattr(user, 'is_procurement_user', False):
-        return bool(sheet.project and sheet.project.region_id == user.region_id)
+        return bool(
+            sheet.project
+            and sheet.project.region_id == user.region_id
+            and sheet.project.status
+            and sheet.project.status.category == 'won'
+        )
     return False
 
 
@@ -201,8 +205,12 @@ class CostingPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
                 Q(project__region=user.region)
             )
         elif getattr(user, 'is_procurement_user', False):
-            # Procurement sees BOMs (no pricing) in their own region only.
-            return queryset.filter(project__region=user.region)
+            # Procurement sees BOMs (no pricing) for Won projects in their
+            # own region only — that's when their work begins.
+            return queryset.filter(
+                project__region=user.region,
+                project__status__category='won',
+            )
         else:
             return queryset.filter(created_by=user)
 

@@ -192,6 +192,16 @@ class PurchaseOrderItem(models.Model):
         help_text='Initials of the SCM team member responsible (e.g. ST, ZH).',
     )
 
+    source_bom_item = models.ForeignKey(
+        'costing.CostingLineItem',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='procured_po_items',
+        help_text='If imported from a costing sheet BOM, points back to the '
+                  'source line item — used to mark BOM items "already procured" '
+                  'and to show PO traceability per BOM row.',
+    )
+
     order = models.PositiveIntegerField(default=0)
 
     class Meta:

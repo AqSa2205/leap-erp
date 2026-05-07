@@ -331,10 +331,10 @@
                     <a href="{% url 'costing:export' sheet.pk %}" class="btn btn-outline-primary bom-pricing-only"><i class="bi bi-file-earmark-excel"></i> Excel</a>
                     <a href="{% url 'costing:export_pdf' sheet.pk %}" target="_blank" class="btn btn-outline-danger bom-pricing-only"><i class="bi bi-file-earmark-pdf"></i> PDF</a>
                     {% if user.is_procurement_user or user.is_super_admin_user or user.is_admin_user %}
-                    <a href="{% url 'procurement:po_create_from_bom' sheet.pk %}"
+                    <a href="{% url 'procurement:bom_procurement_tracker' sheet.pk %}"
                        class="btn btn-outline-warning"
-                       onclick="return confirm('Create a draft PO with all {{ sheet.sections.count }} BOM section\'s line items copied? You will land on the PO edit page to fill in vendor, prices, and the real PO number.');">
-                        <i class="bi bi-cart-plus"></i> Create PO from BOM
+                       title="Pick which BOM items go on this PO. Items already procured stay marked with their PO number.">
+                        <i class="bi bi-cart-plus"></i> Procure BOM Items
                     </a>
                     {% endif %}
                     <a href="{% url 'costing:delete' sheet.pk %}" class="btn btn-outline-secondary"><i class="bi bi-trash"></i> Delete</a>

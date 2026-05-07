@@ -25,12 +25,15 @@ class ProjectPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
 
         if user.is_super_admin_user:
             return queryset
-        # Procurement, admins, and managers all see projects in their region.
-        if (
-            getattr(user, 'is_procurement_user', False)
-            or user.is_admin_user
-            or user.is_manager_user
-        ):
+        # Procurement only kicks in after a project is Won, so they only
+        # ever need to see Won-status projects in their region. Admins and
+        # managers continue to see every status in their region.
+        if getattr(user, 'is_procurement_user', False):
+            return queryset.filter(
+                region=user.region,
+                status__category='won',
+            )
+        if user.is_admin_user or user.is_manager_user:
             return queryset.filter(region=user.region)
         return queryset.filter(owner=user)
 

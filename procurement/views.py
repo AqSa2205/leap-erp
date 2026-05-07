@@ -477,6 +477,133 @@ def po_create_from_bom(request, sheet_pk):
     return redirect('procurement:po_update', pk=po.pk)
 
 
+@login_required
+def bom_procurement_tracker(request, sheet_pk):
+    """Stateful BOM-to-PO procurement page.
+
+    Lists every BOM line item with its current procurement status — items
+    already on a PO show the PO number(s); un-procured items have a
+    checkbox. The user picks items for *this* PO and submits; a draft PO
+    is created with PurchaseOrderItem.source_bom_item pointing back to
+    each chosen line so the same item can't be re-picked next time and
+    each row carries a permanent back-link to the PO it ended up in.
+
+    Multi-PO from the same BOM works naturally: subsequent visits show
+    only the still-available items as checkboxes; already-procured rows
+    are read-only with PO links.
+    """
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user or user.is_procurement_user):
+        messages.error(request, 'Only procurement team members can issue POs from a BOM.')
+        return redirect('costing:detail', pk=sheet_pk)
+
+    from costing.models import CostingSheet, CostingLineItem
+    sheet = get_object_or_404(CostingSheet, pk=sheet_pk)
+
+    # Region scope (super admins bypass).
+    if (
+        not user.is_super_admin_user
+        and getattr(user, 'is_procurement_user', False)
+        and (not sheet.project or sheet.project.region_id != user.region_id)
+    ):
+        messages.error(request, 'You can only procure BOMs for projects in your region.')
+        return redirect('costing:detail', pk=sheet_pk)
+
+    # Procurement only kicks off after the project is Won.
+    project_status = sheet.project.status if sheet.project else None
+    if not project_status or project_status.category != 'won':
+        messages.error(
+            request,
+            'BOM procurement is only available for projects with a Won status.',
+        )
+        return redirect('costing:detail', pk=sheet_pk)
+
+    if request.method == 'POST':
+        item_ids = [int(x) for x in request.POST.getlist('item_ids') if x.isdigit()]
+        if not item_ids:
+            messages.error(request, 'Pick at least one item to add to the PO.')
+        else:
+            placeholder_po_number = f'DRAFT-S{sheet.pk}-{int(datetime.now().timestamp())}'
+            po = PurchaseOrder.objects.create(
+                po_date=datetime.now().date(),
+                po_number=placeholder_po_number,
+                vendor_name='',
+                po_issued_by=user.get_full_name() or user.username,
+                issuer_email=user.email or '',
+                project=sheet.project,
+                project_name=sheet.project.project_name if sheet.project else (sheet.title or ''),
+                created_by=user,
+            )
+            serial = 1
+            picked = (
+                CostingLineItem.objects
+                .filter(pk__in=item_ids, section__costing_sheet=sheet)
+                .select_related('section')
+            )
+            for li in picked:
+                # Defensive: skip items that were claimed by another PO
+                # between the page render and this POST.
+                if li.procured_po_items.exists():
+                    continue
+                make_model = ' '.join(filter(None, [li.make, li.model_number])).strip()
+                PurchaseOrderItem.objects.create(
+                    purchase_order=po,
+                    serial_number=serial,
+                    system=li.section.title or '',
+                    make_model=make_model,
+                    description=li.description,
+                    quantity=li.quantity,
+                    uom=li.unit or 'Nos',
+                    rate_per_unit=Decimal('0'),
+                    order=serial,
+                    source_bom_item=li,
+                )
+                serial += 1
+
+            copied = serial - 1
+            if copied == 0:
+                messages.warning(
+                    request,
+                    'Every item you picked is already on another PO — nothing to add.',
+                )
+                po.delete()
+                return redirect('procurement:bom_procurement_tracker', sheet_pk=sheet.pk)
+            messages.success(
+                request,
+                f'Draft PO seeded with {copied} item{"" if copied == 1 else "s"} from BOM. '
+                f'Replace the placeholder PO number, add the vendor, fill rates, then save.',
+            )
+            return redirect('procurement:po_update', pk=po.pk)
+
+    # Build per-section item lists with procurement status.
+    rows = []
+    available_count = 0
+    procured_count = 0
+    for section in sheet.sections.prefetch_related('line_items__procured_po_items__purchase_order').all():
+        section_items = []
+        for li in section.line_items.all():
+            procured = list(li.procured_po_items.select_related('purchase_order').all())
+            if procured:
+                procured_count += 1
+            else:
+                available_count += 1
+            section_items.append({
+                'item': li,
+                'procured_in': procured,  # list of PurchaseOrderItem
+                'is_available': not procured,
+            })
+        if section_items:
+            rows.append({'section': section, 'items': section_items})
+
+    return render(request, 'procurement/bom_procurement_tracker.html', {
+        'sheet': sheet,
+        'rows': rows,
+        'total_count': available_count + procured_count,
+        'available_count': available_count,
+        'procured_count': procured_count,
+    })
+
+
 class PODeleteView(ProcurementPermissionMixin, DeleteView):
     model = PurchaseOrder
     template_name = 'procurement/po_confirm_delete.html'

@@ -1,0 +1,274 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}BOM Procurement — {{ sheet.title }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .tracker-header {
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+        color: #fff;
+        border-radius: 12px;
+        padding: 1.25rem 1.5rem;
+    }
+    .tracker-header h1 { color: #fff; }
+    .tracker-header .crumb-link { color: #ffd966; text-decoration: none; }
+    .tracker-header .crumb-link:hover { text-decoration: underline; }
+
+    .stat-tile {
+        border-radius: 10px;
+        border: none;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        padding: 0.85rem 1rem;
+        background: #fff;
+        height: 100%;
+    }
+    .stat-tile .stat-label {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #6c757d;
+        font-weight: 600;
+    }
+    .stat-tile .stat-value {
+        font-size: 1.6rem;
+        font-weight: 700;
+        line-height: 1.1;
+    }
+    .stat-tile.tile-total { border-left: 4px solid #1a1a1a; }
+    .stat-tile.tile-available { border-left: 4px solid #198754; }
+    .stat-tile.tile-procured { border-left: 4px solid #C41E3A; }
+
+    .section-card {
+        border-radius: 12px;
+        border: none;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+        margin-bottom: 1rem;
+    }
+    .section-card .section-head {
+        padding: 0.65rem 1rem;
+        background: #f0f3f5;
+        border-bottom: 1px solid #dee2e6;
+        font-weight: 600;
+    }
+    .item-row {
+        padding: 0.55rem 1rem;
+        border-bottom: 1px solid #f0f0f0;
+        display: grid;
+        grid-template-columns: 36px 90px minmax(220px, 2fr) 1fr 80px 80px 220px;
+        gap: 0.75rem;
+        align-items: center;
+    }
+    .item-row:last-child { border-bottom: none; }
+    .item-row.row-procured { background: #fafafa; opacity: 0.85; }
+    .item-row .col-num { font-weight: 600; color: #495057; }
+    .item-row .col-desc { font-size: 0.9rem; }
+    .item-row .col-mm { font-size: 0.8rem; color: #6c757d; }
+    .item-row .col-qty { text-align: right; font-weight: 600; }
+    .item-row .col-status .badge { font-weight: 500; }
+    .item-row .col-status .po-link { font-size: 0.78rem; display: block; margin-top: 2px; }
+
+    /* Mobile / narrow laptop: stack the row instead of squeezing the grid. */
+    @media (max-width: 992px) {
+        .item-row {
+            grid-template-columns: 36px 1fr;
+            grid-template-areas:
+                "check num"
+                "check desc"
+                "check mm"
+                "check qty"
+                "check status";
+            row-gap: 0.15rem;
+        }
+        .item-row .col-check { grid-area: check; }
+        .item-row .col-num { grid-area: num; }
+        .item-row .col-desc { grid-area: desc; }
+        .item-row .col-mm { grid-area: mm; }
+        .item-row .col-qty { grid-area: qty; text-align: left; }
+        .item-row .col-uom { display: none; }
+        .item-row .col-status { grid-area: status; }
+    }
+
+    .header-row {
+        padding: 0.4rem 1rem;
+        background: #fff;
+        border-bottom: 2px solid #dee2e6;
+        display: grid;
+        grid-template-columns: 36px 90px minmax(220px, 2fr) 1fr 80px 80px 220px;
+        gap: 0.75rem;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #6c757d;
+        font-weight: 700;
+    }
+    @media (max-width: 992px) { .header-row { display: none; } }
+
+    .submit-bar {
+        position: sticky;
+        bottom: 0;
+        background: #fff;
+        border-top: 1px solid #dee2e6;
+        padding: 0.85rem 1rem;
+        box-shadow: 0 -3px 12px rgba(0,0,0,0.05);
+        z-index: 10;
+        margin-top: 1.5rem;
+        border-radius: 0 0 12px 12px;
+    }
+    .selected-count { font-weight: 700; color: #C41E3A; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <!-- Header -->
+    <div class="tracker-header mb-4">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+                <small><a class="crumb-link" href="{% url 'costing:detail' sheet.pk %}"><i class="bi bi-arrow-left"></i> Back to BOM</a></small>
+                <h1 class="h3 mb-1 mt-1">{{ sheet.title }}</h1>
+                <div class="small">
+                    {% if sheet.project %}
+                        <i class="bi bi-folder me-1"></i>{{ sheet.project.project_name }}
+                        {% if sheet.project.region %} · <i class="bi bi-geo-alt"></i> {{ sheet.project.region.name }}{% endif %}
+                        {% if sheet.project.status %}
+                            · <span class="badge ms-1" style="background:{{ sheet.project.status.color }};">{{ sheet.project.status.name }}</span>
+                        {% endif %}
+                    {% endif %}
+                </div>
+            </div>
+            <div>
+                <a href="{% url 'procurement:po_list' %}" class="btn btn-outline-light btn-sm">
+                    <i class="bi bi-list me-1"></i> All POs
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="row g-3 mb-4">
+        <div class="col-md-4">
+            <div class="stat-tile tile-total">
+                <div class="stat-label">Total BOM Items</div>
+                <div class="stat-value">{{ total_count|intcomma }}</div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="stat-tile tile-available">
+                <div class="stat-label">Available to Procure</div>
+                <div class="stat-value">{{ available_count|intcomma }}</div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="stat-tile tile-procured">
+                <div class="stat-label">Already on a PO</div>
+                <div class="stat-value">{{ procured_count|intcomma }}</div>
+            </div>
+        </div>
+    </div>
+
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="card section-card">
+            <div class="header-row">
+                <div></div>
+                <div>Item No</div>
+                <div>Description</div>
+                <div>Make / Model</div>
+                <div class="text-end">Qty</div>
+                <div>UoM</div>
+                <div>Procurement Status</div>
+            </div>
+        </div>
+
+        {% for row in rows %}
+        <div class="card section-card">
+            <div class="section-head">
+                <i class="bi bi-stack me-1"></i>
+                {% if row.section.section_number %}{{ row.section.section_number }} · {% endif %}{{ row.section.title }}
+            </div>
+            {% for it in row.items %}
+            <div class="item-row {% if not it.is_available %}row-procured{% endif %}">
+                <div class="col-check">
+                    {% if it.is_available %}
+                    <input type="checkbox" class="form-check-input item-check" name="item_ids" value="{{ it.item.pk }}">
+                    {% else %}
+                    <i class="bi bi-check-circle-fill text-success" title="Already on a PO"></i>
+                    {% endif %}
+                </div>
+                <div class="col-num">{{ it.item.item_number|default:"—" }}</div>
+                <div class="col-desc">{{ it.item.description|truncatechars:140 }}</div>
+                <div class="col-mm">
+                    {{ it.item.make }}{% if it.item.make and it.item.model_number %} · {% endif %}{{ it.item.model_number }}
+                    {% if not it.item.make and not it.item.model_number %}<span class="text-muted">—</span>{% endif %}
+                </div>
+                <div class="col-qty">{{ it.item.quantity|floatformat:"-2"|intcomma }}</div>
+                <div class="col-uom">{{ it.item.unit|default:"—" }}</div>
+                <div class="col-status">
+                    {% if it.is_available %}
+                    <span class="badge bg-success-subtle text-success border border-success-subtle">Available</span>
+                    {% else %}
+                    <span class="badge bg-secondary-subtle text-secondary border">On {{ it.procured_in|length }} PO{{ it.procured_in|length|pluralize }}</span>
+                    {% for pi in it.procured_in %}
+                    <a class="po-link" href="{% url 'procurement:po_detail' pi.purchase_order.pk %}">
+                        <i class="bi bi-link-45deg"></i> {{ pi.purchase_order.po_number }}
+                    </a>
+                    {% endfor %}
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% empty %}
+        <div class="alert alert-info">No line items in this BOM yet.</div>
+        {% endfor %}
+
+        {% if available_count %}
+        <div class="submit-bar d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+                <span class="selected-count" id="selectedCount">0</span>
+                of {{ available_count }} available item{{ available_count|pluralize }} selected.
+                <button type="button" class="btn btn-sm btn-link text-decoration-none" id="selectAllBtn">Select all</button>
+                <button type="button" class="btn btn-sm btn-link text-decoration-none" id="clearAllBtn">Clear</button>
+            </div>
+            <button type="submit" class="btn btn-danger" id="createPoBtn" disabled>
+                <i class="bi bi-cart-plus me-1"></i> Create PO with selected items
+            </button>
+        </div>
+        {% else %}
+        <div class="alert alert-success mt-3 mb-0">
+            <i class="bi bi-check2-circle me-2"></i>
+            Every BOM item is already on a PO. Nothing left to procure for this sheet.
+        </div>
+        {% endif %}
+    </form>
+</div>
+
+<script>
+(function() {
+    const checks = document.querySelectorAll('.item-check');
+    const countEl = document.getElementById('selectedCount');
+    const submitBtn = document.getElementById('createPoBtn');
+    const selectAllBtn = document.getElementById('selectAllBtn');
+    const clearAllBtn = document.getElementById('clearAllBtn');
+    if (!checks.length) return;
+
+    function refresh() {
+        const n = Array.from(checks).filter(c => c.checked).length;
+        if (countEl) countEl.textContent = n;
+        if (submitBtn) submitBtn.disabled = n === 0;
+    }
+    checks.forEach(c => c.addEventListener('change', refresh));
+    if (selectAllBtn) selectAllBtn.addEventListener('click', function() {
+        checks.forEach(c => { c.checked = true; });
+        refresh();
+    });
+    if (clearAllBtn) clearAllBtn.addEventListener('click', function() {
+        checks.forEach(c => { c.checked = false; });
+        refresh();
+    });
+    refresh();
+})();
+</script>
+{% endblock %}
