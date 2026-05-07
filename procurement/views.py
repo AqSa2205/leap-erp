@@ -29,6 +29,73 @@ import openpyxl
 from datetime import datetime, timedelta
 
 
+_NUM_UNITS = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine']
+_NUM_TEENS = ['Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen']
+_NUM_TENS = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety']
+_NUM_SCALES = ['', 'Thousand', 'Million', 'Billion', 'Trillion']
+
+
+def _amount_in_words(value, currency='SAR'):
+    """Spell out a numeric amount for invoice/PO use.
+
+    Example: Decimal('25420.50') with currency='SAR' →
+    'Twenty Five Thousand Four Hundred Twenty SAR and Fifty Halalas Only'.
+
+    Splits into integer SAR and 2-digit fractional Halalas, words each part
+    in English, and appends ' Only' as is conventional on a payment doc.
+    Returns an empty string for None / unparseable input.
+    """
+    if value is None:
+        return ''
+    try:
+        d = Decimal(str(value)).quantize(Decimal('0.01'))
+    except (InvalidOperation, ValueError, TypeError):
+        return ''
+
+    # Operate on the absolute value so the sub-helpers never see a negative.
+    sign = ''
+    if d < 0:
+        sign = 'Negative '
+        d = -d
+
+    integer_part = int(d)
+    halala_part = int(((d - integer_part) * 100).to_integral_value())
+
+    def _under_hundred(n):
+        if n < 10:
+            return _NUM_UNITS[n]
+        if n < 20:
+            return _NUM_TEENS[n - 10]
+        t, u = divmod(n, 10)
+        return _NUM_TENS[t] if u == 0 else f'{_NUM_TENS[t]} {_NUM_UNITS[u]}'
+
+    def _under_thousand(n):
+        if n < 100:
+            return _under_hundred(n)
+        h, r = divmod(n, 100)
+        return f'{_NUM_UNITS[h]} Hundred' if r == 0 else f'{_NUM_UNITS[h]} Hundred {_under_hundred(r)}'
+
+    def _spell(n):
+        if n == 0:
+            return 'Zero'
+        parts, i = [], 0
+        while n > 0:
+            chunk = n % 1000
+            if chunk:
+                scale = _NUM_SCALES[i] if i < len(_NUM_SCALES) else ''
+                parts.append(f'{_under_thousand(chunk)} {scale}'.strip())
+            n //= 1000
+            i += 1
+        return ' '.join(reversed(parts))
+
+    main_words = _spell(integer_part)
+    base = f'{sign}{main_words} {currency}'
+    if halala_part:
+        suffix = 'Halala' if halala_part == 1 else 'Halalas'
+        return f'{base} and {_under_hundred(halala_part)} {suffix} Only'
+    return f'{base} Only'
+
+
 def _safe_filename(name, prefix='', suffix='', extension=''):
     """Build a safe filename for Content-Disposition headers.
 
@@ -160,6 +227,23 @@ def procurement_dashboard(request):
     return render(request, 'procurement/dashboard.html', context)
 
 
+def _procurement_team_users():
+    """Active users who realistically issue POs.
+
+    Used to populate the optional "Pick teammate" dropdown next to the
+    PO Issuer text field — the form still saves whatever the text input
+    holds, so the dropdown is just a UX shortcut.
+    """
+    from accounts.models import User, Role
+    return User.objects.filter(
+        is_active=True,
+        role__name__in=[
+            Role.SUPER_ADMIN, Role.ADMIN, Role.MANAGER,
+            Role.PROCUREMENT_MGR, Role.PROCUREMENT_OFF,
+        ],
+    ).select_related('role').order_by('first_name', 'last_name', 'username')
+
+
 class ProcurementPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
         queryset = PurchaseOrder.objects.select_related('project', 'created_by').all()
@@ -246,6 +330,7 @@ class POCreateView(ProcurementPermissionMixin, CreateView):
             context['terms_by_category'] = _po_terms_by_category([])
         context['title'] = 'Create Purchase Order'
         context['system_suggestions'] = PurchaseOrder.SYSTEM_SUGGESTIONS
+        context['procurement_team'] = _procurement_team_users()
         return context
 
     def form_valid(self, form):
@@ -314,6 +399,7 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
             context['terms_by_category'] = _po_terms_by_category(current_ids)
         context['title'] = f'Edit PO: {self.object.po_number}'
         context['system_suggestions'] = PurchaseOrder.SYSTEM_SUGGESTIONS
+        context['procurement_team'] = _procurement_team_users()
         return context
 
     def form_valid(self, form):
@@ -332,6 +418,63 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
 
     def get_success_url(self):
         return reverse('procurement:po_detail', kwargs={'pk': self.object.pk})
+
+
+@login_required
+def po_create_from_bom(request, sheet_pk):
+    """Seed a draft PO with line items copied from a costing sheet's BOM.
+
+    Procurement-only. The user is dropped onto the PO edit screen with all
+    items pre-filled (description / make-model / qty / uom) so they only
+    need to add vendor, prices, and any extra rows.
+    """
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user or user.is_procurement_user):
+        messages.error(request, 'Only procurement team members can create POs from a BOM.')
+        return redirect('costing:detail', pk=sheet_pk)
+
+    from costing.models import CostingSheet
+    sheet = get_object_or_404(CostingSheet, pk=sheet_pk)
+
+    today = datetime.now().date()
+    # PO number must be unique; use a deterministic placeholder the user
+    # will replace before saving the real PO number.
+    placeholder_po_number = f'DRAFT-S{sheet.pk}-{int(datetime.now().timestamp())}'
+    po = PurchaseOrder.objects.create(
+        po_date=today,
+        po_number=placeholder_po_number,
+        vendor_name='',
+        po_issued_by=user.get_full_name() or user.username,
+        issuer_email=user.email or '',
+        project=sheet.project,
+        project_name=sheet.project.project_name if sheet.project else (sheet.title or ''),
+        created_by=user,
+    )
+
+    serial = 1
+    for section in sheet.sections.all():
+        for item in section.line_items.all():
+            make_model = ' '.join(filter(None, [item.make, item.model_number])).strip()
+            PurchaseOrderItem.objects.create(
+                purchase_order=po,
+                serial_number=serial,
+                system=section.title or '',
+                make_model=make_model,
+                description=item.description,
+                quantity=item.quantity,
+                uom=item.unit or 'Nos',
+                rate_per_unit=Decimal('0'),
+                order=serial,
+            )
+            serial += 1
+
+    copied = serial - 1
+    messages.success(
+        request,
+        f'Draft PO seeded with {copied} item{"" if copied == 1 else "s"} from BOM "{sheet.title}". '
+        f'Replace the placeholder PO number, add the vendor, fill in rates, then save.',
+    )
+    return redirect('procurement:po_update', pk=po.pk)
 
 
 class PODeleteView(ProcurementPermissionMixin, DeleteView):
@@ -638,28 +781,45 @@ def po_export_pdf(request, pk):
     totals_data.append(['', '', 'Gross Value', '', '', '', f'{po.gross_value:,.2f}', ''])
     totals_data.append(['', '', f'VAT ({po.vat_rate:.0f}%)', '', '', '', f'{po.vat_amount:,.2f}', ''])
     totals_data.append(['', '', 'Total Value in SAR', '', '', '', f'{po.total_value:,.2f}', ''])
+    total_row_idx = len(totals_data) - 1  # for SPAN/style refs below
+
+    # Amount-in-words row sits inside the same totals table so it aligns
+    # to the totals column block (cols 2-6) instead of free-floating.
+    amt_words_style = ParagraphStyle(
+        'AmtWords', parent=styles['Normal'], fontSize=8, leading=11,
+    )
+    amt_words_para = Paragraph(
+        f'<b>Amount in words:</b> {_amount_in_words(po.total_value, currency="SAR")}',
+        amt_words_style,
+    )
+    totals_data.append(['', '', amt_words_para, '', '', '', '', ''])
+    amt_row_idx = len(totals_data) - 1
 
     totals_table = Table(totals_data, colWidths=col_widths)
     totals_table.setStyle(TableStyle([
-        ('FONTNAME', (2, 0), (2, -1), 'Helvetica-Bold'),
-        ('FONTNAME', (6, 0), (6, -1), 'Helvetica-Bold'),
+        ('FONTNAME', (2, 0), (2, total_row_idx), 'Helvetica-Bold'),
+        ('FONTNAME', (6, 0), (6, total_row_idx), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, -1), 8),
-        ('ALIGN', (6, 0), (6, -1), 'RIGHT'),
-        ('LINEABOVE', (2, -1), (6, -1), 1, dark_blue),
-        ('LINEBELOW', (2, -1), (6, -1), 1.5, dark_blue),
-        ('BACKGROUND', (2, -1), (6, -1), colors.HexColor('#FBE8EC')),
-        ('TOPPADDING', (0, 0), (-1, -1), 2),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('ALIGN', (6, 0), (6, total_row_idx), 'RIGHT'),
+        ('LINEABOVE', (2, total_row_idx), (6, total_row_idx), 1, dark_blue),
+        ('LINEBELOW', (2, total_row_idx), (6, total_row_idx), 1.5, dark_blue),
+        ('BACKGROUND', (2, total_row_idx), (6, total_row_idx), colors.HexColor('#FBE8EC')),
+        # Amount-in-words row — span across the totals column block, left-aligned,
+        # vertically padded so it doesn't sit flush against the total row.
+        ('SPAN', (2, amt_row_idx), (6, amt_row_idx)),
+        ('VALIGN', (2, amt_row_idx), (6, amt_row_idx), 'TOP'),
+        ('TOPPADDING', (2, amt_row_idx), (6, amt_row_idx), 4),
+        ('BOTTOMPADDING', (2, amt_row_idx), (6, amt_row_idx), 0),
+        ('TOPPADDING', (0, 0), (-1, total_row_idx), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, total_row_idx), 2),
     ]))
     elements.append(totals_table)
 
-    # ── Approvals (5 signatures) ──
+    # ── Approvals (3 signatures: PM / COO / CEO) ──
     from xml.sax.saxutils import escape as _xml_escape
 
     elements.append(Spacer(1, 8*mm))
     approvals = [
-        ('PO Issuer', po.po_issued_by or ''),
-        ('Checked / Verified by', ''),
         ('PM Approval', 'Ali Sultan'),
         ('COO Approval', 'Babar Zulfiqar'),
         ('CEO Approval', 'Asif Imam'),
@@ -671,7 +831,7 @@ def po_export_pdf(request, pk):
     name_row = [Paragraph(f'<para align="center">Name: <u>{_xml_escape(name) if name else "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"}</u></para>',
                           ParagraphStyle('AppName', parent=styles['Normal'], fontSize=8, leading=10))
                 for _, name in approvals]
-    approval_table = Table([label_row, name_row], colWidths=[37*mm]*5)
+    approval_table = Table([label_row, name_row], colWidths=[60*mm]*3)
     approval_table.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ('TOPPADDING', (0, 0), (-1, 0), 4),

@@ -41,6 +41,16 @@ class PurchaseOrderForm(forms.ModelForm):
             else:
                 field.widget.attrs['class'] = 'form-control'
 
+        # On create, prefill PO Issuer with the current user's name + email so
+        # the common case is a single click. Update mode preserves whatever
+        # was saved before.
+        if self.user and not self.instance.pk:
+            full_name = self.user.get_full_name() or self.user.username
+            if not self.initial.get('po_issued_by'):
+                self.initial['po_issued_by'] = full_name
+            if not self.initial.get('issuer_email') and self.user.email:
+                self.initial['issuer_email'] = self.user.email
+
         self.fields['project'].required = False
         self.fields['project'].queryset = Project.objects.select_related('region').all()
 
