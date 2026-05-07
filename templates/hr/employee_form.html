@@ -66,6 +66,43 @@
                             </div>
                         </div>
 
+                        <!-- Iqama & Medical Insurance Validity -->
+                        <h5 class="border-bottom pb-2 mb-3">
+                            <i class="bi bi-shield-check"></i> Iqama &amp; Medical Insurance
+                        </h5>
+                        <div class="row mb-2">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Iqama Issue Date</label>
+                                {{ form.iqama_issued_on }}
+                                {% if form.iqama_issued_on.errors %}
+                                <div class="invalid-feedback d-block">{{ form.iqama_issued_on.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Iqama Expiry Date</label>
+                                {{ form.iqama_expires_on }}
+                                {% if form.iqama_expires_on.errors %}
+                                <div class="invalid-feedback d-block">{{ form.iqama_expires_on.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="row mb-4">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Medical Insurance Issue Date</label>
+                                {{ form.medical_insurance_issued_on }}
+                                {% if form.medical_insurance_issued_on.errors %}
+                                <div class="invalid-feedback d-block">{{ form.medical_insurance_issued_on.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Medical Insurance Expiry Date</label>
+                                {{ form.medical_insurance_expires_on }}
+                                {% if form.medical_insurance_expires_on.errors %}
+                                <div class="invalid-feedback d-block">{{ form.medical_insurance_expires_on.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                        </div>
+
                         <!-- Employment Details -->
                         <h5 class="border-bottom pb-2 mb-3">
                             <i class="bi bi-briefcase"></i> Employment Details

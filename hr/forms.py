@@ -6,13 +6,19 @@ class EmployeeForm(forms.ModelForm):
     class Meta:
         model = Employee
         fields = [
-            'iqama_number', 'full_name', 'designation', 'qualification',
+            'iqama_number', 'iqama_issued_on', 'iqama_expires_on',
+            'medical_insurance_issued_on', 'medical_insurance_expires_on',
+            'full_name', 'designation', 'qualification',
             'date_of_birth', 'joining_date', 'nationality', 'marital_status',
             'blood_group', 'personal_email', 'documents_link', 'deployment',
             'contract_type', 'work_email', 'mobile_number', 'is_active',
         ]
         widgets = {
             'iqama_number': forms.TextInput(attrs={'class': 'form-control'}),
+            'iqama_issued_on': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'iqama_expires_on': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'medical_insurance_issued_on': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'medical_insurance_expires_on': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
             'full_name': forms.TextInput(attrs={'class': 'form-control'}),
             'designation': forms.TextInput(attrs={'class': 'form-control'}),
             'qualification': forms.TextInput(attrs={'class': 'form-control'}),
@@ -29,6 +35,18 @@ class EmployeeForm(forms.ModelForm):
             'mobile_number': forms.TextInput(attrs={'class': 'form-control'}),
             'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
         }
+
+    def clean(self):
+        cleaned = super().clean()
+        for issue, expiry, label in (
+            ('iqama_issued_on', 'iqama_expires_on', 'Iqama'),
+            ('medical_insurance_issued_on', 'medical_insurance_expires_on', 'Medical insurance'),
+        ):
+            issued = cleaned.get(issue)
+            expires = cleaned.get(expiry)
+            if issued and expires and expires < issued:
+                self.add_error(expiry, f'{label} expiry date cannot be before its issue date.')
+        return cleaned
 
 
 class EmployeeFilterForm(forms.Form):
