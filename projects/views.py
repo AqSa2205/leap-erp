@@ -25,10 +25,14 @@ class ProjectPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
 
         if user.is_super_admin_user:
             return queryset
-        elif user.is_admin_user or user.is_manager_user:
+        # Procurement, admins, and managers all see projects in their region.
+        if (
+            getattr(user, 'is_procurement_user', False)
+            or user.is_admin_user
+            or user.is_manager_user
+        ):
             return queryset.filter(region=user.region)
-        else:
-            return queryset.filter(owner=user)
+        return queryset.filter(owner=user)
 
 
 class ProjectListView(ProjectPermissionMixin, ListView):

@@ -755,7 +755,10 @@
         </div>
 
         {# ─── MAIN ─── #}
-        {% if not user.is_procurement_manager_user and not user.is_procurement_officer_user %}
+        {# Procurement now sees the Main section too — they need Commercial #}
+        {# Pipeline (to find projects) and the Proposals → BOM link (to copy #}
+        {# line items into a PO). View-side perms still gate any pages they #}
+        {# shouldn't open. #}
         <div class="nav-section" data-section="main"><span>Main</span><i class="bi bi-chevron-down section-chevron"></i></div>
         <ul class="nav flex-column nav-section-items" data-section-items="main">
             <li class="nav-item">
@@ -867,7 +870,6 @@
             </li>
             {% endif %}
         </ul>
-        {% endif %}
 
         {# ─── REPORTS ─── #}
         {% if not user.is_procurement_manager_user and not user.is_procurement_officer_user %}

@@ -56,7 +56,7 @@
 {% block content %}
 <!-- Summary Cards -->
 <div class="row mb-4">
-    <div class="col-md-6 mb-3 mb-md-0">
+    <div class="{% if user.is_procurement_user %}col-md-12{% else %}col-md-6 mb-3 mb-md-0{% endif %}">
         <div class="card summary-card projects-card">
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center">
@@ -69,6 +69,7 @@
             </div>
         </div>
     </div>
+    {% if not user.is_procurement_user %}
     <div class="col-md-6">
         <div class="card summary-card value-card">
             <div class="card-body">
@@ -82,6 +83,7 @@
             </div>
         </div>
     </div>
+    {% endif %}
 </div>
 
 <!-- Filter Card -->
@@ -160,7 +162,9 @@
                         <th>Customer</th>
                         <th>Region</th>
                         <th>Status</th>
+                        {% if not user.is_procurement_user %}
                         <th class="text-end">Actual Sales</th>
+                        {% endif %}
                         <th>Submission Date</th>
                         <th class="text-center">Actions</th>
                     </tr>
@@ -199,6 +203,7 @@
                                 {{ project.status.name }}
                             </span>
                         </td>
+                        {% if not user.is_procurement_user %}
                         <td class="text-end">
                             {% if project.actual_sales and project.actual_sales > 0 %}
                                 {% if project.region.code == 'UK' or project.region.code == 'GLB' %}
@@ -210,6 +215,7 @@
                             <span class="text-muted">-</span>
                             {% endif %}
                         </td>
+                        {% endif %}
                         <td>{% if project.submission_deadline %}{{ project.submission_deadline|date:"d M Y" }}{% else %}-{% endif %}</td>
                         <td class="text-center" data-no-row-click>
                             <div class="btn-group btn-group-sm">
@@ -229,7 +235,7 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="8" class="text-center text-muted py-5">
+                        <td colspan="{% if user.is_procurement_user %}7{% else %}8{% endif %}" class="text-center text-muted py-5">
                             <i class="bi bi-folder-x fs-1 d-block mb-2"></i>
                             No commercial proposals found.
                         </td>
