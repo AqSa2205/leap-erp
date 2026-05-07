@@ -21,8 +21,11 @@
     </td>
 </tr>
 <tr class="subtotal-row">
-    <td colspan="8" class="text-end">Sub-Total ({{ output_currency }})</td>
-    <td class="num fw-bold">{{ section.subtotal|mul:conversion_rate|floatformat:2|intcomma }}</td>
+    {# In BOM view (proposal team / procurement) the Unit Price + Total Price #}
+    {# columns are hidden, so trim the label colspan from 8 → 7 to avoid a #}
+    {# stray empty cell in those views. #}
+    <td colspan="{% if user.is_proposal_team_user or user.is_procurement_user %}7{% else %}8{% endif %}" class="text-end">Sub-Total ({{ output_currency }})</td>
+    <td class="num fw-bold bom-pricing-only">{{ section.subtotal|mul:conversion_rate|floatformat:2|intcomma }}</td>
     <td class="cost-col"></td>
     <td class="cost-col num fw-bold">{{ section.subtotal_base_unit_cost|mul:conversion_rate|floatformat:2|intcomma }}</td>
     <td class="cost-col num fw-bold">{{ section.subtotal_discount|mul:conversion_rate|floatformat:2|intcomma }}</td>

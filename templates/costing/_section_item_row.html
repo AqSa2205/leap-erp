@@ -25,8 +25,8 @@
             {% endfor %}
         </select>
     </td>
-    <td class="num" data-computed="final_unit_price">{{ item.final_unit_price|mul:conversion_rate|floatformat:2|intcomma }}</td>
-    <td class="num fw-bold" data-computed="final_total_price">{{ item.final_total_price|mul:conversion_rate|floatformat:2|intcomma }}</td>
+    <td class="num bom-pricing-only" data-computed="final_unit_price">{{ item.final_unit_price|mul:conversion_rate|floatformat:2|intcomma }}</td>
+    <td class="num fw-bold bom-pricing-only" data-computed="final_total_price">{{ item.final_total_price|mul:conversion_rate|floatformat:2|intcomma }}</td>
     <td class="cost-col">
         <select class="currency-select" data-item-id="{{ item.pk }}">
             {% for rate in exchange_rates %}
