@@ -95,7 +95,9 @@ class CostingSheet(models.Model):
         ('bom_in_progress',     'BOM — in progress by Proposal'),
         ('ready_for_costing',   'Ready for costing (handed over to Sales)'),
         ('costing_in_progress', 'Costing — in progress by Sales'),
-        ('finalized',           'Finalized'),
+        ('finalized',           'Finalized by Sales'),
+        ('finance_review',      'Finance — budgeting in progress'),
+        ('finance_approved',    'Finance approved — released for Procurement'),
     ]
 
     project = models.ForeignKey(
@@ -176,6 +178,25 @@ class CostingSheet(models.Model):
         on_delete=models.SET_NULL, null=True, blank=True,
         related_name='costing_sheets_finalized',
     )
+    finance_review_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text='When sales handed the sheet over to finance for budgeting.',
+    )
+    finance_review_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='costing_sheets_handed_to_finance',
+    )
+    finance_approved_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text='When finance approved the sheet, releasing it for procurement.',
+    )
+    finance_approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='costing_sheets_finance_approved',
+    )
+    finance_note = models.TextField(blank=True, help_text='Notes from the finance team.')
 
     include_optional_in_total = models.BooleanField(
         default=False,
