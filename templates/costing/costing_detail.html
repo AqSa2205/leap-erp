@@ -129,8 +129,15 @@
 
 {% block content %}
 <!-- Workflow Stage banner -->
-{% with stage=sheet.workflow_stage %}
-<div class="card mb-3 border-0 shadow-sm" style="background: {% if stage == 'bom_in_progress' %}#fff3cd{% elif stage == 'ready_for_costing' %}#cfe2ff{% elif stage == 'costing_in_progress' %}#d1e7dd{% else %}#e2e3e5{% endif %};">
+{% with stage=sheet.workflow_stage project_won=sheet.project.status.category|default:''|stringformat:'s' %}
+<div class="card mb-3 border-0 shadow-sm" style="background:
+    {% if stage == 'bom_in_progress' %}#fff3cd
+    {% elif stage == 'ready_for_costing' %}#cfe2ff
+    {% elif stage == 'costing_in_progress' %}#d1e7dd
+    {% elif stage == 'finalized' %}#e2e3e5
+    {% elif stage == 'finance_review' %}#f8d7da
+    {% elif stage == 'finance_approved' %}#d1e7dd
+    {% else %}#e2e3e5{% endif %};">
     <div class="card-body py-2">
         <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
             <div>
@@ -144,8 +151,14 @@
                 <span class="badge bg-success"><i class="bi bi-cash-coin me-1"></i>Costing in progress · sales team</span>
                 {% if sheet.costing_started_at %}<small class="text-muted ms-2">Started {{ sheet.costing_started_at|date:"d M Y H:i" }}{% if sheet.costing_started_by %} by {{ sheet.costing_started_by.get_full_name|default:sheet.costing_started_by.username }}{% endif %}</small>{% endif %}
                 {% elif stage == 'finalized' %}
-                <span class="badge bg-dark"><i class="bi bi-check2-circle me-1"></i>Finalized</span>
+                <span class="badge bg-dark"><i class="bi bi-check2-circle me-1"></i>Finalized by sales</span>
                 {% if sheet.finalized_at %}<small class="text-muted ms-2">Finalized {{ sheet.finalized_at|date:"d M Y H:i" }}{% if sheet.finalized_by %} by {{ sheet.finalized_by.get_full_name|default:sheet.finalized_by.username }}{% endif %}</small>{% endif %}
+                {% elif stage == 'finance_review' %}
+                <span class="badge bg-danger"><i class="bi bi-bank me-1"></i>Finance — budgeting</span>
+                {% if sheet.finance_review_at %}<small class="text-muted ms-2">Sent {{ sheet.finance_review_at|date:"d M Y H:i" }}{% if sheet.finance_review_by %} by {{ sheet.finance_review_by.get_full_name|default:sheet.finance_review_by.username }}{% endif %}</small>{% endif %}
+                {% elif stage == 'finance_approved' %}
+                <span class="badge bg-success"><i class="bi bi-shield-check me-1"></i>Finance approved · released for procurement</span>
+                {% if sheet.finance_approved_at %}<small class="text-muted ms-2">Approved {{ sheet.finance_approved_at|date:"d M Y H:i" }}{% if sheet.finance_approved_by %} by {{ sheet.finance_approved_by.get_full_name|default:sheet.finance_approved_by.username }}{% endif %}</small>{% endif %}
                 {% endif %}
             </div>
             <div class="d-flex gap-2">
@@ -174,6 +187,22 @@
                 </form>
                 {% endif %}
 
+                {# Send to finance: only after finalize, only when project is Won, sales/super-admin #}
+                {% if stage == 'finalized' and project_won == 'won' and user.is_sales_team_user %}
+                <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal" data-bs-target="#sendFinanceModal">
+                    <i class="bi bi-bank me-1"></i>Send to Finance
+                </button>
+                {% elif stage == 'finalized' and project_won != 'won' and user.is_sales_team_user %}
+                <span class="text-muted small"><i class="bi bi-info-circle me-1"></i>Project must be Won before finance hand-off</span>
+                {% endif %}
+
+                {# Finance approve: finance team only, while in finance_review #}
+                {% if stage == 'finance_review' and user.is_finance_team_user %}
+                <button type="button" class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#financeApproveModal">
+                    <i class="bi bi-shield-check me-1"></i>Approve &amp; Release for Procurement
+                </button>
+                {% endif %}
+
                 {# Reopen: sales can rewind #}
                 {% if stage != 'bom_in_progress' and user.is_sales_team_user %}
                 <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}" class="d-inline">
@@ -187,6 +216,22 @@
         {% if sheet.handover_note %}
         <div class="mt-2 small">
             <i class="bi bi-sticky me-1"></i><strong>Handover note:</strong> {{ sheet.handover_note }}
+        </div>
+        {% endif %}
+        {% if sheet.finance_note and stage in 'finance_review,finance_approved' %}
+        <div class="mt-2 small">
+            <i class="bi bi-sticky me-1"></i><strong>Finance note:</strong> {{ sheet.finance_note }}
+        </div>
+        {% endif %}
+
+        {# Read-only banners — surface why edits are disabled. #}
+        {% if stage == 'finance_review' and not user.is_finance_team_user and not user.is_super_admin_user %}
+        <div class="alert alert-warning small mt-2 mb-0 py-2">
+            <i class="bi bi-lock me-1"></i>This sheet is locked for editing — finance team is currently budgeting it.
+        </div>
+        {% elif stage == 'finance_approved' and not user.is_super_admin_user %}
+        <div class="alert alert-success small mt-2 mb-0 py-2">
+            <i class="bi bi-shield-check me-1"></i>Finance approved — sheet is now read-only and the procurement BOM tracker is unlocked.
         </div>
         {% endif %}
     </div>
@@ -216,6 +261,71 @@
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
                     <button type="submit" class="btn btn-warning"><i class="bi bi-send-check me-1"></i>Hand Over</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Send to Finance modal -->
+{% if stage == 'finalized' and project_won == 'won' %}
+<div class="modal fade" id="sendFinanceModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="send_to_finance">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-bank me-2"></i>Send Costing Sheet to Finance</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="small text-muted">
+                        Hand the finalized costing sheet over to the finance team for budgeting.
+                        Once sent, sales can no longer edit the sheet — only finance can. Procurement
+                        unlocks once finance approves.
+                    </p>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Note for finance (optional)</label>
+                        <textarea class="form-control" name="note" rows="3" placeholder="Anything finance needs to know — payment terms, milestones, urgency."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger"><i class="bi bi-bank me-1"></i>Send to Finance</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Finance approve modal -->
+{% if stage == 'finance_review' %}
+<div class="modal fade" id="financeApproveModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="finance_approve">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-shield-check me-2"></i>Approve &amp; Release for Procurement</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="small text-muted">
+                        Approving locks the sheet (no further edits) and unlocks the procurement BOM tracker.
+                        Procurement is notified automatically.
+                    </p>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Finance note (optional)</label>
+                        <textarea class="form-control" name="note" rows="3" placeholder="Approved budget summary, conditions, or hand-off notes for procurement.">{{ sheet.finance_note }}</textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success"><i class="bi bi-shield-check me-1"></i>Approve &amp; Release</button>
                 </div>
             </form>
         </div>

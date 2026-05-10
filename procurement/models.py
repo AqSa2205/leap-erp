@@ -114,6 +114,47 @@ class PurchaseOrder(models.Model):
         'costing.TermsTemplate', blank=True, related_name='purchase_orders'
     )
 
+    # Approval workflow — sequential SCM → PM → COO → CEO. CEO is only
+    # required when total_value crosses CEO_APPROVAL_THRESHOLD. Each stage
+    # carries a timestamp + approver FK so the PO detail page can show a
+    # live timeline; exports stay disabled until is_released is True.
+    scm_approved_at = models.DateTimeField(null=True, blank=True, verbose_name='SCM Approved At')
+    scm_approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='scm_approved_pos',
+    )
+    scm_signature = models.ImageField(
+        upload_to='procurement/po_signatures/scm/', null=True, blank=True,
+        verbose_name='SCM Signature Image',
+    )
+    pm_approved_at = models.DateTimeField(null=True, blank=True, verbose_name='PM Approved At')
+    pm_approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='pm_approved_pos',
+    )
+    pm_signature = models.ImageField(
+        upload_to='procurement/po_signatures/pm/', null=True, blank=True,
+        verbose_name='PM Signature Image',
+    )
+    coo_approved_at = models.DateTimeField(null=True, blank=True, verbose_name='COO Approved At')
+    coo_approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='coo_approved_pos',
+    )
+    coo_signature = models.ImageField(
+        upload_to='procurement/po_signatures/coo/', null=True, blank=True,
+        verbose_name='COO Signature Image',
+    )
+    ceo_approved_at = models.DateTimeField(null=True, blank=True, verbose_name='CEO Approved At')
+    ceo_approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='ceo_approved_pos',
+    )
+    ceo_signature = models.ImageField(
+        upload_to='procurement/po_signatures/ceo/', null=True, blank=True,
+        verbose_name='CEO Signature Image',
+    )
+
     # Metadata
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
@@ -121,6 +162,16 @@ class PurchaseOrder(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # Hardcoded signers per stage. Order matters — first to last is the
+    # required sequence. CEO is only required for high-value POs.
+    APPROVAL_STAGES = (
+        ('scm', 'SCM Approval', 'Shaker Alkhalifah'),
+        ('pm',  'PM Approval',  'Ali Sultan'),
+        ('coo', 'COO Approval', 'Babar Zulfiqar'),
+        ('ceo', 'CEO Approval', 'Asif Imam'),
+    )
+    CEO_APPROVAL_THRESHOLD = Decimal('1000000')
 
     class Meta:
         ordering = ['-po_date', '-created_at']
@@ -152,6 +203,90 @@ class PurchaseOrder(models.Model):
     @property
     def total_value(self):
         return self.gross_value + self.vat_amount
+
+    @property
+    def requires_ceo_approval(self):
+        return self.total_value >= self.CEO_APPROVAL_THRESHOLD
+
+    @property
+    def required_stages(self):
+        """Tuple of stage keys this PO must pass through, in order."""
+        if self.requires_ceo_approval:
+            return ('scm', 'pm', 'coo', 'ceo')
+        return ('scm', 'pm', 'coo')
+
+    @property
+    def approval_status(self):
+        """Per-stage state for the timeline UI and PDF rendering.
+
+        Returns a list of dicts: key, label, signer, approved_at,
+        approved_by, is_approved, is_current. Stages not required for
+        this PO (e.g. CEO under threshold) are omitted entirely so the
+        UI and PDF don't show empty slots.
+        """
+        out = []
+        seen_pending = False
+        for key, label, signer in self.APPROVAL_STAGES:
+            if key not in self.required_stages:
+                continue
+            ts = getattr(self, f'{key}_approved_at')
+            by = getattr(self, f'{key}_approved_by')
+            is_approved = ts is not None
+            is_current = (not is_approved) and (not seen_pending)
+            if not is_approved:
+                seen_pending = True
+            sig = getattr(self, f'{key}_signature', None)
+            sig_url = sig.url if sig else None
+            out.append({
+                'key': key,
+                'label': label,
+                'signer': signer,
+                'approved_at': ts,
+                'approved_by': by,
+                'is_approved': is_approved,
+                'is_current': is_current,
+                'signature': sig,
+                'signature_url': sig_url,
+            })
+        return out
+
+    @property
+    def current_stage(self):
+        """The stage dict awaiting approval right now, or None if released."""
+        for s in self.approval_status:
+            if not s['is_approved']:
+                return s
+        return None
+
+    @property
+    def is_released(self):
+        """All required stages signed → PO can be printed."""
+        return self.current_stage is None
+
+    @property
+    def approved_stages(self):
+        """Just the stages that have been signed, in order."""
+        return [s for s in self.approval_status if s['is_approved']]
+
+    def can_user_approve_stage(self, user, stage_key):
+        """Permission gate per stage.
+
+        Mapping (super_admin can do anything):
+          - SCM  → procurement manager (Shaker)
+          - PM   → admin (Ali)
+          - COO  → admin (Babar)
+          - CEO  → super_admin only (Asif) — high-value escalation
+        """
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_super_admin_user:
+            return True
+        if stage_key == 'scm':
+            return getattr(user, 'is_procurement_manager_user', False)
+        if stage_key in ('pm', 'coo'):
+            return user.is_admin_user
+        # CEO stays super-admin-only.
+        return False
 
 
 class PurchaseOrderItem(models.Model):

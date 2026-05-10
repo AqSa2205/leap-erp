@@ -24,6 +24,7 @@ from .forms import (
 )
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Sum, F
+from django.utils import timezone
 from django.utils.text import slugify
 import openpyxl
 from datetime import datetime, timedelta
@@ -363,10 +364,17 @@ class PODetailView(ProcurementPermissionMixin, DetailView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['items'] = self.object.items.all()
+        po = self.object
+        context['items'] = po.items.all()
         context['terms_by_category'] = _po_terms_by_category(
-            self.object.selected_terms.values_list('pk', flat=True)
+            po.selected_terms.values_list('pk', flat=True)
         )
+        # Per-stage approval permission for the current viewer — keys
+        # ('scm','pm','coo','ceo') the user is authorised to sign.
+        context['approvable_stages'] = {
+            key for key, _, _ in po.APPROVAL_STAGES
+            if po.can_user_approve_stage(self.request.user, key)
+        }
         return context
 
 
@@ -509,12 +517,19 @@ def bom_procurement_tracker(request, sheet_pk):
         messages.error(request, 'You can only procure BOMs for projects in your region.')
         return redirect('costing:detail', pk=sheet_pk)
 
-    # Procurement only kicks off after the project is Won.
+    # Procurement only kicks off after the project is Won AND finance has
+    # signed off on the costing sheet's budget.
     project_status = sheet.project.status if sheet.project else None
     if not project_status or project_status.category != 'won':
         messages.error(
             request,
             'BOM procurement is only available for projects with a Won status.',
+        )
+        return redirect('costing:detail', pk=sheet_pk)
+    if sheet.workflow_stage != 'finance_approved':
+        messages.error(
+            request,
+            f'BOM procurement is locked until finance approves the budget. Current stage: {sheet.get_workflow_stage_display()}.',
         )
         return redirect('costing:detail', pk=sheet_pk)
 
@@ -604,6 +619,73 @@ def bom_procurement_tracker(request, sheet_pk):
     })
 
 
+@login_required
+@require_POST
+def po_approve_stage(request, pk, stage):
+    """Sign one approval stage on a PO and stamp the timestamp + approver.
+
+    Strict sequencing: only the *current* pending stage can be signed.
+    Once signed a stage is locked — no un-approve. If the freshly signed
+    stage was the last required one, the PO is now released and exports
+    unlock automatically.
+    """
+    po = get_object_or_404(PurchaseOrder, pk=pk)
+
+    if stage not in po.required_stages:
+        return JsonResponse({'error': 'This stage is not required for this PO.'}, status=400)
+
+    cur = po.current_stage
+    if not cur or cur['key'] != stage:
+        return JsonResponse({
+            'error': f'Out of sequence — next pending stage is {(cur["label"] if cur else "(none, already released)")}.',
+        }, status=400)
+
+    if not po.can_user_approve_stage(request.user, stage):
+        return JsonResponse({'error': 'You do not have permission to approve this stage.'}, status=403)
+
+    # Pull the signature out of the request — either an uploaded file
+    # ('signature_file') or a base64 PNG data URL from the drawing canvas
+    # ('signature_data'). Reject the request if neither is present.
+    sig_field = f'{stage}_signature'
+    if 'signature_file' in request.FILES:
+        getattr(po, sig_field).save(
+            request.FILES['signature_file'].name,
+            request.FILES['signature_file'],
+            save=False,
+        )
+    elif request.POST.get('signature_data', '').startswith('data:image/'):
+        import base64
+        from django.core.files.base import ContentFile
+        header, _, b64 = request.POST['signature_data'].partition(',')
+        try:
+            raw = base64.b64decode(b64)
+        except Exception:
+            return JsonResponse({'error': 'Could not decode the drawn signature.'}, status=400)
+        ext = 'png' if 'png' in header else 'jpg'
+        filename = f'po{po.pk}_{stage}_sig.{ext}'
+        getattr(po, sig_field).save(filename, ContentFile(raw), save=False)
+    else:
+        return JsonResponse({
+            'error': 'Signature required — upload an image or draw on the pad.',
+        }, status=400)
+
+    setattr(po, f'{stage}_approved_at', timezone.now())
+    setattr(po, f'{stage}_approved_by', request.user)
+    po.save(update_fields=[
+        f'{stage}_approved_at', f'{stage}_approved_by', sig_field, 'updated_at',
+    ])
+
+    new_cur = po.current_stage
+    return JsonResponse({
+        'ok': True,
+        'released': po.is_released,
+        'stage_signed': stage,
+        'next_stage': new_cur['key'] if new_cur else None,
+        'next_stage_label': new_cur['label'] if new_cur else None,
+        'approved_by': (request.user.get_full_name() or request.user.username),
+    })
+
+
 class PODeleteView(ProcurementPermissionMixin, DeleteView):
     model = PurchaseOrder
     template_name = 'procurement/po_confirm_delete.html'
@@ -629,6 +711,10 @@ def po_export_excel(request, pk):
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
     po = get_object_or_404(PurchaseOrder, pk=pk)
+    if not po.is_released:
+        cur = po.current_stage['label'] if po.current_stage else 'approval'
+        messages.error(request, f'PO not released yet — pending {cur}. Excel export is locked until all required approvals are signed.')
+        return redirect('procurement:po_detail', pk=pk)
     items = po.items.all()
 
     wb = openpyxl.Workbook()
@@ -774,6 +860,10 @@ def po_export_pdf(request, pk):
     from django.contrib.staticfiles.finders import find as find_static
 
     po = get_object_or_404(PurchaseOrder, pk=pk)
+    if not po.is_released:
+        cur = po.current_stage['label'] if po.current_stage else 'approval'
+        messages.error(request, f'PO not released yet — pending {cur}. PDF export is locked until all required approvals are signed.')
+        return redirect('procurement:po_detail', pk=pk)
     items = po.items.all()
 
     NumberedCanvas = _make_numbered_canvas()
@@ -942,34 +1032,75 @@ def po_export_pdf(request, pk):
     ]))
     elements.append(totals_table)
 
-    # ── Approvals (3 signatures: PM / COO / CEO) ──
+    # ── Approvals — rendered progressively as each stage is signed.
+    # Order: SCM → PM → COO → CEO. CEO is omitted entirely for POs under
+    # 1M SAR. Export is gated by po.is_released above, so by the time we
+    # reach this code every required stage is already signed and the
+    # PDF will always have a complete signature block.
     from xml.sax.saxutils import escape as _xml_escape
 
     elements.append(Spacer(1, 8*mm))
-    approvals = [
-        ('PM Approval', 'Ali Sultan'),
-        ('COO Approval', 'Babar Zulfiqar'),
-        ('CEO Approval', 'Asif Imam'),
-    ]
-    sig_line = '___________________'
-    label_row = [Paragraph(f'<para align="center">{sig_line}<br/><b>{_xml_escape(role)}</b></para>',
-                           ParagraphStyle('AppRole', parent=styles['Normal'], fontSize=8, leading=10))
-                 for role, _ in approvals]
-    name_row = [Paragraph(f'<para align="center">Name: <u>{_xml_escape(name) if name else "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"}</u></para>',
-                          ParagraphStyle('AppName', parent=styles['Normal'], fontSize=8, leading=10))
-                for _, name in approvals]
-    approval_table = Table([label_row, name_row], colWidths=[60*mm]*3)
-    approval_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('TOPPADDING', (0, 0), (-1, 0), 4),
-        ('TOPPADDING', (0, 1), (-1, 1), 6),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ('LEFTPADDING', (0, 0), (-1, -1), 2),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 2),
-        ('LINEBELOW', (0, -1), (-1, -1), 1, colors.HexColor('#C41E3A')),
-    ]))
-    elements.append(approval_table)
-    elements.append(Spacer(1, 4*mm))
+    approvals = po.approved_stages
+    if approvals:
+        from reportlab.platypus import Image as RLImage
+        col_w = max(40*mm, 180*mm / max(len(approvals), 1))
+        sig_h = 16*mm  # signature image height — width auto-scales
+
+        # Row 1: signature image (or empty cell if none uploaded yet).
+        # Read via FieldFile so this works with both local storage and R2.
+        from io import BytesIO as _BytesIO
+        sig_row = []
+        for s in approvals:
+            sig = s['signature']
+            placed = False
+            if sig:
+                try:
+                    sig.open('rb')
+                    data = sig.read()
+                    sig.close()
+                    img = RLImage(_BytesIO(data),
+                                  width=col_w - 6*mm, height=sig_h,
+                                  kind='proportional')
+                    sig_row.append(img)
+                    placed = True
+                except Exception:
+                    pass
+            if not placed:
+                sig_row.append('')
+
+        # Row 2: signature line + role label.
+        sig_line = '___________________'
+        label_row = [
+            Paragraph(
+                f'<para align="center">{sig_line}<br/><b>{_xml_escape(s["label"])}</b></para>',
+                ParagraphStyle('AppRole', parent=styles['Normal'], fontSize=8, leading=10),
+            )
+            for s in approvals
+        ]
+        # Row 3: signer name (hardcoded, e.g. Shaker Alkhalifah).
+        name_row = [
+            Paragraph(
+                f'<para align="center">Name: <u>{_xml_escape(s["signer"])}</u></para>',
+                ParagraphStyle('AppName', parent=styles['Normal'], fontSize=8, leading=10),
+            )
+            for s in approvals
+        ]
+        approval_table = Table(
+            [sig_row, label_row, name_row],
+            colWidths=[col_w] * len(approvals),
+            rowHeights=[sig_h + 2*mm, None, None],
+        )
+        approval_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, 0), 'BOTTOM'),
+            ('VALIGN', (0, 1), (-1, -1), 'TOP'),
+            ('TOPPADDING', (0, 0), (-1, -1), 2),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+            ('LEFTPADDING', (0, 0), (-1, -1), 2),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+            ('LINEBELOW', (0, -1), (-1, -1), 1, colors.HexColor('#C41E3A')),
+        ]))
+        elements.append(approval_table)
+        elements.append(Spacer(1, 4*mm))
 
     # ── Terms & Conditions ──
     from costing.models import TermsTemplate as _TermsTemplate

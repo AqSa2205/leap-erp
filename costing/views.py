@@ -69,6 +69,10 @@ def _user_can_view_sheet(user, sheet):
     # Proposal team sees every sheet as a BOM (no pricing) regardless of region
     if getattr(user, 'is_proposal_team_user', False):
         return True
+    # Finance team can view sheets in their region — needed for budgeting
+    # review and ongoing finance reference.
+    if getattr(user, 'is_finance_team_user', False):
+        return bool(sheet.project and sheet.project.region_id == user.region_id)
     # Procurement only sees BOMs whose project is Won and in their region.
     if getattr(user, 'is_procurement_user', False):
         return bool(
@@ -86,6 +90,8 @@ def _user_team(user):
         return 'other'
     if getattr(user, 'is_proposal_team_user', False):
         return 'proposal'
+    if getattr(user, 'is_finance_team_user', False):
+        return 'finance'
     if getattr(user, 'is_sales_team_user', False):
         return 'sales'
     return 'other'
@@ -169,16 +175,42 @@ def _field_is_pricing(field):
     return field in PRICING_FIELDS
 
 
+FINANCE_LOCKED_STAGES = ('finance_review', 'finance_approved')
+
+
 def _user_can_edit_sheet(user, sheet):
     """Check whether user has edit access to a costing sheet.
-    Edit rules: super_admin can edit anything, admin can edit within region,
-    creator can edit their own. Manager-only access is read-only.
-    Proposal team can edit non-pricing fields on every sheet (gated elsewhere).
+
+    Stage-aware lock:
+      * Once the sheet enters finance_review, sales/proposal/admin/manager
+        are read-only — only the finance team (and super admin) can touch
+        it during budgeting.
+      * Once finance_approved, the sheet is fully locked even to finance —
+        super admin only at that point.
+
+    Edit rules outside the finance window: super_admin can edit anything,
+    admin can edit within region, creator can edit their own. Manager-only
+    access is read-only. Proposal team can edit non-pricing fields on every
+    sheet (pricing is gated elsewhere).
     """
     if not user.is_authenticated:
         return False
     if user.is_super_admin_user:
         return True
+
+    stage = sheet.workflow_stage
+    if stage == 'finance_review':
+        # Finance owns the sheet during budgeting.
+        return bool(
+            getattr(user, 'is_finance_team_user', False)
+            and sheet.project
+            and sheet.project.region_id == user.region_id
+        )
+    if stage == 'finance_approved':
+        # Sheet locked once finance signs off — only super admin can edit.
+        return False
+
+    # Pre-finance stages: original ruleset.
     if sheet.created_by_id == user.id:
         return True
     if user.is_admin_user and sheet.project and sheet.project.region_id == user.region_id:
@@ -204,6 +236,10 @@ class CostingPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
                 Q(created_by=user) |
                 Q(project__region=user.region)
             )
+        elif getattr(user, 'is_finance_team_user', False):
+            # Finance team sees every sheet in their region — they need
+            # the full pricing breakdown to budget.
+            return queryset.filter(project__region=user.region)
         elif getattr(user, 'is_procurement_user', False):
             # Procurement sees BOMs (no pricing) for Won projects in their
             # own region only — that's when their work begins.
@@ -1818,10 +1854,39 @@ def costing_workflow_transition(request, pk):
             'verb': 'finalized the sheet',
             'notify_team': 'proposal',
         },
+        'send_to_finance': {
+            'from': {'finalized'},
+            'to':   'finance_review',
+            'allowed_teams': {'sales'},
+            'requires_won_project': True,
+            'sets':  lambda: {
+                'workflow_stage': 'finance_review',
+                'finance_review_at': now,
+                'finance_review_by': user,
+            },
+            'verb': 'sent the sheet to finance for budgeting',
+            'notify_team': 'finance',
+        },
+        'finance_approve': {
+            'from': {'finance_review'},
+            'to':   'finance_approved',
+            'allowed_teams': {'finance'},
+            'sets':  lambda: {
+                'workflow_stage': 'finance_approved',
+                'finance_approved_at': now,
+                'finance_approved_by': user,
+                'finance_note': note or sheet.finance_note,
+            },
+            'verb': 'approved the sheet — released for procurement',
+            'notify_team': 'procurement',
+        },
         'reopen': {
-            'from': {'finalized', 'costing_in_progress', 'ready_for_costing'},
+            'from': {
+                'finalized', 'costing_in_progress', 'ready_for_costing',
+                'finance_review', 'finance_approved',
+            },
             'to':   'bom_in_progress',
-            'allowed_teams': {'sales'},  # only sales can rewind for now
+            'allowed_teams': {'sales'},  # super-admin override below
             'sets':  lambda: {'workflow_stage': 'bom_in_progress'},
             'verb': 're-opened the sheet (back to BOM)',
             'notify_team': 'proposal',
@@ -1844,6 +1909,17 @@ def costing_workflow_transition(request, pk):
         messages.error(request, f'This action requires the sheet to be in one of: {", ".join(tx["from"])}. Current: {sheet.workflow_stage}.')
         return redirect('costing:detail', pk=sheet.pk)
 
+    # Won-project gate (currently only used by send_to_finance — finance
+    # budgeting only kicks in once the project is actually awarded).
+    if tx.get('requires_won_project'):
+        proj = sheet.project
+        if not proj or not proj.status or proj.status.category != 'won':
+            messages.error(
+                request,
+                'This action is only available once the linked project is in a Won status.',
+            )
+            return redirect('costing:detail', pk=sheet.pk)
+
     # Apply
     updates = tx['sets']()
     CostingSheet.objects.filter(pk=sheet.pk).update(**updates)
@@ -1865,6 +1941,15 @@ def costing_workflow_transition(request, pk):
         from accounts.models import User as _U
         if tx['notify_team'] == 'proposal':
             recipients = _U.objects.filter(role__name__in=['proposal_head', 'proposal_rep'])
+        elif tx['notify_team'] == 'finance':
+            recipients = _U.objects.filter(role__name__in=['finance_head', 'finance_manager', 'finance_rep']).filter(
+                Q(region_id=sheet.project.region_id if sheet.project_id else None) |
+                Q(role__name='finance_head')
+            ).distinct()
+        elif tx['notify_team'] == 'procurement':
+            recipients = _U.objects.filter(role__name__in=['procurement_mgr', 'procurement_off']).filter(
+                region_id=sheet.project.region_id if sheet.project_id else None
+            ).distinct()
         else:
             recipients = _U.objects.filter(role__name__in=['sales_rep', 'manager', 'admin', 'super_admin']).filter(
                 Q(pk=sheet.created_by_id) |

@@ -73,8 +73,13 @@
                         </div>
                         <div class="d-flex gap-2 export-btn-group">
                             <a href="{% url 'procurement:po_list' %}" class="btn btn-outline-light"><i class="bi bi-arrow-left"></i></a>
+                            {% if po.is_released %}
                             <a href="{% url 'procurement:po_export' po.pk %}" class="btn btn-outline-light"><i class="bi bi-file-earmark-excel me-1"></i>Excel</a>
                             <a href="{% url 'procurement:po_export_pdf' po.pk %}" target="_blank" class="btn btn-outline-light"><i class="bi bi-file-earmark-pdf me-1"></i>PDF</a>
+                            {% else %}
+                            <button type="button" class="btn btn-outline-light disabled" disabled title="Locked — pending {{ po.current_stage.label }}"><i class="bi bi-lock me-1"></i>Excel</button>
+                            <button type="button" class="btn btn-outline-light disabled" disabled title="Locked — pending {{ po.current_stage.label }}"><i class="bi bi-lock me-1"></i>PDF</button>
+                            {% endif %}
                             <a href="{% url 'procurement:po_update' po.pk %}" class="btn btn-light text-danger"><i class="bi bi-pencil me-1"></i>Edit</a>
                             <a href="{% url 'procurement:po_delete' po.pk %}" class="btn btn-outline-light text-danger border-danger"><i class="bi bi-trash"></i></a>
                         </div>
@@ -129,6 +134,76 @@
                             </div>
                         </div>
                         {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Approvals Timeline -->
+            <div class="card info-card mb-4" id="poApprovalsCard">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0">
+                        <i class="bi bi-pen me-2 text-danger"></i>Approvals
+                        {% if po.is_released %}
+                        <span class="badge bg-success ms-2">Released — Ready to print</span>
+                        {% else %}
+                        <span class="badge bg-warning text-dark ms-2">Pending {{ po.current_stage.label }}</span>
+                        {% endif %}
+                    </h6>
+                    <small class="text-muted">
+                        Total: <strong>SAR {{ po.total_value|floatformat:2|intcomma }}</strong>
+                        {% if po.requires_ceo_approval %}
+                        <span class="badge bg-danger-subtle text-danger ms-1">≥ 1M — CEO required</span>
+                        {% else %}
+                        <span class="badge bg-secondary-subtle text-secondary ms-1">&lt; 1M — CEO skipped</span>
+                        {% endif %}
+                    </small>
+                </div>
+                <div class="card-body">
+                    <div class="d-flex gap-3 align-items-stretch flex-wrap" id="approvalSteps">
+                        {% for stage in po.approval_status %}
+                        <div class="flex-grow-1 p-3 rounded-3 border position-relative
+                                    {% if stage.is_approved %}bg-success-subtle border-success-subtle
+                                    {% elif stage.is_current %}bg-warning-subtle border-warning
+                                    {% else %}bg-light border-secondary-subtle{% endif %}"
+                             style="min-width:200px;"
+                             data-stage="{{ stage.key }}">
+                            <div class="d-flex justify-content-between align-items-start mb-1">
+                                <div class="fw-bold">{{ stage.label }}</div>
+                                {% if stage.is_approved %}
+                                <i class="bi bi-check-circle-fill text-success"></i>
+                                {% elif stage.is_current %}
+                                <i class="bi bi-hourglass-split text-warning"></i>
+                                {% else %}
+                                <i class="bi bi-circle text-muted"></i>
+                                {% endif %}
+                            </div>
+                            <div class="small text-muted mb-2">{{ stage.signer }}</div>
+                            {% if stage.is_approved %}
+                            {% if stage.signature_url %}
+                            <div class="bg-white rounded p-1 mb-2 text-center" style="min-height:48px;">
+                                <img src="{{ stage.signature_url }}" alt="signature" style="max-height:44px; max-width:100%;">
+                            </div>
+                            {% endif %}
+                            <div class="small">
+                                <div><i class="bi bi-clock me-1"></i>{{ stage.approved_at|date:"d M Y, H:i" }}</div>
+                                <div class="text-muted"><i class="bi bi-person me-1"></i>{{ stage.approved_by|default:"—" }}</div>
+                            </div>
+                            {% elif stage.is_current %}
+                            {% if stage.key in approvable_stages %}
+                            <button type="button"
+                                    class="btn btn-sm btn-success w-100 approve-btn"
+                                    data-stage="{{ stage.key }}"
+                                    data-url="{% url 'procurement:po_approve_stage' po.pk stage.key %}">
+                                <i class="bi bi-check-lg me-1"></i>Approve
+                            </button>
+                            {% else %}
+                            <small class="text-muted">Awaiting authorised user</small>
+                            {% endif %}
+                            {% else %}
+                            <small class="text-muted">Locked — earlier stage pending</small>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
                     </div>
                 </div>
             </div>
@@ -373,6 +448,52 @@
         </div>
     </div>
 </div>
+
+<!-- E-Sign Modal — opened by Approve buttons in the timeline. -->
+<div class="modal fade" id="approveSignModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-pen me-2"></i><span id="approveSignTitle">Approve Stage</span>
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <ul class="nav nav-tabs mb-3" role="tablist">
+                    <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#signDrawTab" type="button">Draw signature</button></li>
+                    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#signUploadTab" type="button">Upload image</button></li>
+                </ul>
+                <div class="tab-content">
+                    <div class="tab-pane fade show active" id="signDrawTab" role="tabpanel">
+                        <p class="text-muted small mb-2">Sign in the box below using your mouse or finger. Click <em>Clear</em> to redraw.</p>
+                        <div class="border rounded bg-white" style="touch-action: none;">
+                            <canvas id="signCanvas" width="700" height="220" style="width:100%; height:220px; cursor:crosshair; display:block;"></canvas>
+                        </div>
+                        <div class="d-flex justify-content-end mt-2">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="signClearBtn">
+                                <i class="bi bi-eraser me-1"></i>Clear
+                            </button>
+                        </div>
+                    </div>
+                    <div class="tab-pane fade" id="signUploadTab" role="tabpanel">
+                        <p class="text-muted small mb-2">Pick a transparent or white-background image (PNG/JPG) of your signature.</p>
+                        <input type="file" class="form-control" id="signFileInput" accept="image/*">
+                        <img id="signFilePreview" class="img-fluid border rounded mt-3 d-none" style="max-height:200px;">
+                    </div>
+                </div>
+                <div id="signError" class="alert alert-danger d-none mt-3 mb-0"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-success" id="signSubmitBtn">
+                    <i class="bi bi-check-lg me-1"></i>Approve &amp; Sign
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% endblock %}
 
 {% block extra_js %}
@@ -408,6 +529,138 @@
     }
 
     document.querySelectorAll('.po-term-checkbox').forEach(wireToggle);
+
+    // ─── E-Sign modal + canvas drawing pad ───
+    const signModalEl = document.getElementById('approveSignModal');
+    const signTitleEl = document.getElementById('approveSignTitle');
+    const signCanvas = document.getElementById('signCanvas');
+    const signClearBtn = document.getElementById('signClearBtn');
+    const signFileInput = document.getElementById('signFileInput');
+    const signFilePreview = document.getElementById('signFilePreview');
+    const signSubmitBtn = document.getElementById('signSubmitBtn');
+    const signErrorBox = document.getElementById('signError');
+
+    let signModal = null;
+    let approveUrl = '';
+    let approveStage = '';
+    let canvasCtx = null;
+    let drawing = false;
+    let canvasHasInk = false;
+
+    function setupCanvas() {
+        // Resize the bitmap to match its on-screen size for crisp lines.
+        const rect = signCanvas.getBoundingClientRect();
+        const ratio = window.devicePixelRatio || 1;
+        signCanvas.width = Math.floor(rect.width * ratio);
+        signCanvas.height = Math.floor(rect.height * ratio);
+        canvasCtx = signCanvas.getContext('2d');
+        canvasCtx.scale(ratio, ratio);
+        canvasCtx.fillStyle = '#ffffff';
+        canvasCtx.fillRect(0, 0, rect.width, rect.height);
+        canvasCtx.lineWidth = 2.2;
+        canvasCtx.lineCap = 'round';
+        canvasCtx.lineJoin = 'round';
+        canvasCtx.strokeStyle = '#1a1a1a';
+        canvasHasInk = false;
+    }
+
+    function getPoint(ev) {
+        const rect = signCanvas.getBoundingClientRect();
+        const t = ev.touches ? ev.touches[0] : ev;
+        return { x: t.clientX - rect.left, y: t.clientY - rect.top };
+    }
+
+    function startDraw(ev) { ev.preventDefault(); drawing = true; const p = getPoint(ev); canvasCtx.beginPath(); canvasCtx.moveTo(p.x, p.y); }
+    function moveDraw(ev) { if (!drawing) return; ev.preventDefault(); const p = getPoint(ev); canvasCtx.lineTo(p.x, p.y); canvasCtx.stroke(); canvasHasInk = true; }
+    function endDraw(ev) { drawing = false; }
+
+    signCanvas.addEventListener('mousedown', startDraw);
+    signCanvas.addEventListener('mousemove', moveDraw);
+    signCanvas.addEventListener('mouseup', endDraw);
+    signCanvas.addEventListener('mouseleave', endDraw);
+    signCanvas.addEventListener('touchstart', startDraw, { passive: false });
+    signCanvas.addEventListener('touchmove', moveDraw, { passive: false });
+    signCanvas.addEventListener('touchend', endDraw);
+
+    if (signClearBtn) signClearBtn.addEventListener('click', setupCanvas);
+
+    if (signFileInput) signFileInput.addEventListener('change', function() {
+        const f = this.files && this.files[0];
+        if (!f) return;
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            signFilePreview.src = e.target.result;
+            signFilePreview.classList.remove('d-none');
+        };
+        reader.readAsDataURL(f);
+    });
+
+    document.querySelectorAll('.approve-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            approveUrl = this.dataset.url;
+            approveStage = this.dataset.stage;
+            const card = this.closest('[data-stage]');
+            const stageLabel = card ? (card.querySelector('.fw-bold') || {}).textContent : 'Approve';
+            signTitleEl.textContent = (stageLabel || 'Approve').trim();
+            signErrorBox.classList.add('d-none');
+            signFileInput.value = '';
+            signFilePreview.classList.add('d-none');
+            signFilePreview.src = '';
+            // Show modal first so canvas has correct dimensions.
+            signModal = new bootstrap.Modal(signModalEl);
+            signModalEl.addEventListener('shown.bs.modal', setupCanvas, { once: true });
+            signModal.show();
+        });
+    });
+
+    signSubmitBtn.addEventListener('click', function() {
+        signErrorBox.classList.add('d-none');
+        const file = signFileInput.files && signFileInput.files[0];
+        const fd = new FormData();
+
+        const uploadTabActive = document.getElementById('signUploadTab').classList.contains('active');
+        if (uploadTabActive) {
+            if (!file) {
+                signErrorBox.textContent = 'Pick a signature image first.';
+                signErrorBox.classList.remove('d-none');
+                return;
+            }
+            fd.append('signature_file', file);
+        } else {
+            if (!canvasHasInk) {
+                signErrorBox.textContent = 'Draw your signature on the pad first.';
+                signErrorBox.classList.remove('d-none');
+                return;
+            }
+            fd.append('signature_data', signCanvas.toDataURL('image/png'));
+        }
+
+        signSubmitBtn.disabled = true;
+        signSubmitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Signing…';
+        fetch(approveUrl, {
+            method: 'POST',
+            body: fd,
+            headers: { 'X-CSRFToken': csrfToken },
+        })
+        .then(function(r) { return r.json().then(function(j) { return {status: r.status, j: j}; }); })
+        .then(function(res) {
+            if (res.status !== 200 || !res.j.ok) {
+                signErrorBox.textContent = res.j.error || 'Could not approve.';
+                signErrorBox.classList.remove('d-none');
+                signSubmitBtn.disabled = false;
+                signSubmitBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Approve & Sign';
+                return;
+            }
+            window.location.reload();
+        })
+        .catch(function(err) {
+            signErrorBox.textContent = 'Network error — please try again.';
+            signErrorBox.classList.remove('d-none');
+            console.error(err);
+            signSubmitBtn.disabled = false;
+            signSubmitBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Approve & Sign';
+        });
+    });
 
     // ─── Quick-add Terms Template (inline, no navigation away) ───
     const form = document.getElementById('quickAddTermsForm');
