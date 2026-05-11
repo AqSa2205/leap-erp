@@ -211,7 +211,14 @@ def _user_can_edit_sheet(user, sheet):
         return False
 
     # Pre-finance stages: original ruleset.
-    if sheet.created_by_id == user.id:
+    # Creator override is region-scoped — without this, a former employee
+    # whose role was downgraded or who moved regions would retain a back-
+    # door onto every sheet they ever created.
+    if (
+        sheet.created_by_id == user.id
+        and sheet.project
+        and sheet.project.region_id == user.region_id
+    ):
         return True
     if user.is_admin_user and sheet.project and sheet.project.region_id == user.region_id:
         return True
@@ -810,10 +817,24 @@ class TermsTemplateCreateView(LoginRequiredMixin, CreateView):
 def ajax_create_terms_template(request):
     """Create a TermsTemplate inline (no page navigation).
 
-    Used by the PO form / detail page so HR-style "create the template I
+    Used by the PO form / detail page so the "create the template I
     realised I need right now" flow doesn't blow away unsaved PO data via a
-    full-page navigation.
+    full-page navigation. Role-gated — only sales / procurement / admin
+    can add to the global library so junior accounts can't spam or
+    deface terms that a real PO might pull in.
     """
+    user = request.user
+    if not (
+        user.is_super_admin_user
+        or user.is_admin_user
+        or user.is_manager_user
+        or getattr(user, 'is_sales_rep_user', False)
+        or getattr(user, 'is_procurement_user', False)
+    ):
+        return JsonResponse(
+            {'error': 'Your role cannot add to the terms library.'},
+            status=403,
+        )
     name = (request.POST.get('name') or '').strip()
     category = (request.POST.get('category') or '').strip()
     content = (request.POST.get('content') or '').strip()
@@ -821,6 +842,9 @@ def ajax_create_terms_template(request):
         return JsonResponse({'error': 'name, category, and content are all required.'}, status=400)
     if category not in dict(TermsTemplate.CATEGORY_CHOICES):
         return JsonResponse({'error': 'Invalid category.'}, status=400)
+    # Cap length to prevent runaway text in the global library.
+    if len(name) > 255 or len(content) > 10_000:
+        return JsonResponse({'error': 'Name or content too long.'}, status=400)
     template = TermsTemplate.objects.create(
         name=name, category=category, content=content,
         created_by=request.user,
@@ -1908,6 +1932,18 @@ def costing_workflow_transition(request, pk):
     if sheet.workflow_stage not in tx['from']:
         messages.error(request, f'This action requires the sheet to be in one of: {", ".join(tx["from"])}. Current: {sheet.workflow_stage}.')
         return redirect('costing:detail', pk=sheet.pk)
+
+    # Reopen guard: rewinding a sheet that finance has touched would
+    # silently discard the budget approval. Restrict that origin to finance
+    # team or super-admin so sales can't roll back finance work unilaterally.
+    if action == 'reopen' and sheet.workflow_stage in ('finance_review', 'finance_approved'):
+        if not user.is_super_admin_user and team != 'finance':
+            messages.error(
+                request,
+                'Reopening a sheet from a finance stage requires the finance '
+                'team or a super administrator.',
+            )
+            return redirect('costing:detail', pk=sheet.pk)
 
     # Won-project gate (currently only used by send_to_finance — finance
     # budgeting only kicks in once the project is actually awarded).
