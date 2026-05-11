@@ -4,7 +4,7 @@
         <input type="text" class="text-edit item-num-edit" data-item-id="{{ item.pk }}" data-field="item_number" value="{{ item.item_number }}">
     </td>
     <td class="sticky-col sticky-col-2">
-        <input type="text" class="text-edit desc-edit" data-item-id="{{ item.pk }}" data-field="description" value="{{ item.description }}" placeholder="Description">
+        <textarea class="text-edit desc-edit" data-item-id="{{ item.pk }}" data-field="description" rows="1" placeholder="Description">{{ item.description }}</textarea>
     </td>
     <td>
         <input type="text" class="text-edit" data-item-id="{{ item.pk }}" data-field="vendor_name" value="{{ item.vendor_name }}" style="width:90px;">

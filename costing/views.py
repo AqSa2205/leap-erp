@@ -2831,10 +2831,10 @@ def costing_export_pdf(request, pk):
     # Blank separator row
     data.append(['', '', '', '', ''])
 
-    # Row A.2: SCOPE OF WORK (pink bg) — sow_total is already in output_currency
+    # Row A.2: SERVICES (pink bg) — sow_total is already in output_currency
     data.append([
         Paragraph('<b>A.2</b>', cell_bold),
-        Paragraph('<b>SCOPE OF WORK</b>', cell_bold),
+        Paragraph('<b>SERVICES</b>', cell_bold),
         '', '',
         Paragraph(f'<b>{fmt_num(sow_total)}</b>', cell_right),
     ])
