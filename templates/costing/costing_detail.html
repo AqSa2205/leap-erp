@@ -452,6 +452,8 @@
                     <a href="{% url 'costing:import_excel' sheet.pk %}" class="btn btn-outline-success"><i class="bi bi-upload"></i> Import Excel</a>
                     <a href="{% url 'costing:export' sheet.pk %}" class="btn btn-outline-primary bom-pricing-only"><i class="bi bi-file-earmark-excel"></i> Excel</a>
                     <a href="{% url 'costing:export_pdf' sheet.pk %}" target="_blank" class="btn btn-outline-danger bom-pricing-only"><i class="bi bi-file-earmark-pdf"></i> PDF</a>
+                    {# Unpriced BOM PDF — same template, prices and totals stripped. Available to every team that can view the sheet. #}
+                    <a href="{% url 'costing:export_pdf' sheet.pk %}?unpriced=1" target="_blank" class="btn btn-outline-dark" title="BOM-only PDF without pricing — safe to share externally."><i class="bi bi-file-earmark-text"></i> BOM PDF (unpriced)</a>
                     {% if user.is_procurement_user or user.is_super_admin_user or user.is_admin_user %}
                     <a href="{% url 'procurement:bom_procurement_tracker' sheet.pk %}"
                        class="btn btn-outline-warning"

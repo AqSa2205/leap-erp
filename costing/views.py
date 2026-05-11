@@ -2427,11 +2427,18 @@ def costing_export_pdf(request, pk):
         return redirect('costing:detail', pk=pk)
 
     sheet = get_object_or_404(CostingSheet, pk=pk)
+    # `?unpriced=1` produces a price-free BOM PDF — same layout, prices and
+    # totals removed. Proposal team can grab this version; the priced one
+    # stays sales/finance/procurement-only.
+    unpriced = request.GET.get('unpriced') == '1'
     if not _user_can_view_sheet(request.user, sheet):
         messages.error(request, 'You do not have permission to export this costing sheet.')
         return redirect('costing:list')
-    if getattr(request.user, 'is_proposal_team_user', False):
-        messages.error(request, 'PDF export includes pricing — only the sales team can download it.')
+    if not unpriced and getattr(request.user, 'is_proposal_team_user', False):
+        messages.error(
+            request,
+            'The priced PDF is sales-only. Use "Export BOM PDF (unpriced)" instead.',
+        )
         return redirect('costing:detail', pk=pk)
     sections = list(sheet.sections.prefetch_related('line_items').all())
 
@@ -2452,7 +2459,11 @@ def costing_export_pdf(request, pk):
     # return it to the user.
     import io as _io
     pdf_buffer = _io.BytesIO()
-    filename = _safe_filename(sheet.title, suffix='Commercial_Offer', extension='pdf')
+    filename = _safe_filename(
+        sheet.title,
+        suffix=('BOM_Unpriced' if unpriced else 'Commercial_Offer'),
+        extension='pdf',
+    )
 
     import os
     from django.contrib.staticfiles.finders import find as find_static
@@ -2622,8 +2633,18 @@ def costing_export_pdf(request, pk):
     # Title bar: 10pt white on blue
     title_style = ParagraphStyle('TitleBar', fontName='Helvetica-Bold', fontSize=10, alignment=TA_CENTER, textColor=colors.white)
 
+    # Placeholder for blanked numbers on the unpriced variant — plain
+    # empty string so the price cells render visually empty.
+    _BLANK = ''
+
     def fmt_num(val):
-        """Format a Decimal/number with thousand separators and 2 decimals."""
+        """Format a Decimal/number with thousand separators and 2 decimals.
+
+        Returns the blank placeholder in unpriced mode so the visual layout
+        stays identical to the priced PDF.
+        """
+        if unpriced:
+            return _BLANK
         try:
             return f'{float(val):,.2f}'
         except (TypeError, ValueError):
@@ -2635,7 +2656,10 @@ def costing_export_pdf(request, pk):
         Use this for any aggregate computed from line-item costs (which are
         stored in SAR). Use plain fmt_num for values the user already
         entered in the output currency (Scope-of-Work item totals).
+        Returns the blank placeholder in unpriced mode.
         """
+        if unpriced:
+            return _BLANK
         try:
             return f'{float(Decimal(str(val)) * conv):,.2f}'
         except (TypeError, ValueError, InvalidOperation):
@@ -2727,6 +2751,9 @@ def costing_export_pdf(request, pk):
     elements.append(Spacer(1, 5 * mm))
 
     # ─── TITLE BAR + DATA TABLE ───
+    # The summary page (contract total, A.1/A.2/A.3 breakdown) is the only
+    # part of this PDF that prints prices. When unpriced=1 we still build
+    # the summary objects (cheap) but skip appending them to the document.
     # Define column widths first so the title bar matches
     # 5 columns spanning the full page width
     col_widths = [40, PAGE_WIDTH - 40 - 35 - 35 - 120, 35, 35, 120]
@@ -2846,7 +2873,7 @@ def costing_export_pdf(request, pk):
             Paragraph(f' {item.description}', desc_style),
             Paragraph(str(int(item.quantity) if item.quantity == int(item.quantity) else item.quantity), cell_center),
             Paragraph(item.uom, cell_center),
-            Paragraph(item.display_price, cell_right),
+            Paragraph(_BLANK if unpriced else item.display_price, cell_right),
         ])
 
     # Row indices for special styling
@@ -3066,10 +3093,13 @@ def costing_export_pdf(request, pk):
 
     # Project details header is now drawn by NumberedCanvas on every page — no inline table here.
 
-    # BOM title bar
-    # 8 BOM columns spanning full page width
+    # BOM title bar — same 8-column layout in both modes; only the
+    # numeric values are blanked when unpriced.
     bom_col_widths = [40, PAGE_WIDTH - 40 - 55 - 55 - 30 - 30 - 65 - 65, 55, 55, 30, 30, 65, 65]
-    bom_title_data = [[Paragraph('<b>BILL OF MATERIAL - PRICED</b>', title_style)]]
+    bom_title_data = [[Paragraph(
+        f'<b>BILL OF MATERIAL - {"UNPRICED" if unpriced else "PRICED"}</b>',
+        title_style,
+    )]]
     bom_title_table = Table(bom_title_data, colWidths=[PAGE_WIDTH])
     bom_title_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), TITLE_BLUE),
@@ -3285,12 +3315,16 @@ def costing_export_pdf(request, pk):
 
     pdf_bytes = pdf_buffer.getvalue()
 
-    # Save this export as a revision (with state snapshot + diff vs previous)
-    try:
-        _save_costing_revision(sheet, pdf_bytes, filename, export_format='pdf', user=request.user)
-    except Exception as _e:
-        import logging
-        logging.getLogger(__name__).warning('Failed to save costing PDF revision: %s', _e)
+    # Save this export as a revision (with state snapshot + diff vs previous).
+    # Unpriced exports are a derivative of the same sheet state, so we do
+    # not snapshot them as separate revisions — the priced PDF remains the
+    # canonical record.
+    if not unpriced:
+        try:
+            _save_costing_revision(sheet, pdf_bytes, filename, export_format='pdf', user=request.user)
+        except Exception as _e:
+            import logging
+            logging.getLogger(__name__).warning('Failed to save costing PDF revision: %s', _e)
 
     response = HttpResponse(pdf_bytes, content_type='application/pdf')
     response['Content-Disposition'] = f'inline; filename="{filename}"'
