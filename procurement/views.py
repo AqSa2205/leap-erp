@@ -245,19 +245,60 @@ def _procurement_team_users():
     ).select_related('role').order_by('first_name', 'last_name', 'username')
 
 
+def _visible_pos_for(user):
+    """Function-based equivalent of ProcurementPermissionMixin.get_queryset.
+
+    Used by export and approve endpoints (function-based views) so a user
+    cannot read or sign a PO outside their region by guessing the PK.
+    """
+    qs = PurchaseOrder.objects.select_related('project', 'created_by').all()
+    if not getattr(user, 'is_authenticated', False):
+        return qs.none()
+    if user.is_super_admin_user or user.is_procurement_user:
+        return qs
+    if user.is_admin_user or user.is_manager_user:
+        return qs.filter(
+            Q(created_by=user) |
+            Q(project__region=user.region)
+        )
+    return qs.filter(created_by=user)
+
+
+def _validate_signature_image(raw_bytes, *, max_bytes=2 * 1024 * 1024):
+    """Verify ``raw_bytes`` is a real image and re-encode as a clean PNG.
+
+    Defends against Pillow CVE chains and stored malicious payloads — the
+    original bytes are discarded and only Pillow's safe re-encoded output
+    is kept. Raises ValueError with a user-friendly message on failure.
+    """
+    from io import BytesIO
+    from PIL import Image, UnidentifiedImageError
+    if not raw_bytes:
+        raise ValueError('Signature is empty.')
+    if len(raw_bytes) > max_bytes:
+        raise ValueError(f'Signature too large (max {max_bytes // (1024 * 1024)} MB).')
+    # First pass — verify() catches structural problems before .load() runs
+    # the heavier decoders.
+    try:
+        Image.open(BytesIO(raw_bytes)).verify()
+    except (UnidentifiedImageError, Exception) as e:
+        raise ValueError(f'Not a valid image: {e}') from e
+    # Re-decode through a fresh handle (verify() consumes the stream) and
+    # re-encode as PNG to strip any malicious metadata or polyglot tricks.
+    img = Image.open(BytesIO(raw_bytes))
+    img.load()
+    if img.mode in ('RGBA', 'LA'):
+        out_img = img
+    else:
+        out_img = img.convert('RGB')
+    out = BytesIO()
+    out_img.save(out, format='PNG', optimize=True)
+    return out.getvalue()
+
+
 class ProcurementPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
-        queryset = PurchaseOrder.objects.select_related('project', 'created_by').all()
-        user = self.request.user
-        if user.is_super_admin_user or user.is_procurement_user:
-            return queryset
-        elif user.is_admin_user or user.is_manager_user:
-            return queryset.filter(
-                Q(created_by=user) |
-                Q(project__region=user.region)
-            )
-        else:
-            return queryset.filter(created_by=user)
+        return _visible_pos_for(self.request.user)
 
 
 # ─── PO CRUD ─────────────────────────────────────────────────
@@ -628,52 +669,72 @@ def po_approve_stage(request, pk, stage):
     Once signed a stage is locked — no un-approve. If the freshly signed
     stage was the last required one, the PO is now released and exports
     unlock automatically.
+
+    Region- and role-scoped via _visible_pos_for() — guessing PKs across
+    regions returns 404. Stage role gate is enforced separately. The
+    read-check-write window runs inside an atomic block holding a row-level
+    lock so concurrent Approve clicks can't race past each other.
     """
-    po = get_object_or_404(PurchaseOrder, pk=pk)
-
-    if stage not in po.required_stages:
-        return JsonResponse({'error': 'This stage is not required for this PO.'}, status=400)
-
-    cur = po.current_stage
-    if not cur or cur['key'] != stage:
-        return JsonResponse({
-            'error': f'Out of sequence — next pending stage is {(cur["label"] if cur else "(none, already released)")}.',
-        }, status=400)
-
-    if not po.can_user_approve_stage(request.user, stage):
-        return JsonResponse({'error': 'You do not have permission to approve this stage.'}, status=403)
-
-    # Pull the signature out of the request — either an uploaded file
-    # ('signature_file') or a base64 PNG data URL from the drawing canvas
-    # ('signature_data'). Reject the request if neither is present.
-    sig_field = f'{stage}_signature'
+    # First read the signature payload out of the request *before* the
+    # transaction opens — Pillow validation on potentially-malicious
+    # bytes shouldn't run inside a row-locked block.
+    raw = None
     if 'signature_file' in request.FILES:
-        getattr(po, sig_field).save(
-            request.FILES['signature_file'].name,
-            request.FILES['signature_file'],
-            save=False,
-        )
+        raw = request.FILES['signature_file'].read()
     elif request.POST.get('signature_data', '').startswith('data:image/'):
         import base64
-        from django.core.files.base import ContentFile
-        header, _, b64 = request.POST['signature_data'].partition(',')
+        _, _, b64 = request.POST['signature_data'].partition(',')
         try:
             raw = base64.b64decode(b64)
         except Exception:
             return JsonResponse({'error': 'Could not decode the drawn signature.'}, status=400)
-        ext = 'png' if 'png' in header else 'jpg'
-        filename = f'po{po.pk}_{stage}_sig.{ext}'
-        getattr(po, sig_field).save(filename, ContentFile(raw), save=False)
-    else:
+    if raw is None:
         return JsonResponse({
             'error': 'Signature required — upload an image or draw on the pad.',
         }, status=400)
 
-    setattr(po, f'{stage}_approved_at', timezone.now())
-    setattr(po, f'{stage}_approved_by', request.user)
-    po.save(update_fields=[
-        f'{stage}_approved_at', f'{stage}_approved_by', sig_field, 'updated_at',
-    ])
+    # Re-encode through Pillow so we never persist arbitrary user-supplied
+    # bytes — defends against Pillow-decoder CVEs and polyglot uploads.
+    try:
+        clean = _validate_signature_image(raw)
+    except ValueError as e:
+        return JsonResponse({'error': str(e)}, status=400)
+
+    sig_field = f'{stage}_signature'
+    from django.core.files.base import ContentFile
+
+    with transaction.atomic():
+        try:
+            po = (
+                _visible_pos_for(request.user)
+                .select_for_update()
+                .get(pk=pk)
+            )
+        except PurchaseOrder.DoesNotExist:
+            return JsonResponse({'error': 'PO not found or not in your scope.'}, status=404)
+
+        if stage not in po.required_stages:
+            return JsonResponse({'error': 'This stage is not required for this PO.'}, status=400)
+
+        cur = po.current_stage
+        if not cur or cur['key'] != stage:
+            return JsonResponse({
+                'error': f'Out of sequence — next pending stage is {(cur["label"] if cur else "(none, already released)")}.',
+            }, status=400)
+
+        if not po.can_user_approve_stage(request.user, stage):
+            return JsonResponse({'error': 'You do not have permission to approve this stage.'}, status=403)
+
+        getattr(po, sig_field).save(
+            f'po{po.pk}_{stage}_sig.png',
+            ContentFile(clean),
+            save=False,
+        )
+        setattr(po, f'{stage}_approved_at', timezone.now())
+        setattr(po, f'{stage}_approved_by', request.user)
+        po.save(update_fields=[
+            f'{stage}_approved_at', f'{stage}_approved_by', sig_field, 'updated_at',
+        ])
 
     new_cur = po.current_stage
     return JsonResponse({
@@ -693,9 +754,19 @@ class PODeleteView(ProcurementPermissionMixin, DeleteView):
 
     def test_func(self):
         user = self.request.user
+        obj = self.get_object()
+        # Audit-trail protection: once *any* approval stage has been signed,
+        # only super admin can delete the PO. Without this gate the original
+        # creator could erase a fully-signed PO and destroy the audit chain
+        # the approval workflow exists to produce.
+        any_signed = any(
+            getattr(obj, f'{s}_approved_at') is not None
+            for s in ('scm', 'pm', 'coo', 'ceo')
+        )
+        if any_signed and not user.is_super_admin_user:
+            return False
         if user.is_super_admin_user or user.is_admin_user:
             return True
-        obj = self.get_object()
         return obj.created_by == user
 
     def form_valid(self, form):
@@ -705,12 +776,16 @@ class PODeleteView(ProcurementPermissionMixin, DeleteView):
 
 # ─── Excel Export ─────────────────────────────────────────────
 
+@login_required
 def po_export_excel(request, pk):
     """Export a Purchase Order to Excel matching the original format."""
     import openpyxl
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-    po = get_object_or_404(PurchaseOrder, pk=pk)
+    # Region/role scoped — guessing a PK from outside the user's scope
+    # returns 404, so this also enforces the same region rules the list
+    # and detail views use.
+    po = get_object_or_404(_visible_pos_for(request.user), pk=pk)
     if not po.is_released:
         cur = po.current_stage['label'] if po.current_stage else 'approval'
         messages.error(request, f'PO not released yet — pending {cur}. Excel export is locked until all required approvals are signed.')
@@ -859,7 +934,7 @@ def po_export_pdf(request, pk):
     from io import BytesIO
     from django.contrib.staticfiles.finders import find as find_static
 
-    po = get_object_or_404(PurchaseOrder, pk=pk)
+    po = get_object_or_404(_visible_pos_for(request.user), pk=pk)
     if not po.is_released:
         cur = po.current_stage['label'] if po.current_stage else 'approval'
         messages.error(request, f'PO not released yet — pending {cur}. PDF export is locked until all required approvals are signed.')
