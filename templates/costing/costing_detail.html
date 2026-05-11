@@ -71,7 +71,19 @@
     }
     .cost-edit, .margin-edit { border-color: #999; text-align: right; width: 70px; }
     .text-edit { width: 100%; min-width: 60px; }
-    .text-edit.desc-edit { min-width: 180px; }
+    .text-edit.desc-edit {
+        min-width: 180px;
+        resize: none;
+        overflow: hidden;
+        line-height: 1.35;
+        padding: 4px 6px;
+        font-family: inherit;
+        font-size: inherit;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    /* Soft auto-grow look without JS jitter — falls back gracefully. */
+    textarea.desc-edit { display: block; }
     .text-edit.item-num-edit { width: 50px; }
     .text-edit:hover, .cost-edit:hover, .margin-edit:hover { border-color: #ccc; background: rgba(0,0,0,0.02); }
     .margin-edit { text-align: center; width: 60px; }
@@ -102,7 +114,7 @@
     }
     .bom-table th.sticky-col { background: #212529; z-index: 3; }
     .bom-table td.sticky-col-1, .bom-table th.sticky-col-1 { left: 0; min-width: 45px; }
-    .bom-table td.sticky-col-2, .bom-table th.sticky-col-2 { left: 45px; min-width: 180px; max-width: 220px; white-space: normal; }
+    .bom-table td.sticky-col-2, .bom-table th.sticky-col-2 { left: 45px; min-width: 220px; max-width: 280px; white-space: normal; vertical-align: top; }
     /* Bulletproof sticky header: apply to every th so cells don't leak through */
     .bom-table thead.sticky-top { z-index: 5; top: 0; }
     .bom-table thead.sticky-top th {
@@ -499,7 +511,7 @@
             {% if sow_total %}
             <div class="text-center">
                 <div class="total-value text-secondary fw-bold">{{ sow_total|floatformat:2|intcomma }}</div>
-                <div class="total-label">Scope of Work (A.2)</div>
+                <div class="total-label">Services (A.2)</div>
             </div>
             <div class="text-center">
                 <div class="total-value text-success fw-bold">{{ contract_total|floatformat:2|intcomma }}</div>
@@ -701,10 +713,10 @@
     </div>
 </div>
 
-<!-- Scope of Work (A.2) -->
+<!-- Services / Scope of Work (A.2) -->
 <div class="card mt-3 bom-pricing-only">
     <div class="card-header d-flex justify-content-between align-items-center" style="background:#F1DCDB;">
-        <span><i class="bi bi-hammer me-2"></i> <strong>A.2 — Scope of Work</strong></span>
+        <span><i class="bi bi-hammer me-2"></i> <strong>A.2 — Services</strong></span>
         <button class="btn btn-sm btn-dark" data-bs-toggle="modal" data-bs-target="#addSowModal">
             <i class="bi bi-plus-lg me-1"></i> Add Item
         </button>
@@ -758,7 +770,7 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-hammer me-2"></i><span id="sowModalTitle">Add Scope of Work Item</span></h5>
+                <h5 class="modal-title"><i class="bi bi-hammer me-2"></i><span id="sowModalTitle">Add Service Item</span></h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <input type="hidden" id="sowEditingId" value="">
@@ -1383,6 +1395,11 @@ var _csrfToken = '{{ csrf_token }}';
             var el = e.target;
             if (!el.matches('.cost-edit, .text-edit, .currency-select')) return;
             if (e.key !== 'Enter') return;
+            // Alt+Enter / Ctrl+Enter inside the description textarea inserts a
+            // newline (Excel-style) instead of jumping rows.
+            if (el.tagName === 'TEXTAREA' && (e.altKey || e.ctrlKey)) {
+                return; // let the browser insert the newline
+            }
             e.preventDefault();
 
             // All editables in the same column (same data-field, or all
@@ -1405,6 +1422,32 @@ var _csrfToken = '{{ csrf_token }}';
                 try { if (target.select) target.select(); } catch (ex) {}
             }, 0);
         });
+
+        // ── Auto-grow the description textarea as the user types ──
+        // Without this the textarea stays at rows=1 and tall descriptions
+        // would clip again. Grows up to ~6 lines, then scrolls.
+        function growDesc(ta) {
+            if (!ta || ta.tagName !== 'TEXTAREA') return;
+            ta.style.height = 'auto';
+            var max = 130;  // ~6 lines at 1.35 line-height
+            ta.style.height = Math.min(ta.scrollHeight, max) + 'px';
+            ta.style.overflowY = ta.scrollHeight > max ? 'auto' : 'hidden';
+        }
+        bomTable.querySelectorAll('textarea.desc-edit').forEach(growDesc);
+        bomTable.addEventListener('input', function(e) {
+            if (e.target.matches('textarea.desc-edit')) growDesc(e.target);
+        });
+        // Re-fit when a new row is inserted dynamically (Add row / Paste from Excel)
+        // — observer picks up the textarea after the new row hits the DOM.
+        new MutationObserver(function(records) {
+            records.forEach(function(r) {
+                r.addedNodes.forEach(function(node) {
+                    if (node.querySelectorAll) {
+                        node.querySelectorAll('textarea.desc-edit').forEach(growDesc);
+                    }
+                });
+            });
+        }).observe(bomTable, { childList: true, subtree: true });
 
         // Paste from Excel — open modal scoped to this section
         bomTable.addEventListener('click', function(e) {
@@ -1864,7 +1907,7 @@ var _csrfToken = '{{ csrf_token }}';
 
     function resetModal() {
         editingIdInput.value = '';
-        titleSpan.textContent = 'Add Scope of Work Item';
+        titleSpan.textContent = 'Add Service Item';
         saveBtnText.textContent = 'Add';
         descInput.value = '';
         qtyInput.value = '1';
@@ -1960,7 +2003,7 @@ var _csrfToken = '{{ csrf_token }}';
         if (editBtn) {
             const tr = editBtn.closest('tr');
             editingIdInput.value = editBtn.dataset.pk;
-            titleSpan.textContent = 'Edit Scope of Work Item';
+            titleSpan.textContent = 'Edit Service Item';
             saveBtnText.textContent = 'Save';
             descInput.value = tr.dataset.description || '';
             qtyInput.value = tr.dataset.quantity || '1';
