@@ -333,11 +333,12 @@ def _resolve_project_sales_value(project, costing_sheets=None):
             'currency': 'GBP' | 'SAR', # which currency to format `amount` in
         }
 
-    Resolution order:
-      1. Actual sales recorded → "Actual Sales".
-      2. Any linked costing sheet has a grand_total > 0 → "Costing Total
+    Resolution order (costing wins over actual_sales — the costing sheet
+    is the live source of truth; actual_sales can go stale):
+      1. Any linked costing sheet has a grand_total > 0 → "Costing Total
          (live)" with the highest grand_total. Stage doesn't matter; we
          look at the number itself.
+      2. Actual sales recorded → "Actual Sales".
       3. Otherwise → "Estimated Price" using the project's estimated_value,
          with the subtitle "Costing not started". Keeps the column useful
          for early-stage pipeline entries without adding visual noise.
@@ -347,15 +348,6 @@ def _resolve_project_sales_value(project, costing_sheets=None):
     """
     region_code = project.region.code if project.region_id else ''
     local_ccy = 'GBP' if region_code in ('UK', 'GLB') else 'SAR'
-
-    if project.actual_sales and project.actual_sales > 0:
-        return {
-            'source':   'actual',
-            'amount':   project.actual_sales,
-            'note':     None,
-            'sheet':    None,
-            'currency': local_ccy,
-        }
 
     if costing_sheets is None:
         costing_sheets = list(project.costing_sheets.all())
@@ -373,6 +365,15 @@ def _resolve_project_sales_value(project, costing_sheets=None):
             'note':     f'Live total from costing sheet "{latest_priced.title}" · {latest_priced.get_workflow_stage_display()}',
             'sheet':    latest_priced,
             'currency': 'SAR',
+        }
+
+    if project.actual_sales and project.actual_sales > 0:
+        return {
+            'source':   'actual',
+            'amount':   project.actual_sales,
+            'note':     None,
+            'sheet':    None,
+            'currency': local_ccy,
         }
 
     # No priced costing yet — show the estimated value as a placeholder.
