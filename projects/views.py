@@ -149,6 +149,50 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
             'commercial_pdf_count': commercial_pdfs,
         }
 
+        # ── Derived "Actual Sales / Costing" panel value ─────────────────
+        # Resolution rule (display only — never writes back to actual_sales):
+        #   1. If a real actual_sales figure was entered, surface it as-is.
+        #   2. Else if there's a costing sheet that has reached costing or
+        #      finalised/finance/approved stages, surface that sheet's
+        #      grand_total (in SAR) with a "from costing sheet" label.
+        #   3. Else if there's a costing sheet still in BOM phase, surface
+        #      a "Costing in progress" message.
+        #   4. Else (no sheet at all), surface a "Costing not started" hint.
+        # Existing data and the model are untouched — this is purely a
+        # presentation aid for sales/management while a deal is still open.
+        priced_stages = {'costing_in_progress', 'finalized',
+                         'finance_review', 'finance_approved'}
+        pending_stages = {'bom_in_progress', 'ready_for_costing'}
+        sales_value_source = None
+        sales_value_amount = None
+        sales_value_note = None
+        sales_value_sheet = None
+        if project.actual_sales and project.actual_sales > 0:
+            sales_value_source = 'actual'
+            sales_value_amount = project.actual_sales
+        elif costing_sheets:
+            # Pick the most recently updated sheet — that's the one the team
+            # is currently working on.
+            latest = max(costing_sheets, key=lambda s: s.updated_at)
+            sales_value_sheet = latest
+            if latest.workflow_stage in priced_stages:
+                sales_value_source = 'costing'
+                sales_value_amount = latest.grand_total
+                sales_value_note = f'Live total from costing sheet "{latest.title}" · {latest.get_workflow_stage_display()}'
+            elif latest.workflow_stage in pending_stages:
+                sales_value_source = 'pending'
+                sales_value_note = f'Costing in progress — sheet "{latest.title}" is at {latest.get_workflow_stage_display()}'
+            else:
+                sales_value_source = 'pending'
+                sales_value_note = f'Costing sheet "{latest.title}" linked; stage: {latest.get_workflow_stage_display()}'
+        else:
+            sales_value_source = 'none'
+            sales_value_note = 'Costing not started — no costing sheet linked yet.'
+        context['sales_value_source'] = sales_value_source
+        context['sales_value_amount'] = sales_value_amount
+        context['sales_value_note'] = sales_value_note
+        context['sales_value_sheet'] = sales_value_sheet
+
         # ── Timeline: flat, chronologically sorted event stream ─────────
         # Each event: {when, icon, color, title, subtitle, actor, url}
         events = []
@@ -280,6 +324,19 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
         return context
 
 
+def _exchange_rates_json():
+    """Return a JSON-safe dict of {currency_code: rate_to_usd} for use by the
+    project form's USD → local-currency auto-conversion. Stays in sync with
+    whatever the costing module's ExchangeRate rows hold."""
+    import json
+    from costing.models import ExchangeRate
+    rates = {
+        r.currency_code: float(r.rate_to_usd)
+        for r in ExchangeRate.objects.all()
+    }
+    return json.dumps(rates)
+
+
 class ProjectCreateView(LoginRequiredMixin, CreateView):
     """Create a new project"""
     model = Project
@@ -291,6 +348,11 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
         kwargs = super().get_form_kwargs()
         kwargs['user'] = self.request.user
         return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['exchange_rates_json'] = _exchange_rates_json()
+        return context
 
     def form_valid(self, form):
         form.instance.created_by = self.request.user
@@ -330,6 +392,11 @@ class ProjectUpdateView(ProjectPermissionMixin, UpdateView):
         kwargs = super().get_form_kwargs()
         kwargs['user'] = self.request.user
         return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['exchange_rates_json'] = _exchange_rates_json()
+        return context
 
     def form_valid(self, form):
         old_owner = Project.objects.get(pk=self.object.pk).owner

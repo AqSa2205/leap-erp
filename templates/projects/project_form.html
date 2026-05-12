@@ -98,12 +98,18 @@
                     {{ form.year }}
                 </div>
                 <div class="col-md-3 mb-3">
-                    <label class="form-label">Estimated Value</label>
+                    <label class="form-label">Estimated Value <span class="text-muted small fw-normal" id="est-value-currency-label"></span></label>
                     {{ form.estimated_value }}
+                    <div class="form-text" id="est-value-conv-hint" style="display:none;">
+                        <i class="bi bi-arrow-left-right me-1"></i><span></span>
+                    </div>
                 </div>
                 <div class="col-md-3 mb-3">
                     <label class="form-label">Est. Value (USD)</label>
                     {{ form.estimated_value_usd }}
+                    <div class="form-text text-success" id="usd-conv-hint" style="display:none;">
+                        <i class="bi bi-info-circle me-1"></i><span></span>
+                    </div>
                 </div>
                 <div class="col-md-3 mb-3">
                     <label class="form-label">Est. Value Per Annum (SAR)</label>
@@ -155,4 +161,110 @@
         </form>
     </div>
 </div>
+
+<script>
+(function() {
+    // ── USD ↔ SAR / GBP auto-conversion ─────────────────────────
+    // Reads the same exchange rates the costing module uses so the
+    // numbers stay consistent between project pipeline and costing
+    // sheets. Rate map is {currency_code: rate_to_usd}, i.e. "X local
+    // per 1 USD". Conversion direction:
+    //     local = usd * rate_to_usd[local]
+    //     usd   = local / rate_to_usd[local]
+    var rates = {{ exchange_rates_json|default:"{}"|safe }};
+    var usdField   = document.querySelector('[name="estimated_value_usd"]');
+    var localField = document.querySelector('[name="estimated_value"]');
+    var regionSel  = document.querySelector('[name="region"]');
+    var usdHint    = document.getElementById('usd-conv-hint');
+    var localHint  = document.getElementById('est-value-conv-hint');
+    var currLabel  = document.getElementById('est-value-currency-label');
+    if (!usdField || !localField) return;
+
+    // Map region <option> text to the currency that the project
+    // detail page renders the estimated_value in.
+    function localCurrencyForRegion() {
+        if (!regionSel || !regionSel.options) return 'SAR';
+        var opt = regionSel.options[regionSel.selectedIndex];
+        if (!opt) return 'SAR';
+        var text = (opt.textContent || '').toUpperCase();
+        if (text.indexOf('UK') !== -1 || text.indexOf('GLOBAL') !== -1 ||
+            text.indexOf('LNUK') !== -1 || text.indexOf('GLB') !== -1) {
+            return 'GBP';
+        }
+        return 'SAR';
+    }
+
+    function fmt(n) {
+        if (n == null || isNaN(n)) return '';
+        return n.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    }
+
+    function refreshLabel() {
+        var local = localCurrencyForRegion();
+        if (currLabel) currLabel.textContent = '(' + local + ')';
+    }
+
+    function recalcFromUsd() {
+        var usd = parseFloat(usdField.value);
+        if (isNaN(usd) || usd <= 0) {
+            usdHint.style.display = 'none';
+            return;
+        }
+        var local = localCurrencyForRegion();
+        var rate = rates[local];
+        if (!rate) {
+            usdHint.style.display = 'none';
+            return;
+        }
+        var localValue = usd * rate;
+        var sarValue   = (rates.SAR ? usd * rates.SAR : null);
+        var gbpValue   = (rates.GBP ? usd * rates.GBP : null);
+        // Auto-fill estimated_value only when it's still empty —
+        // never overwrite a value the user has typed themselves.
+        if (!localField.value || parseFloat(localField.value) === 0) {
+            localField.value = localValue.toFixed(2);
+        }
+        var bits = [];
+        if (sarValue !== null) bits.push('SAR ' + fmt(sarValue));
+        if (gbpValue !== null) bits.push('GBP ' + fmt(gbpValue));
+        usdHint.querySelector('span').textContent =
+            usd.toFixed(2) + ' USD ≈ ' + bits.join('  ·  ');
+        usdHint.style.display = '';
+    }
+
+    function recalcFromLocal() {
+        var localValue = parseFloat(localField.value);
+        if (isNaN(localValue) || localValue <= 0) {
+            localHint.style.display = 'none';
+            return;
+        }
+        var local = localCurrencyForRegion();
+        var rate = rates[local];
+        if (!rate) {
+            localHint.style.display = 'none';
+            return;
+        }
+        var usd = localValue / rate;
+        var other = (local === 'SAR') ? 'GBP' : 'SAR';
+        var otherValue = (rates[other] ? usd * rates[other] : null);
+        var bits = ['USD ' + fmt(usd)];
+        if (otherValue !== null) bits.push(other + ' ' + fmt(otherValue));
+        localHint.querySelector('span').textContent =
+            fmt(localValue) + ' ' + local + ' ≈ ' + bits.join('  ·  ');
+        localHint.style.display = '';
+    }
+
+    usdField.addEventListener('input', recalcFromUsd);
+    localField.addEventListener('input', recalcFromLocal);
+    if (regionSel) regionSel.addEventListener('change', function() {
+        refreshLabel();
+        recalcFromUsd();
+        recalcFromLocal();
+    });
+    refreshLabel();
+    // Run once on load in case the form already has values (edit mode).
+    recalcFromUsd();
+    recalcFromLocal();
+})();
+</script>
 {% endblock %}

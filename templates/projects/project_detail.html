@@ -538,18 +538,39 @@
                     </h5>
                 </div>
                 <div class="mb-3">
-                    <small class="text-muted d-block">Actual Sales</small>
-                    <h4 class="mb-0 text-success">
-                        {% if project.actual_sales and project.actual_sales > 0 %}
-                            {% if project.region.code == 'UK' or project.region.code == 'GLB' %}
-                            £{{ project.actual_sales|floatformat:2|intcomma }}
-                            {% else %}
-                            SAR {{ project.actual_sales|floatformat:2|intcomma }}
-                            {% endif %}
+                    <small class="text-muted d-block">
+                        {% if sales_value_source == 'actual' %}Actual Sales
+                        {% elif sales_value_source == 'costing' %}Costing Total (live)
+                        {% else %}Costing Status{% endif %}
+                    </small>
+                    {% if sales_value_amount and sales_value_amount > 0 %}
+                    <h4 class="mb-0 {% if sales_value_source == 'actual' %}text-success{% else %}text-primary{% endif %}">
+                        {% if sales_value_source == 'costing' %}
+                            SAR {{ sales_value_amount|floatformat:2|intcomma }}
+                        {% elif project.region.code == 'UK' or project.region.code == 'GLB' %}
+                            £{{ sales_value_amount|floatformat:2|intcomma }}
                         {% else %}
-                        <span class="text-muted">Not recorded</span>
+                            SAR {{ sales_value_amount|floatformat:2|intcomma }}
                         {% endif %}
                     </h4>
+                    {% else %}
+                    <h6 class="mb-0 text-muted fst-italic">
+                        {% if sales_value_source == 'pending' %}Costing in progress
+                        {% elif sales_value_source == 'none' %}Costing not started
+                        {% else %}Not recorded{% endif %}
+                    </h6>
+                    {% endif %}
+                    {% if sales_value_note %}
+                    <div class="small text-muted mt-1">
+                        {% if sales_value_sheet %}
+                        <a href="{% url 'costing:detail' sales_value_sheet.pk %}" class="text-decoration-none">
+                            <i class="bi bi-link-45deg"></i> {{ sales_value_note }}
+                        </a>
+                        {% else %}
+                        <i class="bi bi-info-circle"></i> {{ sales_value_note }}
+                        {% endif %}
+                    </div>
+                    {% endif %}
                 </div>
                 {% if project.minimum_achievement %}
                 <div>

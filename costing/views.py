@@ -317,6 +317,32 @@ class CostingCreateView(LoginRequiredMixin, CreateView):
         kwargs['user'] = self.request.user
         return kwargs
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # Build a {project_pk: {customer, end_user, contact_with, ref}} map
+        # so the create form can auto-fill the PDF header fields as soon as
+        # the user picks a project from the dropdown. Scope mirrors the
+        # form's project queryset.
+        import json
+        from projects.models import Project
+        user = self.request.user
+        proj_qs = Project.objects.select_related('region').all()
+        if not user.is_super_admin_user:
+            if user.is_admin_user or user.is_manager_user:
+                proj_qs = proj_qs.filter(region=user.region)
+            else:
+                proj_qs = proj_qs.filter(owner=user)
+        context['project_data_json'] = json.dumps({
+            str(p.pk): {
+                'customer':       p.customer or '',
+                'end_user':       p.end_user or '',
+                'contact_person': p.contact_with or '',
+                'reference':      p.proposal_reference or '',
+            }
+            for p in proj_qs
+        })
+        return context
+
     def form_valid(self, form):
         form.instance.created_by = self.request.user
         messages.success(self.request, 'Costing sheet created successfully.')
