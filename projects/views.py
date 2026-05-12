@@ -91,7 +91,10 @@ class ProjectListView(ProjectPermissionMixin, ListView):
         if owner:
             queryset = queryset.filter(owner_id=owner)
 
-        return queryset.order_by('-updated_at')
+        # Prefetch costing sheets so each project's row can resolve its
+        # derived sales-value without an N+1 storm. ``sales_resolved`` is
+        # attached on each row in get_context_data() for the template.
+        return queryset.prefetch_related('costing_sheets').order_by('-updated_at')
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -101,6 +104,15 @@ class ProjectListView(ProjectPermissionMixin, ListView):
         queryset = self.get_queryset()
         context['total_count'] = queryset.count()
         context['total_value'] = queryset.aggregate(Sum('estimated_value'))['estimated_value__sum'] or 0
+
+        # Decorate each visible row with its resolved sales-value dict so
+        # the template can render the same "Actual / Costing / Pending /
+        # Not started" logic the detail page uses. The prefetch on
+        # get_queryset() means this is O(rows) without extra queries.
+        for project in context.get('projects', []):
+            project.sales_resolved = _resolve_project_sales_value(
+                project, project.costing_sheets.all()
+            )
 
         # Regions for import modal
         context['regions'] = Region.objects.filter(is_active=True)
@@ -148,6 +160,16 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
             'vendor_quote_count':   vendor_quotes,
             'commercial_pdf_count': commercial_pdfs,
         }
+
+        # ── Derived "Actual Sales / Costing" panel value ─────────────────
+        # Same resolution rule used by the Commercial Pipeline list — see
+        # _resolve_project_sales_value. Display-only, never writes back to
+        # the actual_sales column.
+        resolved = _resolve_project_sales_value(project, costing_sheets)
+        context['sales_value_source'] = resolved['source']
+        context['sales_value_amount'] = resolved['amount']
+        context['sales_value_note']   = resolved['note']
+        context['sales_value_sheet']  = resolved['sheet']
 
         # ── Timeline: flat, chronologically sorted event stream ─────────
         # Each event: {when, icon, color, title, subtitle, actor, url}
@@ -280,6 +302,98 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
         return context
 
 
+def _exchange_rates_json():
+    """Return a JSON-safe dict of {currency_code: rate_to_usd} for use by the
+    project form's USD → local-currency auto-conversion. Stays in sync with
+    whatever the costing module's ExchangeRate rows hold."""
+    import json
+    from costing.models import ExchangeRate
+    rates = {
+        r.currency_code: float(r.rate_to_usd)
+        for r in ExchangeRate.objects.all()
+    }
+    return json.dumps(rates)
+
+
+PRICED_WORKFLOW_STAGES = {
+    'costing_in_progress', 'finalized', 'finance_review', 'finance_approved',
+}
+PENDING_WORKFLOW_STAGES = {'bom_in_progress', 'ready_for_costing'}
+
+
+def _resolve_project_sales_value(project, costing_sheets=None):
+    """Derive the "Actual Sales / Costing" display for a single project.
+
+    Returns a dict shaped:
+        {
+            'source':   'actual' | 'costing' | 'estimate' | 'none',
+            'amount':   Decimal | None,
+            'note':     str,           # subtitle under the big number
+            'sheet':    CostingSheet | None,
+            'currency': 'GBP' | 'SAR', # which currency to format `amount` in
+        }
+
+    Resolution order:
+      1. Actual sales recorded → "Actual Sales".
+      2. Any linked costing sheet has a grand_total > 0 → "Costing Total
+         (live)" with the highest grand_total. Stage doesn't matter; we
+         look at the number itself.
+      3. Otherwise → "Estimated Price" using the project's estimated_value,
+         with the subtitle "Costing not started". Keeps the column useful
+         for early-stage pipeline entries without adding visual noise.
+      4. No estimate either → bare "Costing not started" message.
+
+    Display-only — never writes back to actual_sales.
+    """
+    region_code = project.region.code if project.region_id else ''
+    local_ccy = 'GBP' if region_code in ('UK', 'GLB') else 'SAR'
+
+    if project.actual_sales and project.actual_sales > 0:
+        return {
+            'source':   'actual',
+            'amount':   project.actual_sales,
+            'note':     None,
+            'sheet':    None,
+            'currency': local_ccy,
+        }
+
+    if costing_sheets is None:
+        costing_sheets = list(project.costing_sheets.all())
+    else:
+        costing_sheets = list(costing_sheets)
+
+    # Pick the sheet with the largest non-zero grand_total — that's the
+    # one with real pricing entered, regardless of stage.
+    priced_sheets = [s for s in costing_sheets if s.grand_total and s.grand_total > 0]
+    if priced_sheets:
+        latest_priced = max(priced_sheets, key=lambda s: s.grand_total)
+        return {
+            'source':   'costing',
+            'amount':   latest_priced.grand_total,
+            'note':     f'Live total from costing sheet "{latest_priced.title}" · {latest_priced.get_workflow_stage_display()}',
+            'sheet':    latest_priced,
+            'currency': 'SAR',
+        }
+
+    # No priced costing yet — show the estimated value as a placeholder.
+    if project.estimated_value and project.estimated_value > 0:
+        return {
+            'source':   'estimate',
+            'amount':   project.estimated_value,
+            'note':     'Costing not started',
+            'sheet':    None,
+            'currency': local_ccy,
+        }
+
+    return {
+        'source':   'none',
+        'amount':   None,
+        'note':     'Costing not started',
+        'sheet':    None,
+        'currency': local_ccy,
+    }
+
+
 class ProjectCreateView(LoginRequiredMixin, CreateView):
     """Create a new project"""
     model = Project
@@ -291,6 +405,11 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
         kwargs = super().get_form_kwargs()
         kwargs['user'] = self.request.user
         return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['exchange_rates_json'] = _exchange_rates_json()
+        return context
 
     def form_valid(self, form):
         form.instance.created_by = self.request.user
@@ -330,6 +449,11 @@ class ProjectUpdateView(ProjectPermissionMixin, UpdateView):
         kwargs = super().get_form_kwargs()
         kwargs['user'] = self.request.user
         return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['exchange_rates_json'] = _exchange_rates_json()
+        return context
 
     def form_valid(self, form):
         old_owner = Project.objects.get(pk=self.object.pk).owner

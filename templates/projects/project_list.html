@@ -163,7 +163,7 @@
                         <th>Region</th>
                         <th>Status</th>
                         {% if not user.is_procurement_user %}
-                        <th class="text-end">Actual Sales</th>
+                        <th class="text-end">Actual / Costing</th>
                         {% endif %}
                         <th>Submission Date</th>
                         <th class="text-center">Actions</th>
@@ -205,15 +205,28 @@
                         </td>
                         {% if not user.is_procurement_user %}
                         <td class="text-end">
-                            {% if project.actual_sales and project.actual_sales > 0 %}
-                                {% if project.region.code == 'UK' or project.region.code == 'GLB' %}
-                                <span class="text-success fw-bold">£{{ project.actual_sales|floatformat:2|intcomma }}</span>
+                            {% with sv=project.sales_resolved %}
+                            {% if sv.source == 'actual' %}
+                                {% if sv.currency == 'GBP' %}
+                                <span class="text-success fw-bold">£{{ sv.amount|floatformat:2|intcomma }}</span>
                                 {% else %}
-                                <span class="text-success fw-bold">SAR {{ project.actual_sales|floatformat:2|intcomma }}</span>
+                                <span class="text-success fw-bold">SAR {{ sv.amount|floatformat:2|intcomma }}</span>
                                 {% endif %}
+                                <div class="small text-muted">Actual sales</div>
+                            {% elif sv.source == 'costing' %}
+                                <span class="text-primary fw-bold">SAR {{ sv.amount|floatformat:2|intcomma }}</span>
+                                <div class="small text-muted"><i class="bi bi-link-45deg"></i>From costing</div>
+                            {% elif sv.source == 'estimate' %}
+                                {% if sv.currency == 'GBP' %}
+                                <span class="text-secondary fw-semibold">£{{ sv.amount|floatformat:2|intcomma }}</span>
+                                {% else %}
+                                <span class="text-secondary fw-semibold">SAR {{ sv.amount|floatformat:2|intcomma }}</span>
+                                {% endif %}
+                                <div class="small text-muted fst-italic">Costing not started</div>
                             {% else %}
-                            <span class="text-muted">-</span>
+                                <span class="text-muted fst-italic small">Costing not started</span>
                             {% endif %}
+                            {% endwith %}
                         </td>
                         {% endif %}
                         <td>{% if project.submission_deadline %}{{ project.submission_deadline|date:"d M Y" }}{% else %}-{% endif %}</td>
