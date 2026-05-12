@@ -91,7 +91,10 @@ class ProjectListView(ProjectPermissionMixin, ListView):
         if owner:
             queryset = queryset.filter(owner_id=owner)
 
-        return queryset.order_by('-updated_at')
+        # Prefetch costing sheets so each project's row can resolve its
+        # derived sales-value without an N+1 storm. ``sales_resolved`` is
+        # attached on each row in get_context_data() for the template.
+        return queryset.prefetch_related('costing_sheets').order_by('-updated_at')
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -101,6 +104,15 @@ class ProjectListView(ProjectPermissionMixin, ListView):
         queryset = self.get_queryset()
         context['total_count'] = queryset.count()
         context['total_value'] = queryset.aggregate(Sum('estimated_value'))['estimated_value__sum'] or 0
+
+        # Decorate each visible row with its resolved sales-value dict so
+        # the template can render the same "Actual / Costing / Pending /
+        # Not started" logic the detail page uses. The prefetch on
+        # get_queryset() means this is O(rows) without extra queries.
+        for project in context.get('projects', []):
+            project.sales_resolved = _resolve_project_sales_value(
+                project, project.costing_sheets.all()
+            )
 
         # Regions for import modal
         context['regions'] = Region.objects.filter(is_active=True)
@@ -150,48 +162,14 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
         }
 
         # ── Derived "Actual Sales / Costing" panel value ─────────────────
-        # Resolution rule (display only — never writes back to actual_sales):
-        #   1. If a real actual_sales figure was entered, surface it as-is.
-        #   2. Else if there's a costing sheet that has reached costing or
-        #      finalised/finance/approved stages, surface that sheet's
-        #      grand_total (in SAR) with a "from costing sheet" label.
-        #   3. Else if there's a costing sheet still in BOM phase, surface
-        #      a "Costing in progress" message.
-        #   4. Else (no sheet at all), surface a "Costing not started" hint.
-        # Existing data and the model are untouched — this is purely a
-        # presentation aid for sales/management while a deal is still open.
-        priced_stages = {'costing_in_progress', 'finalized',
-                         'finance_review', 'finance_approved'}
-        pending_stages = {'bom_in_progress', 'ready_for_costing'}
-        sales_value_source = None
-        sales_value_amount = None
-        sales_value_note = None
-        sales_value_sheet = None
-        if project.actual_sales and project.actual_sales > 0:
-            sales_value_source = 'actual'
-            sales_value_amount = project.actual_sales
-        elif costing_sheets:
-            # Pick the most recently updated sheet — that's the one the team
-            # is currently working on.
-            latest = max(costing_sheets, key=lambda s: s.updated_at)
-            sales_value_sheet = latest
-            if latest.workflow_stage in priced_stages:
-                sales_value_source = 'costing'
-                sales_value_amount = latest.grand_total
-                sales_value_note = f'Live total from costing sheet "{latest.title}" · {latest.get_workflow_stage_display()}'
-            elif latest.workflow_stage in pending_stages:
-                sales_value_source = 'pending'
-                sales_value_note = f'Costing in progress — sheet "{latest.title}" is at {latest.get_workflow_stage_display()}'
-            else:
-                sales_value_source = 'pending'
-                sales_value_note = f'Costing sheet "{latest.title}" linked; stage: {latest.get_workflow_stage_display()}'
-        else:
-            sales_value_source = 'none'
-            sales_value_note = 'Costing not started — no costing sheet linked yet.'
-        context['sales_value_source'] = sales_value_source
-        context['sales_value_amount'] = sales_value_amount
-        context['sales_value_note'] = sales_value_note
-        context['sales_value_sheet'] = sales_value_sheet
+        # Same resolution rule used by the Commercial Pipeline list — see
+        # _resolve_project_sales_value. Display-only, never writes back to
+        # the actual_sales column.
+        resolved = _resolve_project_sales_value(project, costing_sheets)
+        context['sales_value_source'] = resolved['source']
+        context['sales_value_amount'] = resolved['amount']
+        context['sales_value_note']   = resolved['note']
+        context['sales_value_sheet']  = resolved['sheet']
 
         # ── Timeline: flat, chronologically sorted event stream ─────────
         # Each event: {when, icon, color, title, subtitle, actor, url}
@@ -335,6 +313,85 @@ def _exchange_rates_json():
         for r in ExchangeRate.objects.all()
     }
     return json.dumps(rates)
+
+
+PRICED_WORKFLOW_STAGES = {
+    'costing_in_progress', 'finalized', 'finance_review', 'finance_approved',
+}
+PENDING_WORKFLOW_STAGES = {'bom_in_progress', 'ready_for_costing'}
+
+
+def _resolve_project_sales_value(project, costing_sheets=None):
+    """Derive the "Actual Sales / Costing" display for a single project.
+
+    Returns a dict shaped:
+        {
+            'source':   'actual' | 'costing' | 'estimate' | 'none',
+            'amount':   Decimal | None,
+            'note':     str,           # subtitle under the big number
+            'sheet':    CostingSheet | None,
+            'currency': 'GBP' | 'SAR', # which currency to format `amount` in
+        }
+
+    Resolution order:
+      1. Actual sales recorded → "Actual Sales".
+      2. Any linked costing sheet has a grand_total > 0 → "Costing Total
+         (live)" with the highest grand_total. Stage doesn't matter; we
+         look at the number itself.
+      3. Otherwise → "Estimated Price" using the project's estimated_value,
+         with the subtitle "Costing not started". Keeps the column useful
+         for early-stage pipeline entries without adding visual noise.
+      4. No estimate either → bare "Costing not started" message.
+
+    Display-only — never writes back to actual_sales.
+    """
+    region_code = project.region.code if project.region_id else ''
+    local_ccy = 'GBP' if region_code in ('UK', 'GLB') else 'SAR'
+
+    if project.actual_sales and project.actual_sales > 0:
+        return {
+            'source':   'actual',
+            'amount':   project.actual_sales,
+            'note':     None,
+            'sheet':    None,
+            'currency': local_ccy,
+        }
+
+    if costing_sheets is None:
+        costing_sheets = list(project.costing_sheets.all())
+    else:
+        costing_sheets = list(costing_sheets)
+
+    # Pick the sheet with the largest non-zero grand_total — that's the
+    # one with real pricing entered, regardless of stage.
+    priced_sheets = [s for s in costing_sheets if s.grand_total and s.grand_total > 0]
+    if priced_sheets:
+        latest_priced = max(priced_sheets, key=lambda s: s.grand_total)
+        return {
+            'source':   'costing',
+            'amount':   latest_priced.grand_total,
+            'note':     f'Live total from costing sheet "{latest_priced.title}" · {latest_priced.get_workflow_stage_display()}',
+            'sheet':    latest_priced,
+            'currency': 'SAR',
+        }
+
+    # No priced costing yet — show the estimated value as a placeholder.
+    if project.estimated_value and project.estimated_value > 0:
+        return {
+            'source':   'estimate',
+            'amount':   project.estimated_value,
+            'note':     'Costing not started',
+            'sheet':    None,
+            'currency': local_ccy,
+        }
+
+    return {
+        'source':   'none',
+        'amount':   None,
+        'note':     'Costing not started',
+        'sheet':    None,
+        'currency': local_ccy,
+    }
 
 
 class ProjectCreateView(LoginRequiredMixin, CreateView):

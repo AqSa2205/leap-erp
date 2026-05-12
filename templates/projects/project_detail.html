@@ -541,10 +541,15 @@
                     <small class="text-muted d-block">
                         {% if sales_value_source == 'actual' %}Actual Sales
                         {% elif sales_value_source == 'costing' %}Costing Total (live)
+                        {% elif sales_value_source == 'estimate' %}Estimated Price
                         {% else %}Costing Status{% endif %}
                     </small>
                     {% if sales_value_amount and sales_value_amount > 0 %}
-                    <h4 class="mb-0 {% if sales_value_source == 'actual' %}text-success{% else %}text-primary{% endif %}">
+                    <h4 class="mb-0
+                        {% if sales_value_source == 'actual' %}text-success
+                        {% elif sales_value_source == 'costing' %}text-primary
+                        {% elif sales_value_source == 'estimate' %}text-secondary
+                        {% else %}text-primary{% endif %}">
                         {% if sales_value_source == 'costing' %}
                             SAR {{ sales_value_amount|floatformat:2|intcomma }}
                         {% elif project.region.code == 'UK' or project.region.code == 'GLB' %}
@@ -554,11 +559,7 @@
                         {% endif %}
                     </h4>
                     {% else %}
-                    <h6 class="mb-0 text-muted fst-italic">
-                        {% if sales_value_source == 'pending' %}Costing in progress
-                        {% elif sales_value_source == 'none' %}Costing not started
-                        {% else %}Not recorded{% endif %}
-                    </h6>
+                    <h6 class="mb-0 text-muted fst-italic">Costing not started</h6>
                     {% endif %}
                     {% if sales_value_note %}
                     <div class="small text-muted mt-1">
