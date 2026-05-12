@@ -214,8 +214,13 @@
                                 {% endif %}
                                 <div class="small text-muted">Actual sales</div>
                             {% elif sv.source == 'costing' %}
-                                <span class="text-primary fw-bold">SAR {{ sv.amount|floatformat:2|intcomma }}</span>
-                                <div class="small text-muted"><i class="bi bi-link-45deg"></i>From costing</div>
+                                <span class="text-primary fw-bold">
+                                {% if sv.currency == 'GBP' %}£{{ sv.amount|floatformat:2|intcomma }}
+                                {% elif sv.currency == 'USD' %}${{ sv.amount|floatformat:2|intcomma }}
+                                {% elif sv.currency == 'EUR' %}€{{ sv.amount|floatformat:2|intcomma }}
+                                {% else %}{{ sv.currency }} {{ sv.amount|floatformat:2|intcomma }}{% endif %}
+                                </span>
+                                <div class="small text-muted"><i class="bi bi-link-45deg"></i>Contract total (live)</div>
                             {% elif sv.source == 'estimate' %}
                                 {% if sv.currency == 'GBP' %}
                                 <span class="text-secondary fw-semibold">£{{ sv.amount|floatformat:2|intcomma }}</span>

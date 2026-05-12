@@ -540,7 +540,7 @@
                 <div class="mb-3">
                     <small class="text-muted d-block">
                         {% if sales_value_source == 'actual' %}Actual Sales
-                        {% elif sales_value_source == 'costing' %}Costing Total (live)
+                        {% elif sales_value_source == 'costing' %}Contract Total (live)
                         {% elif sales_value_source == 'estimate' %}Estimated Price
                         {% else %}Costing Status{% endif %}
                     </small>
@@ -550,13 +550,10 @@
                         {% elif sales_value_source == 'costing' %}text-primary
                         {% elif sales_value_source == 'estimate' %}text-secondary
                         {% else %}text-primary{% endif %}">
-                        {% if sales_value_source == 'costing' %}
-                            SAR {{ sales_value_amount|floatformat:2|intcomma }}
-                        {% elif project.region.code == 'UK' or project.region.code == 'GLB' %}
-                            £{{ sales_value_amount|floatformat:2|intcomma }}
-                        {% else %}
-                            SAR {{ sales_value_amount|floatformat:2|intcomma }}
-                        {% endif %}
+                        {% if sales_value_currency == 'GBP' %}£{{ sales_value_amount|floatformat:2|intcomma }}
+                        {% elif sales_value_currency == 'USD' %}${{ sales_value_amount|floatformat:2|intcomma }}
+                        {% elif sales_value_currency == 'EUR' %}€{{ sales_value_amount|floatformat:2|intcomma }}
+                        {% else %}{{ sales_value_currency|default:"SAR" }} {{ sales_value_amount|floatformat:2|intcomma }}{% endif %}
                     </h4>
                     {% else %}
                     <h6 class="mb-0 text-muted fst-italic">Costing not started</h6>

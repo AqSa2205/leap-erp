@@ -91,10 +91,13 @@ class ProjectListView(ProjectPermissionMixin, ListView):
         if owner:
             queryset = queryset.filter(owner_id=owner)
 
-        # Prefetch costing sheets so each project's row can resolve its
-        # derived sales-value without an N+1 storm. ``sales_resolved`` is
-        # attached on each row in get_context_data() for the template.
-        return queryset.prefetch_related('costing_sheets').order_by('-updated_at')
+        # Prefetch costing sheets + their SOW items so each project's row
+        # can resolve its derived contract-total without an N+1 storm.
+        # ``sales_resolved`` is attached per project in get_context_data().
+        return queryset.prefetch_related(
+            'costing_sheets',
+            'costing_sheets__scope_of_work_items',
+        ).order_by('-updated_at')
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -106,13 +109,18 @@ class ProjectListView(ProjectPermissionMixin, ListView):
         context['total_value'] = queryset.aggregate(Sum('estimated_value'))['estimated_value__sum'] or 0
 
         # Decorate each visible row with its resolved sales-value dict so
-        # the template can render the same "Actual / Costing / Pending /
+        # the template can render the same "Actual / Costing / Estimate /
         # Not started" logic the detail page uses. The prefetch on
         # get_queryset() means this is O(rows) without extra queries.
+        # Exchange rates are loaded once per request and injected onto every
+        # sheet so contract_total avoids a per-row ExchangeRate query.
+        from costing.models import ExchangeRate
+        rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
         for project in context.get('projects', []):
-            project.sales_resolved = _resolve_project_sales_value(
-                project, project.costing_sheets.all()
-            )
+            sheets = list(project.costing_sheets.all())
+            for s in sheets:
+                s.set_rates_cache(rates)
+            project.sales_resolved = _resolve_project_sales_value(project, sheets)
 
         # Regions for import modal
         context['regions'] = Region.objects.filter(is_active=True)
@@ -164,12 +172,18 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
         # ── Derived "Actual Sales / Costing" panel value ─────────────────
         # Same resolution rule used by the Commercial Pipeline list — see
         # _resolve_project_sales_value. Display-only, never writes back to
-        # the actual_sales column.
+        # the actual_sales column. Pre-load exchange rates and inject onto
+        # every sheet so contract_total doesn't hit the DB once per sheet.
+        from costing.models import ExchangeRate
+        rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
+        for s in costing_sheets:
+            s.set_rates_cache(rates)
         resolved = _resolve_project_sales_value(project, costing_sheets)
-        context['sales_value_source'] = resolved['source']
-        context['sales_value_amount'] = resolved['amount']
-        context['sales_value_note']   = resolved['note']
-        context['sales_value_sheet']  = resolved['sheet']
+        context['sales_value_source']   = resolved['source']
+        context['sales_value_amount']   = resolved['amount']
+        context['sales_value_note']     = resolved['note']
+        context['sales_value_sheet']    = resolved['sheet']
+        context['sales_value_currency'] = resolved['currency']
 
         # ── Timeline: flat, chronologically sorted event stream ─────────
         # Each event: {when, icon, color, title, subtitle, actor, url}
@@ -354,17 +368,18 @@ def _resolve_project_sales_value(project, costing_sheets=None):
     else:
         costing_sheets = list(costing_sheets)
 
-    # Pick the sheet with the largest non-zero grand_total — that's the
-    # one with real pricing entered, regardless of stage.
-    priced_sheets = [s for s in costing_sheets if s.grand_total and s.grand_total > 0]
+    # Pick the sheet with the largest non-zero contract_total — that
+    # matches the "MAIN — TOTAL CONTRACT PRICE" line on the costing PDF
+    # (A.1 + A.3* + A.2 Services), in the sheet's own output currency.
+    priced_sheets = [s for s in costing_sheets if s.contract_total and s.contract_total > 0]
     if priced_sheets:
-        latest_priced = max(priced_sheets, key=lambda s: s.grand_total)
+        latest_priced = max(priced_sheets, key=lambda s: s.contract_total)
         return {
             'source':   'costing',
-            'amount':   latest_priced.grand_total,
-            'note':     f'Live total from costing sheet "{latest_priced.title}" · {latest_priced.get_workflow_stage_display()}',
+            'amount':   latest_priced.contract_total,
+            'note':     f'Live contract total from costing sheet "{latest_priced.title}" · {latest_priced.get_workflow_stage_display()}',
             'sheet':    latest_priced,
-            'currency': 'SAR',
+            'currency': latest_priced.contract_total_currency,
         }
 
     if project.actual_sales and project.actual_sales > 0:

@@ -270,6 +270,58 @@ class CostingSheet(models.Model):
     def grand_total(self):
         return self._compute_totals()['grand_total']
 
+    # Exchange-rate cache hook so list views can pre-load rates once and
+    # avoid an N+1 query when iterating contract_total over many sheets.
+    def set_rates_cache(self, rates_dict):
+        self._rates_cache = rates_dict
+
+    def _conv_to_output_currency(self):
+        """Return the SAR → output_currency multiplier for this sheet."""
+        rates = getattr(self, '_rates_cache', None)
+        if rates is None:
+            rates = {r.currency_code: r.rate_to_usd
+                     for r in ExchangeRate.objects.all()}
+            self._rates_cache = rates
+        target = (self.output_currency or 'SAR').upper()
+        if target == 'SAR':
+            return Decimal('1')
+        sar_rate = rates.get('SAR')
+        tgt_rate = rates.get(target)
+        if not sar_rate or not tgt_rate:
+            return Decimal('1')
+        return tgt_rate / sar_rate
+
+    @property
+    def sow_total(self):
+        """Sum of Scope-of-Work / Services items, in this sheet's output
+        currency. Falls back to the legacy flat scope_of_work_total field
+        when no per-row items exist.
+        """
+        items = list(self.scope_of_work_items.all())
+        if items:
+            return sum((i.total_price for i in items), Decimal('0'))
+        return self.scope_of_work_total or Decimal('0')
+
+    @property
+    def contract_total(self):
+        """Contract total in the sheet's output currency.
+
+        Mirrors the "MAIN — TOTAL CONTRACT PRICE" line on the costing
+        PDF: A.1 (grand_total) converted to the output currency, plus
+        A.2 (sow_total) which is already in the output currency.
+
+        Display-only — the underlying grand_total / SOW values are not
+        rewritten. Pre-load exchange rates with set_rates_cache() when
+        accessed across many sheets.
+        """
+        conv = self._conv_to_output_currency()
+        grand_in_oc = (self.grand_total * conv).quantize(Decimal('0.01'))
+        return (grand_in_oc + Decimal(str(self.sow_total))).quantize(Decimal('0.01'))
+
+    @property
+    def contract_total_currency(self):
+        return (self.output_currency or 'SAR').upper()
+
     @property
     def total_cost(self):
         return self._compute_totals()['total_cost']
