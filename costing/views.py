@@ -189,9 +189,9 @@ def _user_can_edit_sheet(user, sheet):
         super admin only at that point.
 
     Edit rules outside the finance window: super_admin can edit anything,
-    admin can edit within region, creator can edit their own. Manager-only
-    access is read-only. Proposal team can edit non-pricing fields on every
-    sheet (pricing is gated elsewhere).
+    admin/manager can edit within region, creator can edit their own.
+    Proposal team can edit non-pricing fields on every sheet (pricing is
+    gated elsewhere).
     """
     if not user.is_authenticated:
         return False
@@ -221,6 +221,8 @@ def _user_can_edit_sheet(user, sheet):
     ):
         return True
     if user.is_admin_user and sheet.project and sheet.project.region_id == user.region_id:
+        return True
+    if user.is_manager_user and sheet.project and sheet.project.region_id == user.region_id:
         return True
     if getattr(user, 'is_proposal_team_user', False):
         return True
@@ -554,13 +556,7 @@ class CostingUpdateView(CostingPermissionMixin, UpdateView):
     template_name = 'costing/costing_form.html'
 
     def test_func(self):
-        sheet = self.get_object()
-        user = self.request.user
-        if user.is_super_admin_user:
-            return True
-        if user.is_admin_user and sheet.project and sheet.project.region == user.region:
-            return True
-        return sheet.created_by == user
+        return _user_can_edit_sheet(self.request.user, self.get_object())
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
@@ -3413,6 +3409,9 @@ def costing_import_excel(request, pk):
 
         # Map column indices - matches the Item No / Description / Make /
         # Model / Qty / Unit / Vendor template used by costing_import_new.
+        # unit_price / total_price are optional — when present the value
+        # lands in base_unit_cost (raw supplier cost). Spares users from
+        # typing 400 prices by hand for an existing sheet.
         col_map = {
             'item_no': headers.get('item no', headers.get('item #', headers.get('rfp item #', headers.get('rfp item', headers.get('#', -1))))),
             'description': headers.get('description', headers.get('desc', -1)),
@@ -3421,6 +3420,8 @@ def costing_import_excel(request, pk):
             'qty': headers.get('qty', headers.get('quantity', -1)),
             'unit': headers.get('unit', headers.get('uom', -1)),
             'vendor': headers.get('vendor', headers.get('vendor name', -1)),
+            'unit_price': headers.get('unit price', headers.get('unit cost', headers.get('price', headers.get('cost', headers.get('rate', headers.get('unit rate', -1)))))),
+            'total_price': headers.get('total price', headers.get('total cost', headers.get('total', headers.get('amount', headers.get('extended price', -1))))),
         }
 
         # All DB writes happen inside a single atomic block.
@@ -3490,6 +3491,8 @@ def costing_import_excel(request, pk):
                     qty_val = cell_raw(row, 'qty')
                     unit = cell(row, 'unit') or 'EA'
                     vendor = cell(row, 'vendor')
+                    unit_price_raw = cell_raw(row, 'unit_price')
+                    total_price_raw = cell_raw(row, 'total_price')
 
                     # Skip empty rows or sheet-level headings.
                     if not item_no and not description:
@@ -3502,6 +3505,24 @@ def costing_import_excel(request, pk):
                         qty = Decimal(str(qty_val)) if qty_val else Decimal('1')
                     except (InvalidOperation, ValueError):
                         qty = Decimal('1')
+
+                    # Parse price (unit preferred; fall back to total/qty).
+                    # Strip thousands separators carried over from Excel.
+                    def _parse_money(raw):
+                        if raw is None or raw == '':
+                            return None
+                        try:
+                            return Decimal(str(raw).replace(',', '').strip())
+                        except (InvalidOperation, ValueError):
+                            return None
+                    unit_cost = Decimal('0')
+                    up = _parse_money(unit_price_raw)
+                    if up is not None:
+                        unit_cost = up
+                    else:
+                        tp = _parse_money(total_price_raw)
+                        if tp is not None and qty > 0:
+                            unit_cost = (tp / qty).quantize(Decimal('0.0001'))
 
                     # Detect if this is a section header.
                     # Section headers: whole numbers (1, 2, 3) or roman numerals,
@@ -3575,6 +3596,7 @@ def costing_import_excel(request, pk):
                             quantity=qty,
                             unit=unit[:20] if unit else 'EA',
                             vendor_name=vendor[:255] if vendor else '',
+                            base_unit_cost=unit_cost,
                             order=item_order
                         )
                         items_created += 1
@@ -3654,7 +3676,11 @@ def costing_import_new(request):
             messages.error(request, 'Could not find header row in Excel file. Looking for columns: Item No, Description, Vendor, Make, Model, Qty, Unit')
             return redirect('costing:import_new')
 
-        # Map column indices
+        # Map column indices. Unit price / total price are optional —
+        # only consumed when the BOQ already has prices (saves manual
+        # entry for hundreds of line items). Currency is intentionally
+        # NOT read from the file; line items take supplier_currency from
+        # the sheet default, which the user can flip on the detail page.
         col_map = {
             'item_no': headers.get('item no', headers.get('item #', headers.get('rfp item #', headers.get('rfp item', headers.get('#', -1))))),
             'description': headers.get('description', headers.get('desc', -1)),
@@ -3663,6 +3689,8 @@ def costing_import_new(request):
             'qty': headers.get('qty', headers.get('quantity', -1)),
             'unit': headers.get('unit', headers.get('uom', -1)),
             'vendor': headers.get('vendor', headers.get('vendor name', -1)),
+            'unit_price': headers.get('unit price', headers.get('unit cost', headers.get('price', headers.get('cost', headers.get('rate', headers.get('unit rate', -1)))))),
+            'total_price': headers.get('total price', headers.get('total cost', headers.get('total', headers.get('amount', headers.get('extended price', -1))))),
         }
 
         # All DB writes (including the new sheet itself) happen inside
@@ -3694,6 +3722,8 @@ def costing_import_new(request):
                     qty_val = row[col_map['qty']] if col_map['qty'] >= 0 and col_map['qty'] < len(row) else None
                     unit = str(row[col_map['unit']] or '').strip() if col_map['unit'] >= 0 and col_map['unit'] < len(row) else 'EA'
                     vendor = str(row[col_map['vendor']] or '').strip() if col_map['vendor'] >= 0 and col_map['vendor'] < len(row) else ''
+                    unit_price_raw = row[col_map['unit_price']] if col_map['unit_price'] >= 0 and col_map['unit_price'] < len(row) else None
+                    total_price_raw = row[col_map['total_price']] if col_map['total_price'] >= 0 and col_map['total_price'] < len(row) else None
 
                     # Skip empty rows or sheet-level headings
                     if not item_no and not description:
@@ -3706,6 +3736,24 @@ def costing_import_new(request):
                         qty = Decimal(str(qty_val)) if qty_val else Decimal('1')
                     except (InvalidOperation, ValueError):
                         qty = Decimal('1')
+
+                    # Parse price. Prefer unit price; fall back to total/qty.
+                    # Strip thousands separators that Excel sometimes carries through.
+                    def _parse_money(raw):
+                        if raw is None or raw == '':
+                            return None
+                        try:
+                            return Decimal(str(raw).replace(',', '').strip())
+                        except (InvalidOperation, ValueError):
+                            return None
+                    unit_cost = Decimal('0')
+                    up = _parse_money(unit_price_raw)
+                    if up is not None:
+                        unit_cost = up
+                    else:
+                        tp = _parse_money(total_price_raw)
+                        if tp is not None and qty > 0:
+                            unit_cost = (tp / qty).quantize(Decimal('0.0001'))
 
                     # Detect if this is a section header
                     is_section = False
@@ -3744,6 +3792,7 @@ def costing_import_new(request):
                             quantity=qty,
                             unit=unit[:20] if unit else 'EA',
                             vendor_name=vendor[:255] if vendor else '',
+                            base_unit_cost=unit_cost,
                             order=item_order
                         )
                         items_created += 1
