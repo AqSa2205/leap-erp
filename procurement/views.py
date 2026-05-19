@@ -112,10 +112,15 @@ def _safe_filename(name, prefix='', suffix='', extension=''):
     return f'{base}{extension}'
 
 
-def _make_numbered_canvas():
+def _make_numbered_canvas(draft=False):
     """Return a two-pass Canvas subclass that draws "Page X of Y" at the
     bottom of every page. Used by procurement PDF exports for consistent
-    pagination across PO / DN / Inventory / Summary outputs."""
+    pagination across PO / DN / Inventory / Summary outputs.
+
+    When ``draft=True`` a large diagonal "DRAFT" watermark is layered on
+    every page so an unapproved export cannot be mistaken for a final,
+    signed document.
+    """
     from reportlab.lib import colors
     from reportlab.lib.units import mm
     from reportlab.pdfgen.canvas import Canvas
@@ -134,7 +139,19 @@ def _make_numbered_canvas():
             for state in self._saved_pages:
                 self.__dict__.update(state)
                 try:
-                    page_w, _ = self._pagesize
+                    page_w, page_h = self._pagesize
+                    if draft:
+                        self.saveState()
+                        self.setFillColor(colors.HexColor('#C41E3A'))
+                        try:
+                            self.setFillAlpha(0.10)
+                        except Exception:
+                            pass
+                        self.setFont('Helvetica-Bold', 120)
+                        self.translate(page_w / 2, page_h / 2)
+                        self.rotate(45)
+                        self.drawCentredString(0, 0, 'DRAFT')
+                        self.restoreState()
                     self.setFont('Helvetica', 8)
                     self.setFillColor(colors.HexColor('#6c757d'))
                     self.drawCentredString(
@@ -935,13 +952,10 @@ def po_export_pdf(request, pk):
     from django.contrib.staticfiles.finders import find as find_static
 
     po = get_object_or_404(_visible_pos_for(request.user), pk=pk)
-    if not po.is_released:
-        cur = po.current_stage['label'] if po.current_stage else 'approval'
-        messages.error(request, f'PO not released yet — pending {cur}. PDF export is locked until all required approvals are signed.')
-        return redirect('procurement:po_detail', pk=pk)
     items = po.items.all()
+    is_draft = not po.is_released
 
-    NumberedCanvas = _make_numbered_canvas()
+    NumberedCanvas = _make_numbered_canvas(draft=is_draft)
 
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
@@ -959,15 +973,23 @@ def po_export_pdf(request, pk):
     right_bold = ParagraphStyle('RightBold', parent=styles['Normal'], fontSize=8, alignment=TA_RIGHT, fontName='Helvetica-Bold')
 
     # ── Logo + Title ──
+    if is_draft:
+        pending = po.current_stage['label'] if po.current_stage else 'approval'
+        title_html = (
+            'PURCHASE ORDER '
+            f'<font size="9" color="#C41E3A">— DRAFT (awaiting {pending})</font>'
+        )
+    else:
+        title_html = 'PURCHASE ORDER'
     logo_path = find_static('images/leap_logo.jpg')
     if logo_path:
         from reportlab.platypus import Image
         logo = Image(logo_path, width=50*mm, height=15*mm)
-        title_table = Table([[logo, Paragraph('PURCHASE ORDER', title_style)]], colWidths=[55*mm, 120*mm])
+        title_table = Table([[logo, Paragraph(title_html, title_style)]], colWidths=[55*mm, 120*mm])
         title_table.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
         elements.append(title_table)
     else:
-        elements.append(Paragraph('PURCHASE ORDER', title_style))
+        elements.append(Paragraph(title_html, title_style))
     elements.append(Spacer(1, 4*mm))
 
     # ── Header Info ──
@@ -1109,9 +1131,9 @@ def po_export_pdf(request, pk):
 
     # ── Approvals — rendered progressively as each stage is signed.
     # Order: SCM → PM → COO → CEO. CEO is omitted entirely for POs under
-    # 1M SAR. Export is gated by po.is_released above, so by the time we
-    # reach this code every required stage is already signed and the
-    # PDF will always have a complete signature block.
+    # 1M SAR. po.approved_stages excludes unsigned stages, so a draft
+    # export renders only the signatures collected so far (or no signature
+    # block at all when the PO has not been signed yet).
     from xml.sax.saxutils import escape as _xml_escape
 
     elements.append(Spacer(1, 8*mm))
@@ -1227,7 +1249,8 @@ def po_export_pdf(request, pk):
     buf.seek(0)
 
     response = HttpResponse(buf.read(), content_type='application/pdf')
-    filename = _safe_filename(po.po_number, prefix='PO', extension='pdf')
+    prefix = 'PO_DRAFT' if is_draft else 'PO'
+    filename = _safe_filename(po.po_number, prefix=prefix, extension='pdf')
     response['Content-Disposition'] = f'inline; filename="{filename}"'
     return response
 
