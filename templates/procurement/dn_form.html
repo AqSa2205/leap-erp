@@ -66,7 +66,7 @@
                                         <th width="80">Qty</th>
                                         <th width="70">UOM</th>
                                         <th>Remarks</th>
-                                        <th width="40">Del</th>
+                                        <th width="50">Del</th>
                                     </tr>
                                 </thead>
                                 <tbody id="item-rows">
@@ -79,12 +79,40 @@
                                         <td>{{ f.uom }}</td>
                                         <td>{{ f.remarks }}</td>
                                         <td class="text-center">
-                                            {% if f.instance.pk %}{{ f.DELETE }}{% else %}<button type="button" class="btn btn-sm btn-outline-danger remove-row"><i class="bi bi-x"></i></button>{% endif %}
+                                            {# DELETE checkbox always rendered (hidden) so the formset always sees a value. #}
+                                            <span class="d-none">{{ f.DELETE }}</span>
+                                            <button type="button"
+                                                    class="btn btn-sm btn-outline-danger {% if f.instance.pk %}delete-saved-row{% else %}remove-row{% endif %}"
+                                                    title="{% if f.instance.pk %}Mark for delete{% else %}Remove{% endif %}">
+                                                <i class="bi bi-trash"></i>
+                                            </button>
                                         </td>
                                     </tr>
                                     {% endfor %}
                                 </tbody>
                             </table>
+
+                            {# Hidden template row used by Add Item — clones use index __prefix__ #}
+                            <template id="item-row-template">
+                                <tr class="item-row">
+                                    <td>
+                                        {{ item_formset.empty_form.serial_number }}
+                                        {{ item_formset.empty_form.order.as_hidden }}
+                                        {{ item_formset.empty_form.id }}
+                                    </td>
+                                    <td>{{ item_formset.empty_form.make_part_number }}</td>
+                                    <td>{{ item_formset.empty_form.description }}</td>
+                                    <td>{{ item_formset.empty_form.quantity }}</td>
+                                    <td>{{ item_formset.empty_form.uom }}</td>
+                                    <td>{{ item_formset.empty_form.remarks }}</td>
+                                    <td class="text-center">
+                                        <span class="d-none">{{ item_formset.empty_form.DELETE }}</span>
+                                        <button type="button" class="btn btn-sm btn-outline-danger remove-row" title="Remove">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            </template>
                         </div>
                     </div>
                 </div>
@@ -102,29 +130,73 @@ document.addEventListener('DOMContentLoaded', function() {
     const tbody = document.getElementById('item-rows');
     const addBtn = document.getElementById('add-item');
     const totalForms = document.getElementById('id_items-TOTAL_FORMS');
+    const tmpl = document.getElementById('item-row-template');
+
     addBtn.addEventListener('click', function() {
-        const idx = parseInt(totalForms.value);
-        const first = tbody.querySelector('.item-row');
-        if (!first) return;
-        const row = first.cloneNode(true);
-        row.querySelectorAll('input, textarea, select').forEach(el => {
-            if (el.name) {
-                el.name = el.name.replace(/items-\d+/, 'items-' + idx);
-                el.id = el.id.replace(/items-\d+/, 'items-' + idx);
-                if (el.type === 'checkbox') el.checked = false;
-                else if (el.tagName === 'SELECT') el.selectedIndex = 0;
-                else el.value = '';
-            }
-        });
-        const sn = row.querySelector('[name$="-serial_number"]');
-        if (sn) sn.value = idx + 1;
-        const ord = row.querySelector('[name$="-order"]');
-        if (ord) ord.value = idx;
-        row.querySelector('td:last-child').innerHTML = '<button type="button" class="btn btn-sm btn-outline-danger remove-row"><i class="bi bi-x"></i></button>';
-        tbody.appendChild(row);
-        totalForms.value = idx + 1;
+        const formIdx = parseInt(totalForms.value, 10);
+        // Always clone from the empty-form template so we never inherit
+        // values from an existing row.
+        const html = tmpl.innerHTML.replace(/__prefix__/g, formIdx);
+        const tempTbody = document.createElement('tbody');
+        tempTbody.innerHTML = html.trim();
+        const newRow = tempTbody.querySelector('tr');
+
+        const snInput = newRow.querySelector('[name$="-serial_number"]');
+        if (snInput) snInput.value = formIdx + 1;
+        const orderInput = newRow.querySelector('[name$="-order"]');
+        if (orderInput) orderInput.value = formIdx;
+
+        tbody.appendChild(newRow);
+        totalForms.value = formIdx + 1;
     });
-    tbody.addEventListener('click', e => { const b = e.target.closest('.remove-row'); if (b) b.closest('tr').remove(); });
+
+    // Click handler for both flavours of delete:
+    //   .remove-row       → unsaved row, just nuke it from the DOM
+    //   .delete-saved-row → saved row, tick the hidden DELETE checkbox so
+    //                       the formset removes it on save; visually mark
+    //                       the row as deleted with an Undo affordance.
+    tbody.addEventListener('click', function(e) {
+        const removeBtn = e.target.closest('.remove-row');
+        if (removeBtn) {
+            removeBtn.closest('tr').remove();
+            // Keep TOTAL_FORMS in sync so Django doesn't complain about an
+            // unexpected count when the user saves.
+            totalForms.value = parseInt(totalForms.value, 10) - 1;
+            return;
+        }
+
+        // CRITICAL: do NOT use innerHTML on the cell — that destroys the
+        // DELETE checkbox sibling and the row never actually gets deleted.
+        const delBtn = e.target.closest('.delete-saved-row');
+        if (delBtn) {
+            const row = delBtn.closest('tr');
+            const checkbox = row.querySelector('input[type="checkbox"][name$="-DELETE"]');
+            if (!checkbox) return;
+            checkbox.checked = true;
+            row.classList.add('row-marked-deleted');
+            row.style.opacity = '0.45';
+            row.style.textDecoration = 'line-through';
+            delBtn.classList.remove('btn-outline-danger', 'delete-saved-row');
+            delBtn.classList.add('btn-outline-secondary', 'undo-delete-row');
+            delBtn.title = 'Undo delete';
+            delBtn.innerHTML = '<i class="bi bi-arrow-counterclockwise"></i>';
+            return;
+        }
+
+        const undoBtn = e.target.closest('.undo-delete-row');
+        if (undoBtn) {
+            const row = undoBtn.closest('tr');
+            const checkbox = row.querySelector('input[type="checkbox"][name$="-DELETE"]');
+            if (checkbox) checkbox.checked = false;
+            row.classList.remove('row-marked-deleted');
+            row.style.opacity = '';
+            row.style.textDecoration = '';
+            undoBtn.classList.remove('btn-outline-secondary', 'undo-delete-row');
+            undoBtn.classList.add('btn-outline-danger', 'delete-saved-row');
+            undoBtn.title = 'Mark for delete';
+            undoBtn.innerHTML = '<i class="bi bi-trash"></i>';
+        }
+    });
 });
 </script>
 {% endblock %}

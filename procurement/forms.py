@@ -195,12 +195,22 @@ class DeliveryNoteItemForm(forms.ModelForm):
             else:
                 field.widget.attrs['class'] = 'form-control form-control-sm'
 
+    def has_changed(self):
+        # An unsaved row without a description is treated as untouched so a
+        # blank extra row never blocks validation (and never blocks DELETE
+        # flags on saved rows from being applied).
+        if not self.instance.pk:
+            description = (self.data.get(self.add_prefix('description')) or '').strip()
+            if not description:
+                return False
+        return super().has_changed()
+
 
 DNItemFormSet = inlineformset_factory(
     DeliveryNote,
     DeliveryNoteItem,
     form=DeliveryNoteItemForm,
-    extra=1,
+    extra=0,
     can_delete=True,
 )
 
