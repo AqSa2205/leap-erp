@@ -34,17 +34,10 @@ class CostingSheetForm(forms.ModelForm):
         self.fields['project'].required = False
         self.fields['project'].queryset = Project.objects.select_related('region').all()
 
-        if self.user:
-            if self.user.is_super_admin_user:
-                pass
-            elif self.user.is_admin_user or self.user.is_manager_user:
-                self.fields['project'].queryset = Project.objects.filter(
-                    region=self.user.region
-                )
-            else:
-                self.fields['project'].queryset = Project.objects.filter(
-                    owner=self.user
-                )
+        if self.user and not self.user.is_super_admin_user:
+            self.fields['project'].queryset = Project.objects.filter(
+                region=self.user.region
+            ).select_related('region')
 
 
 class CostingSectionForm(forms.ModelForm):
