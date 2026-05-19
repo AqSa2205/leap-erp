@@ -54,23 +54,17 @@ class PurchaseOrderForm(forms.ModelForm):
         self.fields['project'].required = False
         self.fields['project'].queryset = Project.objects.select_related('region').all()
 
-        if self.user:
-            if self.user.is_super_admin_user:
-                pass
-            elif getattr(self.user, 'is_procurement_user', False):
+        if self.user and not self.user.is_super_admin_user:
+            if getattr(self.user, 'is_procurement_user', False):
                 # Procurement only ever issues POs against Won projects.
                 self.fields['project'].queryset = Project.objects.filter(
                     region=self.user.region,
                     status__category='won',
-                )
-            elif self.user.is_admin_user or self.user.is_manager_user:
-                self.fields['project'].queryset = Project.objects.filter(
-                    region=self.user.region
-                )
+                ).select_related('region')
             else:
                 self.fields['project'].queryset = Project.objects.filter(
-                    owner=self.user
-                )
+                    region=self.user.region
+                ).select_related('region')
 
 
 class PurchaseOrderItemForm(forms.ModelForm):
@@ -178,13 +172,10 @@ class DeliveryNoteForm(forms.ModelForm):
         self.fields['project'].queryset = Project.objects.select_related('region').all()
         self.fields['purchase_order'].queryset = PurchaseOrder.objects.all()
 
-        if self.user:
-            if self.user.is_super_admin_user:
-                pass
-            elif self.user.is_admin_user or self.user.is_manager_user:
-                self.fields['project'].queryset = Project.objects.filter(region=self.user.region)
-            else:
-                self.fields['project'].queryset = Project.objects.filter(owner=self.user)
+        if self.user and not self.user.is_super_admin_user:
+            self.fields['project'].queryset = Project.objects.filter(
+                region=self.user.region
+            ).select_related('region')
 
 
 class DeliveryNoteItemForm(forms.ModelForm):
@@ -231,13 +222,10 @@ class InventoryReportForm(forms.ModelForm):
                 field.widget.attrs['class'] = 'form-control'
         self.fields['project'].required = False
         self.fields['project'].queryset = Project.objects.select_related('region').all()
-        if self.user:
-            if self.user.is_super_admin_user:
-                pass
-            elif self.user.is_admin_user or self.user.is_manager_user:
-                self.fields['project'].queryset = Project.objects.filter(region=self.user.region)
-            else:
-                self.fields['project'].queryset = Project.objects.filter(owner=self.user)
+        if self.user and not self.user.is_super_admin_user:
+            self.fields['project'].queryset = Project.objects.filter(
+                region=self.user.region
+            ).select_related('region')
 
 
 class InventoryItemForm(forms.ModelForm):
@@ -294,13 +282,10 @@ class FRCReportForm(forms.ModelForm):
                 field.widget.attrs['class'] = 'form-control'
         self.fields['project'].required = False
         self.fields['project'].queryset = Project.objects.select_related('region').all()
-        if self.user:
-            if self.user.is_super_admin_user:
-                pass
-            elif self.user.is_admin_user or self.user.is_manager_user:
-                self.fields['project'].queryset = Project.objects.filter(region=self.user.region)
-            else:
-                self.fields['project'].queryset = Project.objects.filter(owner=self.user)
+        if self.user and not self.user.is_super_admin_user:
+            self.fields['project'].queryset = Project.objects.filter(
+                region=self.user.region
+            ).select_related('region')
 
 
 class FRCEntryForm(forms.ModelForm):
