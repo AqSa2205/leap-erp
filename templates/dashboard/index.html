@@ -367,6 +367,71 @@
     [data-theme="dark"] .tab-pane {
         color: #e0e0e0;
     }
+
+    /* ─── Phone-only layout fixes (≤576px) ─── */
+    @media (max-width: 576px) {
+        /* Summary strip: 5 cells wrap into a 2-col grid instead of squeezing into one row */
+        .summary-strip .row.g-0 { display: grid; grid-template-columns: 1fr 1fr; }
+        .summary-strip .col.summary-item {
+            flex: unset;
+            max-width: unset;
+            padding: 0.9rem 0.5rem;
+            border-right: 1px solid #f0f0f0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .summary-strip .col.summary-item:nth-child(2n) { border-right: none; }
+        .summary-strip .col.summary-item:nth-last-child(-n+2) { border-bottom: none; }
+        .summary-strip .col.summary-item:last-child:nth-child(odd) {
+            grid-column: 1 / -1;
+            border-right: none;
+        }
+        .summary-item h2 { font-size: 1.4rem; }
+        .summary-item small { font-size: 0.6rem; letter-spacing: 0.6px; }
+
+        /* Region tabs: scroll horizontally instead of wrapping into 4 ugly rows */
+        .nav-tabs {
+            flex-wrap: nowrap;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            padding: 0.4rem 0.4rem 0;
+        }
+        .nav-tabs::-webkit-scrollbar { display: none; }
+        .nav-tabs .nav-item { flex: 0 0 auto; }
+        .nav-tabs .nav-link {
+            white-space: nowrap;
+            padding: 0.55rem 0.9rem;
+            font-size: 0.85rem;
+        }
+        .nav-tabs .nav-link i { margin-right: 0.35rem !important; }
+        .currency-tag { font-size: 0.55rem; padding: 0.15rem 0.35rem; }
+
+        /* Tab content: cut wasted side padding */
+        .tab-pane { padding: 1rem 0.75rem; }
+
+        /* Region header: drop the giant value to fit on one line */
+        .region-header {
+            padding: 1rem 1rem;
+            margin-bottom: 1rem;
+        }
+        .region-header .row.align-items-center { flex-direction: column; align-items: flex-start !important; }
+        .region-header .col-auto.text-end { text-align: left !important; width: 100%; margin-top: 0.5rem; }
+        .region-header .region-value { font-size: 1.6rem; }
+        .region-header h4 { font-size: 1.1rem; }
+
+        /* Stat cards: keep 2-up grid (already col-6) but trim font */
+        .stat-card .stat-number { font-size: 1.5rem; }
+        .stat-card .stat-label { font-size: 0.65rem; }
+        .stat-card .stat-value { font-size: 0.75rem; padding: 0.25rem 0.55rem; }
+        .stat-card .card-body { padding: 1rem 0.6rem; }
+
+        /* Hero stat banner */
+        .hero-stat { padding: 1.25rem; }
+        .hero-stat .display-value { font-size: 1.8rem; }
+        .hero-stat .stat-icon { font-size: 3rem; right: 0.75rem; }
+
+        /* Chart container: shorter, so two charts don't take the whole screen */
+        .chart-container { height: 240px; padding: 0.5rem; }
+    }
 </style>
 {% endblock %}
 
