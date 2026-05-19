@@ -328,6 +328,56 @@
             }
         }
 
+        /* ─── Phone-only layout fixes (≤576px) — does not affect tablet/desktop ─── */
+        @media (max-width: 576px) {
+            /* Tighter content padding so cards aren't squeezed */
+            .main-content > .container-fluid.p-4 {
+                padding: 0.75rem 0.6rem !important;
+            }
+
+            /* Top bar: wrap into two rows, drop clock and welcome */
+            .top-navbar {
+                padding: 0.55rem 0.75rem;
+                flex-wrap: wrap;
+                gap: 0.5rem;
+            }
+            .top-navbar .clock-widget { display: none !important; }
+            .top-navbar .navbar-greet-line { display: none; }
+            .top-navbar h5 { font-size: 0.95rem; margin-top: 0 !important; }
+            .top-navbar .gsearch-trigger { padding: 0.35rem 0.55rem; }
+
+            /* List-page headers: title row + action buttons should stack cleanly */
+            .container-fluid > .d-flex.justify-content-between.align-items-center,
+            .card-body > .d-flex.justify-content-between,
+            .card-header.d-flex.justify-content-between {
+                flex-wrap: wrap;
+                gap: 0.5rem;
+            }
+            /* Allow nested button groups inside flex headers to wrap too */
+            .card-header.d-flex .d-flex.gap-2 { flex-wrap: wrap; gap: 0.4rem !important; }
+
+            /* Headings */
+            h1.h3, h1 { font-size: 1.4rem !important; }
+            .card-header h5, .card-header h6 { font-size: 0.95rem; }
+
+            /* Cards: trim inner padding */
+            .card-body { padding: 1rem; }
+
+            /* Tables in horizontal-scroll wrappers — momentum scrolling on iOS */
+            .table-responsive { -webkit-overflow-scrolling: touch; }
+            .table { font-size: 0.85rem; }
+            .table th, .table td { padding: 0.55rem 0.6rem !important; white-space: nowrap; }
+
+            /* Breadcrumb wraps already; trim its padding */
+            nav.crumb-trail { padding: 0.4rem 0.6rem; font-size: 0.75rem; }
+
+            /* Action buttons in headers — keep readable, allow wrap */
+            .container-fluid > .d-flex .btn { font-size: 0.85rem; padding: 0.35rem 0.6rem; }
+
+            /* Filter / category chip rows already use flex-wrap; reduce gap */
+            .d-flex.flex-wrap.gap-2 { gap: 0.4rem !important; }
+        }
+
         /* Notification bell */
         .notif-wrapper {
             position: relative;
@@ -1037,7 +1087,7 @@
                     <i class="bi bi-list fs-4"></i>
                 </button>
                 <div>
-                    <span class="welcome-greeting" id="navbarGreeting">Hello</span>, <strong>{{ user.first_name|default:user.username }}</strong>!
+                    <span class="navbar-greet-line"><span class="welcome-greeting" id="navbarGreeting">Hello</span>, <strong>{{ user.first_name|default:user.username }}</strong>!</span>
                     <h5 class="mb-0 text-dark mt-1">{% block page_title %}{% endblock %}</h5>
                 </div>
             </div>
