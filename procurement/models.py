@@ -466,6 +466,17 @@ class DeliveryNoteItem(models.Model):
     quantity = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('1'), verbose_name="Quantity")
     uom = models.CharField(max_length=50, default='Each', verbose_name="UOM")
     remarks = models.TextField(blank=True, verbose_name="Remarks / LNA PO# ref")
+
+    source_po_item = models.ForeignKey(
+        PurchaseOrderItem,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='delivered_dn_items',
+        help_text='If imported from a Purchase Order, points back to the '
+                  'source PO line item — used to mark PO items "already '
+                  'delivered" so remaining items can be picked for later DNs.',
+    )
+
     order = models.PositiveIntegerField(default=0)
 
     class Meta:

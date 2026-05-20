@@ -2130,6 +2130,18 @@ class DNCreateView(DNPermissionMixin, CreateView):
         else:
             context['item_formset'] = DNItemFormSet(prefix='items')
         context['title'] = 'Create Delivery Note'
+        # POs offered in the "build from PO" picker — region-scoped, only
+        # POs that actually have line items.
+        pos = (
+            PurchaseOrder.objects
+            .select_related('project')
+            .annotate(item_count=Count('items'))
+            .filter(item_count__gt=0)
+        )
+        user = self.request.user
+        if not user.is_super_admin_user:
+            pos = pos.filter(Q(project__region=user.region) | Q(project__isnull=True))
+        context['available_pos'] = pos.order_by('-po_date', '-id')
         return context
 
     def form_valid(self, form):
@@ -2147,6 +2159,112 @@ class DNCreateView(DNPermissionMixin, CreateView):
 
     def get_success_url(self):
         return reverse('procurement:dn_detail', kwargs={'pk': self.object.pk})
+
+
+@login_required
+def dn_create_from_po(request, po_pk):
+    """Selection screen + DN seeder for building a Delivery Note from a PO.
+
+    GET  — lists every PO line item; items already on a DN are read-only
+           with back-links, the rest are pickable checkboxes.
+    POST — creates a draft DN prefilled from the PO header, copies the
+           picked items in as editable DN rows (source_po_item set so they
+           can't be re-picked for a later DN), then drops the user on the
+           DN edit screen.
+
+    Multi-DN from one PO works naturally: subsequent visits show only the
+    still-undelivered items as checkboxes.
+    """
+    po = get_object_or_404(
+        PurchaseOrder.objects.select_related('project', 'project__region'),
+        pk=po_pk,
+    )
+    user = request.user
+
+    # Region scope — non-super-admins only touch POs in their region.
+    if (
+        not user.is_super_admin_user
+        and po.project
+        and po.project.region_id != user.region_id
+    ):
+        messages.error(request, 'You can only create delivery notes for POs in your region.')
+        return redirect('procurement:po_detail', pk=po.pk)
+
+    po_items = list(po.items.prefetch_related('delivered_dn_items__delivery_note'))
+    if not po_items:
+        messages.error(request, 'This PO has no line items to deliver.')
+        return redirect('procurement:po_detail', pk=po.pk)
+
+    if request.method == 'POST':
+        item_ids = [int(x) for x in request.POST.getlist('item_ids') if x.isdigit()]
+        if not item_ids:
+            messages.error(request, 'Pick at least one item to add to the delivery note.')
+        else:
+            dn = DeliveryNote.objects.create(
+                sold_to_company=po.end_user or '',
+                delivery_address=po.delivery_location or '',
+                date=datetime.now().date(),
+                project_title=po.project_name or (po.project.project_name if po.project else ''),
+                leap_po_number=po.po_number,
+                project=po.project,
+                purchase_order=po,
+                created_by=user,
+            )
+            serial = 1
+            for pi in po.items.filter(pk__in=item_ids):
+                # Defensive: skip items claimed by another DN between the
+                # page render and this POST.
+                if pi.delivered_dn_items.exists():
+                    continue
+                DeliveryNoteItem.objects.create(
+                    delivery_note=dn,
+                    serial_number=serial,
+                    make_part_number=pi.make_model,
+                    description=pi.description,
+                    quantity=pi.quantity,
+                    uom=pi.uom or 'Each',
+                    remarks=pi.remarks,
+                    order=serial,
+                    source_po_item=pi,
+                )
+                serial += 1
+            copied = serial - 1
+            if copied == 0:
+                messages.warning(
+                    request,
+                    'Every item you picked is already on a delivery note — nothing to add.',
+                )
+                dn.delete()
+                return redirect('procurement:dn_create_from_po', po_pk=po.pk)
+            messages.success(
+                request,
+                f'Delivery Note seeded with {copied} item{"" if copied == 1 else "s"} from PO {po.po_number}. '
+                f'Fill in the Sold-To details, adjust quantities if partial, then save.',
+            )
+            return redirect('procurement:dn_update', pk=dn.pk)
+
+    rows = []
+    available_count = 0
+    delivered_count = 0
+    for pi in po_items:
+        delivered = list(pi.delivered_dn_items.all())
+        if delivered:
+            delivered_count += 1
+        else:
+            available_count += 1
+        rows.append({
+            'item': pi,
+            'delivered_in': delivered,
+            'is_available': not delivered,
+        })
+
+    return render(request, 'procurement/dn_select_po_items.html', {
+        'po': po,
+        'rows': rows,
+        'total_count': len(po_items),
+        'available_count': available_count,
+        'delivered_count': delivered_count,
+    })
 
 
 class DNDetailView(DNPermissionMixin, DetailView):
