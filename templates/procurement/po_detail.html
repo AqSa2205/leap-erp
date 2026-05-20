@@ -80,6 +80,7 @@
                             <button type="button" class="btn btn-outline-light disabled" disabled title="Locked — pending {{ po.current_stage.label }}"><i class="bi bi-lock me-1"></i>Excel</button>
                             <button type="button" class="btn btn-outline-light disabled" disabled title="Locked — pending {{ po.current_stage.label }}"><i class="bi bi-lock me-1"></i>PDF</button>
                             {% endif %}
+                            <a href="{% url 'procurement:dn_create_from_po' po.pk %}" class="btn btn-outline-light"><i class="bi bi-truck me-1"></i>Delivery Note</a>
                             <a href="{% url 'procurement:po_update' po.pk %}" class="btn btn-light text-danger"><i class="bi bi-pencil me-1"></i>Edit</a>
                             <a href="{% url 'procurement:po_delete' po.pk %}" class="btn btn-outline-light text-danger border-danger"><i class="bi bi-trash"></i></a>
                         </div>

@@ -32,6 +32,7 @@ urlpatterns = [
     # Delivery Notes
     path('dn/', views.DNListView.as_view(), name='dn_list'),
     path('dn/create/', views.DNCreateView.as_view(), name='dn_create'),
+    path('dn/from-po/<int:po_pk>/', views.dn_create_from_po, name='dn_create_from_po'),
     path('dn/import/', views.dn_import_excel, name='dn_import'),
     path('dn/<int:pk>/', views.DNDetailView.as_view(), name='dn_detail'),
     path('dn/<int:pk>/edit/', views.DNUpdateView.as_view(), name='dn_update'),

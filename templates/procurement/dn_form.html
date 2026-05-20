@@ -7,6 +7,27 @@
     <div class="row justify-content-center">
         <div class="col-lg-11">
             <h1 class="h3 mb-4">{{ title }}</h1>
+
+            {% if available_pos %}
+            <div class="card mb-4 border-danger-subtle">
+                <div class="card-body">
+                    <label class="form-label fw-bold mb-1"><i class="bi bi-lightning-charge"></i> Build from an existing Purchase Order</label>
+                    <p class="text-muted small mb-2">Pick a PO to pull its line items in — no re-typing. You choose which items go on this delivery note.</p>
+                    <div class="d-flex flex-wrap align-items-end gap-2">
+                        <div class="flex-grow-1">
+                            <select id="poPicker" class="form-select">
+                                <option value="">— Select a Purchase Order —</option>
+                                {% for po in available_pos %}
+                                <option value="{% url 'procurement:dn_create_from_po' po.pk %}">{{ po.po_number }} — {{ po.vendor_name|default:"(no vendor)" }}{% if po.project_name %} · {{ po.project_name }}{% endif %} ({{ po.item_count }} item{{ po.item_count|pluralize }})</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <button type="button" id="poPickerGo" class="btn btn-danger" disabled><i class="bi bi-box-arrow-in-down me-1"></i> Load PO Items</button>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
             <form method="post" novalidate>
                 {% csrf_token %}
                 {% if form.errors %}<div class="alert alert-danger"><strong>Please correct the errors below.</strong>{{ form.errors }}</div>{% endif %}
@@ -197,6 +218,19 @@ document.addEventListener('DOMContentLoaded', function() {
             undoBtn.innerHTML = '<i class="bi bi-trash"></i>';
         }
     });
+
+    // "Build from an existing PO" picker — navigate to the item-selection
+    // screen for the chosen PO.
+    const poPicker = document.getElementById('poPicker');
+    const poPickerGo = document.getElementById('poPickerGo');
+    if (poPicker && poPickerGo) {
+        poPicker.addEventListener('change', function() {
+            poPickerGo.disabled = !poPicker.value;
+        });
+        poPickerGo.addEventListener('click', function() {
+            if (poPicker.value) window.location.href = poPicker.value;
+        });
+    }
 });
 </script>
 {% endblock %}
