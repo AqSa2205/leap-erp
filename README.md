@@ -15,11 +15,6 @@ A comprehensive Enterprise Resource Planning (ERP) system built with Django for 
 - Multi-currency support with automatic exchange rate conversion
 - Configurable rates: Margin, Discount, Shipping, Customs, Finances, Installation
 - Sheet-level defaults with per-line-item overrides
-- Calculation formulas:
-  - Discount Amount = Base Cost × Discount %
-  - Unit Cost = Base Cost - Discount Amount
-  - Selling Price = Cost ÷ (1 - Margin %)
-  - Final Price = Selling Price + Addon Costs
 - Export to Excel and PDF (Professional Commercial Offer format)
 
 ### Sales Call Reports
