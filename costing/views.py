@@ -2453,6 +2453,11 @@ def costing_export_pdf(request, pk):
     # totals removed. Proposal team can grab this version; the priced one
     # stays sales/finance/procurement-only.
     unpriced = request.GET.get('unpriced') == '1'
+    # `?services_only=1` prints the page-1 summary table with the A.2 SERVICES
+    # block only — row A (contract total), A.1 (scope of supply) and A.3
+    # (optional items) are dropped. Everything else — terms, client remarks
+    # and the page-2+ detailed BOM — is unchanged.
+    services_only = request.GET.get('services_only') == '1'
     if not _user_can_view_sheet(request.user, sheet):
         messages.error(request, 'You do not have permission to export this costing sheet.')
         return redirect('costing:list')
@@ -2481,11 +2486,13 @@ def costing_export_pdf(request, pk):
     # return it to the user.
     import io as _io
     pdf_buffer = _io.BytesIO()
-    filename = _safe_filename(
-        sheet.title,
-        suffix=('BOM_Unpriced' if unpriced else 'Commercial_Offer'),
-        extension='pdf',
-    )
+    if unpriced:
+        _pdf_suffix = 'BOM_Unpriced'
+    elif services_only:
+        _pdf_suffix = 'Services'
+    else:
+        _pdf_suffix = 'Commercial_Offer'
+    filename = _safe_filename(sheet.title, suffix=_pdf_suffix, extension='pdf')
 
     import os
     from django.contrib.staticfiles.finders import find as find_static
@@ -2828,23 +2835,26 @@ def costing_export_pdf(request, pk):
     if sheet.include_optional_in_total and has_optional:
         contract_total_oc += optional_total_oc
 
-    # Row A: MAIN - TOTAL CONTRACT PRICE
-    contract_label_parts = 'A.1+A.2+A.3' if (has_optional and sheet.include_optional_in_total) else 'A.1+A.2'
-    contract_label = f'MAIN - TOTAL CONTRACT PRICE ({contract_label_parts})'
-    data.append([
-        Paragraph('<b>A</b>', cell_bold),
-        Paragraph(f'<b>{contract_label}</b>', cell_bold),
-        '', '',
-        Paragraph(f'<b>{fmt_num(contract_total_oc)}</b>', cell_right),
-    ])
+    # Row A (contract total) + Row A.1 (scope of supply) — dropped entirely
+    # when ?services_only=1, which prints the A.2 SERVICES block only.
+    if not services_only:
+        # Row A: MAIN - TOTAL CONTRACT PRICE
+        contract_label_parts = 'A.1+A.2+A.3' if (has_optional and sheet.include_optional_in_total) else 'A.1+A.2'
+        contract_label = f'MAIN - TOTAL CONTRACT PRICE ({contract_label_parts})'
+        data.append([
+            Paragraph('<b>A</b>', cell_bold),
+            Paragraph(f'<b>{contract_label}</b>', cell_bold),
+            '', '',
+            Paragraph(f'<b>{fmt_num(contract_total_oc)}</b>', cell_right),
+        ])
 
-    # Row A.1: SCOPE OF SUPPLY (pink bg) — always non-optional
-    data.append([
-        Paragraph('<b>A.1</b>', cell_bold),
-        Paragraph('<b>SCOPE OF SUPPLY</b>', cell_bold),
-        '', '',
-        Paragraph(f'<b>{fmt_num(non_optional_supply_oc)}</b>', cell_right),
-    ])
+        # Row A.1: SCOPE OF SUPPLY (pink bg) — always non-optional
+        data.append([
+            Paragraph('<b>A.1</b>', cell_bold),
+            Paragraph('<b>SCOPE OF SUPPLY</b>', cell_bold),
+            '', '',
+            Paragraph(f'<b>{fmt_num(non_optional_supply_oc)}</b>', cell_right),
+        ])
 
     # Consolidate sections with the same title so that duplicate
     # imports (e.g. two "DATA NETWORK SYSTEM" sections) are merged
@@ -2867,18 +2877,20 @@ def costing_export_pdf(request, pk):
                 'subtotal': section.subtotal,
             }
 
-    # Supply line items (one per consolidated group, renumbered)
-    for idx, (title_key, group) in enumerate(consolidated.items(), 1):
-        data.append([
-            Paragraph(str(idx), cell_center),
-            Paragraph(f' {group["title"]}', cell_style),
-            Paragraph('1', cell_center),
-            Paragraph('LOT', cell_center),
-            Paragraph(fmt_money(group['subtotal']), cell_right),
-        ])
+    # Supply line items (one per consolidated group, renumbered) + the blank
+    # separator row before A.2 — both omitted in services-only mode.
+    if not services_only:
+        for idx, (title_key, group) in enumerate(consolidated.items(), 1):
+            data.append([
+                Paragraph(str(idx), cell_center),
+                Paragraph(f' {group["title"]}', cell_style),
+                Paragraph('1', cell_center),
+                Paragraph('LOT', cell_center),
+                Paragraph(fmt_money(group['subtotal']), cell_right),
+            ])
 
-    # Blank separator row
-    data.append(['', '', '', '', ''])
+        # Blank separator row
+        data.append(['', '', '', '', ''])
 
     # Row A.2: SERVICES (pink bg) — sow_total is already in output_currency
     data.append([
@@ -2900,13 +2912,18 @@ def costing_export_pdf(request, pk):
 
     # Row indices for special styling
     num_consolidated = len(consolidated)
-    a1_row = 2
-    a2_row = 2 + num_consolidated + 1 + 1  # +1 blank +1 for A.2 itself
+    if services_only:
+        # Only the header row precedes A.2; A.1/A.3 are not rendered.
+        a1_row = None
+        a2_row = 1
+    else:
+        a1_row = 2
+        a2_row = 2 + num_consolidated + 1 + 1  # +1 blank +1 for A.2 itself
     a3_row = None  # set below if optional section exists
     PINK_BG = colors.HexColor('#F1DCDB')
 
     # ─── A.3 OPTIONAL ITEMS (only when there are optional sections) ───
-    if has_optional:
+    if has_optional and not services_only:
         # Blank separator + A.3 header
         data.append(['', '', '', '', ''])
         # Capture A.3 row index right before appending so indexing is bulletproof
@@ -2945,13 +2962,15 @@ def costing_export_pdf(request, pk):
         ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
         ('LEFTPADDING', (0, 0), (-1, -1), 4),
         ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-        # Row A (contract total) — orange/red thin line below header
+        # Orange/red thin line below header (above Row A, or above A.2 in
+        # services-only mode).
         ('LINEABOVE', (0, 1), (-1, 1), 2, colors.HexColor('#E26B0A')),
-        # A.1 SCOPE OF SUPPLY — pink bg
-        ('BACKGROUND', (0, a1_row), (-1, a1_row), PINK_BG),
-        # A.2 SCOPE OF WORK — pink bg
+        # A.2 SERVICES — pink bg
         ('BACKGROUND', (0, a2_row), (-1, a2_row), PINK_BG),
     ]
+    # A.1 SCOPE OF SUPPLY — pink bg (omitted in services-only mode)
+    if a1_row is not None:
+        style_cmds.append(('BACKGROUND', (0, a1_row), (-1, a1_row), PINK_BG))
     if a3_row is not None:
         style_cmds.append(('BACKGROUND', (0, a3_row), (-1, a3_row), PINK_BG))
 
