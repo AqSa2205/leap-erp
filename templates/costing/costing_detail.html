@@ -851,9 +851,17 @@
     <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
         <span>
             <i class="bi bi-activity me-2"></i> Recent Changes
-            <span class="badge bg-secondary ms-1">{{ change_log|length }}</span>
+            <span class="badge bg-secondary ms-1" title="Showing {{ change_log|length }} of {{ change_log_total }} total entries">{{ change_log|length }} / {{ change_log_total }}</span>
         </span>
         <div class="d-flex align-items-center gap-2">
+            <form method="get" class="d-flex align-items-center gap-1 m-0">
+                <label for="changeLogLimit" class="small text-muted m-0">Show</label>
+                <input type="number" id="changeLogLimit" name="change_log_limit"
+                       value="{{ change_log_limit }}" min="1" max="500" step="1"
+                       class="form-control form-control-sm" style="width: 85px;"
+                       title="How many recent entries to display (1–500)">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">Apply</button>
+            </form>
             <small class="text-muted d-none d-md-inline">Edits from both teams appear here with timestamps.</small>
             {% if user.is_super_admin_user or user.is_admin_user %}
             <form method="post" action="{% url 'costing:clear_changelog' sheet.pk %}" class="m-0"

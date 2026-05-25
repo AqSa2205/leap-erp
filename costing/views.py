@@ -541,8 +541,18 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
         # PDF revisions (saved snapshots from previous Export PDF clicks)
         context['pdf_revisions'] = sheet.pdf_revisions.select_related('created_by').all()
 
-        # Recent change log (for cross-team visibility)
-        context['change_log'] = sheet.change_log.select_related('actor').all()[:20]
+        # Recent change log (for cross-team visibility).
+        # The UI lets the user dial how many entries are shown via ?change_log_limit=N.
+        # Default 20, clamp 1..500 to avoid rendering thousands of rows.
+        try:
+            _cl_limit = int(self.request.GET.get('change_log_limit') or 20)
+        except (TypeError, ValueError):
+            _cl_limit = 20
+        _cl_limit = max(1, min(_cl_limit, 500))
+        _cl_qs = sheet.change_log.select_related('actor')
+        context['change_log_total'] = _cl_qs.count()
+        context['change_log_limit'] = _cl_limit
+        context['change_log'] = _cl_qs.all()[:_cl_limit]
 
         # Vendor quotes attached to this sheet
         context['vendor_quotes'] = sheet.vendor_quotes.select_related('uploaded_by').all()
