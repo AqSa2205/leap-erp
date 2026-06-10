@@ -245,3 +245,30 @@ class PasswordResetRequest(models.Model):
         from django.utils import timezone
         from datetime import timedelta
         return self.created_at < timezone.now() - timedelta(days=7)
+
+
+class RolePermission(models.Model):
+    """Per-role on/off grant for a capability codename (see accounts.permissions)."""
+    role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name='permissions')
+    codename = models.CharField(max_length=64)
+    allowed = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('role', 'codename')
+        indexes = [models.Index(fields=['role', 'codename'])]
+
+    def __str__(self):
+        return f"{self.role.name}:{self.codename}={'on' if self.allowed else 'off'}"
+
+
+class PermissionChangeLog(models.Model):
+    """Audit trail for grant toggles (security-sensitive)."""
+    actor = models.ForeignKey('User', on_delete=models.SET_NULL, null=True, related_name='+')
+    role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name='+')
+    codename = models.CharField(max_length=64)
+    allowed = models.BooleanField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
