@@ -84,8 +84,10 @@ def count_working_days(start, end, weekends, holidays) -> int   # inclusive rang
 
 **Year-entitlement generator** (a view action): for a chosen `year`, create/refresh
 `LeaveEntitlement` rows for all active employees from each active `LeaveType.default_annual_days`,
-EXCEPT **Annual**, where the Saudi rule applies per employee:
-`entitled = 30 if tenure(joining_date) >= 5 years else 21`. Existing rows are not
+EXCEPT **Annual**, which follows the **Leap Networks policy** per employee:
+**25 days in the employee's first year of service, 30 days from the second year onward.**
+Boundary: `years_of_service = year - joining_date.year`; `entitled = 25 if years_of_service <= 0
+else 30` (i.e. the calendar year they joined → 25; every year after → 30). Existing rows are not
 overwritten unless HR explicitly chooses "reset" (default: only create missing).
 
 ### Module B — Daily Attendance
@@ -169,7 +171,9 @@ Phase B depends on Phase A (it reads leave + holidays + weekend settings).
 ## Testing
 
 - `count_working_days` across weekends + holidays (incl. zero-working-day ranges).
-- Saudi annual rule: tenure `< 5y → 21`, `>= 5y → 30` from `joining_date`.
+- Leap Networks annual rule: joining calendar year → `25`, every year after → `30`
+  (from `joining_date`); verify the boundary at the year an employee crosses from first to
+  second year.
 - Leave balance: `entitled | taken | remaining` with multiple records; cross-year attribution.
 - Attendance status precedence: leave > holiday > weekend > present > absent, for the same date.
 - `hours_worked` computation; check_out<check_in rejected.
