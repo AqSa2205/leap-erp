@@ -354,6 +354,16 @@ class PipelineWiringTests(TestCase):
         resp = self.client.get(reverse('projects:list'))
         self.assertEqual(resp.status_code, 403)
 
+    def test_finance_is_view_only_cannot_edit_region_project(self):
+        # Finance can SEE the region project (above) but must not be able to
+        # edit it — the widened queryset grants view, not write.
+        owner = User.objects.create_user('owner2', password='x')
+        proj = Project.objects.create(
+            project_name='ZZPIPE2', region=self.region, status=self.status, owner=owner)
+        self.client.force_login(self.fin)
+        resp = self.client.get(reverse('projects:edit', kwargs={'pk': proj.pk}))
+        self.assertEqual(resp.status_code, 403)
+
 
 class ModuleAccessWiringTests(TestCase):
     def setUp(self):

@@ -464,7 +464,10 @@ class ProjectUpdateView(ProjectPermissionMixin, UpdateView):
     template_name = 'projects/project_form.html'
 
     def test_func(self):
-        return True  # All authenticated users can edit
+        # Finance gets a region-scoped *view* of the pipeline (via the mixin
+        # queryset), but not edit rights — exclude them so the widened queryset
+        # doesn't grant region-wide project editing. Everyone else unchanged.
+        return not getattr(self.request.user, 'is_finance_team_user', False)
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
@@ -1068,7 +1071,8 @@ class ProjectRevisionCreateView(ProjectPermissionMixin, View):
     """POST: create a new revision of the current project state."""
 
     def test_func(self):
-        return True
+        # Same as ProjectUpdateView: finance has view access, not write access.
+        return not getattr(self.request.user, 'is_finance_team_user', False)
 
     def post(self, request, pk):
         project = get_object_or_404(Project, pk=pk)
