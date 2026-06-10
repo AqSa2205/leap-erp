@@ -1419,30 +1419,69 @@ def ajax_paste_line_items(request, pk):
 
 # ─── Inline Add Row (AJAX) ───────────────────────────────────
 
-def _renumber_section(section, ordered_items=None):
-    """Resequence a section's line items to a clean 1..N order.
+def _resequence_order(section, ordered_items):
+    """Rewrite only the ``order`` field to a clean 0..N sequence.
 
-    Sets each item's ``order`` to its index and ``item_number`` to
-    ``"<section_number>.<idx+1>"``. Pass ``ordered_items`` to control the
-    sequence (e.g. after splicing a freshly inserted row into place);
-    otherwise the section's current ordering is used.
-
-    Returns a list of ``{'pk', 'item_number'}`` dicts for every row whose
-    number/order actually changed, so callers can patch the DOM in place
-    instead of re-rendering the whole section.
+    Invisible to the user (``item_number`` is the displayed value), but it
+    positions a freshly inserted row and repairs ties that would otherwise let
+    the string ``item_number`` decide the sort. Item numbers are untouched.
     """
-    if ordered_items is None:
-        ordered_items = list(section.line_items.all().order_by('order', 'item_number'))
-    changes = []
     for idx, item in enumerate(ordered_items):
-        new_number = f'{section.section_number}.{idx + 1}'
-        if item.item_number != new_number or item.order != idx:
-            CostingLineItem.objects.filter(pk=item.pk).update(
-                item_number=new_number, order=idx,
-            )
-            item.item_number = new_number
+        if item.order != idx:
+            CostingLineItem.objects.filter(pk=item.pk).update(order=idx)
             item.order = idx
-            changes.append({'pk': item.pk, 'item_number': new_number})
+
+
+def _assign_hierarchical_number(ordered_items, anchor, new_item):
+    """Number ``new_item`` as the next sibling of ``anchor`` in place.
+
+    The anchor's number is parsed into ``<parent>.<n>`` segments; the new row
+    becomes ``<parent>.<n+1>``. Only rows sharing that exact parent prefix AND
+    depth AND a numeric last segment are bumped, and only when they would
+    collide — cascading upward (e.g. inserting 1.2.2 pushes an existing 1.2.2
+    to 1.2.3, 1.2.3 to 1.2.4, ...). A pre-existing gap absorbs the insert with
+    no further shifts. Sub-items, named rows (e.g. "Services"), other branches,
+    and unparseable numbers are left untouched.
+
+    If the anchor's last segment isn't numeric, the new row is left blank for
+    the user to fill in. Returns the list of ``{'pk', 'item_number'}`` for the
+    existing rows that were bumped (the new row is handled separately).
+    """
+    anchor_segs = anchor.item_number.split('.')
+    parent = anchor_segs[:-1]
+    depth = len(anchor_segs)
+
+    if not anchor_segs[-1].isdigit():
+        # Non-numeric anchor (e.g. a named row) — can't guess a sibling number.
+        CostingLineItem.objects.filter(pk=new_item.pk).update(item_number='')
+        new_item.item_number = ''
+        return []
+
+    new_int = int(anchor_segs[-1]) + 1
+    new_number = '.'.join(parent + [str(new_int)])
+
+    changes = []
+    expected = new_int
+    new_pos = ordered_items.index(new_item)
+    for item in ordered_items[new_pos + 1:]:
+        segs = item.item_number.split('.')
+        if len(segs) != depth or segs[:-1] != parent or not segs[-1].isdigit():
+            continue  # sub-item, named row, other branch, or typo — leave alone
+        val = int(segs[-1])
+        if val < expected:
+            continue  # out-of-order straggler, not a collision
+        if val > expected:
+            break  # gap already present, no collision to resolve
+        # val == expected: collision — bump this sibling up and keep cascading.
+        bumped_int = expected + 1
+        bumped = '.'.join(parent + [str(bumped_int)])
+        CostingLineItem.objects.filter(pk=item.pk).update(item_number=bumped)
+        item.item_number = bumped
+        changes.append({'pk': item.pk, 'item_number': bumped})
+        expected = bumped_int
+
+    CostingLineItem.objects.filter(pk=new_item.pk).update(item_number=new_number)
+    new_item.item_number = new_number
     return changes
 
 
@@ -1491,13 +1530,15 @@ def ajax_add_line_item(request, pk):
 @login_required
 @require_POST
 def ajax_insert_line_item_after(request, pk):
-    """Insert a blank line item directly below ``pk`` and renumber the section.
+    """Insert a blank line item directly below ``pk`` as the anchor's next sibling.
 
     Unlike :func:`ajax_add_line_item` (append-to-end), this places the new row
-    immediately after the anchor item, then resequences every row in the
-    section so numbering stays clean (1.2, 1.3, 1.4 ...). Returns the rendered
-    new row plus the list of existing rows whose numbers shifted, so the client
-    can patch them in place without re-rendering the section.
+    immediately after the anchor. Numbering is *hierarchy-aware*: the new row
+    takes the anchor's next sibling number and only colliding siblings at the
+    same level are bumped — sub-items, named rows and other branches keep their
+    numbers (see :func:`_assign_hierarchical_number`). Returns the rendered new
+    row plus the list of existing rows whose numbers shifted, so the client can
+    patch them in place without re-rendering the section.
     """
     anchor = get_object_or_404(CostingLineItem, pk=pk)
     section = anchor.section
@@ -1511,7 +1552,7 @@ def ajax_insert_line_item_after(request, pk):
 
         item = CostingLineItem.objects.create(
             section=section,
-            item_number='',  # assigned by _renumber_section below
+            item_number='',  # assigned by _assign_hierarchical_number below
             description='',
             quantity=Decimal('1'),
             unit='EA',
@@ -1519,13 +1560,12 @@ def ajax_insert_line_item_after(request, pk):
             base_unit_cost=Decimal('0'),
             order=anchor_idx + 1,
         )
-        # Splice the new row into place, then resequence the whole section.
+        # Splice the new row into place. Fix only the invisible `order` field
+        # for clean positioning; leave displayed item_numbers alone except for
+        # the hierarchy-aware sibling assignment.
         items.insert(anchor_idx + 1, item)
-        changes = _renumber_section(section, items)
-
-    # The new row carries its own (already correct) number; the rest are the
-    # existing rows whose numbers shifted.
-    renumbered = [c for c in changes if c['pk'] != item.pk]
+        _resequence_order(section, items)
+        renumbered = _assign_hierarchical_number(items, anchor, item)
 
     exchange_rates = list(ExchangeRate.objects.all())
     rates_dict = {r.currency_code: r.rate_to_usd for r in exchange_rates}
@@ -1569,10 +1609,15 @@ def bulk_delete_page(request, pk):
                 pk__in=selected_ids, section=section
             ).delete()[0]
 
-            # Renumber remaining items
-            _renumber_section(section)
+            # Close the position gap left by the deleted rows, but DON'T rewrite
+            # item_numbers — flattening would destroy hierarchical numbering
+            # (1.2.1, named "Services" rows, etc.). Numbers are the user's to set.
+            _resequence_order(
+                section,
+                list(section.line_items.all().order_by('order', 'item_number')),
+            )
 
-        messages.success(request, f'Deleted {deleted} item(s). Remaining items renumbered.')
+        messages.success(request, f'Deleted {deleted} item(s).')
         return redirect('costing:detail', pk=sheet.pk)
 
     return render(request, 'costing/bulk_delete.html', {
