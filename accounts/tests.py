@@ -78,7 +78,8 @@ class HasCapabilityTests(TestCase):
         self.assertFalse(self.fin_user.has_capability('po.access'))
 
     def test_missing_grant_defaults_false(self):
-        self.assertFalse(self.fin_user.has_capability('dn.access'))
+        # settings.access is seeded False for finance (super_admin-only page).
+        self.assertFalse(self.fin_user.has_capability('settings.access'))
 
     def test_super_admin_always_true(self):
         self.assertTrue(self.sa_user.has_capability('anything.at.all'))
@@ -116,7 +117,9 @@ class GateTests(TestCase):
         self.assertEqual(view(self._req(self.user)).status_code, 200)
 
     def test_decorator_blocks_when_missing(self):
-        @require_capability('po.access')
+        # settings.access is the one capability a finance_rep never holds
+        # (super_admin only), so it's a stable "denied" case across baselines.
+        @require_capability('settings.access')
         def view(request):
             return HttpResponse('ok')
         with self.assertRaises(PermissionDenied):
@@ -126,7 +129,7 @@ class GateTests(TestCase):
         from django.views import View
 
         class V(CapabilityRequiredMixin, View):
-            capability = 'po.access'
+            capability = 'settings.access'
             def get(self, request):
                 return HttpResponse('ok')
 
@@ -163,7 +166,7 @@ class TemplateFilterTests(TestCase):
         self.assertEqual(self._render('costing.access', self.user), 'YES')
 
     def test_filter_false(self):
-        self.assertEqual(self._render('po.access', self.user), 'NO')
+        self.assertEqual(self._render('settings.access', self.user), 'NO')
 
 
 class SeedTests(TestCase):
@@ -192,20 +195,31 @@ class SeedTests(TestCase):
         self.assertTrue(self._allowed(Role.FINANCE_REP, 'pipeline.access'))
         self.assertTrue(self._allowed(Role.FINANCE_REP, 'pipeline.nav'))
 
-    def test_finance_no_procurement(self):
-        self.assertFalse(self._allowed(Role.FINANCE_REP, 'procurement.access'))
+    def test_match_today_all_open_modules_on_for_every_role(self):
+        # Zero-regression baseline: every currently-open module is ON for every
+        # role (data is scoped inside the views, but the page opens — as today).
+        open_modules = ['dashboard', 'pipeline', 'costing', 'procurement', 'po', 'dn']
+        for role_name, _ in Role.ROLE_CHOICES:
+            for module in open_modules:
+                self.assertTrue(self._allowed(role_name, f'{module}.access'),
+                                msg=f'{role_name} should have {module}.access')
+                self.assertTrue(self._allowed(role_name, f'{module}.nav'),
+                                msg=f'{role_name} should have {module}.nav')
 
-    def test_sales_rep_pipeline_and_costing(self):
-        self.assertTrue(self._allowed(Role.SALES_REP, 'pipeline.access'))
-        self.assertTrue(self._allowed(Role.SALES_REP, 'costing.access'))
+    def test_finance_has_procurement_today(self):
+        # Match-today: finance can open procurement pages (scoped) just like now.
+        self.assertTrue(self._allowed(Role.FINANCE_REP, 'procurement.access'))
 
     def test_procurement_gets_po_dn(self):
         self.assertTrue(self._allowed(Role.PROCUREMENT_OFF, 'po.access'))
         self.assertTrue(self._allowed(Role.PROCUREMENT_OFF, 'dn.access'))
 
-    def test_only_super_admin_gets_settings(self):
+    def test_settings_is_super_admin_only(self):
+        # Users/Settings is the one genuinely restricted page today
+        # (AdminRequiredMixin = super_admin only).
         self.assertTrue(self._allowed(Role.SUPER_ADMIN, 'settings.access'))
         self.assertFalse(self._allowed(Role.SALES_REP, 'settings.access'))
+        self.assertFalse(self._allowed(Role.ADMIN, 'settings.access'))
 
     def test_seed_is_idempotent(self):
         before = RolePermission.objects.count()

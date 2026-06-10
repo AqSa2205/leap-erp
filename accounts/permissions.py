@@ -88,22 +88,29 @@ class CapabilityRequiredMixin:
         return super().dispatch(request, *args, **kwargs)
 
 
-# Module access baseline = today's behavior. Keys are role.name. The value is
-# the set of MODULE keys whose `.access` + `.nav` are ON. Granular caps
-# (enforced=False) are seeded OFF for everyone for now and toggled on later.
+# Module access baseline = TODAY'S behavior, exactly (zero regression on launch).
+# Every list page (dashboard, pipeline, costing, procurement, po, dn) currently
+# has `test_func: return True` / only `@login_required`, so any authenticated
+# user can open them today — data is scoped inside, but the page opens. We seed
+# all of those ON for every role so nobody loses access on deploy; the super
+# admin then tightens from the grid. Only the Users/Settings page is genuinely
+# restricted today (AdminRequiredMixin = super_admin only), so `settings` is
+# seeded for super_admin alone. Granular caps (enforced=False) stay OFF.
+# Note: finance already has `pipeline` here (the earlier "deliberate change"),
+# which is now subsumed by the match-today baseline.
+_OPEN_TO_ALL = {'dashboard', 'pipeline', 'costing', 'procurement', 'po', 'dn'}
 DEFAULT_MODULE_ACCESS = {
-    'super_admin':     {'dashboard', 'pipeline', 'costing', 'procurement', 'po', 'dn', 'settings'},
-    'admin':           {'dashboard', 'pipeline', 'costing'},
-    'manager':         {'dashboard', 'pipeline', 'costing'},
-    'sales_rep':       {'dashboard', 'pipeline', 'costing'},
-    'procurement_mgr': {'dashboard', 'costing', 'procurement', 'po', 'dn'},
-    'procurement_off': {'dashboard', 'costing', 'procurement', 'po', 'dn'},
-    'proposal_head':   {'dashboard', 'pipeline', 'costing'},
-    'proposal_rep':    {'dashboard', 'pipeline', 'costing'},
-    # Deliberate launch change: finance gains the (region-scoped) pipeline view.
-    'finance_head':    {'dashboard', 'pipeline', 'costing'},
-    'finance_manager': {'dashboard', 'pipeline', 'costing'},
-    'finance_rep':     {'dashboard', 'pipeline', 'costing'},
+    'super_admin':     _OPEN_TO_ALL | {'settings'},
+    'admin':           set(_OPEN_TO_ALL),
+    'manager':         set(_OPEN_TO_ALL),
+    'sales_rep':       set(_OPEN_TO_ALL),
+    'procurement_mgr': set(_OPEN_TO_ALL),
+    'procurement_off': set(_OPEN_TO_ALL),
+    'proposal_head':   set(_OPEN_TO_ALL),
+    'proposal_rep':    set(_OPEN_TO_ALL),
+    'finance_head':    set(_OPEN_TO_ALL),
+    'finance_manager': set(_OPEN_TO_ALL),
+    'finance_rep':     set(_OPEN_TO_ALL),
 }
 
 
