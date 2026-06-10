@@ -9,6 +9,7 @@ from django.urls import reverse_lazy
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.exceptions import PermissionDenied
 from django.views.decorators.http import require_POST
+from django.db import transaction
 
 from .models import User, Role, RolePermission, PasswordResetRequest, PermissionChangeLog
 from accounts.permissions import capabilities_by_module, capability_codenames
@@ -456,10 +457,12 @@ def ajax_toggle_permission(request):
     if role.name == Role.SUPER_ADMIN:
         return JsonResponse({'error': 'Super Admin permissions are fixed'}, status=400)
 
-    RolePermission.objects.update_or_create(
-        role=role, codename=codename, defaults={'allowed': allowed},
-    )
-    PermissionChangeLog.objects.create(
-        actor=request.user, role=role, codename=codename, allowed=allowed,
-    )
+    # One transaction so a grant change can never persist without its audit row.
+    with transaction.atomic():
+        RolePermission.objects.update_or_create(
+            role=role, codename=codename, defaults={'allowed': allowed},
+        )
+        PermissionChangeLog.objects.create(
+            actor=request.user, role=role, codename=codename, allowed=allowed,
+        )
     return JsonResponse({'ok': True})

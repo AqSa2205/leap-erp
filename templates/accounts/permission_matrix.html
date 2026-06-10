@@ -41,17 +41,14 @@
 
 <script>
 (function () {
-  function csrf() {
-    var m = document.cookie.match(/csrftoken=([^;]+)/);
-    return m ? m[1] : '';
-  }
+  var csrfToken = '{{ csrf_token }}';
   document.querySelectorAll('.perm-toggle:not([disabled])').forEach(function (box) {
     box.addEventListener('change', function () {
       var cb = this;
       cb.disabled = true;
       fetch("{% url 'accounts:toggle_permission' %}", {
         method: 'POST',
-        headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrf()},
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken},
         body: JSON.stringify({
           role: parseInt(cb.dataset.role, 10),
           codename: cb.dataset.codename,

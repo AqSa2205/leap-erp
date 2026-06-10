@@ -273,3 +273,15 @@ class TogglePermissionTests(TestCase):
         sa_role = Role.objects.get(name=Role.SUPER_ADMIN)
         resp = self._toggle(sa_role.id, 'po.access', False)
         self.assertEqual(resp.status_code, 400)
+
+    def test_toggle_updates_existing_row_not_duplicate(self):
+        # update_or_create must flip the existing seeded row in place, never
+        # create a second one for the same (role, codename).
+        self.client.force_login(self.sa)
+        self._toggle(self.fin_role.id, 'po.access', True)
+        self._toggle(self.fin_role.id, 'po.access', False)
+        rows = RolePermission.objects.filter(role=self.fin_role, codename='po.access')
+        self.assertEqual(rows.count(), 1)
+        self.assertFalse(rows.get().allowed)
+        # Each toggle is independently audited.
+        self.assertEqual(PermissionChangeLog.objects.filter(codename='po.access').count(), 2)
