@@ -140,15 +140,35 @@ derived from the current hardcoded logic. Examples:
 | Role | pipeline.access | costing.access | procurement.access | po.access |
 |---|---|---|---|---|
 | sales_rep | on | on | off | off |
-| finance_* | off* | on | off | off |
+| finance_* | **on** | on | off | off |
 | procurement_* | off | on | on | on |
 | admin/manager | on | on | off | off |
 
-(*finance currently falls through to `owner=user` on the pipeline, i.e.
-effectively no access — seeded `off`, matching reality.)
+Result: the day it ships, nothing changes for anyone — **except** the one
+deliberate change below.
 
-Result: the day it ships, nothing changes for anyone. The super admin then
-adjusts from a known-good baseline.
+### 4a. Deliberate launch change: finance gets the region-scoped pipeline
+
+Finance currently falls through to `owner=user` on both the pipeline and the
+dashboard, so they see effectively nothing. At launch we want them to see the
+commercial pipeline **scoped to their own region** (mirroring how they already
+see costing sheets). Because "which records" is code, not a toggle, this is two
+coordinated pieces:
+
+- **Seed:** `pipeline.access` (and its `nav`) = ON for the three finance roles.
+- **Code (in phase 1):** add a finance branch to the project/dashboard
+  querysets so an allowed finance user sees `region=user.region` projects, not
+  `owner=user`:
+  - `projects/views.py` `ProjectPermissionMixin.get_queryset` — add
+    `if is_finance_team_user: return queryset.filter(region=user.region)` before
+    the `owner=user` fallback.
+  - `dashboard/views.py` `index` — add the same region branch before the
+    `owner=user` fallback.
+
+The capability gate still runs first: if a super admin later turns
+`pipeline.access` OFF for finance, the region branch never executes (they're
+blocked at the gate). The two layers compose — toggle decides *whether*, code
+decides *which records*.
 
 ### 5. Phase 1 enforced capabilities (access + nav)
 
