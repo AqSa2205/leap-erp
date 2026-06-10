@@ -86,9 +86,17 @@ def count_working_days(start, end, weekends, holidays) -> int   # inclusive rang
 `LeaveEntitlement` rows for all active employees from each active `LeaveType.default_annual_days`,
 EXCEPT **Annual**, which follows the **Leap Networks policy** per employee:
 **25 days in the employee's first year of service, 30 days from the second year onward.**
-Boundary: `years_of_service = year - joining_date.year`; `entitled = 25 if years_of_service <= 0
-else 30` (i.e. the calendar year they joined → 25; every year after → 30). Existing rows are not
-overwritten unless HR explicitly chooses "reset" (default: only create missing).
+The 12-month anniversary upgrades the employee to 30, and the year containing that anniversary
+gets 30 ("anniversary year → 30"). Because the anniversary always falls in
+`joining_date.year + 1`, this reduces to a clean per-calendar-year rule:
+
+```
+entitled = 25 if year <= joining_date.year else 30
+```
+
+i.e. the calendar year they joined → 25; every subsequent calendar year → 30. (Example: joins
+1 Jul 2025 → 2025 = 25, 2026 = 30, 2027+ = 30.) Existing rows are not overwritten unless HR
+explicitly chooses "reset" (default: only create missing).
 
 ### Module B — Daily Attendance
 
