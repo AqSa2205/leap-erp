@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 
@@ -255,8 +256,9 @@ class RolePermission(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        # unique_together already creates the backing index on (role, codename),
+        # so no separate models.Index is needed.
         unique_together = ('role', 'codename')
-        indexes = [models.Index(fields=['role', 'codename'])]
 
     def __str__(self):
         return f"{self.role.name}:{self.codename}={'on' if self.allowed else 'off'}"
@@ -264,7 +266,7 @@ class RolePermission(models.Model):
 
 class PermissionChangeLog(models.Model):
     """Audit trail for grant toggles (security-sensitive)."""
-    actor = models.ForeignKey('User', on_delete=models.SET_NULL, null=True, related_name='+')
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='+')
     role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name='+')
     codename = models.CharField(max_length=64)
     allowed = models.BooleanField()
@@ -272,3 +274,7 @@ class PermissionChangeLog(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+
+    def __str__(self):
+        state = 'on' if self.allowed else 'off'
+        return f"{self.actor} set {self.role.name}:{self.codename}={state} @ {self.created_at:%Y-%m-%d %H:%M}"

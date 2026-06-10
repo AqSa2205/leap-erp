@@ -40,3 +40,8 @@ class RolePermissionModelTests(TestCase):
         u = User.objects.create_user('toggler', password='x')
         PermissionChangeLog.objects.create(actor=u, role=self.role, codename='po.access', allowed=True)
         self.assertEqual(PermissionChangeLog.objects.count(), 1)
+        log = PermissionChangeLog.objects.get()
+        self.assertEqual(log.actor, u)
+        self.assertEqual(log.role, self.role)
+        self.assertEqual(log.codename, 'po.access')
+        self.assertTrue(log.allowed)
