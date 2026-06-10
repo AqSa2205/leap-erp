@@ -1419,6 +1419,33 @@ def ajax_paste_line_items(request, pk):
 
 # ─── Inline Add Row (AJAX) ───────────────────────────────────
 
+def _renumber_section(section, ordered_items=None):
+    """Resequence a section's line items to a clean 1..N order.
+
+    Sets each item's ``order`` to its index and ``item_number`` to
+    ``"<section_number>.<idx+1>"``. Pass ``ordered_items`` to control the
+    sequence (e.g. after splicing a freshly inserted row into place);
+    otherwise the section's current ordering is used.
+
+    Returns a list of ``{'pk', 'item_number'}`` dicts for every row whose
+    number/order actually changed, so callers can patch the DOM in place
+    instead of re-rendering the whole section.
+    """
+    if ordered_items is None:
+        ordered_items = list(section.line_items.all().order_by('order', 'item_number'))
+    changes = []
+    for idx, item in enumerate(ordered_items):
+        new_number = f'{section.section_number}.{idx + 1}'
+        if item.item_number != new_number or item.order != idx:
+            CostingLineItem.objects.filter(pk=item.pk).update(
+                item_number=new_number, order=idx,
+            )
+            item.item_number = new_number
+            item.order = idx
+            changes.append({'pk': item.pk, 'item_number': new_number})
+    return changes
+
+
 @login_required
 @require_POST
 def ajax_add_line_item(request, pk):
@@ -1461,6 +1488,63 @@ def ajax_add_line_item(request, pk):
     return JsonResponse({'ok': True, 'html': html, 'item_pk': item.pk})
 
 
+@login_required
+@require_POST
+def ajax_insert_line_item_after(request, pk):
+    """Insert a blank line item directly below ``pk`` and renumber the section.
+
+    Unlike :func:`ajax_add_line_item` (append-to-end), this places the new row
+    immediately after the anchor item, then resequences every row in the
+    section so numbering stays clean (1.2, 1.3, 1.4 ...). Returns the rendered
+    new row plus the list of existing rows whose numbers shifted, so the client
+    can patch them in place without re-rendering the section.
+    """
+    anchor = get_object_or_404(CostingLineItem, pk=pk)
+    section = anchor.section
+    sheet = section.costing_sheet
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    with transaction.atomic():
+        items = list(section.line_items.all().order_by('order', 'item_number'))
+        anchor_idx = next(i for i, it in enumerate(items) if it.pk == anchor.pk)
+
+        item = CostingLineItem.objects.create(
+            section=section,
+            item_number='',  # assigned by _renumber_section below
+            description='',
+            quantity=Decimal('1'),
+            unit='EA',
+            supplier_currency=sheet.default_supplier_currency or 'SAR',
+            base_unit_cost=Decimal('0'),
+            order=anchor_idx + 1,
+        )
+        # Splice the new row into place, then resequence the whole section.
+        items.insert(anchor_idx + 1, item)
+        changes = _renumber_section(section, items)
+
+    # The new row carries its own (already correct) number; the rest are the
+    # existing rows whose numbers shifted.
+    renumbered = [c for c in changes if c['pk'] != item.pk]
+
+    exchange_rates = list(ExchangeRate.objects.all())
+    rates_dict = {r.currency_code: r.rate_to_usd for r in exchange_rates}
+    item.set_exchange_rates_cache(rates_dict)
+    item.set_sheet_cache(sheet)
+
+    conversion_rate = _conversion_rate(sheet.output_currency, rates_dict)
+    html = render_to_string('costing/_section_item_row.html', {
+        'item': item,
+        'section': section,
+        'exchange_rates': exchange_rates,
+        'output_currency': sheet.output_currency,
+        'conversion_rate': conversion_rate,
+    })
+    return JsonResponse({
+        'ok': True, 'html': html, 'item_pk': item.pk, 'renumbered': renumbered,
+    })
+
+
 # ─── Bulk Delete Items (dedicated page) ──────────────────────
 
 @login_required
@@ -1486,12 +1570,7 @@ def bulk_delete_page(request, pk):
             ).delete()[0]
 
             # Renumber remaining items
-            remaining = section.line_items.all().order_by('order', 'pk')
-            for idx, item in enumerate(remaining):
-                new_number = f'{section.section_number}.{idx + 1}'
-                CostingLineItem.objects.filter(pk=item.pk).update(
-                    item_number=new_number, order=idx
-                )
+            _renumber_section(section)
 
         messages.success(request, f'Deleted {deleted} item(s). Remaining items renumbered.')
         return redirect('costing:detail', pk=sheet.pk)

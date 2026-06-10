@@ -1521,6 +1521,54 @@ var _csrfToken = '{{ csrf_token }}';
                 btn.innerHTML = origHtml;
             });
         });
+
+        // Inline "Insert row below" button — creates a blank item directly
+        // after the clicked row, then renumbers the rest of the section.
+        bomTable.addEventListener('click', function(e) {
+            var btn = e.target.closest('.insert-row-btn');
+            if (!btn) return;
+            e.preventDefault();
+            var itemPk = btn.dataset.itemId;
+            var anchorRow = btn.closest('tr');
+            btn.disabled = true;
+            var origHtml = btn.innerHTML;
+            btn.innerHTML = '<i class="bi bi-hourglass"></i>';
+
+            fetch('/costing/item/' + itemPk + '/insert-after/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': _csrfToken},
+                body: new FormData(),
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(resp) {
+                btn.disabled = false;
+                btn.innerHTML = origHtml;
+                if (!resp.ok) {
+                    alert(resp.error || 'Failed to insert row');
+                    return;
+                }
+                // Drop the new row in directly after the clicked row.
+                var temp = document.createElement('tbody');
+                temp.innerHTML = resp.html.trim();
+                var newRow = temp.firstElementChild;
+                anchorRow.insertAdjacentElement('afterend', newRow);
+                // Patch the item-number inputs of the rows that shifted down.
+                (resp.renumbered || []).forEach(function(c) {
+                    var input = bomTable.querySelector(
+                        '.item-num-edit[data-item-id="' + c.pk + '"]');
+                    if (input) input.value = c.item_number;
+                });
+                // Bring the new row into view and focus it for typing.
+                newRow.scrollIntoView({block: 'center', behavior: 'smooth'});
+                var descInput = newRow.querySelector('.desc-edit');
+                if (descInput) descInput.focus();
+            })
+            .catch(function(err) {
+                console.error('Insert row failed:', err);
+                btn.disabled = false;
+                btn.innerHTML = origHtml;
+            });
+        });
     }
 
     // ─── Paste from Excel: import handler ───────────────────────
