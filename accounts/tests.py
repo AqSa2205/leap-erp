@@ -285,3 +285,25 @@ class TogglePermissionTests(TestCase):
         self.assertFalse(rows.get().allowed)
         # Each toggle is independently audited.
         self.assertEqual(PermissionChangeLog.objects.filter(codename='po.access').count(), 2)
+
+
+class DashboardWiringTests(TestCase):
+    def setUp(self):
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.fin = User.objects.create_user('fin', password='x')
+        self.fin.role = Role.objects.get(name=Role.FINANCE_REP)
+        self.fin.save()
+
+    def test_finance_with_access_gets_200(self):
+        self.client.force_login(self.fin)
+        resp = self.client.get(reverse('dashboard:index'))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_finance_without_access_gets_403(self):
+        role = Role.objects.get(name=Role.FINANCE_REP)
+        RolePermission.objects.filter(role=role, codename='dashboard.access').update(allowed=False)
+        self.client.force_login(self.fin)
+        resp = self.client.get(reverse('dashboard:index'))
+        self.assertEqual(resp.status_code, 403)

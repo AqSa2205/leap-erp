@@ -2,6 +2,7 @@ from django.shortcuts import render
 from django.contrib.auth.decorators import login_required
 from django.db.models import Sum, Count, Q
 from django.http import JsonResponse
+from accounts.permissions import require_capability
 
 from projects.models import Project, Region, ProjectStatus
 from accounts.models import User
@@ -48,6 +49,7 @@ def get_region_stats(projects, region_codes):
 
 
 @login_required
+@require_capability('dashboard.access')
 def index(request):
     """Main dashboard view with regional tabs"""
     user = request.user
@@ -56,6 +58,9 @@ def index(request):
     if user.is_super_admin_user:
         projects = Project.objects.all()
     elif user.is_admin_user or user.is_manager_user:
+        projects = Project.objects.filter(region=user.region)
+    elif getattr(user, 'is_finance_team_user', False):
+        # Finance sees their own region (capability gate already passed).
         projects = Project.objects.filter(region=user.region)
     else:
         projects = Project.objects.filter(owner=user)
