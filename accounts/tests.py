@@ -2,6 +2,7 @@ from django.test import TestCase, RequestFactory
 from django.db import IntegrityError
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse
+from django.template import Template, Context
 from accounts.permissions import CAPABILITIES, Capability, capability_codenames, require_capability, CapabilityRequiredMixin
 from accounts.models import Role, RolePermission, PermissionChangeLog, User
 
@@ -137,3 +138,23 @@ class GateTests(TestCase):
 
         resp = V.as_view()(self._req(self.user))
         self.assertEqual(resp.status_code, 200)
+
+
+class TemplateFilterTests(TestCase):
+    def setUp(self):
+        self.role, _ = Role.objects.get_or_create(name=Role.FINANCE_REP)
+        self.user = User.objects.create_user('u', password='x')
+        self.user.role = self.role
+        self.user.save()
+        RolePermission.objects.update_or_create(
+            role=self.role, codename='costing.access', defaults={'allowed': True})
+
+    def _render(self, codename, user):
+        t = Template("{% load perms %}{% if user|can:cap %}YES{% else %}NO{% endif %}")
+        return t.render(Context({'user': user, 'cap': codename}))
+
+    def test_filter_true(self):
+        self.assertEqual(self._render('costing.access', self.user), 'YES')
+
+    def test_filter_false(self):
+        self.assertEqual(self._render('po.access', self.user), 'NO')
