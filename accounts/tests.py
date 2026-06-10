@@ -394,3 +394,31 @@ class ModuleAccessWiringTests(TestCase):
         self.assertEqual(self.client.get(reverse('procurement:dn_list')).status_code, 200)
         self._off('dn.access')
         self.assertEqual(self.client.get(reverse('procurement:dn_list')).status_code, 403)
+
+
+class NavVisibilityTests(TestCase):
+    def setUp(self):
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.user = User.objects.create_user('navu', password='x')
+        self.user.role = Role.objects.get(name=Role.SALES_REP)
+        self.user.save()
+        self.role = Role.objects.get(name=Role.SALES_REP)
+
+    def test_procurement_section_visible_by_default(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('dashboard:index'))
+        self.assertContains(resp, 'data-section="procurement"')
+
+    def test_procurement_section_hidden_when_nav_off(self):
+        RolePermission.objects.filter(role=self.role, codename='procurement.nav').update(allowed=False)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('dashboard:index'))
+        self.assertNotContains(resp, 'data-section="procurement"')
+
+    def test_pipeline_link_hidden_when_nav_off(self):
+        RolePermission.objects.filter(role=self.role, codename='pipeline.nav').update(allowed=False)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('dashboard:index'))
+        self.assertNotContains(resp, 'data-title="Commercial Pipeline"')

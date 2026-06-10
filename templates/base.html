@@ -1,4 +1,5 @@
 {% load static %}
+{% load perms %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -816,16 +817,20 @@
                     <i class="bi bi-person-workspace"></i> <span>My Work</span>
                 </a>
             </li>
+            {% if user|can:'dashboard.nav' %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'index' and request.resolver_match.app_name == 'dashboard' %}active{% endif %}" href="{% url 'dashboard:index' %}" data-title="Dashboard">
                     <i class="bi bi-speedometer2"></i> <span>Dashboard</span>
                 </a>
             </li>
+            {% endif %}
+            {% if user|can:'pipeline.nav' %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'projects' and 'document' not in request.resolver_match.url_name %}active{% endif %}" href="{% url 'projects:list' %}" data-title="Commercial Pipeline">
                     <i class="bi bi-folder"></i> <span>Commercial Pipeline</span>
                 </a>
             </li>
+            {% endif %}
             {# ─── Proposals (clickable + collapsible sub-groups) ─── #}
             <li class="nav-item">
                 <div class="d-flex align-items-stretch">
@@ -878,6 +883,7 @@
                         </li>
 
                         {# ─── Commercial sub-group ─── #}
+                        {% if user|can:'costing.nav' %}
                         <li class="nav-item">
                             <div class="d-flex align-items-stretch">
                                 <a class="nav-link py-1 flex-grow-1" href="{% url 'costing:list' %}" title="Commercial: Vendor Quotes · Costing · Commercial Proposal">
@@ -908,6 +914,7 @@
                                 </ul>
                             </div>
                         </li>
+                        {% endif %}
                     </ul>
                 </div>
             </li>
@@ -934,6 +941,7 @@
         {% endif %}
 
         {# ─── PROCUREMENT ─── #}
+        {% if user|can:'procurement.nav' %}
         <div class="nav-section" data-section="procurement"><span>Procurement</span><i class="bi bi-chevron-down section-chevron"></i></div>
         <ul class="nav flex-column nav-section-items" data-section-items="procurement">
             <li class="nav-item">
@@ -941,11 +949,13 @@
                     <i class="bi bi-speedometer2"></i> <span>Overview</span>
                 </a>
             </li>
+            {% if user|can:'po.nav' %}
             <li class="nav-item">
                 <a class="nav-link {% if 'po_' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'procurement:po_list' %}" data-title="Purchase Orders">
                     <i class="bi bi-box-seam"></i> <span>Purchase Orders</span>
                 </a>
             </li>
+            {% endif %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'summary_internal' %}active{% endif %}" href="{% url 'procurement:summary_internal' %}" data-title="Summary (Internal)">
                     <i class="bi bi-clipboard-data"></i> <span>Summary (Internal)</span>
@@ -956,11 +966,13 @@
                     <i class="bi bi-clipboard-check"></i> <span>Summary (External)</span>
                 </a>
             </li>
+            {% if user|can:'dn.nav' %}
             <li class="nav-item">
                 <a class="nav-link {% if 'dn_' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'procurement:dn_list' %}" data-title="Delivery Notes">
                     <i class="bi bi-truck"></i> <span>Delivery Notes</span>
                 </a>
             </li>
+            {% endif %}
             <li class="nav-item">
                 <a class="nav-link {% if 'inventory' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'procurement:inventory_list' %}" data-title="Inventory">
                     <i class="bi bi-archive"></i> <span>Inventory</span>
@@ -977,6 +989,7 @@
                 </a>
             </li>
         </ul>
+        {% endif %}
 
         {# ─── ADMINISTRATION (includes Contacts/Database) ─── #}
         {% if user.is_super_admin_user or user.is_admin_user %}
