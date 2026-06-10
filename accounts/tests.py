@@ -29,6 +29,9 @@ class RegistryTests(TestCase):
 class RolePermissionModelTests(TestCase):
     def setUp(self):
         self.role, _ = Role.objects.get_or_create(name=Role.FINANCE_REP)
+        # The seed migration pre-creates rows for all roles; remove the specific
+        # codename used below so we can test raw create/unique behaviour.
+        RolePermission.objects.filter(role=self.role, codename='costing.access').delete()
 
     def test_create_grant(self):
         g = RolePermission.objects.create(role=self.role, codename='costing.access', allowed=True)
@@ -158,3 +161,46 @@ class TemplateFilterTests(TestCase):
 
     def test_filter_false(self):
         self.assertEqual(self._render('po.access', self.user), 'NO')
+
+
+from accounts.permissions import seed_default_permissions
+
+
+class SeedTests(TestCase):
+    def setUp(self):
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+
+    def _allowed(self, role_name, codename):
+        role = Role.objects.get(name=role_name)
+        return RolePermission.objects.get(role=role, codename=codename).allowed
+
+    def test_every_role_capability_pair_has_a_row(self):
+        n_roles = Role.objects.count()
+        n_caps = len(capability_codenames())
+        self.assertEqual(RolePermission.objects.count(), n_roles * n_caps)
+
+    def test_finance_gets_pipeline_access(self):
+        self.assertTrue(self._allowed(Role.FINANCE_REP, 'pipeline.access'))
+        self.assertTrue(self._allowed(Role.FINANCE_REP, 'pipeline.nav'))
+
+    def test_finance_no_procurement(self):
+        self.assertFalse(self._allowed(Role.FINANCE_REP, 'procurement.access'))
+
+    def test_sales_rep_pipeline_and_costing(self):
+        self.assertTrue(self._allowed(Role.SALES_REP, 'pipeline.access'))
+        self.assertTrue(self._allowed(Role.SALES_REP, 'costing.access'))
+
+    def test_procurement_gets_po_dn(self):
+        self.assertTrue(self._allowed(Role.PROCUREMENT_OFF, 'po.access'))
+        self.assertTrue(self._allowed(Role.PROCUREMENT_OFF, 'dn.access'))
+
+    def test_only_super_admin_gets_settings(self):
+        self.assertTrue(self._allowed(Role.SUPER_ADMIN, 'settings.access'))
+        self.assertFalse(self._allowed(Role.SALES_REP, 'settings.access'))
+
+    def test_seed_is_idempotent(self):
+        before = RolePermission.objects.count()
+        seed_default_permissions()
+        self.assertEqual(RolePermission.objects.count(), before)

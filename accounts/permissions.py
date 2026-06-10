@@ -86,3 +86,40 @@ class CapabilityRequiredMixin:
         if user is None or not user.is_authenticated or not user.has_capability(self.capability):
             raise PermissionDenied
         return super().dispatch(request, *args, **kwargs)
+
+
+# Module access baseline = today's behavior. Keys are role.name. The value is
+# the set of MODULE keys whose `.access` + `.nav` are ON. Granular caps
+# (enforced=False) are seeded OFF for everyone for now and toggled on later.
+DEFAULT_MODULE_ACCESS = {
+    'super_admin':     {'dashboard', 'pipeline', 'costing', 'procurement', 'po', 'dn', 'settings'},
+    'admin':           {'dashboard', 'pipeline', 'costing'},
+    'manager':         {'dashboard', 'pipeline', 'costing'},
+    'sales_rep':       {'dashboard', 'pipeline', 'costing'},
+    'procurement_mgr': {'dashboard', 'costing', 'procurement', 'po', 'dn'},
+    'procurement_off': {'dashboard', 'costing', 'procurement', 'po', 'dn'},
+    'proposal_head':   {'dashboard', 'pipeline', 'costing'},
+    'proposal_rep':    {'dashboard', 'pipeline', 'costing'},
+    # Deliberate launch change: finance gains the (region-scoped) pipeline view.
+    'finance_head':    {'dashboard', 'pipeline', 'costing'},
+    'finance_manager': {'dashboard', 'pipeline', 'costing'},
+    'finance_rep':     {'dashboard', 'pipeline', 'costing'},
+}
+
+
+def seed_default_permissions():
+    """Create a RolePermission row for every (role x capability), set to the
+    baseline above. Idempotent: existing rows are left as the admin set them;
+    only missing rows are created. Safe to call from a data migration and tests.
+    """
+    from accounts.models import Role, RolePermission
+    access_actions = {'access', 'nav'}
+    for role in Role.objects.all():
+        modules_on = DEFAULT_MODULE_ACCESS.get(role.name, set())
+        for cap in CAPABILITIES:
+            module_key = cap.codename.rsplit('.', 1)[0]
+            default_allowed = cap.action in access_actions and module_key in modules_on
+            RolePermission.objects.get_or_create(
+                role=role, codename=cap.codename,
+                defaults={'allowed': default_allowed},
+            )
