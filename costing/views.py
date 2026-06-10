@@ -14,6 +14,7 @@ from django.utils.text import slugify
 from django.utils import timezone
 from decimal import Decimal, InvalidOperation
 import logging
+from accounts.permissions import CapabilityRequiredMixin
 
 logger = logging.getLogger(__name__)
 
@@ -274,7 +275,8 @@ class _SheetChildPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
 
 # ─── Costing Sheet CRUD ───────────────────────────────────────
 
-class CostingListView(CostingPermissionMixin, ListView):
+class CostingListView(CapabilityRequiredMixin, CostingPermissionMixin, ListView):
+    capability = 'costing.access'
     model = CostingSheet
     template_name = 'costing/costing_list.html'
     context_object_name = 'sheets'

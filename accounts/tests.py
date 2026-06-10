@@ -353,3 +353,44 @@ class PipelineWiringTests(TestCase):
         self.client.force_login(self.fin)
         resp = self.client.get(reverse('projects:list'))
         self.assertEqual(resp.status_code, 403)
+
+
+class ModuleAccessWiringTests(TestCase):
+    def setUp(self):
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.fin = User.objects.create_user('fin', password='x')
+        self.fin.role = Role.objects.get(name=Role.FINANCE_REP)
+        self.fin.save()
+        self.fin_role = Role.objects.get(name=Role.FINANCE_REP)
+
+    def _off(self, codename):
+        RolePermission.objects.filter(role=self.fin_role, codename=codename).update(allowed=False)
+
+    def test_costing_open_by_default(self):
+        self.client.force_login(self.fin)
+        self.assertEqual(self.client.get(reverse('costing:list')).status_code, 200)
+
+    def test_costing_gate_blocks_when_off(self):
+        self.client.force_login(self.fin)
+        self._off('costing.access')
+        self.assertEqual(self.client.get(reverse('costing:list')).status_code, 403)
+
+    def test_procurement_gate(self):
+        self.client.force_login(self.fin)
+        self.assertEqual(self.client.get(reverse('procurement:dashboard')).status_code, 200)
+        self._off('procurement.access')
+        self.assertEqual(self.client.get(reverse('procurement:dashboard')).status_code, 403)
+
+    def test_po_gate(self):
+        self.client.force_login(self.fin)
+        self.assertEqual(self.client.get(reverse('procurement:po_list')).status_code, 200)
+        self._off('po.access')
+        self.assertEqual(self.client.get(reverse('procurement:po_list')).status_code, 403)
+
+    def test_dn_gate(self):
+        self.client.force_login(self.fin)
+        self.assertEqual(self.client.get(reverse('procurement:dn_list')).status_code, 200)
+        self._off('dn.access')
+        self.assertEqual(self.client.get(reverse('procurement:dn_list')).status_code, 403)

@@ -28,6 +28,7 @@ from django.utils import timezone
 from django.utils.text import slugify
 import openpyxl
 from datetime import datetime, timedelta
+from accounts.permissions import require_capability, CapabilityRequiredMixin
 
 
 _NUM_UNITS = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine']
@@ -171,6 +172,7 @@ def _make_numbered_canvas(draft=False):
 # ═══════════════════════════════════════════════════════════════
 
 @login_required
+@require_capability('procurement.access')
 def procurement_dashboard(request):
     """Procurement dashboard with KPIs, recent activity, and stats."""
     user = request.user
@@ -320,7 +322,8 @@ class ProcurementPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
 
 # ─── PO CRUD ─────────────────────────────────────────────────
 
-class POListView(ProcurementPermissionMixin, ListView):
+class POListView(CapabilityRequiredMixin, ProcurementPermissionMixin, ListView):
+    capability = 'po.access'
     model = PurchaseOrder
     template_name = 'procurement/po_list.html'
     context_object_name = 'purchase_orders'
@@ -2083,7 +2086,8 @@ class DNPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
             return queryset.filter(created_by=user)
 
 
-class DNListView(DNPermissionMixin, ListView):
+class DNListView(CapabilityRequiredMixin, DNPermissionMixin, ListView):
+    capability = 'dn.access'
     model = DeliveryNote
     template_name = 'procurement/dn_list.html'
     context_object_name = 'delivery_notes'
