@@ -993,6 +993,11 @@
                     <i class="bi bi-shield-lock"></i> <span>Reset Requests</span>
                 </a>
             </li>
+            <li class="nav-item">
+              <a class="nav-link {% if request.resolver_match.url_name == 'permission_matrix' %}active{% endif %}" href="{% url 'accounts:permission_matrix' %}" data-title="Permissions">
+                <i class="bi bi-shield-lock"></i> <span>Permissions</span>
+              </a>
+            </li>
             {% endif %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'hr_dashboard' %}active{% endif %}" href="{% url 'hr:hr_dashboard' %}" data-title="HR Dashboard">

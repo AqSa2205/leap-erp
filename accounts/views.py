@@ -6,8 +6,10 @@ from django.contrib import messages
 from django.views.generic import ListView, CreateView, UpdateView, DeleteView
 from django.urls import reverse_lazy
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.core.exceptions import PermissionDenied
 
-from .models import User, Role, PasswordResetRequest
+from .models import User, Role, RolePermission, PasswordResetRequest
+from accounts.permissions import capabilities_by_module
 from .forms import (
     CustomAuthenticationForm, CustomUserCreationForm,
     CustomUserChangeForm, UserProfileForm
@@ -395,3 +397,36 @@ def reject_reset(request, pk):
 
     messages.success(request, f'Password reset rejected for {reset_req.user.username}.')
     return redirect('accounts:reset_requests')
+
+
+@login_required
+def permission_matrix(request):
+    """Super-admin-only grid of role x capability toggles.
+
+    Hardcoded super_admin gate (NOT capability-gated) so the page can never be
+    toggled away or used to lock everyone out.
+    """
+    if not request.user.is_super_admin_user:
+        raise PermissionDenied
+
+    roles = list(Role.objects.all())
+    grant_map = {
+        (g.role_id, g.codename): g.allowed
+        for g in RolePermission.objects.all()
+    }
+    modules = []
+    for module_label, caps in capabilities_by_module().items():
+        rows = []
+        for cap in caps:
+            cells = [{
+                'role': role,
+                'allowed': grant_map.get((role.id, cap.codename), False),
+                'locked': role.name == Role.SUPER_ADMIN,
+            } for role in roles]
+            rows.append({'cap': cap, 'cells': cells})
+        modules.append({'label': module_label, 'rows': rows})
+
+    return render(request, 'accounts/permission_matrix.html', {
+        'roles': roles,
+        'modules': modules,
+    })

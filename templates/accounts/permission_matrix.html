@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+{% load perms %}
+{% block content %}
+<div class="container-fluid py-3">
+  <h4 class="mb-1">Permissions</h4>
+  <p class="text-muted small">Toggle what each role can do. Super Admin is always allowed.
+     Cells marked <span class="badge bg-light text-muted">wiring pending</span> are saved but not yet enforced.</p>
+
+  {% for module in modules %}
+  <div class="card mb-3">
+    <div class="card-header py-2 fw-semibold">{{ module.label }}</div>
+    <div class="table-responsive">
+      <table class="table table-sm table-bordered mb-0 align-middle">
+        <thead>
+          <tr>
+            <th style="min-width:220px;">Capability</th>
+            {% for role in roles %}<th class="text-center small">{{ role.get_name_display }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in module.rows %}
+          <tr>
+            <td class="small">
+              {{ row.cap.label }}
+              {% if not row.cap.enforced %}<span class="badge bg-light text-muted ms-1" title="Defined in the grid but not yet enforced in code">wiring pending</span>{% endif %}
+            </td>
+            {% for cell in row.cells %}
+            <td class="text-center">
+              <input type="checkbox" class="perm-toggle"
+                     data-role="{{ cell.role.id }}" data-codename="{{ row.cap.codename }}"
+                     {% if cell.allowed %}checked{% endif %} {% if cell.locked %}checked disabled{% endif %}>
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<script>
+// AJAX per-cell toggle is wired in the next task. No-op for now.
+</script>
+{% endblock %}

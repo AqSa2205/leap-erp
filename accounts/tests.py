@@ -3,6 +3,7 @@ from django.db import IntegrityError
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse
 from django.template import Template, Context
+from django.urls import reverse
 from accounts.permissions import CAPABILITIES, Capability, capability_codenames, require_capability, CapabilityRequiredMixin, seed_default_permissions, DEFAULT_MODULE_ACCESS
 from accounts.models import Role, RolePermission, PermissionChangeLog, User
 
@@ -208,3 +209,27 @@ class SeedTests(TestCase):
         before = RolePermission.objects.count()
         seed_default_permissions()
         self.assertEqual(RolePermission.objects.count(), before)
+
+
+class PermissionMatrixViewTests(TestCase):
+    def setUp(self):
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.sa = User.objects.create_user('sa', password='x')
+        self.sa.role = Role.objects.get(name=Role.SUPER_ADMIN)
+        self.sa.save()
+        self.fin = User.objects.create_user('fin', password='x')
+        self.fin.role = Role.objects.get(name=Role.FINANCE_REP)
+        self.fin.save()
+
+    def test_super_admin_can_open(self):
+        self.client.force_login(self.sa)
+        resp = self.client.get(reverse('accounts:permission_matrix'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Commercial Pipeline')
+
+    def test_non_super_admin_forbidden(self):
+        self.client.force_login(self.fin)
+        resp = self.client.get(reverse('accounts:permission_matrix'))
+        self.assertEqual(resp.status_code, 403)
