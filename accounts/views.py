@@ -1,3 +1,4 @@
+import json
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth import login, logout
 from django.contrib.auth.views import LoginView, LogoutView
@@ -7,9 +8,10 @@ from django.views.generic import ListView, CreateView, UpdateView, DeleteView
 from django.urls import reverse_lazy
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.exceptions import PermissionDenied
+from django.views.decorators.http import require_POST
 
-from .models import User, Role, RolePermission, PasswordResetRequest
-from accounts.permissions import capabilities_by_module
+from .models import User, Role, RolePermission, PasswordResetRequest, PermissionChangeLog
+from accounts.permissions import capabilities_by_module, capability_codenames
 from .forms import (
     CustomAuthenticationForm, CustomUserCreationForm,
     CustomUserChangeForm, UserProfileForm
@@ -430,3 +432,34 @@ def permission_matrix(request):
         'roles': roles,
         'modules': modules,
     })
+
+
+@login_required
+@require_POST
+def ajax_toggle_permission(request):
+    if not request.user.is_super_admin_user:
+        raise PermissionDenied
+    try:
+        payload = json.loads(request.body or '{}')
+        role_id = int(payload['role'])
+        codename = str(payload['codename'])
+        allowed = bool(payload['allowed'])
+    except (ValueError, KeyError, TypeError):
+        return JsonResponse({'error': 'Bad payload'}, status=400)
+
+    if codename not in capability_codenames():
+        return JsonResponse({'error': 'Unknown capability'}, status=400)
+
+    role = Role.objects.filter(pk=role_id).first()
+    if role is None:
+        return JsonResponse({'error': 'Unknown role'}, status=400)
+    if role.name == Role.SUPER_ADMIN:
+        return JsonResponse({'error': 'Super Admin permissions are fixed'}, status=400)
+
+    RolePermission.objects.update_or_create(
+        role=role, codename=codename, defaults={'allowed': allowed},
+    )
+    PermissionChangeLog.objects.create(
+        actor=request.user, role=role, codename=codename, allowed=allowed,
+    )
+    return JsonResponse({'ok': True})

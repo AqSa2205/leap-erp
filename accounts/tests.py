@@ -1,3 +1,4 @@
+import json
 from django.test import TestCase, RequestFactory
 from django.db import IntegrityError
 from django.core.exceptions import PermissionDenied
@@ -233,3 +234,42 @@ class PermissionMatrixViewTests(TestCase):
         self.client.force_login(self.fin)
         resp = self.client.get(reverse('accounts:permission_matrix'))
         self.assertEqual(resp.status_code, 403)
+
+
+class TogglePermissionTests(TestCase):
+    def setUp(self):
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.sa = User.objects.create_user('sa', password='x')
+        self.sa.role = Role.objects.get(name=Role.SUPER_ADMIN)
+        self.sa.save()
+        self.fin = User.objects.create_user('fin', password='x')
+        self.fin.role = Role.objects.get(name=Role.FINANCE_REP)
+        self.fin.save()
+        self.fin_role = Role.objects.get(name=Role.FINANCE_REP)
+
+    def _toggle(self, role_id, codename, allowed):
+        return self.client.post(
+            reverse('accounts:toggle_permission'),
+            data=json.dumps({'role': role_id, 'codename': codename, 'allowed': allowed}),
+            content_type='application/json',
+        )
+
+    def test_toggle_flips_grant_and_logs(self):
+        self.client.force_login(self.sa)
+        resp = self._toggle(self.fin_role.id, 'po.access', True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(RolePermission.objects.get(role=self.fin_role, codename='po.access').allowed)
+        self.assertEqual(PermissionChangeLog.objects.filter(codename='po.access', allowed=True).count(), 1)
+
+    def test_non_super_admin_forbidden(self):
+        self.client.force_login(self.fin)
+        resp = self._toggle(self.fin_role.id, 'po.access', True)
+        self.assertEqual(resp.status_code, 403)
+
+    def test_cannot_toggle_super_admin_row(self):
+        self.client.force_login(self.sa)
+        sa_role = Role.objects.get(name=Role.SUPER_ADMIN)
+        resp = self._toggle(sa_role.id, 'po.access', False)
+        self.assertEqual(resp.status_code, 400)

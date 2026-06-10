@@ -40,6 +40,32 @@
 </div>
 
 <script>
-// AJAX per-cell toggle is wired in the next task. No-op for now.
+(function () {
+  function csrf() {
+    var m = document.cookie.match(/csrftoken=([^;]+)/);
+    return m ? m[1] : '';
+  }
+  document.querySelectorAll('.perm-toggle:not([disabled])').forEach(function (box) {
+    box.addEventListener('change', function () {
+      var cb = this;
+      cb.disabled = true;
+      fetch("{% url 'accounts:toggle_permission' %}", {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrf()},
+        body: JSON.stringify({
+          role: parseInt(cb.dataset.role, 10),
+          codename: cb.dataset.codename,
+          allowed: cb.checked,
+        }),
+      })
+      .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
+      .then(function (res) {
+        cb.disabled = false;
+        if (!res.ok) { cb.checked = !cb.checked; alert(res.j.error || 'Failed to save'); }
+      })
+      .catch(function () { cb.disabled = false; cb.checked = !cb.checked; alert('Network error'); });
+    });
+  });
+})();
 </script>
 {% endblock %}

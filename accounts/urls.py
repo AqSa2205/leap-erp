@@ -20,4 +20,5 @@ urlpatterns = [
     path('reset-requests/', views.reset_requests_list, name='reset_requests'),
     path('reset-requests/<int:pk>/reject/', views.reject_reset, name='reject_reset'),
     path('settings/permissions/', views.permission_matrix, name='permission_matrix'),
+    path('settings/permissions/toggle/', views.ajax_toggle_permission, name='toggle_permission'),
 ]
