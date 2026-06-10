@@ -3,7 +3,7 @@ from django.db import IntegrityError
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse
 from django.template import Template, Context
-from accounts.permissions import CAPABILITIES, Capability, capability_codenames, require_capability, CapabilityRequiredMixin
+from accounts.permissions import CAPABILITIES, Capability, capability_codenames, require_capability, CapabilityRequiredMixin, seed_default_permissions, DEFAULT_MODULE_ACCESS
 from accounts.models import Role, RolePermission, PermissionChangeLog, User
 
 
@@ -163,14 +163,18 @@ class TemplateFilterTests(TestCase):
         self.assertEqual(self._render('po.access', self.user), 'NO')
 
 
-from accounts.permissions import seed_default_permissions
-
-
 class SeedTests(TestCase):
     def setUp(self):
         for name, _ in Role.ROLE_CHOICES:
             Role.objects.get_or_create(name=name)
         seed_default_permissions()
+
+    def test_default_module_access_keys_match_roles(self):
+        # Guards against a silent regression: if a Role is renamed or added and
+        # DEFAULT_MODULE_ACCESS isn't updated, the seed would give that role
+        # zero access with no error. This fails loudly instead.
+        valid_role_names = {name for name, _ in Role.ROLE_CHOICES}
+        self.assertEqual(set(DEFAULT_MODULE_ACCESS), valid_role_names)
 
     def _allowed(self, role_name, codename):
         role = Role.objects.get(name=role_name)

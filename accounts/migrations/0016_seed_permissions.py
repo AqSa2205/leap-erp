@@ -7,6 +7,8 @@ def seed(apps, schema_editor):
 
 
 def unseed(apps, schema_editor):
+    # RolePermission is brand-new as of 0015, so reversing this seed back to an
+    # empty table is the correct inverse — there are no pre-seed rows to keep.
     RolePermission = apps.get_model('accounts', 'RolePermission')
     RolePermission.objects.all().delete()
 
