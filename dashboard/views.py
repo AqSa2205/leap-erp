@@ -162,6 +162,7 @@ def index(request):
 
 
 @login_required
+@require_capability('dashboard.access')
 def chart_data(request):
     """API endpoint for dashboard charts"""
     user = request.user
