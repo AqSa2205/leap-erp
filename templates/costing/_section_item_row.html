@@ -69,6 +69,7 @@
     <td class="cost-col num" data-computed="final_unit_price">{{ item.final_unit_price|mul:conversion_rate|floatformat:2|intcomma }}</td>
     <td class="cost-col num fw-bold" data-computed="final_total_price">{{ item.final_total_price|mul:conversion_rate|floatformat:2|intcomma }}</td>
     <td class="text-center">
+        <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1 insert-row-btn" data-item-id="{{ item.pk }}" title="Insert row below"><i class="bi bi-plus-lg"></i></button>
         <a href="{% url 'costing:item_delete' item.pk %}" class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"><i class="bi bi-trash"></i></a>
     </td>
 </tr>

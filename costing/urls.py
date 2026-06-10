@@ -32,6 +32,7 @@ urlpatterns = [
     path('section/<int:section_pk>/add-item/', views.LineItemCreateView.as_view(), name='item_create'),
     path('item/<int:pk>/edit/', views.LineItemUpdateView.as_view(), name='item_edit'),
     path('item/<int:pk>/delete/', views.LineItemDeleteView.as_view(), name='item_delete'),
+    path('item/<int:pk>/insert-after/', views.ajax_insert_line_item_after, name='ajax_insert_line_item'),
     path('item/<int:pk>/update-margin/', views.ajax_update_item_margin, name='item_update_margin'),
     path('item/<int:pk>/update-field/', views.ajax_update_item_field, name='item_update_field'),
 
