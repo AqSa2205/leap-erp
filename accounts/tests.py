@@ -7,6 +7,7 @@ from django.template import Template, Context
 from django.urls import reverse
 from accounts.permissions import CAPABILITIES, Capability, capability_codenames, require_capability, CapabilityRequiredMixin, seed_default_permissions, DEFAULT_MODULE_ACCESS
 from accounts.models import Role, RolePermission, PermissionChangeLog, User
+from projects.models import Project, Region, ProjectStatus
 
 
 class RegistryTests(TestCase):
@@ -306,4 +307,35 @@ class DashboardWiringTests(TestCase):
         RolePermission.objects.filter(role=role, codename='dashboard.access').update(allowed=False)
         self.client.force_login(self.fin)
         resp = self.client.get(reverse('dashboard:index'))
+        self.assertEqual(resp.status_code, 403)
+
+
+class PipelineWiringTests(TestCase):
+    def setUp(self):
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.region, _ = Region.objects.get_or_create(
+            code='LNA', defaults={'name': 'LNA', 'description': ''})
+        self.status, _ = ProjectStatus.objects.get_or_create(
+            name='Open', defaults={'category': 'open', 'description': ''})
+        self.fin = User.objects.create_user('fin', password='x')
+        self.fin.role = Role.objects.get(name=Role.FINANCE_REP)
+        self.fin.region = self.region
+        self.fin.save()
+
+    def test_finance_with_access_sees_region_projects(self):
+        owner = User.objects.create_user('owner', password='x')
+        Project.objects.create(
+            project_name='ZZPIPE1', region=self.region, status=self.status, owner=owner)
+        self.client.force_login(self.fin)
+        resp = self.client.get(reverse('projects:list'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'ZZPIPE1')
+
+    def test_finance_without_access_403(self):
+        role = Role.objects.get(name=Role.FINANCE_REP)
+        RolePermission.objects.filter(role=role, codename='pipeline.access').update(allowed=False)
+        self.client.force_login(self.fin)
+        resp = self.client.get(reverse('projects:list'))
         self.assertEqual(resp.status_code, 403)

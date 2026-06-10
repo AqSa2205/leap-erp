@@ -13,6 +13,7 @@ import openpyxl
 from .models import Project, Region, ProjectStatus, ProjectHistory, Document, ProjectRevision
 from .forms import ProjectForm, ProjectFilterForm, DocumentForm, DocumentFilterForm
 from notifications.services import notify_users
+from accounts.permissions import CapabilityRequiredMixin
 
 
 class ProjectPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
@@ -35,11 +36,15 @@ class ProjectPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
             )
         if user.is_admin_user or user.is_manager_user:
             return queryset.filter(region=user.region)
+        if getattr(user, 'is_finance_team_user', False):
+            # Finance sees their region (the pipeline.access gate runs first).
+            return queryset.filter(region=user.region)
         return queryset.filter(owner=user)
 
 
-class ProjectListView(ProjectPermissionMixin, ListView):
+class ProjectListView(CapabilityRequiredMixin, ProjectPermissionMixin, ListView):
     """List all projects with filtering"""
+    capability = 'pipeline.access'
     model = Project
     template_name = 'projects/project_list.html'
     context_object_name = 'projects'
