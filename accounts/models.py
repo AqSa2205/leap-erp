@@ -205,6 +205,29 @@ class User(AbstractUser):
             return True
         return False
 
+    def has_capability(self, codename):
+        """Single enforcement API. super_admin always passes (lockout safety).
+
+        Caches the role's allowed codenames on the instance so nav rendering
+        does not fan out queries. Cache lives for the life of this Python
+        object (i.e. one request via `request.user`).
+        """
+        if not self.is_authenticated:
+            return False
+        if self.is_super_admin_user:
+            return True
+        if self.role_id is None:
+            return False
+        cache = getattr(self, '_capability_cache', None)
+        if cache is None:
+            cache = set(
+                RolePermission.objects
+                .filter(role_id=self.role_id, allowed=True)
+                .values_list('codename', flat=True)
+            )
+            self._capability_cache = cache
+        return codename in cache
+
     def can_delete_project(self):
         """Super admins and admins can delete projects"""
         return self.is_super_admin_user or self.is_admin_user

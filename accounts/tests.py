@@ -45,3 +45,41 @@ class RolePermissionModelTests(TestCase):
         self.assertEqual(log.role, self.role)
         self.assertEqual(log.codename, 'po.access')
         self.assertTrue(log.allowed)
+
+
+class HasCapabilityTests(TestCase):
+    def setUp(self):
+        self.fin, _ = Role.objects.get_or_create(name=Role.FINANCE_REP)
+        self.sa, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.fin_user = User.objects.create_user('fin', password='x')
+        self.fin_user.role = self.fin
+        self.fin_user.save()
+        self.sa_user = User.objects.create_user('sa', password='x')
+        self.sa_user.role = self.sa
+        self.sa_user.save()
+        RolePermission.objects.update_or_create(
+            role=self.fin, codename='costing.access', defaults={'allowed': True})
+        RolePermission.objects.update_or_create(
+            role=self.fin, codename='po.access', defaults={'allowed': False})
+
+    def test_granted_capability_true(self):
+        self.assertTrue(self.fin_user.has_capability('costing.access'))
+
+    def test_denied_capability_false(self):
+        self.assertFalse(self.fin_user.has_capability('po.access'))
+
+    def test_missing_grant_defaults_false(self):
+        self.assertFalse(self.fin_user.has_capability('dn.access'))
+
+    def test_super_admin_always_true(self):
+        self.assertTrue(self.sa_user.has_capability('anything.at.all'))
+
+    def test_user_without_role_false(self):
+        roleless = User.objects.create_user('none', password='x')
+        self.assertFalse(roleless.has_capability('costing.access'))
+
+    def test_cache_is_consistent_within_instance(self):
+        first = self.fin_user.has_capability('costing.access')
+        RolePermission.objects.filter(role=self.fin, codename='costing.access').update(allowed=False)
+        # Same in-memory user keeps its cached snapshot until reloaded.
+        self.assertEqual(self.fin_user.has_capability('costing.access'), first)
