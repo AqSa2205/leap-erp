@@ -1,6 +1,8 @@
-from django.test import TestCase
+from django.test import TestCase, RequestFactory
 from django.db import IntegrityError
-from accounts.permissions import CAPABILITIES, Capability, capability_codenames
+from django.core.exceptions import PermissionDenied
+from django.http import HttpResponse
+from accounts.permissions import CAPABILITIES, Capability, capability_codenames, require_capability, CapabilityRequiredMixin
 from accounts.models import Role, RolePermission, PermissionChangeLog, User
 
 
@@ -83,3 +85,43 @@ class HasCapabilityTests(TestCase):
         RolePermission.objects.filter(role=self.fin, codename='costing.access').update(allowed=False)
         # Same in-memory user keeps its cached snapshot until reloaded.
         self.assertEqual(self.fin_user.has_capability('costing.access'), first)
+
+
+class GateTests(TestCase):
+    def setUp(self):
+        self.rf = RequestFactory()
+        self.role, _ = Role.objects.get_or_create(name=Role.FINANCE_REP)
+        self.user = User.objects.create_user('u', password='x')
+        self.user.role = self.role
+        self.user.save()
+        RolePermission.objects.update_or_create(
+            role=self.role, codename='costing.access', defaults={'allowed': True})
+
+    def _req(self, user):
+        r = self.rf.get('/x/')
+        r.user = user
+        return r
+
+    def test_decorator_allows_when_granted(self):
+        @require_capability('costing.access')
+        def view(request):
+            return HttpResponse('ok')
+        self.assertEqual(view(self._req(self.user)).status_code, 200)
+
+    def test_decorator_blocks_when_missing(self):
+        @require_capability('po.access')
+        def view(request):
+            return HttpResponse('ok')
+        with self.assertRaises(PermissionDenied):
+            view(self._req(self.user))
+
+    def test_mixin_blocks_when_missing(self):
+        from django.views import View
+
+        class V(CapabilityRequiredMixin, View):
+            capability = 'po.access'
+            def get(self, request):
+                return HttpResponse('ok')
+
+        with self.assertRaises(PermissionDenied):
+            V.as_view()(self._req(self.user))

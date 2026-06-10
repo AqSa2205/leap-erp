@@ -6,6 +6,8 @@ code path checks it). Only the per-role on/off *grants* live in the database
 crossed with the roles.
 """
 from dataclasses import dataclass
+from functools import wraps
+from django.core.exceptions import PermissionDenied
 
 
 @dataclass(frozen=True)
@@ -60,3 +62,27 @@ def capabilities_by_module():
     for caps in out.values():
         caps.sort(key=lambda c: c.order)
     return out
+
+
+def require_capability(codename):
+    """Decorator for function views: 403 unless the user holds `codename`."""
+    def decorator(view):
+        @wraps(view)
+        def _wrapped(request, *args, **kwargs):
+            user = getattr(request, 'user', None)
+            if user is None or not user.is_authenticated or not user.has_capability(codename):
+                raise PermissionDenied
+            return view(request, *args, **kwargs)
+        return _wrapped
+    return decorator
+
+
+class CapabilityRequiredMixin:
+    """Class-based-view mixin. Set `capability = '<codename>'`."""
+    capability = None
+
+    def dispatch(self, request, *args, **kwargs):
+        user = getattr(request, 'user', None)
+        if user is None or not user.is_authenticated or not user.has_capability(self.capability):
+            raise PermissionDenied
+        return super().dispatch(request, *args, **kwargs)
