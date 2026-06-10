@@ -1,5 +1,4 @@
 {% extends 'base.html' %}
-{% load perms %}
 {% block content %}
 <div class="container-fluid py-3">
   <h4 class="mb-1">Permissions</h4>
@@ -28,7 +27,7 @@
             <td class="text-center">
               <input type="checkbox" class="perm-toggle"
                      data-role="{{ cell.role.id }}" data-codename="{{ row.cap.codename }}"
-                     {% if cell.allowed %}checked{% endif %} {% if cell.locked %}checked disabled{% endif %}>
+                     {% if cell.locked %}checked disabled{% elif cell.allowed %}checked{% endif %}>
             </td>
             {% endfor %}
           </tr>
