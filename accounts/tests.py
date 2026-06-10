@@ -125,3 +125,15 @@ class GateTests(TestCase):
 
         with self.assertRaises(PermissionDenied):
             V.as_view()(self._req(self.user))
+
+    def test_mixin_allows_when_granted(self):
+        # Exercises the success path: dispatch must fall through to the view.
+        from django.views import View
+
+        class V(CapabilityRequiredMixin, View):
+            capability = 'costing.access'
+            def get(self, request):
+                return HttpResponse('ok')
+
+        resp = V.as_view()(self._req(self.user))
+        self.assertEqual(resp.status_code, 200)
