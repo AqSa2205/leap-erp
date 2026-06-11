@@ -22,7 +22,7 @@ def derive_status(employee, d, check_in, check_out=None):
 
     Precedence: leave > holiday > weekend(unless WorkingDay) > wfh > late/present > absent.
     """
-    from hr.models import LeaveRecord, Holiday, AttendanceSettings, WorkingDay
+    from hr.models import LeaveRecord, Holiday, AttendanceSettings, WorkingDay, WFHRecord
     if LeaveRecord.objects.filter(employee=employee, start_date__lte=d, end_date__gte=d).exists():
         return 'leave', None
     if Holiday.objects.filter(date=d, is_active=True).exists():
@@ -31,7 +31,8 @@ def derive_status(employee, d, check_in, check_out=None):
     is_weekend = d.weekday() in settings.weekend_day_set()
     if is_weekend and not WorkingDay.objects.filter(date=d, is_active=True).exists():
         return 'weekend', None
-    # (A WFH branch will be added here in a later task, before the check_in block.)
+    if WFHRecord.objects.filter(employee=employee, start_date__lte=d, end_date__gte=d).exists():
+        return 'wfh', _hours_between(check_in, check_out)
     if check_in:
         if check_in > settings.expected_in_by:
             return 'late', _hours_between(check_in, check_out)

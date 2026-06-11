@@ -707,3 +707,22 @@ class WFHRecordModelTests(TestCase):
         bad = WFHRecord(employee=self.emp, start_date=_date(2026, 7, 15), end_date=_date(2026, 7, 13))
         with self.assertRaises(ValidationError):
             bad.full_clean()
+
+
+class DeriveWFHTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+
+    def test_wfh_record_makes_day_wfh(self):
+        from hr.models import WFHRecord
+        from hr.attendance_services import derive_status
+        WFHRecord.objects.create(employee=self.emp, start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13))
+        status, hours = derive_status(self.emp, _date(2026, 7, 13), _time(8, 0), _time(17, 0))
+        self.assertEqual(status, 'wfh')
+        self.assertEqual(hours, Decimal('9'))  # hours still counted; Decimal(round(9.0,2)) == Decimal('9')
+
+    def test_weekend_beats_wfh(self):
+        from hr.models import WFHRecord
+        from hr.attendance_services import derive_status
+        WFHRecord.objects.create(employee=self.emp, start_date=_date(2026, 7, 11), end_date=_date(2026, 7, 11))
+        self.assertEqual(derive_status(self.emp, _date(2026, 7, 11), None)[0], 'weekend')  # Saturday
