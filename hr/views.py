@@ -7,7 +7,7 @@ from django.urls import reverse_lazy, reverse
 from django.db.models import Q, Count, Sum
 from django.http import HttpResponse
 from django.utils import timezone
-from datetime import datetime, date, datetime as _dt
+from datetime import datetime, date
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
@@ -1441,7 +1441,7 @@ def entitlement_year(request):
 
 def _parse_date(s):
     try:
-        return _dt.strptime(s, '%Y-%m-%d').date()
+        return datetime.strptime(s, '%Y-%m-%d').date()
     except (TypeError, ValueError):
         return timezone.now().date()
 
@@ -1459,8 +1459,8 @@ def attendance_grid(request):
         for emp in employees:
             ci = request.POST.get(f'check_in_{emp.pk}') or None
             co = request.POST.get(f'check_out_{emp.pk}') or None
-            ci_t = _dt.strptime(ci, '%H:%M').time() if ci else None
-            co_t = _dt.strptime(co, '%H:%M').time() if co else None
+            ci_t = datetime.strptime(ci, '%H:%M').time() if ci else None
+            co_t = datetime.strptime(co, '%H:%M').time() if co else None
             status, hours = derive_status(emp, day, ci_t, co_t)
             AttendanceRecord.objects.update_or_create(
                 employee=emp, date=day,
