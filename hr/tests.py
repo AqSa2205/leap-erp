@@ -662,3 +662,20 @@ class MatrixWorkingDayTests(TestCase):
         days, rows, weekend_dates = build_matrix([self.emp], _date(2026, 7, 10), _date(2026, 7, 11), with_weekend_dates=True)
         self.assertIn(_date(2026, 7, 10), weekend_dates)     # Friday still weekend
         self.assertNotIn(_date(2026, 7, 11), weekend_dates)  # Saturday is a working day
+
+
+class WorkingDayViewTests(TestCase):
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+
+    def test_list_ok(self):
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.get(reverse('hr:workingday_list')).status_code, 200)
+
+    def test_create(self):
+        self.client.force_login(self.admin)
+        self.client.post(reverse('hr:workingday_create'), {'date': '2026-07-18', 'name': 'WS', 'is_active': 'on'})
+        from hr.models import WorkingDay
+        self.assertEqual(WorkingDay.objects.filter(name='WS').count(), 1)

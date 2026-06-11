@@ -15,12 +15,12 @@ from datetime import datetime, date, timedelta
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings
+from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm, AssetIssueForm, AssetReturnForm,
     VehicleForm, VehicleFilterForm, EmployeeDocumentForm,
-    LeaveTypeForm, HolidayForm, LeaveRecordForm,
+    LeaveTypeForm, HolidayForm, WorkingDayForm, LeaveRecordForm,
     AttendanceSettingsForm,
 )
 from .leave_services import generate_year_entitlements
@@ -1378,6 +1378,36 @@ class HolidayDeleteView(AdminRequiredMixin, DeleteView):
     def form_valid(self, form):
         messages.success(self.request, 'Holiday deleted.')
         return super().form_valid(form)
+
+
+# ─── WorkingDay CRUD ──────────────────────────────────────────
+
+class WorkingDayListView(AdminRequiredMixin, ListView):
+    model = WorkingDay
+    template_name = 'hr/workingday_list.html'
+    context_object_name = 'working_days'
+    paginate_by = 25
+
+class WorkingDayCreateView(AdminRequiredMixin, CreateView):
+    model = WorkingDay
+    form_class = WorkingDayForm
+    template_name = 'hr/workingday_form.html'
+    success_url = reverse_lazy('hr:workingday_list')
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs); ctx['title'] = 'Add Working Day'; ctx['button_text'] = 'Save'; return ctx
+
+class WorkingDayUpdateView(AdminRequiredMixin, UpdateView):
+    model = WorkingDay
+    form_class = WorkingDayForm
+    template_name = 'hr/workingday_form.html'
+    success_url = reverse_lazy('hr:workingday_list')
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs); ctx['title'] = 'Edit Working Day'; ctx['button_text'] = 'Save Changes'; return ctx
+
+class WorkingDayDeleteView(AdminRequiredMixin, DeleteView):
+    model = WorkingDay
+    template_name = 'hr/workingday_confirm_delete.html'
+    success_url = reverse_lazy('hr:workingday_list')
 
 
 # ─── Leave Records, Summary & Entitlement Generation ─────────────────────────

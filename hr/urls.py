@@ -48,6 +48,12 @@ urlpatterns = [
     path('holidays/<int:pk>/edit/', views.HolidayUpdateView.as_view(), name='holiday_update'),
     path('holidays/<int:pk>/delete/', views.HolidayDeleteView.as_view(), name='holiday_delete'),
 
+    # Working Days
+    path('working-days/', views.WorkingDayListView.as_view(), name='workingday_list'),
+    path('working-days/create/', views.WorkingDayCreateView.as_view(), name='workingday_create'),
+    path('working-days/<int:pk>/edit/', views.WorkingDayUpdateView.as_view(), name='workingday_update'),
+    path('working-days/<int:pk>/delete/', views.WorkingDayDeleteView.as_view(), name='workingday_delete'),
+
     # Leave Records, Summary & Entitlements
     path('leave/record/create/', views.LeaveRecordCreateView.as_view(), name='leave_record_create'),
     path('leave/record/<int:pk>/delete/', views.LeaveRecordDeleteView.as_view(), name='leave_record_delete'),

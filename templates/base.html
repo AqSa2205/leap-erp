@@ -1100,6 +1100,11 @@
                                 <i class="bi bi-gear"></i> <span>Settings</span>
                             </a>
                         </li>
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if 'workingday' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:workingday_list' %}">
+                                <i class="bi bi-calendar2-week"></i> <span>Working Days</span>
+                            </a>
+                        </li>
                     </ul>
                 </div>
             </li>
