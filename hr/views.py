@@ -1532,6 +1532,15 @@ def attendance_grid(request):
             co = request.POST.get(f'check_out_{emp.pk}') or None
             ci_t = datetime.strptime(ci, '%H:%M').time() if ci else None
             co_t = datetime.strptime(co, '%H:%M').time() if co else None
+            # Reconcile per-day WFH flag before deriving status.
+            wants_wfh = request.POST.get(f'wfh_{emp.pk}') == '1'
+            if wants_wfh:
+                WFHRecord.objects.get_or_create(
+                    employee=emp, start_date=day, end_date=day,
+                    defaults={'created_by': request.user})
+            else:
+                # Only delete single-day records; never touch multi-day WFH.
+                WFHRecord.objects.filter(employee=emp, start_date=day, end_date=day).delete()
             status, hours = derive_status(emp, day, ci_t, co_t)
             AttendanceRecord.objects.update_or_create(
                 employee=emp, date=day,
@@ -1547,8 +1556,10 @@ def attendance_grid(request):
         preview_status, _ph = derive_status(emp, day, rec.check_in if rec else None,
                                             rec.check_out if rec else None)
         locked = preview_status in ('leave', 'holiday', 'weekend')
+        is_wfh = WFHRecord.objects.filter(employee=emp, start_date=day, end_date=day).exists()
         rows.append({'employee': emp, 'record': rec,
-                     'status': rec.status if rec else preview_status, 'locked': locked})
+                     'status': rec.status if rec else preview_status, 'locked': locked,
+                     'is_wfh': is_wfh})
     return render(request, 'hr/attendance_grid.html', {'day': day, 'rows': rows})
 
 

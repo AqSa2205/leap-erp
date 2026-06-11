@@ -757,3 +757,44 @@ class WFHViewTests(TestCase):
                          'start_date': '2026-07-13', 'end_date': '2026-07-15', 'note': ''})
         from hr.models import WFHRecord
         self.assertEqual(WFHRecord.objects.filter(employee=self.emp).count(), 1)
+
+
+class GridWFHTests(TestCase):
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+        self.emp = make_employee()
+
+    def test_grid_wfh_flag_creates_record_and_status(self):
+        from hr.models import WFHRecord, AttendanceRecord
+        self.client.force_login(self.admin)
+        self.client.post(reverse('hr:attendance_grid') + '?date=2026-07-13', {
+            'date': '2026-07-13',
+            f'wfh_{self.emp.pk}': '1',
+            f'check_in_{self.emp.pk}': '08:15',
+            f'check_out_{self.emp.pk}': '18:00',
+        })
+        self.assertEqual(WFHRecord.objects.filter(employee=self.emp, start_date=_date(2026, 7, 13),
+                                                  end_date=_date(2026, 7, 13)).count(), 1)
+        self.assertEqual(AttendanceRecord.objects.get(employee=self.emp, date=_date(2026, 7, 13)).status, 'wfh')
+
+    def test_grid_unflag_wfh_removes_single_day_record(self):
+        from hr.models import WFHRecord, AttendanceRecord
+        WFHRecord.objects.create(employee=self.emp, start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13))
+        self.client.force_login(self.admin)
+        self.client.post(reverse('hr:attendance_grid') + '?date=2026-07-13', {
+            'date': '2026-07-13',
+            f'check_in_{self.emp.pk}': '08:00', f'check_out_{self.emp.pk}': '17:00',
+        })
+        self.assertFalse(WFHRecord.objects.filter(employee=self.emp, start_date=_date(2026, 7, 13),
+                                                  end_date=_date(2026, 7, 13)).exists())
+        self.assertEqual(AttendanceRecord.objects.get(employee=self.emp, date=_date(2026, 7, 13)).status, 'present')
+
+    def test_grid_does_not_touch_multiday_wfh(self):
+        from hr.models import WFHRecord
+        WFHRecord.objects.create(employee=self.emp, start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 15))
+        self.client.force_login(self.admin)
+        self.client.post(reverse('hr:attendance_grid') + '?date=2026-07-13', {'date': '2026-07-13'})
+        self.assertTrue(WFHRecord.objects.filter(employee=self.emp, start_date=_date(2026, 7, 13),
+                                                 end_date=_date(2026, 7, 15)).exists())  # multi-day untouched
