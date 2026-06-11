@@ -38,7 +38,7 @@
                 <tr>
                     <th class="ps-3" style="position:sticky;left:0;background:#f8f9fa;z-index:2;">Employee</th>
                     {% for d in days %}
-                    <th class="text-center small {% if d.weekday in weekend_set %}table-secondary{% endif %}">
+                    <th class="text-center small {% if d in weekend_dates %}table-secondary{% endif %}">
                         {{ d|date:"D" }}<br>{{ d|date:"j" }}
                     </th>
                     {% endfor %}

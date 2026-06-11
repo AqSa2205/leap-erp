@@ -1567,7 +1567,7 @@ def attendance_matrix(request):
     anchor = _parse_date(request.GET.get('date'))
     start, end = period_range(period, anchor)
     employees = list(Employee.objects.filter(is_active=True).order_by('full_name'))
-    days, rows = build_matrix(employees, start, end)
+    days, rows, weekend_dates = build_matrix(employees, start, end, with_weekend_dates=True)
     prev_anchor = start - timedelta(days=1)
     next_anchor = end + timedelta(days=1)
     return render(request, 'hr/attendance_matrix.html', {
@@ -1576,8 +1576,8 @@ def attendance_matrix(request):
         'prev_anchor': prev_anchor, 'next_anchor': next_anchor,
         'today': timezone.now().date(),
         'leave_types': LeaveType.objects.filter(is_active=True).order_by('name'),
-        # so the column-header shading matches the configured weekend (not a hardcoded Fri/Sat)
         'weekend_set': AttendanceSettings.load().weekend_day_set(),
+        'weekend_dates': weekend_dates,
     })
 
 

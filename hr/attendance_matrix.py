@@ -23,19 +23,21 @@ def period_range(period, anchor):
 
 def display_status_no_record(d):
     """Cell status for a day with no AttendanceRecord and no leave: holiday/weekend/''."""
-    from hr.models import Holiday, AttendanceSettings
+    from hr.models import Holiday, AttendanceSettings, WorkingDay
     if Holiday.objects.filter(date=d, is_active=True).exists():
         return 'holiday'
-    if d.weekday() in AttendanceSettings.load().weekend_day_set():
+    if d.weekday() in AttendanceSettings.load().weekend_day_set() \
+            and not WorkingDay.objects.filter(date=d, is_active=True).exists():
         return 'weekend'
     return ''
 
 
-def build_matrix(employees, start, end):
-    """Return (days, rows). `days` is the list of dates; `rows` is
+def build_matrix(employees, start, end, with_weekend_dates=False):
+    """Return (days, rows) or (days, rows, weekend_dates) when with_weekend_dates=True.
+    `days` is the list of dates; `rows` is
     [{'employee', 'cells': [{'date','status','leave_record_id','locked'}]}].
-    Batched: ~4 queries regardless of grid size."""
-    from hr.models import AttendanceRecord, LeaveRecord, Holiday, AttendanceSettings
+    Batched: ~5 queries regardless of grid size."""
+    from hr.models import AttendanceRecord, LeaveRecord, Holiday, AttendanceSettings, WorkingDay
 
     days = []
     d = start
@@ -64,6 +66,9 @@ def build_matrix(employees, start, end):
     holidays = set(Holiday.objects.filter(
         is_active=True, date__range=(start, end)).values_list('date', flat=True))
     weekends = AttendanceSettings.load().weekend_day_set()
+    working_days = set(WorkingDay.objects.filter(
+        is_active=True, date__range=(start, end)).values_list('date', flat=True))
+    weekend_dates = {d for d in days if d.weekday() in weekends and d not in working_days}
 
     rows = []
     for emp in employees:
@@ -80,7 +85,7 @@ def build_matrix(employees, start, end):
                 leave_pk = leave_cell[key]
             elif day in holidays:
                 status = 'holiday'
-            elif day.weekday() in weekends:
+            elif day in weekend_dates:
                 status = 'weekend'
             else:
                 status = ''
@@ -90,4 +95,6 @@ def build_matrix(employees, start, end):
                 'locked': status in ('weekend', 'holiday'),
             })
         rows.append({'employee': emp, 'cells': cells})
+    if with_weekend_dates:
+        return days, rows, weekend_dates
     return days, rows

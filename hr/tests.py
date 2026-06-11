@@ -641,3 +641,24 @@ class DeriveLateWorkingDayTests(TestCase):
     def test_plain_weekend_still_weekend(self):
         from hr.attendance_services import derive_status
         self.assertEqual(derive_status(self.emp, _date(2026, 7, 11), None)[0], 'weekend')  # Saturday
+
+
+class MatrixWorkingDayTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+
+    def test_workingday_cell_not_weekend(self):
+        from hr.models import WorkingDay
+        from hr.attendance_matrix import build_matrix
+        WorkingDay.objects.create(date=_date(2026, 7, 11), name='WS')  # Saturday
+        days, rows = build_matrix([self.emp], _date(2026, 7, 11), _date(2026, 7, 11))
+        self.assertEqual(rows[0]['cells'][0]['status'], '')        # blank working day, not 'weekend'
+        self.assertFalse(rows[0]['cells'][0]['locked'])
+
+    def test_weekend_set_excludes_workingdays(self):
+        from hr.models import WorkingDay
+        from hr.attendance_matrix import build_matrix
+        WorkingDay.objects.create(date=_date(2026, 7, 11), name='WS')
+        days, rows, weekend_dates = build_matrix([self.emp], _date(2026, 7, 10), _date(2026, 7, 11), with_weekend_dates=True)
+        self.assertIn(_date(2026, 7, 10), weekend_dates)     # Friday still weekend
+        self.assertNotIn(_date(2026, 7, 11), weekend_dates)  # Saturday is a working day
