@@ -798,3 +798,20 @@ class GridWFHTests(TestCase):
         self.client.post(reverse('hr:attendance_grid') + '?date=2026-07-13', {'date': '2026-07-13'})
         self.assertTrue(WFHRecord.objects.filter(employee=self.emp, start_date=_date(2026, 7, 13),
                                                  end_date=_date(2026, 7, 15)).exists())  # multi-day untouched
+
+
+class HistoryLateWFHSummaryTests(TestCase):
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+        self.emp = make_employee()
+
+    def test_summary_counts_late_and_wfh(self):
+        from hr.models import AttendanceRecord
+        AttendanceRecord.objects.create(employee=self.emp, date=_date(2026, 7, 13), status='late')
+        AttendanceRecord.objects.create(employee=self.emp, date=_date(2026, 7, 14), status='wfh')
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse('hr:attendance_history', kwargs={'pk': self.emp.pk}) + '?year=2026&month=7')
+        self.assertEqual(resp.context['summary']['late'], 1)
+        self.assertEqual(resp.context['summary']['wfh'], 1)

@@ -1494,6 +1494,7 @@ class AttendanceHistoryView(AdminRequiredMixin, DetailView):
                 'present': counts.get('present', 0), 'absent': counts.get('absent', 0),
                 'leave': counts.get('leave', 0), 'holiday': counts.get('holiday', 0),
                 'weekend': counts.get('weekend', 0), 'total_hours': total_hours,
+                'late': counts.get('late', 0), 'wfh': counts.get('wfh', 0),
             },
         })
         return ctx
