@@ -1576,7 +1576,6 @@ def attendance_matrix(request):
         'prev_anchor': prev_anchor, 'next_anchor': next_anchor,
         'today': timezone.now().date(),
         'leave_types': LeaveType.objects.filter(is_active=True).order_by('name'),
-        'weekend_set': AttendanceSettings.load().weekend_day_set(),
         'weekend_dates': weekend_dates,
     })
 
