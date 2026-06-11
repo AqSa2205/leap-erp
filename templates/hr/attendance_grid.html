@@ -100,6 +100,7 @@
                                 </td>
                                 <td>
                                     <div class="d-flex align-items-center gap-2">
+                                        <span class="row-status" data-pk="{{ row.employee.pk }}">
                                         {% if row.status == 'present' %}
                                         <span class="badge bg-success">Present</span>
                                         {% elif row.status == 'absent' %}
@@ -107,6 +108,7 @@
                                         {% else %}
                                         <span class="badge bg-light text-dark">{{ row.status|title }}</span>
                                         {% endif %}
+                                        </span>
                                         <button type="button" class="btn btn-sm btn-outline-success present-btn"
                                                 data-pk="{{ row.employee.pk }}" title="Fill 08:15 in / 18:00 out">
                                             <i class="bi bi-person-check"></i> Present
@@ -147,15 +149,25 @@
         return [document.querySelector('input[name="check_in_' + pk + '"]'),
                 document.querySelector('input[name="check_out_' + pk + '"]')];
     }
+    var BADGE = {
+        present: '<span class="badge bg-success">Present</span>',
+        absent: '<span class="badge bg-danger">Absent</span>'
+    };
+    function setBadge(pk, status) {  // instant visual feedback (persists on Save)
+        var el = document.querySelector('.row-status[data-pk="' + pk + '"]');
+        if (el && BADGE[status]) el.innerHTML = BADGE[status];
+    }
     function fillRow(pk) {
         var io = rowInputs(pk);
         if (io[0]) io[0].value = DEFAULT_IN;
         if (io[1]) io[1].value = DEFAULT_OUT;
+        setBadge(pk, 'present');
     }
     function clearRow(pk) {  // blank times -> saves as Absent
         var io = rowInputs(pk);
         if (io[0]) io[0].value = '';
         if (io[1]) io[1].value = '';
+        setBadge(pk, 'absent');
     }
     // Per-row Present buttons (only rendered on unlocked/working rows).
     document.querySelectorAll('.present-btn').forEach(function (btn) {

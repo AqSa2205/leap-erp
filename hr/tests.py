@@ -292,6 +292,19 @@ class AttendanceGridTests(TestCase):
         rec = AttendanceRecord.objects.get(employee=self.emp, date=_date(2026, 7, 13))
         self.assertEqual(rec.status, 'leave')
 
+    def test_grid_post_blank_times_marks_absent(self):
+        # The Absent button clears the row's times; saving a working day with no
+        # check-in must record 'absent' (overwriting any prior present record).
+        from datetime import time
+        AttendanceRecord.objects.create(employee=self.emp, date=_date(2026, 7, 13),
+                                        status='present', check_in=time(8, 0), hours_worked=Decimal('8'))
+        self.client.force_login(self.admin)
+        self.client.post(reverse('hr:attendance_grid') + '?date=2026-07-13',
+                         {'date': '2026-07-13'})  # no check_in/out submitted = cleared
+        rec = AttendanceRecord.objects.get(employee=self.emp, date=_date(2026, 7, 13))
+        self.assertEqual(rec.status, 'absent')
+        self.assertIsNone(rec.check_in)
+
 
 class AttendanceHistoryTests(TestCase):
     def setUp(self):
