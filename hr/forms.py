@@ -1,5 +1,5 @@
 from django import forms
-from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday
+from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday, LeaveRecord
 
 
 class EmployeeForm(forms.ModelForm):
@@ -275,4 +275,18 @@ class HolidayForm(forms.ModelForm):
             'date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
             'name': forms.TextInput(attrs={'class': 'form-control'}),
             'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+        }
+
+
+class LeaveRecordForm(forms.ModelForm):
+    class Meta:
+        model = LeaveRecord
+        fields = ['employee', 'leave_type', 'start_date', 'end_date', 'days', 'note']
+        widgets = {
+            'employee': forms.Select(attrs={'class': 'form-select'}),
+            'leave_type': forms.Select(attrs={'class': 'form-select'}),
+            'start_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'end_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'days': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.5', 'placeholder': 'Auto if blank'}),
+            'note': forms.TextInput(attrs={'class': 'form-control'}),
         }

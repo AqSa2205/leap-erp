@@ -198,3 +198,31 @@ class LeaveAdminViewTests(TestCase):
                                 {'date': '2026-07-17', 'name': 'Eid', 'is_active': 'on'})
         self.assertRedirects(resp, reverse('hr:holiday_list'))
         self.assertEqual(Holiday.objects.filter(name='Eid').count(), 1)
+
+
+class LeaveRecordViewTests(TestCase):
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+        self.emp = make_employee()
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+
+    def test_create_leave_autocomputes_days(self):
+        self.client.force_login(self.admin)
+        self.client.post(reverse('hr:leave_record_create'), {
+            'employee': self.emp.pk, 'leave_type': self.annual.pk,
+            'start_date': '2026-07-05', 'end_date': '2026-07-09', 'days': '', 'note': ''})
+        rec = LeaveRecord.objects.get(employee=self.emp)
+        self.assertEqual(rec.days, Decimal('5'))
+
+    def test_summary_shows_balance(self):
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=30)
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse('hr:leave_summary', kwargs={'pk': self.emp.pk}) + '?year=2026')
+        self.assertEqual(resp.status_code, 200)
+
+    def test_generate_entitlements_action(self):
+        self.client.force_login(self.admin)
+        self.client.post(reverse('hr:entitlement_year'), {'year': '2026'})
+        self.assertTrue(LeaveEntitlement.objects.filter(employee=self.emp, year=2026).exists())

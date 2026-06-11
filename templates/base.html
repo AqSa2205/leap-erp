@@ -1043,6 +1043,31 @@
                 </div>
             </li>
             <li class="nav-item">
+                <a class="nav-link d-flex justify-content-between align-items-center" data-bs-toggle="collapse" href="#leaveSubmenu" role="button" aria-expanded="{% if 'leave' in request.resolver_match.url_name or 'entitlement' in request.resolver_match.url_name or 'holiday' in request.resolver_match.url_name or 'leavetype' in request.resolver_match.url_name %}true{% else %}false{% endif %}">
+                    <span><i class="bi bi-calendar2-check"></i> <span>Leave</span></span>
+                    <i class="bi bi-chevron-down" style="font-size:0.7rem;"></i>
+                </a>
+                <div class="collapse {% if 'leave' in request.resolver_match.url_name or 'entitlement' in request.resolver_match.url_name or 'holiday' in request.resolver_match.url_name or 'leavetype' in request.resolver_match.url_name %}show{% endif %}" id="leaveSubmenu">
+                    <ul class="nav flex-column ms-3">
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if 'entitlement' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:entitlement_year' %}">
+                                <i class="bi bi-bar-chart-steps"></i> <span>Entitlements</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if 'leavetype' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:leavetype_list' %}">
+                                <i class="bi bi-tags"></i> <span>Leave Types</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if 'holiday' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:holiday_list' %}">
+                                <i class="bi bi-calendar-event"></i> <span>Holidays</span>
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </li>
+            <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'manpower' %}active{% endif %}" href="{% url 'manpower:sheet_list' %}" data-title="Manpower Costing">
                     <i class="bi bi-person-lines-fill"></i> <span>Manpower Costing</span>
                 </a>

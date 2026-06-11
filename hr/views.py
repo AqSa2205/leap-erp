@@ -3,20 +3,22 @@ from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
-from django.urls import reverse_lazy
+from django.urls import reverse_lazy, reverse
 from django.db.models import Q, Count, Sum
 from django.http import HttpResponse
+from django.utils import timezone
 from datetime import datetime, date
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday
+from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm, AssetIssueForm, AssetReturnForm,
     VehicleForm, VehicleFilterForm, EmployeeDocumentForm,
-    LeaveTypeForm, HolidayForm,
+    LeaveTypeForm, HolidayForm, LeaveRecordForm,
 )
+from .leave_services import generate_year_entitlements
 
 
 class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
@@ -1370,3 +1372,67 @@ class HolidayDeleteView(AdminRequiredMixin, DeleteView):
     def form_valid(self, form):
         messages.success(self.request, 'Holiday deleted.')
         return super().form_valid(form)
+
+
+# ─── Leave Records, Summary & Entitlement Generation ─────────────────────────
+
+
+class LeaveRecordCreateView(AdminRequiredMixin, CreateView):
+    model = LeaveRecord
+    form_class = LeaveRecordForm
+    template_name = 'hr/leaverecord_form.html'
+
+    def form_valid(self, form):
+        form.instance.created_by = self.request.user
+        if not form.cleaned_data.get('days'):
+            form.instance.days = None  # let the model auto-compute working days
+        messages.success(self.request, 'Leave recorded.')
+        return super().form_valid(form)
+
+    def get_success_url(self):
+        return reverse_lazy('hr:leave_summary', kwargs={'pk': self.object.employee_id})
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['title'] = 'Record Leave'
+        ctx['button_text'] = 'Save Leave'
+        return ctx
+
+
+class LeaveRecordDeleteView(AdminRequiredMixin, DeleteView):
+    model = LeaveRecord
+    template_name = 'hr/leaverecord_confirm_delete.html'
+
+    def get_success_url(self):
+        return reverse_lazy('hr:leave_summary', kwargs={'pk': self.object.employee_id})
+
+
+class EmployeeLeaveSummaryView(AdminRequiredMixin, DetailView):
+    model = Employee
+    template_name = 'hr/leave_summary.html'
+    context_object_name = 'employee'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        year = int(self.request.GET.get('year') or timezone.now().year)
+        ctx['year'] = year
+        ctx['entitlements'] = LeaveEntitlement.objects.filter(
+            employee=self.object, year=year).select_related('leave_type')
+        ctx['records'] = self.object.leave_records.filter(
+            start_date__year=year).select_related('leave_type')
+        return ctx
+
+
+@login_required
+def entitlement_year(request):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:hr_dashboard')
+    year = int(request.GET.get('year') or timezone.now().year)
+    if request.method == 'POST':
+        post_year = int(request.POST.get('year') or year)
+        created = generate_year_entitlements(post_year, actor=request.user)
+        messages.success(request, f'Generated {created} entitlement row(s) for {post_year}.')
+        return redirect(f"{reverse('hr:entitlement_year')}?year={post_year}")
+    entitlements = LeaveEntitlement.objects.filter(year=year).select_related('employee', 'leave_type')
+    return render(request, 'hr/entitlement_year.html', {'year': year, 'entitlements': entitlements})

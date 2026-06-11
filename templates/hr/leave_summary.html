@@ -1,0 +1,108 @@
+{% extends 'base.html' %}
+
+{% block title %}Leave Summary – {{ employee.full_name }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Leave Summary</h1>
+            <p class="text-muted mb-0">{{ employee.full_name }}</p>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{% url 'hr:employee_detail' pk=employee.pk %}" class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left"></i> Back to Employee
+            </a>
+            <a href="{% url 'hr:leave_record_create' %}?employee={{ employee.pk }}" class="btn btn-primary">
+                <i class="bi bi-plus-lg"></i> Add Leave
+            </a>
+        </div>
+    </div>
+
+    <!-- Year selector -->
+    <form method="get" class="mb-4 d-flex align-items-center gap-2" style="max-width:280px;">
+        <label class="form-label mb-0 text-nowrap">Year:</label>
+        <input type="number" name="year" value="{{ year }}" class="form-control" min="2000" max="2100">
+        <button type="submit" class="btn btn-outline-primary text-nowrap">Apply</button>
+    </form>
+
+    <!-- Balance table -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="bi bi-bar-chart"></i> Leave Balance – {{ year }}</h5>
+        </div>
+        <div class="card-body p-0">
+            {% if entitlements %}
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Leave Type</th>
+                        <th class="text-end">Entitled</th>
+                        <th class="text-end">Taken</th>
+                        <th class="text-end">Remaining</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for e in entitlements %}
+                    <tr>
+                        <td>{{ e.leave_type.name }}</td>
+                        <td class="text-end">{{ e.entitled_days }}</td>
+                        <td class="text-end">{{ e.taken_days }}</td>
+                        <td class="text-end {% if e.remaining_days < 0 %}text-danger fw-bold{% endif %}">
+                            {{ e.remaining_days }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-muted p-3 mb-0">No entitlements found for {{ year }}. <a href="{% url 'hr:entitlement_year' %}?year={{ year }}">Generate entitlements</a>.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Leave records -->
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0"><i class="bi bi-calendar2-check"></i> Leave Records – {{ year }}</h5>
+            <a href="{% url 'hr:leave_record_create' %}" class="btn btn-sm btn-primary">
+                <i class="bi bi-plus-lg"></i> Add Leave
+            </a>
+        </div>
+        <div class="card-body p-0">
+            {% if records %}
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Type</th>
+                        <th>Start</th>
+                        <th>End</th>
+                        <th class="text-end">Days</th>
+                        <th>Note</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in records %}
+                    <tr>
+                        <td>{{ r.leave_type.name }}</td>
+                        <td>{{ r.start_date }}</td>
+                        <td>{{ r.end_date }}</td>
+                        <td class="text-end">{{ r.days }}</td>
+                        <td>{{ r.note|default:"—" }}</td>
+                        <td class="text-end">
+                            <a href="{% url 'hr:leave_record_delete' pk=r.pk %}" class="btn btn-sm btn-outline-danger">
+                                <i class="bi bi-trash"></i>
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-muted p-3 mb-0">No leave records for {{ year }}.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
