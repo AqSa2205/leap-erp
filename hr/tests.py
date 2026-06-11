@@ -388,8 +388,12 @@ class HardeningTests(TestCase):
                                    start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13), days=Decimal('1'))
         self.client.force_login(self.admin)
         resp = self.client.get(reverse('hr:attendance_grid') + '?date=2026-07-13')
-        # The only active employee is on leave -> locked row -> no per-row Present button.
-        self.assertNotContains(resp, 'data-pk=')
+        # The only active employee is on leave -> locked row -> no editable controls
+        # for them (no time inputs, no per-row buttons). Assert on the time-input
+        # name, which is unique to the rendered row (the JS references data-pk/.present-btn,
+        # so those substrings appear in the script regardless of rows).
+        self.assertNotContains(resp, 'name="check_in_%d"' % self.emp.pk)
+        self.assertContains(resp, 'Leave')  # the locked row shows its Leave badge
 
 
 import json as _json
