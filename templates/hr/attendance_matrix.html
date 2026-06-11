@@ -68,7 +68,7 @@
         <span class="badge bg-success">P</span> Present
         <span class="badge bg-danger">A</span> Absent
         <span class="badge bg-info text-dark">L</span> Leave
-        <span class="badge bg-primary">H</span> Holiday
+        <span class="badge bg-warning text-dark">H</span> Holiday
         <span class="badge bg-secondary">W</span> Weekend
     </div>
 </div>
@@ -81,7 +81,7 @@
     // Keep these badge strings in sync with templates/hr/_attend_cell.html (the
     // server-side source of truth) — used for the optimistic cell update after AJAX.
     var BADGE = {present:'<span class="badge bg-success">P</span>', absent:'<span class="badge bg-danger">A</span>',
-                 leave:'<span class="badge bg-info text-dark">L</span>', holiday:'<span class="badge bg-primary">H</span>',
+                 leave:'<span class="badge bg-info text-dark">L</span>', holiday:'<span class="badge bg-warning text-dark">H</span>',
                  weekend:'<span class="badge bg-secondary">W</span>', '':'<span class="text-muted">—</span>'};
     function post(url, body) {
         return fetch(url, {method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':csrfToken}, body:JSON.stringify(body)})

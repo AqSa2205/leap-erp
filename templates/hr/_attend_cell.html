@@ -1,6 +1,6 @@
 {% if status == 'present' %}<span class="badge bg-success">P</span>
 {% elif status == 'absent' %}<span class="badge bg-danger">A</span>
 {% elif status == 'leave' %}<span class="badge bg-info text-dark">L</span>
-{% elif status == 'holiday' %}<span class="badge bg-primary">H</span>
+{% elif status == 'holiday' %}<span class="badge bg-warning text-dark">H</span>
 {% elif status == 'weekend' %}<span class="badge bg-secondary">W</span>
 {% else %}<span class="text-muted">—</span>{% endif %}
