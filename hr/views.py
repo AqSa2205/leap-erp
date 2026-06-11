@@ -1387,8 +1387,9 @@ class LeaveRecordCreateView(AdminRequiredMixin, CreateView):
 
     def form_valid(self, form):
         form.instance.created_by = self.request.user
-        if not form.cleaned_data.get('days'):
+        if form.cleaned_data.get('days') is None:
             form.instance.days = None  # let the model auto-compute working days
+            # (an explicit 0 is preserved — only a blank field auto-computes)
         messages.success(self.request, 'Leave recorded.')
         return super().form_valid(form)
 
@@ -1417,7 +1418,7 @@ class EmployeeLeaveSummaryView(AdminRequiredMixin, DetailView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        year = int(self.request.GET.get('year') or timezone.now().year)
+        year = _int_or(self.request.GET.get('year'), timezone.now().year)
         ctx['year'] = year
         ctx['entitlements'] = LeaveEntitlement.objects.filter(
             employee=self.object, year=year).select_related('leave_type')
@@ -1431,9 +1432,9 @@ def entitlement_year(request):
     if not (request.user.is_super_admin_user or request.user.is_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:hr_dashboard')
-    year = int(request.GET.get('year') or timezone.now().year)
+    year = _int_or(request.GET.get('year'), timezone.now().year)
     if request.method == 'POST':
-        post_year = int(request.POST.get('year') or year)
+        post_year = _int_or(request.POST.get('year'), year)
         created = generate_year_entitlements(post_year, actor=request.user)
         messages.success(request, f'Generated {created} entitlement row(s) for {post_year}.')
         return redirect(f"{reverse('hr:entitlement_year')}?year={post_year}")
@@ -1449,8 +1450,8 @@ class AttendanceHistoryView(AdminRequiredMixin, DetailView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         now = timezone.now()
-        year = int(self.request.GET.get('year') or now.year)
-        month = int(self.request.GET.get('month') or now.month)
+        year = _int_or(self.request.GET.get('year'), now.year)
+        month = _int_or(self.request.GET.get('month'), now.month, lo=1, hi=12)
         qs = self.object.attendance.filter(date__year=year, date__month=month).order_by('date')
         counts = {row['status']: row['n'] for row in qs.values('status').annotate(n=Count('id'))}
         total_hours = qs.aggregate(s=Sum('hours_worked'))['s'] or 0
@@ -1470,6 +1471,17 @@ def _parse_date(s):
         return datetime.strptime(s, '%Y-%m-%d').date()
     except (TypeError, ValueError):
         return timezone.now().date()
+
+
+def _int_or(value, default, lo=None, hi=None):
+    """Parse an int query param, falling back to `default` on bad/out-of-range input."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    if (lo is not None and n < lo) or (hi is not None and n > hi):
+        return default
+    return n
 
 
 @login_required

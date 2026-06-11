@@ -322,3 +322,37 @@ class AttendanceSettingsViewTests(TestCase):
         self.client.post(reverse('hr:attendance_settings'), {'weekend_days': ['5', '6']})
         from hr.models import AttendanceSettings
         self.assertEqual(AttendanceSettings.load().weekend_day_set(), {5, 6})
+
+
+class HardeningTests(TestCase):
+    """Final-review fixes: no negative hours, days=0 preserved, bad int params don't 500."""
+
+    def setUp(self):
+        from accounts.models import Role, User
+        from datetime import time
+        self.time = time
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+        self.emp = make_employee()
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+
+    def test_inverted_times_yield_no_hours(self):
+        from hr.attendance_services import derive_status
+        status, hours = derive_status(self.emp, _date(2026, 7, 13), self.time(22, 0), self.time(6, 0))
+        self.assertEqual(status, 'present')
+        self.assertIsNone(hours)  # negative span -> blank, not a corrupt negative total
+
+    def test_explicit_zero_days_preserved(self):
+        self.client.force_login(self.admin)
+        # A leave that spans only Fri+Sat would compute 0 working days; recording
+        # an explicit 0 must be kept, not overwritten by auto-compute.
+        self.client.post(reverse('hr:leave_record_create'), {
+            'employee': self.emp.pk, 'leave_type': self.annual.pk,
+            'start_date': '2026-07-10', 'end_date': '2026-07-11', 'days': '0', 'note': ''})
+        rec = LeaveRecord.objects.get(employee=self.emp)
+        self.assertEqual(rec.days, Decimal('0'))
+
+    def test_bad_year_param_does_not_500(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse('hr:leave_summary', kwargs={'pk': self.emp.pk}) + '?year=abc')
+        self.assertEqual(resp.status_code, 200)

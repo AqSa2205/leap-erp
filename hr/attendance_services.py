@@ -8,6 +8,12 @@ def _hours_between(check_in, check_out):
         return None
     base = datetime(2000, 1, 1)
     delta = datetime.combine(base, check_out) - datetime.combine(base, check_in)
+    # Night shifts aren't modelled (the model's clean() treats check_out < check_in
+    # as invalid). The grid upserts bypass clean(), so guard here: never store
+    # negative hours — they'd silently corrupt monthly totals. Leave hours blank
+    # for the admin to correct.
+    if delta.total_seconds() < 0:
+        return None
     return Decimal(round(delta.total_seconds() / 3600, 2))
 
 
