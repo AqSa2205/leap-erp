@@ -38,3 +38,26 @@ class LeaveTypeModelTests(TestCase):
         LeaveType.objects.create(name='Sick', code='sick', default_annual_days=30)
         with self.assertRaises(IntegrityError):
             LeaveType.objects.create(name='Sick 2', code='sick', default_annual_days=10)
+
+
+from datetime import date as _date
+from hr.models import Holiday, AttendanceSettings
+
+
+class HolidayAndSettingsTests(TestCase):
+    def test_holiday_unique_date(self):
+        from django.db import IntegrityError
+        Holiday.objects.create(date=_date(2026, 7, 17), name='Eid')
+        with self.assertRaises(IntegrityError):
+            Holiday.objects.create(date=_date(2026, 7, 17), name='Eid dup')
+
+    def test_settings_singleton_default_weekend(self):
+        s = AttendanceSettings.load()
+        self.assertEqual(s.weekend_day_set(), {4, 5})  # Fri, Sat
+        self.assertEqual(AttendanceSettings.load().pk, s.pk)
+
+    def test_settings_parse_custom_weekend(self):
+        s = AttendanceSettings.load()
+        s.weekend_days = '5,6'  # Sat, Sun
+        s.save()
+        self.assertEqual(AttendanceSettings.load().weekend_day_set(), {5, 6})
