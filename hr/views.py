@@ -7,11 +7,11 @@ from django.urls import reverse_lazy, reverse
 from django.db.models import Q, Count, Sum
 from django.http import HttpResponse
 from django.utils import timezone
-from datetime import datetime, date
+from datetime import datetime, date, datetime as _dt
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord
+from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm, AssetIssueForm, AssetReturnForm,
@@ -19,6 +19,7 @@ from .forms import (
     LeaveTypeForm, HolidayForm, LeaveRecordForm,
 )
 from .leave_services import generate_year_entitlements
+from .attendance_services import derive_status
 
 
 class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
@@ -1436,3 +1437,45 @@ def entitlement_year(request):
         return redirect(f"{reverse('hr:entitlement_year')}?year={post_year}")
     entitlements = LeaveEntitlement.objects.filter(year=year).select_related('employee', 'leave_type')
     return render(request, 'hr/entitlement_year.html', {'year': year, 'entitlements': entitlements})
+
+
+def _parse_date(s):
+    try:
+        return _dt.strptime(s, '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        return timezone.now().date()
+
+
+@login_required
+def attendance_grid(request):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:hr_dashboard')
+
+    day = _parse_date(request.GET.get('date') or (request.POST.get('date') if request.method == 'POST' else None))
+    employees = list(Employee.objects.filter(is_active=True).order_by('full_name'))
+
+    if request.method == 'POST':
+        for emp in employees:
+            ci = request.POST.get(f'check_in_{emp.pk}') or None
+            co = request.POST.get(f'check_out_{emp.pk}') or None
+            ci_t = _dt.strptime(ci, '%H:%M').time() if ci else None
+            co_t = _dt.strptime(co, '%H:%M').time() if co else None
+            status, hours = derive_status(emp, day, ci_t, co_t)
+            AttendanceRecord.objects.update_or_create(
+                employee=emp, date=day,
+                defaults={'check_in': ci_t, 'check_out': co_t, 'status': status,
+                          'hours_worked': hours, 'created_by': request.user})
+        messages.success(request, f'Attendance saved for {day:%Y-%m-%d}.')
+        return redirect(f"{reverse('hr:attendance_grid')}?date={day:%Y-%m-%d}")
+
+    existing = {r.employee_id: r for r in AttendanceRecord.objects.filter(date=day)}
+    rows = []
+    for emp in employees:
+        rec = existing.get(emp.pk)
+        preview_status, _ph = derive_status(emp, day, rec.check_in if rec else None,
+                                            rec.check_out if rec else None)
+        locked = preview_status in ('leave', 'holiday', 'weekend')
+        rows.append({'employee': emp, 'record': rec,
+                     'status': rec.status if rec else preview_status, 'locked': locked})
+    return render(request, 'hr/attendance_grid.html', {'day': day, 'rows': rows})

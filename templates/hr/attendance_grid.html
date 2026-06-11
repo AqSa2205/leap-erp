@@ -1,0 +1,113 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}HR - Daily Attendance{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Daily Attendance</h1>
+            <p class="text-muted mb-0">Bulk attendance entry for {{ day|date:"D, d M Y" }}</p>
+        </div>
+    </div>
+
+    <!-- Date selector -->
+    <div class="card mb-4">
+        <div class="card-body py-3">
+            <form method="get" class="d-flex align-items-center gap-3">
+                <label for="date-input" class="form-label mb-0 fw-semibold">Select Date</label>
+                <input type="date" id="date-input" name="date" value="{{ day|date:'Y-m-d' }}" class="form-control" style="max-width:200px;">
+                <button type="submit" class="btn btn-outline-primary">Apply</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Attendance form -->
+    <div class="card">
+        <div class="card-header py-3">
+            <h6 class="mb-0 fw-semibold">Attendance — {{ day|date:"D, d M Y" }}</h6>
+        </div>
+        <div class="card-body p-0">
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="date" value="{{ day|date:'Y-m-d' }}">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th class="ps-3">Employee</th>
+                                <th>Check-in</th>
+                                <th>Check-out</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in rows %}
+                            <tr>
+                                <td class="ps-3">
+                                    <div class="fw-semibold">{{ row.employee.full_name }}</div>
+                                    {% if row.employee.designation %}
+                                    <div class="text-muted small">{{ row.employee.designation }}</div>
+                                    {% endif %}
+                                </td>
+                                {% if row.locked %}
+                                <td colspan="2" class="text-muted fst-italic small">—</td>
+                                <td>
+                                    {% if row.status == 'leave' %}
+                                    <span class="badge bg-info text-dark">Leave</span>
+                                    {% elif row.status == 'holiday' %}
+                                    <span class="badge bg-primary">Holiday</span>
+                                    {% elif row.status == 'weekend' %}
+                                    <span class="badge bg-secondary">Weekend</span>
+                                    {% else %}
+                                    <span class="badge bg-light text-dark">{{ row.status|title }}</span>
+                                    {% endif %}
+                                </td>
+                                {% else %}
+                                <td>
+                                    <input type="time"
+                                           name="check_in_{{ row.employee.pk }}"
+                                           value="{% if row.record and row.record.check_in %}{{ row.record.check_in|time:'H:i' }}{% endif %}"
+                                           class="form-control form-control-sm"
+                                           style="max-width:130px;">
+                                </td>
+                                <td>
+                                    <input type="time"
+                                           name="check_out_{{ row.employee.pk }}"
+                                           value="{% if row.record and row.record.check_out %}{{ row.record.check_out|time:'H:i' }}{% endif %}"
+                                           class="form-control form-control-sm"
+                                           style="max-width:130px;">
+                                </td>
+                                <td>
+                                    {% if row.status == 'present' %}
+                                    <span class="badge bg-success">Present</span>
+                                    {% elif row.status == 'absent' %}
+                                    <span class="badge bg-danger">Absent</span>
+                                    {% else %}
+                                    <span class="badge bg-light text-dark">{{ row.status|title }}</span>
+                                    {% endif %}
+                                </td>
+                                {% endif %}
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="4" class="text-center text-muted py-4">No active employees found.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% if rows %}
+                <div class="card-footer py-3">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check2-all"></i> Save all
+                    </button>
+                </div>
+                {% endif %}
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

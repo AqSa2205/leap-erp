@@ -257,3 +257,37 @@ class AttendanceStatusTests(TestCase):
 
     def test_absent_when_no_checkin_on_workday(self):
         self.assertEqual(derive_status(self.emp, _date(2026, 7, 13), None)[0], 'absent')
+
+
+class AttendanceGridTests(TestCase):
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+        self.emp = make_employee()
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+
+    def test_grid_get_lists_active_employees(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse('hr:attendance_grid') + '?date=2026-07-13')  # Monday
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, self.emp.full_name)
+
+    def test_grid_post_saves_present(self):
+        self.client.force_login(self.admin)
+        self.client.post(reverse('hr:attendance_grid') + '?date=2026-07-13', {
+            'date': '2026-07-13',
+            f'check_in_{self.emp.pk}': '08:00',
+            f'check_out_{self.emp.pk}': '17:30',
+        })
+        rec = AttendanceRecord.objects.get(employee=self.emp, date=_date(2026, 7, 13))
+        self.assertEqual(rec.status, 'present')
+        self.assertEqual(rec.hours_worked, Decimal('9.5'))
+
+    def test_grid_post_marks_leave_day(self):
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.annual,
+                                   start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13), days=Decimal('1'))
+        self.client.force_login(self.admin)
+        self.client.post(reverse('hr:attendance_grid') + '?date=2026-07-13', {'date': '2026-07-13'})
+        rec = AttendanceRecord.objects.get(employee=self.emp, date=_date(2026, 7, 13))
+        self.assertEqual(rec.status, 'leave')

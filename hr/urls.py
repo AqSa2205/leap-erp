@@ -53,4 +53,7 @@ urlpatterns = [
     path('leave/record/<int:pk>/delete/', views.LeaveRecordDeleteView.as_view(), name='leave_record_delete'),
     path('leave/entitlements/', views.entitlement_year, name='entitlement_year'),
     path('<int:pk>/leave/', views.EmployeeLeaveSummaryView.as_view(), name='leave_summary'),
+
+    # Attendance
+    path('attendance/', views.attendance_grid, name='attendance_grid'),
 ]
