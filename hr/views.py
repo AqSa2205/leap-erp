@@ -1,6 +1,7 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib.auth.decorators import login_required
+from django.views.decorators.http import require_POST
 from django.contrib import messages
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
 from django.urls import reverse_lazy, reverse
@@ -1526,6 +1527,7 @@ def attendance_settings(request):
 
 
 @login_required
+@require_POST
 def attendance_regenerate(request):
     """Re-derive stored status for all records on a given date (after leave/holiday edits)."""
     if not (request.user.is_super_admin_user or request.user.is_admin_user):
