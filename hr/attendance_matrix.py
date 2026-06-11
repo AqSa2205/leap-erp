@@ -21,14 +21,21 @@ def period_range(period, anchor):
     return start, end
 
 
-def display_status_no_record(d):
-    """Cell status for a day with no AttendanceRecord and no leave: holiday/weekend/''."""
-    from hr.models import Holiday, AttendanceSettings, WorkingDay
+def display_status_no_record(d, employee=None):
+    """Cell status for a day with no AttendanceRecord and no leave: holiday/weekend/wfh/''.
+
+    Precedence mirrors derive_status: holiday > weekend(unless WorkingDay) > wfh > ''.
+    Pass `employee` to honor a per-employee WFHRecord covering the day.
+    """
+    from hr.models import Holiday, AttendanceSettings, WorkingDay, WFHRecord
     if Holiday.objects.filter(date=d, is_active=True).exists():
         return 'holiday'
     if d.weekday() in AttendanceSettings.load().weekend_day_set() \
             and not WorkingDay.objects.filter(date=d, is_active=True).exists():
         return 'weekend'
+    if employee is not None and WFHRecord.objects.filter(
+            employee=employee, start_date__lte=d, end_date__gte=d).exists():
+        return 'wfh'
     return ''
 
 

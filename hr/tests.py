@@ -459,6 +459,16 @@ class MatrixHelperTests(TestCase):
         self.assertEqual(display_status_no_record(_date(2026, 7, 10)), 'weekend')  # Friday
         self.assertEqual(display_status_no_record(_date(2026, 7, 16)), '')          # Thursday
 
+    def test_display_status_no_record_honors_wfh(self):
+        from hr.models import WFHRecord
+        emp = make_employee(iqama='WFHHELPER')
+        WFHRecord.objects.create(employee=emp, start_date=_date(2026, 7, 16), end_date=_date(2026, 7, 16))
+        # Thursday working day with a WFH record -> wfh (not blank)
+        self.assertEqual(display_status_no_record(_date(2026, 7, 16), emp), 'wfh')
+        # weekend still beats wfh
+        WFHRecord.objects.create(employee=emp, start_date=_date(2026, 7, 11), end_date=_date(2026, 7, 11))
+        self.assertEqual(display_status_no_record(_date(2026, 7, 11), emp), 'weekend')  # Saturday
+
 
 class MatrixViewTests(TestCase):
     def setUp(self):

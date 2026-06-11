@@ -1676,7 +1676,7 @@ def attendance_unmark_leave(request):
     if lr.start_date != lr.end_date:
         return JsonResponse({'error': 'Part of a multi-day leave — edit from the leave summary.'}, status=400)
 
-    emp_id, day = lr.employee_id, lr.start_date
+    emp, emp_id, day = lr.employee, lr.employee_id, lr.start_date
     with transaction.atomic():
         lr.delete()
         ar = AttendanceRecord.objects.filter(employee_id=emp_id, date=day).first()
@@ -1687,7 +1687,7 @@ def attendance_unmark_leave(request):
         else:
             if ar:
                 ar.delete()  # leave-only row -> restore blank/derived cell
-            new_status = display_status_no_record(day)
+            new_status = display_status_no_record(day, emp)
     return JsonResponse({'ok': True, 'status': new_status})
 
 
