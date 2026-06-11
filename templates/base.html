@@ -1277,6 +1277,22 @@
             });
         })();
 
+        // ─── Preserve sidebar scroll position across full page navigations ───
+        // Without this, every page load resets the sidebar's internal scroll to
+        // the top, so clicking a lower item makes the whole menu "jump up".
+        (function () {
+            if (!sidebar) return;
+            var KEY = 'sidebarScrollTop';
+            var saved = sessionStorage.getItem(KEY);
+            if (saved !== null) sidebar.scrollTop = parseInt(saved, 10) || 0;
+            function remember() { sessionStorage.setItem(KEY, sidebar.scrollTop); }
+            window.addEventListener('beforeunload', remember);
+            // beforeunload can be unreliable; also save the moment a link is clicked.
+            sidebar.addEventListener('click', function (e) {
+                if (e.target.closest('a[href]')) remember();
+            });
+        })();
+
         document.getElementById('sidebarToggle')?.addEventListener('click', function() {
             sidebar.classList.toggle('show');
             sidebarOverlay?.classList.toggle('show');
