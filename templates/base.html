@@ -1107,6 +1107,11 @@
                                 <i class="bi bi-calendar2-week"></i> <span>Working Days</span>
                             </a>
                         </li>
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if 'wfh' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:wfh_list' %}">
+                                <i class="bi bi-house-door"></i> <span>Work From Home</span>
+                            </a>
+                        </li>
                     </ul>
                 </div>
             </li>

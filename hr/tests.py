@@ -738,3 +738,22 @@ class MatrixWFHTests(TestCase):
         WFHRecord.objects.create(employee=self.emp, start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13))
         days, rows = build_matrix([self.emp], _date(2026, 7, 13), _date(2026, 7, 13))
         self.assertEqual(rows[0]['cells'][0]['status'], 'wfh')
+
+
+class WFHViewTests(TestCase):
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+        self.emp = make_employee()
+
+    def test_list_ok(self):
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.get(reverse('hr:wfh_list')).status_code, 200)
+
+    def test_create_wfh(self):
+        self.client.force_login(self.admin)
+        self.client.post(reverse('hr:wfh_create'), {'employee': self.emp.pk,
+                         'start_date': '2026-07-13', 'end_date': '2026-07-15', 'note': ''})
+        from hr.models import WFHRecord
+        self.assertEqual(WFHRecord.objects.filter(employee=self.emp).count(), 1)

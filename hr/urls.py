@@ -61,6 +61,11 @@ urlpatterns = [
     path('<int:pk>/leave/', views.EmployeeLeaveSummaryView.as_view(), name='leave_summary'),
     path('<int:pk>/attendance/', views.AttendanceHistoryView.as_view(), name='attendance_history'),
 
+    # WFH Records
+    path('wfh/', views.WFHRecordListView.as_view(), name='wfh_list'),
+    path('wfh/create/', views.WFHRecordCreateView.as_view(), name='wfh_create'),
+    path('wfh/<int:pk>/delete/', views.WFHRecordDeleteView.as_view(), name='wfh_delete'),
+
     # Attendance
     path('attendance/settings/', views.attendance_settings, name='attendance_settings'),
     path('attendance/regenerate/', views.attendance_regenerate, name='attendance_regenerate'),

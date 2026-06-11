@@ -15,12 +15,12 @@ from datetime import datetime, date, timedelta
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay
+from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay, WFHRecord
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm, AssetIssueForm, AssetReturnForm,
     VehicleForm, VehicleFilterForm, EmployeeDocumentForm,
-    LeaveTypeForm, HolidayForm, WorkingDayForm, LeaveRecordForm,
+    LeaveTypeForm, HolidayForm, WorkingDayForm, LeaveRecordForm, WFHRecordForm,
     AttendanceSettingsForm,
 )
 from .leave_services import generate_year_entitlements
@@ -1677,3 +1677,40 @@ def attendance_unmark_leave(request):
                 ar.delete()  # leave-only row -> restore blank/derived cell
             new_status = display_status_no_record(day)
     return JsonResponse({'ok': True, 'status': new_status})
+
+
+# ─── WFH Records ──────────────────────────────────────────────────────────────
+
+
+class WFHRecordListView(AdminRequiredMixin, ListView):
+    model = WFHRecord
+    template_name = 'hr/wfhrecord_list.html'
+    context_object_name = 'wfh_records'
+    paginate_by = 25
+
+    def get_queryset(self):
+        return WFHRecord.objects.select_related('employee').all()
+
+
+class WFHRecordCreateView(AdminRequiredMixin, CreateView):
+    model = WFHRecord
+    form_class = WFHRecordForm
+    template_name = 'hr/wfhrecord_form.html'
+    success_url = reverse_lazy('hr:wfh_list')
+
+    def form_valid(self, form):
+        form.instance.created_by = self.request.user
+        messages.success(self.request, 'WFH recorded.')
+        return super().form_valid(form)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['title'] = 'Record WFH'
+        ctx['button_text'] = 'Save WFH'
+        return ctx
+
+
+class WFHRecordDeleteView(AdminRequiredMixin, DeleteView):
+    model = WFHRecord
+    template_name = 'hr/wfhrecord_confirm_delete.html'
+    success_url = reverse_lazy('hr:wfh_list')
