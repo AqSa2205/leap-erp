@@ -37,7 +37,7 @@ def build_matrix(employees, start, end, with_weekend_dates=False):
     `days` is the list of dates; `rows` is
     [{'employee', 'cells': [{'date','status','leave_record_id','locked'}]}].
     Batched: ~5 queries regardless of grid size."""
-    from hr.models import AttendanceRecord, LeaveRecord, Holiday, AttendanceSettings, WorkingDay
+    from hr.models import AttendanceRecord, LeaveRecord, Holiday, AttendanceSettings, WorkingDay, WFHRecord
 
     days = []
     d = start
@@ -63,6 +63,12 @@ def build_matrix(employees, start, end, with_weekend_dates=False):
             leave_cell[(lr.employee_id, dd)] = removable_pk
             dd += timedelta(days=1)
 
+    wfh_cells = set()
+    for wr in WFHRecord.objects.filter(employee_id__in=emp_ids, start_date__lte=end, end_date__gte=start):
+        dd = max(wr.start_date, start); last = min(wr.end_date, end)
+        while dd <= last:
+            wfh_cells.add((wr.employee_id, dd)); dd += timedelta(days=1)
+
     holidays = set(Holiday.objects.filter(
         is_active=True, date__range=(start, end)).values_list('date', flat=True))
     weekends = AttendanceSettings.load().weekend_day_set()
@@ -87,6 +93,8 @@ def build_matrix(employees, start, end, with_weekend_dates=False):
                 status = 'holiday'
             elif day in weekend_dates:
                 status = 'weekend'
+            elif key in wfh_cells:
+                status = 'wfh'
             else:
                 status = ''
             cells.append({

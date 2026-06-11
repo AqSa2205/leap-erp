@@ -726,3 +726,15 @@ class DeriveWFHTests(TestCase):
         from hr.attendance_services import derive_status
         WFHRecord.objects.create(employee=self.emp, start_date=_date(2026, 7, 11), end_date=_date(2026, 7, 11))
         self.assertEqual(derive_status(self.emp, _date(2026, 7, 11), None)[0], 'weekend')  # Saturday
+
+
+class MatrixWFHTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+
+    def test_wfh_record_shows_in_matrix(self):
+        from hr.models import WFHRecord
+        from hr.attendance_matrix import build_matrix
+        WFHRecord.objects.create(employee=self.emp, start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13))
+        days, rows = build_matrix([self.emp], _date(2026, 7, 13), _date(2026, 7, 13))
+        self.assertEqual(rows[0]['cells'][0]['status'], 'wfh')
