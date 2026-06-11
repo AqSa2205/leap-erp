@@ -38,8 +38,14 @@
 
     <!-- Attendance form -->
     <div class="card">
-        <div class="card-header py-3">
+        <div class="card-header py-3 d-flex justify-content-between align-items-center">
             <h6 class="mb-0 fw-semibold">Attendance — {{ day|date:"D, d M Y" }}</h6>
+            {% if rows %}
+            <button type="button" class="btn btn-sm btn-success" id="markAllPresent"
+                    title="Fill 08:15 in / 18:00 out for every working row">
+                <i class="bi bi-people-fill"></i> Mark all present
+            </button>
+            {% endif %}
         </div>
         <div class="card-body p-0">
             <form method="post">
@@ -93,13 +99,19 @@
                                            style="max-width:130px;">
                                 </td>
                                 <td>
-                                    {% if row.status == 'present' %}
-                                    <span class="badge bg-success">Present</span>
-                                    {% elif row.status == 'absent' %}
-                                    <span class="badge bg-danger">Absent</span>
-                                    {% else %}
-                                    <span class="badge bg-light text-dark">{{ row.status|title }}</span>
-                                    {% endif %}
+                                    <div class="d-flex align-items-center gap-2">
+                                        {% if row.status == 'present' %}
+                                        <span class="badge bg-success">Present</span>
+                                        {% elif row.status == 'absent' %}
+                                        <span class="badge bg-danger">Absent</span>
+                                        {% else %}
+                                        <span class="badge bg-light text-dark">{{ row.status|title }}</span>
+                                        {% endif %}
+                                        <button type="button" class="btn btn-sm btn-outline-success present-btn"
+                                                data-pk="{{ row.employee.pk }}" title="Fill 08:15 in / 18:00 out">
+                                            <i class="bi bi-person-check"></i> Present
+                                        </button>
+                                    </div>
                                 </td>
                                 {% endif %}
                             </tr>
@@ -122,4 +134,28 @@
         </div>
     </div>
 </div>
+
+<script>
+(function () {
+    // Default working hours; HR can edit any row before saving (e.g. latecomers).
+    var DEFAULT_IN = '08:15', DEFAULT_OUT = '18:00';  // 18:00 = 6:00 PM
+    function fillRow(pk) {
+        var ci = document.querySelector('input[name="check_in_' + pk + '"]');
+        var co = document.querySelector('input[name="check_out_' + pk + '"]');
+        if (ci) ci.value = DEFAULT_IN;
+        if (co) co.value = DEFAULT_OUT;
+    }
+    // Per-row Present buttons (only rendered on unlocked/working rows).
+    document.querySelectorAll('.present-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () { fillRow(this.dataset.pk); });
+    });
+    // Header "Mark all present" — fill every working row at once.
+    var markAll = document.getElementById('markAllPresent');
+    if (markAll) {
+        markAll.addEventListener('click', function () {
+            document.querySelectorAll('.present-btn').forEach(function (btn) { fillRow(btn.dataset.pk); });
+        });
+    }
+})();
+</script>
 {% endblock %}

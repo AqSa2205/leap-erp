@@ -356,3 +356,21 @@ class HardeningTests(TestCase):
         self.client.force_login(self.admin)
         resp = self.client.get(reverse('hr:leave_summary', kwargs={'pk': self.emp.pk}) + '?year=abc')
         self.assertEqual(resp.status_code, 200)
+
+    def test_grid_renders_present_presets_on_working_row(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse('hr:attendance_grid') + '?date=2026-07-13')  # Monday (working)
+        self.assertContains(resp, 'Mark all present')
+        # The per-row Present button carries the employee pk in data-pk (only the
+        # rendered button has the literal `data-pk=`; the JS uses .dataset.pk).
+        self.assertContains(resp, 'data-pk="%d"' % self.emp.pk)
+        self.assertContains(resp, '08:15')   # default check-in baked into the JS
+        self.assertContains(resp, '18:00')   # default check-out (6:00 PM)
+
+    def test_grid_no_present_button_on_locked_leave_row(self):
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.annual,
+                                   start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13), days=Decimal('1'))
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse('hr:attendance_grid') + '?date=2026-07-13')
+        # The only active employee is on leave -> locked row -> no per-row Present button.
+        self.assertNotContains(resp, 'data-pk=')
