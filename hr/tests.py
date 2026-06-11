@@ -490,3 +490,38 @@ class MarkLeaveTests(TestCase):
         self.client.force_login(u)
         resp = self._post({'employee': self.emp.pk, 'date': '2026-07-13', 'leave_type': self.annual.pk})
         self.assertEqual(resp.status_code, 403)
+
+
+class UnmarkLeaveTests(TestCase):
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+        self.emp = make_employee()
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+
+    def _post(self, payload):
+        return self.client.post(reverse('hr:attendance_unmark_leave'),
+                                data=_json.dumps(payload), content_type='application/json')
+
+    def test_unmark_single_day_deletes_and_rederives(self):
+        self.client.force_login(self.admin)
+        # mark first (creates a 1-day leave + an attendance row at 'leave')
+        self.client.post(reverse('hr:attendance_mark_leave'),
+                         data=_json.dumps({'employee': self.emp.pk, 'date': '2026-07-13', 'leave_type': self.annual.pk}),
+                         content_type='application/json')
+        lr = LeaveRecord.objects.get(employee=self.emp)
+        resp = self._post({'leave_record_id': lr.pk})
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(LeaveRecord.objects.filter(pk=lr.pk).exists())
+        # 2026-07-13 is a Monday (working day), no check-in -> attendance row removed -> cell blank
+        self.assertFalse(AttendanceRecord.objects.filter(employee=self.emp, date=_date(2026, 7, 13)).exists())
+        self.assertEqual(resp.json()['status'], '')
+
+    def test_unmark_rejects_multiday(self):
+        self.client.force_login(self.admin)
+        lr = LeaveRecord.objects.create(employee=self.emp, leave_type=self.annual,
+                                        start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 15), days=Decimal('3'))
+        resp = self._post({'leave_record_id': lr.pk})
+        self.assertEqual(resp.status_code, 400)
+        self.assertTrue(LeaveRecord.objects.filter(pk=lr.pk).exists())  # not deleted

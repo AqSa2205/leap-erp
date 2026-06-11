@@ -25,7 +25,7 @@ from .forms import (
 )
 from .leave_services import generate_year_entitlements
 from .attendance_services import derive_status
-from .attendance_matrix import period_range, build_matrix
+from .attendance_matrix import period_range, build_matrix, display_status_no_record
 
 
 class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
@@ -1613,4 +1613,29 @@ def attendance_mark_leave(request):
 @login_required
 @require_POST
 def attendance_unmark_leave(request):
-    return JsonResponse({'error': 'not implemented'}, status=501)
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        raise PermissionDenied
+    try:
+        lr_id = int(json.loads(request.body or '{}')['leave_record_id'])
+    except (ValueError, KeyError, TypeError):
+        return JsonResponse({'error': 'Bad payload'}, status=400)
+
+    lr = LeaveRecord.objects.filter(pk=lr_id).first()
+    if lr is None:
+        return JsonResponse({'error': 'Not found'}, status=404)
+    if lr.start_date != lr.end_date:
+        return JsonResponse({'error': 'Part of a multi-day leave — edit from the leave summary.'}, status=400)
+
+    emp_id, day = lr.employee_id, lr.start_date
+    with transaction.atomic():
+        lr.delete()
+        ar = AttendanceRecord.objects.filter(employee_id=emp_id, date=day).first()
+        if ar and (ar.check_in or ar.check_out):
+            status, hours = derive_status(ar.employee, day, ar.check_in, ar.check_out)
+            AttendanceRecord.objects.filter(pk=ar.pk).update(status=status, hours_worked=hours)
+            new_status = status
+        else:
+            if ar:
+                ar.delete()  # leave-only row -> restore blank/derived cell
+            new_status = display_status_no_record(day)
+    return JsonResponse({'ok': True, 'status': new_status})
