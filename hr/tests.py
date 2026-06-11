@@ -61,3 +61,42 @@ class HolidayAndSettingsTests(TestCase):
         s.weekend_days = '5,6'  # Sat, Sun
         s.save()
         self.assertEqual(AttendanceSettings.load().weekend_day_set(), {5, 6})
+
+
+from decimal import Decimal
+from hr.models import Employee, LeaveEntitlement
+try:
+    from hr.models import LeaveRecord
+except ImportError:
+    LeaveRecord = None
+
+
+def make_employee(iqama='E1', name='Ali', joining=None):
+    return Employee.objects.create(iqama_number=iqama, full_name=name, joining_date=joining)
+
+
+class LeaveEntitlementTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.annual = LeaveType.objects.create(name='Annual', code='annual', default_annual_days=30)
+
+    def test_unique_per_employee_type_year(self):
+        from django.db import IntegrityError
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=30)
+        with self.assertRaises(IntegrityError):
+            LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=25)
+
+    def test_balance_with_records(self):
+        ent = LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=30)
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.annual,
+                                   start_date=_date(2026, 3, 1), end_date=_date(2026, 3, 5), days=Decimal('5'))
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.annual,
+                                   start_date=_date(2026, 6, 1), end_date=_date(2026, 6, 3), days=Decimal('3'))
+        self.assertEqual(ent.taken_days, Decimal('8'))
+        self.assertEqual(ent.remaining_days, Decimal('22'))
+
+    def test_taken_only_counts_matching_year_and_type(self):
+        ent = LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=30)
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.annual,
+                                   start_date=_date(2025, 12, 30), end_date=_date(2025, 12, 31), days=Decimal('2'))
+        self.assertEqual(ent.taken_days, Decimal('0'))
