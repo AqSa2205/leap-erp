@@ -427,3 +427,33 @@ class MatrixHelperTests(TestCase):
         self.assertEqual(display_status_no_record(_date(2026, 7, 14)), 'holiday')
         self.assertEqual(display_status_no_record(_date(2026, 7, 10)), 'weekend')  # Friday
         self.assertEqual(display_status_no_record(_date(2026, 7, 16)), '')          # Thursday
+
+
+class MatrixViewTests(TestCase):
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+        self.emp = make_employee(name='Zara Tester')
+
+    def test_matrix_month_renders(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse('hr:attendance_matrix') + '?period=month&date=2026-07-15')
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Zara Tester')
+        self.assertContains(resp, 'July')        # period heading
+        self.assertEqual(len(resp.context['days']), 31)
+
+    def test_matrix_week_has_7_days(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse('hr:attendance_matrix') + '?period=week&date=2026-07-15')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.context['days']), 7)
+
+    def test_matrix_requires_admin(self):
+        from accounts.models import Role, User
+        rep, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        u = User.objects.create_user('rep', password='x'); u.role = rep; u.save()
+        self.client.force_login(u)
+        resp = self.client.get(reverse('hr:attendance_matrix'))
+        self.assertEqual(resp.status_code, 302)  # admin-gate redirect to hr_dashboard

@@ -1080,6 +1080,11 @@
                             </a>
                         </li>
                         <li class="nav-item">
+                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'attendance_matrix' %}active{% endif %}" href="{% url 'hr:attendance_matrix' %}">
+                                <i class="bi bi-grid-3x3"></i> <span>Register</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
                             <a class="nav-link py-1 {% if request.resolver_match.url_name == 'attendance_settings' %}active{% endif %}" href="{% url 'hr:attendance_settings' %}">
                                 <i class="bi bi-gear"></i> <span>Settings</span>
                             </a>

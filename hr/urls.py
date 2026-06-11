@@ -58,5 +58,8 @@ urlpatterns = [
     # Attendance
     path('attendance/settings/', views.attendance_settings, name='attendance_settings'),
     path('attendance/regenerate/', views.attendance_regenerate, name='attendance_regenerate'),
+    path('attendance/matrix/', views.attendance_matrix, name='attendance_matrix'),
+    path('attendance/mark-leave/', views.attendance_mark_leave, name='attendance_mark_leave'),
+    path('attendance/unmark-leave/', views.attendance_unmark_leave, name='attendance_unmark_leave'),
     path('attendance/', views.attendance_grid, name='attendance_grid'),
 ]

@@ -6,9 +6,9 @@ from django.contrib import messages
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
 from django.urls import reverse_lazy, reverse
 from django.db.models import Q, Count, Sum
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
@@ -22,6 +22,7 @@ from .forms import (
 )
 from .leave_services import generate_year_entitlements
 from .attendance_services import derive_status
+from .attendance_matrix import period_range, build_matrix
 
 
 class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
@@ -1553,3 +1554,36 @@ def attendance_regenerate(request):
         n += 1
     messages.success(request, f'Regenerated {n} record(s) for {day:%Y-%m-%d}.')
     return redirect(f"{reverse('hr:attendance_grid')}?date={day:%Y-%m-%d}")
+
+
+@login_required
+def attendance_matrix(request):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:hr_dashboard')
+    period = request.GET.get('period') if request.GET.get('period') in ('week', 'month') else 'month'
+    anchor = _parse_date(request.GET.get('date'))
+    start, end = period_range(period, anchor)
+    employees = list(Employee.objects.filter(is_active=True).order_by('full_name'))
+    days, rows = build_matrix(employees, start, end)
+    prev_anchor = start - timedelta(days=1)
+    next_anchor = end + timedelta(days=1)
+    return render(request, 'hr/attendance_matrix.html', {
+        'period': period, 'anchor': anchor, 'start': start, 'end': end,
+        'days': days, 'rows': rows,
+        'prev_anchor': prev_anchor, 'next_anchor': next_anchor,
+        'today': timezone.now().date(),
+        'leave_types': LeaveType.objects.filter(is_active=True).order_by('name'),
+    })
+
+
+@login_required
+@require_POST
+def attendance_mark_leave(request):
+    return JsonResponse({'error': 'not implemented'}, status=501)
+
+
+@login_required
+@require_POST
+def attendance_unmark_leave(request):
+    return JsonResponse({'error': 'not implemented'}, status=501)

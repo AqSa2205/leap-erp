@@ -1,0 +1,115 @@
+{% extends 'base.html' %}
+{% block title %}HR - Attendance Register{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Attendance Register</h1>
+            <p class="text-muted mb-0">{{ start|date:"d M Y" }} — {{ end|date:"d M Y" }} &middot; {{ start|date:"F Y" }}</p>
+        </div>
+        <a href="{% url 'hr:leave_record_create' %}" class="btn btn-outline-primary">
+            <i class="bi bi-calendar-plus"></i> Mark leave (range)
+        </a>
+    </div>
+
+    <div class="card mb-3"><div class="card-body py-2 d-flex flex-wrap gap-2 align-items-center">
+        <div class="btn-group">
+            <a class="btn btn-sm {% if period == 'week' %}btn-primary{% else %}btn-outline-primary{% endif %}"
+               href="?period=week&date={{ anchor|date:'Y-m-d' }}">Week</a>
+            <a class="btn btn-sm {% if period == 'month' %}btn-primary{% else %}btn-outline-primary{% endif %}"
+               href="?period=month&date={{ anchor|date:'Y-m-d' }}">Month</a>
+        </div>
+        <div class="btn-group ms-2">
+            <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ prev_anchor|date:'Y-m-d' }}">&lsaquo; Prev</a>
+            <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ today|date:'Y-m-d' }}">Today</a>
+            <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ next_anchor|date:'Y-m-d' }}">Next &rsaquo;</a>
+        </div>
+        <div class="ms-auto d-flex align-items-center gap-2">
+            <label for="leaveType" class="small text-muted mb-0">Mark-leave type</label>
+            <select id="leaveType" class="form-select form-select-sm" style="width:auto;">
+                {% for lt in leave_types %}<option value="{{ lt.pk }}">{{ lt.name }}</option>{% endfor %}
+            </select>
+        </div>
+    </div></div>
+
+    <div class="card"><div class="card-body p-0"><div class="table-responsive">
+        <table class="table table-bordered table-sm align-middle mb-0" style="white-space:nowrap;">
+            <thead class="table-light">
+                <tr>
+                    <th class="ps-3" style="position:sticky;left:0;background:#f8f9fa;z-index:2;">Employee</th>
+                    {% for d in days %}
+                    <th class="text-center small {% if d.weekday == 4 or d.weekday == 5 %}table-secondary{% endif %}">
+                        {{ d|date:"D" }}<br>{{ d|date:"j" }}
+                    </th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td class="ps-3 fw-semibold" style="position:sticky;left:0;background:#fff;z-index:1;">{{ row.employee.full_name }}</td>
+                    {% for c in row.cells %}
+                    <td class="text-center attend-cell {% if c.locked %}table-secondary{% endif %}"
+                        data-emp="{{ row.employee.pk }}" data-date="{{ c.date|date:'Y-m-d' }}"
+                        data-status="{{ c.status }}" data-leave-id="{{ c.leave_record_id|default_if_none:'' }}"
+                        {% if not c.locked %}role="button"{% endif %}>
+                        {% include 'hr/_attend_cell.html' with status=c.status %}
+                    </td>
+                    {% endfor %}
+                </tr>
+                {% empty %}
+                <tr><td colspan="{{ days|length|add:1 }}" class="text-center text-muted py-4">No active employees.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div></div></div>
+    <div class="small text-muted mt-2">
+        Click a working cell to mark the selected leave type; click a single-day leave to remove it.
+        <span class="badge bg-success">P</span> Present
+        <span class="badge bg-danger">A</span> Absent
+        <span class="badge bg-info text-dark">L</span> Leave
+        <span class="badge bg-primary">H</span> Holiday
+        <span class="badge bg-secondary">W</span> Weekend
+    </div>
+</div>
+
+<script>
+(function () {
+    var csrfToken = '{{ csrf_token }}';
+    var MARK_URL = "{% url 'hr:attendance_mark_leave' %}";
+    var UNMARK_URL = "{% url 'hr:attendance_unmark_leave' %}";
+    var BADGE = {present:'<span class="badge bg-success">P</span>', absent:'<span class="badge bg-danger">A</span>',
+                 leave:'<span class="badge bg-info text-dark">L</span>', holiday:'<span class="badge bg-primary">H</span>',
+                 weekend:'<span class="badge bg-secondary">W</span>', '':'<span class="text-muted">—</span>'};
+    function post(url, body) {
+        return fetch(url, {method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':csrfToken}, body:JSON.stringify(body)})
+            .then(function (r) { return r.json().then(function (j) { return {ok:r.ok, j:j}; }); });
+    }
+    function render(cell, status, leaveId) {
+        cell.dataset.status = status;
+        cell.dataset.leaveId = leaveId || '';
+        cell.innerHTML = BADGE[status] !== undefined ? BADGE[status] : BADGE[''];
+    }
+    document.querySelectorAll('.attend-cell').forEach(function (cell) {
+        if (cell.classList.contains('table-secondary')) return;  // weekend/holiday locked
+        cell.addEventListener('click', function () {
+            var status = cell.dataset.status, leaveId = cell.dataset.leaveId;
+            if (status === 'leave') {
+                if (!leaveId) { alert('Part of a multi-day leave — edit it from the leave summary.'); return; }
+                post(UNMARK_URL, {leave_record_id: parseInt(leaveId, 10)}).then(function (res) {
+                    if (!res.ok) { alert(res.j.error || 'Failed'); return; }
+                    render(cell, res.j.status, null);
+                });
+            } else {
+                var lt = document.getElementById('leaveType').value;
+                post(MARK_URL, {employee: parseInt(cell.dataset.emp, 10), date: cell.dataset.date, leave_type: parseInt(lt, 10)})
+                    .then(function (res) {
+                        if (!res.ok) { alert(res.j.error || 'Failed'); return; }
+                        render(cell, 'leave', res.j.leave_record_id);
+                    });
+            }
+        });
+    });
+})();
+</script>
+{% endblock %}
