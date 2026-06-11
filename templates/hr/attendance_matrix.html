@@ -38,7 +38,7 @@
                 <tr>
                     <th class="ps-3" style="position:sticky;left:0;background:#f8f9fa;z-index:2;">Employee</th>
                     {% for d in days %}
-                    <th class="text-center small {% if d.weekday == 4 or d.weekday == 5 %}table-secondary{% endif %}">
+                    <th class="text-center small {% if d.weekday in weekend_set %}table-secondary{% endif %}">
                         {{ d|date:"D" }}<br>{{ d|date:"j" }}
                     </th>
                     {% endfor %}
@@ -78,6 +78,8 @@
     var csrfToken = '{{ csrf_token }}';
     var MARK_URL = "{% url 'hr:attendance_mark_leave' %}";
     var UNMARK_URL = "{% url 'hr:attendance_unmark_leave' %}";
+    // Keep these badge strings in sync with templates/hr/_attend_cell.html (the
+    // server-side source of truth) — used for the optimistic cell update after AJAX.
     var BADGE = {present:'<span class="badge bg-success">P</span>', absent:'<span class="badge bg-danger">A</span>',
                  leave:'<span class="badge bg-info text-dark">L</span>', holiday:'<span class="badge bg-primary">H</span>',
                  weekend:'<span class="badge bg-secondary">W</span>', '':'<span class="text-muted">—</span>'};
@@ -93,17 +95,22 @@
     document.querySelectorAll('.attend-cell').forEach(function (cell) {
         if (cell.classList.contains('table-secondary')) return;  // weekend/holiday locked
         cell.addEventListener('click', function () {
+            if (cell.dataset.pending) return;  // ignore double-clicks while a request is in flight
             var status = cell.dataset.status, leaveId = cell.dataset.leaveId;
             if (status === 'leave') {
                 if (!leaveId) { alert('Part of a multi-day leave — edit it from the leave summary.'); return; }
+                cell.dataset.pending = '1';
                 post(UNMARK_URL, {leave_record_id: parseInt(leaveId, 10)}).then(function (res) {
+                    cell.dataset.pending = '';
                     if (!res.ok) { alert(res.j.error || 'Failed'); return; }
                     render(cell, res.j.status, null);
                 });
             } else {
                 var lt = document.getElementById('leaveType').value;
+                cell.dataset.pending = '1';
                 post(MARK_URL, {employee: parseInt(cell.dataset.emp, 10), date: cell.dataset.date, leave_type: parseInt(lt, 10)})
                     .then(function (res) {
+                        cell.dataset.pending = '';
                         if (!res.ok) { alert(res.j.error || 'Failed'); return; }
                         render(cell, 'leave', res.j.leave_record_id);
                     });

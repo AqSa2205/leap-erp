@@ -1574,6 +1574,8 @@ def attendance_matrix(request):
         'prev_anchor': prev_anchor, 'next_anchor': next_anchor,
         'today': timezone.now().date(),
         'leave_types': LeaveType.objects.filter(is_active=True).order_by('name'),
+        # so the column-header shading matches the configured weekend (not a hardcoded Fri/Sat)
+        'weekend_set': AttendanceSettings.load().weekend_day_set(),
     })
 
 
