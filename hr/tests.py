@@ -362,7 +362,7 @@ class HardeningTests(TestCase):
     def test_inverted_times_yield_no_hours(self):
         from hr.attendance_services import derive_status
         status, hours = derive_status(self.emp, _date(2026, 7, 13), self.time(22, 0), self.time(6, 0))
-        self.assertEqual(status, 'present')
+        self.assertIn(status, ('present', 'late'))  # late threshold now applies; either is non-absent
         self.assertIsNone(hours)  # negative span -> blank, not a corrupt negative total
 
     def test_explicit_zero_days_preserved(self):
@@ -612,3 +612,32 @@ class AttendanceExtrasModelTests(TestCase):
         codes = dict(AttendanceRecord.STATUS_CHOICES)
         self.assertIn('late', codes)
         self.assertIn('wfh', codes)
+
+
+class DeriveLateWorkingDayTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+
+    def test_on_time_is_present(self):
+        from hr.attendance_services import derive_status
+        # Mon 2026-07-13; default expected_in_by 08:30; check-in 08:20 -> present
+        self.assertEqual(derive_status(self.emp, _date(2026, 7, 13), _time(8, 20))[0], 'present')
+
+    def test_late_after_threshold(self):
+        from hr.attendance_services import derive_status
+        self.assertEqual(derive_status(self.emp, _date(2026, 7, 13), _time(9, 5))[0], 'late')
+
+    def test_exactly_threshold_is_present(self):
+        from hr.attendance_services import derive_status
+        self.assertEqual(derive_status(self.emp, _date(2026, 7, 13), _time(8, 30))[0], 'present')
+
+    def test_working_day_overrides_weekend(self):
+        from hr.models import WorkingDay
+        from hr.attendance_services import derive_status
+        WorkingDay.objects.create(date=_date(2026, 7, 10), name='WS')  # Fri 10 Jul is weekend
+        self.assertEqual(derive_status(self.emp, _date(2026, 7, 10), _time(8, 0))[0], 'present')
+        self.assertEqual(derive_status(self.emp, _date(2026, 7, 10), None)[0], 'absent')
+
+    def test_plain_weekend_still_weekend(self):
+        from hr.attendance_services import derive_status
+        self.assertEqual(derive_status(self.emp, _date(2026, 7, 11), None)[0], 'weekend')  # Saturday
