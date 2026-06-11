@@ -1,6 +1,7 @@
 from datetime import date
 from django.test import TestCase
 from hr.work_calendar import count_working_days, is_working_day
+from hr.models import LeaveType
 
 
 class WorkCalendarTests(TestCase):
@@ -24,3 +25,16 @@ class WorkCalendarTests(TestCase):
     def test_count_range_all_weekend_is_zero(self):
         # Fri 10 + Sat 11 Jul 2026
         self.assertEqual(count_working_days(date(2026, 7, 10), date(2026, 7, 11), self.WEEKENDS, set()), 0)
+
+
+class LeaveTypeModelTests(TestCase):
+    def test_create_and_str(self):
+        lt = LeaveType.objects.create(name='Annual', code='annual', default_annual_days=21)
+        self.assertEqual(str(lt), 'Annual')
+        self.assertTrue(lt.is_paid)  # default True
+
+    def test_code_is_unique(self):
+        from django.db import IntegrityError
+        LeaveType.objects.create(name='Sick', code='sick', default_annual_days=30)
+        with self.assertRaises(IntegrityError):
+            LeaveType.objects.create(name='Sick 2', code='sick', default_annual_days=10)
