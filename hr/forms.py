@@ -1,5 +1,5 @@
 from django import forms
-from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument
+from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday
 
 
 class EmployeeForm(forms.ModelForm):
@@ -251,8 +251,6 @@ class AssetReturnForm(forms.ModelForm):
 
 
 # ─── Leave Type & Holiday Forms ──────────────────────────────
-
-from .models import LeaveType, Holiday
 
 
 class LeaveTypeForm(forms.ModelForm):

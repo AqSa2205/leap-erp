@@ -10,11 +10,12 @@ from datetime import datetime, date
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument
+from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm, AssetIssueForm, AssetReturnForm,
     VehicleForm, VehicleFilterForm, EmployeeDocumentForm,
+    LeaveTypeForm, HolidayForm,
 )
 
 
@@ -1275,15 +1276,12 @@ def vehicle_export(request):
 
 # ─── Leave Type CRUD ──────────────────────────────────────────
 
-from .models import LeaveType, LeaveEntitlement, LeaveRecord, Holiday, AttendanceSettings
-from .forms import LeaveTypeForm, HolidayForm
-from .leave_services import generate_year_entitlements
-
 
 class LeaveTypeListView(AdminRequiredMixin, ListView):
     model = LeaveType
     template_name = 'hr/leavetype_list.html'
     context_object_name = 'leave_types'
+    paginate_by = 25
 
 
 class LeaveTypeCreateView(AdminRequiredMixin, CreateView):
@@ -1296,6 +1294,12 @@ class LeaveTypeCreateView(AdminRequiredMixin, CreateView):
         messages.success(self.request, 'Leave type created successfully.')
         return super().form_valid(form)
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['title'] = 'Add Leave Type'
+        context['button_text'] = 'Save Leave Type'
+        return context
+
 
 class LeaveTypeUpdateView(AdminRequiredMixin, UpdateView):
     model = LeaveType
@@ -1307,6 +1311,12 @@ class LeaveTypeUpdateView(AdminRequiredMixin, UpdateView):
         messages.success(self.request, 'Leave type updated successfully.')
         return super().form_valid(form)
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['title'] = 'Edit Leave Type'
+        context['button_text'] = 'Save Changes'
+        return context
+
 
 # ─── Holiday CRUD ─────────────────────────────────────────────
 
@@ -1315,6 +1325,7 @@ class HolidayListView(AdminRequiredMixin, ListView):
     template_name = 'hr/holiday_list.html'
     context_object_name = 'holidays'
     ordering = ['date']
+    paginate_by = 25
 
 
 class HolidayCreateView(AdminRequiredMixin, CreateView):
@@ -1327,6 +1338,12 @@ class HolidayCreateView(AdminRequiredMixin, CreateView):
         messages.success(self.request, 'Holiday created successfully.')
         return super().form_valid(form)
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['title'] = 'Add Holiday'
+        context['button_text'] = 'Save Holiday'
+        return context
+
 
 class HolidayUpdateView(AdminRequiredMixin, UpdateView):
     model = Holiday
@@ -1337,6 +1354,12 @@ class HolidayUpdateView(AdminRequiredMixin, UpdateView):
     def form_valid(self, form):
         messages.success(self.request, 'Holiday updated successfully.')
         return super().form_valid(form)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['title'] = 'Edit Holiday'
+        context['button_text'] = 'Save Changes'
+        return context
 
 
 class HolidayDeleteView(AdminRequiredMixin, DeleteView):

@@ -155,6 +155,7 @@ class GeneratorTests(TestCase):
     def setUp(self):
         self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={
             'name': 'Annual', 'default_annual_days': 30})
+        # Sick forced to 15 (not the seeded 30) so the generator test verifies the flat-default path with a non-seed value.
         self.sick, _ = LeaveType.objects.update_or_create(
             code='sick', defaults={'name': 'Sick', 'default_annual_days': 15})
         self.e_new = make_employee('A', 'New', _date(2026, 2, 1))   # joins 2026
@@ -193,6 +194,7 @@ class LeaveAdminViewTests(TestCase):
 
     def test_holiday_create(self):
         self.client.force_login(self.admin)
-        self.client.post(reverse('hr:holiday_create'),
-                         {'date': '2026-07-17', 'name': 'Eid', 'is_active': 'on'})
+        resp = self.client.post(reverse('hr:holiday_create'),
+                                {'date': '2026-07-17', 'name': 'Eid', 'is_active': 'on'})
+        self.assertRedirects(resp, reverse('hr:holiday_list'))
         self.assertEqual(Holiday.objects.filter(name='Eid').count(), 1)
