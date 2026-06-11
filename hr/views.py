@@ -1599,14 +1599,22 @@ def attendance_mark_leave(request):
     if employee is None or leave_type is None:
         return JsonResponse({'error': 'Unknown employee or leave type'}, status=400)
 
+    # Guard against double-booking: a day already inside any leave (incl. a
+    # multi-day record showing stale 'present' in the matrix) must not get a
+    # second overlapping LeaveRecord that would double-count the balance.
+    if LeaveRecord.objects.filter(employee=employee, start_date__lte=day, end_date__gte=day).exists():
+        return JsonResponse({'error': 'Already on leave that day.'}, status=400)
+
     with transaction.atomic():
         lr = LeaveRecord.objects.create(
             employee=employee, leave_type=leave_type,
             start_date=day, end_date=day, created_by=request.user)
+        # Don't blank check_in/check_out — if the day already had clock times,
+        # preserving them keeps the mark->unmark round trip lossless (unmark
+        # re-derives back to present). hours_worked is nulled (no hours on leave).
         AttendanceRecord.objects.update_or_create(
             employee=employee, date=day,
-            defaults={'status': 'leave', 'check_in': None, 'check_out': None,
-                      'hours_worked': None, 'created_by': request.user})
+            defaults={'status': 'leave', 'hours_worked': None, 'created_by': request.user})
     return JsonResponse({'ok': True, 'status': 'leave', 'leave_record_id': lr.pk})
 
 

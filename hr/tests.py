@@ -525,3 +525,45 @@ class UnmarkLeaveTests(TestCase):
         resp = self._post({'leave_record_id': lr.pk})
         self.assertEqual(resp.status_code, 400)
         self.assertTrue(LeaveRecord.objects.filter(pk=lr.pk).exists())  # not deleted
+
+
+class MarkLeaveIntegrityTests(TestCase):
+    """Final-review fixes: no double-booking; clock times survive a mark->unmark round trip."""
+
+    def setUp(self):
+        from accounts.models import Role, User
+        from datetime import time
+        self.time = time
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+        self.emp = make_employee()
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+        self.client.force_login(self.admin)
+
+    def _mark(self, day='2026-07-13'):
+        return self.client.post(reverse('hr:attendance_mark_leave'),
+                                data=_json.dumps({'employee': self.emp.pk, 'date': day, 'leave_type': self.annual.pk}),
+                                content_type='application/json')
+
+    def test_mark_rejects_overlapping_leave(self):
+        # A multi-day leave already covers 2026-07-13.
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.annual,
+                                   start_date=_date(2026, 7, 12), end_date=_date(2026, 7, 15), days=Decimal('4'))
+        resp = self._mark('2026-07-13')
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(LeaveRecord.objects.filter(employee=self.emp).count(), 1)  # no second record
+
+    def test_mark_over_present_preserves_times_roundtrip(self):
+        AttendanceRecord.objects.create(employee=self.emp, date=_date(2026, 7, 13), status='present',
+                                        check_in=self.time(8, 0), check_out=self.time(17, 0), hours_worked=Decimal('9'))
+        self._mark('2026-07-13')
+        ar = AttendanceRecord.objects.get(employee=self.emp, date=_date(2026, 7, 13))
+        self.assertEqual(ar.status, 'leave')
+        self.assertEqual(ar.check_in, self.time(8, 0))   # times preserved, not wiped
+        lr = LeaveRecord.objects.get(employee=self.emp)
+        resp = self.client.post(reverse('hr:attendance_unmark_leave'),
+                                data=_json.dumps({'leave_record_id': lr.pk}), content_type='application/json')
+        self.assertEqual(resp.json()['status'], 'present')   # re-derived back to present
+        ar.refresh_from_db()
+        self.assertEqual(ar.status, 'present')
+        self.assertEqual(ar.hours_worked, Decimal('9.00'))
