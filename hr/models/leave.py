@@ -45,3 +45,40 @@ class LeaveEntitlement(models.Model):
     @property
     def remaining_days(self):
         return self.entitled_days - self.taken_days
+
+
+class LeaveRecord(models.Model):
+    employee = models.ForeignKey('hr.Employee', on_delete=models.CASCADE, related_name='leave_records')
+    leave_type = models.ForeignKey(LeaveType, on_delete=models.PROTECT, related_name='records')
+    start_date = models.DateField()
+    end_date = models.DateField()
+    days = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True,
+                               help_text='Working days; auto-computed from the range if left blank.')
+    note = models.CharField(max_length=300, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-start_date']
+        indexes = [models.Index(fields=['employee', 'start_date'])]
+
+    def __str__(self):
+        return f"{self.employee.full_name} {self.leave_type.name} {self.start_date}..{self.end_date}"
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValidationError({'end_date': 'End date cannot be before start date.'})
+
+    def computed_days(self):
+        from decimal import Decimal
+        from hr.models import AttendanceSettings, Holiday
+        from hr.work_calendar import count_working_days
+        weekends = AttendanceSettings.load().weekend_day_set()
+        holidays = set(Holiday.objects.filter(is_active=True).values_list('date', flat=True))
+        return Decimal(count_working_days(self.start_date, self.end_date, weekends, holidays))
+
+    def save(self, *args, **kwargs):
+        if self.days is None:
+            self.days = self.computed_days()
+        super().save(*args, **kwargs)

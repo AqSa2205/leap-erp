@@ -64,11 +64,8 @@ class HolidayAndSettingsTests(TestCase):
 
 
 from decimal import Decimal
-from hr.models import Employee, LeaveEntitlement
-try:
-    from hr.models import LeaveRecord
-except ImportError:
-    LeaveRecord = None
+from django.core.exceptions import ValidationError
+from hr.models import Employee, LeaveEntitlement, LeaveRecord
 
 
 def make_employee(iqama='E1', name='Ali', joining=None):
@@ -100,3 +97,35 @@ class LeaveEntitlementTests(TestCase):
         LeaveRecord.objects.create(employee=self.emp, leave_type=self.annual,
                                    start_date=_date(2025, 12, 30), end_date=_date(2025, 12, 31), days=Decimal('2'))
         self.assertEqual(ent.taken_days, Decimal('0'))
+
+
+class LeaveRecordTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.annual = LeaveType.objects.create(name='Annual', code='annual', default_annual_days=30)
+
+    def test_days_autocomputed_excluding_weekend(self):
+        # Sun 5 Jul -> Thu 9 Jul 2026 = 5 working days (Fri/Sat weekend)
+        rec = LeaveRecord(employee=self.emp, leave_type=self.annual,
+                          start_date=_date(2026, 7, 5), end_date=_date(2026, 7, 9))
+        rec.save()
+        self.assertEqual(rec.days, Decimal('5'))
+
+    def test_days_excludes_holiday(self):
+        Holiday.objects.create(date=_date(2026, 7, 7), name='X')
+        rec = LeaveRecord(employee=self.emp, leave_type=self.annual,
+                          start_date=_date(2026, 7, 5), end_date=_date(2026, 7, 9))
+        rec.save()
+        self.assertEqual(rec.days, Decimal('4'))
+
+    def test_manual_days_override_preserved(self):
+        rec = LeaveRecord(employee=self.emp, leave_type=self.annual,
+                          start_date=_date(2026, 7, 5), end_date=_date(2026, 7, 9), days=Decimal('3'))
+        rec.save()
+        self.assertEqual(rec.days, Decimal('3'))
+
+    def test_end_before_start_rejected(self):
+        rec = LeaveRecord(employee=self.emp, leave_type=self.annual,
+                          start_date=_date(2026, 7, 9), end_date=_date(2026, 7, 5))
+        with self.assertRaises(ValidationError):
+            rec.full_clean()
