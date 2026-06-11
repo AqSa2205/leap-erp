@@ -147,6 +147,9 @@ class AnnualRuleTests(TestCase):
         self.assertEqual(annual_entitlement_for(_date(2025, 7, 1), 2026), Decimal('30'))
         self.assertEqual(annual_entitlement_for(_date(2025, 7, 1), 2027), Decimal('30'))
 
+    def test_no_joining_date_defaults_30(self):
+        self.assertEqual(annual_entitlement_for(None, 2026), Decimal('30'))
+
 
 class WorkingDayModelTests(TestCase):
     def test_unique_date_and_str(self):
@@ -156,9 +159,6 @@ class WorkingDayModelTests(TestCase):
         self.assertIn('2026-07-18', str(wd))
         with self.assertRaises(IntegrityError):
             WorkingDay.objects.create(date=_date(2026, 7, 18), name='dup')
-
-    def test_no_joining_date_defaults_30(self):
-        self.assertEqual(annual_entitlement_for(None, 2026), Decimal('30'))
 
 
 class GeneratorTests(TestCase):
