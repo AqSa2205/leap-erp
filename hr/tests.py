@@ -376,6 +376,7 @@ class HardeningTests(TestCase):
         self.assertNotContains(resp, 'data-pk=')
 
 
+import json as _json
 from hr.attendance_matrix import period_range, build_matrix, display_status_no_record
 
 
@@ -457,3 +458,35 @@ class MatrixViewTests(TestCase):
         self.client.force_login(u)
         resp = self.client.get(reverse('hr:attendance_matrix'))
         self.assertEqual(resp.status_code, 302)  # admin-gate redirect to hr_dashboard
+
+
+class MarkLeaveTests(TestCase):
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+        self.emp = make_employee()
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+
+    def _post(self, payload):
+        return self.client.post(reverse('hr:attendance_mark_leave'),
+                                data=_json.dumps(payload), content_type='application/json')
+
+    def test_mark_creates_leave_and_attendance(self):
+        self.client.force_login(self.admin)
+        resp = self._post({'employee': self.emp.pk, 'date': '2026-07-13', 'leave_type': self.annual.pk})
+        self.assertEqual(resp.status_code, 200)
+        lr = LeaveRecord.objects.get(employee=self.emp)
+        self.assertEqual(lr.start_date, _date(2026, 7, 13))
+        self.assertEqual(lr.end_date, _date(2026, 7, 13))
+        ar = AttendanceRecord.objects.get(employee=self.emp, date=_date(2026, 7, 13))
+        self.assertEqual(ar.status, 'leave')
+        self.assertEqual(resp.json()['leave_record_id'], lr.pk)
+
+    def test_mark_requires_admin(self):
+        from accounts.models import Role, User
+        rep, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        u = User.objects.create_user('rep', password='x'); u.role = rep; u.save()
+        self.client.force_login(u)
+        resp = self._post({'employee': self.emp.pk, 'date': '2026-07-13', 'leave_type': self.annual.pk})
+        self.assertEqual(resp.status_code, 403)

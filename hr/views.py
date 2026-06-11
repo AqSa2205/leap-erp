@@ -1,3 +1,4 @@
+import json
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib.auth.decorators import login_required
@@ -8,6 +9,8 @@ from django.urls import reverse_lazy, reverse
 from django.db.models import Q, Count, Sum
 from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
+from django.db import transaction
+from django.core.exceptions import PermissionDenied
 from datetime import datetime, date, timedelta
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -1582,7 +1585,30 @@ def attendance_matrix(request):
 @login_required
 @require_POST
 def attendance_mark_leave(request):
-    return JsonResponse({'error': 'not implemented'}, status=501)
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        raise PermissionDenied
+    try:
+        payload = json.loads(request.body or '{}')
+        emp_id = int(payload['employee'])
+        day = datetime.strptime(payload['date'], '%Y-%m-%d').date()
+        lt_id = int(payload['leave_type'])
+    except (ValueError, KeyError, TypeError):
+        return JsonResponse({'error': 'Bad payload'}, status=400)
+
+    employee = Employee.objects.filter(pk=emp_id, is_active=True).first()
+    leave_type = LeaveType.objects.filter(pk=lt_id, is_active=True).first()
+    if employee is None or leave_type is None:
+        return JsonResponse({'error': 'Unknown employee or leave type'}, status=400)
+
+    with transaction.atomic():
+        lr = LeaveRecord.objects.create(
+            employee=employee, leave_type=leave_type,
+            start_date=day, end_date=day, created_by=request.user)
+        AttendanceRecord.objects.update_or_create(
+            employee=employee, date=day,
+            defaults={'status': 'leave', 'check_in': None, 'check_out': None,
+                      'hours_worked': None, 'created_by': request.user})
+    return JsonResponse({'ok': True, 'status': 'leave', 'leave_record_id': lr.pk})
 
 
 @login_required
