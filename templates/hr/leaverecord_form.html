@@ -18,7 +18,7 @@
 
             <div class="card">
                 <div class="card-body">
-                    <form method="post" novalidate>
+                    <form method="post" enctype="multipart/form-data" novalidate>
                         {% csrf_token %}
 
                         <div class="row mb-3">
@@ -67,6 +67,21 @@
                             {{ form.note }}
                             {% if form.note.errors %}
                             <div class="invalid-feedback d-block">{{ form.note.errors.0 }}</div>
+                            {% endif %}
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Medical Certificate</label>
+                            {% if form.instance.medical_certificate %}
+                            <div class="small mb-1">
+                                Current: <a href="{{ form.instance.medical_certificate.url }}" target="_blank">
+                                    <i class="bi bi-paperclip"></i> view file</a>
+                            </div>
+                            {% endif %}
+                            {{ form.medical_certificate }}
+                            <div class="form-text">Required for leave types that mandate one (e.g. Sick). PDF or image.</div>
+                            {% if form.medical_certificate.errors %}
+                            <div class="invalid-feedback d-block">{{ form.medical_certificate.errors.0 }}</div>
                             {% endif %}
                         </div>
 

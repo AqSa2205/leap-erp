@@ -256,13 +256,15 @@ class AssetReturnForm(forms.ModelForm):
 class LeaveTypeForm(forms.ModelForm):
     class Meta:
         model = LeaveType
-        fields = ['name', 'code', 'default_annual_days', 'is_paid', 'color', 'is_active']
+        fields = ['name', 'code', 'default_annual_days', 'is_paid', 'color',
+                  'requires_medical_certificate', 'is_active']
         widgets = {
             'name': forms.TextInput(attrs={'class': 'form-control'}),
             'code': forms.TextInput(attrs={'class': 'form-control'}),
             'default_annual_days': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.5'}),
             'is_paid': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
             'color': forms.TextInput(attrs={'class': 'form-control'}),
+            'requires_medical_certificate': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
             'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
         }
 
@@ -292,7 +294,7 @@ class WorkingDayForm(forms.ModelForm):
 class LeaveRecordForm(forms.ModelForm):
     class Meta:
         model = LeaveRecord
-        fields = ['employee', 'leave_type', 'start_date', 'end_date', 'days', 'note']
+        fields = ['employee', 'leave_type', 'start_date', 'end_date', 'days', 'note', 'medical_certificate']
         widgets = {
             'employee': forms.Select(attrs={'class': 'form-select'}),
             'leave_type': forms.Select(attrs={'class': 'form-select'}),
@@ -300,6 +302,7 @@ class LeaveRecordForm(forms.ModelForm):
             'end_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
             'days': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.5', 'placeholder': 'Auto if blank'}),
             'note': forms.TextInput(attrs={'class': 'form-control'}),
+            'medical_certificate': forms.ClearableFileInput(attrs={'class': 'form-control'}),
         }
 
 

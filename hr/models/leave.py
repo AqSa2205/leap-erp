@@ -8,6 +8,9 @@ class LeaveType(models.Model):
     default_annual_days = models.DecimalField(max_digits=5, decimal_places=1, default=0)
     is_paid = models.BooleanField(default=True)
     color = models.CharField(max_length=20, default='secondary', help_text='Bootstrap color name for badges')
+    requires_medical_certificate = models.BooleanField(
+        default=False,
+        help_text='If set, a medical certificate must be attached when recording this leave (e.g. Sick).')
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -55,6 +58,9 @@ class LeaveRecord(models.Model):
     days = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True,
                                help_text='Working days; auto-computed from the range if left blank.')
     note = models.CharField(max_length=300, blank=True)
+    medical_certificate = models.FileField(
+        upload_to='leave_certificates/%Y/%m/', null=True, blank=True,
+        help_text='Required for leave types that mandate a medical certificate (e.g. Sick).')
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -69,6 +75,10 @@ class LeaveRecord(models.Model):
         from django.core.exceptions import ValidationError
         if self.start_date and self.end_date and self.end_date < self.start_date:
             raise ValidationError({'end_date': 'End date cannot be before start date.'})
+        if self.leave_type_id and self.leave_type.requires_medical_certificate \
+                and not self.medical_certificate:
+            raise ValidationError({'medical_certificate':
+                                   'A medical certificate is required for this leave type.'})
 
     def computed_days(self):
         from decimal import Decimal

@@ -79,6 +79,7 @@
                         <th>End</th>
                         <th class="text-end">Days</th>
                         <th>Note</th>
+                        <th>Certificate</th>
                         <th></th>
                     </tr>
                 </thead>
@@ -90,6 +91,17 @@
                         <td>{{ r.end_date }}</td>
                         <td class="text-end">{{ r.days }}</td>
                         <td>{{ r.note|default:"—" }}</td>
+                        <td>
+                            {% if r.medical_certificate %}
+                            <a href="{{ r.medical_certificate.url }}" target="_blank" class="text-decoration-none">
+                                <i class="bi bi-paperclip"></i> View
+                            </a>
+                            {% elif r.leave_type.requires_medical_certificate %}
+                            <span class="badge bg-danger">Missing</span>
+                            {% else %}
+                            <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
                         <td class="text-end">
                             <a href="{% url 'hr:leave_record_delete' pk=r.pk %}" class="btn btn-sm btn-outline-danger">
                                 <i class="bi bi-trash"></i>

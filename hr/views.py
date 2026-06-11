@@ -1673,6 +1673,13 @@ def attendance_mark_leave(request):
     if employee is None or leave_type is None:
         return JsonResponse({'error': 'Unknown employee or leave type'}, status=400)
 
+    # Certificate-required leave (e.g. Sick) can't be granted from the one-click
+    # grid action — there's nowhere to attach the file. Send them to Add Leave.
+    if leave_type.requires_medical_certificate:
+        return JsonResponse(
+            {'error': f'{leave_type.name} needs a medical certificate — use the Add Leave form.'},
+            status=400)
+
     # Guard against double-booking: a day already inside any leave (incl. a
     # multi-day record showing stale 'present' in the matrix) must not get a
     # second overlapping LeaveRecord that would double-count the balance.

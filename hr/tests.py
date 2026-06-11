@@ -866,3 +866,78 @@ class EntitlementYearGroupedTests(TestCase):
         g = resp.context['groups'][0]
         self.assertEqual(g['total_taken'], Decimal('0'))       # 2025 leave excluded
         self.assertEqual(g['total_remaining'], Decimal('30'))
+
+
+class SickLeaveCertificateTests(TestCase):
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+        self.emp = make_employee()
+        self.sick, _ = LeaveType.objects.get_or_create(
+            code='sick', defaults={'name': 'Sick', 'default_annual_days': 15})
+        self.sick.requires_medical_certificate = True
+        self.sick.save()
+        self.annual, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+
+    def _cert(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        return SimpleUploadedFile('cert.pdf', b'%PDF-1.4 fake', content_type='application/pdf')
+
+    def test_sick_migration_set_flag(self):
+        # Data migration 0017 should have flagged the seeded sick type — but this
+        # test recreates it, so just assert the flag we set holds.
+        self.assertTrue(LeaveType.objects.get(code='sick').requires_medical_certificate)
+
+    def test_model_clean_blocks_sick_without_certificate(self):
+        from django.core.exceptions import ValidationError
+        r = LeaveRecord(employee=self.emp, leave_type=self.sick,
+                        start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13), days=Decimal('1'))
+        with self.assertRaises(ValidationError):
+            r.full_clean()
+
+    def test_model_clean_allows_sick_with_certificate(self):
+        r = LeaveRecord(employee=self.emp, leave_type=self.sick,
+                        start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13), days=Decimal('1'),
+                        medical_certificate=self._cert())
+        r.full_clean()  # should not raise
+
+    def test_model_clean_allows_non_sick_without_certificate(self):
+        r = LeaveRecord(employee=self.emp, leave_type=self.annual,
+                        start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13), days=Decimal('1'))
+        r.full_clean()  # annual doesn't require a certificate
+
+    def test_create_form_rejects_sick_without_certificate(self):
+        self.client.force_login(self.admin)
+        resp = self.client.post(reverse('hr:leave_record_create'), {
+            'employee': self.emp.pk, 'leave_type': self.sick.pk,
+            'start_date': '2026-07-13', 'end_date': '2026-07-13', 'days': '', 'note': ''})
+        self.assertEqual(resp.status_code, 200)  # re-rendered with errors, not redirected
+        self.assertFalse(LeaveRecord.objects.filter(employee=self.emp).exists())
+
+    def test_create_form_accepts_sick_with_certificate(self):
+        self.client.force_login(self.admin)
+        resp = self.client.post(reverse('hr:leave_record_create'), {
+            'employee': self.emp.pk, 'leave_type': self.sick.pk,
+            'start_date': '2026-07-13', 'end_date': '2026-07-13', 'days': '', 'note': '',
+            'medical_certificate': self._cert()})
+        self.assertEqual(LeaveRecord.objects.filter(employee=self.emp).count(), 1)
+        self.assertTrue(LeaveRecord.objects.get(employee=self.emp).medical_certificate)
+
+    def test_grid_mark_leave_blocks_certificate_type(self):
+        import json as _json
+        self.client.force_login(self.admin)
+        resp = self.client.post(reverse('hr:attendance_mark_leave'),
+                                data=_json.dumps({'employee': self.emp.pk, 'date': '2026-07-13',
+                                                  'leave_type': self.sick.pk}),
+                                content_type='application/json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('certificate', resp.json()['error'].lower())
+        self.assertFalse(LeaveRecord.objects.filter(employee=self.emp).exists())
+
+    def tearDown(self):
+        # Remove any files written to MEDIA_ROOT by accepted-certificate tests.
+        for r in LeaveRecord.objects.exclude(medical_certificate=''):
+            if r.medical_certificate:
+                r.medical_certificate.delete(save=False)

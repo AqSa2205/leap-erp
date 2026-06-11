@@ -77,6 +77,16 @@
                                 <div class="invalid-feedback d-block">{{ form.is_active.errors.0 }}</div>
                                 {% endif %}
                             </div>
+                            <div class="col-md-6 mb-3">
+                                <div class="form-check mt-2">
+                                    {{ form.requires_medical_certificate }}
+                                    <label class="form-check-label">Requires medical certificate</label>
+                                </div>
+                                <div class="form-text">Leave of this type can't be saved without an attached certificate.</div>
+                                {% if form.requires_medical_certificate.errors %}
+                                <div class="invalid-feedback d-block">{{ form.requires_medical_certificate.errors.0 }}</div>
+                                {% endif %}
+                            </div>
                         </div>
 
                         <!-- Submit Buttons -->
