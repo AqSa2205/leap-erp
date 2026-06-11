@@ -111,6 +111,10 @@
                                                 data-pk="{{ row.employee.pk }}" title="Fill 08:15 in / 18:00 out">
                                             <i class="bi bi-person-check"></i> Present
                                         </button>
+                                        <button type="button" class="btn btn-sm btn-outline-danger absent-btn"
+                                                data-pk="{{ row.employee.pk }}" title="Clear times — saves as Absent">
+                                            <i class="bi bi-person-x"></i> Absent
+                                        </button>
                                     </div>
                                 </td>
                                 {% endif %}
@@ -139,15 +143,27 @@
 (function () {
     // Default working hours; HR can edit any row before saving (e.g. latecomers).
     var DEFAULT_IN = '08:15', DEFAULT_OUT = '18:00';  // 18:00 = 6:00 PM
+    function rowInputs(pk) {
+        return [document.querySelector('input[name="check_in_' + pk + '"]'),
+                document.querySelector('input[name="check_out_' + pk + '"]')];
+    }
     function fillRow(pk) {
-        var ci = document.querySelector('input[name="check_in_' + pk + '"]');
-        var co = document.querySelector('input[name="check_out_' + pk + '"]');
-        if (ci) ci.value = DEFAULT_IN;
-        if (co) co.value = DEFAULT_OUT;
+        var io = rowInputs(pk);
+        if (io[0]) io[0].value = DEFAULT_IN;
+        if (io[1]) io[1].value = DEFAULT_OUT;
+    }
+    function clearRow(pk) {  // blank times -> saves as Absent
+        var io = rowInputs(pk);
+        if (io[0]) io[0].value = '';
+        if (io[1]) io[1].value = '';
     }
     // Per-row Present buttons (only rendered on unlocked/working rows).
     document.querySelectorAll('.present-btn').forEach(function (btn) {
         btn.addEventListener('click', function () { fillRow(this.dataset.pk); });
+    });
+    // Per-row Absent buttons — clear the row's times so Save records Absent.
+    document.querySelectorAll('.absent-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () { clearRow(this.dataset.pk); });
     });
     // Header "Mark all present" — fill every working row at once.
     var markAll = document.getElementById('markAllPresent');

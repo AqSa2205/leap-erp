@@ -366,6 +366,8 @@ class HardeningTests(TestCase):
         self.assertContains(resp, 'data-pk="%d"' % self.emp.pk)
         self.assertContains(resp, '08:15')   # default check-in baked into the JS
         self.assertContains(resp, '18:00')   # default check-out (6:00 PM)
+        self.assertContains(resp, 'present-btn')
+        self.assertContains(resp, 'absent-btn')  # per-row Absent (clears times -> Absent on save)
 
     def test_grid_no_present_button_on_locked_leave_row(self):
         LeaveRecord.objects.create(employee=self.emp, leave_type=self.annual,
