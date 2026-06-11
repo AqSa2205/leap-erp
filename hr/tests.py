@@ -226,3 +226,34 @@ class LeaveRecordViewTests(TestCase):
         self.client.force_login(self.admin)
         self.client.post(reverse('hr:entitlement_year'), {'year': '2026'})
         self.assertTrue(LeaveEntitlement.objects.filter(employee=self.emp, year=2026).exists())
+
+
+from datetime import time
+from hr.models import AttendanceRecord
+from hr.attendance_services import derive_status
+
+
+class AttendanceStatusTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+
+    def test_leave_beats_everything(self):
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.annual,
+                                   start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13), days=Decimal('1'))
+        self.assertEqual(derive_status(self.emp, _date(2026, 7, 13), time(8, 0))[0], 'leave')
+
+    def test_holiday(self):
+        Holiday.objects.create(date=_date(2026, 7, 14), name='X')
+        self.assertEqual(derive_status(self.emp, _date(2026, 7, 14), None)[0], 'holiday')
+
+    def test_weekend(self):
+        self.assertEqual(derive_status(self.emp, _date(2026, 7, 10), None)[0], 'weekend')  # Friday
+
+    def test_present_with_hours(self):
+        status, hours = derive_status(self.emp, _date(2026, 7, 13), time(8, 0), time(17, 30))
+        self.assertEqual(status, 'present')
+        self.assertEqual(hours, Decimal('9.5'))
+
+    def test_absent_when_no_checkin_on_workday(self):
+        self.assertEqual(derive_status(self.emp, _date(2026, 7, 13), None)[0], 'absent')

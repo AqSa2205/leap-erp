@@ -40,3 +40,33 @@ class AttendanceSettings(models.Model):
             if part.isdigit():
                 out.add(int(part))
         return out
+
+
+class AttendanceRecord(models.Model):
+    STATUS_CHOICES = [
+        ('present', 'Present'), ('absent', 'Absent'), ('leave', 'Leave'),
+        ('holiday', 'Holiday'), ('weekend', 'Weekend'),
+    ]
+    employee = models.ForeignKey('hr.Employee', on_delete=models.CASCADE, related_name='attendance')
+    date = models.DateField()
+    check_in = models.TimeField(null=True, blank=True)
+    check_out = models.TimeField(null=True, blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='absent')
+    hours_worked = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    note = models.CharField(max_length=300, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('employee', 'date')
+        ordering = ['-date']
+        indexes = [models.Index(fields=['date', 'status']), models.Index(fields=['employee', 'date'])]
+
+    def __str__(self):
+        return f"{self.employee.full_name} {self.date} {self.status}"
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.check_in and self.check_out and self.check_out < self.check_in:
+            raise ValidationError({'check_out': 'Check-out cannot be before check-in.'})
