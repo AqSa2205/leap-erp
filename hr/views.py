@@ -1439,6 +1439,30 @@ def entitlement_year(request):
     return render(request, 'hr/entitlement_year.html', {'year': year, 'entitlements': entitlements})
 
 
+class AttendanceHistoryView(AdminRequiredMixin, DetailView):
+    model = Employee
+    template_name = 'hr/attendance_history.html'
+    context_object_name = 'employee'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        now = timezone.now()
+        year = int(self.request.GET.get('year') or now.year)
+        month = int(self.request.GET.get('month') or now.month)
+        qs = self.object.attendance.filter(date__year=year, date__month=month).order_by('date')
+        counts = {row['status']: row['n'] for row in qs.values('status').annotate(n=Count('id'))}
+        total_hours = qs.aggregate(s=Sum('hours_worked'))['s'] or 0
+        ctx.update({
+            'year': year, 'month': month, 'records': qs,
+            'summary': {
+                'present': counts.get('present', 0), 'absent': counts.get('absent', 0),
+                'leave': counts.get('leave', 0), 'holiday': counts.get('holiday', 0),
+                'weekend': counts.get('weekend', 0), 'total_hours': total_hours,
+            },
+        })
+        return ctx
+
+
 def _parse_date(s):
     try:
         return datetime.strptime(s, '%Y-%m-%d').date()
