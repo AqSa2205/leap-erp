@@ -103,7 +103,6 @@ def hr_dashboard(request):
     asset_types = assets.values('asset_type').annotate(count=Count('id')).exclude(asset_type='').order_by('-count')[:8]
 
     # JSON data for Chart.js
-    import json
     nationality_labels = [n['nationality'] or 'Unknown' for n in nationalities]
     nationality_data = [n['count'] for n in nationalities]
     maker_labels = [m['vehicle_maker'] for m in makers]
