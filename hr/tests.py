@@ -374,3 +374,56 @@ class HardeningTests(TestCase):
         resp = self.client.get(reverse('hr:attendance_grid') + '?date=2026-07-13')
         # The only active employee is on leave -> locked row -> no per-row Present button.
         self.assertNotContains(resp, 'data-pk=')
+
+
+from hr.attendance_matrix import period_range, build_matrix, display_status_no_record
+
+
+class MatrixHelperTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+
+    def test_week_range_starts_sunday(self):
+        # 2026-07-15 is a Wednesday; its week (Sun-start) is 12 Jul (Sun) .. 18 Jul (Sat)
+        start, end = period_range('week', _date(2026, 7, 15))
+        self.assertEqual(start, _date(2026, 7, 12))
+        self.assertEqual(end, _date(2026, 7, 18))
+
+    def test_month_range_full_month(self):
+        start, end = period_range('month', _date(2026, 7, 15))
+        self.assertEqual(start, _date(2026, 7, 1))
+        self.assertEqual(end, _date(2026, 7, 31))
+
+    def test_stored_record_status_wins(self):
+        AttendanceRecord.objects.create(employee=self.emp, date=_date(2026, 7, 13), status='present', hours_worked=Decimal('8'))
+        days, rows = build_matrix([self.emp], _date(2026, 7, 13), _date(2026, 7, 13))
+        self.assertEqual(rows[0]['cells'][0]['status'], 'present')
+
+    def test_leave_holiday_weekend_blank_precedence(self):
+        # Mon 13 = leave (single-day record), Tue 14 = holiday, Fri 10 = weekend, Thu 16 = blank
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.annual,
+                                   start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13), days=Decimal('1'))
+        Holiday.objects.create(date=_date(2026, 7, 14), name='X')
+        days, rows = build_matrix([self.emp], _date(2026, 7, 10), _date(2026, 7, 16))
+        by_date = {c['date']: c for c in rows[0]['cells']}
+        self.assertEqual(by_date[_date(2026, 7, 13)]['status'], 'leave')
+        self.assertEqual(by_date[_date(2026, 7, 13)]['leave_record_id'],
+                         LeaveRecord.objects.get(employee=self.emp).pk)  # single-day -> removable
+        self.assertEqual(by_date[_date(2026, 7, 14)]['status'], 'holiday')
+        self.assertEqual(by_date[_date(2026, 7, 10)]['status'], 'weekend')  # Friday
+        self.assertEqual(by_date[_date(2026, 7, 16)]['status'], '')         # Thursday, no record
+
+    def test_multiday_leave_has_no_removable_id(self):
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.annual,
+                                   start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 15), days=Decimal('3'))
+        days, rows = build_matrix([self.emp], _date(2026, 7, 13), _date(2026, 7, 15))
+        for c in rows[0]['cells']:
+            self.assertEqual(c['status'], 'leave')
+            self.assertIsNone(c['leave_record_id'])  # multi-day -> not cell-removable
+
+    def test_display_status_no_record(self):
+        Holiday.objects.create(date=_date(2026, 7, 14), name='X')
+        self.assertEqual(display_status_no_record(_date(2026, 7, 14)), 'holiday')
+        self.assertEqual(display_status_no_record(_date(2026, 7, 10)), 'weekend')  # Friday
+        self.assertEqual(display_status_no_record(_date(2026, 7, 16)), '')          # Thursday
