@@ -70,6 +70,8 @@
         <span class="badge bg-info text-dark">L</span> Leave
         <span class="badge bg-warning text-dark">H</span> Holiday
         <span class="badge bg-secondary">W</span> Weekend
+        <span class="badge badge-late">LT</span> Late
+        <span class="badge badge-wfh">RM</span> WFH
     </div>
 </div>
 
@@ -82,7 +84,7 @@
     // server-side source of truth) — used for the optimistic cell update after AJAX.
     var BADGE = {present:'<span class="badge bg-success">P</span>', absent:'<span class="badge bg-danger">A</span>',
                  leave:'<span class="badge bg-info text-dark">L</span>', holiday:'<span class="badge bg-warning text-dark">H</span>',
-                 weekend:'<span class="badge bg-secondary">W</span>', '':'<span class="text-muted">—</span>'};
+                 weekend:'<span class="badge bg-secondary">W</span>', late:'<span class="badge badge-late">LT</span>', wfh:'<span class="badge badge-wfh">RM</span>', '':'<span class="text-muted">—</span>'};
     function post(url, body) {
         return fetch(url, {method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':csrfToken}, body:JSON.stringify(body)})
             .then(function (r) { return r.json().then(function (j) { return {ok:r.ok, j:j}; }); });

@@ -310,6 +310,11 @@ class AttendanceSettingsForm(forms.Form):
     weekend_days = forms.MultipleChoiceField(
         choices=WEEKDAY_CHOICES, required=False,
         widget=forms.CheckboxSelectMultiple)
+    expected_in_by = forms.TimeField(
+        required=False,
+        widget=forms.TimeInput(attrs={'class': 'form-control', 'type': 'time'}, format='%H:%M'),
+        input_formats=['%H:%M'])
 
     def initial_from(self, settings_obj):
         self.initial['weekend_days'] = [str(x) for x in sorted(settings_obj.weekend_day_set())]
+        self.initial['expected_in_by'] = settings_obj.expected_in_by

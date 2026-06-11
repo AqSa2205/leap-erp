@@ -1562,6 +1562,7 @@ def attendance_settings(request):
         form = AttendanceSettingsForm(request.POST)
         if form.is_valid():
             obj.weekend_days = ','.join(form.cleaned_data['weekend_days'])
+            obj.expected_in_by = form.cleaned_data.get('expected_in_by') or obj.expected_in_by
             obj.save()
             messages.success(request, 'Attendance settings saved.')
             return redirect('hr:attendance_settings')

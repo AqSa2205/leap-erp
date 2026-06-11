@@ -679,3 +679,16 @@ class WorkingDayViewTests(TestCase):
         self.client.post(reverse('hr:workingday_create'), {'date': '2026-07-18', 'name': 'WS', 'is_active': 'on'})
         from hr.models import WorkingDay
         self.assertEqual(WorkingDay.objects.filter(name='WS').count(), 1)
+
+
+class SettingsLateTests(TestCase):
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+
+    def test_update_expected_in_by(self):
+        self.client.force_login(self.admin)
+        self.client.post(reverse('hr:attendance_settings'), {'weekend_days': ['4', '5'], 'expected_in_by': '09:00'})
+        from hr.models import AttendanceSettings
+        self.assertEqual(AttendanceSettings.load().expected_in_by, _time(9, 0))

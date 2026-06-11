@@ -125,6 +125,8 @@
                                 <span class="badge bg-warning text-dark">Holiday</span>
                             {% elif r.status == 'weekend' %}
                                 <span class="badge bg-secondary">Weekend</span>
+                            {% elif r.status == 'late' %}<span class="badge badge-late">Late</span>
+                            {% elif r.status == 'wfh' %}<span class="badge badge-wfh">WFH</span>
                             {% else %}
                                 <span class="badge bg-light text-dark">{{ r.status }}</span>
                             {% endif %}

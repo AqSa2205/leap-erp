@@ -105,6 +105,8 @@
                                         <span class="badge bg-success">Present</span>
                                         {% elif row.status == 'absent' %}
                                         <span class="badge bg-danger">Absent</span>
+                                        {% elif row.status == 'late' %}<span class="badge badge-late">Late</span>
+                                        {% elif row.status == 'wfh' %}<span class="badge badge-wfh">WFH</span>
                                         {% else %}
                                         <span class="badge bg-light text-dark">{{ row.status|title }}</span>
                                         {% endif %}
