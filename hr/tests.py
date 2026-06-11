@@ -129,3 +129,44 @@ class LeaveRecordTests(TestCase):
                           start_date=_date(2026, 7, 9), end_date=_date(2026, 7, 5))
         with self.assertRaises(ValidationError):
             rec.full_clean()
+
+
+from hr.leave_services import annual_entitlement_for, generate_year_entitlements
+
+
+class AnnualRuleTests(TestCase):
+    def test_joining_year_is_25(self):
+        self.assertEqual(annual_entitlement_for(_date(2025, 7, 1), 2025), Decimal('25'))
+
+    def test_year_after_joining_is_30(self):
+        self.assertEqual(annual_entitlement_for(_date(2025, 7, 1), 2026), Decimal('30'))
+        self.assertEqual(annual_entitlement_for(_date(2025, 7, 1), 2027), Decimal('30'))
+
+    def test_no_joining_date_defaults_30(self):
+        self.assertEqual(annual_entitlement_for(None, 2026), Decimal('30'))
+
+
+class GeneratorTests(TestCase):
+    def setUp(self):
+        self.annual = LeaveType.objects.create(name='Annual', code='annual', default_annual_days=30)
+        self.sick = LeaveType.objects.create(name='Sick', code='sick', default_annual_days=15)
+        self.e_new = make_employee('A', 'New', _date(2026, 2, 1))   # joins 2026
+        self.e_old = make_employee('B', 'Old', _date(2020, 1, 1))   # tenured
+        inactive = make_employee('C', 'Inactive', _date(2019, 1, 1))
+        inactive.is_active = False
+        inactive.save()
+
+    def test_generates_rows_for_active_employees_with_rule(self):
+        generate_year_entitlements(2026)
+        self.assertEqual(self._ent(self.e_new, self.annual), Decimal('25'))  # joining year
+        self.assertEqual(self._ent(self.e_old, self.annual), Decimal('30'))  # tenured
+        self.assertEqual(self._ent(self.e_new, self.sick), Decimal('15'))    # flat default
+        self.assertFalse(LeaveEntitlement.objects.filter(employee__iqama_number='C').exists())
+
+    def test_does_not_overwrite_existing(self):
+        LeaveEntitlement.objects.create(employee=self.e_old, leave_type=self.annual, year=2026, entitled_days=99)
+        generate_year_entitlements(2026)
+        self.assertEqual(self._ent(self.e_old, self.annual), Decimal('99'))
+
+    def _ent(self, emp, lt):
+        return LeaveEntitlement.objects.get(employee=emp, leave_type=lt, year=2026).entitled_days
