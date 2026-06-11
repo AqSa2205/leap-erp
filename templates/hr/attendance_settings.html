@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+
+{% block title %}HR - Attendance Settings{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Attendance Settings</h1>
+            <p class="text-muted mb-0">Configure attendance behaviour for all employees.</p>
+        </div>
+        <a href="{% url 'hr:attendance_grid' %}" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-left"></i> Back to Daily Grid
+        </a>
+    </div>
+
+    <div class="card" style="max-width:480px;">
+        <div class="card-header py-3">
+            <h6 class="mb-0 fw-semibold">Weekend Days</h6>
+        </div>
+        <div class="card-body">
+            <p class="text-muted small mb-3">
+                Select the weekdays that count as weekend. Attendance records on these days
+                are automatically marked <strong>Weekend</strong> (default: Friday &amp; Saturday).
+            </p>
+            <form method="post">
+                {% csrf_token %}
+                <div class="mb-4">
+                    <label class="form-label fw-semibold">Weekend days</label>
+                    <div class="d-flex flex-wrap gap-3 mt-1">
+                        {% for checkbox in form.weekend_days %}
+                        <div class="form-check">
+                            {{ checkbox.tag }}
+                            <label class="form-check-label" for="{{ checkbox.id_for_label }}">
+                                {{ checkbox.choice_label }}
+                            </label>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-save"></i> Save Settings
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

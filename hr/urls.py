@@ -56,5 +56,7 @@ urlpatterns = [
     path('<int:pk>/attendance/', views.AttendanceHistoryView.as_view(), name='attendance_history'),
 
     # Attendance
+    path('attendance/settings/', views.attendance_settings, name='attendance_settings'),
+    path('attendance/regenerate/', views.attendance_regenerate, name='attendance_regenerate'),
     path('attendance/', views.attendance_grid, name='attendance_grid'),
 ]

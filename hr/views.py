@@ -11,12 +11,13 @@ from datetime import datetime, date
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord
+from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm, AssetIssueForm, AssetReturnForm,
     VehicleForm, VehicleFilterForm, EmployeeDocumentForm,
     LeaveTypeForm, HolidayForm, LeaveRecordForm,
+    AttendanceSettingsForm,
 )
 from .leave_services import generate_year_entitlements
 from .attendance_services import derive_status
@@ -1503,3 +1504,38 @@ def attendance_grid(request):
         rows.append({'employee': emp, 'record': rec,
                      'status': rec.status if rec else preview_status, 'locked': locked})
     return render(request, 'hr/attendance_grid.html', {'day': day, 'rows': rows})
+
+
+@login_required
+def attendance_settings(request):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:hr_dashboard')
+    obj = AttendanceSettings.load()
+    if request.method == 'POST':
+        form = AttendanceSettingsForm(request.POST)
+        if form.is_valid():
+            obj.weekend_days = ','.join(form.cleaned_data['weekend_days'])
+            obj.save()
+            messages.success(request, 'Attendance settings saved.')
+            return redirect('hr:attendance_settings')
+    else:
+        form = AttendanceSettingsForm()
+        form.initial_from(obj)
+    return render(request, 'hr/attendance_settings.html', {'form': form})
+
+
+@login_required
+def attendance_regenerate(request):
+    """Re-derive stored status for all records on a given date (after leave/holiday edits)."""
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:hr_dashboard')
+    day = _parse_date(request.POST.get('date'))
+    n = 0
+    for rec in AttendanceRecord.objects.filter(date=day).select_related('employee'):
+        status, hours = derive_status(rec.employee, day, rec.check_in, rec.check_out)
+        AttendanceRecord.objects.filter(pk=rec.pk).update(status=status, hours_worked=hours)
+        n += 1
+    messages.success(request, f'Regenerated {n} record(s) for {day:%Y-%m-%d}.')
+    return redirect(f"{reverse('hr:attendance_grid')}?date={day:%Y-%m-%d}")

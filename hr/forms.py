@@ -1,5 +1,5 @@
 from django import forms
-from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday, LeaveRecord
+from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday, LeaveRecord, AttendanceSettings
 
 
 class EmployeeForm(forms.ModelForm):
@@ -290,3 +290,15 @@ class LeaveRecordForm(forms.ModelForm):
             'days': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.5', 'placeholder': 'Auto if blank'}),
             'note': forms.TextInput(attrs={'class': 'form-control'}),
         }
+
+
+WEEKDAY_CHOICES = [(0, 'Mon'), (1, 'Tue'), (2, 'Wed'), (3, 'Thu'), (4, 'Fri'), (5, 'Sat'), (6, 'Sun')]
+
+
+class AttendanceSettingsForm(forms.Form):
+    weekend_days = forms.MultipleChoiceField(
+        choices=WEEKDAY_CHOICES, required=False,
+        widget=forms.CheckboxSelectMultiple)
+
+    def initial_from(self, settings_obj):
+        self.initial['weekend_days'] = [str(x) for x in sorted(settings_obj.weekend_day_set())]

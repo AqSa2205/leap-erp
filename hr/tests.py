@@ -309,3 +309,16 @@ class AttendanceHistoryTests(TestCase):
         self.assertEqual(resp.context['summary']['present'], 1)
         self.assertEqual(resp.context['summary']['absent'], 1)
         self.assertEqual(resp.context['summary']['total_hours'], Decimal('8'))
+
+
+class AttendanceSettingsViewTests(TestCase):
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+
+    def test_update_weekend(self):
+        self.client.force_login(self.admin)
+        self.client.post(reverse('hr:attendance_settings'), {'weekend_days': ['5', '6']})
+        from hr.models import AttendanceSettings
+        self.assertEqual(AttendanceSettings.load().weekend_day_set(), {5, 6})

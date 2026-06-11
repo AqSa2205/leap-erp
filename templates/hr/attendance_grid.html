@@ -11,6 +11,18 @@
             <h1 class="h3 mb-1">Daily Attendance</h1>
             <p class="text-muted mb-0">Bulk attendance entry for {{ day|date:"D, d M Y" }}</p>
         </div>
+        <div class="d-flex gap-2 align-items-center">
+            <form method="post" action="{% url 'hr:attendance_regenerate' %}">
+                {% csrf_token %}
+                <input type="hidden" name="date" value="{{ day|date:'Y-m-d' }}">
+                <button class="btn btn-sm btn-outline-secondary">
+                    <i class="bi bi-arrow-clockwise"></i> Regenerate statuses
+                </button>
+            </form>
+            <a href="{% url 'hr:attendance_settings' %}" class="btn btn-sm btn-outline-secondary">
+                <i class="bi bi-gear"></i> Settings
+            </a>
+        </div>
     </div>
 
     <!-- Date selector -->
