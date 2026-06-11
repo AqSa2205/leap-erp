@@ -248,3 +248,33 @@ class AssetReturnForm(forms.ModelForm):
                 field.widget.attrs['class'] = 'form-select'
             else:
                 field.widget.attrs['class'] = 'form-control'
+
+
+# ─── Leave Type & Holiday Forms ──────────────────────────────
+
+from .models import LeaveType, Holiday
+
+
+class LeaveTypeForm(forms.ModelForm):
+    class Meta:
+        model = LeaveType
+        fields = ['name', 'code', 'default_annual_days', 'is_paid', 'color', 'is_active']
+        widgets = {
+            'name': forms.TextInput(attrs={'class': 'form-control'}),
+            'code': forms.TextInput(attrs={'class': 'form-control'}),
+            'default_annual_days': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.5'}),
+            'is_paid': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+            'color': forms.TextInput(attrs={'class': 'form-control'}),
+            'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+        }
+
+
+class HolidayForm(forms.ModelForm):
+    class Meta:
+        model = Holiday
+        fields = ['date', 'name', 'is_active']
+        widgets = {
+            'date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'name': forms.TextInput(attrs={'class': 'form-control'}),
+            'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+        }

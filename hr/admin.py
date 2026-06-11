@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Employee, Asset
+from .models import Employee, Asset, LeaveType, LeaveEntitlement, LeaveRecord, Holiday, AttendanceSettings
 
 
 @admin.register(Employee)
@@ -14,3 +14,28 @@ class AssetAdmin(admin.ModelAdmin):
     list_display = ['asset_name', 'asset_type', 'serial_number', 'employee_name', 'condition', 'in_stock']
     list_filter = ['asset_type', 'condition', 'in_stock']
     search_fields = ['asset_name', 'serial_number', 'employee_name', 'invoice_number']
+
+
+@admin.register(LeaveType)
+class LeaveTypeAdmin(admin.ModelAdmin):
+    list_display = ['name', 'code', 'default_annual_days', 'is_paid', 'is_active']
+
+
+@admin.register(Holiday)
+class HolidayAdmin(admin.ModelAdmin):
+    list_display = ['date', 'name', 'is_active']
+    list_filter = ['is_active']
+
+
+@admin.register(LeaveEntitlement)
+class LeaveEntitlementAdmin(admin.ModelAdmin):
+    list_display = ['employee', 'leave_type', 'year', 'entitled_days']
+    list_filter = ['year', 'leave_type']
+    search_fields = ['employee__full_name']
+
+
+@admin.register(LeaveRecord)
+class LeaveRecordAdmin(admin.ModelAdmin):
+    list_display = ['employee', 'leave_type', 'start_date', 'end_date', 'days']
+    list_filter = ['leave_type']
+    search_fields = ['employee__full_name']

@@ -1,0 +1,95 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ title|default:'Leave Type' }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-7">
+            <!-- Header -->
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">{{ title|default:'Leave Type' }}</h1>
+                    <p class="text-muted mb-0">Enter leave type details</p>
+                </div>
+                <a href="{% url 'hr:leavetype_list' %}" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Back to List
+                </a>
+            </div>
+
+            <!-- Form Card -->
+            <div class="card">
+                <div class="card-body">
+                    <form method="post" novalidate>
+                        {% csrf_token %}
+
+                        <div class="row mb-3">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Name *</label>
+                                {{ form.name }}
+                                {% if form.name.errors %}
+                                <div class="invalid-feedback d-block">{{ form.name.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Code *</label>
+                                {{ form.code }}
+                                {% if form.code.errors %}
+                                <div class="invalid-feedback d-block">{{ form.code.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                        </div>
+
+                        <div class="row mb-3">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Default Annual Days</label>
+                                {{ form.default_annual_days }}
+                                {% if form.default_annual_days.errors %}
+                                <div class="invalid-feedback d-block">{{ form.default_annual_days.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Color</label>
+                                {{ form.color }}
+                                {% if form.color.errors %}
+                                <div class="invalid-feedback d-block">{{ form.color.errors.0 }}</div>
+                                {% endif %}
+                                <small class="text-muted">Bootstrap color name: primary, success, warning, danger, secondary, info</small>
+                            </div>
+                        </div>
+
+                        <div class="row mb-4">
+                            <div class="col-md-6 mb-3">
+                                <div class="form-check mt-2">
+                                    {{ form.is_paid }}
+                                    <label class="form-check-label">Paid Leave</label>
+                                </div>
+                                {% if form.is_paid.errors %}
+                                <div class="invalid-feedback d-block">{{ form.is_paid.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <div class="form-check mt-2">
+                                    {{ form.is_active }}
+                                    <label class="form-check-label">Active</label>
+                                </div>
+                                {% if form.is_active.errors %}
+                                <div class="invalid-feedback d-block">{{ form.is_active.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                        </div>
+
+                        <!-- Submit Buttons -->
+                        <div class="d-flex justify-content-end gap-2 border-top pt-3">
+                            <a href="{% url 'hr:leavetype_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-check-lg"></i> Save Leave Type
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

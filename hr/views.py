@@ -1271,3 +1271,79 @@ def vehicle_export(request):
     response['Content-Disposition'] = f'attachment; filename="vehicles_{datetime.now().strftime("%Y%m%d")}.xlsx"'
     wb.save(response)
     return response
+
+
+# ─── Leave Type CRUD ──────────────────────────────────────────
+
+from .models import LeaveType, LeaveEntitlement, LeaveRecord, Holiday, AttendanceSettings
+from .forms import LeaveTypeForm, HolidayForm
+from .leave_services import generate_year_entitlements
+
+
+class LeaveTypeListView(AdminRequiredMixin, ListView):
+    model = LeaveType
+    template_name = 'hr/leavetype_list.html'
+    context_object_name = 'leave_types'
+
+
+class LeaveTypeCreateView(AdminRequiredMixin, CreateView):
+    model = LeaveType
+    form_class = LeaveTypeForm
+    template_name = 'hr/leavetype_form.html'
+    success_url = reverse_lazy('hr:leavetype_list')
+
+    def form_valid(self, form):
+        messages.success(self.request, 'Leave type created successfully.')
+        return super().form_valid(form)
+
+
+class LeaveTypeUpdateView(AdminRequiredMixin, UpdateView):
+    model = LeaveType
+    form_class = LeaveTypeForm
+    template_name = 'hr/leavetype_form.html'
+    success_url = reverse_lazy('hr:leavetype_list')
+
+    def form_valid(self, form):
+        messages.success(self.request, 'Leave type updated successfully.')
+        return super().form_valid(form)
+
+
+# ─── Holiday CRUD ─────────────────────────────────────────────
+
+class HolidayListView(AdminRequiredMixin, ListView):
+    model = Holiday
+    template_name = 'hr/holiday_list.html'
+    context_object_name = 'holidays'
+    ordering = ['date']
+
+
+class HolidayCreateView(AdminRequiredMixin, CreateView):
+    model = Holiday
+    form_class = HolidayForm
+    template_name = 'hr/holiday_form.html'
+    success_url = reverse_lazy('hr:holiday_list')
+
+    def form_valid(self, form):
+        messages.success(self.request, 'Holiday created successfully.')
+        return super().form_valid(form)
+
+
+class HolidayUpdateView(AdminRequiredMixin, UpdateView):
+    model = Holiday
+    form_class = HolidayForm
+    template_name = 'hr/holiday_form.html'
+    success_url = reverse_lazy('hr:holiday_list')
+
+    def form_valid(self, form):
+        messages.success(self.request, 'Holiday updated successfully.')
+        return super().form_valid(form)
+
+
+class HolidayDeleteView(AdminRequiredMixin, DeleteView):
+    model = Holiday
+    template_name = 'hr/holiday_confirm_delete.html'
+    success_url = reverse_lazy('hr:holiday_list')
+
+    def form_valid(self, form):
+        messages.success(self.request, 'Holiday deleted.')
+        return super().form_valid(form)

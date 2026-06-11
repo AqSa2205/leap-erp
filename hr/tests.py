@@ -1,5 +1,6 @@
 from datetime import date
 from django.test import TestCase
+from django.urls import reverse
 from hr.work_calendar import count_working_days, is_working_day
 from hr.models import LeaveType
 
@@ -29,13 +30,15 @@ class WorkCalendarTests(TestCase):
 
 class LeaveTypeModelTests(TestCase):
     def test_create_and_str(self):
-        lt = LeaveType.objects.create(name='Annual', code='annual', default_annual_days=21)
+        lt, _ = LeaveType.objects.get_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': 21})
         self.assertEqual(str(lt), 'Annual')
         self.assertTrue(lt.is_paid)  # default True
 
     def test_code_is_unique(self):
         from django.db import IntegrityError
-        LeaveType.objects.create(name='Sick', code='sick', default_annual_days=30)
+        LeaveType.objects.get_or_create(code='sick', defaults={
+            'name': 'Sick', 'default_annual_days': 30})
         with self.assertRaises(IntegrityError):
             LeaveType.objects.create(name='Sick 2', code='sick', default_annual_days=10)
 
@@ -75,7 +78,8 @@ def make_employee(iqama='E1', name='Ali', joining=None):
 class LeaveEntitlementTests(TestCase):
     def setUp(self):
         self.emp = make_employee()
-        self.annual = LeaveType.objects.create(name='Annual', code='annual', default_annual_days=30)
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': 30})
 
     def test_unique_per_employee_type_year(self):
         from django.db import IntegrityError
@@ -102,7 +106,8 @@ class LeaveEntitlementTests(TestCase):
 class LeaveRecordTests(TestCase):
     def setUp(self):
         self.emp = make_employee()
-        self.annual = LeaveType.objects.create(name='Annual', code='annual', default_annual_days=30)
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': 30})
 
     def test_days_autocomputed_excluding_weekend(self):
         # Sun 5 Jul -> Thu 9 Jul 2026 = 5 working days (Fri/Sat weekend)
@@ -148,8 +153,10 @@ class AnnualRuleTests(TestCase):
 
 class GeneratorTests(TestCase):
     def setUp(self):
-        self.annual = LeaveType.objects.create(name='Annual', code='annual', default_annual_days=30)
-        self.sick = LeaveType.objects.create(name='Sick', code='sick', default_annual_days=15)
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': 30})
+        self.sick, _ = LeaveType.objects.update_or_create(
+            code='sick', defaults={'name': 'Sick', 'default_annual_days': 15})
         self.e_new = make_employee('A', 'New', _date(2026, 2, 1))   # joins 2026
         self.e_old = make_employee('B', 'Old', _date(2020, 1, 1))   # tenured
         inactive = make_employee('C', 'Inactive', _date(2019, 1, 1))
@@ -170,3 +177,22 @@ class GeneratorTests(TestCase):
 
     def _ent(self, emp, lt):
         return LeaveEntitlement.objects.get(employee=emp, leave_type=lt, year=2026).entitled_days
+
+
+class LeaveAdminViewTests(TestCase):
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x')
+        self.admin.role = role
+        self.admin.save()
+
+    def test_leavetype_list_ok(self):
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.get(reverse('hr:leavetype_list')).status_code, 200)
+
+    def test_holiday_create(self):
+        self.client.force_login(self.admin)
+        self.client.post(reverse('hr:holiday_create'),
+                         {'date': '2026-07-17', 'name': 'Eid', 'is_active': 'on'})
+        self.assertEqual(Holiday.objects.filter(name='Eid').count(), 1)

@@ -1,0 +1,82 @@
+{% extends 'base.html' %}
+
+{% block title %}HR - Leave Types{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Leave Types</h1>
+            <p class="text-muted mb-0">Manage leave type definitions</p>
+        </div>
+        <div>
+            <a href="{% url 'hr:leavetype_create' %}" class="btn btn-primary">
+                <i class="bi bi-plus-lg"></i> Add Leave Type
+            </a>
+        </div>
+    </div>
+
+    <!-- Table -->
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Name</th>
+                            <th>Code</th>
+                            <th>Default Days</th>
+                            <th>Paid</th>
+                            <th>Color</th>
+                            <th>Active</th>
+                            <th width="80">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for lt in leave_types %}
+                        <tr>
+                            <td><strong>{{ lt.name }}</strong></td>
+                            <td><code>{{ lt.code }}</code></td>
+                            <td>{{ lt.default_annual_days }}</td>
+                            <td>
+                                {% if lt.is_paid %}
+                                <span class="badge bg-success">Yes</span>
+                                {% else %}
+                                <span class="badge bg-secondary">No</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="badge bg-{{ lt.color }}">{{ lt.color }}</span>
+                            </td>
+                            <td>
+                                {% if lt.is_active %}
+                                <span class="badge bg-success">Active</span>
+                                {% else %}
+                                <span class="badge bg-secondary">Inactive</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a href="{% url 'hr:leavetype_update' lt.pk %}" class="btn btn-sm btn-outline-secondary" title="Edit">
+                                    <i class="bi bi-pencil"></i>
+                                </a>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="7" class="text-center py-5">
+                                <i class="bi bi-calendar-x display-4 text-muted"></i>
+                                <p class="text-muted mt-3">No leave types defined.</p>
+                                <a href="{% url 'hr:leavetype_create' %}" class="btn btn-primary">
+                                    <i class="bi bi-plus-lg"></i> Add Leave Type
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

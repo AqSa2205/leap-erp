@@ -36,4 +36,15 @@ urlpatterns = [
     path('vehicles/<int:pk>/', views.VehicleDetailView.as_view(), name='vehicle_detail'),
     path('vehicles/<int:pk>/edit/', views.VehicleUpdateView.as_view(), name='vehicle_update'),
     path('vehicles/<int:pk>/delete/', views.VehicleDeleteView.as_view(), name='vehicle_delete'),
+
+    # Leave Types
+    path('leave-types/', views.LeaveTypeListView.as_view(), name='leavetype_list'),
+    path('leave-types/create/', views.LeaveTypeCreateView.as_view(), name='leavetype_create'),
+    path('leave-types/<int:pk>/edit/', views.LeaveTypeUpdateView.as_view(), name='leavetype_update'),
+
+    # Holidays
+    path('holidays/', views.HolidayListView.as_view(), name='holiday_list'),
+    path('holidays/create/', views.HolidayCreateView.as_view(), name='holiday_create'),
+    path('holidays/<int:pk>/edit/', views.HolidayUpdateView.as_view(), name='holiday_update'),
+    path('holidays/<int:pk>/delete/', views.HolidayDeleteView.as_view(), name='holiday_delete'),
 ]
