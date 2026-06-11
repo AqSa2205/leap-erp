@@ -583,3 +583,18 @@ class MarkLeaveIntegrityTests(TestCase):
         ar.refresh_from_db()
         self.assertEqual(ar.status, 'present')
         self.assertEqual(ar.hours_worked, Decimal('9.00'))
+
+
+from datetime import time as _time
+
+
+class AttendanceExtrasModelTests(TestCase):
+    def test_expected_in_by_default(self):
+        from hr.models import AttendanceSettings
+        self.assertEqual(AttendanceSettings.load().expected_in_by, _time(8, 30))
+
+    def test_record_accepts_late_and_wfh(self):
+        from hr.models import AttendanceRecord
+        codes = dict(AttendanceRecord.STATUS_CHOICES)
+        self.assertIn('late', codes)
+        self.assertIn('wfh', codes)

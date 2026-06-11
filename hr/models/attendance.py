@@ -1,3 +1,4 @@
+from datetime import time
 from django.db import models
 from django.conf import settings
 
@@ -20,6 +21,9 @@ class AttendanceSettings(models.Model):
     weekend_days = models.CharField(
         max_length=20, default='4,5',
         help_text='Comma-separated weekday numbers, Mon=0..Sun=6. Default 4,5 = Fri,Sat.')
+    expected_in_by = models.TimeField(
+        default=time(8, 30),
+        help_text='Check-ins after this time are marked Late.')
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -46,6 +50,7 @@ class AttendanceRecord(models.Model):
     STATUS_CHOICES = [
         ('present', 'Present'), ('absent', 'Absent'), ('leave', 'Leave'),
         ('holiday', 'Holiday'), ('weekend', 'Weekend'),
+        ('late', 'Late'), ('wfh', 'WFH'),
     ]
     employee = models.ForeignKey('hr.Employee', on_delete=models.CASCADE, related_name='attendance')
     date = models.DateField()
