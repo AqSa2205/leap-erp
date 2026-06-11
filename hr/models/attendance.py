@@ -89,3 +89,25 @@ class WorkingDay(models.Model):
 
     def __str__(self):
         return f"{self.date:%Y-%m-%d} {self.name}"
+
+
+class WFHRecord(models.Model):
+    """A work-from-home period. Worked time (no leave balance)."""
+    employee = models.ForeignKey('hr.Employee', on_delete=models.CASCADE, related_name='wfh_records')
+    start_date = models.DateField()
+    end_date = models.DateField()
+    note = models.CharField(max_length=300, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-start_date']
+        indexes = [models.Index(fields=['employee', 'start_date'])]
+
+    def __str__(self):
+        return f"WFH {self.employee.full_name} {self.start_date}..{self.end_date}"
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValidationError({'end_date': 'End date cannot be before start date.'})

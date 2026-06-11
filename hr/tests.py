@@ -692,3 +692,18 @@ class SettingsLateTests(TestCase):
         self.client.post(reverse('hr:attendance_settings'), {'weekend_days': ['4', '5'], 'expected_in_by': '09:00'})
         from hr.models import AttendanceSettings
         self.assertEqual(AttendanceSettings.load().expected_in_by, _time(9, 0))
+
+
+class WFHRecordModelTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+
+    def test_create_and_clean(self):
+        from django.core.exceptions import ValidationError
+        from hr.models import WFHRecord
+        r = WFHRecord(employee=self.emp, start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 15))
+        r.full_clean(); r.save()
+        self.assertEqual(WFHRecord.objects.count(), 1)
+        bad = WFHRecord(employee=self.emp, start_date=_date(2026, 7, 15), end_date=_date(2026, 7, 13))
+        with self.assertRaises(ValidationError):
+            bad.full_clean()

@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Employee, Asset, LeaveType, LeaveEntitlement, LeaveRecord, Holiday, AttendanceSettings, AttendanceRecord, WorkingDay
+from .models import Employee, Asset, LeaveType, LeaveEntitlement, LeaveRecord, Holiday, AttendanceSettings, AttendanceRecord, WorkingDay, WFHRecord
 
 
 @admin.register(Employee)
@@ -52,3 +52,9 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
 class WorkingDayAdmin(admin.ModelAdmin):
     list_display = ['date', 'name', 'is_active']
     list_filter = ['is_active']
+
+
+@admin.register(WFHRecord)
+class WFHRecordAdmin(admin.ModelAdmin):
+    list_display = ['employee', 'start_date', 'end_date']
+    search_fields = ['employee__full_name']
