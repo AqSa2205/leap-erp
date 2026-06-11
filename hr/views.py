@@ -1471,8 +1471,40 @@ def entitlement_year(request):
         created = generate_year_entitlements(post_year, actor=request.user)
         messages.success(request, f'Generated {created} entitlement row(s) for {post_year}.')
         return redirect(f"{reverse('hr:entitlement_year')}?year={post_year}")
-    entitlements = LeaveEntitlement.objects.filter(year=year).select_related('employee', 'leave_type')
-    return render(request, 'hr/entitlement_year.html', {'year': year, 'entitlements': entitlements})
+    entitlements = (LeaveEntitlement.objects.filter(year=year)
+                    .select_related('employee', 'leave_type')
+                    .order_by('employee__full_name', 'leave_type__name'))
+
+    # Batch the taken-days per (employee, leave_type) in one query (avoid N+1).
+    from decimal import Decimal
+    from collections import OrderedDict
+    taken_map = {}
+    for r in (LeaveRecord.objects.filter(start_date__year=year)
+              .values('employee_id', 'leave_type_id')
+              .annotate(t=Sum('days'))):
+        taken_map[(r['employee_id'], r['leave_type_id'])] = r['t'] or Decimal('0')
+
+    # Group entitlement rows under each employee with combined totals.
+    groups = OrderedDict()
+    for e in entitlements:
+        g = groups.get(e.employee_id)
+        if g is None:
+            g = groups[e.employee_id] = {
+                'employee': e.employee, 'rows': [],
+                'total_entitled': Decimal('0'), 'total_taken': Decimal('0'),
+                'total_remaining': Decimal('0'),
+            }
+        taken = taken_map.get((e.employee_id, e.leave_type_id), Decimal('0'))
+        remaining = e.entitled_days - taken
+        g['rows'].append({'leave_type': e.leave_type, 'entitled': e.entitled_days,
+                          'taken': taken, 'remaining': remaining})
+        g['total_entitled'] += e.entitled_days
+        g['total_taken'] += taken
+        g['total_remaining'] += remaining
+
+    return render(request, 'hr/entitlement_year.html',
+                  {'year': year, 'groups': list(groups.values()),
+                   'entitlement_count': entitlements.count()})
 
 
 class AttendanceHistoryView(AdminRequiredMixin, DetailView):

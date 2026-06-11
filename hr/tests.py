@@ -825,3 +825,44 @@ class HistoryLateWFHSummaryTests(TestCase):
         resp = self.client.get(reverse('hr:attendance_history', kwargs={'pk': self.emp.pk}) + '?year=2026&month=7')
         self.assertEqual(resp.context['summary']['late'], 1)
         self.assertEqual(resp.context['summary']['wfh'], 1)
+
+
+class EntitlementYearGroupedTests(TestCase):
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+        self.emp = make_employee()
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+        self.sick, _ = LeaveType.objects.get_or_create(code='sick', defaults={'name': 'Sick', 'default_annual_days': 15})
+
+    def test_grouped_totals_and_taken_remaining(self):
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=30)
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.sick, year=2026, entitled_days=15)
+        # 8 annual days taken in 2026 (explicit days so it's not recomputed)
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.annual,
+                                   start_date=_date(2026, 3, 2), end_date=_date(2026, 3, 11), days=Decimal('8'))
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse('hr:entitlement_year') + '?year=2026')
+        self.assertEqual(resp.status_code, 200)
+        groups = resp.context['groups']
+        self.assertEqual(len(groups), 1)
+        g = groups[0]
+        self.assertEqual(g['employee'].pk, self.emp.pk)
+        self.assertEqual(g['total_entitled'], Decimal('45'))   # 30 + 15
+        self.assertEqual(g['total_taken'], Decimal('8'))       # only annual taken
+        self.assertEqual(g['total_remaining'], Decimal('37'))  # 45 - 8
+        self.assertEqual(len(g['rows']), 2)                    # per-type breakdown
+        annual_row = next(r for r in g['rows'] if r['leave_type'].pk == self.annual.pk)
+        self.assertEqual(annual_row['taken'], Decimal('8'))
+        self.assertEqual(annual_row['remaining'], Decimal('22'))
+
+    def test_leave_from_other_year_not_counted(self):
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=30)
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.annual,
+                                   start_date=_date(2025, 3, 2), end_date=_date(2025, 3, 6), days=Decimal('5'))
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse('hr:entitlement_year') + '?year=2026')
+        g = resp.context['groups'][0]
+        self.assertEqual(g['total_taken'], Decimal('0'))       # 2025 leave excluded
+        self.assertEqual(g['total_remaining'], Decimal('30'))
