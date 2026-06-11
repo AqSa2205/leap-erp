@@ -75,3 +75,17 @@ class AttendanceRecord(models.Model):
         from django.core.exceptions import ValidationError
         if self.check_in and self.check_out and self.check_out < self.check_in:
             raise ValidationError({'check_out': 'Check-out cannot be before check-in.'})
+
+
+class WorkingDay(models.Model):
+    """A normally-weekend date that is a working day (inverse of Holiday)."""
+    date = models.DateField(unique=True)
+    name = models.CharField(max_length=150)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['date']
+
+    def __str__(self):
+        return f"{self.date:%Y-%m-%d} {self.name}"
