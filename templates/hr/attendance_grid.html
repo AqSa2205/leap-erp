@@ -48,7 +48,7 @@
             {% endif %}
         </div>
         <div class="card-body p-0">
-            <form method="post">
+            <form method="post" id="attendanceForm">
                 {% csrf_token %}
                 <input type="hidden" name="date" value="{{ day|date:'Y-m-d' }}">
                 <div class="table-responsive">
@@ -134,12 +134,29 @@
                     <button type="submit" class="btn btn-primary">
                         <i class="bi bi-check2-all"></i> Save all
                     </button>
+                    <span class="text-muted small ms-2">Present/Absent marks aren't saved until you click here.</span>
                 </div>
                 {% endif %}
             </form>
         </div>
     </div>
 </div>
+
+{% if rows %}
+<!-- Sticky reminder shown only after you change something but haven't saved -->
+<div id="unsavedBar"
+     style="display:none; position:fixed; left:0; right:0; bottom:0; z-index:1050;
+            background:#fff3cd; border-top:1px solid #ffe69c; box-shadow:0 -2px 8px rgba(0,0,0,0.1);
+            padding:0.6rem 1rem;">
+    <div class="container-fluid d-flex align-items-center justify-content-between">
+        <span class="fw-semibold text-dark"><i class="bi bi-exclamation-triangle"></i>
+            You have unsaved attendance changes.</span>
+        <button type="button" id="unsavedSave" class="btn btn-primary btn-sm">
+            <i class="bi bi-check2-all"></i> Save all
+        </button>
+    </div>
+</div>
+{% endif %}
 
 <script>
 (function () {
@@ -157,17 +174,28 @@
         var el = document.querySelector('.row-status[data-pk="' + pk + '"]');
         if (el && BADGE[status]) el.innerHTML = BADGE[status];
     }
+    // ─── Unsaved-changes tracking (the grid only persists on "Save all") ───
+    var form = document.getElementById('attendanceForm');
+    var bar = document.getElementById('unsavedBar');
+    var dirty = false, submitting = false;
+    function markDirty() {
+        if (dirty) return;
+        dirty = true;
+        if (bar) bar.style.display = 'block';
+    }
     function fillRow(pk) {
         var io = rowInputs(pk);
         if (io[0]) io[0].value = DEFAULT_IN;
         if (io[1]) io[1].value = DEFAULT_OUT;
         setBadge(pk, 'present');
+        markDirty();
     }
     function clearRow(pk) {  // blank times -> saves as Absent
         var io = rowInputs(pk);
         if (io[0]) io[0].value = '';
         if (io[1]) io[1].value = '';
         setBadge(pk, 'absent');
+        markDirty();
     }
     // Per-row Present buttons (only rendered on unlocked/working rows).
     document.querySelectorAll('.present-btn').forEach(function (btn) {
@@ -177,6 +205,10 @@
     document.querySelectorAll('.absent-btn').forEach(function (btn) {
         btn.addEventListener('click', function () { clearRow(this.dataset.pk); });
     });
+    // Manual time edits also count as unsaved changes.
+    document.querySelectorAll('input[type="time"]').forEach(function (inp) {
+        inp.addEventListener('input', markDirty);
+    });
     // Header "Mark all present" — fill every working row at once.
     var markAll = document.getElementById('markAllPresent');
     if (markAll) {
@@ -184,6 +216,17 @@
             document.querySelectorAll('.present-btn').forEach(function (btn) { fillRow(btn.dataset.pk); });
         });
     }
+    // The sticky bar's button submits the same form as "Save all".
+    var barSave = document.getElementById('unsavedSave');
+    if (barSave && form) {
+        barSave.addEventListener('click', function () { submitting = true; form.submit(); });
+    }
+    // A real "Save all" submit clears the dirty state (don't warn on save).
+    if (form) form.addEventListener('submit', function () { submitting = true; });
+    // Warn before navigating away with unsaved marks (but not when saving).
+    window.addEventListener('beforeunload', function (e) {
+        if (dirty && !submitting) { e.preventDefault(); e.returnValue = ''; }
+    });
 })();
 </script>
 {% endblock %}
