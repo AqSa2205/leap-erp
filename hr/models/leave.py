@@ -20,6 +20,24 @@ class LeaveType(models.Model):
     def __str__(self):
         return self.name
 
+    # Annual leave is governed by the proration policy (annual_entitlement_for),
+    # not the flat day count, so its entitlements must never be flat-overwritten.
+    SYNC_EXCLUDED_CODES = {'annual'}
+
+    def save(self, *args, **kwargs):
+        old_days = None
+        if self.pk:
+            prev = type(self).objects.filter(pk=self.pk).only('default_annual_days').first()
+            if prev is not None:
+                old_days = prev.default_annual_days
+        super().save(*args, **kwargs)
+        # When the day count changes, propagate it to ALL existing entitlements
+        # of this type (every year, every employee) — the leave type is the
+        # source of truth. Annual is excluded (see SYNC_EXCLUDED_CODES).
+        if (old_days is not None and old_days != self.default_annual_days
+                and self.code not in self.SYNC_EXCLUDED_CODES):
+            self.entitlements.update(entitled_days=self.default_annual_days)
+
 
 class LeaveEntitlement(models.Model):
     employee = models.ForeignKey('hr.Employee', on_delete=models.CASCADE, related_name='leave_entitlements')

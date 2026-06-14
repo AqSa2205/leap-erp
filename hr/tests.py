@@ -941,3 +941,56 @@ class SickLeaveCertificateTests(TestCase):
         for r in LeaveRecord.objects.exclude(medical_certificate=''):
             if r.medical_certificate:
                 r.medical_certificate.delete(save=False)
+
+
+class LeaveTypeDaySyncTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.emp2 = make_employee(iqama='E2', name='Sara')
+        self.sick, _ = LeaveType.objects.get_or_create(
+            code='sick', defaults={'name': 'Sick', 'default_annual_days': 15})
+        self.annual, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+
+    def test_changing_days_updates_all_entitlements_all_years(self):
+        e25 = LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.sick, year=2025, entitled_days=15)
+        e26 = LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.sick, year=2026, entitled_days=15)
+        e26b = LeaveEntitlement.objects.create(employee=self.emp2, leave_type=self.sick, year=2026, entitled_days=15)
+        self.sick.default_annual_days = Decimal('20')
+        self.sick.save()
+        for e in (e25, e26, e26b):
+            e.refresh_from_db()
+            self.assertEqual(e.entitled_days, Decimal('20'))
+
+    def test_overwrites_custom_values(self):
+        custom = LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.sick, year=2026, entitled_days=10)
+        self.sick.default_annual_days = Decimal('20')
+        self.sick.save()
+        custom.refresh_from_db()
+        self.assertEqual(custom.entitled_days, Decimal('20'))  # custom value overwritten
+
+    def test_annual_type_is_excluded(self):
+        # Annual entitlements differ by joining-date policy; a flat change must NOT touch them.
+        a = LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=25)
+        self.annual.default_annual_days = Decimal('40')
+        self.annual.save()
+        a.refresh_from_db()
+        self.assertEqual(a.entitled_days, Decimal('25'))  # untouched
+
+    def test_no_change_leaves_entitlements_alone(self):
+        e = LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.sick, year=2026, entitled_days=15)
+        self.sick.name = 'Sick Leave'  # change something other than the day count
+        self.sick.save()
+        e.refresh_from_db()
+        self.assertEqual(e.entitled_days, Decimal('15'))
+
+    def test_other_leave_types_unaffected(self):
+        other, _ = LeaveType.objects.get_or_create(
+            code='unpaid', defaults={'name': 'Unpaid', 'default_annual_days': 0})
+        other_ent = LeaveEntitlement.objects.create(employee=self.emp, leave_type=other, year=2026, entitled_days=0)
+        sick_ent = LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.sick, year=2026, entitled_days=15)
+        self.sick.default_annual_days = Decimal('20')
+        self.sick.save()
+        other_ent.refresh_from_db(); sick_ent.refresh_from_db()
+        self.assertEqual(other_ent.entitled_days, Decimal('0'))   # different type untouched
+        self.assertEqual(sick_ent.entitled_days, Decimal('20'))

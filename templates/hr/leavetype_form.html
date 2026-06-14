@@ -47,6 +47,7 @@
                                 {% if form.default_annual_days.errors %}
                                 <div class="invalid-feedback d-block">{{ form.default_annual_days.errors.0 }}</div>
                                 {% endif %}
+                                <small class="text-muted">Changing this updates every existing entitlement of this type (all years). Annual leave is excluded — it follows the joining-date policy.</small>
                             </div>
                             <div class="col-md-6 mb-3">
                                 <label class="form-label">Color</label>
