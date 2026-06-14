@@ -40,3 +40,17 @@ class CostingProjectAutofillTests(TestCase):
         resp = self.client.get(reverse('costing:edit', kwargs={'pk': sheet.pk}))
         self.assertEqual(resp.status_code, 200)
         self.assertIn('Acme Industries', resp.content.decode())  # was absent before the fix
+
+
+class EnforceFlagTests(TestCase):
+    def test_new_sheet_defaults_strict(self):
+        from projects.models import Region, ProjectStatus, Project
+        from accounts.models import User
+        region = Region.objects.create(name='R', code='LNA', currency='SAR')
+        status = ProjectStatus.objects.create(name='Open', category='active')
+        proj = Project.objects.create(project_name='P', proposal_reference='REF-X',
+                                      status=status, region=region)
+        u = User.objects.create_user('u', password='x')
+        from costing.models import CostingSheet
+        sheet = CostingSheet.objects.create(title='S', project=proj, created_by=u)
+        self.assertTrue(sheet.enforce_stage_barriers)

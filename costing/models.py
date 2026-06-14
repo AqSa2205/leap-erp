@@ -202,6 +202,11 @@ class CostingSheet(models.Model):
     workflow_stage = models.CharField(
         max_length=24, choices=WORKFLOW_STAGE_CHOICES, default='bom_in_progress',
     )
+    enforce_stage_barriers = models.BooleanField(
+        default=True,
+        help_text='When set, editing is locked to the team that owns the current '
+                  'workflow stage (KPI mode). Pre-existing sheets are False so they '
+                  'keep the older lenient rules.')
     handed_over_at = models.DateTimeField(null=True, blank=True,
         help_text='When the proposal team marked the BOM ready for sales')
     handed_over_by = models.ForeignKey(
