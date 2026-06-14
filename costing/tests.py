@@ -128,3 +128,61 @@ class StrictGateTests(TestCase):
         # Non-strict sheet: proposal can edit even at costing_in_progress (legacy global proposal rule).
         s = self._sheet('costing_in_progress', strict=False)
         self.assertTrue(self._can(self.proposal, s))
+
+
+class BarrierEndpointTests(TestCase):
+    """End-to-end HTTP tests proving _user_can_edit_sheet gates real mutation
+    endpoints: 403 out-of-stage, 200 in-stage.
+
+    Endpoint used: ajax_add_sow_item (costing:add_sow_item, POST pk)
+      - requires: description (non-empty)
+      - optional: quantity (defaults to 1)
+      - success: HTTP 200, JSON {ok: true}
+      - gate: _user_can_edit_sheet -> 403 on failure
+    """
+
+    def setUp(self):
+        self.region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.project = Project.objects.create(
+            project_name='P', proposal_reference='REF-E',
+            status=self.status, region=self.region)
+
+        def mkuser(username, role_name):
+            role, _ = Role.objects.get_or_create(name=role_name)
+            u = User.objects.create_user(username, password='x')
+            u.role = role
+            u.region = self.region
+            u.save()
+            return u
+
+        self.proposal = mkuser('pr', Role.PROPOSAL_REP)
+        self.sales = mkuser('sr', Role.SALES_REP)
+
+    def _sheet(self, stage):
+        return CostingSheet.objects.create(
+            title='S', project=self.project,
+            created_by=self.proposal, workflow_stage=stage)
+
+    def _mutate(self, user, sheet):
+        """POST to costing:add_sow_item - the real _user_can_edit_sheet-gated endpoint."""
+        self.client.force_login(user)
+        return self.client.post(
+            reverse('costing:add_sow_item', kwargs={'pk': sheet.pk}),
+            {'description': 'Cabling works', 'quantity': '1'})
+
+    def test_sales_blocked_during_bom(self):
+        self.assertEqual(self._mutate(self.sales, self._sheet('bom_in_progress')).status_code, 403)
+
+    def test_proposal_allowed_during_bom(self):
+        self.assertEqual(self._mutate(self.proposal, self._sheet('bom_in_progress')).status_code, 200)
+
+    def test_ready_for_costing_locked_for_all(self):
+        s = self._sheet('ready_for_costing')
+        self.assertEqual(self._mutate(self.sales, s).status_code, 403)
+        self.assertEqual(self._mutate(self.proposal, s).status_code, 403)
+
+    def test_sales_allowed_during_costing_proposal_blocked(self):
+        s = self._sheet('costing_in_progress')
+        self.assertEqual(self._mutate(self.sales, s).status_code, 200)
+        self.assertEqual(self._mutate(self.proposal, s).status_code, 403)
