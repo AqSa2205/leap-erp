@@ -243,22 +243,27 @@
         }
         var data = pk ? projectMap[pk] : null;
         if (!data) return;
-        // Auto-fill the PDF header fields, but only if they are still empty
-        // — don't overwrite anything the user already typed.
-        var fillIfEmpty = function(name, value) {
+        // Picking a project is an explicit action, so overwrite the PDF-header
+        // fields with that project's details (only skip values the project
+        // itself doesn't have, so we never blank a field with nothing).
+        var setField = function(name, value) {
+            if (!value) return;
             var el = document.querySelector('[name="' + name + '"]');
-            if (el && !el.value && value) el.value = value;
+            if (el) el.value = value;
         };
-        fillIfEmpty('customer_name',      data.customer);
-        fillIfEmpty('end_user',           data.end_user);
-        fillIfEmpty('contact_person',     data.contact_person);
-        fillIfEmpty('customer_reference', data.reference);
+        setField('customer_name',      data.customer);
+        setField('end_user',           data.end_user);
+        setField('contact_person',     data.contact_person);
+        setField('customer_reference', data.reference);
     }
 
-    searchInput.addEventListener('change', function() {
-        var pk = labelToPk[this.value] || '';
-        applyProject(pk);
-    });
+    function onPick() {
+        applyProject(labelToPk[searchInput.value] || '');
+    }
+    // 'input' fires the instant a datalist suggestion is clicked (the older
+    // 'change'-only handler waited for blur, which felt like "nothing happens").
+    searchInput.addEventListener('input', onPick);
+    searchInput.addEventListener('change', onPick);
 })();
 </script>
 {% endblock %}
