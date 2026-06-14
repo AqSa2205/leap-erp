@@ -179,20 +179,44 @@ def _field_is_pricing(field):
 FINANCE_LOCKED_STAGES = ('finance_review', 'finance_approved')
 
 
+def _strict_stage_edit(user, sheet, stage):
+    """Edit rights under the strict per-stage barriers (KPI mode).
+
+    super_admin is handled by the caller. Region scope mirrors the rest of the
+    app (sheet.project.region == user.region).
+    """
+    region_ok = bool(sheet.project and sheet.project.region_id == user.region_id)
+    if stage == 'bom_in_progress':
+        # Proposal team owns BOM building (pricing still field-gated elsewhere).
+        return bool(getattr(user, 'is_proposal_team_user', False))
+    if stage == 'ready_for_costing':
+        # Handoff checkpoint — locked until Sales clicks "Start costing".
+        return False
+    if stage in ('costing_in_progress', 'finalized'):
+        return bool(getattr(user, 'is_sales_team_user', False) and region_ok)
+    return False
+
+
 def _user_can_edit_sheet(user, sheet):
     """Check whether user has edit access to a costing sheet.
 
     Stage-aware lock:
       * Once the sheet enters finance_review, sales/proposal/admin/manager
         are read-only — only the finance team (and super admin) can touch
-        it during budgeting.
+        it during budgeting.  This applies to ALL sheets (strict and legacy).
       * Once finance_approved, the sheet is fully locked even to finance —
-        super admin only at that point.
+        super admin only at that point.  This also applies to ALL sheets.
 
-    Edit rules outside the finance window: super_admin can edit anything,
-    admin/manager can edit within region, creator can edit their own.
-    Proposal team can edit non-pricing fields on every sheet (pricing is
-    gated elsewhere).
+    Strict-barrier branch (enforce_stage_barriers=True, default):
+      super_admin overrides everything; then per-stage rules apply:
+        bom_in_progress      → proposal team only (no region gate)
+        ready_for_costing    → locked (no-one can edit, handoff checkpoint)
+        costing_in_progress  → sales team, same region
+        finalized            → sales team, same region
+
+    Grandfathered / legacy branch (enforce_stage_barriers=False):
+      Original rules: super_admin, admin(region), manager(region),
+      creator(region), proposal_team(global).
     """
     if not user.is_authenticated:
         return False
@@ -211,7 +235,10 @@ def _user_can_edit_sheet(user, sheet):
         # Sheet locked once finance signs off — only super admin can edit.
         return False
 
-    # Pre-finance stages: original ruleset.
+    if sheet.enforce_stage_barriers:
+        return _strict_stage_edit(user, sheet, stage)
+
+    # Pre-finance stages: original ruleset (grandfathered sheets only).
     # Creator override is region-scoped — without this, a former employee
     # whose role was downgraded or who moved regions would retain a back-
     # door onto every sheet they ever created.

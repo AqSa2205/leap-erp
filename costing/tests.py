@@ -54,3 +54,77 @@ class EnforceFlagTests(TestCase):
         from costing.models import CostingSheet
         sheet = CostingSheet.objects.create(title='S', project=proj, created_by=u)
         self.assertTrue(sheet.enforce_stage_barriers)
+
+
+class StrictGateTests(TestCase):
+    def setUp(self):
+        from accounts.models import Role, User
+        from projects.models import Region, ProjectStatus, Project
+        self.region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.project = Project.objects.create(project_name='P', proposal_reference='REF-G',
+                                              status=self.status, region=self.region)
+
+        def mkuser(username, role_name):
+            role, _ = Role.objects.get_or_create(name=role_name)
+            u = User.objects.create_user(username, password='x')
+            u.role = role; u.region = self.region; u.save()
+            return u
+        self.superadmin = mkuser('sa', Role.SUPER_ADMIN)
+        self.proposal = mkuser('pr', Role.PROPOSAL_REP)
+        self.sales = mkuser('sr', Role.SALES_REP)
+        self.finance = mkuser('fr', Role.FINANCE_REP)
+
+    def _sheet(self, stage, strict=True):
+        from costing.models import CostingSheet
+        return CostingSheet.objects.create(title='S', project=self.project,
+                                           created_by=self.proposal, workflow_stage=stage,
+                                           enforce_stage_barriers=strict)
+
+    def _can(self, user, sheet):
+        from costing.views import _user_can_edit_sheet
+        return _user_can_edit_sheet(user, sheet)
+
+    def test_bom_stage_proposal_only(self):
+        s = self._sheet('bom_in_progress')
+        self.assertTrue(self._can(self.proposal, s))
+        self.assertFalse(self._can(self.sales, s))
+        self.assertTrue(self._can(self.superadmin, s))
+
+    def test_ready_for_costing_locked_for_all(self):
+        s = self._sheet('ready_for_costing')
+        self.assertFalse(self._can(self.proposal, s))
+        self.assertFalse(self._can(self.sales, s))
+        self.assertTrue(self._can(self.superadmin, s))  # only override
+
+    def test_costing_stage_sales_only(self):
+        s = self._sheet('costing_in_progress')
+        self.assertTrue(self._can(self.sales, s))
+        self.assertFalse(self._can(self.proposal, s))
+
+    def test_costing_stage_sales_out_of_region_blocked(self):
+        from projects.models import Region
+        other = Region.objects.create(name='UK', code='UK', currency='GBP')
+        self.sales.region = other; self.sales.save()
+        s = self._sheet('costing_in_progress')
+        self.assertFalse(self._can(self.sales, s))
+
+    def test_finalized_stage_sales_only(self):
+        s = self._sheet('finalized')
+        self.assertTrue(self._can(self.sales, s))
+        self.assertFalse(self._can(self.proposal, s))
+
+    def test_finance_stage_unchanged(self):
+        s = self._sheet('finance_review')
+        self.assertTrue(self._can(self.finance, s))
+        self.assertFalse(self._can(self.sales, s))
+
+    def test_finance_approved_locked(self):
+        s = self._sheet('finance_approved')
+        self.assertFalse(self._can(self.finance, s))
+        self.assertTrue(self._can(self.superadmin, s))
+
+    def test_grandfathered_sheet_keeps_lenient_rules(self):
+        # Non-strict sheet: proposal can edit even at costing_in_progress (legacy global proposal rule).
+        s = self._sheet('costing_in_progress', strict=False)
+        self.assertTrue(self._can(self.proposal, s))
