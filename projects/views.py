@@ -119,13 +119,16 @@ class ProjectListView(CapabilityRequiredMixin, ProjectPermissionMixin, ListView)
         # get_queryset() means this is O(rows) without extra queries.
         # Exchange rates are loaded once per request and injected onto every
         # sheet so contract_total avoids a per-row ExchangeRate query.
-        from costing.models import ExchangeRate
+        from costing.models import ExchangeRate, pipeline_stage_badge
         rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
         for project in context.get('projects', []):
             sheets = list(project.costing_sheets.all())
             for s in sheets:
                 s.set_rates_cache(rates)
             project.sales_resolved = _resolve_project_sales_value(project, sheets)
+            # Commercial-pipeline workflow badge (furthest BOM→Sales→Finance
+            # stage across this project's costing sheets; None = not started).
+            project.pipeline_stage = pipeline_stage_badge(sheets)
 
         # Regions for import modal
         context['regions'] = Region.objects.filter(is_active=True)

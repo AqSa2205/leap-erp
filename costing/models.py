@@ -3,6 +3,51 @@ from django.conf import settings
 from decimal import Decimal
 
 
+# ─── Commercial-pipeline workflow badge ──────────────────────────────────────
+# Order of CostingSheet.workflow_stage along the BOM → Sales → Finance pipeline,
+# plus the label + badge style shown on the Commercial Pipeline (projects) list.
+# Index in the sequence = how far along; `most_advanced_stage` uses it to pick a
+# single badge for a project that has several costing sheets.
+WORKFLOW_STAGE_SEQUENCE = [
+    'bom_in_progress', 'ready_for_costing', 'costing_in_progress',
+    'finalized', 'finance_review', 'finance_approved',
+]
+PIPELINE_STAGE_LABELS = {
+    'bom_in_progress':     ('BOM in progress',   'bg-secondary'),
+    'ready_for_costing':   ('Handed to Sales',   'bg-info text-dark'),
+    'costing_in_progress': ('Sales costing',     'bg-primary'),
+    'finalized':           ('Sales finalised',   'bg-warning text-dark'),
+    'finance_review':      ('Handed to Finance', 'bg-dark'),
+    'finance_approved':    ('Finance approved',  'bg-success'),
+}
+
+
+def most_advanced_stage(sheets):
+    """Return the furthest-along workflow_stage code among `sheets`, or None.
+
+    `sheets` is any iterable of CostingSheet (already-prefetched lists are fine).
+    A project with no costing sheet returns None (renders as "Not started").
+    """
+    best, best_idx = None, -1
+    for s in sheets:
+        try:
+            idx = WORKFLOW_STAGE_SEQUENCE.index(s.workflow_stage)
+        except ValueError:
+            continue
+        if idx > best_idx:
+            best, best_idx = s.workflow_stage, idx
+    return best
+
+
+def pipeline_stage_badge(sheets):
+    """Return {'label', 'css'} for the project's furthest stage, or None."""
+    code = most_advanced_stage(sheets)
+    if code is None:
+        return None
+    label, css = PIPELINE_STAGE_LABELS[code]
+    return {'label': label, 'css': css}
+
+
 class TermsTemplate(models.Model):
     CATEGORY_CHOICES = [
         ('terms_and_conditions', 'Terms & Conditions'),
