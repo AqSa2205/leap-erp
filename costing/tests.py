@@ -186,3 +186,36 @@ class BarrierEndpointTests(TestCase):
         s = self._sheet('costing_in_progress')
         self.assertEqual(self._mutate(self.sales, s).status_code, 200)
         self.assertEqual(self._mutate(self.proposal, s).status_code, 403)
+
+
+class DetailCanEditContextTests(TestCase):
+    def setUp(self):
+        from accounts.models import Role, User
+        from projects.models import Region, ProjectStatus, Project
+        self.region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.project = Project.objects.create(project_name='P', proposal_reference='REF-D',
+                                              status=self.status, region=self.region)
+
+        def mkuser(username, role_name):
+            role, _ = Role.objects.get_or_create(name=role_name)
+            u = User.objects.create_user(username, password='x')
+            u.role = role; u.region = self.region; u.save()
+            return u
+        self.proposal = mkuser('pr', Role.PROPOSAL_REP)
+        self.sales = mkuser('sr', Role.SALES_REP)
+
+    def _sheet(self, stage):
+        from costing.models import CostingSheet
+        return CostingSheet.objects.create(title='S', project=self.project,
+                                           created_by=self.proposal, workflow_stage=stage)
+
+    def test_context_can_edit_per_role(self):
+        s = self._sheet('bom_in_progress')
+        self.client.force_login(self.sales)
+        resp = self.client.get(reverse('costing:detail', kwargs={'pk': s.pk}))
+        self.assertFalse(resp.context['can_edit'])
+        self.assertTrue(resp.context['edit_lock_reason'])  # non-empty reason shown
+        self.client.force_login(self.proposal)
+        resp = self.client.get(reverse('costing:detail', kwargs={'pk': s.pk}))
+        self.assertTrue(resp.context['can_edit'])

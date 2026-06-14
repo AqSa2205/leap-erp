@@ -249,6 +249,13 @@
     </div>
 </div>
 
+{% if not can_edit and edit_lock_reason %}
+<div class="alert alert-secondary d-flex align-items-center" role="alert">
+    <i class="bi bi-lock-fill me-2"></i>
+    <div><strong>Read-only.</strong> {{ edit_lock_reason }}</div>
+</div>
+{% endif %}
+
 <!-- Handover modal -->
 {% if stage == 'bom_in_progress' %}
 <div class="modal fade" id="handoverModal" tabindex="-1">

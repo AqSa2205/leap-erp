@@ -257,6 +257,25 @@ def _user_can_edit_sheet(user, sheet):
     return False
 
 
+def _edit_lock_reason(user, sheet):
+    """Short, human explanation of why `user` can't edit `sheet` right now
+    (empty string when they CAN edit, or when the sheet is grandfathered)."""
+    if _user_can_edit_sheet(user, sheet):
+        return ''
+    if not getattr(sheet, 'enforce_stage_barriers', False):
+        return ''  # legacy/finance locks have their own existing banners
+    stage = sheet.workflow_stage
+    if stage == 'bom_in_progress':
+        return ('The Proposal team is still building this BOM. It unlocks for Sales '
+                'after handover and "Start costing".')
+    if stage == 'ready_for_costing':
+        return ('Handed to Sales. Click "Start costing" to begin — the sheet is '
+                'locked until then.')
+    if stage in ('costing_in_progress', 'finalized'):
+        return 'Sales owns this sheet at its current stage — read-only for other teams.'
+    return ''
+
+
 class CostingPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
         queryset = CostingSheet.objects.select_related('project', 'created_by').all()
@@ -273,6 +292,10 @@ class CostingPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
                 Q(created_by=user) |
                 Q(project__region=user.region)
             )
+        elif getattr(user, 'is_sales_rep_user', False):
+            # Sales reps see all sheets in their region — they need visibility
+            # of BOM-stage sheets from the proposal team so they can cost them.
+            return queryset.filter(project__region=user.region)
         elif getattr(user, 'is_finance_team_user', False):
             # Finance team sees every sheet in their region — they need
             # the full pricing breakdown to budget.
@@ -585,6 +608,9 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
 
         # Vendor quotes attached to this sheet
         context['vendor_quotes'] = sheet.vendor_quotes.select_related('uploaded_by').all()
+
+        context['can_edit'] = _user_can_edit_sheet(self.request.user, sheet)
+        context['edit_lock_reason'] = _edit_lock_reason(self.request.user, sheet)
 
         return context
 
