@@ -1013,6 +1013,27 @@
 
         {# ─── ADMINISTRATION (includes Contacts/Database) ─── #}
         {% if user.is_super_admin_user or user.is_admin_user %}
+        {% if user|can:'devtracking.admin' %}
+        <div class="nav-section" data-section="devtracking"><span>Dev Tracking</span><i class="bi bi-chevron-down section-chevron"></i></div>
+        <ul class="nav flex-column nav-section-items" data-section-items="devtracking">
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'dashboard' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:dashboard' %}" data-title="Dev Dashboard">
+                    <i class="bi bi-kanban"></i> <span>Dashboard</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'assign' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:assign' %}" data-title="Assign Task">
+                    <i class="bi bi-plus-square"></i> <span>Assign Task</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'tasks' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:tasks' %}" data-title="All Tasks">
+                    <i class="bi bi-list-task"></i> <span>All Tasks</span>
+                </a>
+            </li>
+        </ul>
+        {% endif %}
+
         <div class="nav-section" data-section="administration"><span>Administration</span><i class="bi bi-chevron-down section-chevron"></i></div>
         <ul class="nav flex-column nav-section-items" data-section-items="administration">
             {% if user.is_super_admin_user %}
@@ -1030,13 +1051,6 @@
               <a class="nav-link {% if request.resolver_match.url_name == 'permission_matrix' %}active{% endif %}" href="{% url 'accounts:permission_matrix' %}" data-title="Permissions">
                 <i class="bi bi-shield-lock"></i> <span>Permissions</span>
               </a>
-            </li>
-            {% endif %}
-            {% if user|can:'devtracking.admin' %}
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'dashboard' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:dashboard' %}" data-title="Dev Tracking">
-                    <i class="bi bi-kanban"></i> <span>Dev Tracking</span>
-                </a>
             </li>
             {% endif %}
             <li class="nav-item">
