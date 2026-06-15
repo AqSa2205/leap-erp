@@ -830,6 +830,13 @@
                     <i class="bi bi-person-workspace"></i> <span>My Work</span>
                 </a>
             </li>
+            {% if user|can:'devtracking.mywork' %}
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'my_tasks' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:my_tasks' %}" data-title="My Tasks">
+                    <i class="bi bi-list-check"></i> <span>My Tasks</span>
+                </a>
+            </li>
+            {% endif %}
             {% if user|can:'dashboard.nav' %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'index' and request.resolver_match.app_name == 'dashboard' %}active{% endif %}" href="{% url 'dashboard:index' %}" data-title="Dashboard">
@@ -1023,6 +1030,13 @@
               <a class="nav-link {% if request.resolver_match.url_name == 'permission_matrix' %}active{% endif %}" href="{% url 'accounts:permission_matrix' %}" data-title="Permissions">
                 <i class="bi bi-shield-lock"></i> <span>Permissions</span>
               </a>
+            </li>
+            {% endif %}
+            {% if user|can:'devtracking.admin' %}
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'dashboard' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:dashboard' %}" data-title="Dev Tracking">
+                    <i class="bi bi-kanban"></i> <span>Dev Tracking</span>
+                </a>
             </li>
             {% endif %}
             <li class="nav-item">

@@ -47,6 +47,14 @@ CAPABILITIES = [
         ('create', 'Create DN'), ('edit', 'Edit DN'), ('delete', 'Delete DN'), ('export', 'Export DN'),
     ]),
     *_module('settings', 'Admin / Settings'),
+    # Dev Tracking: distinct enforced caps for admin-management vs a developer's
+    # own task view. These are read by nav (`can` filter) and by Task 3/4 views,
+    # so they are enforced=True (unlike the not-yet-wired granular caps above).
+    *_module('devtracking', 'Dev Tracking'),
+    Capability('devtracking.admin', 'Dev Tracking', 'admin',
+               'Manage dev tasks (admin)', enforced=True, order=2),
+    Capability('devtracking.mywork', 'Dev Tracking', 'mywork',
+               'See my assigned dev tasks', enforced=True, order=3),
 ]
 
 
@@ -100,8 +108,8 @@ class CapabilityRequiredMixin:
 # which is now subsumed by the match-today baseline.
 _OPEN_TO_ALL = {'dashboard', 'pipeline', 'costing', 'procurement', 'po', 'dn'}
 DEFAULT_MODULE_ACCESS = {
-    'super_admin':     _OPEN_TO_ALL | {'settings'},
-    'admin':           set(_OPEN_TO_ALL),
+    'super_admin':     _OPEN_TO_ALL | {'settings', 'devtracking'},
+    'admin':           _OPEN_TO_ALL | {'devtracking'},
     'manager':         set(_OPEN_TO_ALL),
     'sales_rep':       set(_OPEN_TO_ALL),
     'procurement_mgr': set(_OPEN_TO_ALL),
@@ -111,6 +119,21 @@ DEFAULT_MODULE_ACCESS = {
     'finance_head':    set(_OPEN_TO_ALL),
     'finance_manager': set(_OPEN_TO_ALL),
     'finance_rep':     set(_OPEN_TO_ALL),
+    # Developer: the match-today open baseline (every list page opens for every
+    # role, data scoped inside — same as all other roles) plus the Dev Tracking
+    # module (their own task view). Admin-vs-mywork is split per-codename below.
+    'developer':       _OPEN_TO_ALL | {'devtracking'},
+}
+
+# Per-codename baseline for ENFORCED granular caps that are not plain
+# `access`/`nav` (those are handled by DEFAULT_MODULE_ACCESS above). Maps
+# role.name -> set of exact codenames seeded ON. The system is per-codename
+# granular (User.has_capability checks the exact codename), so these are real,
+# independently-toggleable capabilities.
+DEFAULT_CODENAME_GRANTS = {
+    'super_admin':  {'devtracking.admin', 'devtracking.mywork'},
+    'admin':        {'devtracking.admin', 'devtracking.mywork'},
+    'developer':    {'devtracking.mywork'},
 }
 
 
@@ -123,9 +146,13 @@ def seed_default_permissions():
     access_actions = {'access', 'nav'}
     for role in Role.objects.all():
         modules_on = DEFAULT_MODULE_ACCESS.get(role.name, set())
+        codenames_on = DEFAULT_CODENAME_GRANTS.get(role.name, set())
         for cap in CAPABILITIES:
             module_key = cap.codename.rsplit('.', 1)[0]
-            default_allowed = cap.action in access_actions and module_key in modules_on
+            default_allowed = (
+                (cap.action in access_actions and module_key in modules_on)
+                or cap.codename in codenames_on
+            )
             RolePermission.objects.get_or_create(
                 role=role, codename=cap.codename,
                 defaults={'allowed': default_allowed},

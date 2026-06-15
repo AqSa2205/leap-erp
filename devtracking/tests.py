@@ -40,3 +40,28 @@ class DevTaskModelTests(TestCase):
         self.assertTrue(t.is_overdue)
         t.mark_started(); t.mark_done()
         self.assertFalse(t.is_overdue)
+
+
+class CapabilityTests(TestCase):
+    # The capability model is PER-CODENAME granular: User.has_capability checks
+    # the exact codename against the role's allowed RolePermission rows. Those
+    # rows come from seed_default_permissions(). In a fresh test DB the `admin`
+    # role is not migration-created (only super_admin / procurement / proposal /
+    # finance / developer are), so mkuser() would create an unseeded role. We
+    # seed here — exactly as accounts.tests.SeedTests does — so the granted
+    # codenames exist before we assert on them.
+    def setUp(self):
+        from accounts.permissions import seed_default_permissions
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+
+    def test_developer_has_mywork_not_admin(self):
+        dev = mkuser('d2', Role.DEVELOPER)
+        self.assertTrue(dev.has_capability('devtracking.mywork'))
+        self.assertFalse(dev.has_capability('devtracking.admin'))
+
+    def test_admin_has_both(self):
+        adm = mkuser('a2', Role.ADMIN)
+        self.assertTrue(adm.has_capability('devtracking.admin'))
+        self.assertTrue(adm.has_capability('devtracking.mywork'))
