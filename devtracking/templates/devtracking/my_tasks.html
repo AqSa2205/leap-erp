@@ -1,0 +1,88 @@
+{% extends 'base.html' %}
+{% block title %}My Tasks — Dev Tracking{% endblock %}
+{% block page_title %}My Tasks{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1"><i class="bi bi-list-check"></i> My Tasks</h1>
+            <p class="text-muted mb-0">Tasks assigned to you</p>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header bg-white"><strong>Active</strong></div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0 align-middle">
+                    <thead class="table-light">
+                        <tr><th>Title</th><th>Priority</th><th>Due</th><th>Status</th><th>Elapsed</th><th>Actions</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for task in active %}
+                        <tr>
+                            <td><strong>{{ task.title }}</strong></td>
+                            <td>{{ task.get_priority_display }}</td>
+                            <td>
+                                {% if task.due_date %}{% if task.is_overdue %}<span class="text-danger fw-bold">{{ task.due_date }}</span>{% else %}{{ task.due_date }}{% endif %}{% else %}<span class="text-muted">—</span>{% endif %}
+                            </td>
+                            <td>
+                                {% if task.status == 'assigned' %}<span class="badge bg-secondary">Assigned</span>
+                                {% elif task.status == 'in_progress' %}<span class="badge bg-primary">In progress</span>
+                                {% elif task.status == 'blocked' %}<span class="badge bg-warning text-dark">Blocked</span>{% endif %}
+                            </td>
+                            <td>{% if task.started_at %}<span class="small">{{ task.elapsed }}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                            <td>
+                                <form method="post" action="{% url 'devtracking:task_action' task.pk %}" class="d-flex gap-2 align-items-center">
+                                    {% csrf_token %}
+                                    <input type="text" name="note" class="form-control form-control-sm" placeholder="Quick note (optional)" style="max-width:280px;">
+                                    {% if task.status != 'in_progress' and task.status != 'done' %}
+                                    <button name="action" value="start" class="btn btn-sm btn-primary">Start</button>
+                                    {% endif %}
+                                    {% if task.status != 'done' %}
+                                    <button name="action" value="done" class="btn btn-sm btn-success">Done</button>
+                                    <button name="action" value="blocked" class="btn btn-sm btn-outline-warning">Blocked</button>
+                                    {% endif %}
+                                </form>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="6" class="text-center text-muted py-4">No active tasks.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header bg-white"><strong>Done</strong></div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0 align-middle">
+                    <thead class="table-light">
+                        <tr><th>Title</th><th>Priority</th><th>Completed</th><th>Elapsed</th><th>Result</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for task in done %}
+                        <tr>
+                            <td><strong>{{ task.title }}</strong></td>
+                            <td>{{ task.get_priority_display }}</td>
+                            <td>{% if task.completed_at %}{{ task.completed_at|date:"M j, H:i" }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                            <td>{% if task.started_at %}<span class="small">{{ task.elapsed }}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                            <td>
+                                {% if task.on_time %}<span class="badge bg-success">on time</span>
+                                {% elif task.on_time is False %}<span class="badge bg-danger">late</span>
+                                {% else %}<span class="text-muted">—</span>{% endif %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="5" class="text-center text-muted py-4">No completed tasks.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

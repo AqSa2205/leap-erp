@@ -1,11 +1,12 @@
-from django.contrib.auth.decorators import login_required
-from django.shortcuts import render
+from django.http import HttpResponseForbidden, HttpResponseBadRequest
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
+from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView, CreateView, ListView, DetailView
 
 from accounts.models import Role, User
-from accounts.permissions import CapabilityRequiredMixin
+from accounts.permissions import CapabilityRequiredMixin, require_capability
 from notifications.services import notify_users
 
 from .forms import DevTaskForm
@@ -115,7 +116,42 @@ class DevDetailView(CapabilityRequiredMixin, DetailView):
         return ctx
 
 
-# Task-4 stub: leave intact so nav `{% url %}` resolves.
-@login_required
-def my_tasks_stub(request):
-    return render(request, 'devtracking/coming_soon.html', {'title': 'My Tasks'})
+class MyTasksView(CapabilityRequiredMixin, ListView):
+    capability = 'devtracking.mywork'
+    template_name = 'devtracking/my_tasks.html'
+    context_object_name = 'tasks'
+
+    def get_queryset(self):
+        return (DevTask.objects.filter(developer=self.request.user)
+                .select_related('assigned_by'))
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        tasks = ctx['tasks']
+        ctx['active'] = [t for t in tasks if t.status != 'done']
+        ctx['done'] = [t for t in tasks if t.status == 'done']
+        return ctx
+
+
+@require_capability('devtracking.mywork')
+@require_POST
+def task_action(request, pk):
+    task = get_object_or_404(DevTask, pk=pk)
+    # Only the task's own developer (or an admin) may act.
+    is_admin = request.user.has_capability('devtracking.admin')
+    if task.developer_id != request.user.id and not is_admin:
+        return HttpResponseForbidden('Not your task')
+    action = request.POST.get('action')
+    if action == 'start':
+        task.mark_started()
+    elif action == 'done':
+        task.mark_done()
+    elif action == 'blocked':
+        task.mark_blocked()
+    else:
+        return HttpResponseBadRequest('Unknown action')
+    note = (request.POST.get('note') or '').strip()
+    if note or action:
+        DevTaskUpdate.objects.create(task=task, author=request.user,
+                                     note=note, status_changed_to=task.status)
+    return redirect('devtracking:my_tasks')

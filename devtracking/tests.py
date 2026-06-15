@@ -96,3 +96,43 @@ class AssignFlowTests(TestCase):
         from django.urls import reverse
         self.client.force_login(self.admin)
         self.assertEqual(self.client.get(reverse('devtracking:dashboard')).status_code, 200)
+
+
+class MyTasksActionTests(TestCase):
+    def setUp(self):
+        # seed capabilities like AssignFlowTests.setUp does
+        from accounts.permissions import seed_default_permissions
+        for name, _label in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.admin = mkuser('adm', Role.ADMIN)
+        self.dev = mkuser('dev', Role.DEVELOPER)
+        self.other = mkuser('other', Role.DEVELOPER)
+        from devtracking.models import DevTask
+        self.task = DevTask.objects.create(title='T', developer=self.dev, assigned_by=self.admin)
+
+    def _act(self, user, action, note=''):
+        from django.urls import reverse
+        self.client.force_login(user)
+        return self.client.post(reverse('devtracking:task_action', kwargs={'pk': self.task.pk}),
+                                {'action': action, 'note': note})
+
+    def test_start_then_done_stamps_and_logs(self):
+        self._act(self.dev, 'start', 'beginning')
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.status, 'in_progress')
+        self.assertIsNotNone(self.task.started_at)
+        self._act(self.dev, 'done', 'finished')
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.status, 'done')
+        self.assertIsNotNone(self.task.completed_at)
+        from devtracking.models import DevTaskUpdate
+        self.assertEqual(DevTaskUpdate.objects.filter(task=self.task).count(), 2)
+
+    def test_other_dev_cannot_act(self):
+        self.assertEqual(self._act(self.other, 'start').status_code, 403)
+
+    def test_my_tasks_page_ok(self):
+        from django.urls import reverse
+        self.client.force_login(self.dev)
+        self.assertEqual(self.client.get(reverse('devtracking:my_tasks')).status_code, 200)
