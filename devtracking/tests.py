@@ -136,3 +136,45 @@ class MyTasksActionTests(TestCase):
         from django.urls import reverse
         self.client.force_login(self.dev)
         self.assertEqual(self.client.get(reverse('devtracking:my_tasks')).status_code, 200)
+
+
+class DigestTests(TestCase):
+    def setUp(self):
+        from accounts.permissions import seed_default_permissions
+        for name, _l in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.admin = mkuser('adm', Role.ADMIN); self.dev = mkuser('dev', Role.DEVELOPER)
+        from devtracking.models import DevTask
+        DevTask.objects.create(title='A', developer=self.dev, assigned_by=self.admin, status='done')
+
+    def test_context_counts(self):
+        from devtracking.ai import build_digest_context
+        ctx = build_digest_context()
+        self.assertTrue(any(d['done'] >= 1 for d in ctx['developers']))
+
+    def test_generate_fallback_without_key(self):
+        from django.test import override_settings
+        with override_settings(ANTHROPIC_API_KEY=''):
+            from devtracking.ai import generate_admin_digest
+            dg = generate_admin_digest(generated_by=self.admin)
+            self.assertTrue(dg.content)
+            self.assertEqual(dg.model_used, '')
+
+    def test_generate_now_view(self):
+        from django.urls import reverse
+        from django.test import override_settings
+        with override_settings(ANTHROPIC_API_KEY=''):
+            self.client.force_login(self.admin)
+            resp = self.client.post(reverse('devtracking:generate_now'))
+            self.assertEqual(resp.status_code, 302)
+            from devtracking.models import DevDigest
+            self.assertEqual(DevDigest.objects.count(), 1)
+
+    def test_command_runs(self):
+        from django.core.management import call_command
+        from django.test import override_settings
+        with override_settings(ANTHROPIC_API_KEY=''):
+            call_command('generate_dev_digest')
+        from devtracking.models import DevDigest
+        self.assertEqual(DevDigest.objects.count(), 1)

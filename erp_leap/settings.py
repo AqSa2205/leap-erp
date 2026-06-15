@@ -255,6 +255,11 @@ EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'Leap ERP <notifications@leap-arabia.com>')
 
 
+# AI digest (devtracking) — Anthropic-powered developer-progress reports.
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+DEVTRACKING_AI_MODEL = os.environ.get('DEVTRACKING_AI_MODEL', 'claude-sonnet-4-6')
+
+
 # Security settings for production
 if IS_PRODUCTION:
     SECURE_BROWSER_XSS_FILTER = True

@@ -133,6 +133,14 @@ class MyTasksView(CapabilityRequiredMixin, ListView):
         return ctx
 
 
+@require_capability('devtracking.admin')
+@require_POST
+def generate_now(request):
+    from .ai import generate_admin_digest
+    generate_admin_digest(generated_by=request.user)
+    return redirect('devtracking:dashboard')
+
+
 @require_capability('devtracking.mywork')
 @require_POST
 def task_action(request, pk):
