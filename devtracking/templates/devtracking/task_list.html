@@ -1,0 +1,118 @@
+{% extends 'base.html' %}
+{% block title %}Dev Tasks — Leap Networks ERP{% endblock %}
+{% block page_title %}Dev Tasks{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Dev Tasks</h1>
+            <p class="text-muted mb-0">All assigned development tasks</p>
+        </div>
+        <a href="{% url 'devtracking:assign' %}" class="btn btn-primary"><i class="bi bi-plus-lg"></i> Assign Task</a>
+    </div>
+
+    <!-- Filters -->
+    <div class="card mb-3">
+        <div class="card-body">
+            <form method="get" class="row g-2 align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label small mb-1">Developer</label>
+                    <select name="developer" class="form-select">
+                        <option value="">All</option>
+                        {% for d in developers %}
+                        <option value="{{ d.pk }}" {% if cur_developer == d.pk|stringformat:'s' %}selected{% endif %}>{{ d.username }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small mb-1">Status</label>
+                    <select name="status" class="form-select">
+                        <option value="">All</option>
+                        {% for val, lbl in status_choices %}
+                        <option value="{{ val }}" {% if cur_status == val %}selected{% endif %}>{{ lbl }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <div class="form-check mt-4">
+                        <input type="checkbox" class="form-check-input" name="overdue" value="1" id="overdue" {% if cur_overdue == '1' %}checked{% endif %}>
+                        <label class="form-check-label" for="overdue">Overdue only</label>
+                    </div>
+                </div>
+                <div class="col-md-3 text-end">
+                    <button type="submit" class="btn btn-outline-primary"><i class="bi bi-funnel"></i> Filter</button>
+                    <a href="{% url 'devtracking:tasks' %}" class="btn btn-outline-secondary">Reset</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0 align-middle">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Title</th>
+                            <th>Developer</th>
+                            <th>Status</th>
+                            <th>Priority</th>
+                            <th>Due</th>
+                            <th>Time</th>
+                            <th>GitHub</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for task in tasks %}
+                        <tr>
+                            <td><strong>{{ task.title }}</strong></td>
+                            <td><a href="{% url 'devtracking:dev_detail' task.developer.pk %}" class="text-decoration-none">{{ task.developer.username }}</a></td>
+                            <td>
+                                {% if task.status == 'assigned' %}<span class="badge bg-secondary">Assigned</span>
+                                {% elif task.status == 'in_progress' %}<span class="badge bg-primary">In progress</span>
+                                {% elif task.status == 'blocked' %}<span class="badge bg-warning text-dark">Blocked</span>
+                                {% elif task.status == 'done' %}<span class="badge bg-success">Done</span>{% endif %}
+                            </td>
+                            <td>{{ task.get_priority_display }}</td>
+                            <td>
+                                {% if task.due_date %}
+                                    {% if task.is_overdue %}<span class="text-danger fw-bold">{{ task.due_date }}</span>{% else %}{{ task.due_date }}{% endif %}
+                                {% else %}<span class="text-muted">—</span>{% endif %}
+                            </td>
+                            <td>
+                                {% if task.status == 'done' %}
+                                    <span class="small">{{ task.elapsed }}</span>
+                                    {% if task.on_time %}<span class="badge bg-success">on time</span>
+                                    {% elif task.on_time is False %}<span class="badge bg-danger">late</span>{% endif %}
+                                {% else %}<span class="text-muted">—</span>{% endif %}
+                            </td>
+                            <td>
+                                {% if task.gh_state %}
+                                    {% if task.gh_state == 'open' %}<span class="badge bg-info text-dark">open</span>
+                                    {% elif task.gh_state == 'merged' %}<span class="badge text-white" style="background-color:#6f42c1;">merged</span>
+                                    {% elif task.gh_state == 'closed' %}<span class="badge bg-secondary">closed</span>
+                                    {% else %}<span class="badge bg-light text-dark">{{ task.gh_state }}</span>{% endif %}
+                                {% else %}
+                                    {% if task.github_url %}<a href="{{ task.github_url }}" target="_blank" rel="noopener"><i class="bi bi-github"></i></a>{% else %}<span class="text-muted">—</span>{% endif %}
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="7" class="text-center py-5"><i class="bi bi-inbox display-4 text-muted"></i><p class="text-muted mt-3">No tasks found.</p></td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% if is_paginated %}
+        <nav class="p-2">
+            <ul class="pagination justify-content-center mb-0">
+                {% if page_obj.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}">Previous</a></li>{% endif %}
+                <li class="page-item active"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
+                {% if page_obj.has_next %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a></li>{% endif %}
+            </ul>
+        </nav>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

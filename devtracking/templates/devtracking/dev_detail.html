@@ -1,0 +1,82 @@
+{% extends 'base.html' %}
+{% block title %}{{ developer.username }} — Dev Tracking{% endblock %}
+{% block page_title %}Developer{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1"><i class="bi bi-person-circle"></i> {{ developer.get_full_name|default:developer.username }}</h1>
+            <p class="text-muted mb-0">{{ developer.email }}</p>
+        </div>
+        <a href="{% url 'devtracking:dashboard' %}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Back</a>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-lg-8">
+            <div class="card">
+                <div class="card-header bg-white"><strong>Tasks</strong></div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0 align-middle">
+                            <thead class="table-light">
+                                <tr><th>Title</th><th>Status</th><th>Priority</th><th>Due</th><th>Time</th><th>GitHub</th></tr>
+                            </thead>
+                            <tbody>
+                                {% for task in tasks %}
+                                <tr>
+                                    <td><strong>{{ task.title }}</strong></td>
+                                    <td>
+                                        {% if task.status == 'assigned' %}<span class="badge bg-secondary">Assigned</span>
+                                        {% elif task.status == 'in_progress' %}<span class="badge bg-primary">In progress</span>
+                                        {% elif task.status == 'blocked' %}<span class="badge bg-warning text-dark">Blocked</span>
+                                        {% elif task.status == 'done' %}<span class="badge bg-success">Done</span>{% endif %}
+                                    </td>
+                                    <td>{{ task.get_priority_display }}</td>
+                                    <td>
+                                        {% if task.due_date %}{% if task.is_overdue %}<span class="text-danger fw-bold">{{ task.due_date }}</span>{% else %}{{ task.due_date }}{% endif %}{% else %}<span class="text-muted">—</span>{% endif %}
+                                    </td>
+                                    <td>
+                                        {% if task.status == 'done' %}
+                                            <span class="small">{{ task.elapsed }}</span>
+                                            {% if task.on_time %}<span class="badge bg-success">on time</span>{% elif task.on_time is False %}<span class="badge bg-danger">late</span>{% endif %}
+                                        {% else %}<span class="text-muted">—</span>{% endif %}
+                                    </td>
+                                    <td>
+                                        {% if task.gh_state %}
+                                            {% if task.gh_state == 'open' %}<span class="badge bg-info text-dark">open</span>
+                                            {% elif task.gh_state == 'merged' %}<span class="badge text-white" style="background-color:#6f42c1;">merged</span>
+                                            {% elif task.gh_state == 'closed' %}<span class="badge bg-secondary">closed</span>
+                                            {% else %}<span class="badge bg-light text-dark">{{ task.gh_state }}</span>{% endif %}
+                                        {% else %}<span class="text-muted">—</span>{% endif %}
+                                    </td>
+                                </tr>
+                                {% empty %}
+                                <tr><td colspan="6" class="text-center text-muted py-4">No tasks assigned.</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-4">
+            <div class="card">
+                <div class="card-header bg-white"><strong>Recent Updates</strong></div>
+                <ul class="list-group list-group-flush">
+                    {% for u in updates %}
+                    <li class="list-group-item">
+                        <div class="small text-muted">{{ u.created_at|date:"M j, H:i" }}{% if u.author %} · {{ u.author.username }}{% endif %}</div>
+                        <div class="fw-semibold small">{{ u.task.title }}</div>
+                        {% if u.status_changed_to %}<span class="badge bg-light text-dark">→ {{ u.status_changed_to }}</span>{% endif %}
+                        {% if u.note %}<div class="small">{{ u.note }}</div>{% endif %}
+                    </li>
+                    {% empty %}
+                    <li class="list-group-item text-muted">No updates yet.</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

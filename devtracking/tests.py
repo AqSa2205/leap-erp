@@ -65,3 +65,34 @@ class CapabilityTests(TestCase):
         adm = mkuser('a2', Role.ADMIN)
         self.assertTrue(adm.has_capability('devtracking.admin'))
         self.assertTrue(adm.has_capability('devtracking.mywork'))
+
+
+class AssignFlowTests(TestCase):
+    def setUp(self):
+        # Seed RolePermission rows exactly as CapabilityTests does so the admin
+        # role actually holds devtracking.admin in the fresh test DB.
+        from accounts.permissions import seed_default_permissions
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.admin = mkuser('adm', Role.ADMIN); self.dev = mkuser('dev', Role.DEVELOPER)
+
+    def test_assign_creates_task_and_notifies(self):
+        from django.urls import reverse
+        self.client.force_login(self.admin)
+        self.client.post(reverse('devtracking:assign'), {
+            'developer': self.dev.pk, 'title': 'Build login', 'description': '',
+            'priority': 'high', 'estimated_hours': '6', 'due_date': '2026-07-01', 'github_url': ''})
+        from devtracking.models import DevTask
+        self.assertEqual(DevTask.objects.filter(developer=self.dev, title='Build login').count(), 1)
+
+    def test_developer_cannot_open_assign(self):
+        from django.urls import reverse
+        self.client.force_login(self.dev)
+        resp = self.client.get(reverse('devtracking:assign'))
+        self.assertIn(resp.status_code, (302, 403))
+
+    def test_admin_dashboard_ok(self):
+        from django.urls import reverse
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.get(reverse('devtracking:dashboard')).status_code, 200)

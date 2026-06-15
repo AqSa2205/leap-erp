@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+{% block title %}Dev Tracking — Leap Networks ERP{% endblock %}
+{% block page_title %}Dev Tracking{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Dev Tracking</h1>
+            <p class="text-muted mb-0">Assigned tasks across the development team</p>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{% url 'devtracking:tasks' %}" class="btn btn-outline-secondary">
+                <i class="bi bi-list-task"></i> All Tasks
+            </a>
+            <a href="{% url 'devtracking:assign' %}" class="btn btn-primary">
+                <i class="bi bi-plus-lg"></i> Assign Task
+            </a>
+        </div>
+    </div>
+
+    <!-- Per-dev cards -->
+    <div class="row g-3 mb-4">
+        {% for d in developers %}
+        <div class="col-md-4 col-xl-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h5 class="card-title mb-3">
+                        <a href="{% url 'devtracking:dev_detail' d.user.pk %}" class="text-decoration-none">
+                            <i class="bi bi-person-circle"></i> {{ d.user.get_full_name|default:d.user.username }}
+                        </a>
+                    </h5>
+                    <div class="d-flex flex-wrap gap-2">
+                        <span class="badge bg-secondary">Assigned {{ d.assigned }}</span>
+                        <span class="badge bg-primary">In progress {{ d.in_progress }}</span>
+                        <span class="badge bg-success">Done {{ d.done }}</span>
+                        {% if d.overdue %}<span class="badge bg-danger">Overdue {{ d.overdue }}</span>{% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% empty %}
+        <div class="col-12"><p class="text-muted">No developers found.</p></div>
+        {% endfor %}
+    </div>
+
+    <div class="row g-3">
+        <!-- Overdue / stuck call-out -->
+        <div class="col-lg-7">
+            <div class="card mb-3">
+                <div class="card-header bg-white"><strong class="text-danger"><i class="bi bi-exclamation-triangle"></i> Overdue</strong></div>
+                <ul class="list-group list-group-flush">
+                    {% for task in overdue_tasks %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span>{{ task.title }} <span class="text-muted small">— {{ task.developer.username }}</span></span>
+                        <span class="text-danger small">due {{ task.due_date }}</span>
+                    </li>
+                    {% empty %}
+                    <li class="list-group-item text-muted">Nothing overdue.</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div class="card">
+                <div class="card-header bg-white"><strong class="text-warning"><i class="bi bi-hourglass-split"></i> Stuck (in progress 3+ days)</strong></div>
+                <ul class="list-group list-group-flush">
+                    {% for task in stuck_tasks %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span>{{ task.title }} <span class="text-muted small">— {{ task.developer.username }}</span></span>
+                        <span class="text-muted small">started {{ task.started_at|date:"M j" }}</span>
+                    </li>
+                    {% empty %}
+                    <li class="list-group-item text-muted">Nothing stuck.</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+
+        <!-- AI digest placeholder -->
+        <div class="col-lg-5">
+            <div class="card h-100">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                    <strong><i class="bi bi-robot"></i> AI Digest</strong>
+                    <button class="btn btn-sm btn-outline-secondary" disabled title="Coming in next step">Generate now</button>
+                </div>
+                <div class="card-body">
+                    {% if latest_digest %}{{ latest_digest.content|linebreaksbr }}{% else %}<p class="text-muted">No report yet.</p>{% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

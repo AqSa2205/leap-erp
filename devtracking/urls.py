@@ -5,7 +5,9 @@ from . import views
 app_name = 'devtracking'
 
 urlpatterns = [
-    # Placeholder names so base.html nav resolves; replaced in Task 3/4.
-    path('', views.dashboard, name='dashboard'),
-    path('my-tasks/', views.my_tasks, name='my_tasks'),
+    path('', views.DashboardView.as_view(), name='dashboard'),
+    path('assign/', views.TaskAssignView.as_view(), name='assign'),
+    path('tasks/', views.TaskListView.as_view(), name='tasks'),
+    path('developer/<int:pk>/', views.DevDetailView.as_view(), name='dev_detail'),
+    path('my-tasks/', views.my_tasks_stub, name='my_tasks'),  # Task-4 stub
 ]
