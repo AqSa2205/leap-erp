@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+{% block title %}Create Task List — Dev Tracking{% endblock %}
+{% block page_title %}Create Task List{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">Create Task List</h1>
+                    <p class="text-muted mb-0">Add several tasks at once. They go to the backlog — assign each one later.</p>
+                </div>
+                <a href="{% url 'devtracking:backlog' %}" class="btn btn-outline-secondary">
+                    <i class="bi bi-inbox"></i> Backlog
+                </a>
+            </div>
+
+            <div class="card">
+                <div class="card-body">
+                    <form method="post">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <label class="form-label">Tasks *</label>
+                            {{ form.titles }}
+                            <div class="form-text">{{ form.titles.help_text }}</div>
+                            {% if form.titles.errors %}<div class="text-danger small mt-1">{{ form.titles.errors.0 }}</div>{% endif %}
+                        </div>
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Priority (all)</label>
+                                {{ form.priority }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Due date (all, optional)</label>
+                                {{ form.due_date }}
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-end gap-2 border-top pt-3">
+                            <a href="{% url 'devtracking:dashboard' %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary"><i class="bi bi-list-check"></i> Create tasks</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

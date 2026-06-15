@@ -1,5 +1,5 @@
 from django.http import HttpResponseForbidden, HttpResponseBadRequest
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.views.decorators.http import require_POST
@@ -9,7 +9,7 @@ from accounts.models import AI_DEVELOPER_ROLE_NAMES, User
 from accounts.permissions import CapabilityRequiredMixin, require_capability
 from notifications.services import notify_users
 
-from .forms import DevTaskForm
+from .forms import DevTaskForm, BulkTaskForm, AssignTaskForm
 from .models import DevTask, DevTaskUpdate, DevDigest
 
 
@@ -54,8 +54,10 @@ class DashboardView(CapabilityRequiredMixin, TemplateView):
                          ('blocked', bl), ('overdue', ov), ('total', total)):
                 totals[k] += v
 
-        overdue_tasks = [t for t in all_tasks if t.is_overdue]
-        stuck_tasks = [t for t in all_tasks if t.is_stuck]
+        # Backlog (unassigned) tasks aren't a developer's responsibility yet,
+        # so they don't count toward the per-developer overdue/stuck call-outs.
+        overdue_tasks = [t for t in all_tasks if t.developer_id and t.is_overdue]
+        stuck_tasks = [t for t in all_tasks if t.developer_id and t.is_stuck]
 
         ctx.update({
             'developers': developers,
@@ -92,6 +94,61 @@ class TaskAssignView(CapabilityRequiredMixin, CreateView):
             target_url=reverse('devtracking:my_tasks'),
         )
         return response
+
+
+@require_capability('devtracking.admin')
+def bulk_create(request):
+    """Create a whole list of backlog (unassigned) tasks at once."""
+    if request.method == 'POST':
+        form = BulkTaskForm(request.POST)
+        if form.is_valid():
+            priority = form.cleaned_data['priority']
+            due = form.cleaned_data.get('due_date')
+            DevTask.objects.bulk_create([
+                DevTask(title=t, priority=priority, due_date=due,
+                        status='unassigned', assigned_by=request.user)
+                for t in form.cleaned_data['titles']
+            ])
+            return redirect('devtracking:backlog')
+    else:
+        form = BulkTaskForm()
+    return render(request, 'devtracking/bulk_create.html', {'form': form})
+
+
+class BacklogListView(CapabilityRequiredMixin, ListView):
+    """Unassigned tasks waiting to be handed to a developer."""
+    capability = 'devtracking.admin'
+    template_name = 'devtracking/backlog.html'
+    context_object_name = 'tasks'
+    paginate_by = 50
+
+    def get_queryset(self):
+        return DevTask.objects.filter(developer__isnull=True).order_by('-created_at')
+
+
+@require_capability('devtracking.admin')
+def assign_existing(request, pk):
+    """Assign a single backlog task to a developer."""
+    task = get_object_or_404(DevTask, pk=pk)
+    if request.method == 'POST':
+        form = AssignTaskForm(request.POST, instance=task)
+        if form.is_valid():
+            task = form.save(commit=False)
+            if task.status == 'unassigned':
+                task.status = 'assigned'
+            task.assigned_by = request.user
+            task.save()
+            notify_users(
+                recipients=[task.developer],
+                verb='assigned you a task',
+                actor=request.user,
+                description=task.title,
+                target_url=reverse('devtracking:my_tasks'),
+            )
+            return redirect('devtracking:backlog')
+    else:
+        form = AssignTaskForm(instance=task)
+    return render(request, 'devtracking/assign_existing.html', {'form': form, 'task': task})
 
 
 class TaskListView(CapabilityRequiredMixin, ListView):

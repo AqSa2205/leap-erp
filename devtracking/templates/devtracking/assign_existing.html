@@ -1,0 +1,59 @@
+{% extends 'base.html' %}
+{% block title %}Assign Task — Dev Tracking{% endblock %}
+{% block page_title %}Assign Task{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-7">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">Assign Task</h1>
+                    <p class="text-muted mb-0">Hand this backlog task to a developer.</p>
+                </div>
+                <a href="{% url 'devtracking:backlog' %}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Backlog</a>
+            </div>
+
+            <div class="card">
+                <div class="card-body">
+                    <div class="alert alert-light border">
+                        <div class="fw-semibold">{{ task.title }}</div>
+                        {% if task.description %}<div class="text-muted small">{{ task.description }}</div>{% endif %}
+                    </div>
+                    <form method="post">
+                        {% csrf_token %}
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Developer *</label>
+                                {{ form.developer }}
+                                {% if form.developer.errors %}<div class="text-danger small mt-1">{{ form.developer.errors.0 }}</div>{% endif %}
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Priority</label>
+                                {{ form.priority }}
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Estimated hours</label>
+                                {{ form.estimated_hours }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Due date</label>
+                                {{ form.due_date }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">GitHub link</label>
+                                {{ form.github_url }}
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-end gap-2 border-top pt-3">
+                            <a href="{% url 'devtracking:backlog' %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary"><i class="bi bi-person-check"></i> Assign task</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

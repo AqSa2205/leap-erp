@@ -245,3 +245,72 @@ class DashboardContextTests(TestCase):
         self.assertEqual(resp.context['team_totals']['done'], 1)
         self.assertIn('eng', resp.context['chart_labels'])  # JSON string of dev labels
         self.assertEqual(resp.context['developers'][0]['pct_done'], 50)
+
+
+class BacklogWorkflowTests(TestCase):
+    def setUp(self):
+        from accounts.permissions import seed_default_permissions
+        for name, _l in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.admin = mkuser('adm', Role.ADMIN)
+        self.dev = mkuser('eng', Role.AI_ENGINEER)
+
+    def test_assign_to_helper_flips_status(self):
+        from devtracking.models import DevTask
+        t = DevTask.objects.create(title='X', status='unassigned')
+        self.assertTrue(t.is_unassigned)
+        t.assign_to(self.dev, by=self.admin)
+        self.assertEqual(t.developer, self.dev)
+        self.assertEqual(t.status, 'assigned')
+        self.assertEqual(t.assigned_by, self.admin)
+
+    def test_bulk_create_makes_unassigned_tasks(self):
+        from django.urls import reverse
+        from devtracking.models import DevTask
+        self.client.force_login(self.admin)
+        self.client.post(reverse('devtracking:bulk_create'),
+                         {'titles': 'Build login\nWrite tests\n\nSet up CI', 'priority': 'high', 'due_date': ''})
+        backlog = DevTask.objects.filter(developer__isnull=True, status='unassigned')
+        self.assertEqual(backlog.count(), 3)  # blank line skipped
+        self.assertTrue(backlog.filter(title='Build login', priority='high').exists())
+
+    def test_bulk_create_rejects_empty(self):
+        from django.urls import reverse
+        from devtracking.models import DevTask
+        self.client.force_login(self.admin)
+        resp = self.client.post(reverse('devtracking:bulk_create'),
+                                {'titles': '   \n  ', 'priority': 'medium'})
+        self.assertEqual(resp.status_code, 200)  # re-render with error
+        self.assertEqual(DevTask.objects.count(), 0)
+
+    def test_backlog_lists_only_unassigned(self):
+        from django.urls import reverse
+        from devtracking.models import DevTask
+        DevTask.objects.create(title='Backlog one', status='unassigned')
+        DevTask.objects.create(title='Already assigned', developer=self.dev, status='assigned')
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse('devtracking:backlog'))
+        self.assertEqual(resp.status_code, 200)
+        titles = [t.title for t in resp.context['tasks']]
+        self.assertIn('Backlog one', titles)
+        self.assertNotIn('Already assigned', titles)
+
+    def test_assign_existing_assigns_and_notifies(self):
+        from django.urls import reverse
+        from devtracking.models import DevTask
+        t = DevTask.objects.create(title='Pick me', status='unassigned')
+        self.client.force_login(self.admin)
+        resp = self.client.post(reverse('devtracking:assign_existing', kwargs={'pk': t.pk}),
+                                {'developer': self.dev.pk, 'priority': 'medium',
+                                 'estimated_hours': '4', 'due_date': '2026-08-01', 'github_url': ''})
+        self.assertEqual(resp.status_code, 302)
+        t.refresh_from_db()
+        self.assertEqual(t.developer, self.dev)
+        self.assertEqual(t.status, 'assigned')
+        self.assertEqual(t.assigned_by, self.admin)
+
+    def test_developer_cannot_bulk_create(self):
+        from django.urls import reverse
+        self.client.force_login(self.dev)
+        self.assertIn(self.client.get(reverse('devtracking:bulk_create')).status_code, (302, 403))

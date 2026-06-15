@@ -1022,6 +1022,16 @@
                 </a>
             </li>
             <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'bulk_create' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:bulk_create' %}" data-title="Create Task List">
+                    <i class="bi bi-list-check"></i> <span>Create Task List</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'backlog' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:backlog' %}" data-title="Backlog">
+                    <i class="bi bi-inbox"></i> <span>Backlog</span>
+                </a>
+            </li>
+            <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'assign' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:assign' %}" data-title="Assign Task">
                     <i class="bi bi-plus-square"></i> <span>Assign Task</span>
                 </a>

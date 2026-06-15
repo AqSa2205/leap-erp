@@ -5,11 +5,14 @@ from django.utils import timezone
 
 class DevTask(models.Model):
     PRIORITY_CHOICES = [('low', 'Low'), ('medium', 'Medium'), ('high', 'High')]
-    STATUS_CHOICES = [('assigned', 'Assigned'), ('in_progress', 'In progress'),
-                      ('blocked', 'Blocked'), ('done', 'Done')]
+    STATUS_CHOICES = [('unassigned', 'Unassigned'), ('assigned', 'Assigned'),
+                      ('in_progress', 'In progress'), ('blocked', 'Blocked'),
+                      ('done', 'Done')]
 
+    # Nullable: a task can sit in the backlog (unassigned) before it's given to
+    # a developer. Assigning sets the developer + flips status to 'assigned'.
     developer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
-                                  related_name='dev_tasks')
+                                  related_name='dev_tasks', null=True, blank=True)
     assigned_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
                                     null=True, blank=True, related_name='dev_tasks_assigned')
     title = models.CharField(max_length=255)
@@ -32,7 +35,21 @@ class DevTask(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f'{self.title} → {self.developer}'
+        return f'{self.title} → {self.developer or "unassigned"}'
+
+    @property
+    def is_unassigned(self):
+        return self.developer_id is None
+
+    def assign_to(self, developer, by=None):
+        """Give a backlog task to a developer (or reassign). Flips an
+        unassigned task to 'assigned'; never disturbs in-progress/done state."""
+        self.developer = developer
+        if by is not None:
+            self.assigned_by = by
+        if self.status == 'unassigned':
+            self.status = 'assigned'
+        self.save()
 
     def mark_started(self):
         if self.started_at is None:
