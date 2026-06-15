@@ -16,6 +16,7 @@ class Role(models.Model):
     FINANCE_HEAD = 'finance_head'
     FINANCE_MANAGER = 'finance_manager'
     FINANCE_REP = 'finance_rep'
+    DEVELOPER = 'developer'
 
     ROLE_CHOICES = [
         (SUPER_ADMIN, 'Super Administrator'),
@@ -29,6 +30,7 @@ class Role(models.Model):
         (FINANCE_HEAD, 'Finance Head'),
         (FINANCE_MANAGER, 'Finance Manager'),
         (FINANCE_REP, 'Finance Representative'),
+        (DEVELOPER, 'Developer'),
     ]
 
     name = models.CharField(max_length=20, choices=ROLE_CHOICES, unique=True)
@@ -84,6 +86,10 @@ class Role(models.Model):
     @property
     def is_finance_rep(self):
         return self.name == self.FINANCE_REP
+
+    @property
+    def is_developer(self):
+        return self.name == self.DEVELOPER
 
 
 class User(AbstractUser):
@@ -175,6 +181,10 @@ class User(AbstractUser):
             or self.is_finance_manager_user
             or self.is_finance_rep_user
         )
+
+    @property
+    def is_developer_user(self):
+        return bool(self.role and self.role.is_developer)
 
     @property
     def is_sales_team_user(self):
