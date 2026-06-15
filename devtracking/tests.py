@@ -222,3 +222,26 @@ class AssignableRolesTests(TestCase):
         qs = DevTaskForm().fields['developer'].queryset
         self.assertIn(eng, qs)
         self.assertNotIn(sales, qs)
+
+
+class DashboardContextTests(TestCase):
+    def setUp(self):
+        from accounts.permissions import seed_default_permissions
+        for name, _l in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.admin = mkuser('adm', Role.ADMIN)
+        self.dev = mkuser('eng', Role.AI_ENGINEER)
+        from devtracking.models import DevTask
+        DevTask.objects.create(title='A', developer=self.dev, assigned_by=self.admin, status='done')
+        DevTask.objects.create(title='B', developer=self.dev, assigned_by=self.admin, status='in_progress')
+
+    def test_dashboard_exposes_chart_and_kpi_context(self):
+        from django.urls import reverse
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse('devtracking:dashboard'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context['team_totals']['total'], 2)
+        self.assertEqual(resp.context['team_totals']['done'], 1)
+        self.assertIn('eng', resp.context['chart_labels'])  # JSON string of dev labels
+        self.assertEqual(resp.context['developers'][0]['pct_done'], 50)

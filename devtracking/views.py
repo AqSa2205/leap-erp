@@ -18,34 +18,59 @@ class DashboardView(CapabilityRequiredMixin, TemplateView):
     template_name = 'devtracking/dashboard.html'
 
     def get_context_data(self, **kwargs):
+        import json
         ctx = super().get_context_data(**kwargs)
-        today = timezone.now().date()
-        devs = User.objects.filter(role__name__in=AI_DEVELOPER_ROLE_NAMES, is_active=True).order_by('username')
+        devs = list(User.objects.filter(role__name__in=AI_DEVELOPER_ROLE_NAMES,
+                                        is_active=True).order_by('username'))
+
+        # One query for every task; group + derive in Python (small N).
+        all_tasks = list(DevTask.objects.select_related('developer'))
+        by_dev = {}
+        for t in all_tasks:
+            by_dev.setdefault(t.developer_id, []).append(t)
 
         developers = []
+        labels, ds_assigned, ds_inprog, ds_done = [], [], [], []
+        totals = {'assigned': 0, 'in_progress': 0, 'done': 0, 'blocked': 0,
+                  'overdue': 0, 'total': 0}
         for dev in devs:
-            tasks = DevTask.objects.filter(developer=dev)
+            tasks = by_dev.get(dev.id, [])
+            a = sum(1 for t in tasks if t.status == 'assigned')
+            ip = sum(1 for t in tasks if t.status == 'in_progress')
+            dn = sum(1 for t in tasks if t.status == 'done')
+            bl = sum(1 for t in tasks if t.status == 'blocked')
+            ov = sum(1 for t in tasks if t.is_overdue)
+            done_on_time = sum(1 for t in tasks if t.status == 'done' and t.on_time is True)
+            total = len(tasks)
             developers.append({
-                'user': dev,
-                'assigned': tasks.filter(status='assigned').count(),
-                'in_progress': tasks.filter(status='in_progress').count(),
-                'done': tasks.filter(status='done').count(),
-                'overdue': tasks.exclude(status='done').filter(
-                    due_date__lt=today, due_date__isnull=False).count(),
+                'user': dev, 'assigned': a, 'in_progress': ip, 'done': dn,
+                'blocked': bl, 'overdue': ov, 'total': total,
+                'pct_done': round(100 * dn / total) if total else 0,
+                'on_time_rate': (round(100 * done_on_time / dn) if dn else None),
             })
+            labels.append(dev.get_full_name() or dev.username)
+            ds_assigned.append(a); ds_inprog.append(ip); ds_done.append(dn)
+            for k, v in (('assigned', a), ('in_progress', ip), ('done', dn),
+                         ('blocked', bl), ('overdue', ov), ('total', total)):
+                totals[k] += v
 
-        overdue_tasks = (DevTask.objects.select_related('developer')
-                         .exclude(status='done')
-                         .filter(due_date__lt=today, due_date__isnull=False))
-        # is_stuck = in_progress >= 3 days; compute in Python via the property.
-        stuck_tasks = [t for t in DevTask.objects.select_related('developer')
-                       .filter(status='in_progress') if t.is_stuck]
+        overdue_tasks = [t for t in all_tasks if t.is_overdue]
+        stuck_tasks = [t for t in all_tasks if t.is_stuck]
 
         ctx.update({
             'developers': developers,
+            'team_totals': totals,
             'overdue_tasks': overdue_tasks,
             'stuck_tasks': stuck_tasks,
             'latest_digest': DevDigest.objects.filter(scope='all').first(),
+            # Chart.js payloads
+            'chart_labels': json.dumps(labels),
+            'chart_dev_ids': json.dumps([d['user'].id for d in developers]),
+            'chart_assigned': json.dumps(ds_assigned),
+            'chart_inprog': json.dumps(ds_inprog),
+            'chart_done': json.dumps(ds_done),
+            'chart_status': json.dumps([totals['assigned'], totals['in_progress'],
+                                        totals['done'], totals['blocked']]),
         })
         return ctx
 

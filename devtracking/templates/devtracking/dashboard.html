@@ -1,12 +1,27 @@
 {% extends 'base.html' %}
 {% block title %}Dev Tracking — Leap Networks ERP{% endblock %}
 {% block page_title %}Dev Tracking{% endblock %}
+
+{% block extra_css %}
+<style>
+    .kpi-tile { border:none; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.06);
+                transition:transform .12s ease, box-shadow .12s ease; text-decoration:none; display:block; }
+    .kpi-tile:hover { transform:translateY(-3px); box-shadow:0 6px 16px rgba(0,0,0,0.12); }
+    .kpi-value { font-size:1.9rem; font-weight:700; line-height:1; }
+    .kpi-label { font-size:.72rem; text-transform:uppercase; letter-spacing:.5px; color:#6c757d; }
+    .dev-card { border:none; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.06);
+                transition:transform .12s ease, box-shadow .12s ease; }
+    .dev-card:hover { transform:translateY(-3px); box-shadow:0 6px 16px rgba(0,0,0,0.12); }
+    .chart-card { border:none; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.06); }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container-fluid">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
             <h1 class="h3 mb-1">Dev Tracking</h1>
-            <p class="text-muted mb-0">Assigned tasks across the development team</p>
+            <p class="text-muted mb-0">Live view of the AI team's task progress</p>
         </div>
         <div class="d-flex gap-2">
             <a href="{% url 'devtracking:tasks' %}" class="btn btn-outline-secondary">
@@ -18,35 +33,103 @@
         </div>
     </div>
 
-    <!-- Per-dev cards -->
+    <!-- KPI tiles (click to drill into the filtered task list) -->
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-lg-3">
+            <a href="{% url 'devtracking:tasks' %}" class="kpi-tile card">
+                <div class="card-body">
+                    <div class="kpi-value text-dark">{{ team_totals.total }}</div>
+                    <div class="kpi-label">Total tasks</div>
+                </div>
+            </a>
+        </div>
+        <div class="col-6 col-lg-3">
+            <a href="{% url 'devtracking:tasks' %}?status=in_progress" class="kpi-tile card">
+                <div class="card-body">
+                    <div class="kpi-value text-primary">{{ team_totals.in_progress }}</div>
+                    <div class="kpi-label">In progress</div>
+                </div>
+            </a>
+        </div>
+        <div class="col-6 col-lg-3">
+            <a href="{% url 'devtracking:tasks' %}?status=done" class="kpi-tile card">
+                <div class="card-body">
+                    <div class="kpi-value text-success">{{ team_totals.done }}</div>
+                    <div class="kpi-label">Done</div>
+                </div>
+            </a>
+        </div>
+        <div class="col-6 col-lg-3">
+            <a href="{% url 'devtracking:tasks' %}?overdue=1" class="kpi-tile card">
+                <div class="card-body">
+                    <div class="kpi-value text-danger">{{ team_totals.overdue }}</div>
+                    <div class="kpi-label">Overdue</div>
+                </div>
+            </a>
+        </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="row g-3 mb-4">
+        <div class="col-lg-4">
+            <div class="card chart-card h-100">
+                <div class="card-header bg-white"><strong><i class="bi bi-pie-chart"></i> Task status</strong></div>
+                <div class="card-body d-flex align-items-center justify-content-center">
+                    <canvas id="statusChart" height="220"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-8">
+            <div class="card chart-card h-100">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                    <strong><i class="bi bi-bar-chart"></i> Per-developer workload</strong>
+                    <span class="text-muted small">click a bar to open that developer</span>
+                </div>
+                <div class="card-body">
+                    <canvas id="devChart" height="120"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Per-dev cards with progress -->
     <div class="row g-3 mb-4">
         {% for d in developers %}
-        <div class="col-md-4 col-xl-3">
-            <div class="card h-100">
+        <div class="col-md-6 col-xl-3">
+            <div class="card dev-card h-100">
                 <div class="card-body">
-                    <h5 class="card-title mb-3">
+                    <h6 class="card-title mb-2">
                         <a href="{% url 'devtracking:dev_detail' d.user.pk %}" class="text-decoration-none">
                             <i class="bi bi-person-circle"></i> {{ d.user.get_full_name|default:d.user.username }}
                         </a>
-                    </h5>
-                    <div class="d-flex flex-wrap gap-2">
-                        <span class="badge bg-secondary">Assigned {{ d.assigned }}</span>
-                        <span class="badge bg-primary">In progress {{ d.in_progress }}</span>
-                        <span class="badge bg-success">Done {{ d.done }}</span>
-                        {% if d.overdue %}<span class="badge bg-danger">Overdue {{ d.overdue }}</span>{% endif %}
+                    </h6>
+                    <div class="progress mb-2" style="height:8px;" title="{{ d.pct_done }}% done">
+                        <div class="progress-bar bg-success" role="progressbar"
+                             style="width: {{ d.pct_done }}%;" aria-valuenow="{{ d.pct_done }}"
+                             aria-valuemin="0" aria-valuemax="100"></div>
+                    </div>
+                    <div class="d-flex justify-content-between small text-muted mb-2">
+                        <span>{{ d.done }}/{{ d.total }} done</span>
+                        {% if d.on_time_rate is not None %}<span>{{ d.on_time_rate }}% on-time</span>{% endif %}
+                    </div>
+                    <div class="d-flex flex-wrap gap-1">
+                        <span class="badge bg-secondary">{{ d.assigned }} new</span>
+                        <span class="badge bg-primary">{{ d.in_progress }} active</span>
+                        {% if d.blocked %}<span class="badge bg-warning text-dark">{{ d.blocked }} blocked</span>{% endif %}
+                        {% if d.overdue %}<span class="badge bg-danger">{{ d.overdue }} overdue</span>{% endif %}
                     </div>
                 </div>
             </div>
         </div>
         {% empty %}
-        <div class="col-12"><p class="text-muted">No developers found.</p></div>
+        <div class="col-12"><p class="text-muted">No developers found. Assign a role of AI Intern / Engineer to a user.</p></div>
         {% endfor %}
     </div>
 
     <div class="row g-3">
         <!-- Overdue / stuck call-out -->
         <div class="col-lg-7">
-            <div class="card mb-3">
+            <div class="card chart-card mb-3">
                 <div class="card-header bg-white"><strong class="text-danger"><i class="bi bi-exclamation-triangle"></i> Overdue</strong></div>
                 <ul class="list-group list-group-flush">
                     {% for task in overdue_tasks %}
@@ -55,11 +138,11 @@
                         <span class="text-danger small">due {{ task.due_date }}</span>
                     </li>
                     {% empty %}
-                    <li class="list-group-item text-muted">Nothing overdue.</li>
+                    <li class="list-group-item text-muted">Nothing overdue. 🎉</li>
                     {% endfor %}
                 </ul>
             </div>
-            <div class="card">
+            <div class="card chart-card">
                 <div class="card-header bg-white"><strong class="text-warning"><i class="bi bi-hourglass-split"></i> Stuck (in progress 3+ days)</strong></div>
                 <ul class="list-group list-group-flush">
                     {% for task in stuck_tasks %}
@@ -74,14 +157,14 @@
             </div>
         </div>
 
-        <!-- AI digest placeholder -->
+        <!-- AI digest -->
         <div class="col-lg-5">
-            <div class="card h-100">
+            <div class="card chart-card h-100">
                 <div class="card-header bg-white d-flex justify-content-between align-items-center">
                     <strong><i class="bi bi-robot"></i> AI Digest</strong>
                     <form method="post" action="{% url 'devtracking:generate_now' %}" class="d-inline">
                         {% csrf_token %}
-                        <button class="btn btn-sm btn-primary"><i class="bi bi-stars"></i> Generate report now</button>
+                        <button class="btn btn-sm btn-primary"><i class="bi bi-stars"></i> Generate now</button>
                     </form>
                 </div>
                 <div class="card-body">
@@ -92,11 +175,63 @@
                         </p>
                         <div>{{ latest_digest.content|linebreaksbr }}</div>
                     {% else %}
-                        <p class="text-muted">No report yet.</p>
+                        <p class="text-muted">No report yet. Click <strong>Generate now</strong>.</p>
                     {% endif %}
                 </div>
             </div>
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+(function () {
+    var labels = {{ chart_labels|safe }};
+    var devIds = {{ chart_dev_ids|safe }};
+    var statusCanvas = document.getElementById('statusChart');
+    var devCanvas = document.getElementById('devChart');
+
+    if (statusCanvas) {
+        new Chart(statusCanvas, {
+            type: 'doughnut',
+            data: {
+                labels: ['Assigned', 'In progress', 'Done', 'Blocked'],
+                datasets: [{
+                    data: {{ chart_status|safe }},
+                    backgroundColor: ['#6c757d', '#0d6efd', '#198754', '#ffc107'],
+                    borderWidth: 0,
+                }],
+            },
+            options: { plugins: { legend: { position: 'bottom' } }, cutout: '62%' },
+        });
+    }
+
+    if (devCanvas && labels.length) {
+        var chart = new Chart(devCanvas, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    { label: 'Assigned', data: {{ chart_assigned|safe }}, backgroundColor: '#6c757d' },
+                    { label: 'In progress', data: {{ chart_inprog|safe }}, backgroundColor: '#0d6efd' },
+                    { label: 'Done', data: {{ chart_done|safe }}, backgroundColor: '#198754' },
+                ],
+            },
+            options: {
+                responsive: true,
+                scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } },
+                plugins: { legend: { position: 'bottom' } },
+                onClick: function (evt, els) {
+                    if (els.length) {
+                        var id = devIds[els[0].index];
+                        if (id) window.location.href = '/devtracking/developer/' + id + '/';
+                    }
+                },
+            },
+        });
+    }
+})();
+</script>
 {% endblock %}
