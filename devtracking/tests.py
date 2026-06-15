@@ -212,3 +212,13 @@ class GithubStatusTests(TestCase):
         t = DevTask.objects.create(title='T', developer=dev)  # no github_url
         refresh_if_stale(t)  # must not raise / not call network
         self.assertEqual(t.gh_state, '')
+
+
+class AssignableRolesTests(TestCase):
+    def test_ai_roles_are_assignable(self):
+        from devtracking.forms import DevTaskForm
+        eng = mkuser('eng', Role.AI_ENGINEER)
+        sales = mkuser('sales', Role.SALES_REP)
+        qs = DevTaskForm().fields['developer'].queryset
+        self.assertIn(eng, qs)
+        self.assertNotIn(sales, qs)

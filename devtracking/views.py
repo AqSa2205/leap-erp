@@ -5,7 +5,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView, CreateView, ListView, DetailView
 
-from accounts.models import Role, User
+from accounts.models import AI_DEVELOPER_ROLE_NAMES, User
 from accounts.permissions import CapabilityRequiredMixin, require_capability
 from notifications.services import notify_users
 
@@ -20,7 +20,7 @@ class DashboardView(CapabilityRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         today = timezone.now().date()
-        devs = User.objects.filter(role__name=Role.DEVELOPER, is_active=True).order_by('username')
+        devs = User.objects.filter(role__name__in=AI_DEVELOPER_ROLE_NAMES, is_active=True).order_by('username')
 
         developers = []
         for dev in devs:
@@ -91,7 +91,7 @@ class TaskListView(CapabilityRequiredMixin, ListView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx['developers'] = User.objects.filter(
-            role__name=Role.DEVELOPER, is_active=True).order_by('username')
+            role__name__in=AI_DEVELOPER_ROLE_NAMES, is_active=True).order_by('username')
         ctx['status_choices'] = DevTask.STATUS_CHOICES
         ctx['cur_developer'] = self.request.GET.get('developer', '')
         ctx['cur_status'] = self.request.GET.get('status', '')

@@ -123,6 +123,12 @@ DEFAULT_MODULE_ACCESS = {
     # role, data scoped inside — same as all other roles) plus the Dev Tracking
     # module (their own task view). Admin-vs-mywork is split per-codename below.
     'developer':       _OPEN_TO_ALL | {'devtracking'},
+    # AI team: open baseline plus the Dev Tracking module. AI Head manages
+    # (admin codename below); the doers get their own task view (mywork).
+    'ai_head':            _OPEN_TO_ALL | {'devtracking'},
+    'ai_intern':          _OPEN_TO_ALL | {'devtracking'},
+    'ai_engineer':        _OPEN_TO_ALL | {'devtracking'},
+    'ai_junior_engineer': _OPEN_TO_ALL | {'devtracking'},
 }
 
 # Per-codename baseline for ENFORCED granular caps that are not plain
@@ -134,6 +140,10 @@ DEFAULT_CODENAME_GRANTS = {
     'super_admin':  {'devtracking.admin', 'devtracking.mywork'},
     'admin':        {'devtracking.admin', 'devtracking.mywork'},
     'developer':    {'devtracking.mywork'},
+    'ai_head':            {'devtracking.admin', 'devtracking.mywork'},
+    'ai_intern':          {'devtracking.mywork'},
+    'ai_engineer':        {'devtracking.mywork'},
+    'ai_junior_engineer': {'devtracking.mywork'},
 }
 
 

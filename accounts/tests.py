@@ -432,3 +432,23 @@ class NavVisibilityTests(TestCase):
         self.client.force_login(self.user)
         resp = self.client.get(reverse('dashboard:index'))
         self.assertNotContains(resp, 'data-title="Commercial Pipeline"')
+
+
+class AITeamRoleTests(TestCase):
+    def setUp(self):
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+
+    def _allowed(self, role_name, codename):
+        role = Role.objects.get(name=role_name)
+        return RolePermission.objects.get(role=role, codename=codename).allowed
+
+    def test_ai_head_manages(self):
+        self.assertTrue(self._allowed(Role.AI_HEAD, 'devtracking.admin'))
+        self.assertTrue(self._allowed(Role.AI_HEAD, 'devtracking.mywork'))
+
+    def test_doers_have_mywork_not_admin(self):
+        for r in (Role.AI_INTERN, Role.AI_ENGINEER, Role.AI_JUNIOR_ENGINEER):
+            self.assertTrue(self._allowed(r, 'devtracking.mywork'), r)
+            self.assertFalse(self._allowed(r, 'devtracking.admin'), r)

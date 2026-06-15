@@ -1,5 +1,5 @@
 from django import forms
-from accounts.models import Role, User
+from accounts.models import AI_DEVELOPER_ROLE_NAMES, User
 from .models import DevTask
 
 
@@ -21,4 +21,4 @@ class DevTaskForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['developer'].queryset = User.objects.filter(
-            role__name=Role.DEVELOPER, is_active=True).order_by('username')
+            role__name__in=AI_DEVELOPER_ROLE_NAMES, is_active=True).order_by('username')

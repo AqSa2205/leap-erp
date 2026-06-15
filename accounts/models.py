@@ -17,6 +17,10 @@ class Role(models.Model):
     FINANCE_MANAGER = 'finance_manager'
     FINANCE_REP = 'finance_rep'
     DEVELOPER = 'developer'
+    AI_HEAD = 'ai_head'
+    AI_INTERN = 'ai_intern'
+    AI_ENGINEER = 'ai_engineer'
+    AI_JUNIOR_ENGINEER = 'ai_junior_engineer'
 
     ROLE_CHOICES = [
         (SUPER_ADMIN, 'Super Administrator'),
@@ -31,6 +35,10 @@ class Role(models.Model):
         (FINANCE_MANAGER, 'Finance Manager'),
         (FINANCE_REP, 'Finance Representative'),
         (DEVELOPER, 'Developer'),
+        (AI_HEAD, 'AI Head'),
+        (AI_INTERN, 'AI Intern'),
+        (AI_ENGINEER, 'AI Engineer'),
+        (AI_JUNIOR_ENGINEER, 'Junior AI Engineer'),
     ]
 
     name = models.CharField(max_length=20, choices=ROLE_CHOICES, unique=True)
@@ -90,6 +98,17 @@ class Role(models.Model):
     @property
     def is_developer(self):
         return self.name == self.DEVELOPER
+
+    @property
+    def is_ai_head(self):
+        return self.name == self.AI_HEAD
+
+
+# Roles whose users are tracked as "developers" in the devtracking module
+# (assignable to tasks, appear in the AI digest). AI Head manages, so is NOT here.
+AI_DEVELOPER_ROLE_NAMES = (
+    Role.DEVELOPER, Role.AI_INTERN, Role.AI_ENGINEER, Role.AI_JUNIOR_ENGINEER,
+)
 
 
 class User(AbstractUser):
@@ -185,6 +204,14 @@ class User(AbstractUser):
     @property
     def is_developer_user(self):
         return bool(self.role and self.role.is_developer)
+
+    @property
+    def is_ai_head_user(self):
+        return bool(self.role and self.role.is_ai_head)
+
+    @property
+    def is_ai_developer_user(self):
+        return bool(self.role and self.role.name in AI_DEVELOPER_ROLE_NAMES)
 
     @property
     def is_sales_team_user(self):

@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.utils import timezone
 
-from accounts.models import Role, User
+from accounts.models import AI_DEVELOPER_ROLE_NAMES, User
 
 from .models import DevTask, DevTaskUpdate, DevDigest
 
@@ -9,7 +9,7 @@ from .models import DevTask, DevTaskUpdate, DevDigest
 def build_digest_context(period=None):
     """Pure aggregation (no API). Returns a dict describing each developer's
     task progress for the AI prompt / fallback rendering."""
-    devs = User.objects.filter(role__name=Role.DEVELOPER, is_active=True).order_by('username')
+    devs = User.objects.filter(role__name__in=AI_DEVELOPER_ROLE_NAMES, is_active=True).order_by('username')
     out = {'generated_for': str(period or timezone.now().date()), 'developers': []}
     for dev in devs:
         tasks = list(DevTask.objects.filter(developer=dev))
