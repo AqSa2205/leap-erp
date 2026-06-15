@@ -178,3 +178,37 @@ class DigestTests(TestCase):
             call_command('generate_dev_digest')
         from devtracking.models import DevDigest
         self.assertEqual(DevDigest.objects.count(), 1)
+
+
+class GithubStatusTests(TestCase):
+    def test_parse_pr_url(self):
+        from devtracking.github import parse_pr_url
+        self.assertEqual(parse_pr_url('https://github.com/acme/repo/pull/42'), ('acme', 'repo', 42))
+        self.assertIsNone(parse_pr_url('https://example.com/x'))
+        self.assertIsNone(parse_pr_url(''))
+
+    def test_refresh_writes_cache(self):
+        from unittest.mock import patch
+        from devtracking.models import DevTask
+        dev = mkuser('dev', Role.DEVELOPER)
+        t = DevTask.objects.create(title='T', developer=dev,
+                                   github_url='https://github.com/acme/repo/pull/7')
+        with patch('devtracking.github.fetch_pr_status',
+                   return_value={'state': 'merged', 'commits': 3, 'title': 'Add auth'}):
+            from devtracking.github import refresh_task_github
+            self.assertTrue(refresh_task_github(t))
+        t.refresh_from_db()
+        self.assertEqual(t.gh_state, 'merged'); self.assertEqual(t.gh_commits, 3)
+        self.assertEqual(t.gh_title, 'Add auth'); self.assertIsNotNone(t.gh_checked_at)
+
+    def test_fetch_non_pr_url_returns_none(self):
+        from devtracking.github import fetch_pr_status
+        self.assertIsNone(fetch_pr_status('not a url'))  # no network call made
+
+    def test_refresh_if_stale_noop_without_url(self):
+        from devtracking.models import DevTask
+        from devtracking.github import refresh_if_stale
+        dev = mkuser('d3', Role.DEVELOPER)
+        t = DevTask.objects.create(title='T', developer=dev)  # no github_url
+        refresh_if_stale(t)  # must not raise / not call network
+        self.assertEqual(t.gh_state, '')

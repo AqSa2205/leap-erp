@@ -11,5 +11,6 @@ urlpatterns = [
     path('developer/<int:pk>/', views.DevDetailView.as_view(), name='dev_detail'),
     path('my-tasks/', views.MyTasksView.as_view(), name='my_tasks'),
     path('tasks/<int:pk>/action/', views.task_action, name='task_action'),
+    path('tasks/<int:pk>/refresh-github/', views.refresh_github, name='refresh_github'),
     path('generate/', views.generate_now, name='generate_now'),
 ]

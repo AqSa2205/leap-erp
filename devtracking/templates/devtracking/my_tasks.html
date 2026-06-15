@@ -16,7 +16,7 @@
             <div class="table-responsive">
                 <table class="table table-hover mb-0 align-middle">
                     <thead class="table-light">
-                        <tr><th>Title</th><th>Priority</th><th>Due</th><th>Status</th><th>Elapsed</th><th>Actions</th></tr>
+                        <tr><th>Title</th><th>Priority</th><th>Due</th><th>Status</th><th>GitHub</th><th>Elapsed</th><th>Actions</th></tr>
                     </thead>
                     <tbody>
                         {% for task in active %}
@@ -30,6 +30,17 @@
                                 {% if task.status == 'assigned' %}<span class="badge bg-secondary">Assigned</span>
                                 {% elif task.status == 'in_progress' %}<span class="badge bg-primary">In progress</span>
                                 {% elif task.status == 'blocked' %}<span class="badge bg-warning text-dark">Blocked</span>{% endif %}
+                            </td>
+                            <td>
+                                {% if task.github_url %}
+                                <a href="{{ task.github_url }}" target="_blank" rel="noopener" class="text-decoration-none" title="{{ task.gh_title }}">
+                                    {% if task.gh_state == 'merged' %}<span class="badge" style="background:#6f42c1;color:#fff;">PR merged</span>
+                                    {% elif task.gh_state == 'open' %}<span class="badge bg-info text-dark">PR open</span>
+                                    {% elif task.gh_state == 'closed' %}<span class="badge bg-secondary">PR closed</span>
+                                    {% else %}<span class="badge bg-light text-dark border">PR</span>{% endif %}
+                                    {% if task.gh_commits %}<span class="text-muted small">{{ task.gh_commits }} commits</span>{% endif %}
+                                </a>
+                                {% else %}<span class="text-muted">—</span>{% endif %}
                             </td>
                             <td>{% if task.started_at %}<span class="small">{{ task.elapsed }}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
                             <td>
@@ -47,7 +58,7 @@
                             </td>
                         </tr>
                         {% empty %}
-                        <tr><td colspan="6" class="text-center text-muted py-4">No active tasks.</td></tr>
+                        <tr><td colspan="7" class="text-center text-muted py-4">No active tasks.</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>

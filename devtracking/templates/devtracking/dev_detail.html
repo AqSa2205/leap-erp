@@ -42,11 +42,20 @@
                                         {% else %}<span class="text-muted">—</span>{% endif %}
                                     </td>
                                     <td>
-                                        {% if task.gh_state %}
-                                            {% if task.gh_state == 'open' %}<span class="badge bg-info text-dark">open</span>
-                                            {% elif task.gh_state == 'merged' %}<span class="badge text-white" style="background-color:#6f42c1;">merged</span>
-                                            {% elif task.gh_state == 'closed' %}<span class="badge bg-secondary">closed</span>
-                                            {% else %}<span class="badge bg-light text-dark">{{ task.gh_state }}</span>{% endif %}
+                                        {% if task.github_url %}
+                                        <span class="d-inline-flex align-items-center gap-1">
+                                            <a href="{{ task.github_url }}" target="_blank" rel="noopener" class="text-decoration-none" title="{{ task.gh_title }}">
+                                                {% if task.gh_state == 'merged' %}<span class="badge" style="background:#6f42c1;color:#fff;">PR merged</span>
+                                                {% elif task.gh_state == 'open' %}<span class="badge bg-info text-dark">PR open</span>
+                                                {% elif task.gh_state == 'closed' %}<span class="badge bg-secondary">PR closed</span>
+                                                {% else %}<span class="badge bg-light text-dark border">PR</span>{% endif %}
+                                                {% if task.gh_commits %}<span class="text-muted small">{{ task.gh_commits }} commits</span>{% endif %}
+                                            </a>
+                                            <form method="post" action="{% url 'devtracking:refresh_github' task.pk %}" class="d-inline">
+                                                {% csrf_token %}
+                                                <button type="submit" class="btn btn-sm btn-link p-0 text-muted" title="Refresh PR status"><i class="bi bi-arrow-clockwise"></i></button>
+                                            </form>
+                                        </span>
                                         {% else %}<span class="text-muted">—</span>{% endif %}
                                     </td>
                                 </tr>

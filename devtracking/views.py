@@ -108,8 +108,16 @@ class DevDetailView(CapabilityRequiredMixin, DetailView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         dev = self.object
-        ctx['tasks'] = (DevTask.objects.filter(developer=dev)
-                        .select_related('assigned_by'))
+        tasks = list(DevTask.objects.filter(developer=dev)
+                     .select_related('assigned_by'))
+        # Refresh live GitHub PR status for tasks that have a PR url. The helper
+        # is stale-gated (15 min) + swallows all errors, and each call has a 6s
+        # timeout, so a slow/failed GitHub call can never break the page.
+        from .github import refresh_if_stale
+        for task in tasks:
+            if task.github_url:
+                refresh_if_stale(task)
+        ctx['tasks'] = tasks
         ctx['updates'] = (DevTaskUpdate.objects
                           .filter(task__developer=dev)
                           .select_related('task', 'author')[:20])
@@ -163,3 +171,14 @@ def task_action(request, pk):
         DevTaskUpdate.objects.create(task=task, author=request.user,
                                      note=note, status_changed_to=task.status)
     return redirect('devtracking:my_tasks')
+
+
+@require_capability('devtracking.mywork')
+@require_POST
+def refresh_github(request, pk):
+    task = get_object_or_404(DevTask, pk=pk)
+    if task.developer_id != request.user.id and not request.user.has_capability('devtracking.admin'):
+        return HttpResponseForbidden('Not your task')
+    from .github import refresh_task_github
+    refresh_task_github(task)
+    return redirect(request.META.get('HTTP_REFERER') or 'devtracking:my_tasks')
