@@ -60,7 +60,7 @@
                             <th>Due</th>
                             <th>Time</th>
                             <th>GitHub</th>
-                            <th class="text-end">Edit</th>
+                            <th class="text-end">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -102,9 +102,12 @@
                                     {% if task.github_url %}<a href="{{ task.github_url }}" target="_blank" rel="noopener"><i class="bi bi-github"></i></a>{% else %}<span class="text-muted">—</span>{% endif %}
                                 {% endif %}
                             </td>
-                            <td class="text-end">
+                            <td class="text-end text-nowrap">
                                 <a href="{% url 'devtracking:task_edit' task.pk %}" class="btn btn-sm btn-outline-secondary" title="Edit task">
                                     <i class="bi bi-pencil"></i>
+                                </a>
+                                <a href="{% url 'devtracking:task_delete' task.pk %}" class="btn btn-sm btn-outline-danger" title="Delete task">
+                                    <i class="bi bi-trash"></i>
                                 </a>
                             </td>
                         </tr>

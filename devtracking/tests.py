@@ -369,3 +369,31 @@ class TaskEditTests(TestCase):
         resp = self.client.get(reverse('devtracking:tasks'))
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, 'Unassigned')
+
+
+class TaskDeleteTests(TestCase):
+    def setUp(self):
+        from accounts.permissions import seed_default_permissions
+        for name, _l in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.admin = mkuser('adm', Role.ADMIN)
+        self.dev = mkuser('eng', Role.AI_ENGINEER)
+        from devtracking.models import DevTask
+        self.task = DevTask.objects.create(title='Doomed', status='unassigned')
+
+    def test_admin_can_delete(self):
+        from django.urls import reverse
+        from devtracking.models import DevTask
+        self.client.force_login(self.admin)
+        resp = self.client.post(reverse('devtracking:task_delete', kwargs={'pk': self.task.pk}))
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(DevTask.objects.filter(pk=self.task.pk).exists())
+
+    def test_ai_engineer_cannot_delete(self):
+        from django.urls import reverse
+        from devtracking.models import DevTask
+        self.client.force_login(self.dev)
+        resp = self.client.post(reverse('devtracking:task_delete', kwargs={'pk': self.task.pk}))
+        self.assertIn(resp.status_code, (302, 403))
+        self.assertTrue(DevTask.objects.filter(pk=self.task.pk).exists())

@@ -39,6 +39,9 @@
                             <a href="{% url 'devtracking:task_edit' task.pk %}" class="btn btn-sm btn-outline-secondary" title="Edit task">
                                 <i class="bi bi-pencil"></i>
                             </a>
+                            <a href="{% url 'devtracking:task_delete' task.pk %}" class="btn btn-sm btn-outline-danger" title="Delete task">
+                                <i class="bi bi-trash"></i>
+                            </a>
                             <a href="{% url 'devtracking:assign_existing' task.pk %}" class="btn btn-sm btn-primary">
                                 <i class="bi bi-person-plus"></i> Assign
                             </a>

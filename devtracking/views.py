@@ -3,7 +3,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.views.decorators.http import require_POST
-from django.views.generic import TemplateView, CreateView, UpdateView, ListView, DetailView
+from django.views.generic import (TemplateView, CreateView, UpdateView,
+                                  DeleteView, ListView, DetailView)
 
 from accounts.models import AI_DEVELOPER_ROLE_NAMES, User
 from accounts.permissions import CapabilityRequiredMixin, require_capability
@@ -184,6 +185,14 @@ class TaskEditView(CapabilityRequiredMixin, UpdateView):
                 target_url=reverse('devtracking:my_tasks'),
             )
         return response
+
+
+class TaskDeleteView(CapabilityRequiredMixin, DeleteView):
+    """Delete a task. Gated to devtracking.admin (Super Admin, Admin, AI Head)."""
+    capability = 'devtracking.admin'
+    model = DevTask
+    template_name = 'devtracking/task_confirm_delete.html'
+    success_url = reverse_lazy('devtracking:tasks')
 
 
 class TaskListView(CapabilityRequiredMixin, ListView):

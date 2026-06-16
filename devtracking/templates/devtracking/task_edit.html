@@ -55,7 +55,9 @@
                         <div class="alert alert-danger">{% for e in form.non_field_errors %}<p class="mb-0">{{ e }}</p>{% endfor %}</div>
                         {% endif %}
                         <div class="d-flex justify-content-between border-top pt-3">
-                            <span class="text-muted small align-self-center">Status is managed by the developer (Start / Done).</span>
+                            <a href="{% url 'devtracking:task_delete' form.instance.pk %}" class="btn btn-outline-danger">
+                                <i class="bi bi-trash"></i> Delete
+                            </a>
                             <div class="d-flex gap-2">
                                 <a href="{% url 'devtracking:tasks' %}" class="btn btn-outline-secondary">Cancel</a>
                                 <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> Save changes</button>
