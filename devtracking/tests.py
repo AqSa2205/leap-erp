@@ -314,3 +314,58 @@ class BacklogWorkflowTests(TestCase):
         from django.urls import reverse
         self.client.force_login(self.dev)
         self.assertIn(self.client.get(reverse('devtracking:bulk_create')).status_code, (302, 403))
+
+
+class TaskEditTests(TestCase):
+    def setUp(self):
+        from accounts.permissions import seed_default_permissions
+        for name, _l in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.admin = mkuser('adm', Role.ADMIN)
+        self.head = mkuser('head', Role.AI_HEAD)
+        self.dev = mkuser('eng', Role.AI_ENGINEER)
+        from devtracking.models import DevTask
+        self.task = DevTask.objects.create(title='Old title', status='unassigned')
+
+    def _post(self, user, **extra):
+        from django.urls import reverse
+        self.client.force_login(user)
+        data = {'title': 'New title', 'description': '', 'priority': 'high',
+                'developer': '', 'estimated_hours': '', 'due_date': '', 'github_url': ''}
+        data.update(extra)
+        return self.client.post(reverse('devtracking:task_edit', kwargs={'pk': self.task.pk}), data)
+
+    def test_admin_can_edit(self):
+        resp = self._post(self.admin, title='Edited by admin')
+        self.assertEqual(resp.status_code, 302)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.title, 'Edited by admin')
+        self.assertEqual(self.task.priority, 'high')
+
+    def test_ai_head_can_edit(self):
+        resp = self._post(self.head, title='Edited by head')
+        self.assertEqual(resp.status_code, 302)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.title, 'Edited by head')
+
+    def test_ai_engineer_cannot_edit(self):
+        from django.urls import reverse
+        self.client.force_login(self.dev)
+        resp = self.client.get(reverse('devtracking:task_edit', kwargs={'pk': self.task.pk}))
+        self.assertIn(resp.status_code, (302, 403))
+
+    def test_edit_assigns_and_flips_status(self):
+        self._post(self.admin, developer=self.dev.pk)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.developer, self.dev)
+        self.assertEqual(self.task.status, 'assigned')  # unassigned -> assigned on edit
+        self.assertEqual(self.task.assigned_by, self.admin)
+
+    def test_all_tasks_page_renders_with_unassigned(self):
+        # Regression: an unassigned task in the list must not crash the page.
+        from django.urls import reverse
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse('devtracking:tasks'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Unassigned')

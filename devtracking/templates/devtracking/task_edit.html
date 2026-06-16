@@ -1,0 +1,70 @@
+{% extends 'base.html' %}
+{% block title %}Edit Task — Dev Tracking{% endblock %}
+{% block page_title %}Edit Task{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-7">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">Edit Task</h1>
+                    <p class="text-muted mb-0">Update this task's details or reassign it.</p>
+                </div>
+                <a href="{% url 'devtracking:tasks' %}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> All Tasks</a>
+            </div>
+
+            <div class="card">
+                <div class="card-body">
+                    <form method="post">
+                        {% csrf_token %}
+                        <div class="row">
+                            <div class="col-md-8 mb-3">
+                                <label class="form-label">Title *</label>
+                                {{ form.title }}
+                                {% if form.title.errors %}<div class="text-danger small mt-1">{{ form.title.errors.0 }}</div>{% endif %}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Priority</label>
+                                {{ form.priority }}
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Description</label>
+                            {{ form.description }}
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Developer <span class="text-muted small">(leave blank to keep in backlog)</span></label>
+                                {{ form.developer }}
+                                {% if form.developer.errors %}<div class="text-danger small mt-1">{{ form.developer.errors.0 }}</div>{% endif %}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Estimated hours</label>
+                                {{ form.estimated_hours }}
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Due date</label>
+                                {{ form.due_date }}
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">GitHub link</label>
+                            {{ form.github_url }}
+                        </div>
+                        {% if form.non_field_errors %}
+                        <div class="alert alert-danger">{% for e in form.non_field_errors %}<p class="mb-0">{{ e }}</p>{% endfor %}</div>
+                        {% endif %}
+                        <div class="d-flex justify-content-between border-top pt-3">
+                            <span class="text-muted small align-self-center">Status is managed by the developer (Start / Done).</span>
+                            <div class="d-flex gap-2">
+                                <a href="{% url 'devtracking:tasks' %}" class="btn btn-outline-secondary">Cancel</a>
+                                <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> Save changes</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

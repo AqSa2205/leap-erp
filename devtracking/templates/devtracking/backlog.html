@@ -36,6 +36,9 @@
                         </td>
                         <td>{% if task.due_date %}{{ task.due_date }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
                         <td class="text-end pe-3">
+                            <a href="{% url 'devtracking:task_edit' task.pk %}" class="btn btn-sm btn-outline-secondary" title="Edit task">
+                                <i class="bi bi-pencil"></i>
+                            </a>
                             <a href="{% url 'devtracking:assign_existing' task.pk %}" class="btn btn-sm btn-primary">
                                 <i class="bi bi-person-plus"></i> Assign
                             </a>

@@ -10,6 +10,7 @@ urlpatterns = [
     path('tasks/bulk/', views.bulk_create, name='bulk_create'),
     path('backlog/', views.BacklogListView.as_view(), name='backlog'),
     path('tasks/<int:pk>/assign/', views.assign_existing, name='assign_existing'),
+    path('tasks/<int:pk>/edit/', views.TaskEditView.as_view(), name='task_edit'),
     path('tasks/', views.TaskListView.as_view(), name='tasks'),
     path('developer/<int:pk>/', views.DevDetailView.as_view(), name='dev_detail'),
     path('my-tasks/', views.MyTasksView.as_view(), name='my_tasks'),

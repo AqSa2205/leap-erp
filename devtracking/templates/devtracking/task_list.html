@@ -60,15 +60,21 @@
                             <th>Due</th>
                             <th>Time</th>
                             <th>GitHub</th>
+                            <th class="text-end">Edit</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for task in tasks %}
                         <tr>
                             <td><strong>{{ task.title }}</strong></td>
-                            <td><a href="{% url 'devtracking:dev_detail' task.developer.pk %}" class="text-decoration-none">{{ task.developer.username }}</a></td>
                             <td>
-                                {% if task.status == 'assigned' %}<span class="badge bg-secondary">Assigned</span>
+                                {% if task.developer %}
+                                <a href="{% url 'devtracking:dev_detail' task.developer.pk %}" class="text-decoration-none">{{ task.developer.username }}</a>
+                                {% else %}<span class="badge bg-light text-dark border">Unassigned</span>{% endif %}
+                            </td>
+                            <td>
+                                {% if task.status == 'unassigned' %}<span class="badge bg-light text-dark border">Unassigned</span>
+                                {% elif task.status == 'assigned' %}<span class="badge bg-secondary">Assigned</span>
                                 {% elif task.status == 'in_progress' %}<span class="badge bg-primary">In progress</span>
                                 {% elif task.status == 'blocked' %}<span class="badge bg-warning text-dark">Blocked</span>
                                 {% elif task.status == 'done' %}<span class="badge bg-success">Done</span>{% endif %}
@@ -96,9 +102,14 @@
                                     {% if task.github_url %}<a href="{{ task.github_url }}" target="_blank" rel="noopener"><i class="bi bi-github"></i></a>{% else %}<span class="text-muted">—</span>{% endif %}
                                 {% endif %}
                             </td>
+                            <td class="text-end">
+                                <a href="{% url 'devtracking:task_edit' task.pk %}" class="btn btn-sm btn-outline-secondary" title="Edit task">
+                                    <i class="bi bi-pencil"></i>
+                                </a>
+                            </td>
                         </tr>
                         {% empty %}
-                        <tr><td colspan="7" class="text-center py-5"><i class="bi bi-inbox display-4 text-muted"></i><p class="text-muted mt-3">No tasks found.</p></td></tr>
+                        <tr><td colspan="8" class="text-center py-5"><i class="bi bi-inbox display-4 text-muted"></i><p class="text-muted mt-3">No tasks found.</p></td></tr>
                         {% endfor %}
                     </tbody>
                 </table>

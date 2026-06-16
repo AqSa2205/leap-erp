@@ -3,7 +3,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.views.decorators.http import require_POST
-from django.views.generic import TemplateView, CreateView, ListView, DetailView
+from django.views.generic import TemplateView, CreateView, UpdateView, ListView, DetailView
 
 from accounts.models import AI_DEVELOPER_ROLE_NAMES, User
 from accounts.permissions import CapabilityRequiredMixin, require_capability
@@ -149,6 +149,41 @@ def assign_existing(request, pk):
     else:
         form = AssignTaskForm(instance=task)
     return render(request, 'devtracking/assign_existing.html', {'form': form, 'task': task})
+
+
+class TaskEditView(CapabilityRequiredMixin, UpdateView):
+    """Edit any task after creation. Gated to devtracking.admin — i.e. only
+    AI Head, Admin and Super Admin (the AI doers hold mywork, not admin)."""
+    capability = 'devtracking.admin'
+    model = DevTask
+    form_class = DevTaskForm
+    template_name = 'devtracking/task_edit.html'
+    success_url = reverse_lazy('devtracking:tasks')
+
+    def form_valid(self, form):
+        old_dev_id = DevTask.objects.values_list('developer_id', flat=True).get(pk=self.object.pk)
+        response = super().form_valid(form)
+        task = self.object
+        # Keep status consistent with assignment for non-active tasks only —
+        # never disturb an in-progress/blocked/done task's state or timestamps.
+        if task.developer_id is None and task.status == 'assigned':
+            task.status = 'unassigned'
+            task.save(update_fields=['status'])
+        elif task.developer_id and task.status == 'unassigned':
+            task.status = 'assigned'
+            task.save(update_fields=['status'])
+        # Notify when the edit (re)assigns the task to a different developer.
+        if task.developer_id and task.developer_id != old_dev_id:
+            task.assigned_by = self.request.user
+            task.save(update_fields=['assigned_by'])
+            notify_users(
+                recipients=[task.developer],
+                verb='assigned you a task',
+                actor=self.request.user,
+                description=task.title,
+                target_url=reverse('devtracking:my_tasks'),
+            )
+        return response
 
 
 class TaskListView(CapabilityRequiredMixin, ListView):
