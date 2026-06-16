@@ -397,3 +397,65 @@ class TaskDeleteTests(TestCase):
         resp = self.client.post(reverse('devtracking:task_delete', kwargs={'pk': self.task.pk}))
         self.assertIn(resp.status_code, (302, 403))
         self.assertTrue(DevTask.objects.filter(pk=self.task.pk).exists())
+
+
+class StackTests(TestCase):
+    def setUp(self):
+        from accounts.permissions import seed_default_permissions
+        for name, _l in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.admin = mkuser('adm', Role.ADMIN)
+        self.dev = mkuser('eng', Role.AI_ENGINEER)
+
+    def test_create_stack_with_tasks(self):
+        from django.urls import reverse
+        from devtracking.models import TaskStack, DevTask
+        self.client.force_login(self.admin)
+        self.client.post(reverse('devtracking:stack_create'),
+                         {'name': 'Login feature', 'description': '', 'priority': 'high',
+                          'titles': 'API\nUI\nTests'})
+        stack = TaskStack.objects.get(name='Login feature')
+        self.assertEqual(stack.tasks.count(), 3)
+        self.assertTrue(all(t.status == 'unassigned' for t in stack.tasks.all()))
+
+    def test_group_existing_backlog_tasks(self):
+        from django.urls import reverse
+        from devtracking.models import TaskStack, DevTask
+        a = DevTask.objects.create(title='A', status='unassigned')
+        b = DevTask.objects.create(title='B', status='unassigned')
+        self.client.force_login(self.admin)
+        self.client.post(reverse('devtracking:stack_group'),
+                         {'name': 'Bundle', 'task_ids': [a.pk, b.pk]})
+        stack = TaskStack.objects.get(name='Bundle')
+        a.refresh_from_db(); b.refresh_from_db()
+        self.assertEqual(a.stack, stack); self.assertEqual(b.stack, stack)
+
+    def test_assign_whole_stack(self):
+        from django.urls import reverse
+        from devtracking.models import TaskStack, DevTask
+        stack = TaskStack.objects.create(name='S')
+        t1 = DevTask.objects.create(title='1', status='unassigned', stack=stack)
+        t2 = DevTask.objects.create(title='2', status='unassigned', stack=stack)
+        self.client.force_login(self.admin)
+        self.client.post(reverse('devtracking:stack_assign', kwargs={'pk': stack.pk}),
+                         {'developer': self.dev.pk})
+        t1.refresh_from_db(); t2.refresh_from_db()
+        self.assertEqual(t1.developer, self.dev); self.assertEqual(t1.status, 'assigned')
+        self.assertEqual(t2.developer, self.dev)
+
+    def test_developer_cannot_create_stack(self):
+        from django.urls import reverse
+        self.client.force_login(self.dev)
+        self.assertIn(self.client.get(reverse('devtracking:stack_create')).status_code, (302, 403))
+
+    def test_deleting_stack_keeps_tasks(self):
+        from django.urls import reverse
+        from devtracking.models import TaskStack, DevTask
+        stack = TaskStack.objects.create(name='S2')
+        t = DevTask.objects.create(title='keep', status='unassigned', stack=stack)
+        self.client.force_login(self.admin)
+        self.client.post(reverse('devtracking:stack_delete', kwargs={'pk': stack.pk}))
+        t.refresh_from_db()
+        self.assertIsNone(t.stack)
+        self.assertTrue(DevTask.objects.filter(pk=t.pk).exists())

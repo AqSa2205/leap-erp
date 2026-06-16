@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+{% block title %}Task Stacks — Dev Tracking{% endblock %}
+{% block page_title %}Task Stacks{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Task Stacks</h1>
+            <p class="text-muted mb-0">Bundles of tasks you can assign to one developer at once.</p>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{% url 'devtracking:backlog' %}" class="btn btn-outline-secondary"><i class="bi bi-inbox"></i> Backlog</a>
+            <a href="{% url 'devtracking:stack_create' %}" class="btn btn-primary"><i class="bi bi-stack"></i> Create Stack</a>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body p-0">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-3">Stack</th>
+                        <th>Description</th>
+                        <th>Tasks</th>
+                        <th class="pe-3">Created</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for stack in stacks %}
+                    <tr>
+                        <td class="ps-3 fw-semibold">
+                            <a href="{% url 'devtracking:stack_detail' stack.pk %}" class="text-decoration-none">{{ stack.name }}</a>
+                        </td>
+                        <td>{% if stack.description %}{{ stack.description }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                        <td><span class="badge bg-dark">{{ stack.tasks.count }}</span></td>
+                        <td class="pe-3 text-muted small">{{ stack.created_at|date:"Y-m-d" }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="4" class="text-center text-muted py-5">
+                        No stacks yet. <a href="{% url 'devtracking:stack_create' %}">Create one</a>.
+                    </td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    {% if is_paginated %}
+    <nav class="mt-3"><ul class="pagination">
+        {% if page_obj.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}">Prev</a></li>{% endif %}
+        <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
+        {% if page_obj.has_next %}<li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a></li>{% endif %}
+    </ul></nav>
+    {% endif %}
+</div>
+{% endblock %}

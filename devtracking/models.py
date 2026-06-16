@@ -3,6 +3,20 @@ from django.conf import settings
 from django.utils import timezone
 
 
+class TaskStack(models.Model):
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                                   null=True, blank=True, related_name='dev_stacks_created')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.name
+
+
 class DevTask(models.Model):
     PRIORITY_CHOICES = [('low', 'Low'), ('medium', 'Medium'), ('high', 'High')]
     STATUS_CHOICES = [('unassigned', 'Unassigned'), ('assigned', 'Assigned'),
@@ -15,6 +29,8 @@ class DevTask(models.Model):
                                   related_name='dev_tasks', null=True, blank=True)
     assigned_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
                                     null=True, blank=True, related_name='dev_tasks_assigned')
+    stack = models.ForeignKey('TaskStack', on_delete=models.SET_NULL, null=True,
+                              blank=True, related_name='tasks')
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
     priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default='medium')

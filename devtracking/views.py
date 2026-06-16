@@ -10,8 +10,8 @@ from accounts.models import AI_DEVELOPER_ROLE_NAMES, User
 from accounts.permissions import CapabilityRequiredMixin, require_capability
 from notifications.services import notify_users
 
-from .forms import DevTaskForm, BulkTaskForm, AssignTaskForm
-from .models import DevTask, DevTaskUpdate, DevDigest
+from .forms import DevTaskForm, BulkTaskForm, AssignTaskForm, StackForm
+from .models import DevTask, DevTaskUpdate, DevDigest, TaskStack
 
 
 class DashboardView(CapabilityRequiredMixin, TemplateView):
@@ -265,6 +265,107 @@ class MyTasksView(CapabilityRequiredMixin, ListView):
         ctx['active'] = [t for t in tasks if t.status != 'done']
         ctx['done'] = [t for t in tasks if t.status == 'done']
         return ctx
+
+
+class StackListView(CapabilityRequiredMixin, ListView):
+    capability = 'devtracking.admin'
+    model = TaskStack
+    template_name = 'devtracking/stack_list.html'
+    context_object_name = 'stacks'
+    paginate_by = 30
+
+    def get_queryset(self):
+        return TaskStack.objects.all()
+
+
+@require_capability('devtracking.admin')
+def stack_create(request):
+    if request.method == 'POST':
+        form = StackForm(request.POST)
+        if form.is_valid():
+            stack = TaskStack.objects.create(
+                name=form.cleaned_data['name'],
+                description=form.cleaned_data.get('description', ''),
+                created_by=request.user,
+            )
+            priority = form.cleaned_data['priority']
+            titles = form.cleaned_data['titles']
+            if titles:
+                DevTask.objects.bulk_create([
+                    DevTask(title=t, priority=priority, status='unassigned',
+                            stack=stack, assigned_by=request.user)
+                    for t in titles
+                ])
+            return redirect('devtracking:stack_detail', pk=stack.pk)
+    else:
+        form = StackForm()
+    return render(request, 'devtracking/stack_form.html', {'form': form})
+
+
+class StackDetailView(CapabilityRequiredMixin, DetailView):
+    capability = 'devtracking.admin'
+    model = TaskStack
+    template_name = 'devtracking/stack_detail.html'
+    context_object_name = 'stack'
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['developers'] = User.objects.filter(
+            role__name__in=AI_DEVELOPER_ROLE_NAMES, is_active=True).order_by('username')
+        return ctx
+
+
+@require_capability('devtracking.admin')
+@require_POST
+def stack_assign(request, pk):
+    stack = get_object_or_404(TaskStack, pk=pk)
+    developer = get_object_or_404(
+        User.objects.filter(role__name__in=AI_DEVELOPER_ROLE_NAMES, is_active=True),
+        pk=request.POST.get('developer'))
+    # Only (re)assign tasks not yet started/done — never disturb
+    # in_progress/blocked/done state or timestamps.
+    for task in stack.tasks.filter(status__in=('unassigned', 'assigned')):
+        task.assign_to(developer, by=request.user)
+    notify_users(
+        recipients=[developer],
+        verb='assigned you a task stack',
+        actor=request.user,
+        description=stack.name,
+        target_url=reverse('devtracking:my_tasks'),
+    )
+    return redirect('devtracking:stack_detail', pk=stack.pk)
+
+
+@require_capability('devtracking.admin')
+@require_POST
+def stack_add_tasks(request, pk):
+    stack = get_object_or_404(TaskStack, pk=pk)
+    titles = [ln.strip() for ln in (request.POST.get('titles') or '').splitlines() if ln.strip()]
+    if titles:
+        DevTask.objects.bulk_create([
+            DevTask(title=t, status='unassigned', stack=stack, assigned_by=request.user)
+            for t in titles
+        ])
+    return redirect('devtracking:stack_detail', pk=stack.pk)
+
+
+@require_capability('devtracking.admin')
+@require_POST
+def stack_group(request):
+    name = (request.POST.get('name') or '').strip()
+    task_ids = request.POST.getlist('task_ids')
+    if not name or not task_ids:
+        return redirect('devtracking:backlog')
+    stack = TaskStack.objects.create(name=name, created_by=request.user)
+    DevTask.objects.filter(pk__in=task_ids).update(stack=stack)
+    return redirect('devtracking:stack_detail', pk=stack.pk)
+
+
+class StackDeleteView(CapabilityRequiredMixin, DeleteView):
+    capability = 'devtracking.admin'
+    model = TaskStack
+    template_name = 'devtracking/stack_confirm_delete.html'
+    success_url = reverse_lazy('devtracking:stacks')
 
 
 @require_capability('devtracking.admin')

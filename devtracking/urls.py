@@ -18,4 +18,11 @@ urlpatterns = [
     path('tasks/<int:pk>/action/', views.task_action, name='task_action'),
     path('tasks/<int:pk>/refresh-github/', views.refresh_github, name='refresh_github'),
     path('generate/', views.generate_now, name='generate_now'),
+    path('stacks/', views.StackListView.as_view(), name='stacks'),
+    path('stacks/create/', views.stack_create, name='stack_create'),
+    path('stacks/group/', views.stack_group, name='stack_group'),
+    path('stacks/<int:pk>/', views.StackDetailView.as_view(), name='stack_detail'),
+    path('stacks/<int:pk>/assign/', views.stack_assign, name='stack_assign'),
+    path('stacks/<int:pk>/add-tasks/', views.stack_add_tasks, name='stack_add_tasks'),
+    path('stacks/<int:pk>/delete/', views.StackDeleteView.as_view(), name='stack_delete'),
 ]

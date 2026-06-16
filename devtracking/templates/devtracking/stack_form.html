@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+{% block title %}Create Stack — Dev Tracking{% endblock %}
+{% block page_title %}Create Stack{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-7">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">Create Stack</h1>
+                    <p class="text-muted mb-0">Bundle tasks together, then assign the whole stack at once.</p>
+                </div>
+                <a href="{% url 'devtracking:stacks' %}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Stacks</a>
+            </div>
+
+            <div class="card">
+                <div class="card-body">
+                    <form method="post">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <label class="form-label">Name *</label>
+                            {{ form.name }}
+                            {% if form.name.errors %}<div class="text-danger small mt-1">{{ form.name.errors.0 }}</div>{% endif %}
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Description</label>
+                            {{ form.description }}
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Priority</label>
+                            {{ form.priority }}
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Tasks</label>
+                            {{ form.titles }}
+                            <div class="form-text">{{ form.titles.help_text }}</div>
+                        </div>
+                        <div class="d-flex justify-content-end gap-2 border-top pt-3">
+                            <a href="{% url 'devtracking:stacks' %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> Create stack</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

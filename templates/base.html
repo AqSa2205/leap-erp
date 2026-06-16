@@ -1041,6 +1041,11 @@
                     <i class="bi bi-list-task"></i> <span>All Tasks</span>
                 </a>
             </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'stacks' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:stacks' %}" data-title="Stacks">
+                    <i class="bi bi-stack"></i> <span>Stacks</span>
+                </a>
+            </li>
         </ul>
         {% endif %}
 

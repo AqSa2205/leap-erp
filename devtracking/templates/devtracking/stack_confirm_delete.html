@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% block title %}Delete Stack — Dev Tracking{% endblock %}
+{% block page_title %}Delete Stack{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-6">
+            <div class="card border-danger">
+                <div class="card-body">
+                    <h1 class="h4 mb-3 text-danger"><i class="bi bi-exclamation-triangle"></i> Delete stack</h1>
+                    <p>Are you sure you want to delete the stack <strong>{{ object.name }}</strong>?</p>
+                    <p class="text-muted">The {{ object.tasks.count }} task(s) in this stack will be <strong>kept</strong> — they're just removed from the stack (un-stacked).</p>
+                    <form method="post">
+                        {% csrf_token %}
+                        <div class="d-flex justify-content-end gap-2 border-top pt-3">
+                            <a href="{% url 'devtracking:stack_detail' object.pk %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-danger"><i class="bi bi-trash"></i> Delete stack</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

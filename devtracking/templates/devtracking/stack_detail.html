@@ -1,0 +1,89 @@
+{% extends 'base.html' %}
+{% block title %}{{ stack.name }} — Dev Tracking{% endblock %}
+{% block page_title %}Stack{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">{{ stack.name }}</h1>
+            {% if stack.description %}<p class="text-muted mb-0">{{ stack.description }}</p>{% endif %}
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{% url 'devtracking:stacks' %}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Stacks</a>
+            <a href="{% url 'devtracking:stack_delete' stack.pk %}" class="btn btn-outline-danger"><i class="bi bi-trash"></i> Delete stack</a>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h2 class="h6 mb-3"><i class="bi bi-person-plus"></i> Assign whole stack</h2>
+                    <form method="post" action="{% url 'devtracking:stack_assign' stack.pk %}" class="d-flex gap-2">
+                        {% csrf_token %}
+                        <select name="developer" class="form-select" required>
+                            <option value="">Select developer…</option>
+                            {% for d in developers %}
+                            <option value="{{ d.pk }}">{{ d.username }}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="btn btn-primary text-nowrap">Assign stack to developer</button>
+                    </form>
+                    <p class="text-muted small mb-0 mt-2">Assigns every not-yet-started task in this stack. In-progress/blocked/done tasks are left untouched.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h2 class="h6 mb-3"><i class="bi bi-plus-lg"></i> Add tasks</h2>
+                    <form method="post" action="{% url 'devtracking:stack_add_tasks' stack.pk %}">
+                        {% csrf_token %}
+                        <textarea name="titles" class="form-control mb-2" rows="3" placeholder="One task per line"></textarea>
+                        <button type="submit" class="btn btn-outline-primary">Add tasks to stack</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body p-0">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-3">Task</th>
+                        <th>Status</th>
+                        <th>Developer</th>
+                        <th>Due</th>
+                        <th class="text-end pe-3">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for task in stack.tasks.all %}
+                    <tr>
+                        <td class="ps-3 fw-semibold">{{ task.title }}</td>
+                        <td>
+                            {% if task.status == 'unassigned' %}<span class="badge bg-light text-dark border">Unassigned</span>
+                            {% elif task.status == 'assigned' %}<span class="badge bg-secondary">Assigned</span>
+                            {% elif task.status == 'in_progress' %}<span class="badge bg-primary">In progress</span>
+                            {% elif task.status == 'blocked' %}<span class="badge bg-warning text-dark">Blocked</span>
+                            {% elif task.status == 'done' %}<span class="badge bg-success">Done</span>{% endif %}
+                        </td>
+                        <td>{% if task.developer %}{{ task.developer.username }}{% else %}<span class="text-muted">Unassigned</span>{% endif %}</td>
+                        <td>{% if task.due_date %}{{ task.due_date }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                        <td class="text-end pe-3 text-nowrap">
+                            <a href="{% url 'devtracking:task_edit' task.pk %}" class="btn btn-sm btn-outline-secondary" title="Edit task"><i class="bi bi-pencil"></i></a>
+                            <a href="{% url 'devtracking:assign_existing' task.pk %}" class="btn btn-sm btn-primary" title="Assign task"><i class="bi bi-person-plus"></i></a>
+                            <a href="{% url 'devtracking:task_delete' task.pk %}" class="btn btn-sm btn-outline-danger" title="Delete task"><i class="bi bi-trash"></i></a>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="5" class="text-center text-muted py-5">No tasks in this stack yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

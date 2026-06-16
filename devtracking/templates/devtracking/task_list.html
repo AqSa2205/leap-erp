@@ -66,7 +66,7 @@
                     <tbody>
                         {% for task in tasks %}
                         <tr>
-                            <td><strong>{{ task.title }}</strong></td>
+                            <td><strong>{{ task.title }}</strong>{% if task.stack %} <span class="badge bg-dark">{{ task.stack.name }}</span>{% endif %}</td>
                             <td>
                                 {% if task.developer %}
                                 <a href="{% url 'devtracking:dev_detail' task.developer.pk %}" class="text-decoration-none">{{ task.developer.username }}</a>

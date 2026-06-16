@@ -47,9 +47,15 @@
                                 {{ form.due_date }}
                             </div>
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label">GitHub link</label>
-                            {{ form.github_url }}
+                        <div class="row">
+                            <div class="col-md-8 mb-3">
+                                <label class="form-label">GitHub link</label>
+                                {{ form.github_url }}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Stack</label>
+                                {{ form.stack }}
+                            </div>
                         </div>
                         {% if form.non_field_errors %}
                         <div class="alert alert-danger">{% for e in form.non_field_errors %}<p class="mb-0">{{ e }}</p>{% endfor %}</div>
