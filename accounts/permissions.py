@@ -119,16 +119,17 @@ DEFAULT_MODULE_ACCESS = {
     'finance_head':    set(_OPEN_TO_ALL),
     'finance_manager': set(_OPEN_TO_ALL),
     'finance_rep':     set(_OPEN_TO_ALL),
-    # Developer: the match-today open baseline (every list page opens for every
-    # role, data scoped inside — same as all other roles) plus the Dev Tracking
-    # module (their own task view). Admin-vs-mywork is split per-codename below.
-    'developer':       _OPEN_TO_ALL | {'devtracking'},
-    # AI team: open baseline plus the Dev Tracking module. AI Head manages
-    # (admin codename below); the doers get their own task view (mywork).
-    'ai_head':            _OPEN_TO_ALL | {'devtracking'},
-    'ai_intern':          _OPEN_TO_ALL | {'devtracking'},
-    'ai_engineer':        _OPEN_TO_ALL | {'devtracking'},
-    'ai_junior_engineer': _OPEN_TO_ALL | {'devtracking'},
+    # ── AI team: siloed to Dev Tracking only (NOT the open baseline) ──
+    # The doers see just "My Work" (ungated) + notifications (ungated) + their
+    # own task view (devtracking.mywork, granted below) — no Costing/Pipeline/
+    # Procurement/PO/DN nav. AI Head additionally manages Dev Tracking, so keeps
+    # the devtracking module (admin codename granted below). Later we can widen
+    # the doers to their own assets/attendance/leave.
+    'developer':          set(),
+    'ai_head':            {'devtracking'},
+    'ai_intern':          set(),
+    'ai_engineer':        set(),
+    'ai_junior_engineer': set(),
 }
 
 # Per-codename baseline for ENFORCED granular caps that are not plain

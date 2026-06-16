@@ -195,16 +195,35 @@ class SeedTests(TestCase):
         self.assertTrue(self._allowed(Role.FINANCE_REP, 'pipeline.access'))
         self.assertTrue(self._allowed(Role.FINANCE_REP, 'pipeline.nav'))
 
+    # The AI team is deliberately siloed to Dev Tracking (+ ungated My Work /
+    # notifications), so it is exempt from the match-today open-module baseline.
+    SILOED_ROLES = {Role.DEVELOPER, Role.AI_HEAD, Role.AI_INTERN,
+                    Role.AI_ENGINEER, Role.AI_JUNIOR_ENGINEER}
+
     def test_match_today_all_open_modules_on_for_every_role(self):
         # Zero-regression baseline: every currently-open module is ON for every
-        # role (data is scoped inside the views, but the page opens — as today).
+        # operational role (data is scoped inside the views, but the page opens).
         open_modules = ['dashboard', 'pipeline', 'costing', 'procurement', 'po', 'dn']
         for role_name, _ in Role.ROLE_CHOICES:
+            if role_name in self.SILOED_ROLES:
+                continue
             for module in open_modules:
                 self.assertTrue(self._allowed(role_name, f'{module}.access'),
                                 msg=f'{role_name} should have {module}.access')
                 self.assertTrue(self._allowed(role_name, f'{module}.nav'),
                                 msg=f'{role_name} should have {module}.nav')
+
+    def test_ai_team_is_siloed_to_devtracking(self):
+        # Doers: only their own task view — none of the operational modules.
+        for r in (Role.AI_INTERN, Role.AI_ENGINEER, Role.AI_JUNIOR_ENGINEER):
+            self.assertTrue(self._allowed(r, 'devtracking.mywork'), msg=r)
+            self.assertFalse(self._allowed(r, 'devtracking.admin'), msg=r)
+            self.assertFalse(self._allowed(r, 'costing.access'), msg=r)
+            self.assertFalse(self._allowed(r, 'pipeline.access'), msg=r)
+            self.assertFalse(self._allowed(r, 'dashboard.nav'), msg=r)
+        # AI Head manages Dev Tracking but stays out of the operational modules.
+        self.assertTrue(self._allowed(Role.AI_HEAD, 'devtracking.admin'))
+        self.assertFalse(self._allowed(Role.AI_HEAD, 'costing.access'))
 
     def test_finance_has_procurement_today(self):
         # Match-today: finance can open procurement pages (scoped) just like now.
