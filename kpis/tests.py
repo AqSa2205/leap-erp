@@ -473,3 +473,16 @@ class ActivityViewTests(TestCase):
         self.client.force_login(admin)
         url = reverse('kpis:activity_detail', args=[admin.pk])
         self.assertEqual(self.client.get(url).status_code, 200)
+
+    def test_overview_renders_user_and_total(self):
+        from projects.models import Region, ProjectStatus, Project
+        admin = self._user(Role.SUPER_ADMIN)
+        region = Region.objects.create(name='KSA', code='LNA', currency='SAR')
+        status = ProjectStatus.objects.create(name='Open', category='active')
+        Project.objects.create(project_name='P1', proposal_reference='P1',
+                               status=status, region=region, created_by=admin)
+        self.client.force_login(admin)
+        resp = self.client.get(reverse('kpis:activity'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Pipelines created')
+        self.assertContains(resp, 'Total')

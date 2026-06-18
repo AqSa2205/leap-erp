@@ -1025,6 +1025,13 @@
                     <i class="bi bi-person-lines-fill"></i> <span>By Person</span>
                 </a>
             </li>
+            {% if user|can:'kpis.activity' %}
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'kpis' and 'activity' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'kpis:activity' %}" data-title="Team Activity">
+                    <i class="bi bi-activity"></i> <span>Team Activity</span>
+                </a>
+            </li>
+            {% endif %}
             {% if user|can:'kpis.manage' %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'kpis' and request.resolver_match.url_name == 'manage' %}active{% endif %}" href="{% url 'kpis:manage' %}" data-title="Enter KPI Data">

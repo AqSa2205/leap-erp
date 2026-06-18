@@ -1,6 +1,48 @@
 {% extends 'base.html' %}
-{% block title %}Activity — {{ data.user.username }}{% endblock %}
+{% block title %}Activity — {{ data.user.get_full_name|default:data.user.username }}{% endblock %}
 {% block page_title %}Activity{% endblock %}
 {% block content %}
-<div class="container-fluid"><p>{{ data.user.get_full_name|default:data.user.username }} — {{ data.total }} actions</p></div>
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+        <div class="d-flex align-items-center gap-2">
+            <i class="bi bi-person-circle fs-2 text-primary"></i>
+            <div>
+                <h1 class="h4 mb-0">{{ data.user.get_full_name|default:data.user.username }}</h1>
+                <span class="text-muted small">{% if data.user.role %}{{ data.user.role.get_name_display }} · {% endif %}{{ data.total }} actions · {{ data.period_label }}</span>
+            </div>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+            <form method="get" class="d-flex gap-2 align-items-center">
+                <select name="period" class="form-select form-select-sm" onchange="this.form.submit()" style="min-width:150px;">
+                    {% for val, lbl in period_options %}
+                    <option value="{{ val }}" {% if val == period %}selected{% endif %}>{{ lbl }}</option>
+                    {% endfor %}
+                </select>
+            </form>
+            <a href="{% url 'kpis:activity' %}?period={{ period }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-table"></i> All users</a>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        {% for mod in data.modules %}
+        <div class="col-md-6 col-xl-4">
+            <div class="card h-100">
+                <div class="card-header bg-white"><strong>{{ mod.module }}</strong></div>
+                <ul class="list-group list-group-flush">
+                    {% for item in mod.items %}
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>{{ item.label }}</span>
+                        <span class="badge {% if item.count %}bg-primary{% else %}bg-light text-muted border{% endif %}">{{ item.count }}</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <p class="text-muted small mt-3">
+        <i class="bi bi-info-circle"></i> Performance score (combining these into a weighted figure to attach to KPIs) is coming soon.
+    </p>
+</div>
 {% endblock %}
