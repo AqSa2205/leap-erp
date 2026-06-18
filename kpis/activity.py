@@ -23,8 +23,14 @@ class ActivityMetric:
     headline: bool = False
 
     def _base(self, start, end, user_id=None):
+        # Require BOTH the actor and the date to be set: an action only counts
+        # if it actually happened (its date field is populated). This matters
+        # when actor and date are set at different lifecycle moments — e.g.
+        # DevTask.developer is set at assignment but completed_at only at
+        # completion, so "tasks completed" must not count merely-assigned tasks.
         Model = apps.get_model(self.model_path)
-        qs = Model.objects.filter(**{f'{self.actor_field}__isnull': False})
+        qs = Model.objects.filter(**{f'{self.actor_field}__isnull': False,
+                                     f'{self.date_field}__isnull': False})
         if user_id is not None:
             qs = qs.filter(**{self.actor_field: user_id})
         if start is not None:

@@ -390,6 +390,21 @@ class ActivityRegistryTests(TestCase):
             'projects_created', 'boms_created', 'sales_finalised',
             'handed_to_finance', 'pos_created', 'tech_proposals', 'tasks_completed'})
 
+    def test_tasks_completed_excludes_incomplete_all_time(self):
+        from devtracking.models import DevTask
+        from kpis.activity import ACTIVITY_METRICS
+        from django.utils import timezone
+        # Assigned-but-not-completed: developer set, completed_at NULL.
+        DevTask.objects.create(developer=self.u1, title='open', status='in_progress')
+        # Completed: developer set + completed_at populated.
+        DevTask.objects.create(
+            developer=self.u1, title='done', status='done',
+            completed_at=timezone.make_aware(datetime.datetime(2026, 5, 5, 12)))
+        metric = next(m for m in ACTIVITY_METRICS if m.key == 'tasks_completed')
+        # All-time must count ONLY the completed one (not the merely-assigned one).
+        self.assertEqual(metric.counts(None, None).get(self.u1.id), 1)
+        self.assertEqual(metric.count_for(None, None, self.u1.id), 1)
+
 
 class ActivityPermissionSeedTests(TestCase):
     def setUp(self):
