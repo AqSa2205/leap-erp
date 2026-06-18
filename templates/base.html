@@ -1011,6 +1011,25 @@
         </ul>
         {% endif %}
 
+        {# ─── DEPARTMENT KPIs (management + department heads) ─── #}
+        {% if user|can:'kpis.access' %}
+        <div class="nav-section" data-section="kpis"><span>Department KPIs</span><i class="bi bi-chevron-down section-chevron"></i></div>
+        <ul class="nav flex-column nav-section-items" data-section-items="kpis">
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'kpis' and request.resolver_match.url_name == 'dashboard' %}active{% endif %}" href="{% url 'kpis:dashboard' %}" data-title="KPI Dashboard">
+                    <i class="bi bi-speedometer"></i> <span>KPI Dashboard</span>
+                </a>
+            </li>
+            {% if user|can:'kpis.manage' %}
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'kpis' and request.resolver_match.url_name == 'manage' %}active{% endif %}" href="{% url 'kpis:manage' %}" data-title="Enter KPI Data">
+                    <i class="bi bi-pencil-square"></i> <span>Enter KPI Data</span>
+                </a>
+            </li>
+            {% endif %}
+        </ul>
+        {% endif %}
+
         {# ─── ADMINISTRATION (includes Contacts/Database) ─── #}
         {% if user.is_super_admin_user or user.is_admin_user %}
         {% if user|can:'devtracking.admin' %}

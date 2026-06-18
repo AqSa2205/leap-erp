@@ -1,0 +1,98 @@
+{% extends 'base.html' %}
+{% block title %}Enter KPI Data — Leap Networks ERP{% endblock %}
+{% block page_title %}Enter KPI Data{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+        <div>
+            <h1 class="h3 mb-1">Enter KPI Data</h1>
+            <p class="text-muted mb-0">
+                Set targets and type the manual values for <strong>{{ period_label }}</strong>.
+                Auto KPIs are computed from ERP data — you only set their target.
+            </p>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+            <form method="get" class="d-flex gap-2 align-items-center">
+                <label class="form-label small mb-0 text-muted">Period</label>
+                <select name="period" class="form-select form-select-sm" onchange="this.form.submit()" style="min-width:160px;">
+                    {% for val, lbl in period_options %}
+                    <option value="{{ val }}" {% if val == period %}selected{% endif %}>{{ lbl }}</option>
+                    {% endfor %}
+                </select>
+            </form>
+            <a href="{% url 'kpis:dashboard' %}?period={{ period }}" class="btn btn-sm btn-outline-secondary">
+                <i class="bi bi-speedometer"></i> View Dashboard
+            </a>
+        </div>
+    </div>
+
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="period" value="{{ period }}">
+
+        {% for dept in departments %}
+        <div class="card mb-3">
+            <div class="card-header bg-white"><strong>{{ dept.label }}</strong></div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="width:28%;">KPI</th>
+                                <th style="width:10%;">Source</th>
+                                <th style="width:16%;">Target</th>
+                                <th style="width:16%;">Actual value</th>
+                                <th>Note</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in dept.rows %}
+                            <tr>
+                                <td>
+                                    <strong>{{ row.kpi.label }}</strong>
+                                    <div class="text-muted" style="font-size:.7rem;">{{ row.kpi.help }}</div>
+                                </td>
+                                <td>
+                                    {% if row.kpi.is_auto %}
+                                    <span class="badge bg-light text-success border">AUTO</span>
+                                    {% else %}
+                                    <span class="badge bg-light text-primary border">MANUAL</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <input type="number" step="any" class="form-control form-control-sm"
+                                           name="target_{{ row.kpi.key }}"
+                                           value="{{ row.target|default_if_none:'' }}"
+                                           placeholder="{{ row.kpi.target_help|default:'target' }}">
+                                </td>
+                                <td>
+                                    {% if row.kpi.is_auto %}
+                                    <span class="text-muted small"><i class="bi bi-cpu"></i> computed</span>
+                                    {% else %}
+                                    <input type="number" step="any" class="form-control form-control-sm"
+                                           name="value_{{ row.kpi.key }}"
+                                           value="{{ row.manual_value|default_if_none:'' }}">
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <input type="text" class="form-control form-control-sm"
+                                           name="note_{{ row.kpi.key }}" value="{{ row.note }}"
+                                           placeholder="optional">
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+
+        <div class="d-flex justify-content-end gap-2 mb-5">
+            <a href="{% url 'kpis:dashboard' %}?period={{ period }}" class="btn btn-outline-secondary">Cancel</a>
+            <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> Save KPI data</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

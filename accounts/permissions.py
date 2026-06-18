@@ -55,6 +55,11 @@ CAPABILITIES = [
                'Manage dev tasks (admin)', enforced=True, order=2),
     Capability('devtracking.mywork', 'Dev Tracking', 'mywork',
                'See my assigned dev tasks', enforced=True, order=3),
+    # Department KPIs: a read dashboard (access/nav) plus a manage cap that gates
+    # entering manual values + targets. All enforced (read by nav + the views).
+    *_module('kpis', 'Department KPIs'),
+    Capability('kpis.manage', 'Department KPIs', 'manage',
+               'Enter KPI values & targets', enforced=True, order=2),
 ]
 
 
@@ -108,15 +113,17 @@ class CapabilityRequiredMixin:
 # which is now subsumed by the match-today baseline.
 _OPEN_TO_ALL = {'dashboard', 'pipeline', 'costing', 'procurement', 'po', 'dn'}
 DEFAULT_MODULE_ACCESS = {
-    'super_admin':     _OPEN_TO_ALL | {'settings', 'devtracking'},
-    'admin':           _OPEN_TO_ALL | {'devtracking'},
-    'manager':         set(_OPEN_TO_ALL),
+    # Department KPIs (read) goes to management + the department heads who own
+    # those numbers today (the Excel's "GM View"); reps/AI don't get it.
+    'super_admin':     _OPEN_TO_ALL | {'settings', 'devtracking', 'kpis'},
+    'admin':           _OPEN_TO_ALL | {'devtracking', 'kpis'},
+    'manager':         _OPEN_TO_ALL | {'kpis'},
     'sales_rep':       set(_OPEN_TO_ALL),
-    'procurement_mgr': set(_OPEN_TO_ALL),
+    'procurement_mgr': _OPEN_TO_ALL | {'kpis'},
     'procurement_off': set(_OPEN_TO_ALL),
-    'proposal_head':   set(_OPEN_TO_ALL),
+    'proposal_head':   _OPEN_TO_ALL | {'kpis'},
     'proposal_rep':    set(_OPEN_TO_ALL),
-    'finance_head':    set(_OPEN_TO_ALL),
+    'finance_head':    _OPEN_TO_ALL | {'kpis'},
     'finance_manager': set(_OPEN_TO_ALL),
     'finance_rep':     set(_OPEN_TO_ALL),
     # ── AI team: siloed to Dev Tracking only (NOT the open baseline) ──
@@ -138,8 +145,9 @@ DEFAULT_MODULE_ACCESS = {
 # granular (User.has_capability checks the exact codename), so these are real,
 # independently-toggleable capabilities.
 DEFAULT_CODENAME_GRANTS = {
-    'super_admin':  {'devtracking.admin', 'devtracking.mywork'},
-    'admin':        {'devtracking.admin', 'devtracking.mywork'},
+    'super_admin':  {'devtracking.admin', 'devtracking.mywork', 'kpis.manage'},
+    'admin':        {'devtracking.admin', 'devtracking.mywork', 'kpis.manage'},
+    'manager':      {'kpis.manage'},
     'developer':    {'devtracking.mywork'},
     'ai_head':            {'devtracking.admin', 'devtracking.mywork'},
     'ai_intern':          {'devtracking.mywork'},
