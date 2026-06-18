@@ -389,3 +389,19 @@ class ActivityRegistryTests(TestCase):
         self.assertEqual({m.key for m in headline_metrics()}, {
             'projects_created', 'boms_created', 'sales_finalised',
             'handed_to_finance', 'pos_created', 'tech_proposals', 'tasks_completed'})
+
+
+class ActivityPermissionSeedTests(TestCase):
+    def setUp(self):
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+
+    def _allowed(self, role_name):
+        role = Role.objects.get(name=role_name)
+        return RolePermission.objects.get(role=role, codename='kpis.activity').allowed
+
+    def test_activity_cap_super_admin_only(self):
+        self.assertTrue(self._allowed(Role.SUPER_ADMIN))
+        for r in (Role.ADMIN, Role.MANAGER, Role.SALES_REP, Role.AI_HEAD):
+            self.assertFalse(self._allowed(r), msg=r)

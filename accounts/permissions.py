@@ -60,6 +60,8 @@ CAPABILITIES = [
     *_module('kpis', 'Department KPIs'),
     Capability('kpis.manage', 'Department KPIs', 'manage',
                'Enter KPI values & targets', enforced=True, order=2),
+    Capability('kpis.activity', 'Department KPIs', 'activity',
+               'View team activity review', enforced=True, order=3),
 ]
 
 
@@ -146,7 +148,7 @@ DEFAULT_MODULE_ACCESS = {
 # granular (User.has_capability checks the exact codename), so these are real,
 # independently-toggleable capabilities.
 DEFAULT_CODENAME_GRANTS = {
-    'super_admin':  {'devtracking.admin', 'devtracking.mywork', 'kpis.manage'},
+    'super_admin':  {'devtracking.admin', 'devtracking.mywork', 'kpis.manage', 'kpis.activity'},
     'admin':        {'devtracking.admin', 'devtracking.mywork'},
     'developer':    {'devtracking.mywork'},
     'ai_head':            {'devtracking.admin', 'devtracking.mywork'},
