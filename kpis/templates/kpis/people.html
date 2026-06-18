@@ -101,8 +101,11 @@
                                 role="progressbar" style="width: {{ c.pct }}%;"></div>
                         </div>
                         {% endif %}
-                        <p class="text-muted small mb-0" style="font-size:.7rem;" title="{{ c.help }}">
-                            <i class="bi bi-info-circle"></i> {{ c.help|truncatechars:60 }}
+                        {% if c.coverage %}
+                        <p class="mb-1" style="font-size:.7rem;"><i class="bi bi-database"></i> <span class="text-secondary">{{ c.coverage }}</span></p>
+                        {% endif %}
+                        <p class="text-muted small mb-0" style="font-size:.68rem;" title="{{ c.help }}">
+                            <i class="bi bi-info-circle"></i> {{ c.help|truncatechars:56 }}
                         </p>
                     </div>
                 </div>

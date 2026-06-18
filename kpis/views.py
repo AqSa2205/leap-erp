@@ -36,15 +36,30 @@ def _parse_decimal(raw):
         return None
 
 
+def _resolve_region(request):
+    """(region_instance_or_None, all_regions_queryset). Reads ?region=<code>;
+    blank / 'all' / unknown -> None (all regions blended)."""
+    from projects.models import Region
+    regions = Region.objects.filter(is_active=True).order_by('name')
+    code = (request.GET.get('region') or '').strip()
+    selected = None
+    if code and code.lower() != 'all':
+        selected = regions.filter(code=code).first()
+    return selected, regions
+
+
 @login_required
 @require_capability('kpis.access')
 def dashboard(request):
     period = _resolve_period(request)
-    data = build_dashboard(period)
+    region, regions = _resolve_region(request)
+    data = build_dashboard(period, region=region)
     context = {
         'data': data,
         'period': period,
         'period_options': period_options(),
+        'regions': regions,
+        'selected_region': region,
         'can_manage': request.user.has_capability('kpis.manage'),
     }
     return render(request, 'kpis/dashboard.html', context)

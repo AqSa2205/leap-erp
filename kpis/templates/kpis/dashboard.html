@@ -26,12 +26,20 @@
     <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
         <div>
             <h1 class="h3 mb-1">Department KPIs</h1>
-            <p class="text-muted mb-0">Live performance against targets — {{ data.period_label }}</p>
+            <p class="text-muted mb-0">
+                Live performance against targets — {{ data.period_label }}
+                · {% if selected_region %}{{ selected_region.name }}{% else %}<span title="Money KPIs blend currencies across regions — pick a region for a clean figure">All regions</span>{% endif %}
+            </p>
         </div>
         <div class="d-flex gap-2 align-items-center">
             <form method="get" class="d-flex gap-2 align-items-center">
-                <label class="form-label small mb-0 text-muted">Period</label>
-                <select name="period" class="form-select form-select-sm" onchange="this.form.submit()" style="min-width:160px;">
+                <select name="region" class="form-select form-select-sm" onchange="this.form.submit()" style="min-width:150px;" title="Region">
+                    <option value="all" {% if not selected_region %}selected{% endif %}>All regions</option>
+                    {% for r in regions %}
+                    <option value="{{ r.code }}" {% if selected_region and selected_region.pk == r.pk %}selected{% endif %}>{{ r.name }}</option>
+                    {% endfor %}
+                </select>
+                <select name="period" class="form-select form-select-sm" onchange="this.form.submit()" style="min-width:150px;" title="Period">
                     {% for val, lbl in period_options %}
                     <option value="{{ val }}" {% if val == period %}selected{% endif %}>{{ lbl }}</option>
                     {% endfor %}
@@ -44,6 +52,22 @@
             {% endif %}
         </div>
     </div>
+
+    {% if data.readiness.has_gaps %}
+    <div class="alert alert-warning d-flex align-items-start gap-2 py-2">
+        <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+        <div class="small">
+            <strong>Data readiness{% if selected_region %} — {{ selected_region.name }}{% endif %}:</strong>
+            {% if data.readiness.untagged_year %}
+                {{ data.readiness.untagged_year }} of {{ data.readiness.won_lost_total }} won/lost deals have <strong>no financial year</strong> set (they fall back to status history, or go uncounted).
+            {% endif %}
+            {% if data.readiness.won_missing_actuals %}
+                {{ data.readiness.won_missing_actuals }} of {{ data.readiness.won_total }} won deals have <strong>no actual sales</strong> filled (revenue &amp; forecast accuracy understate until added).
+            {% endif %}
+            Fill these on the project records for sharper KPIs.
+        </div>
+    </div>
+    {% endif %}
 
     {% for dept in data.departments %}
     <div class="mb-4">
@@ -86,8 +110,13 @@
                                 aria-valuenow="{{ c.pct }}" aria-valuemin="0" aria-valuemax="100"></div>
                         </div>
                         {% endif %}
-                        <p class="text-muted small mb-0" style="font-size:.7rem;" title="{{ c.help }}">
-                            <i class="bi bi-info-circle"></i> {{ c.help|truncatechars:64 }}
+                        {% if c.coverage %}
+                        <p class="mb-1" style="font-size:.7rem;" title="What fed this number">
+                            <i class="bi bi-database"></i> <span class="text-secondary">{{ c.coverage }}</span>
+                        </p>
+                        {% endif %}
+                        <p class="text-muted small mb-0" style="font-size:.68rem;" title="{{ c.help }}">
+                            <i class="bi bi-info-circle"></i> {{ c.help|truncatechars:58 }}
                         </p>
                         {% if c.note %}<p class="small text-secondary mb-0 mt-1"><i class="bi bi-chat-left-text"></i> {{ c.note }}</p>{% endif %}
                     </div>
