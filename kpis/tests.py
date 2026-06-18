@@ -405,3 +405,45 @@ class ActivityPermissionSeedTests(TestCase):
         self.assertTrue(self._allowed(Role.SUPER_ADMIN))
         for r in (Role.ADMIN, Role.MANAGER, Role.SALES_REP, Role.AI_HEAD):
             self.assertFalse(self._allowed(r), msg=r)
+
+
+class ActivityServiceTests(TestCase):
+    def setUp(self):
+        self.role = Role.objects.create(name=Role.SALES_REP)
+        self.active1 = User.objects.create_user('a1', password='pw', role=self.role)
+        self.active2 = User.objects.create_user('a2', password='pw', role=self.role)
+        self.inactive = User.objects.create_user('z', password='pw', role=self.role, is_active=False)
+        self.region = Region.objects.create(name='KSA', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        Project.objects.create(project_name='P1', proposal_reference='P1',
+                               status=self.status, region=self.region, created_by=self.active1)
+        Project.objects.create(project_name='P2', proposal_reference='P2',
+                               status=self.status, region=self.region, created_by=self.active1)
+
+    def test_overview_all_active_users_with_totals(self):
+        from kpis.activity_service import build_activity_overview
+        data = build_activity_overview('all')
+        ids = [r['user'].id for r in data['rows']]
+        self.assertIn(self.active1.id, ids)
+        self.assertIn(self.active2.id, ids)
+        self.assertNotIn(self.inactive.id, ids)
+        top = data['rows'][0]
+        self.assertEqual(top['user'].id, self.active1.id)
+        self.assertEqual(top['total'], 2)
+        self.assertEqual(top['headline']['projects_created'], 2)
+
+    def test_user_detail_grouped_by_module(self):
+        from kpis.activity_service import build_user_activity
+        data = build_user_activity('all', self.active1)
+        self.assertEqual(data['total'], 2)
+        modules = [m['module'] for m in data['modules']]
+        self.assertEqual(modules, ['Pipeline', 'Costing', 'Procurement', 'Proposals', 'Dev Tracking'])
+        pipeline = next(m for m in data['modules'] if m['module'] == 'Pipeline')
+        created = next(i for i in pipeline['items'] if i['label'] == 'Pipelines created')
+        self.assertEqual(created['count'], 2)
+
+    def test_activity_window_all_time(self):
+        from kpis.activity_service import activity_window
+        self.assertEqual(activity_window('all'), (None, None))
+        self.assertEqual(activity_window('2026-Q2'),
+                         (datetime.date(2026, 4, 1), datetime.date(2026, 7, 1)))
