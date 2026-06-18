@@ -1,11 +1,15 @@
 from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
+from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 
 from accounts.permissions import require_capability
+from .activity_service import (
+    build_activity_overview, build_user_activity, activity_period_options,
+)
 from .models import KPIEntry
 from .periods import current_period, period_options, period_bounds, label_for
 from .registry import KPI_DEFINITIONS, DEPARTMENTS, KPI_BY_KEY
@@ -148,3 +152,41 @@ def manage(request):
         'departments': departments,
     }
     return render(request, 'kpis/manage.html', context)
+
+
+def _resolve_activity_period(request):
+    """'all' or a valid period string; defaults to 'all' (lifetime review)."""
+    period = request.GET.get('period') or 'all'
+    if period == 'all':
+        return 'all'
+    try:
+        period_bounds(period)
+        return period
+    except (ValueError, TypeError):
+        return 'all'
+
+
+@login_required
+@require_capability('kpis.activity')
+def activity_overview(request):
+    period = _resolve_activity_period(request)
+    sort = request.GET.get('sort', 'total')
+    data = build_activity_overview(period, sort=sort)
+    return render(request, 'kpis/activity_overview.html', {
+        'data': data,
+        'period': period,
+        'period_options': activity_period_options(),
+    })
+
+
+@login_required
+@require_capability('kpis.activity')
+def activity_detail(request, user_id):
+    period = _resolve_activity_period(request)
+    user = get_object_or_404(get_user_model(), pk=user_id)
+    data = build_user_activity(period, user)
+    return render(request, 'kpis/activity_detail.html', {
+        'data': data,
+        'period': period,
+        'period_options': activity_period_options(),
+    })

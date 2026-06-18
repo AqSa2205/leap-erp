@@ -447,3 +447,29 @@ class ActivityServiceTests(TestCase):
         self.assertEqual(activity_window('all'), (None, None))
         self.assertEqual(activity_window('2026-Q2'),
                          (datetime.date(2026, 4, 1), datetime.date(2026, 7, 1)))
+
+
+class ActivityViewTests(TestCase):
+    def setUp(self):
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+
+    def _user(self, role_name):
+        return User.objects.create_user(
+            username=f'av_{role_name}', password='pw',
+            role=Role.objects.get(name=role_name))
+
+    def test_super_admin_sees_overview(self):
+        self.client.force_login(self._user(Role.SUPER_ADMIN))
+        self.assertEqual(self.client.get(reverse('kpis:activity')).status_code, 200)
+
+    def test_admin_denied_overview(self):
+        self.client.force_login(self._user(Role.ADMIN))
+        self.assertEqual(self.client.get(reverse('kpis:activity')).status_code, 403)
+
+    def test_super_admin_sees_detail(self):
+        admin = self._user(Role.SUPER_ADMIN)
+        self.client.force_login(admin)
+        url = reverse('kpis:activity_detail', args=[admin.pk])
+        self.assertEqual(self.client.get(url).status_code, 200)

@@ -1,0 +1,6 @@
+{% extends 'base.html' %}
+{% block title %}Activity — {{ data.user.username }}{% endblock %}
+{% block page_title %}Activity{% endblock %}
+{% block content %}
+<div class="container-fluid"><p>{{ data.user.get_full_name|default:data.user.username }} — {{ data.total }} actions</p></div>
+{% endblock %}
