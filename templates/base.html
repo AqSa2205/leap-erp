@@ -1020,6 +1020,11 @@
                     <i class="bi bi-speedometer"></i> <span>KPI Dashboard</span>
                 </a>
             </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'kpis' and request.resolver_match.url_name == 'people' %}active{% endif %}" href="{% url 'kpis:people' %}" data-title="KPIs by Person">
+                    <i class="bi bi-person-lines-fill"></i> <span>By Person</span>
+                </a>
+            </li>
             {% if user|can:'kpis.manage' %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'kpis' and request.resolver_match.url_name == 'manage' %}active{% endif %}" href="{% url 'kpis:manage' %}" data-title="Enter KPI Data">

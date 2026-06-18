@@ -6,5 +6,6 @@ app_name = 'kpis'
 
 urlpatterns = [
     path('', views.dashboard, name='dashboard'),
+    path('people/', views.people, name='people'),
     path('manage/', views.manage, name='manage'),
 ]

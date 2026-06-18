@@ -9,7 +9,9 @@ from accounts.permissions import require_capability
 from .models import KPIEntry
 from .periods import current_period, period_options, period_bounds, label_for
 from .registry import KPI_DEFINITIONS, DEPARTMENTS, KPI_BY_KEY
-from .services import build_dashboard, format_value
+from .services import (
+    build_dashboard, format_value, build_person_scorecard, attributable_users,
+)
 
 
 def _resolve_period(request):
@@ -46,6 +48,34 @@ def dashboard(request):
         'can_manage': request.user.has_capability('kpis.manage'),
     }
     return render(request, 'kpis/dashboard.html', context)
+
+
+@login_required
+@require_capability('kpis.access')
+def people(request):
+    """Per-person KPI scorecard. Pick a user; see the attributable auto KPIs
+    computed from records they own/created."""
+    period = _resolve_period(request)
+    users = attributable_users()
+
+    selected = None
+    raw_id = request.GET.get('user')
+    if raw_id:
+        for u in users:
+            if str(u.pk) == str(raw_id):
+                selected = u
+                break
+
+    scorecard = build_person_scorecard(period, selected) if selected else None
+    context = {
+        'period': period,
+        'period_label': label_for(period),
+        'period_options': period_options(),
+        'users': users,
+        'selected': selected,
+        'scorecard': scorecard,
+    }
+    return render(request, 'kpis/people.html', context)
 
 
 @login_required

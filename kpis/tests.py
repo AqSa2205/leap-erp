@@ -181,6 +181,58 @@ class ComputeTests(ComputeFixtureMixin, TestCase):
         self.assertEqual(val, Decimal('50.0'))
 
 
+class PerUserComputeTests(ComputeFixtureMixin, TestCase):
+    def setUp(self):
+        super().setUp()
+        self.role = Role.objects.create(name=Role.SALES_REP)
+        self.alice = User.objects.create_user('alice', password='pw', role=self.role)
+        self.bob = User.objects.create_user('bob', password='pw', role=self.role)
+
+    def _owned(self, ref, status, owner, actual='0'):
+        p = self._project(ref, status, actual=actual)
+        Project.objects.filter(pk=p.pk).update(owner=owner)
+        p.refresh_from_db()
+        return p
+
+    def test_win_rate_per_user(self):
+        p1 = self._owned('A1', self.won, self.alice)
+        p2 = self._owned('A2', self.lost, self.alice)
+        p3 = self._owned('B1', self.won, self.bob)
+        self._transition(p1, self.won, _aware(2026, 5, 1))
+        self._transition(p2, self.lost, _aware(2026, 5, 2))
+        self._transition(p3, self.won, _aware(2026, 5, 3))
+        bounds = period_bounds('2026-Q2')
+        kpi = KPI_BY_KEY['sales_win_rate']
+        self.assertEqual(kpi.compute(*bounds, {}, user=self.alice), Decimal('50.0'))
+        self.assertEqual(kpi.compute(*bounds, {}, user=self.bob), Decimal('100.0'))
+        # Department total = 2 won / 3 = 66.7
+        self.assertEqual(kpi.compute(*bounds, {}), Decimal('66.7'))
+
+    def test_revenue_per_user(self):
+        p1 = self._owned('A1', self.won, self.alice, actual='400000')
+        p2 = self._owned('B1', self.won, self.bob, actual='100000')
+        self._transition(p1, self.won, _aware(2026, 5, 1))
+        self._transition(p2, self.won, _aware(2026, 5, 2))
+        bounds = period_bounds('2026-Q2')
+        kpi = KPI_BY_KEY['sales_revenue_achievement']
+        self.assertEqual(kpi.compute(*bounds, {}, user=self.alice), Decimal('400000'))
+        self.assertEqual(kpi.compute(*bounds, {}, user=self.bob), Decimal('100000'))
+
+    def test_pipeline_coverage_is_department_only(self):
+        # Per-user pipeline coverage is intentionally None (no per-person goal).
+        kpi = KPI_BY_KEY['sales_pipeline_coverage']
+        bounds = period_bounds('2026-Q2')
+        self.assertIsNone(kpi.compute(*bounds, {'sales_revenue_achievement': Decimal('1')}, user=self.alice))
+
+    def test_scorecard_shape_excludes_manual(self):
+        from .services import build_person_scorecard
+        card = build_person_scorecard('2026-Q2', self.alice)
+        all_keys = [c['key'] for d in card['departments'] for c in d['cards']]
+        self.assertEqual(len(all_keys), 10)            # 10 attributable autos
+        self.assertNotIn('proc_supplier_performance', all_keys)   # manual excluded
+        self.assertNotIn('sales_pipeline_coverage', all_keys)     # dept-only excluded
+
+
 class ServiceTests(ComputeFixtureMixin, TestCase):
     def test_build_dashboard_shape(self):
         data = build_dashboard('2026-Q2')
@@ -216,34 +268,49 @@ class PermissionTests(TestCase):
         return User.objects.create_user(
             username=f'u_{role_name}', password='pw', role=role)
 
-    def test_manager_sees_dashboard(self):
-        self.client.force_login(self._user(Role.MANAGER))
+    def test_super_admin_sees_dashboard(self):
+        self.client.force_login(self._user(Role.SUPER_ADMIN))
         self.assertEqual(self.client.get(reverse('kpis:dashboard')).status_code, 200)
+
+    def test_admin_denied_dashboard(self):
+        self.client.force_login(self._user(Role.ADMIN))
+        self.assertEqual(self.client.get(reverse('kpis:dashboard')).status_code, 403)
+
+    def test_manager_denied_dashboard(self):
+        self.client.force_login(self._user(Role.MANAGER))
+        self.assertEqual(self.client.get(reverse('kpis:dashboard')).status_code, 403)
 
     def test_sales_rep_denied_dashboard(self):
         self.client.force_login(self._user(Role.SALES_REP))
         self.assertEqual(self.client.get(reverse('kpis:dashboard')).status_code, 403)
 
-    def test_proposal_head_views_but_cannot_manage(self):
-        self.client.force_login(self._user(Role.PROPOSAL_HEAD))
-        self.assertEqual(self.client.get(reverse('kpis:dashboard')).status_code, 200)
-        self.assertEqual(self.client.get(reverse('kpis:manage')).status_code, 403)
-
-    def test_admin_can_manage(self):
-        self.client.force_login(self._user(Role.ADMIN))
+    def test_super_admin_can_manage(self):
+        self.client.force_login(self._user(Role.SUPER_ADMIN))
         self.assertEqual(self.client.get(reverse('kpis:manage')).status_code, 200)
 
-    def test_seeded_caps(self):
+    def test_admin_denied_manage(self):
+        self.client.force_login(self._user(Role.ADMIN))
+        self.assertEqual(self.client.get(reverse('kpis:manage')).status_code, 403)
+
+    def test_super_admin_people_view(self):
+        self.client.force_login(self._user(Role.SUPER_ADMIN))
+        self.assertEqual(self.client.get(reverse('kpis:people')).status_code, 200)
+
+    def test_people_view_denied_for_admin(self):
+        self.client.force_login(self._user(Role.ADMIN))
+        self.assertEqual(self.client.get(reverse('kpis:people')).status_code, 403)
+
+    def test_seeded_caps_super_admin_only(self):
         def allowed(role_name, code):
             role = Role.objects.get(name=role_name)
             return RolePermission.objects.get(role=role, codename=code).allowed
-        self.assertTrue(allowed(Role.MANAGER, 'kpis.access'))
-        self.assertTrue(allowed(Role.MANAGER, 'kpis.manage'))
-        self.assertTrue(allowed(Role.PROPOSAL_HEAD, 'kpis.access'))
-        self.assertFalse(allowed(Role.PROPOSAL_HEAD, 'kpis.manage'))
-        self.assertFalse(allowed(Role.SALES_REP, 'kpis.access'))
-        # AI roles stay siloed.
-        self.assertFalse(allowed(Role.AI_HEAD, 'kpis.access'))
+        self.assertTrue(allowed(Role.SUPER_ADMIN, 'kpis.access'))
+        self.assertTrue(allowed(Role.SUPER_ADMIN, 'kpis.manage'))
+        # Everyone else is locked out of the whole KPI section.
+        for r in (Role.ADMIN, Role.MANAGER, Role.PROPOSAL_HEAD, Role.PROCUREMENT_MGR,
+                  Role.FINANCE_HEAD, Role.SALES_REP, Role.AI_HEAD):
+            self.assertFalse(allowed(r, 'kpis.access'), msg=r)
+            self.assertFalse(allowed(r, 'kpis.manage'), msg=r)
 
 
 class ManagePostTests(TestCase):
@@ -252,7 +319,7 @@ class ManagePostTests(TestCase):
             Role.objects.get_or_create(name=name)
         seed_default_permissions()
         self.admin = User.objects.create_user(
-            username='admin1', password='pw', role=Role.objects.get(name=Role.ADMIN))
+            username='admin1', password='pw', role=Role.objects.get(name=Role.SUPER_ADMIN))
         self.client.force_login(self.admin)
 
     def test_post_creates_entries(self):

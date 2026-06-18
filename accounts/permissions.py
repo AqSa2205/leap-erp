@@ -113,17 +113,18 @@ class CapabilityRequiredMixin:
 # which is now subsumed by the match-today baseline.
 _OPEN_TO_ALL = {'dashboard', 'pipeline', 'costing', 'procurement', 'po', 'dn'}
 DEFAULT_MODULE_ACCESS = {
-    # Department KPIs (read) goes to management + the department heads who own
-    # those numbers today (the Excel's "GM View"); reps/AI don't get it.
+    # Department KPIs: restricted to super_admin only (the whole KPI section —
+    # dashboard, by-person, and data entry). Super admin can widen later from
+    # the permission grid if management wants dept heads to see it.
     'super_admin':     _OPEN_TO_ALL | {'settings', 'devtracking', 'kpis'},
-    'admin':           _OPEN_TO_ALL | {'devtracking', 'kpis'},
-    'manager':         _OPEN_TO_ALL | {'kpis'},
+    'admin':           _OPEN_TO_ALL | {'devtracking'},
+    'manager':         set(_OPEN_TO_ALL),
     'sales_rep':       set(_OPEN_TO_ALL),
-    'procurement_mgr': _OPEN_TO_ALL | {'kpis'},
+    'procurement_mgr': set(_OPEN_TO_ALL),
     'procurement_off': set(_OPEN_TO_ALL),
-    'proposal_head':   _OPEN_TO_ALL | {'kpis'},
+    'proposal_head':   set(_OPEN_TO_ALL),
     'proposal_rep':    set(_OPEN_TO_ALL),
-    'finance_head':    _OPEN_TO_ALL | {'kpis'},
+    'finance_head':    set(_OPEN_TO_ALL),
     'finance_manager': set(_OPEN_TO_ALL),
     'finance_rep':     set(_OPEN_TO_ALL),
     # ── AI team: siloed to Dev Tracking only (NOT the open baseline) ──
@@ -146,8 +147,7 @@ DEFAULT_MODULE_ACCESS = {
 # independently-toggleable capabilities.
 DEFAULT_CODENAME_GRANTS = {
     'super_admin':  {'devtracking.admin', 'devtracking.mywork', 'kpis.manage'},
-    'admin':        {'devtracking.admin', 'devtracking.mywork', 'kpis.manage'},
-    'manager':      {'kpis.manage'},
+    'admin':        {'devtracking.admin', 'devtracking.mywork'},
     'developer':    {'devtracking.mywork'},
     'ai_head':            {'devtracking.admin', 'devtracking.mywork'},
     'ai_intern':          {'devtracking.mywork'},

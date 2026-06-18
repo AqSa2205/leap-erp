@@ -11,11 +11,14 @@ Each KPI declares a `direction` used to colour the tile against its target:
 A value of None means "no data this period" (or, for auto KPIs that need a goal,
 no target was set yet) and renders as a neutral 'n/a' tile.
 
-Compute functions all take (start, end, targets) where `targets` maps kpi_key ->
-the manual target Decimal for the same period, so a KPI like pipeline coverage
-can divide the live pipeline by the revenue goal management entered.
+Compute functions all take (start, end, targets, user=None):
+  * `targets` maps kpi_key -> the manual target Decimal for the same period, so
+    a KPI like pipeline coverage can divide the live pipeline by the revenue
+    goal management entered.
+  * `user` (optional) restricts the computation to records that person owns /
+    created, powering the per-person scorecard. None = whole-department.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Callable, Optional
 
@@ -50,13 +53,17 @@ class KPI:
     direction: str                      # 'higher' | 'lower'
     target: Optional[Decimal] = None    # default target; overridable per period
     source: str = 'manual'              # 'auto' | 'manual'
-    compute: Optional[Callable] = None  # (start, end, targets) -> Decimal|None
+    compute: Optional[Callable] = None  # (start, end, targets, user=None) -> Decimal|None
     help: str = ''
     target_help: str = ''               # hint shown next to the target input
 
     @property
     def is_auto(self):
         return self.source == 'auto' and self.compute is not None
+
+    @property
+    def is_user_attributable(self):
+        return self.key in USER_ATTRIBUTABLE_KEYS
 
 
 def _d(x):
@@ -71,18 +78,22 @@ def _d(x):
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Compute helpers — small, focused queries over the existing ERP models.
+# Each accepts an optional `owner` / `creator` to slice to one person's work.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _won_lost_in_period(start, end, restrict_project_ids=None):
+def _won_lost_in_period(start, end, restrict_project_ids=None, owner=None):
     """({won_pids}, {lost_pids}) — projects whose status transitioned into a
     won/lost category within [start, end). The *latest* such transition in the
     window decides the outcome (a project flipped won then lost counts as lost).
+    `owner` limits to projects owned by that user.
     """
     from projects.models import ProjectHistory
     qs = (ProjectHistory.objects
           .filter(changed_at__date__gte=start, changed_at__date__lt=end,
-                  new_status__category__in=['won', 'lost'])
-          .order_by('project_id', '-changed_at')
+                  new_status__category__in=['won', 'lost']))
+    if owner is not None:
+        qs = qs.filter(project__owner=owner)
+    qs = (qs.order_by('project_id', '-changed_at')
           .values_list('project_id', 'new_status__category'))
     outcome = {}
     for pid, cat in qs:
@@ -95,29 +106,32 @@ def _won_lost_in_period(start, end, restrict_project_ids=None):
     return won, lost
 
 
-def _win_rate(start, end, restrict_project_ids=None):
-    won, lost = _won_lost_in_period(start, end, restrict_project_ids)
+def _win_rate(start, end, restrict_project_ids=None, owner=None):
+    won, lost = _won_lost_in_period(start, end, restrict_project_ids, owner)
     decided = len(won) + len(lost)
     if not decided:
         return None
     return (Decimal(len(won)) / Decimal(decided) * Decimal('100')).quantize(Decimal('0.1'))
 
 
-def compute_revenue_won(start, end, targets):
+def compute_revenue_won(start, end, targets, user=None):
     """Actual sales (SAR) of projects won in the period. Tile shows this against
     the revenue goal management enters as the target."""
     from projects.models import Project
     from django.db.models import Sum
-    won, _ = _won_lost_in_period(start, end)
+    won, _ = _won_lost_in_period(start, end, owner=user)
     if not won:
         return Decimal('0')
     total = Project.objects.filter(pk__in=won).aggregate(s=Sum('actual_sales'))['s']
     return _d(total) or Decimal('0')
 
 
-def compute_pipeline_coverage(start, end, targets):
+def compute_pipeline_coverage(start, end, targets, user=None):
     """Open pipeline value ÷ the revenue goal -> coverage multiple (e.g. 3.2x).
-    Returns None until a revenue goal is set for the period."""
+    Department-only: returns None per-user (no per-person goal) or until a
+    revenue goal is set for the period."""
+    if user is not None:
+        return None
     from projects.models import Project
     from django.db.models import Sum
     goal = targets.get('sales_revenue_achievement')
@@ -129,15 +143,15 @@ def compute_pipeline_coverage(start, end, targets):
     return (Decimal(open_value) / goal).quantize(Decimal('0.01'))
 
 
-def compute_sales_win_rate(start, end, targets):
-    return _win_rate(start, end)
+def compute_sales_win_rate(start, end, targets, user=None):
+    return _win_rate(start, end, owner=user)
 
 
-def compute_forecast_accuracy(start, end, targets):
+def compute_forecast_accuracy(start, end, targets, user=None):
     """Average accuracy of estimated_value vs actual_sales for won projects,
     as 100% − mean absolute percentage error (floored at 0)."""
     from projects.models import Project
-    won, _ = _won_lost_in_period(start, end)
+    won, _ = _won_lost_in_period(start, end, owner=user)
     if not won:
         return None
     accs = []
@@ -153,22 +167,26 @@ def compute_forecast_accuracy(start, end, targets):
     return (sum(accs) / Decimal(len(accs)) * Decimal('100')).quantize(Decimal('0.1'))
 
 
-def _submission_ontime(start, end, by='deadline'):
+def _submission_ontime(start, end, by='deadline', owner=None, creator=None):
     """Shared on-time submission %.
 
     by='deadline' -> projects whose submission_deadline falls in the window;
                      on-time if a submitted proposal's revision_date <= deadline.
+                     `owner` limits to that project owner (sales attribution).
     by='revision' -> proposals submitted (revision_date) in the window with a
                      deadline set; on-time if revision_date <= deadline.
+                     `creator` limits to that proposal's created_by.
     Denominator only counts items that actually have a submitted proposal +
     deadline, so missing data never silently drags the score down.
     """
     from proposals.models import TechnicalProposal
-    submitted = (TechnicalProposal.objects
-                 .filter(status='submitted', project__isnull=False)
-                 .select_related('project')
-                 .values_list('project_id', 'revision_date',
-                              'project__submission_deadline'))
+    qs = TechnicalProposal.objects.filter(status='submitted', project__isnull=False)
+    if owner is not None:
+        qs = qs.filter(project__owner=owner)
+    if creator is not None:
+        qs = qs.filter(created_by=creator)
+    submitted = qs.select_related('project').values_list(
+        'project_id', 'revision_date', 'project__submission_deadline')
     # Latest submitted proposal per project wins; build {pid: (rev, deadline)}.
     latest = {}
     for pid, rev, deadline in submitted:
@@ -190,35 +208,37 @@ def _submission_ontime(start, end, by='deadline'):
     return (Decimal(ontime) / Decimal(total) * Decimal('100')).quantize(Decimal('0.1'))
 
 
-def compute_ontime_rfq_submission(start, end, targets):
-    return _submission_ontime(start, end, by='deadline')
+def compute_ontime_rfq_submission(start, end, targets, user=None):
+    return _submission_ontime(start, end, by='deadline', owner=user)
 
 
-def compute_proposal_submission_ontime(start, end, targets):
-    return _submission_ontime(start, end, by='revision')
+def compute_proposal_submission_ontime(start, end, targets, user=None):
+    return _submission_ontime(start, end, by='revision', creator=user)
 
 
-def compute_proposal_win_rate(start, end, targets):
+def compute_proposal_win_rate(start, end, targets, user=None):
     from proposals.models import TechnicalProposal
-    proposal_pids = set(
-        TechnicalProposal.objects.filter(project__isnull=False)
-        .values_list('project_id', flat=True)
-    )
+    qs = TechnicalProposal.objects.filter(project__isnull=False)
+    if user is not None:
+        qs = qs.filter(created_by=user)
+    proposal_pids = set(qs.values_list('project_id', flat=True))
     if not proposal_pids:
         return None
     return _win_rate(start, end, restrict_project_ids=proposal_pids)
 
 
-def _bom_vs_po_totals(start, end):
+def _bom_vs_po_totals(start, end, creator=None):
     """(planned_total, actual_total) SAR over PO line items issued in the window
     that trace back to a costing BOM item. planned = BOM unit cost × qty,
-    actual = PO rate × qty."""
+    actual = PO rate × qty. `creator` limits to POs that user created."""
     from procurement.models import PurchaseOrderItem
-    items = (PurchaseOrderItem.objects
-             .filter(purchase_order__po_date__gte=start,
-                     purchase_order__po_date__lt=end,
-                     source_bom_item__isnull=False)
-             .select_related('source_bom_item'))
+    qs = (PurchaseOrderItem.objects
+          .filter(purchase_order__po_date__gte=start,
+                  purchase_order__po_date__lt=end,
+                  source_bom_item__isnull=False))
+    if creator is not None:
+        qs = qs.filter(purchase_order__created_by=creator)
+    items = qs.select_related('source_bom_item')
     planned = Decimal('0')
     actual = Decimal('0')
     for it in items:
@@ -228,32 +248,34 @@ def _bom_vs_po_totals(start, end):
     return planned, actual
 
 
-def compute_cost_savings(start, end, targets):
+def compute_cost_savings(start, end, targets, user=None):
     """Planned BOM cost − actual PO cost (SAR). Positive = money saved."""
-    planned, actual = _bom_vs_po_totals(start, end)
+    planned, actual = _bom_vs_po_totals(start, end, creator=user)
     if planned == 0 and actual == 0:
         return None
     return (planned - actual).quantize(Decimal('0.01'))
 
 
-def compute_ppv(start, end, targets):
+def compute_ppv(start, end, targets, user=None):
     """Purchase Price Variance %: (actual − planned) / planned × 100.
     Negative is favourable (paid less than the BOM standard)."""
-    planned, actual = _bom_vs_po_totals(start, end)
+    planned, actual = _bom_vs_po_totals(start, end, creator=user)
     if planned == 0:
         return None
     return ((actual - planned) / planned * Decimal('100')).quantize(Decimal('0.1'))
 
 
-def compute_pr_to_po_cycle(start, end, targets):
+def compute_pr_to_po_cycle(start, end, targets, user=None):
     """Avg working-window days from costing finance-approval (release for
     procurement) to PO issuance, for POs issued in the period."""
     from procurement.models import PurchaseOrder
     from costing.models import CostingSheet
     deltas = []
-    pos = (PurchaseOrder.objects
-           .filter(po_date__gte=start, po_date__lt=end, project__isnull=False)
-           .values_list('project_id', 'po_date'))
+    pos = PurchaseOrder.objects.filter(
+        po_date__gte=start, po_date__lt=end, project__isnull=False)
+    if user is not None:
+        pos = pos.filter(created_by=user)
+    pos = pos.values_list('project_id', 'po_date')
     # Earliest finance-approval per project.
     approved = {}
     for pid, ts in (CostingSheet.objects
@@ -273,7 +295,7 @@ def compute_pr_to_po_cycle(start, end, targets):
     return (Decimal(sum(deltas)) / Decimal(len(deltas))).quantize(Decimal('0.1'))
 
 
-def compute_ontime_delivery(start, end, targets):
+def compute_ontime_delivery(start, end, targets, user=None):
     """% of PO summary rows delivered on/before plan, among rows with an actual
     delivery date in the period."""
     from procurement.models import POSummaryEntry
@@ -282,6 +304,8 @@ def compute_ontime_delivery(start, end, targets):
         delivery_actual__gte=start, delivery_actual__lt=end,
         delivery_plan__isnull=False,
     )
+    if user is not None:
+        base = base.filter(purchase_order_item__purchase_order__created_by=user)
     total = base.count()
     if not total:
         return None
@@ -367,9 +391,23 @@ KPI_DEFINITIONS = [
 
 KPI_BY_KEY = {k.key: k for k in KPI_DEFINITIONS}
 
+# Auto KPIs that can be sliced per individual (have a clean owner/creator link).
+# Pipeline coverage needs a per-period revenue goal we don't track per person,
+# so it stays department-only and is excluded here.
+USER_ATTRIBUTABLE_KEYS = {
+    'sales_revenue_achievement', 'sales_win_rate', 'sales_forecast_accuracy',
+    'sales_ontime_rfq',
+    'proposal_submission_ontime', 'proposal_win_rate',
+    'proc_cost_savings', 'proc_ppv', 'proc_pr_to_po_cycle', 'proc_ontime_delivery',
+}
+
 
 def kpis_for_department(dept):
     return [k for k in KPI_DEFINITIONS if k.department == dept]
+
+
+def user_attributable_kpis():
+    return [k for k in KPI_DEFINITIONS if k.key in USER_ATTRIBUTABLE_KEYS]
 
 
 def evaluate(kpi, value, target):
