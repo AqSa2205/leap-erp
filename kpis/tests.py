@@ -349,3 +349,43 @@ class ManagePostTests(TestCase):
     def test_empty_rows_not_created(self):
         self.client.post(reverse('kpis:manage') + '?period=2026-Q2', {'period': '2026-Q2'})
         self.assertEqual(KPIEntry.objects.count(), 0)
+
+
+class ActivityRegistryTests(TestCase):
+    def setUp(self):
+        self.role = Role.objects.create(name=Role.SALES_REP)
+        self.u1 = User.objects.create_user('act1', password='pw', role=self.role)
+        self.u2 = User.objects.create_user('act2', password='pw', role=self.role)
+        self.region = Region.objects.create(name='KSA', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+
+    def _make_project(self, ref, creator, when):
+        from django.utils import timezone
+        p = Project.objects.create(
+            project_name=ref, proposal_reference=ref, status=self.status,
+            region=self.region, created_by=creator)
+        Project.objects.filter(pk=p.pk).update(
+            created_at=timezone.make_aware(datetime.datetime(when.year, when.month, when.day, 12)))
+        return p
+
+    def test_projects_created_counts_by_user_and_period(self):
+        from kpis.activity import ACTIVITY_METRICS
+        metric = next(m for m in ACTIVITY_METRICS if m.key == 'projects_created')
+        self._make_project('P1', self.u1, datetime.date(2026, 5, 1))
+        self._make_project('P2', self.u1, datetime.date(2026, 5, 2))
+        self._make_project('P3', self.u2, datetime.date(2026, 5, 3))
+        self._make_project('P4', self.u1, datetime.date(2025, 1, 1))   # prior year
+        counts = metric.counts(None, None)
+        self.assertEqual(counts[self.u1.id], 3)
+        self.assertEqual(counts[self.u2.id], 1)
+        q2 = metric.counts(datetime.date(2026, 4, 1), datetime.date(2026, 7, 1))
+        self.assertEqual(q2[self.u1.id], 2)
+        self.assertEqual(q2.get(self.u2.id), 1)
+        self.assertEqual(metric.count_for(None, None, self.u1.id), 3)
+
+    def test_registry_has_21_metrics_and_headlines(self):
+        from kpis.activity import ACTIVITY_METRICS, headline_metrics
+        self.assertEqual(len(ACTIVITY_METRICS), 21)
+        self.assertEqual({m.key for m in headline_metrics()}, {
+            'projects_created', 'boms_created', 'sales_finalised',
+            'handed_to_finance', 'pos_created', 'tech_proposals', 'tasks_completed'})
