@@ -25,8 +25,9 @@ lxml>=4.9.0
 # Rich Text Editor
 django-tinymce>=5.0.0
 
-# PQD PDF merging (uses Pillow for image->PDF, PyPDF2 already listed)
+# PQD PDF merging (pypdf merges the body PDF with attachment PDFs; Pillow does image->PDF)
 # Optional: docx2pdf works only on Windows with MS Word; Linux uses libreoffice (install via apt)
+pypdf>=4.0.0
 docx2pdf==0.1.8 ; sys_platform == 'win32'
 Pillow>=10.0.0
 
