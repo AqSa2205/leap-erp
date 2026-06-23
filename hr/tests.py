@@ -994,3 +994,92 @@ class LeaveTypeDaySyncTests(TestCase):
         other_ent.refresh_from_db(); sick_ent.refresh_from_db()
         self.assertEqual(other_ent.entitled_days, Decimal('0'))   # different type untouched
         self.assertEqual(sick_ent.entitled_days, Decimal('20'))
+
+
+import tempfile
+from django.test import override_settings
+from django.core.files.storage import default_storage
+from django.core.files.uploadedfile import SimpleUploadedFile
+from accounts.models import Role, User
+from hr.models import Vehicle, VehicleDocument
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class VehicleDocumentTests(TestCase):
+    def setUp(self):
+        sa, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.admin = User.objects.create_user('va', password='x')
+        self.admin.role = sa
+        self.admin.save()
+        self.vehicle = Vehicle.objects.create(plate_number='ABC-1234')
+        self.client.force_login(self.admin)
+
+    def _upload(self, **overrides):
+        data = {
+            'document_type': 'registration', 'custom_type': '',
+            'title': 'Istimara 2026',
+            'file': SimpleUploadedFile('reg.pdf', b'%PDF x',
+                                       content_type='application/pdf'),
+        }
+        data.update(overrides)
+        return self.client.post(
+            reverse('hr:vehicle_doc_upload', kwargs={'pk': self.vehicle.pk}), data)
+
+    def test_upload_then_delete_reclaims_file(self):
+        self._upload()
+        self.assertEqual(VehicleDocument.objects.count(), 1)
+        doc = VehicleDocument.objects.first()
+        name = doc.file.name
+        self.assertTrue(default_storage.exists(name))
+        self.client.get(reverse('hr:vehicle_doc_delete', kwargs={'pk': doc.pk}))
+        self.assertFalse(default_storage.exists(name))
+
+    def test_other_type_requires_custom_label(self):
+        self._upload(document_type='other', custom_type='')
+        self.assertEqual(VehicleDocument.objects.count(), 0)  # rejected
+
+    def test_custom_type_label(self):
+        self._upload(document_type='other', custom_type='Pollution Cert')
+        doc = VehicleDocument.objects.first()
+        self.assertEqual(doc.type_label, 'Pollution Cert')
+
+    def test_cascade_delete_removes_doc_files(self):
+        self._upload(document_type='insurance')
+        doc = VehicleDocument.objects.first()
+        name = doc.file.name
+        self.vehicle.delete()  # cascade -> central signal cleans the file
+        self.assertEqual(VehicleDocument.objects.count(), 0)
+        self.assertFalse(default_storage.exists(name))
+
+    def test_edit_replacing_file_reclaims_old(self):
+        self._upload()
+        doc = VehicleDocument.objects.first()
+        old_name = doc.file.name
+        self.client.post(reverse('hr:vehicle_doc_edit', kwargs={'pk': doc.pk}), {
+            'document_type': 'registration', 'custom_type': '', 'title': 'Istimara 2026',
+            'file': SimpleUploadedFile('newreg.pdf', b'%PDF new',
+                                       content_type='application/pdf'),
+        })
+        doc.refresh_from_db()
+        self.assertNotEqual(doc.file.name, old_name)
+        self.assertFalse(default_storage.exists(old_name))  # no orphan on replace
+        self.assertTrue(default_storage.exists(doc.file.name))
+
+    def test_edit_metadata_keeps_file(self):
+        self._upload()
+        doc = VehicleDocument.objects.first()
+        name = doc.file.name
+        self.client.post(reverse('hr:vehicle_doc_edit', kwargs={'pk': doc.pk}), {
+            'document_type': 'registration', 'custom_type': '', 'title': 'Istimara (renamed)',
+        })  # no file -> keep existing
+        doc.refresh_from_db()
+        self.assertEqual(doc.title, 'Istimara (renamed)')
+        self.assertEqual(doc.file.name, name)
+        self.assertTrue(default_storage.exists(name))
+
+    def test_edit_form_renders(self):
+        self._upload()
+        doc = VehicleDocument.objects.first()
+        r = self.client.get(reverse('hr:vehicle_doc_edit', kwargs={'pk': doc.pk}))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(b'Edit Document', r.content)

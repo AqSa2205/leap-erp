@@ -15,11 +15,11 @@ from datetime import datetime, date, timedelta
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay, WFHRecord
+from .models import Employee, Asset, AssetAssignment, Vehicle, VehicleDocument, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay, WFHRecord
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm, AssetIssueForm, AssetReturnForm,
-    VehicleForm, VehicleFilterForm, EmployeeDocumentForm,
+    VehicleForm, VehicleFilterForm, EmployeeDocumentForm, VehicleDocumentForm,
     LeaveTypeForm, HolidayForm, WorkingDayForm, LeaveRecordForm, WFHRecordForm,
     AttendanceSettingsForm,
 )
@@ -1113,6 +1113,70 @@ class VehicleDetailView(AdminRequiredMixin, DetailView):
     model = Vehicle
     template_name = 'hr/vehicle_detail.html'
     context_object_name = 'vehicle'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['documents'] = self.object.documents.all()
+        context['doc_form'] = VehicleDocumentForm()
+        return context
+
+
+@login_required
+def vehicle_document_upload(request, pk):
+    """Upload a document for a vehicle."""
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:vehicle_list')
+
+    vehicle = get_object_or_404(Vehicle, pk=pk)
+    if request.method == 'POST':
+        form = VehicleDocumentForm(request.POST, request.FILES)
+        if form.is_valid():
+            doc = form.save(commit=False)
+            doc.vehicle = vehicle
+            doc.uploaded_by = request.user
+            doc.save()
+            messages.success(request, f'Document "{doc.title}" uploaded.')
+        else:
+            errs = '; '.join(f'{f}: {", ".join(e)}' for f, e in form.errors.items())
+            messages.error(request, f'Could not upload document. {errs}')
+    return redirect('hr:vehicle_detail', pk=pk)
+
+
+@login_required
+def vehicle_document_edit(request, pk):
+    """Edit a vehicle document's details, optionally replacing the file.
+    Replacing the file reclaims the old one via the central pre_save signal."""
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:vehicle_list')
+
+    doc = get_object_or_404(VehicleDocument, pk=pk)
+    if request.method == 'POST':
+        form = VehicleDocumentForm(request.POST, request.FILES, instance=doc)
+        if form.is_valid():
+            form.save()
+            messages.success(request, f'Document "{doc.title}" updated.')
+            return redirect('hr:vehicle_detail', pk=doc.vehicle_id)
+        messages.error(request, 'Please fix the errors below.')
+    else:
+        form = VehicleDocumentForm(instance=doc)
+    return render(request, 'hr/vehicle_document_edit.html', {
+        'form': form, 'doc': doc, 'vehicle': doc.vehicle})
+
+
+@login_required
+def vehicle_document_delete(request, pk):
+    """Delete a vehicle document (its file is reclaimed by the cleanup signal)."""
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:vehicle_list')
+
+    doc = get_object_or_404(VehicleDocument, pk=pk)
+    vehicle_pk = doc.vehicle_id
+    doc.delete()
+    messages.success(request, 'Document deleted.')
+    return redirect('hr:vehicle_detail', pk=vehicle_pk)
 
 
 class VehicleUpdateView(AdminRequiredMixin, UpdateView):

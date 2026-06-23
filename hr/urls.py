@@ -36,6 +36,9 @@ urlpatterns = [
     path('vehicles/<int:pk>/', views.VehicleDetailView.as_view(), name='vehicle_detail'),
     path('vehicles/<int:pk>/edit/', views.VehicleUpdateView.as_view(), name='vehicle_update'),
     path('vehicles/<int:pk>/delete/', views.VehicleDeleteView.as_view(), name='vehicle_delete'),
+    path('vehicles/<int:pk>/upload-document/', views.vehicle_document_upload, name='vehicle_doc_upload'),
+    path('vehicle-document/<int:pk>/edit/', views.vehicle_document_edit, name='vehicle_doc_edit'),
+    path('vehicle-document/<int:pk>/delete/', views.vehicle_document_delete, name='vehicle_doc_delete'),
 
     # Leave Types
     path('leave-types/', views.LeaveTypeListView.as_view(), name='leavetype_list'),

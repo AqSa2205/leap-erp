@@ -1,5 +1,5 @@
 from django import forms
-from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, LeaveType, Holiday, LeaveRecord, AttendanceSettings, WorkingDay, WFHRecord
+from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, VehicleDocument, LeaveType, Holiday, LeaveRecord, AttendanceSettings, WorkingDay, WFHRecord
 
 
 class EmployeeForm(forms.ModelForm):
@@ -202,6 +202,36 @@ class EmployeeDocumentForm(forms.ModelForm):
                 field.widget.attrs['class'] = 'form-control'
             else:
                 field.widget.attrs['class'] = 'form-control'
+
+
+class VehicleDocumentForm(forms.ModelForm):
+    class Meta:
+        model = VehicleDocument
+        fields = ['document_type', 'custom_type', 'title', 'file', 'expiry_date', 'notes']
+        widgets = {
+            'expiry_date': forms.DateInput(attrs={'type': 'date'}),
+            'notes': forms.Textarea(attrs={'rows': 2}),
+            'custom_type': forms.TextInput(attrs={'placeholder': 'Type a label (used when "Other")'}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['custom_type'].required = False
+        self.fields['expiry_date'].required = False
+        # On edit, keep the existing file unless a new one is uploaded.
+        if self.instance and self.instance.pk:
+            self.fields['file'].required = False
+        for field in self.fields.values():
+            if isinstance(field.widget, forms.Select):
+                field.widget.attrs['class'] = 'form-select'
+            else:
+                field.widget.attrs['class'] = 'form-control'
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get('document_type') == 'other' and not cleaned.get('custom_type'):
+            self.add_error('custom_type', 'Enter a label for the "Other" document type.')
+        return cleaned
 
 
 class AssetIssueForm(forms.ModelForm):
