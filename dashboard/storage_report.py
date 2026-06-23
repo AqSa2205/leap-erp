@@ -28,8 +28,10 @@ FILE_CLASSES = [
     ('PO signature (COO)',    'procurement', 'PurchaseOrder',        'coo_signature'),
     ('PO signature (CEO)',    'procurement', 'PurchaseOrder',        'ceo_signature'),
     ('Employee documents',    'hr',          'EmployeeDocument',     'file'),
+    ('Vehicle documents',     'hr',          'VehicleDocument',      'file'),
     ('Asset handover forms',  'hr',          'AssetAssignment',      'handover_form'),
     ('Leave medical certs',   'hr',          'LeaveRecord',          'medical_certificate'),
+    ('Company documents',     'company',     'CompanyDocument',      'file'),
 ]
 
 # Cloudflare R2 free tier, for the % readout.

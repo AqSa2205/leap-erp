@@ -85,6 +85,7 @@ INSTALLED_APPS = [
     "procurement",
     "devtracking",
     "kpis",
+    "company",
 ]
 
 MIDDLEWARE = [
