@@ -11,4 +11,5 @@ urlpatterns = [
     path('api/chart-data/', views.chart_data, name='chart_data'),
     path('api/search/', global_search, name='global_search'),
     path('storage/', views.storage_report, name='storage_report'),
+    path('storage/preview/', views.storage_orphan_preview, name='storage_orphan_preview'),
 ]

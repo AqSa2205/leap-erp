@@ -590,8 +590,19 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
         grand_total_oc = (sheet.grand_total * conversion_rate).quantize(Decimal('0.01'))
         context['contract_total'] = grand_total_oc + Decimal(str(sow_total_oc))
 
-        # PDF revisions (saved snapshots from previous Export PDF clicks)
-        context['pdf_revisions'] = sheet.pdf_revisions.select_related('created_by').all()
+        # PDF revisions (saved snapshots from previous Export PDF clicks).
+        # Attach each file's size + a total so the UI can show storage cost and
+        # offer cleanup. .size hits the backend; a sheet has only a handful.
+        revisions = list(sheet.pdf_revisions.select_related('created_by').all())
+        total_rev_size = 0
+        for rev in revisions:
+            try:
+                rev.size_bytes = rev.file.size
+                total_rev_size += rev.size_bytes
+            except Exception:
+                rev.size_bytes = None
+        context['pdf_revisions'] = revisions
+        context['pdf_revisions_total_size'] = total_rev_size
 
         # Recent change log (for cross-team visibility).
         # The UI lets the user dial how many entries are shown via ?change_log_limit=N.
@@ -2235,6 +2246,49 @@ def delete_costing_revision(request, pk):
         pass
     rev.delete()
     messages.success(request, f'Revision {label} deleted.')
+    return redirect('costing:detail', pk=sheet.pk)
+
+
+@require_POST
+def cleanup_costing_revisions(request, pk):
+    """Delete all but the most recent revision of each format, reclaiming the
+    stored files. Keeps the latest PDF and the latest Excel so a current
+    archive of each type survives."""
+    from django.template.defaultfilters import filesizeformat
+    from .models import CostingSheet
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+    if not _user_can_edit_sheet(request.user, sheet):
+        messages.error(request, 'Permission denied.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    revs = list(sheet.pdf_revisions.order_by('-created_at'))  # newest first
+    keep, seen_formats = set(), set()
+    for rev in revs:
+        if rev.export_format not in seen_formats:
+            seen_formats.add(rev.export_format)
+            keep.add(rev.pk)  # newest of this format
+    to_delete = [r for r in revs if r.pk not in keep]
+
+    freed = 0
+    for rev in to_delete:
+        try:
+            freed += rev.file.size
+        except Exception:
+            pass
+        try:
+            rev.file.delete(save=False)
+        except Exception:
+            pass
+        rev.delete()
+
+    if to_delete:
+        messages.success(
+            request,
+            f'Cleaned up {len(to_delete)} older export'
+            f'{"" if len(to_delete) == 1 else "s"}, freed {filesizeformat(freed)}. '
+            f'Kept the latest of each format.')
+    else:
+        messages.info(request, 'Nothing to clean up — only the latest export of each type is kept.')
     return redirect('costing:detail', pk=sheet.pk)
 
 

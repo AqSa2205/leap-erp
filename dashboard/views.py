@@ -212,3 +212,29 @@ def storage_report(request):
         cache.set(cache_key, report, 300)  # 5 minutes
 
     return render(request, 'dashboard/storage_report.html', {'report': report})
+
+
+@login_required
+def storage_orphan_preview(request):
+    """Super-admin: open a storage object by key to inspect it before cleanup.
+
+    Read-only — redirects to the file's (signed) URL. Django's storage layer
+    rejects path-traversal keys, and this is super-admin only, so it can't be
+    used to escape the media namespace.
+    """
+    from django.core.exceptions import PermissionDenied
+    from django.core.files.storage import default_storage
+    from django.http import Http404, HttpResponseRedirect
+
+    if not request.user.is_super_admin_user:
+        raise PermissionDenied
+    key = request.GET.get('key', '')
+    if not key:
+        raise Http404('No key given')
+    try:
+        exists = default_storage.exists(key)
+    except Exception:
+        exists = False  # traversal / bad key rejected by the storage layer
+    if not exists:
+        raise Http404('Object not found')
+    return HttpResponseRedirect(default_storage.url(key))

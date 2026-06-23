@@ -1087,8 +1087,24 @@
         <span>
             <i class="bi bi-clock-history me-2"></i> Revisions
             <span class="badge bg-secondary ms-1">{{ pdf_revisions|length }}</span>
+            {% if pdf_revisions_total_size %}
+            <span class="badge bg-light text-dark ms-1" title="Total storage used by this sheet's saved exports">
+                <i class="bi bi-hdd me-1"></i>{{ pdf_revisions_total_size|filesizeformat }}
+            </span>
+            {% endif %}
         </span>
-        <small class="text-muted">A copy is saved automatically each time you export as PDF or Excel.</small>
+        <span class="d-flex align-items-center gap-2">
+            <small class="text-muted">A copy is saved automatically each time you export as PDF or Excel.</small>
+            {% if can_edit and pdf_revisions|length > 1 %}
+            <form method="post" action="{% url 'costing:cleanup_revisions' sheet.pk %}" class="d-inline"
+                  onsubmit="return confirm('Delete all older exports, keeping only the latest PDF and latest Excel? This frees their storage and cannot be undone.');">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete older exports, keep latest of each format">
+                    <i class="bi bi-trash3 me-1"></i>Clean up old exports
+                </button>
+            </form>
+            {% endif %}
+        </span>
     </div>
     <div class="card-body p-0">
         <div class="table-responsive" style="max-height: 360px; overflow-y: auto;">
@@ -1100,6 +1116,7 @@
                         <th>Generated</th>
                         <th>By</th>
                         <th>Changes vs previous</th>
+                        <th class="text-end" style="width: 80px;">Size</th>
                         <th class="text-end" style="width: 140px;">Actions</th>
                     </tr>
                 </thead>
@@ -1142,6 +1159,9 @@
                             <span class="text-muted">-</span>
                             {% endif %}
                         </td>
+                        <td class="text-end small text-muted">
+                            {% if rev.size_bytes %}{{ rev.size_bytes|filesizeformat }}{% else %}-{% endif %}
+                        </td>
                         <td class="text-end">
                             <a href="{{ rev.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary" title="Preview / download">
                                 <i class="bi bi-eye"></i>
@@ -1158,7 +1178,7 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="6" class="text-center text-muted py-3 small">
+                        <td colspan="7" class="text-center text-muted py-3 small">
                             No revisions yet. Click Excel or PDF in the header to export — the first revision will appear here.
                         </td>
                     </tr>

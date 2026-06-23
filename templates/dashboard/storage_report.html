@@ -102,10 +102,20 @@
       </p>
       {% if report.orphan_count %}
       <table class="table table-sm mb-1">
-        <thead class="table-light"><tr><th class="text-end" style="width:120px;">Size</th><th>Key</th></tr></thead>
+        <thead class="table-light"><tr><th class="text-end" style="width:120px;">Size</th><th>Key</th><th style="width:80px;"></th></tr></thead>
         <tbody>
           {% for o in report.orphan_examples %}
-          <tr><td class="text-end">{{ o.bytes|filesizeformat }}</td><td class="text-truncate">{{ o.key }}</td></tr>
+          <tr>
+            <td class="text-end">{{ o.bytes|filesizeformat }}</td>
+            <td class="text-truncate">{{ o.key }}</td>
+            <td class="text-end">
+              <a href="{% url 'dashboard:storage_orphan_preview' %}?key={{ o.key|urlencode }}"
+                 target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary py-0"
+                 title="Open this file to inspect it before any cleanup">
+                <i class="bi bi-eye"></i> View
+              </a>
+            </td>
+          </tr>
           {% endfor %}
         </tbody>
       </table>
