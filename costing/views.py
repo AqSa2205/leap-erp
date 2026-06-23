@@ -2253,16 +2253,52 @@ def _build_costing_snapshot(sheet):
     for section in sheet.sections.all():
         items = list(section.line_items.all())
         total_items += len(items)
+        # Per-item text fingerprint: lets the change detector notice edits to
+        # description/make/model/qty that leave the section subtotal unchanged
+        # (the totals block already catches anything price-affecting).
+        items_data = [{
+            'item_number': it.item_number,
+            'description': it.description,
+            'make': it.make,
+            'model_number': it.model_number,
+            'quantity': _d(it.quantity),
+            'unit': it.unit,
+            'vendor_name': it.vendor_name,
+        } for it in items]
         sections_data.append({
             'section_number': section.section_number,
             'title': section.title,
             'is_optional': section.is_optional,
             'item_count': len(items),
             'subtotal': _d(section.subtotal),
+            'items': items_data,
         })
 
     return {
-        'snapshot_version': 1,
+        'snapshot_version': 2,
+        # Header + free-text content + template selections. None of these feed
+        # the diff summary (which only reads totals/rates/counts), but they make
+        # the snapshot a faithful fingerprint of what renders in the PDF, so an
+        # unchanged re-export is correctly recognised as a no-op.
+        'header': {
+            'title': sheet.title,
+            'customer_reference': sheet.customer_reference,
+            'customer_name': sheet.customer_name,
+            'end_user': sheet.end_user,
+            'contact_person': sheet.contact_person,
+            'telephone': sheet.telephone,
+            'fax': sheet.fax,
+        },
+        'content': {
+            'terms_and_conditions': sheet.terms_and_conditions,
+            'exclusions': sheet.exclusions,
+            'payment_terms': sheet.payment_terms,
+            'conclusion': sheet.conclusion,
+        },
+        'selected_terms': sorted(sheet.selected_terms.values_list('id', flat=True)),
+        'selected_client_remarks': sorted(
+            sheet.selected_client_remarks.values_list('id', flat=True)
+        ),
         'totals': {
             'grand_total': _d(sheet.grand_total),
             'total_cost': _d(sheet.total_cost),
@@ -2362,6 +2398,70 @@ def _compute_costing_diff(prev, current):
             'label': 'Line items',
         })
 
+    # Header fields (short strings — show the actual before → after).
+    header_labels = (
+        ('title', 'Title'), ('customer_reference', 'Customer Ref'),
+        ('customer_name', 'Customer'), ('end_user', 'End User'),
+        ('contact_person', 'Contact'), ('telephone', 'Telephone'), ('fax', 'Fax'),
+    )
+    for key, label in header_labels:
+        old_v = (prev.get('header') or {}).get(key)
+        new_v = (current.get('header') or {}).get(key)
+        if old_v != new_v:
+            details.append({'field': f'header.{key}', 'before': old_v,
+                            'after': new_v, 'label': label})
+
+    # Free-text content blocks — flag as edited rather than dumping full text
+    # (keeps change_details compact in the DB).
+    content_labels = (
+        ('terms_and_conditions', 'Terms & Conditions'), ('exclusions', 'Exclusions'),
+        ('payment_terms', 'Payment Terms'), ('conclusion', 'Conclusion'),
+    )
+    for key, label in content_labels:
+        if (prev.get('content') or {}).get(key) != (current.get('content') or {}).get(key):
+            details.append({'field': f'content.{key}', 'label': label, 'note': 'edited'})
+
+    # Template selections (report the count change).
+    for key, label in (('selected_terms', 'Terms templates'),
+                       ('selected_client_remarks', 'Client remarks')):
+        old_sel, new_sel = prev.get(key) or [], current.get(key) or []
+        if old_sel != new_sel:
+            details.append({'field': key, 'before': len(old_sel),
+                            'after': len(new_sel), 'label': label})
+
+    # Per-line-item text edits that leave totals/counts unchanged. Match items
+    # by (section_number, item_number); add/remove is already covered by the
+    # count diffs above, so only matched-but-changed items are reported here.
+    def _item_index(snap):
+        idx = {}
+        for s in (snap.get('sections') or []):
+            for it in (s.get('items') or []):
+                idx[(s.get('section_number'), it.get('item_number'))] = it
+        return idx
+
+    prev_items, cur_items = _item_index(prev), _item_index(current)
+    item_fields = (('description', 'description'), ('make', 'make'),
+                   ('model_number', 'model'), ('quantity', 'qty'),
+                   ('unit', 'unit'), ('vendor_name', 'vendor'))
+    item_changes = 0
+    ITEM_CHANGE_CAP = 20
+    for k, cur_it in cur_items.items():
+        prev_it = prev_items.get(k)
+        if prev_it is None:
+            continue
+        for f, flabel in item_fields:
+            if prev_it.get(f) != cur_it.get(f):
+                if item_changes < ITEM_CHANGE_CAP:
+                    details.append({
+                        'field': f'item.{k[1]}.{f}',
+                        'label': f'Item {k[1]} {flabel}',
+                        'before': prev_it.get(f), 'after': cur_it.get(f),
+                    })
+                item_changes += 1
+    if item_changes > ITEM_CHANGE_CAP:
+        details.append({'field': 'item_edits_more', 'label': 'Line item edits',
+                        'note': f'+{item_changes - ITEM_CHANGE_CAP} more'})
+
     # Build a short summary line (top ~3 changes, with deltas where available)
     if not details:
         return 'no changes vs previous', []
@@ -2369,6 +2469,8 @@ def _compute_costing_diff(prev, current):
     for d in details[:3]:
         if 'delta' in d:
             summary_bits.append(f"{d['label']} {d['delta']}")
+        elif 'note' in d:
+            summary_bits.append(f"{d['label']} {d['note']}")
         else:
             summary_bits.append(f"{d['label']}: {d.get('before')} → {d.get('after')}")
     summary = ' · '.join(summary_bits)
@@ -2383,6 +2485,22 @@ def _save_costing_revision(sheet, file_bytes, filename, export_format, user):
     from .models import CostingSheetRevision
     snapshot = _build_costing_snapshot(sheet)
     prev = CostingSheetRevision.objects.filter(sheet=sheet).order_by('-created_at').first()
+
+    # De-dupe unchanged re-exports: if the most recent revision of this same
+    # format already captured an identical snapshot, the export produced nothing
+    # new — reuse it instead of writing another R2 file + DB row. The caller
+    # still serves the freshly generated bytes for download; we only skip the
+    # persisted copy. Scoped to same-format so at least one PDF and one Excel
+    # archive survive per content version.
+    last_same_format = (
+        CostingSheetRevision.objects
+        .filter(sheet=sheet, export_format=export_format)
+        .order_by('-created_at')
+        .first()
+    )
+    if last_same_format and last_same_format.snapshot == snapshot:
+        return last_same_format
+
     summary, details = _compute_costing_diff(prev.snapshot if prev else None, snapshot)
     rev_label = CostingSheetRevision.next_label_for(sheet)
     rev = CostingSheetRevision(

@@ -1,4 +1,7 @@
-from django.test import TestCase
+import tempfile
+from decimal import Decimal
+
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from accounts.models import Role, User
@@ -219,3 +222,92 @@ class DetailCanEditContextTests(TestCase):
         self.client.force_login(self.proposal)
         resp = self.client.get(reverse('costing:detail', kwargs={'pk': s.pk}))
         self.assertTrue(resp.context['can_edit'])
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class RevisionDedupTests(TestCase):
+    """Re-exporting an unchanged sheet must not create a duplicate revision
+    (R2 file + DB row). A genuine content edit — including header/T&C/per-item
+    text that the compact diff summary ignores — must still create a new one.
+    De-dupe is scoped per format, so one PDF and one Excel archive both survive.
+    """
+
+    def setUp(self):
+        from costing.models import (
+            CostingSection, CostingLineItem, ExchangeRate,
+        )
+        self.region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.project = Project.objects.create(
+            project_name='P', proposal_reference='REF-REV',
+            status=self.status, region=self.region)
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('rev', password='x')
+        self.user.role = role
+        self.user.region = self.region
+        self.user.save()
+        ExchangeRate.objects.get_or_create(
+            currency_code='SAR',
+            defaults={'currency_name': 'Saudi Riyal', 'rate_to_usd': Decimal('3.75')})
+        self.sheet = CostingSheet.objects.create(
+            title='S', project=self.project, created_by=self.user,
+            customer_name='Acme')
+        self.section = CostingSection.objects.create(
+            costing_sheet=self.sheet, section_number='A.1', title='Supply')
+        self.item = CostingLineItem.objects.create(
+            section=self.section, item_number='1', description='Camera',
+            base_unit_cost=Decimal('100'))
+
+    def _save(self, fmt='pdf'):
+        from costing.views import _save_costing_revision
+        return _save_costing_revision(
+            self.sheet, b'%PDF-1.4 fake-bytes', f'offer.{fmt}',
+            export_format=fmt, user=self.user)
+
+    def _count(self):
+        from costing.models import CostingSheetRevision
+        return CostingSheetRevision.objects.filter(sheet=self.sheet).count()
+
+    def test_unchanged_reexport_is_noop(self):
+        r1 = self._save('pdf')
+        r2 = self._save('pdf')
+        self.assertEqual(self._count(), 1)
+        self.assertEqual(r1.pk, r2.pk)  # same row returned, no new file
+
+    def test_priced_edit_creates_new_revision(self):
+        self._save('pdf')
+        self.item.base_unit_cost = Decimal('250')  # moves the subtotal/totals
+        self.item.save()
+        self._save('pdf')
+        self.assertEqual(self._count(), 2)
+
+    def test_item_text_only_edit_creates_new_revision(self):
+        # Description doesn't change any total — the expanded per-item fingerprint
+        # both triggers the new revision AND reports the edit in the details.
+        self._save('pdf')
+        self.item.description = 'Camera (revised model)'
+        self.item.save()
+        rev = self._save('pdf')
+        self.assertEqual(self._count(), 2)
+        self.assertIn('Item 1 description', rev.change_summary)
+        self.assertTrue(rev.change_details)  # detail rows, not "no changes"
+
+    def test_header_only_edit_creates_new_revision(self):
+        # customer_name isn't a total, but it must show up in the change details.
+        self._save('pdf')
+        self.sheet.customer_name = 'Globex'
+        self.sheet.save()
+        rev = self._save('pdf')
+        self.assertEqual(self._count(), 2)
+        self.assertIn('Globex', rev.change_summary)
+        self.assertTrue(any(d['field'] == 'header.customer_name'
+                            for d in rev.change_details))
+
+    def test_same_content_different_format_both_kept(self):
+        self._save('pdf')
+        self._save('excel')  # identical content, different format -> kept
+        self.assertEqual(self._count(), 2)
+        # re-exporting each format again with no change is a no-op
+        self._save('pdf')
+        self._save('excel')
+        self.assertEqual(self._count(), 2)
