@@ -1,0 +1,120 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="container-fluid py-3">
+
+  <div class="d-flex justify-content-between align-items-start mb-1">
+    <h4 class="mb-0"><i class="bi bi-hdd-stack me-1"></i> Storage Usage</h4>
+    <a href="?refresh=1" class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-arrow-clockwise"></i> Rescan
+    </a>
+  </div>
+  <p class="text-muted small mb-3">
+    File usage by class, plus objects in storage that no record references
+    (orphans). Cached for 5 minutes &mdash; use Rescan to refresh.
+  </p>
+
+  {% if not report.is_s3 %}
+  <div class="alert alert-warning py-2 small">
+    <i class="bi bi-exclamation-triangle"></i>
+    Reading the <strong>local filesystem</strong> ({{ report.backend }}), not production R2.
+    These numbers reflect the dev <code>media/</code> dir only. Run on Render for real figures.
+  </div>
+  {% endif %}
+
+  <!-- Quota summary -->
+  <div class="card mb-3">
+    <div class="card-body py-3">
+      <div class="d-flex justify-content-between small mb-1">
+        <span class="fw-semibold">
+          {{ report.total_bytes|filesizeformat }} used
+          <span class="text-muted">across {{ report.total_files }} file{{ report.total_files|pluralize }}</span>
+        </span>
+        <span class="text-muted">{{ report.pct_used|floatformat:1 }}% of {{ report.quota_gb|floatformat:0 }} GB</span>
+      </div>
+      <div class="progress" style="height:10px;">
+        <div class="progress-bar {% if report.pct_used > 80 %}bg-danger{% elif report.pct_used > 50 %}bg-warning{% else %}bg-success{% endif %}"
+             role="progressbar" style="width: {{ report.pct_used|floatformat:1 }}%;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Per-class breakdown -->
+  <div class="card mb-3">
+    <div class="card-header py-2 fw-semibold">By file class</div>
+    <div class="table-responsive">
+      <table class="table table-sm table-bordered mb-0 align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>File class</th>
+            <th class="text-end" style="width:110px;">Files</th>
+            <th class="text-end" style="width:140px;">Size</th>
+            <th class="text-end" style="width:110px;">Missing</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in report.classes %}
+          <tr>
+            <td class="small">{{ row.label }}</td>
+            <td class="text-end small">{{ row.count }}</td>
+            <td class="text-end small">{{ row.bytes|filesizeformat }}</td>
+            <td class="text-end small">
+              {% if row.missing %}<span class="text-danger fw-semibold">{{ row.missing }}</span>{% else %}&mdash;{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr class="table-light fw-semibold">
+            <td class="small">Total (referenced)</td>
+            <td class="text-end small">{{ report.total_files }}</td>
+            <td class="text-end small">{{ report.total_bytes|filesizeformat }}</td>
+            <td class="text-end small">
+              {% if report.total_missing %}<span class="text-danger">{{ report.total_missing }}</span>{% else %}&mdash;{% endif %}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+    {% if report.total_missing %}
+    <div class="card-footer py-2 small text-muted">
+      <i class="bi bi-exclamation-circle text-danger"></i>
+      {{ report.total_missing }} record{{ report.total_missing|pluralize }} point at a file the backend no longer has.
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Orphans -->
+  <div class="card mb-3">
+    <div class="card-header py-2 fw-semibold d-flex justify-content-between align-items-center">
+      <span>Orphaned objects</span>
+      {% if report.orphan_count %}
+      <span class="badge bg-warning text-dark">
+        {{ report.orphan_count }} object{{ report.orphan_count|pluralize }} &middot; {{ report.orphan_bytes|filesizeformat }} reclaimable
+      </span>
+      {% else %}
+      <span class="badge bg-success">none</span>
+      {% endif %}
+    </div>
+    <div class="card-body py-2 small">
+      <p class="text-muted mb-2">
+        Objects physically in storage that no database record references &mdash; typically left behind
+        when a parent record was deleted. This is a <strong>read-only report</strong>; nothing is deleted here.
+      </p>
+      {% if report.orphan_count %}
+      <table class="table table-sm mb-1">
+        <thead class="table-light"><tr><th class="text-end" style="width:120px;">Size</th><th>Key</th></tr></thead>
+        <tbody>
+          {% for o in report.orphan_examples %}
+          <tr><td class="text-end">{{ o.bytes|filesizeformat }}</td><td class="text-truncate">{{ o.key }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% if report.orphan_count > report.orphan_examples|length %}
+      <span class="text-muted">Showing the largest {{ report.orphan_examples|length }} of {{ report.orphan_count }}.</span>
+      {% endif %}
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}

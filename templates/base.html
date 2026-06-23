@@ -1098,6 +1098,11 @@
                 <i class="bi bi-shield-lock"></i> <span>Permissions</span>
               </a>
             </li>
+            <li class="nav-item">
+              <a class="nav-link {% if request.resolver_match.url_name == 'storage_report' %}active{% endif %}" href="{% url 'dashboard:storage_report' %}" data-title="Storage">
+                <i class="bi bi-hdd-stack"></i> <span>Storage</span>
+              </a>
+            </li>
             {% endif %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'hr_dashboard' %}active{% endif %}" href="{% url 'hr:hr_dashboard' %}" data-title="HR Dashboard">

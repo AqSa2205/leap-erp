@@ -188,3 +188,27 @@ def chart_data(request):
         'regions': list(regions),
         'statuses': list(statuses),
     })
+
+
+@login_required
+def storage_report(request):
+    """Super-admin view of file-storage usage by class + R2 orphan detection.
+
+    Hardcoded super_admin gate (matches the permission-grid page). The backend
+    scan is cached briefly so refreshing doesn't re-list the whole bucket;
+    add ?refresh=1 to force a fresh scan.
+    """
+    from django.core.cache import cache
+    from django.core.exceptions import PermissionDenied
+    from dashboard.storage_report import build_storage_report
+
+    if not request.user.is_super_admin_user:
+        raise PermissionDenied
+
+    cache_key = 'storage_report'
+    report = None if request.GET.get('refresh') else cache.get(cache_key)
+    if report is None:
+        report = build_storage_report()
+        cache.set(cache_key, report, 300)  # 5 minutes
+
+    return render(request, 'dashboard/storage_report.html', {'report': report})

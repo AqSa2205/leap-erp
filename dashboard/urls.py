@@ -10,4 +10,5 @@ urlpatterns = [
     path('my-work/', my_work, name='my_work'),
     path('api/chart-data/', views.chart_data, name='chart_data'),
     path('api/search/', global_search, name='global_search'),
+    path('storage/', views.storage_report, name='storage_report'),
 ]
