@@ -311,3 +311,135 @@ class RevisionDedupTests(TestCase):
         self._save('pdf')
         self._save('excel')
         self.assertEqual(self._count(), 2)
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class RevisionCleanupTests(TestCase):
+    """'Clean up old exports' keeps the latest revision of each format and
+    deletes the rest (row + file), reclaiming storage."""
+
+    def setUp(self):
+        self.region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.project = Project.objects.create(
+            project_name='P', proposal_reference='REF-CLEAN',
+            status=self.status, region=self.region)
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('clean', password='x')
+        self.user.role = role
+        self.user.region = self.region
+        self.user.save()
+        self.sheet = CostingSheet.objects.create(
+            title='S', project=self.project, created_by=self.user)
+        self.client.force_login(self.user)
+
+    def _mk(self, label, fmt):
+        from django.core.files.base import ContentFile
+        from costing.models import CostingSheetRevision
+        rev = CostingSheetRevision(sheet=self.sheet, revision_label=label,
+                                   export_format=fmt)
+        rev.file.save(f'{label}.{fmt}', ContentFile(b'payload-bytes'), save=True)
+        return rev
+
+    def _cleanup(self):
+        return self.client.post(
+            reverse('costing:cleanup_revisions', kwargs={'pk': self.sheet.pk}))
+
+    def test_keeps_latest_of_each_format(self):
+        from costing.models import CostingSheetRevision
+        for lbl in ('R00', 'R01', 'R02'):
+            self._mk(lbl, 'pdf')
+        for lbl in ('R03', 'R04'):
+            self._mk(lbl, 'excel')
+        self.assertEqual(self._cleanup().status_code, 302)
+        remaining = CostingSheetRevision.objects.filter(sheet=self.sheet)
+        self.assertEqual(remaining.count(), 2)
+        self.assertEqual(remaining.filter(export_format='pdf').count(), 1)
+        self.assertEqual(remaining.filter(export_format='excel').count(), 1)
+
+    def test_deleted_file_removed_from_storage(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from django.core.files.storage import default_storage
+        from costing.models import CostingSheetRevision
+        old = self._mk('R00', 'pdf')
+        new = self._mk('R01', 'pdf')  # newer pdf -> kept
+        CostingSheetRevision.objects.filter(pk=old.pk).update(
+            created_at=timezone.now() - timedelta(hours=1))
+        CostingSheetRevision.objects.filter(pk=new.pk).update(
+            created_at=timezone.now())
+        old_name = old.file.name
+        self.assertTrue(default_storage.exists(old_name))
+        self._cleanup()
+        self.assertFalse(default_storage.exists(old_name))  # storage reclaimed
+
+    def test_nothing_to_clean_keeps_both(self):
+        from costing.models import CostingSheetRevision
+        self._mk('R00', 'pdf')
+        self._mk('R01', 'excel')
+        self._cleanup()
+        self.assertEqual(
+            CostingSheetRevision.objects.filter(sheet=self.sheet).count(), 2)
+
+    def test_non_editor_cannot_clean_up(self):
+        from costing.models import CostingSheetRevision
+        self._mk('R00', 'pdf')
+        self._mk('R01', 'pdf')
+        outsider = User.objects.create_user('outsider', password='x')  # no role
+        self.client.force_login(outsider)
+        self._cleanup()
+        self.assertEqual(
+            CostingSheetRevision.objects.filter(sheet=self.sheet).count(), 2)
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class FileCleanupSignalTests(TestCase):
+    """The central post_delete / pre_save signals delete the stored file on
+    cascade delete, bulk delete, and field replacement — the paths the
+    per-view cleanup never covered."""
+
+    def setUp(self):
+        self.region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.project = Project.objects.create(
+            project_name='P', proposal_reference='REF-SIG',
+            status=self.status, region=self.region)
+        self.user = User.objects.create_user('sig', password='x')
+        self.sheet = CostingSheet.objects.create(
+            title='S', project=self.project, created_by=self.user)
+
+    def _mk(self, label, fmt='pdf'):
+        from django.core.files.base import ContentFile
+        from costing.models import CostingSheetRevision
+        rev = CostingSheetRevision(sheet=self.sheet, revision_label=label,
+                                   export_format=fmt)
+        rev.file.save(f'{label}.{fmt}', ContentFile(b'payload'), save=True)
+        return rev
+
+    def test_cascade_delete_removes_files(self):
+        from django.core.files.storage import default_storage
+        r0, r1 = self._mk('R00'), self._mk('R01')
+        n0, n1 = r0.file.name, r1.file.name
+        self.assertTrue(default_storage.exists(n0) and default_storage.exists(n1))
+        self.sheet.delete()  # cascades to revisions; no per-view cleanup involved
+        self.assertFalse(default_storage.exists(n0))
+        self.assertFalse(default_storage.exists(n1))
+
+    def test_bulk_queryset_delete_removes_files(self):
+        from django.core.files.storage import default_storage
+        from costing.models import CostingSheetRevision
+        r0, r1 = self._mk('R00'), self._mk('R01')
+        n0, n1 = r0.file.name, r1.file.name
+        CostingSheetRevision.objects.filter(sheet=self.sheet).delete()  # bulk
+        self.assertFalse(default_storage.exists(n0))
+        self.assertFalse(default_storage.exists(n1))
+
+    def test_replacing_file_deletes_old(self):
+        from django.core.files.base import ContentFile
+        from django.core.files.storage import default_storage
+        rev = self._mk('R00')
+        old_name = rev.file.name
+        rev.file.save('R00_new.pdf', ContentFile(b'new payload'), save=True)
+        self.assertNotEqual(rev.file.name, old_name)
+        self.assertFalse(default_storage.exists(old_name))   # old reclaimed
+        self.assertTrue(default_storage.exists(rev.file.name))  # new kept
