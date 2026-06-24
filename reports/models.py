@@ -192,7 +192,9 @@ class SalesCallReport(models.Model):
 
     # Systems/Category choices (based on Excel tabs)
     SYSTEM_CATEGORY_CHOICES = [
-        ('cctv', 'CCTV'),
+        # NOTE: codes (first element) are stored in the DB — keep them stable so
+        # existing reports keep mapping. Edit labels freely; add new codes below.
+        ('cctv', 'CCTV/Video Surveillance System (VSS)'),
         ('radios', 'Radios'),
         ('acs', 'Access Control Systems (ACS)'),
         ('iot', 'IoT'),
@@ -210,10 +212,21 @@ class SalesCallReport(models.Model):
         ('healthcare', 'Healthcare'),
         ('manufacturing', 'Manufacturing'),
         ('oil_gas', 'Oil & Gas'),
-        ('vast', 'VAST'),
+        ('vast', 'VSAT'),  # code kept as 'vast' (legacy); label corrected
         ('hse', 'HSE'),
         ('rtls', 'RTLS'),
         ('smart_safety', 'Smart Safety'),
+        ('ai_smart_safety', 'AI Based Smart Safety Monitoring System'),
+        ('physical_security', 'Physical Security System'),
+        ('security_control', 'Security Control System'),
+        ('ups', 'UPS & Accessories'),
+        ('structured_cabling', 'OSP & ISP Structured Cabling'),
+        ('paga', 'Public Address and General Alarm (PAGA)'),
+        ('data_network', 'Data Network System (LAN & WAN)'),
+        ('pids', 'Perimeter Intrusion Detection System (PIDS)'),
+        ('fencing_lighting', 'Fencing & Area Lighting'),
+        ('civil_electrical', 'Civil Works / Electrical Works'),
+        ('idas', 'Intrusion Detection & Alarm System (IDAS)'),
         ('other', 'Other'),
     ]
 
