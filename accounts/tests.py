@@ -335,12 +335,16 @@ class DashboardWiringTests(TestCase):
         resp = self.client.get(reverse('dashboard:index'))
         self.assertEqual(resp.status_code, 200)
 
-    def test_finance_without_access_gets_403(self):
+    def test_finance_without_access_redirected_not_403(self):
+        # The dashboard root ('/') must not 403 for a logged-in user who lacks
+        # dashboard access — it routes them to a page they can reach instead.
+        # (Dashboard data is still only rendered for those with access.)
         role = Role.objects.get(name=Role.FINANCE_REP)
         RolePermission.objects.filter(role=role, codename='dashboard.access').update(allowed=False)
         self.client.force_login(self.fin)
         resp = self.client.get(reverse('dashboard:index'))
-        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.status_code, 302)
+        self.assertNotEqual(resp['Location'], reverse('dashboard:index'))  # not a self-loop
 
 
 class PipelineWiringTests(TestCase):
@@ -494,3 +498,38 @@ class RoleAccessReferenceTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, 'Department access by role')
         self.assertContains(r, 'Commercial Pipeline')
+
+
+class LandingRedirectTests(TestCase):
+    """Siloed roles (AI team) land on a page they can access instead of 403'ing
+    on the capability-gated dashboard root."""
+
+    def setUp(self):
+        for rn in (Role.AI_HEAD, Role.AI_ENGINEER, Role.SUPER_ADMIN):
+            Role.objects.get_or_create(name=rn)
+        seed_default_permissions()
+
+    def _user(self, role_name, uname):
+        u = User.objects.create_user(uname, password='x')
+        u.role = Role.objects.get(name=role_name)
+        u.save()
+        return u
+
+    def test_ai_head_root_redirects_not_403(self):
+        self.client.force_login(self._user(Role.AI_HEAD, 'ah'))
+        r = self.client.get('/')
+        self.assertEqual(r.status_code, 302)
+        self.assertIn('/devtracking/', r['Location'])
+
+    def test_super_admin_sees_dashboard(self):
+        self.client.force_login(self._user(Role.SUPER_ADMIN, 'sa'))
+        self.assertEqual(self.client.get('/').status_code, 200)
+
+    def test_landing_url_for_roles(self):
+        from accounts.permissions import landing_url_for
+        self.assertEqual(landing_url_for(self._user(Role.AI_HEAD, 'ah2')),
+                         reverse('devtracking:dashboard'))
+        self.assertEqual(landing_url_for(self._user(Role.AI_ENGINEER, 'ae2')),
+                         reverse('devtracking:my_tasks'))
+        self.assertEqual(landing_url_for(self._user(Role.SUPER_ADMIN, 'sa2')),
+                         reverse('dashboard:index'))

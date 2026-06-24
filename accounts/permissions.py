@@ -69,6 +69,23 @@ def capability_codenames():
     return {c.codename for c in CAPABILITIES}
 
 
+def landing_url_for(user):
+    """Best post-login landing page for a user, based on what they can reach.
+
+    The main dashboard is gated by `dashboard.access`, so siloed roles (e.g. the
+    AI team, who only have Dev Tracking) would 403 if dumped there. Route them to
+    a page they can actually open instead.
+    """
+    from django.urls import reverse
+    if user.has_capability('dashboard.access'):
+        return reverse('dashboard:index')
+    if user.has_capability('devtracking.admin'):
+        return reverse('devtracking:dashboard')
+    if user.has_capability('devtracking.mywork'):
+        return reverse('devtracking:my_tasks')
+    return reverse('dashboard:my_work')  # ungated fallback
+
+
 def default_modules_by_role():
     """{role_name: [department/module labels granted by default]}.
 

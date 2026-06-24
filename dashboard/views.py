@@ -49,10 +49,18 @@ def get_region_stats(projects, region_codes):
 
 
 @login_required
-@require_capability('dashboard.access')
 def index(request):
-    """Main dashboard view with regional tabs"""
+    """Main dashboard view with regional tabs.
+
+    Root URL ('/') for the whole app, so it must not 403 for users who lack
+    dashboard access (e.g. AI team) — send them to their own landing instead.
+    Dashboard data is still only rendered for users who can access it.
+    """
     user = request.user
+    if not user.has_capability('dashboard.access'):
+        from accounts.permissions import landing_url_for
+        from django.shortcuts import redirect
+        return redirect(landing_url_for(user))
 
     # Base queryset based on user role
     if user.is_super_admin_user:

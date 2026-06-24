@@ -33,6 +33,12 @@ class CustomLoginView(LoginView):
     template_name = 'accounts/login.html'
     redirect_authenticated_user = True
 
+    def get_default_redirect_url(self):
+        # Respect an explicit ?next=; otherwise send the user to a page they can
+        # actually access (siloed roles like AI team can't open the dashboard).
+        from accounts.permissions import landing_url_for
+        return landing_url_for(self.request.user)
+
 
 class CustomLogoutView(LogoutView):
     """Custom logout view"""
