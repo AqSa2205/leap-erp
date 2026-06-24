@@ -146,9 +146,93 @@ class PipelineVisibilityTests(TestCase):
         self.client.force_login(self.admin)
         resp = self.client.post(reverse('projects:create'), self._create_post('LNA-NEW'))
         self.assertEqual(resp.status_code, 302)  # created -> redirect
-        proj = Project.objects.get(proposal_reference='LNA-NEW')
+        # LNA reference is auto-generated, so look the project up by name.
+        proj = Project.objects.get(project_name='New Pipeline')
         recips = set(Notification.objects.filter(target_object_id=proj.pk)
                      .values_list('recipient__username', flat=True))
         self.assertIn('sales', recips)     # region sales notified
         self.assertIn('prop', recips)      # region proposal notified
         self.assertNotIn('adm', recips)    # actor not self-notified
+
+
+class LnaReferenceTests(TestCase):
+    """LNA proposal references auto-generate as 'LNA <n> - <name>', n starting
+    at 2870 and auto-incrementing; the name mirrors renames; legacy refs and
+    other regions are untouched."""
+
+    def setUp(self):
+        self.lna = Region.objects.create(name='LNA', code='LNA', currency='SAR')
+        self.uk = Region.objects.create(name='UK', code='UK', currency='GBP')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+
+    def _data(self, **over):
+        d = {
+            'project_name': 'CCTV Upgrade', 'proposal_reference': '',
+            'status': self.status.pk, 'region': self.lna.pk, 'owner': '',
+            'estimated_value': '0', 'estimated_value_usd': '0',
+            'estimated_value_per_annum': '0', 'estimated_gp': '0',
+            'actual_sales': '0', 'success_quotient': '0',
+            'client_rfq_reference': '', 'po_number': '', 'customer': '',
+            'end_user': '', 'project_stage': '', 'year': '', 'po_award_quarter': '',
+            'contact_with': '', 'remarks': '', 'notes': '', 'portal_url': '',
+        }
+        d.update(over)
+        return d
+
+    def _save(self, instance=None, **over):
+        from projects.forms import ProjectForm
+        f = ProjectForm(data=self._data(**over), instance=instance)
+        self.assertTrue(f.is_valid(), f.errors)
+        return f.save()
+
+    def test_new_lna_starts_at_2870(self):
+        p = self._save(project_name='CCTV Upgrade')
+        self.assertEqual(p.proposal_reference, 'LNA 2870 - CCTV Upgrade')
+
+    def test_lna_auto_increments(self):
+        self._save(project_name='First')
+        p2 = self._save(project_name='Second')
+        self.assertEqual(p2.proposal_reference, 'LNA 2871 - Second')
+
+    def test_rename_mirrors_name_keeps_number(self):
+        p = self._save(project_name='Old Name')
+        p2 = self._save(instance=p, project_name='New Name')
+        self.assertEqual(p2.proposal_reference, 'LNA 2870 - New Name')
+
+    def test_legacy_lna_reference_not_renumbered(self):
+        legacy = Project.objects.create(
+            project_name='Old', proposal_reference='LNA-2289',
+            status=self.status, region=self.lna)
+        p = self._save(instance=legacy, project_name='Old Renamed')
+        self.assertEqual(p.proposal_reference, 'LNA-2289')  # untouched
+
+    def test_non_lna_requires_manual_reference(self):
+        from projects.forms import ProjectForm
+        f = ProjectForm(data=self._data(region=self.uk.pk, proposal_reference=''))
+        self.assertFalse(f.is_valid())
+        self.assertIn('proposal_reference', f.errors)
+
+    def test_non_lna_keeps_manual_reference(self):
+        p = self._save(region=self.uk.pk, proposal_reference='LNUK-P999')
+        self.assertEqual(p.proposal_reference, 'LNUK-P999')
+
+    def test_lna_user_region_defaulted_and_field_locked(self):
+        from accounts.models import User
+        from projects.forms import ProjectForm
+        u = User.objects.create_user('lnauser', password='x')
+        u.region = self.lna
+        u.save()
+        f = ProjectForm(user=u)  # unbound create form
+        self.assertEqual(f.initial.get('region'), self.lna.id)  # region pre-filled
+        self.assertEqual(
+            f.fields['proposal_reference'].widget.attrs.get('readonly'), 'readonly')
+
+    def test_non_lna_user_region_defaulted_field_editable(self):
+        from accounts.models import User
+        from projects.forms import ProjectForm
+        u = User.objects.create_user('ukuser', password='x')
+        u.region = self.uk
+        u.save()
+        f = ProjectForm(user=u)
+        self.assertEqual(f.initial.get('region'), self.uk.id)
+        self.assertNotIn('readonly', f.fields['proposal_reference'].widget.attrs)

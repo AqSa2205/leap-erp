@@ -26,6 +26,9 @@
                 <div class="col-md-6 mb-3">
                     <label class="form-label">Proposal Reference *</label>
                     {{ form.proposal_reference }}
+                    <div class="form-text" id="lna-ref-hint" style="display:none;">
+                        <i class="bi bi-info-circle"></i> Auto-generated for LNA (LNA #### - project name) and not editable.
+                    </div>
                     {% if form.proposal_reference.errors %}<div class="text-danger small">{{ form.proposal_reference.errors.0 }}</div>{% endif %}
                 </div>
                 <div class="col-md-6 mb-3">
@@ -164,6 +167,35 @@
 
 <script>
 (function() {
+    // ── LNA auto-reference (LNA #### - project name, read-only) ──
+    var LNA_REGION_ID = '{{ lna_region_id }}';
+    var LNA_NUMBER = '{{ lna_preview_number }}';
+    var refField = document.getElementById('id_proposal_reference');
+    var nameField = document.getElementById('id_project_name');
+    var regionField = document.getElementById('id_region');
+    var refHint = document.getElementById('lna-ref-hint');
+    function syncLnaReference() {
+        if (!refField || !regionField) return;
+        var isLna = LNA_REGION_ID && String(regionField.value) === String(LNA_REGION_ID);
+        if (refHint) refHint.style.display = isLna ? '' : 'none';
+        if (isLna) {
+            refField.readOnly = true;
+            refField.classList.add('bg-light');
+            var current = (refField.value || '').trim();
+            // Leave a legacy LNA reference (not in "LNA #### - " form) untouched.
+            if (current && !/^LNA \d+ - /.test(current)) return;
+            var name = nameField ? nameField.value.trim() : '';
+            refField.value = 'LNA ' + LNA_NUMBER + ' - ' + name;
+        } else {
+            refField.readOnly = false;
+            refField.classList.remove('bg-light');
+            if (/^LNA \d+ - /.test(refField.value || '')) refField.value = '';
+        }
+    }
+    if (regionField) regionField.addEventListener('change', syncLnaReference);
+    if (nameField) nameField.addEventListener('input', syncLnaReference);
+    syncLnaReference();
+
     // ── USD ↔ SAR / GBP auto-conversion ─────────────────────────
     // Reads the same exchange rates the costing module uses so the
     // numbers stay consistent between project pipeline and costing

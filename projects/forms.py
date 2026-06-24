@@ -1,5 +1,8 @@
 from django import forms
-from .models import Project, Region, ProjectStatus, Document
+from .models import (
+    Project, Region, ProjectStatus, Document,
+    LNA_REFERENCE_RE, build_lna_reference, next_lna_reference_number,
+)
 
 
 class ProjectForm(forms.ModelForm):
@@ -32,6 +35,55 @@ class ProjectForm(forms.ModelForm):
                 field.widget.attrs['class'] = 'form-check-input'
             else:
                 field.widget.attrs['class'] = 'form-control'
+
+        instance = getattr(self, 'instance', None)
+        is_create = not (instance and instance.pk)
+
+        # On create, default the project region to the logged-in user's region.
+        # Their region is already known, so an LNA user immediately gets the LNA
+        # auto-reference without having to pick the region. (They can still
+        # change it.)
+        if is_create and self.user and getattr(self.user, 'region_id', None):
+            self.initial['region'] = self.user.region_id
+
+        # LNA references are auto-generated (LNA #### - project name), so the
+        # field is optional here and read-only for LNA. JS keeps it in sync live
+        # by region; this locks it server-side when the form opens in LNA mode
+        # (LNA project being edited, or an LNA user's defaulted region on create).
+        self.fields['proposal_reference'].required = False
+        ref = self.fields['proposal_reference']
+        ref.widget.attrs['data-lna-reference'] = '1'
+        if instance and instance.pk and instance.region:
+            effective_region = instance.region
+        else:
+            effective_region = getattr(self.user, 'region', None)
+        if effective_region and getattr(effective_region, 'code', None) == 'LNA':
+            ref.widget.attrs['readonly'] = 'readonly'
+
+    def _is_lna(self, region):
+        return bool(region and getattr(region, 'code', None) == 'LNA')
+
+    def clean(self):
+        cleaned = super().clean()
+        region = cleaned.get('region')
+        name = cleaned.get('project_name')
+        if self._is_lna(region):
+            existing = (self.instance.proposal_reference
+                        if self.instance and self.instance.pk else '') or ''
+            m = LNA_REFERENCE_RE.match(existing)
+            if m:
+                # Already auto-format: keep the number, mirror the current name.
+                cleaned['proposal_reference'] = build_lna_reference(int(m.group(1)), name)
+            elif existing:
+                # Legacy LNA reference: leave it exactly as-is (don't renumber).
+                cleaned['proposal_reference'] = existing
+            else:
+                # New LNA project: assign the next number.
+                cleaned['proposal_reference'] = build_lna_reference(
+                    next_lna_reference_number(), name)
+        elif not cleaned.get('proposal_reference'):
+            self.add_error('proposal_reference', 'This field is required.')
+        return cleaned
 
         # Filter owner choices based on user role
         if self.user:

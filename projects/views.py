@@ -344,6 +344,22 @@ def _exchange_rates_json():
     return json.dumps(rates)
 
 
+def _lna_form_context(obj):
+    """Context for the project form's LNA auto-reference behaviour: the LNA
+    region id (so JS knows when to lock the field) and the number to preview."""
+    from .models import next_lna_reference_number, LNA_REFERENCE_RE
+    lna = Region.objects.filter(code='LNA').first()
+    number = next_lna_reference_number()
+    if obj and getattr(obj, 'pk', None) and obj.proposal_reference:
+        m = LNA_REFERENCE_RE.match(obj.proposal_reference)
+        if m:
+            number = int(m.group(1))
+    return {
+        'lna_region_id': lna.id if lna else '',
+        'lna_preview_number': number,
+    }
+
+
 PRICED_WORKFLOW_STAGES = {
     'costing_in_progress', 'finalized', 'finance_review', 'finance_approved',
 }
@@ -440,6 +456,7 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['exchange_rates_json'] = _exchange_rates_json()
+        context.update(_lna_form_context(getattr(self, 'object', None)))
         return context
 
     def form_valid(self, form):
@@ -509,6 +526,7 @@ class ProjectUpdateView(ProjectPermissionMixin, UpdateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['exchange_rates_json'] = _exchange_rates_json()
+        context.update(_lna_form_context(getattr(self, 'object', None)))
         return context
 
     def form_valid(self, form):

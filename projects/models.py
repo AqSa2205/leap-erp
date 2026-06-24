@@ -1,5 +1,32 @@
+import re
+
 from django.db import models
 from django.conf import settings
+
+
+# Auto-generated LNA reference: "LNA <number> - <project name>", numbers
+# auto-incrementing from this floor. (Region code 'LNA'.)
+LNA_REFERENCE_START = 2870
+LNA_REFERENCE_RE = re.compile(r'^LNA (\d+) - ')
+
+
+def build_lna_reference(number, project_name):
+    """Compose an LNA reference string, capped to the field length."""
+    return f'LNA {number} - {(project_name or "").strip()}'[:255]
+
+
+def next_lna_reference_number():
+    """Next LNA sequence number: max existing auto-ref number + 1, floored at
+    LNA_REFERENCE_START. Only references in the 'LNA <n> - ' format count."""
+    highest = LNA_REFERENCE_START - 1
+    refs = (Project.objects
+            .filter(proposal_reference__startswith='LNA ')
+            .values_list('proposal_reference', flat=True))
+    for ref in refs:
+        m = LNA_REFERENCE_RE.match(ref or '')
+        if m:
+            highest = max(highest, int(m.group(1)))
+    return highest + 1
 
 
 class Region(models.Model):
@@ -61,9 +88,9 @@ class Project(models.Model):
     serial_number = models.IntegerField(null=True, blank=True)
     project_name = models.CharField(max_length=500)
     proposal_reference = models.CharField(
-        max_length=50,
+        max_length=255,
         unique=True,
-        help_text="Leap Proposal Reference (e.g., LNUK-P02125038)"
+        help_text="Leap Proposal Reference. Auto-generated for LNA (LNA #### - project name)."
     )
     client_rfq_reference = models.CharField(
         max_length=255,
