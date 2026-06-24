@@ -27,17 +27,24 @@ class ProjectPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
         if user.is_super_admin_user:
             return queryset
         # Procurement only kicks in after a project is Won, so they only
-        # ever need to see Won-status projects in their region. Admins and
-        # managers continue to see every status in their region.
+        # ever need to see Won-status projects in their region.
         if getattr(user, 'is_procurement_user', False):
             return queryset.filter(
                 region=user.region,
                 status__category='won',
             )
-        if user.is_admin_user or user.is_manager_user:
-            return queryset.filter(region=user.region)
-        if getattr(user, 'is_finance_team_user', False):
-            # Finance sees their region (the pipeline.access gate runs first).
+        # Admin/manager, finance, and the sales + proposal teams all get a
+        # region-scoped *view* of the pipeline. Sales & proposal need it to see
+        # and pick up new projects in their region (pairs with the on-create
+        # notification); edit rights stay narrower (see ProjectUpdateView).
+        region_scoped = (
+            user.is_admin_user
+            or user.is_manager_user
+            or getattr(user, 'is_finance_team_user', False)
+            or getattr(user, 'is_sales_rep_user', False)
+            or getattr(user, 'is_proposal_team_user', False)
+        )
+        if region_scoped:
             return queryset.filter(region=user.region)
         return queryset.filter(owner=user)
 
@@ -442,20 +449,29 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
         messages.success(self.request, 'Project created successfully.')
         response = super().form_valid(form)
 
-        # Notify region managers about new project
+        # Notify the region's sales + proposal team (and managers) so they can
+        # see and start working on the new project. Region-scoped visibility is
+        # granted by ProjectPermissionMixin.
         from accounts.models import User, Role
         project = self.object
-        region_managers = User.objects.filter(
-            role__name=Role.MANAGER, region=project.region, is_active=True
+        team_roles = [
+            Role.MANAGER, Role.SALES_REP, Role.PROPOSAL_HEAD, Role.PROPOSAL_REP,
+        ]
+        recipients = User.objects.filter(
+            role__name__in=team_roles, region=project.region, is_active=True
         )
         notify_users(
-            recipients=region_managers,
-            verb='created a new project',
+            recipients=recipients,
+            verb='created a new pipeline project',
             actor=self.request.user,
             target=project,
             target_url=reverse_lazy('projects:detail', kwargs={'pk': project.pk}),
-            description=f'New project: {project.project_name}',
+            description=(
+                f'New project "{project.project_name}" in '
+                f'{project.region or "—"} is ready for the team.'
+            ),
             level='info',
+            send_email=True,
         )
         return response
 
@@ -468,9 +484,22 @@ class ProjectUpdateView(ProjectPermissionMixin, UpdateView):
 
     def test_func(self):
         # Finance gets a region-scoped *view* of the pipeline (via the mixin
-        # queryset), but not edit rights — exclude them so the widened queryset
-        # doesn't grant region-wide project editing. Everyone else unchanged.
+        # queryset), but not edit rights — exclude them. Everyone else unchanged.
         return not getattr(self.request.user, 'is_finance_team_user', False)
+
+    def get_queryset(self):
+        # Editing is narrower than viewing: super admins edit anything,
+        # admins/managers edit their region, and everyone else (incl. sales &
+        # proposal, who now *view* the whole region) edits only projects they
+        # own. This stops the widened view-queryset from granting region-wide
+        # project editing.
+        qs = Project.objects.all()
+        user = self.request.user
+        if user.is_super_admin_user:
+            return qs
+        if user.is_admin_user or user.is_manager_user:
+            return qs.filter(region=user.region)
+        return qs.filter(owner=user)
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
