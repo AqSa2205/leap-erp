@@ -90,10 +90,10 @@
         <div class="card-body p-0">
           {% if assets %}
           <table class="table table-sm mb-0">
-            <thead class="table-light"><tr><th>Asset</th><th>Type</th><th>Since</th></tr></thead>
+            <thead class="table-light"><tr><th>Asset</th><th>Type</th><th>Serial</th></tr></thead>
             <tbody>
               {% for a in assets %}
-              <tr><td>{{ a.asset.asset_name }}</td><td class="small">{{ a.asset.asset_type|default:"-" }}</td><td class="small">{{ a.assigned_at|date:"d M Y" }}</td></tr>
+              <tr><td>{{ a.asset_name }}</td><td class="small">{{ a.asset_type|default:"-" }}</td><td class="small">{{ a.serial_number|default:"-" }}</td></tr>
               {% endfor %}
             </tbody>
           </table>

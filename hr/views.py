@@ -148,17 +148,25 @@ def my_profile(request):
     """Self-service portal: the logged-in user's own HR record — attendance,
     leave balance, assets held, documents (iqama/passport), and any vehicle.
     Shows a friendly prompt if the account isn't linked to an employee yet."""
+    from django.db.models import Q
     from django.utils import timezone
-    from .models import AttendanceRecord
+    from .models import AttendanceRecord, Asset, Vehicle
 
     emp = getattr(request.user, 'employee_profile', None)
     context = {'employee': emp}
     if emp:
         today = timezone.localtime(timezone.now()).date()
-        # Current assets held (open assignments).
-        context['assets'] = (
+        # Assets in custody. The roster tracks holders two ways: proper
+        # issue/return assignments AND a denormalised Asset.employee_name (used
+        # by the imported data). Union both, deduped, so nothing is missed.
+        asset_ids = set(
             emp.asset_assignments.filter(returned_at__isnull=True)
-            .select_related('asset'))
+            .values_list('asset_id', flat=True))
+        if emp.full_name:
+            asset_ids |= set(
+                Asset.objects.filter(employee_name__iexact=emp.full_name)
+                .values_list('id', flat=True))
+        context['assets'] = Asset.objects.filter(id__in=asset_ids).order_by('asset_name')
         # Documents (iqama/passport copies, contracts, etc.).
         context['documents'] = emp.documents.all()
         # Leave balance for the current year.
@@ -175,11 +183,15 @@ def my_profile(request):
         context['attendance_month'] = today
         context['recent_leaves'] = emp.leave_records.select_related(
             'leave_type').order_by('-start_date')[:5]
-        # Vehicles assigned to this employee (matched by driver name — vehicles
-        # have no hard FK to employees).
-        from .models import Vehicle
-        context['vehicles'] = Vehicle.objects.filter(
-            driver_name__iexact=emp.full_name) if emp.full_name else Vehicle.objects.none()
+        # Vehicles. No hard FK, so match on driver_id == iqama (the reliable
+        # key in the data) or driver_name == full name.
+        veh_q = Q()
+        if emp.iqama_number:
+            veh_q |= Q(driver_id=emp.iqama_number)
+        if emp.full_name:
+            veh_q |= Q(driver_name__iexact=emp.full_name)
+        context['vehicles'] = (
+            Vehicle.objects.filter(veh_q) if veh_q else Vehicle.objects.none())
     return render(request, 'hr/my_profile.html', context)
 
 

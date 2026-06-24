@@ -1110,6 +1110,19 @@ class MyProfilePortalTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, "isn't linked")
 
+    def test_portal_shows_assets_by_name_and_vehicles_by_driver_id(self):
+        from hr.models import Asset, Vehicle
+        # Asset linked via the denormalised employee_name (no AssetAssignment).
+        Asset.objects.create(asset_name='Dell Laptop', asset_type='Laptop',
+                             employee_name='Emp One')
+        # Vehicle linked via driver_id == iqama_number.
+        Vehicle.objects.create(plate_number='XYZ-9', vehicle_maker='Toyota',
+                              driver_id='IQ-001')
+        self.client.force_login(self.user)
+        r = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(r, 'Dell Laptop')   # matched by employee_name
+        self.assertContains(r, 'XYZ-9')          # matched by driver_id == iqama
+
 
 class LinkEmployeeUsersCommandTests(TestCase):
     def test_links_by_email_then_code(self):
