@@ -152,7 +152,10 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Internationalization
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = "UTC"
+# Saudi Arabia (UTC+3). Datetimes are still stored in UTC (USE_TZ=True); this
+# only controls how they're displayed, so timestamps read in local time instead
+# of 3 hours behind.
+TIME_ZONE = "Asia/Riyadh"
 USE_I18N = True
 USE_TZ = True
 
