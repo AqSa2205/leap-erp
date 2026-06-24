@@ -270,6 +270,11 @@ GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
 
 # Security settings for production
 if IS_PRODUCTION:
+    # Render terminates TLS at its proxy and forwards plain HTTP with an
+    # X-Forwarded-Proto header. Without this, request.is_secure() is False, so
+    # Django treats every request as insecure — which breaks CSRF on form POSTs
+    # (e.g. login -> "CSRF verification failed") and loops SSL redirects.
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS = 'DENY'
