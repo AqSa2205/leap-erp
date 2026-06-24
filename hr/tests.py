@@ -1083,3 +1083,52 @@ class VehicleDocumentTests(TestCase):
         r = self.client.get(reverse('hr:vehicle_doc_edit', kwargs={'pk': doc.pk}))
         self.assertEqual(r.status_code, 200)
         self.assertIn(b'Edit Document', r.content)
+
+
+from hr.models import Employee
+
+
+class MyProfilePortalTests(TestCase):
+    """The self-service portal shows the linked employee's data, or a prompt
+    when the account isn't linked yet."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('emp1', password='x', email='emp1@leap.com')
+        self.emp = Employee.objects.create(
+            full_name='Emp One', iqama_number='IQ-001', user=self.user)
+        self.unlinked = User.objects.create_user('nobody', password='x')
+
+    def test_portal_shows_linked_employee(self):
+        self.client.force_login(self.user)
+        r = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'Emp One')
+
+    def test_portal_prompts_when_not_linked(self):
+        self.client.force_login(self.unlinked)
+        r = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "isn't linked")
+
+
+class LinkEmployeeUsersCommandTests(TestCase):
+    def test_links_by_email_then_code(self):
+        from django.core.management import call_command
+        u_email = User.objects.create_user('byemail', password='x', email='match@leap.com')
+        u_code = User.objects.create_user('bycode', password='x', employee_code='IQ-CODE')
+        e1 = Employee.objects.create(full_name='By Email', iqama_number='IQ-1', work_email='match@leap.com')
+        e2 = Employee.objects.create(full_name='By Code', iqama_number='IQ-CODE')
+        call_command('link_employee_users')
+        e1.refresh_from_db()
+        e2.refresh_from_db()
+        self.assertEqual(e1.user, u_email)
+        self.assertEqual(e2.user, u_code)
+
+    def test_does_not_steal_already_linked_user(self):
+        from django.core.management import call_command
+        u = User.objects.create_user('shared', password='x', email='dup@leap.com')
+        already = Employee.objects.create(full_name='Already', iqama_number='IQ-A', user=u)
+        contender = Employee.objects.create(full_name='Contender', iqama_number='IQ-B', work_email='dup@leap.com')
+        call_command('link_employee_users')
+        contender.refresh_from_db()
+        self.assertIsNone(contender.user)  # u already taken

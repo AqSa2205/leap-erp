@@ -1,0 +1,158 @@
+{% extends 'base.html' %}
+{% block title %}My Profile{% endblock %}
+{% block content %}
+<div class="container-fluid py-3">
+  <h4 class="mb-3"><i class="bi bi-person-badge me-2"></i>My Profile</h4>
+
+  {% if not employee %}
+    <div class="alert alert-info">
+      <i class="bi bi-info-circle me-1"></i>
+      Your account isn't linked to an employee record yet, so there's nothing to show here.
+      Please ask an administrator to link your login to your HR profile.
+    </div>
+  {% else %}
+
+  <div class="row g-3">
+    <!-- Personal / ID -->
+    <div class="col-lg-6">
+      <div class="card h-100">
+        <div class="card-header fw-semibold"><i class="bi bi-person-vcard me-1"></i> Personal & ID</div>
+        <div class="card-body">
+          <div class="row g-2 small">
+            <div class="col-6"><div class="text-muted">Name</div><div class="fw-semibold">{{ employee.full_name }}</div></div>
+            <div class="col-6"><div class="text-muted">Designation</div><div>{{ employee.designation|default:"-" }}</div></div>
+            <div class="col-6"><div class="text-muted">Iqama / Passport No.</div><div>{{ employee.iqama_number }}</div></div>
+            <div class="col-6"><div class="text-muted">Nationality</div><div>{{ employee.nationality|default:"-" }}</div></div>
+            <div class="col-6">
+              <div class="text-muted">Iqama Expiry</div>
+              <div>
+                {{ employee.iqama_expires_on|date:"d M Y"|default:"-" }}
+                {% if employee.iqama_status == 'expired' %}<span class="badge bg-danger ms-1">Expired</span>
+                {% elif employee.iqama_status == 'expiring_soon' %}<span class="badge bg-warning text-dark ms-1">Soon</span>{% endif %}
+              </div>
+            </div>
+            <div class="col-6">
+              <div class="text-muted">Medical Insurance Expiry</div>
+              <div>
+                {{ employee.medical_insurance_expires_on|date:"d M Y"|default:"-" }}
+                {% if employee.medical_insurance_status == 'expired' %}<span class="badge bg-danger ms-1">Expired</span>
+                {% elif employee.medical_insurance_status == 'expiring_soon' %}<span class="badge bg-warning text-dark ms-1">Soon</span>{% endif %}
+              </div>
+            </div>
+            <div class="col-6"><div class="text-muted">Joining Date</div><div>{{ employee.joining_date|date:"d M Y"|default:"-" }}</div></div>
+            <div class="col-6"><div class="text-muted">Contract</div><div>{{ employee.get_contract_type_display|default:"-" }}</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Attendance (this month) + Leave -->
+    <div class="col-lg-6">
+      <div class="card h-100">
+        <div class="card-header fw-semibold"><i class="bi bi-clock-history me-1"></i> Attendance — {{ attendance_month|date:"F Y" }}</div>
+        <div class="card-body">
+          {% if attendance_summary %}
+          <div class="d-flex flex-wrap gap-2 mb-3">
+            {% for status, count in attendance_summary.items %}
+            <span class="badge bg-light text-dark border">{{ status|title }}: <strong>{{ count }}</strong></span>
+            {% endfor %}
+          </div>
+          {% else %}
+          <p class="text-muted small mb-3">No attendance recorded this month.</p>
+          {% endif %}
+
+          <div class="fw-semibold small mb-2"><i class="bi bi-calendar2-check me-1"></i> Leave Balance ({{ attendance_month|date:"Y" }})</div>
+          {% if entitlements %}
+          <table class="table table-sm mb-0">
+            <thead class="table-light"><tr><th>Type</th><th class="text-end">Entitled</th><th class="text-end">Taken</th><th class="text-end">Remaining</th></tr></thead>
+            <tbody>
+              {% for ent in entitlements %}
+              <tr>
+                <td>{{ ent.leave_type.name }}</td>
+                <td class="text-end">{{ ent.entitled_days }}</td>
+                <td class="text-end">{{ ent.taken_days }}</td>
+                <td class="text-end fw-semibold">{{ ent.remaining_days }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <p class="text-muted small mb-0">No leave entitlements set for this year.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Assets -->
+    <div class="col-lg-6">
+      <div class="card h-100">
+        <div class="card-header fw-semibold"><i class="bi bi-laptop me-1"></i> Assets in My Custody</div>
+        <div class="card-body p-0">
+          {% if assets %}
+          <table class="table table-sm mb-0">
+            <thead class="table-light"><tr><th>Asset</th><th>Type</th><th>Since</th></tr></thead>
+            <tbody>
+              {% for a in assets %}
+              <tr><td>{{ a.asset.asset_name }}</td><td class="small">{{ a.asset.asset_type|default:"-" }}</td><td class="small">{{ a.assigned_at|date:"d M Y" }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <p class="text-muted small p-3 mb-0">No assets currently assigned to you.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Documents -->
+    <div class="col-lg-6">
+      <div class="card h-100">
+        <div class="card-header fw-semibold"><i class="bi bi-folder2-open me-1"></i> My Documents</div>
+        <div class="card-body p-0">
+          {% if documents %}
+          <table class="table table-sm mb-0">
+            <thead class="table-light"><tr><th>Type</th><th>Title</th><th>File</th></tr></thead>
+            <tbody>
+              {% for d in documents %}
+              <tr>
+                <td><span class="badge bg-secondary">{{ d.get_document_type_display }}</span></td>
+                <td class="small">{{ d.title }}</td>
+                <td><a href="{{ d.file.url }}" target="_blank" class="small">{% if d.is_pdf %}<i class="bi bi-file-earmark-pdf text-danger me-1"></i>{% elif d.is_image %}<i class="bi bi-file-earmark-image text-success me-1"></i>{% else %}<i class="bi bi-file-earmark me-1"></i>{% endif %}{{ d.filename|truncatechars:24 }}</a></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <p class="text-muted small p-3 mb-0">No documents on file.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Vehicles -->
+    {% if vehicles %}
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header fw-semibold"><i class="bi bi-car-front me-1"></i> My Vehicles</div>
+        <div class="card-body p-0">
+          <table class="table table-sm mb-0">
+            <thead class="table-light"><tr><th>Plate</th><th>Vehicle</th><th>License Expiry</th><th>Status</th></tr></thead>
+            <tbody>
+              {% for v in vehicles %}
+              <tr>
+                <td class="fw-semibold">{{ v.plate_number }}</td>
+                <td class="small">{{ v.vehicle_maker }} {{ v.vehicle_model }}</td>
+                <td class="small">{{ v.license_expiry|default:"-" }}</td>
+                <td><span class="badge {% if v.vehicle_status == 'valid' %}bg-success{% else %}bg-secondary{% endif %}">{{ v.get_vehicle_status_display }}</span></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

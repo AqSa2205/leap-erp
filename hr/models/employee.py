@@ -39,6 +39,17 @@ class Employee(models.Model):
     work_email = models.EmailField(blank=True, verbose_name='Work Email')
     mobile_number = models.CharField(max_length=20, blank=True, verbose_name='Mobile Number')
     is_active = models.BooleanField(default=True, verbose_name='Active')
+    # Login account this employee record belongs to — powers the self-service
+    # "My Profile" portal. Optional; auto-matched by email / employee_code and
+    # settable manually by admins.
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='employee_profile',
+        verbose_name='Login Account',
+        help_text='The user account that logs in as this employee.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     created_by = models.ForeignKey(

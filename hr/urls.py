@@ -5,6 +5,7 @@ app_name = 'hr'
 
 urlpatterns = [
     path('', views.hr_dashboard, name='hr_dashboard'),
+    path('my-profile/', views.my_profile, name='my_profile'),
     path('employees/', views.EmployeeListView.as_view(), name='employee_list'),
     path('create/', views.EmployeeCreateView.as_view(), name='employee_create'),
     path('import/', views.employee_import, name='employee_import'),

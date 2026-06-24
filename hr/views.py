@@ -143,6 +143,46 @@ def hr_dashboard(request):
     return render(request, 'hr/dashboard.html', context)
 
 
+@login_required
+def my_profile(request):
+    """Self-service portal: the logged-in user's own HR record — attendance,
+    leave balance, assets held, documents (iqama/passport), and any vehicle.
+    Shows a friendly prompt if the account isn't linked to an employee yet."""
+    from django.utils import timezone
+    from .models import AttendanceRecord
+
+    emp = getattr(request.user, 'employee_profile', None)
+    context = {'employee': emp}
+    if emp:
+        today = timezone.localtime(timezone.now()).date()
+        # Current assets held (open assignments).
+        context['assets'] = (
+            emp.asset_assignments.filter(returned_at__isnull=True)
+            .select_related('asset'))
+        # Documents (iqama/passport copies, contracts, etc.).
+        context['documents'] = emp.documents.all()
+        # Leave balance for the current year.
+        context['entitlements'] = (
+            emp.leave_entitlements.filter(year=today.year)
+            .select_related('leave_type'))
+        # Attendance summary for the current month.
+        month_records = AttendanceRecord.objects.filter(
+            employee=emp, date__year=today.year, date__month=today.month)
+        summary = {}
+        for rec in month_records:
+            summary[rec.status] = summary.get(rec.status, 0) + 1
+        context['attendance_summary'] = summary
+        context['attendance_month'] = today
+        context['recent_leaves'] = emp.leave_records.select_related(
+            'leave_type').order_by('-start_date')[:5]
+        # Vehicles assigned to this employee (matched by driver name — vehicles
+        # have no hard FK to employees).
+        from .models import Vehicle
+        context['vehicles'] = Vehicle.objects.filter(
+            driver_name__iexact=emp.full_name) if emp.full_name else Vehicle.objects.none()
+    return render(request, 'hr/my_profile.html', context)
+
+
 class EmployeeListView(AdminRequiredMixin, ListView):
     model = Employee
     template_name = 'hr/employee_list.html'

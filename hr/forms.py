@@ -11,9 +11,10 @@ class EmployeeForm(forms.ModelForm):
             'full_name', 'designation', 'qualification',
             'date_of_birth', 'joining_date', 'nationality', 'marital_status',
             'blood_group', 'personal_email', 'documents_link', 'deployment',
-            'contract_type', 'work_email', 'mobile_number', 'is_active',
+            'contract_type', 'work_email', 'mobile_number', 'is_active', 'user',
         ]
         widgets = {
+            'user': forms.Select(attrs={'class': 'form-select'}),
             'iqama_number': forms.TextInput(attrs={'class': 'form-control'}),
             'iqama_issued_on': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
             'iqama_expires_on': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
@@ -35,6 +36,17 @@ class EmployeeForm(forms.ModelForm):
             'mobile_number': forms.TextInput(attrs={'class': 'form-control'}),
             'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from accounts.models import User
+        self.fields['user'].required = False
+        self.fields['user'].label = 'Linked Login Account'
+        self.fields['user'].help_text = (
+            'The account that logs in as this employee (for the self-service '
+            'portal). Leave blank if none.')
+        self.fields['user'].queryset = User.objects.filter(
+            is_active=True).order_by('username')
 
     def clean(self):
         cleaned = super().clean()

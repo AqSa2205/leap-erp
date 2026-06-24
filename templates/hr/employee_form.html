@@ -160,6 +160,14 @@
                             </div>
                         </div>
                         <div class="row mb-4">
+                            <div class="col-md-12 mb-3">
+                                <label class="form-label">{{ form.user.label }}</label>
+                                {{ form.user }}
+                                {% if form.user.help_text %}<div class="form-text">{{ form.user.help_text }}</div>{% endif %}
+                                {% if form.user.errors %}
+                                <div class="invalid-feedback d-block">{{ form.user.errors.0 }}</div>
+                                {% endif %}
+                            </div>
                             <div class="col-md-12">
                                 <label class="form-label">Documents Link</label>
                                 {{ form.documents_link }}

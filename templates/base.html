@@ -830,6 +830,11 @@
                     <i class="bi bi-person-workspace"></i> <span>My Work</span>
                 </a>
             </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'my_profile' %}active{% endif %}" href="{% url 'hr:my_profile' %}" data-title="My Profile">
+                    <i class="bi bi-person-badge"></i> <span>My Profile</span>
+                </a>
+            </li>
             {% if user|can:'devtracking.mywork' %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'my_tasks' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:my_tasks' %}" data-title="My Tasks">
