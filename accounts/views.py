@@ -83,7 +83,25 @@ class UserListView(AdminRequiredMixin, ListView):
         return queryset
 
 
-class UserCreateView(AdminRequiredMixin, CreateView):
+class _RoleAccessContextMixin:
+    """Adds a role -> department-access reference to the user form, so admins
+    can see what each role grants when they pick one."""
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        from accounts.permissions import default_modules_by_role
+        labels = dict(Role.ROLE_CHOICES)
+        ctx['role_access'] = [
+            {'label': labels.get(name, name), 'modules': mods}
+            for name, mods in sorted(
+                default_modules_by_role().items(),
+                key=lambda kv: labels.get(kv[0], kv[0]))
+            if mods  # skip roles with no module access (e.g. AI doers)
+        ]
+        return ctx
+
+
+class UserCreateView(_RoleAccessContextMixin, AdminRequiredMixin, CreateView):
     """Create new user (admin only)"""
     model = User
     form_class = CustomUserCreationForm
@@ -95,7 +113,7 @@ class UserCreateView(AdminRequiredMixin, CreateView):
         return super().form_valid(form)
 
 
-class UserUpdateView(AdminRequiredMixin, UpdateView):
+class UserUpdateView(_RoleAccessContextMixin, AdminRequiredMixin, UpdateView):
     """Update user (admin only)"""
     model = User
     form_class = CustomUserChangeForm

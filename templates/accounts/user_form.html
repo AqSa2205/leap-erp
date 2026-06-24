@@ -43,4 +43,36 @@
         </div>
     </div>
 </div>
+
+{% if role_access %}
+<div class="row justify-content-center mt-3">
+    <div class="col-md-8 col-lg-6">
+        <div class="card">
+            <div class="card-header py-2 fw-semibold small">
+                <i class="bi bi-shield-lock me-1"></i> Department access by role
+            </div>
+            <div class="card-body py-2">
+                <p class="text-muted small mb-2">
+                    Access is granted by the user's <strong>role</strong> — picking a role gives the
+                    departments below. A super admin can fine-tune later in
+                    <a href="{% url 'accounts:permission_matrix' %}">Permissions</a>.
+                </p>
+                <div class="table-responsive">
+                    <table class="table table-sm table-bordered mb-0 small align-middle">
+                        <thead class="table-light"><tr><th style="width:190px;">Role</th><th>Departments / modules</th></tr></thead>
+                        <tbody>
+                            {% for r in role_access %}
+                            <tr>
+                                <td class="fw-semibold">{{ r.label }}</td>
+                                <td>{% for m in r.modules %}<span class="badge bg-light text-dark border me-1 mb-1">{{ m }}</span>{% endfor %}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
 {% endblock %}

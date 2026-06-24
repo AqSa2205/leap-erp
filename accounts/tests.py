@@ -471,3 +471,26 @@ class AITeamRoleTests(TestCase):
         for r in (Role.AI_INTERN, Role.AI_ENGINEER, Role.AI_JUNIOR_ENGINEER):
             self.assertTrue(self._allowed(r, 'devtracking.mywork'), r)
             self.assertFalse(self._allowed(r, 'devtracking.admin'), r)
+
+
+class RoleAccessReferenceTests(TestCase):
+    """default_modules_by_role() maps roles to readable department labels, and
+    the user form surfaces it for admins."""
+
+    def test_sales_rep_includes_pipeline(self):
+        from accounts.permissions import default_modules_by_role
+        mapping = default_modules_by_role()
+        self.assertIn('Commercial Pipeline', mapping['sales_rep'])
+        # AI doer roles have no module access
+        self.assertEqual(mapping['developer'], [])
+
+    def test_user_form_shows_role_access_panel(self):
+        sa, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        admin = User.objects.create_user('boss', password='x')
+        admin.role = sa
+        admin.save()
+        self.client.force_login(admin)
+        r = self.client.get(reverse('accounts:user_create'))
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'Department access by role')
+        self.assertContains(r, 'Commercial Pipeline')

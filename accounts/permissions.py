@@ -69,6 +69,22 @@ def capability_codenames():
     return {c.codename for c in CAPABILITIES}
 
 
+def default_modules_by_role():
+    """{role_name: [department/module labels granted by default]}.
+
+    Used on the user form to show, at a glance, which departments a role gives
+    access to — access stays role-driven; this just makes it visible.
+    """
+    key_label = {}
+    for c in CAPABILITIES:
+        key = c.codename.rsplit('.', 1)[0]
+        key_label.setdefault(key, c.module)
+    return {
+        role_name: sorted({key_label.get(m, m) for m in modules})
+        for role_name, modules in DEFAULT_MODULE_ACCESS.items()
+    }
+
+
 def capabilities_by_module():
     """Ordered {module_label: [Capability, ...]} for rendering the grid."""
     out = {}
