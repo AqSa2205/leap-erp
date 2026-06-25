@@ -126,7 +126,7 @@ class Project(models.Model):
     PROJECT_STAGE_CHOICES = [
         ('', '-'),
         ('procurement', 'Procurement Stage'),
-        ('building', 'Building Stage'),
+        ('building', 'Bidding Stage'),  # stored code kept as 'building' (legacy); label corrected
     ]
     project_stage = models.CharField(
         max_length=20,
