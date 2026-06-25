@@ -109,19 +109,20 @@ class LeaveRecordTests(TestCase):
         self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={
             'name': 'Annual', 'default_annual_days': 30})
 
-    def test_days_autocomputed_excluding_weekend(self):
-        # Sun 5 Jul -> Thu 9 Jul 2026 = 5 working days (Fri/Sat weekend)
+    def test_days_autocomputed_calendar_incl_weekend(self):
+        # Thu 2 Jul -> Mon 6 Jul 2026 = 5 calendar days (Fri+Sat weekend counted)
         rec = LeaveRecord(employee=self.emp, leave_type=self.annual,
-                          start_date=_date(2026, 7, 5), end_date=_date(2026, 7, 9))
+                          start_date=_date(2026, 7, 2), end_date=_date(2026, 7, 6))
         rec.save()
         self.assertEqual(rec.days, Decimal('5'))
 
-    def test_days_excludes_holiday(self):
+    def test_days_count_calendar_incl_holiday(self):
+        # A holiday inside the range still counts as a leave day (calendar count).
         Holiday.objects.create(date=_date(2026, 7, 7), name='X')
         rec = LeaveRecord(employee=self.emp, leave_type=self.annual,
                           start_date=_date(2026, 7, 5), end_date=_date(2026, 7, 9))
         rec.save()
-        self.assertEqual(rec.days, Decimal('4'))
+        self.assertEqual(rec.days, Decimal('5'))
 
     def test_manual_days_override_preserved(self):
         rec = LeaveRecord(employee=self.emp, leave_type=self.annual,
@@ -136,19 +137,7 @@ class LeaveRecordTests(TestCase):
             rec.full_clean()
 
 
-from hr.leave_services import annual_entitlement_for, generate_year_entitlements
-
-
-class AnnualRuleTests(TestCase):
-    def test_joining_year_is_25(self):
-        self.assertEqual(annual_entitlement_for(_date(2025, 7, 1), 2025), Decimal('25'))
-
-    def test_year_after_joining_is_30(self):
-        self.assertEqual(annual_entitlement_for(_date(2025, 7, 1), 2026), Decimal('30'))
-        self.assertEqual(annual_entitlement_for(_date(2025, 7, 1), 2027), Decimal('30'))
-
-    def test_no_joining_date_defaults_30(self):
-        self.assertEqual(annual_entitlement_for(None, 2026), Decimal('30'))
+from hr.leave_services import generate_year_entitlements
 
 
 class WorkingDayModelTests(TestCase):
@@ -174,10 +163,10 @@ class GeneratorTests(TestCase):
         inactive.is_active = False
         inactive.save()
 
-    def test_generates_rows_for_active_employees_with_rule(self):
+    def test_generates_flat_default_rows_for_active_employees(self):
         generate_year_entitlements(2026)
-        self.assertEqual(self._ent(self.e_new, self.annual), Decimal('25'))  # joining year
-        self.assertEqual(self._ent(self.e_old, self.annual), Decimal('30'))  # tenured
+        self.assertEqual(self._ent(self.e_new, self.annual), Decimal('30'))  # flat default
+        self.assertEqual(self._ent(self.e_old, self.annual), Decimal('30'))  # flat default
         self.assertEqual(self._ent(self.e_new, self.sick), Decimal('15'))    # flat default
         self.assertFalse(LeaveEntitlement.objects.filter(employee__iqama_number='C').exists())
 
@@ -224,6 +213,16 @@ class LeaveRecordViewTests(TestCase):
             'employee': self.emp.pk, 'leave_type': self.annual.pk,
             'start_date': '2026-07-05', 'end_date': '2026-07-09', 'days': '', 'note': ''})
         rec = LeaveRecord.objects.get(employee=self.emp)
+        self.assertEqual(rec.days, Decimal('5'))
+
+    def test_create_leave_counts_calendar_days_incl_weekend(self):
+        # Thu 2 Jul -> Mon 6 Jul = 5 calendar days (weekend counted), days blank.
+        self.client.force_login(self.admin)
+        self.client.post(reverse('hr:leave_record_create'), {
+            'employee': self.emp.pk, 'leave_type': self.annual.pk,
+            'start_date': '2026-07-02', 'end_date': '2026-07-06', 'days': '', 'note': ''})
+        rec = LeaveRecord.objects.get(employee=self.emp,
+                                      start_date=_date(2026, 7, 2))
         self.assertEqual(rec.days, Decimal('5'))
 
     def test_summary_shows_balance(self):
@@ -969,13 +968,14 @@ class LeaveTypeDaySyncTests(TestCase):
         custom.refresh_from_db()
         self.assertEqual(custom.entitled_days, Decimal('20'))  # custom value overwritten
 
-    def test_annual_type_is_excluded(self):
-        # Annual entitlements differ by joining-date policy; a flat change must NOT touch them.
+    def test_annual_type_is_synced(self):
+        # Annual now behaves like any other type: a flat change updates all its
+        # entitlements (proration policy dropped).
         a = LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=25)
         self.annual.default_annual_days = Decimal('40')
         self.annual.save()
         a.refresh_from_db()
-        self.assertEqual(a.entitled_days, Decimal('25'))  # untouched
+        self.assertEqual(a.entitled_days, Decimal('40'))  # now updated
 
     def test_no_change_leaves_entitlements_alone(self):
         e = LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.sick, year=2026, entitled_days=15)

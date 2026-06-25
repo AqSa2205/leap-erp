@@ -105,4 +105,24 @@
         </div>
     </div>
 </div>
+
+<script>
+(function(){
+    // Live calendar-day calculation for the Days field — inclusive of weekends
+    // and holidays (1st–5th = 5 days).
+    var startEl = document.getElementById('id_start_date');
+    var endEl = document.getElementById('id_end_date');
+    var daysEl = document.getElementById('id_days');
+    function calc(){
+        if (!startEl || !endEl || !daysEl || !startEl.value || !endEl.value) return;
+        var sd = new Date(startEl.value + 'T00:00:00');
+        var ed = new Date(endEl.value + 'T00:00:00');
+        if (ed < sd) return;
+        var count = Math.round((ed - sd) / 86400000) + 1;  // inclusive day span
+        daysEl.value = count;
+    }
+    if (startEl) startEl.addEventListener('change', calc);
+    if (endEl) endEl.addEventListener('change', calc);
+})();
+</script>
 {% endblock %}

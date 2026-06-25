@@ -20,10 +20,6 @@ class LeaveType(models.Model):
     def __str__(self):
         return self.name
 
-    # Annual leave is governed by the proration policy (annual_entitlement_for),
-    # not the flat day count, so its entitlements must never be flat-overwritten.
-    SYNC_EXCLUDED_CODES = {'annual'}
-
     def save(self, *args, **kwargs):
         old_days = None
         if self.pk:
@@ -33,9 +29,8 @@ class LeaveType(models.Model):
         super().save(*args, **kwargs)
         # When the day count changes, propagate it to ALL existing entitlements
         # of this type (every year, every employee) — the leave type is the
-        # source of truth. Annual is excluded (see SYNC_EXCLUDED_CODES).
-        if (old_days is not None and old_days != self.default_annual_days
-                and self.code not in self.SYNC_EXCLUDED_CODES):
+        # source of truth. Applies to every type, including Annual (flat).
+        if old_days is not None and old_days != self.default_annual_days:
             self.entitlements.update(entitled_days=self.default_annual_days)
 
 
@@ -99,12 +94,12 @@ class LeaveRecord(models.Model):
                                    'A medical certificate is required for this leave type.'})
 
     def computed_days(self):
+        """Leave is counted in calendar days, inclusive — weekends (and any
+        holidays) within the range still count (1st–5th = 5 days)."""
         from decimal import Decimal
-        from hr.models import AttendanceSettings, Holiday
-        from hr.work_calendar import count_working_days
-        weekends = AttendanceSettings.load().weekend_day_set()
-        holidays = set(Holiday.objects.filter(is_active=True).values_list('date', flat=True))
-        return Decimal(count_working_days(self.start_date, self.end_date, weekends, holidays))
+        if not self.start_date or not self.end_date or self.end_date < self.start_date:
+            return Decimal('0')
+        return Decimal((self.end_date - self.start_date).days + 1)
 
     def save(self, *args, **kwargs):
         if self.days is None:
