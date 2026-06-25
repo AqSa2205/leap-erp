@@ -39,6 +39,9 @@ class Employee(models.Model):
     work_email = models.EmailField(blank=True, verbose_name='Work Email')
     mobile_number = models.CharField(max_length=20, blank=True, verbose_name='Mobile Number')
     is_active = models.BooleanField(default=True, verbose_name='Active')
+    inactive_from = models.DateField(
+        null=True, blank=True, verbose_name='Inactive From',
+        help_text='Date the employee became inactive (today or earlier).')
     # Login account this employee record belongs to — powers the self-service
     # "My Profile" portal. Optional; auto-matched by email / employee_code and
     # settable manually by admins.

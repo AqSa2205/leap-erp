@@ -208,6 +208,7 @@ class EmployeeListView(AdminRequiredMixin, ListView):
         contract_type = self.request.GET.get('contract_type', '')
         nationality = self.request.GET.get('nationality', '')
         deployment = self.request.GET.get('deployment', '')
+        status = self.request.GET.get('status', '')
 
         if search:
             queryset = queryset.filter(
@@ -222,6 +223,10 @@ class EmployeeListView(AdminRequiredMixin, ListView):
             queryset = queryset.filter(nationality__icontains=nationality)
         if deployment:
             queryset = queryset.filter(deployment__icontains=deployment)
+        if status == 'active':
+            queryset = queryset.filter(is_active=True)
+        elif status == 'inactive':
+            queryset = queryset.filter(is_active=False)
 
         return queryset.order_by('full_name')
 

@@ -100,7 +100,10 @@
                 <div class="col-md-2">
                     {{ filter_form.deployment }}
                 </div>
-                <div class="col-md-3">
+                <div class="col-md-2">
+                    {{ filter_form.status }}
+                </div>
+                <div class="col-md-2">
                     <button type="submit" class="btn btn-primary">Filter</button>
                     {% if request.GET %}
                     <a href="{% url 'hr:employee_list' %}" class="btn btn-outline-secondary ms-1">Clear</a>
@@ -126,6 +129,7 @@
                             <th>Contract</th>
                             <th>Mobile</th>
                             <th>Status</th>
+                            <th>Inactive From</th>
                             <th width="100">Actions</th>
                         </tr>
                     </thead>
@@ -161,6 +165,9 @@
                                 <span class="badge bg-secondary">Inactive</span>
                                 {% endif %}
                             </td>
+                            <td class="small">
+                                {% if not emp.is_active and emp.inactive_from %}{{ emp.inactive_from|date:"d M Y" }}{% else %}-{% endif %}
+                            </td>
                             <td>
                                 <div class="btn-group btn-group-sm">
                                     <a href="{% url 'hr:employee_detail' emp.pk %}" class="btn btn-outline-primary" title="View">
@@ -177,7 +184,7 @@
                         </tr>
                         {% empty %}
                         <tr>
-                            <td colspan="10" class="text-center py-5">
+                            <td colspan="11" class="text-center py-5">
                                 <i class="bi bi-people display-4 text-muted"></i>
                                 <p class="text-muted mt-3">No employees found.</p>
                                 <a href="{% url 'hr:employee_create' %}" class="btn btn-primary me-2">

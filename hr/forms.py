@@ -11,10 +11,12 @@ class EmployeeForm(forms.ModelForm):
             'full_name', 'designation', 'qualification',
             'date_of_birth', 'joining_date', 'nationality', 'marital_status',
             'blood_group', 'personal_email', 'documents_link', 'deployment',
-            'contract_type', 'work_email', 'mobile_number', 'is_active', 'user',
+            'contract_type', 'work_email', 'mobile_number',
+            'is_active', 'inactive_from', 'user',
         ]
         widgets = {
             'user': forms.Select(attrs={'class': 'form-select'}),
+            'inactive_from': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
             'iqama_number': forms.TextInput(attrs={'class': 'form-control'}),
             'iqama_issued_on': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
             'iqama_expires_on': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
@@ -39,6 +41,7 @@ class EmployeeForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        from django.utils import timezone
         from accounts.models import User
         self.fields['user'].required = False
         self.fields['user'].label = 'Linked Login Account'
@@ -47,8 +50,14 @@ class EmployeeForm(forms.ModelForm):
             'portal). Leave blank if none.')
         self.fields['user'].queryset = User.objects.filter(
             is_active=True).order_by('username')
+        # Inactive-from: optional, and the date picker can't go past today.
+        self.fields['inactive_from'].required = False
+        self.fields['inactive_from'].label = 'Inactive From'
+        self.fields['inactive_from'].widget.attrs['max'] = (
+            timezone.localdate().isoformat())
 
     def clean(self):
+        from django.utils import timezone
         cleaned = super().clean()
         for issue, expiry, label in (
             ('iqama_issued_on', 'iqama_expires_on', 'Iqama'),
@@ -58,6 +67,18 @@ class EmployeeForm(forms.ModelForm):
             expires = cleaned.get(expiry)
             if issued and expires and expires < issued:
                 self.add_error(expiry, f'{label} expiry date cannot be before its issue date.')
+
+        # Inactive-from is only meaningful when the employee is inactive.
+        today = timezone.localdate()
+        inactive_from = cleaned.get('inactive_from')
+        if cleaned.get('is_active'):
+            cleaned['inactive_from'] = None          # active -> no inactive date
+        else:
+            if not inactive_from:
+                cleaned['inactive_from'] = today      # default to today
+            elif inactive_from > today:
+                self.add_error('inactive_from',
+                               'Inactive-from date cannot be in the future.')
         return cleaned
 
 
@@ -87,6 +108,11 @@ class EmployeeFilterForm(forms.Form):
             'class': 'form-control',
             'placeholder': 'Deployment...',
         }),
+    )
+    status = forms.ChoiceField(
+        required=False,
+        choices=[('', 'All Statuses'), ('active', 'Active'), ('inactive', 'Inactive')],
+        widget=forms.Select(attrs={'class': 'form-select'}),
     )
 
 

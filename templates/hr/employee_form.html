@@ -134,8 +134,21 @@
                                 <label class="form-label">Status</label>
                                 <div class="form-check mt-2">
                                     {{ form.is_active }}
-                                    <label class="form-check-label">Active Employee</label>
+                                    <label class="form-check-label" for="id_is_active">Active Employee</label>
                                 </div>
+                                <div class="mt-2" id="inactive-from-wrap">
+                                    <label class="form-label small text-muted mb-1">Inactive From</label>
+                                    {{ form.inactive_from }}
+                                    {% if form.inactive_from.errors %}<div class="text-danger small">{{ form.inactive_from.errors.0 }}</div>{% endif %}
+                                </div>
+                                <script>
+                                (function(){
+                                    var cb = document.getElementById('id_is_active');
+                                    var wrap = document.getElementById('inactive-from-wrap');
+                                    function sync(){ if (cb && wrap) wrap.style.display = cb.checked ? 'none' : ''; }
+                                    if (cb){ cb.addEventListener('change', sync); sync(); }
+                                })();
+                                </script>
                             </div>
                         </div>
 

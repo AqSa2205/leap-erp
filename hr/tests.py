@@ -1145,3 +1145,84 @@ class LinkEmployeeUsersCommandTests(TestCase):
         call_command('link_employee_users')
         contender.refresh_from_db()
         self.assertIsNone(contender.user)  # u already taken
+
+
+class EmployeeInactiveFromTests(TestCase):
+    """Marking an employee inactive captures an 'inactive from' date (defaulting
+    to today, never in the future); reactivating clears it; the list filters by
+    status and the date picker is capped at today."""
+
+    def _data(self, **over):
+        d = {'iqama_number': 'IQ-X', 'full_name': 'Test Emp', 'user': '', 'is_active': 'on'}
+        d.update(over)
+        return d
+
+    def test_marking_inactive_defaults_date_to_today(self):
+        from django.utils import timezone
+        from hr.forms import EmployeeForm
+        emp = Employee.objects.create(full_name='X', iqama_number='IQ-1', is_active=True)
+        data = self._data(iqama_number='IQ-1', full_name='X')
+        data.pop('is_active')  # unchecked -> inactive
+        f = EmployeeForm(data=data, instance=emp)
+        self.assertTrue(f.is_valid(), f.errors)
+        f.save()
+        emp.refresh_from_db()
+        self.assertFalse(emp.is_active)
+        self.assertEqual(emp.inactive_from, timezone.localdate())
+
+    def test_inactive_with_past_date_kept(self):
+        from datetime import date
+        from hr.forms import EmployeeForm
+        emp = Employee.objects.create(full_name='Y', iqama_number='IQ-2', is_active=True)
+        data = self._data(iqama_number='IQ-2', full_name='Y', inactive_from='2025-01-15')
+        data.pop('is_active')
+        f = EmployeeForm(data=data, instance=emp)
+        self.assertTrue(f.is_valid(), f.errors)
+        f.save()
+        emp.refresh_from_db()
+        self.assertEqual(emp.inactive_from, date(2025, 1, 15))
+
+    def test_future_inactive_date_rejected(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from hr.forms import EmployeeForm
+        emp = Employee.objects.create(full_name='Z', iqama_number='IQ-3', is_active=True)
+        future = (timezone.localdate() + timedelta(days=5)).isoformat()
+        data = self._data(iqama_number='IQ-3', full_name='Z', inactive_from=future)
+        data.pop('is_active')
+        f = EmployeeForm(data=data, instance=emp)
+        self.assertFalse(f.is_valid())
+        self.assertIn('inactive_from', f.errors)
+
+    def test_reactivating_clears_inactive_from(self):
+        from datetime import date
+        from hr.forms import EmployeeForm
+        emp = Employee.objects.create(full_name='W', iqama_number='IQ-4',
+                                      is_active=False, inactive_from=date(2025, 1, 1))
+        f = EmployeeForm(data=self._data(iqama_number='IQ-4', full_name='W', is_active='on'),
+                         instance=emp)
+        self.assertTrue(f.is_valid(), f.errors)
+        f.save()
+        emp.refresh_from_db()
+        self.assertTrue(emp.is_active)
+        self.assertIsNone(emp.inactive_from)
+
+    def test_date_picker_max_is_today(self):
+        from django.utils import timezone
+        from hr.forms import EmployeeForm
+        f = EmployeeForm()
+        self.assertEqual(f.fields['inactive_from'].widget.attrs.get('max'),
+                         timezone.localdate().isoformat())
+
+    def test_list_filters_by_status(self):
+        sa, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        admin = User.objects.create_user('hradmin', password='x')
+        admin.role = sa
+        admin.save()
+        Employee.objects.create(full_name='Active One', iqama_number='IQ-AC', is_active=True)
+        Employee.objects.create(full_name='Inactive One', iqama_number='IQ-IN', is_active=False)
+        self.client.force_login(admin)
+        r = self.client.get(reverse('hr:employee_list'), {'status': 'inactive'})
+        names = [e.full_name for e in r.context['employees']]
+        self.assertIn('Inactive One', names)
+        self.assertNotIn('Active One', names)
