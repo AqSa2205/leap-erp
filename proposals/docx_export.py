@@ -935,6 +935,10 @@ def generate_proposal_docx(proposal):
     # Region
     textbox_replacements['UNITED KINGDOM'] = proposal.get_region_display_name().upper()
 
+    # Company entity in the header — changes with the region (LNUK -> Global,
+    # LNKSA -> Arabia, LNIRL -> Ireland).
+    textbox_replacements['LEAP Networks Global Ltd.'] = proposal.get_company_name()
+
     # ── Exact-match replacements (initials — only when the entire
     #    text box content equals the placeholder) ──────────────
     exact_replacements = {}

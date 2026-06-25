@@ -13,15 +13,18 @@ class ProposalDocxExportTests(TestCase):
     <span style="...">) must be rendered as formatted text in the exported DOCX,
     not dumped as literal HTML."""
 
-    def _proposal(self, **content):
+    def _proposal(self, ref='TP-EXPORT-1', **content):
         return TechnicalProposal.objects.create(
-            title='T', proposal_reference='TP-EXPORT-1', client_name='ACME',
+            title='T', proposal_reference=ref, client_name='ACME',
             revision_date=date(2026, 1, 1), prepared_by_initials='AJ', **content)
 
-    def _doc_xml(self, proposal):
+    def _part_xml(self, proposal, part='word/document.xml'):
         resp = generate_proposal_docx(proposal)
         with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
-            return z.read('word/document.xml').decode('utf-8')
+            return z.read(part).decode('utf-8')
+
+    def _doc_xml(self, proposal):
+        return self._part_xml(proposal)
 
     def test_word_pasted_html_is_rendered_not_dumped_raw(self):
         html = (
@@ -41,3 +44,14 @@ class ProposalDocxExportTests(TestCase):
     def test_plain_text_still_renders(self):
         xml = self._doc_xml(self._proposal(covering_letter='Just plain text here.'))
         self.assertIn('Just plain text here.', xml)
+
+    def test_header_company_name_is_arabia_for_ksa(self):
+        h = self._part_xml(self._proposal(ref='TP-KSA', region_entity='LNKSA'),
+                           'word/header1.xml')
+        self.assertIn('Arabia', h)        # LEAP Networks Arabia
+        self.assertNotIn('Global', h)     # not the UK entity
+
+    def test_header_company_name_is_global_for_uk(self):
+        h = self._part_xml(self._proposal(ref='TP-UK', region_entity='LNUK'),
+                           'word/header1.xml')
+        self.assertIn('Global', h)        # LEAP Networks Global Ltd. (unchanged)

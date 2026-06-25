@@ -41,9 +41,8 @@ class TechnicalProposal(models.Model):
         ('submitted', 'Submitted'),
     ]
     REGION_CHOICES = [
-        ('LNUK', 'United Kingdom'),
-        ('LNIRL', 'Ireland'),
-        ('LNKSA', 'Saudi Arabia'),
+        ('LNUK', 'Global'),
+        ('LNKSA', 'Arabia'),
     ]
 
     project = models.ForeignKey(
@@ -95,6 +94,15 @@ class TechnicalProposal(models.Model):
     def get_region_display_name(self):
         return dict(self.REGION_CHOICES).get(self.region_entity, self.region_entity)
 
+    # Company entity shown in the document header, by region.
+    COMPANY_NAMES = {
+        'LNUK': 'LEAP Networks Global Ltd.',
+        'LNKSA': 'LEAP Networks Arabia',
+    }
+
+    def get_company_name(self):
+        return self.COMPANY_NAMES.get(self.region_entity, 'LEAP Networks Global Ltd.')
+
     SECTION_FIELDS = [
         ('covering_letter', 'Covering Letter'),
         ('executive_summary', 'Executive Summary'),
@@ -139,9 +147,8 @@ class PrequalificationDocument(models.Model):
         ('submitted', 'Submitted'),
     ]
     REGION_CHOICES = [
-        ('LNUK', 'United Kingdom'),
-        ('LNIRL', 'Ireland'),
-        ('LNKSA', 'Saudi Arabia'),
+        ('LNUK', 'Global'),
+        ('LNKSA', 'Arabia'),
     ]
 
     project = models.ForeignKey(
