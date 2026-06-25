@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import copy
 import zipfile
 from lxml import etree
@@ -16,6 +17,14 @@ WP_NS = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
 PIC_NS = 'http://schemas.openxmlformats.org/drawingml/2006/picture'
 REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 XML_SPACE = '{http://www.w3.org/XML/1998/namespace}space'
+
+# Detect rich-text HTML (from TinyMCE / Word paste) regardless of tag
+# attributes. Matches opening/closing tags of known HTML elements with a word
+# boundary, so a stray "<" in plain text won't false-positive.
+_HTML_TAG_RE = re.compile(
+    r'</?(?:p|div|span|strong|b|em|i|u|s|br|hr|table|tr|td|th|thead|tbody|'
+    r'ul|ol|li|img|figure|figcaption|h[1-6]|a|sub|sup|blockquote|pre|code)\b',
+    re.IGNORECASE)
 
 
 def _find_template():
@@ -361,8 +370,10 @@ def _replace_body_sections(xml_bytes, proposal, image_registry):
 
         heading_para = children[start_pos]
 
-        # Check if content is HTML (from TinyMCE)
-        if '<p>' in content or '<table' in content or '<ul' in content or '<ol' in content or '<img' in content or '<figure' in content:
+        # Check if content is HTML (from TinyMCE). Match real tags regardless of
+        # attributes — pasting from Word yields <p class="Para">, <span ...>,
+        # etc., which a bare "<p>" check would miss (dumping raw HTML).
+        if _HTML_TAG_RE.search(content):
             _insert_html_content(body, heading_para, content, pPr_template, rPr_template, image_registry)
         else:
             for line in content.split('\n'):
