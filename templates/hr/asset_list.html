@@ -108,7 +108,10 @@
                 <div class="col-md-2">
                     {{ filter_form.in_stock }}
                 </div>
-                <div class="col-md-3">
+                <div class="col-md-2">
+                    {{ filter_form.status }}
+                </div>
+                <div class="col-md-2">
                     <button type="submit" class="btn btn-primary">Filter</button>
                     {% if request.GET %}
                     <a href="{% url 'hr:asset_list' %}" class="btn btn-outline-secondary ms-1">Clear</a>
@@ -177,21 +180,35 @@
                             <td>{{ asset.purchase_date|date:"d M Y"|default:"-" }}</td>
                             <td>{% if asset.price %}{{ asset.price|floatformat:2|intcomma }}{% else %}-{% endif %}</td>
                             <td>
-                                {% if asset.in_stock %}
+                                {% if asset.is_decommissioned %}
+                                <span class="badge bg-dark" title="{{ asset.decommission_reason }}{% if asset.decommissioned_on %} ({{ asset.decommissioned_on|date:'d M Y' }}){% endif %}">Out of Service</span>
+                                {% elif asset.in_stock %}
                                 <span class="badge bg-success">In Stock</span>
                                 {% else %}
                                 <span class="badge bg-secondary">Assigned</span>
                                 {% endif %}
                             </td>
                             <td>
-                                <div class="btn-group btn-group-sm">
-                                    <a href="{% url 'hr:asset_detail' asset.pk %}" class="btn btn-outline-primary" title="View">
+                                <div class="d-inline-flex flex-nowrap gap-1">
+                                    <a href="{% url 'hr:asset_detail' asset.pk %}" class="btn btn-sm btn-outline-primary" title="View">
                                         <i class="bi bi-eye"></i>
                                     </a>
-                                    <a href="{% url 'hr:asset_update' asset.pk %}" class="btn btn-outline-secondary" title="Edit">
+                                    <a href="{% url 'hr:asset_update' asset.pk %}" class="btn btn-sm btn-outline-secondary" title="Edit">
                                         <i class="bi bi-pencil"></i>
                                     </a>
-                                    <a href="{% url 'hr:asset_delete' asset.pk %}" class="btn btn-outline-danger" title="Delete">
+                                    {% if asset.is_decommissioned %}
+                                    <form method="post" action="{% url 'hr:asset_restore' asset.pk %}" class="d-inline">
+                                        {% csrf_token %}
+                                        <button type="submit" class="btn btn-sm btn-outline-success" title="Restore to service"><i class="bi bi-arrow-counterclockwise"></i></button>
+                                    </form>
+                                    {% else %}
+                                    <form method="post" action="{% url 'hr:asset_decommission' asset.pk %}" class="d-inline"
+                                          onsubmit="return confirm('Mark {{ asset.asset_name|escapejs }} as out of service (dead / no longer usable)? It will be removed from stock.');">
+                                        {% csrf_token %}
+                                        <button type="submit" class="btn btn-sm btn-outline-dark" title="Mark out of service"><i class="bi bi-x-octagon"></i></button>
+                                    </form>
+                                    {% endif %}
+                                    <a href="{% url 'hr:asset_delete' asset.pk %}" class="btn btn-sm btn-outline-danger" title="Delete">
                                         <i class="bi bi-trash"></i>
                                     </a>
                                 </div>

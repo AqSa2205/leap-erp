@@ -131,6 +131,7 @@ class AssetForm(forms.ModelForm):
             'handover_date', 'handover_by', 'condition', 'return_date',
             'return_to', 'quantity', 'purchase_date', 'price',
             'planned_life', 'in_stock',
+            'is_decommissioned', 'decommissioned_on', 'decommission_reason',
         ]
         widgets = {
             'asset_name': forms.TextInput(attrs={'class': 'form-control'}),
@@ -151,7 +152,32 @@ class AssetForm(forms.ModelForm):
             'price': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.01'}),
             'planned_life': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'e.g. 3 Years'}),
             'in_stock': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+            'is_decommissioned': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+            'decommissioned_on': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'decommission_reason': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'e.g. Dead / beyond repair'}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from django.utils import timezone
+        self.fields['decommissioned_on'].required = False
+        self.fields['decommission_reason'].required = False
+        self.fields['decommissioned_on'].widget.attrs['max'] = timezone.localdate().isoformat()
+
+    def clean(self):
+        from django.utils import timezone
+        cleaned = super().clean()
+        today = timezone.localdate()
+        if cleaned.get('is_decommissioned'):
+            cleaned['in_stock'] = False  # out of service can never be in stock
+            if not cleaned.get('decommissioned_on'):
+                cleaned['decommissioned_on'] = today
+            elif cleaned['decommissioned_on'] > today:
+                self.add_error('decommissioned_on', 'Date cannot be in the future.')
+        else:
+            cleaned['decommissioned_on'] = None
+            cleaned['decommission_reason'] = ''
+        return cleaned
 
 
 class AssetFilterForm(forms.Form):
@@ -177,6 +203,12 @@ class AssetFilterForm(forms.Form):
     in_stock = forms.ChoiceField(
         required=False,
         choices=[('', 'All'), ('true', 'In Stock'), ('false', 'Assigned')],
+        widget=forms.Select(attrs={'class': 'form-select'}),
+    )
+    status = forms.ChoiceField(
+        required=False,
+        choices=[('', 'All Statuses'), ('in_service', 'In Service'),
+                 ('decommissioned', 'Out of Service')],
         widget=forms.Select(attrs={'class': 'form-select'}),
     )
 

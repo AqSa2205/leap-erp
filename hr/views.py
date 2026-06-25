@@ -587,6 +587,7 @@ class AssetListView(AdminRequiredMixin, ListView):
         asset_type = self.request.GET.get('asset_type', '')
         condition = self.request.GET.get('condition', '')
         in_stock = self.request.GET.get('in_stock', '')
+        status = self.request.GET.get('status', '')
 
         if search:
             queryset = queryset.filter(
@@ -603,6 +604,10 @@ class AssetListView(AdminRequiredMixin, ListView):
             queryset = queryset.filter(in_stock=True)
         elif in_stock == 'false':
             queryset = queryset.filter(in_stock=False)
+        if status == 'decommissioned':
+            queryset = queryset.filter(is_decommissioned=True)
+        elif status == 'in_service':
+            queryset = queryset.filter(is_decommissioned=False)
 
         return queryset.order_by('asset_name')
 
@@ -687,6 +692,46 @@ class AssetDeleteView(AdminRequiredMixin, DeleteView):
     def delete(self, request, *args, **kwargs):
         messages.success(request, 'Asset deleted successfully.')
         return super().delete(request, *args, **kwargs)
+
+
+@login_required
+@require_POST
+def asset_decommission(request, pk):
+    """Mark an asset as out of service (dead / no longer usable). It can never
+    be in stock once decommissioned."""
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:asset_list')
+    from django.utils import timezone
+    asset = get_object_or_404(Asset, pk=pk)
+    asset.is_decommissioned = True
+    asset.in_stock = False  # out of service can't be in stock
+    if not asset.decommissioned_on:
+        asset.decommissioned_on = timezone.localdate()
+    reason = (request.POST.get('reason') or '').strip()
+    if reason:
+        asset.decommission_reason = reason
+    asset.save(update_fields=['is_decommissioned', 'in_stock',
+                              'decommissioned_on', 'decommission_reason', 'updated_at'])
+    messages.success(request, f'"{asset.asset_name}" marked out of service.')
+    return redirect(request.POST.get('next') or 'hr:asset_list')
+
+
+@login_required
+@require_POST
+def asset_restore(request, pk):
+    """Restore a decommissioned asset back into service."""
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:asset_list')
+    asset = get_object_or_404(Asset, pk=pk)
+    asset.is_decommissioned = False
+    asset.decommissioned_on = None
+    asset.decommission_reason = ''
+    asset.save(update_fields=['is_decommissioned', 'decommissioned_on',
+                              'decommission_reason', 'updated_at'])
+    messages.success(request, f'"{asset.asset_name}" restored to service.')
+    return redirect(request.POST.get('next') or 'hr:asset_list')
 
 
 # ─── Asset Assignment (Issue / Return) ───────────────────────────────────────

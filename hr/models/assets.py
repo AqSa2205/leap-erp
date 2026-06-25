@@ -26,6 +26,14 @@ class Asset(models.Model):
     price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, verbose_name='Price (SAR)')
     planned_life = models.CharField(max_length=50, blank=True, verbose_name='Planned Asset Life')
     in_stock = models.BooleanField(default=False, verbose_name='In Stock?')
+    # Dead / retired laptops etc. — kept for records but can never be in stock.
+    is_decommissioned = models.BooleanField(
+        default=False, verbose_name='Out of Service',
+        help_text='Dead / no longer usable. Kept for records but never in stock.')
+    decommissioned_on = models.DateField(
+        null=True, blank=True, verbose_name='Out-of-Service Date')
+    decommission_reason = models.CharField(
+        max_length=255, blank=True, verbose_name='Reason')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     created_by = models.ForeignKey(

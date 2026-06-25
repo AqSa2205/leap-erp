@@ -138,6 +138,39 @@
                             </div>
                         </div>
 
+                        <!-- Out of service / decommissioned -->
+                        <div class="row align-items-start">
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Out of Service</label>
+                                <div class="form-check mt-2">
+                                    {{ form.is_decommissioned }}
+                                    <label class="form-check-label" for="id_is_decommissioned">Dead / no longer usable</label>
+                                </div>
+                                <div class="form-text">Removes it from stock; kept for records.</div>
+                            </div>
+                            <div class="col-md-9" id="decommission-fields">
+                                <div class="row">
+                                    <div class="col-md-4 mb-3">
+                                        <label class="form-label">Out-of-Service Date</label>
+                                        {{ form.decommissioned_on }}
+                                        {% if form.decommissioned_on.errors %}<div class="text-danger small">{{ form.decommissioned_on.errors.0 }}</div>{% endif %}
+                                    </div>
+                                    <div class="col-md-8 mb-3">
+                                        <label class="form-label">Reason</label>
+                                        {{ form.decommission_reason }}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <script>
+                        (function(){
+                            var cb = document.getElementById('id_is_decommissioned');
+                            var wrap = document.getElementById('decommission-fields');
+                            function sync(){ if (cb && wrap) wrap.style.display = cb.checked ? '' : 'none'; }
+                            if (cb){ cb.addEventListener('change', sync); sync(); }
+                        })();
+                        </script>
+
                         <!-- Submit Buttons -->
                         <div class="d-flex justify-content-end gap-2 border-top pt-3">
                             <a href="{% url 'hr:asset_list' %}" class="btn btn-outline-secondary">Cancel</a>

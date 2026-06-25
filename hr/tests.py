@@ -1238,3 +1238,55 @@ class EmployeeInactiveFromTests(TestCase):
         names = [e.full_name for e in r.context['employees']]
         self.assertIn('Inactive One', names)
         self.assertNotIn('Active One', names)
+
+
+class AssetDecommissionTests(TestCase):
+    """Assets can be marked out of service (dead) — removed from stock, kept for
+    records — and restored. Listable via the status filter."""
+
+    def setUp(self):
+        from hr.models import Asset
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.admin = User.objects.create_user('aadm', password='x')
+        self.admin.role = role
+        self.admin.save()
+        self.asset = Asset.objects.create(asset_name='Old Laptop', in_stock=True)
+        self.client.force_login(self.admin)
+
+    def test_decommission_marks_and_removes_from_stock(self):
+        from django.utils import timezone
+        self.client.post(reverse('hr:asset_decommission', kwargs={'pk': self.asset.pk}),
+                         {'reason': 'Dead'})
+        self.asset.refresh_from_db()
+        self.assertTrue(self.asset.is_decommissioned)
+        self.assertFalse(self.asset.in_stock)  # can't be in stock
+        self.assertEqual(self.asset.decommissioned_on, timezone.localdate())
+        self.assertEqual(self.asset.decommission_reason, 'Dead')
+
+    def test_restore_brings_back(self):
+        from datetime import date
+        self.asset.is_decommissioned = True
+        self.asset.decommissioned_on = date(2025, 1, 1)
+        self.asset.in_stock = False
+        self.asset.save()
+        self.client.post(reverse('hr:asset_restore', kwargs={'pk': self.asset.pk}))
+        self.asset.refresh_from_db()
+        self.assertFalse(self.asset.is_decommissioned)
+        self.assertIsNone(self.asset.decommissioned_on)
+
+    def test_form_decommission_forces_out_of_stock(self):
+        from hr.forms import AssetForm
+        f = AssetForm(data={'asset_name': 'X', 'quantity': '1', 'in_stock': 'on',
+                            'is_decommissioned': 'on'}, instance=self.asset)
+        self.assertTrue(f.is_valid(), f.errors)
+        obj = f.save()
+        self.assertTrue(obj.is_decommissioned)
+        self.assertFalse(obj.in_stock)  # in_stock forced off
+
+    def test_list_filters_decommissioned(self):
+        from hr.models import Asset
+        Asset.objects.create(asset_name='Dead One', is_decommissioned=True)
+        r = self.client.get(reverse('hr:asset_list'), {'status': 'decommissioned'})
+        names = [a.asset_name for a in r.context['assets']]
+        self.assertIn('Dead One', names)
+        self.assertNotIn('Old Laptop', names)
