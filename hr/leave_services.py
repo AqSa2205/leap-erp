@@ -18,3 +18,18 @@ def generate_year_entitlements(year, actor=None):
             if was_created:
                 created += 1
     return created
+
+
+def reapply_leave_type_defaults(year=None):
+    """Force every entitlement's day count to match its leave type's current
+    default_annual_days. Overwrites custom values (the leave type is the source
+    of truth). Optionally scoped to a single `year`. Returns rows updated.
+    """
+    from hr.models import LeaveType, LeaveEntitlement
+    updated = 0
+    for lt in LeaveType.objects.all():
+        qs = LeaveEntitlement.objects.filter(leave_type=lt)
+        if year is not None:
+            qs = qs.filter(year=year)
+        updated += qs.update(entitled_days=lt.default_annual_days)
+    return updated

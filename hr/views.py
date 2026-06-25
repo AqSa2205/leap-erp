@@ -1589,8 +1589,15 @@ def entitlement_year(request):
     year = _int_or(request.GET.get('year'), timezone.now().year)
     if request.method == 'POST':
         post_year = _int_or(request.POST.get('year'), year)
-        created = generate_year_entitlements(post_year, actor=request.user)
-        messages.success(request, f'Generated {created} entitlement row(s) for {post_year}.')
+        if request.POST.get('action') == 'reapply':
+            from hr.leave_services import reapply_leave_type_defaults
+            updated = reapply_leave_type_defaults(post_year)
+            messages.success(
+                request,
+                f'Re-applied leave-type day counts to {updated} entitlement(s) for {post_year}.')
+        else:
+            created = generate_year_entitlements(post_year, actor=request.user)
+            messages.success(request, f'Generated {created} entitlement row(s) for {post_year}.')
         return redirect(f"{reverse('hr:entitlement_year')}?year={post_year}")
     entitlements = (LeaveEntitlement.objects.filter(year=year)
                     .select_related('employee', 'leave_type')

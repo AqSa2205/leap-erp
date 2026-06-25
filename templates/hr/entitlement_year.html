@@ -34,13 +34,28 @@
                         Creates missing entitlement rows for all active employees based on their leave types and joining date.
                         <strong>Existing rows are not overwritten.</strong>
                     </p>
-                    <form method="post" class="d-flex gap-2 align-items-center">
-                        {% csrf_token %}
-                        <input type="number" name="year" value="{{ year }}" class="form-control" min="2000" max="2100" style="max-width:120px;">
-                        <button type="submit" class="btn btn-primary text-nowrap">
-                            <i class="bi bi-magic"></i> Generate entitlements
-                        </button>
-                    </form>
+                    <div class="d-flex gap-2 align-items-center flex-wrap">
+                        <form method="post" class="d-flex gap-2 align-items-center">
+                            {% csrf_token %}
+                            <input type="number" name="year" value="{{ year }}" class="form-control" min="2000" max="2100" style="max-width:120px;">
+                            <button type="submit" class="btn btn-primary text-nowrap">
+                                <i class="bi bi-magic"></i> Generate entitlements
+                            </button>
+                        </form>
+                        <form method="post" class="d-inline"
+                              onsubmit="return confirm('Re-apply each leave type\'s current day count to ALL entitlements for {{ year }}? This overwrites any custom per-employee values.');">
+                            {% csrf_token %}
+                            <input type="hidden" name="year" value="{{ year }}">
+                            <input type="hidden" name="action" value="reapply">
+                            <button type="submit" class="btn btn-outline-danger text-nowrap">
+                                <i class="bi bi-arrow-repeat"></i> Re-apply leave-type counts
+                            </button>
+                        </form>
+                    </div>
+                    <p class="text-muted small mb-0 mt-2">
+                        <strong>Re-apply</strong> forces every entitlement to match its leave type's current number
+                        (e.g. Sick = 12) — use it if a count change didn't reflect.
+                    </p>
                 </div>
             </div>
         </div>

@@ -236,6 +236,18 @@ class LeaveRecordViewTests(TestCase):
         self.client.post(reverse('hr:entitlement_year'), {'year': '2026'})
         self.assertTrue(LeaveEntitlement.objects.filter(employee=self.emp, year=2026).exists())
 
+    def test_reapply_forces_entitlements_to_leave_type_count(self):
+        sick, _ = LeaveType.objects.update_or_create(
+            code='sick', defaults={'name': 'Sick', 'default_annual_days': Decimal('12')})
+        # An entitlement that drifted to 30 (e.g. generated before the count change).
+        ent = LeaveEntitlement.objects.create(
+            employee=self.emp, leave_type=sick, year=2026, entitled_days=Decimal('30'))
+        self.client.force_login(self.admin)
+        self.client.post(reverse('hr:entitlement_year'),
+                         {'year': '2026', 'action': 'reapply'})
+        ent.refresh_from_db()
+        self.assertEqual(ent.entitled_days, Decimal('12'))  # snapped to the type count
+
 
 from datetime import time
 from hr.models import AttendanceRecord
