@@ -1047,8 +1047,7 @@
         </ul>
         {% endif %}
 
-        {# ─── ADMINISTRATION (includes Contacts/Database) ─── #}
-        {% if user.is_super_admin_user or user.is_admin_user %}
+        {# ─── DEV TRACKING (own section — admins, super admins, AI Head) ─── #}
         {% if user|can:'devtracking.admin' %}
         <div class="nav-section" data-section="devtracking"><span>Dev Tracking</span><i class="bi bi-chevron-down section-chevron"></i></div>
         <ul class="nav flex-column nav-section-items" data-section-items="devtracking">
@@ -1085,6 +1084,8 @@
         </ul>
         {% endif %}
 
+        {# ─── ADMINISTRATION (includes Contacts/Database) ─── #}
+        {% if user.is_super_admin_user or user.is_admin_user %}
         <div class="nav-section" data-section="administration"><span>Administration</span><i class="bi bi-chevron-down section-chevron"></i></div>
         <ul class="nav flex-column nav-section-items" data-section-items="administration">
             {% if user.is_super_admin_user %}
