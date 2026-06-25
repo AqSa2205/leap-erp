@@ -835,7 +835,7 @@
                     <i class="bi bi-person-badge"></i> <span>My Profile</span>
                 </a>
             </li>
-            {% if user|can:'devtracking.mywork' %}
+            {% if user.is_ai_developer_user or user.is_ai_head_user %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'my_tasks' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:my_tasks' %}" data-title="My Tasks">
                     <i class="bi bi-list-check"></i> <span>My Tasks</span>
