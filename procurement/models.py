@@ -35,6 +35,20 @@ class PurchaseOrder(models.Model):
         ('DAT', 'DAT - Delivered at Terminal'),
     ]
 
+    CURRENCY_CHOICES = [
+        ('SAR', 'SAR — Saudi Riyal'),
+        ('USD', 'USD — US Dollar'),
+        ('EUR', 'EUR — Euro'),
+        ('AED', 'AED — UAE Dirham'),
+    ]
+    # Fractional unit name per currency, for the "amount in words" line.
+    CURRENCY_FRACTIONS = {
+        'SAR': ('Halala', 'Halalas'),
+        'USD': ('Cent', 'Cents'),
+        'EUR': ('Cent', 'Cents'),
+        'AED': ('Fils', 'Fils'),
+    }
+
     # Suggested values for the `system` datalist on the PO form.
     # Stored as free text so users can pick from these or type their own.
     SYSTEM_SUGGESTIONS = [
@@ -83,6 +97,10 @@ class PurchaseOrder(models.Model):
     delivery_location = models.CharField(max_length=500, blank=True, verbose_name="Delivery Location")
 
     # Financial
+    currency = models.CharField(
+        max_length=3, choices=CURRENCY_CHOICES, default='SAR',
+        verbose_name="Currency",
+    )
     discount_rate = models.DecimalField(
         max_digits=5, decimal_places=2, default=Decimal('0'),
         verbose_name="Discount %", help_text="e.g. 5 for 5%"

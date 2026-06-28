@@ -37,8 +37,13 @@
     .totals-card .total-row:last-child { border-bottom: none; }
     .totals-card .grand-total { background: linear-gradient(135deg, #C41E3A 0%, #a01830 100%); color: white; border-radius: 0 0 12px 12px; padding: 12px 16px; }
     .line-item-table th { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; color: #C41E3A; border-bottom: 2px solid #C41E3A !important; }
-    .line-item-table td { vertical-align: middle; font-size: 0.9rem; }
+    /* Top-align so multi-line descriptions read cleanly; wrap long text and
+       break very long unbroken strings so nothing overflows the column. */
+    .line-item-table td { vertical-align: top; font-size: 0.9rem; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
     .line-item-table tbody tr:hover { background: rgba(196,30,58,0.04); }
+    /* Long text stays fully visible; an extremely long cell caps its height
+       and scrolls instead of stretching the whole row off the page. */
+    .line-item-table .cell-scroll { max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
     .tc-section { background: #f8f9fa; border-radius: 12px; padding: 1.5rem; }
     .export-btn-group .btn { border-radius: 8px; padding: 6px 14px; font-size: 0.82rem; font-weight: 600; }
 </style>
@@ -80,6 +85,7 @@
                             <button type="button" class="btn btn-outline-light disabled" disabled title="Locked — pending {{ po.current_stage.label }}"><i class="bi bi-lock me-1"></i>Excel</button>
                             <button type="button" class="btn btn-outline-light disabled" disabled title="Locked — pending {{ po.current_stage.label }}"><i class="bi bi-lock me-1"></i>PDF</button>
                             {% endif %}
+                            <a href="{% url 'procurement:po_export_pdf_unpriced' po.pk %}" target="_blank" class="btn btn-outline-light" title="PDF without any pricing — safe to share scope only"><i class="bi bi-file-earmark-pdf me-1"></i>Unpriced PDF</a>
                             <a href="{% url 'procurement:dn_create_from_po' po.pk %}" class="btn btn-outline-light"><i class="bi bi-truck me-1"></i>Delivery Note</a>
                             <a href="{% url 'procurement:po_update' po.pk %}" class="btn btn-light text-danger"><i class="bi bi-pencil me-1"></i>Edit</a>
                             <a href="{% url 'procurement:po_delete' po.pk %}" class="btn btn-outline-light text-danger border-danger"><i class="bi bi-trash"></i></a>
@@ -151,7 +157,7 @@
                         {% endif %}
                     </h6>
                     <small class="text-muted">
-                        Total: <strong>SAR {{ po.total_value|floatformat:2|intcomma }}</strong>
+                        Total: <strong>{{ po.currency }} {{ po.total_value|floatformat:2|intcomma }}</strong>
                         {% if po.requires_ceo_approval %}
                         <span class="badge bg-danger-subtle text-danger ms-1">≥ 1M — CEO required</span>
                         {% else %}
@@ -284,8 +290,8 @@
                                             <th>Make/Model</th>
                                             <th class="text-end">Qty</th>
                                             <th>UOM</th>
-                                            <th class="text-end">Rate</th>
-                                            <th class="text-end">Total</th>
+                                            <th class="text-end">Rate ({{ po.currency }})</th>
+                                            <th class="text-end">Total ({{ po.currency }})</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -294,8 +300,10 @@
                                             <td class="text-muted">{{ item.serial_number }}</td>
                                             <td>{% if item.system %}<span class="badge bg-secondary">{{ item.system }}</span>{% else %}<span class="text-muted small">—</span>{% endif %}</td>
                                             <td>
-                                                <strong>{{ item.description }}</strong>
-                                                {% if item.remarks %}<br><small class="text-muted">{{ item.remarks }}</small>{% endif %}
+                                                <div class="cell-scroll">
+                                                    <strong>{{ item.description }}</strong>
+                                                    {% if item.remarks %}<br><small class="text-muted">{{ item.remarks }}</small>{% endif %}
+                                                </div>
                                             </td>
                                             <td><small>{{ item.make_model|default:"-" }}</small></td>
                                             <td class="text-end">{{ item.quantity|floatformat:0 }}</td>
@@ -338,7 +346,7 @@
                                 <span class="fw-semibold">{{ po.vat_amount|floatformat:2|intcomma }}</span>
                             </div>
                             <div class="grand-total d-flex justify-content-between align-items-center">
-                                <span class="fw-bold">Total (SAR)</span>
+                                <span class="fw-bold">Total ({{ po.currency }})</span>
                                 <span class="fw-bold" style="font-size:1.3rem;">{{ po.total_value|floatformat:2|intcomma }}</span>
                             </div>
                         </div>

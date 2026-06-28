@@ -2,6 +2,24 @@
 
 {% block title %}{{ title }}{% endblock %}
 
+{% block extra_css %}
+<style>
+    /* Excel-like line-item grid: cells top-aligned so tall (multi-line)
+       descriptions read cleanly; textareas auto-grow via JS so long text is
+       fully visible instead of clipped. */
+    #item-table td, #item-table th { vertical-align: top; }
+    #item-table textarea {
+        overflow: hidden;
+        resize: none;
+        min-height: 34px;
+        line-height: 1.3;
+    }
+    #item-table input, #item-table textarea, #item-table select { font-size: 0.85rem; }
+    /* Keep the grid usable on smaller screens without squashing columns. */
+    #item-table { min-width: 1100px; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container-fluid">
     <div class="row justify-content-center">
@@ -15,6 +33,28 @@
                 <div class="alert alert-danger">
                     <strong>Please correct the errors below.</strong>
                     {{ form.errors }}
+                </div>
+                {% endif %}
+
+                {# Line-item (formset) errors — without this a single bad row
+                   (e.g. a missing Item Description) silently blocks the whole
+                   save and the page just reloads with no explanation. #}
+                {% if item_formset.non_form_errors or item_formset.errors %}
+                <div class="alert alert-danger">
+                    <strong><i class="bi bi-exclamation-triangle me-1"></i>The line items couldn't be saved — please fix these:</strong>
+                    {{ item_formset.non_form_errors }}
+                    <ul class="mb-0 mt-1">
+                        {% for item_form in item_formset %}
+                            {% if item_form.errors %}
+                            <li>
+                                Row {{ forloop.counter }}{% if item_form.instance.description %} ({{ item_form.instance.description|truncatechars:30 }}){% endif %}:
+                                {% for field, errs in item_form.errors.items %}
+                                    {{ field }} — {{ errs|join:", " }}{% if not forloop.last %}; {% endif %}
+                                {% endfor %}
+                            </li>
+                            {% endif %}
+                        {% endfor %}
+                    </ul>
                 </div>
                 {% endif %}
 
@@ -166,6 +206,10 @@
                     <div class="card-body">
                         <div class="row">
                             <div class="col-md-3 mb-3">
+                                <label class="form-label fw-bold">Currency</label>
+                                {{ form.currency }}
+                            </div>
+                            <div class="col-md-3 mb-3">
                                 <label class="form-label fw-bold">Discount %</label>
                                 {{ form.discount_rate }}
                             </div>
@@ -181,7 +225,7 @@
                 <div class="card mb-4">
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <h5 class="mb-0"><i class="bi bi-list-ol"></i> Line Items</h5>
-                        <button type="button" class="btn btn-sm btn-outline-danger" id="add-item">
+                        <button type="button" class="btn btn-sm btn-outline-danger add-item-btn" id="add-item">
                             <i class="bi bi-plus-lg"></i> Add Item
                         </button>
                     </div>
@@ -271,6 +315,15 @@
                                     </td>
                                 </tr>
                             </template>
+                        </div>
+                        <div class="p-2 border-top d-flex align-items-center gap-2 flex-wrap">
+                            <button type="button" class="btn btn-sm btn-primary add-item-btn">
+                                <i class="bi bi-plus-lg"></i> Add Item
+                            </button>
+                            <span class="text-muted small">
+                                Tip: press <kbd>Tab</kbd> in the last cell of the last row to start a new row.
+                                <kbd>Enter</kbd> in a single-line cell jumps to the cell below. Long text expands to stay fully visible.
+                            </span>
                         </div>
                     </div>
                 </div>
@@ -384,12 +437,31 @@
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const tbody = document.getElementById('item-rows');
-    const addBtn = document.getElementById('add-item');
     const totalForms = document.getElementById('id_items-TOTAL_FORMS');
-
     const tmpl = document.getElementById('item-row-template');
 
-    addBtn.addEventListener('click', function() {
+    // ─── Auto-expanding textareas (dynamic row height) ──────────
+    // Long descriptions / remarks grow to show all their text instead of
+    // being clipped to a fixed number of rows.
+    const CELL_MAX_PX = 200;  // beyond this the cell scrolls instead of growing
+    function autoGrow(el) {
+        if (!el || el.tagName !== 'TEXTAREA') return;
+        el.style.height = 'auto';
+        const full = el.scrollHeight + 2;
+        el.style.height = Math.min(full, CELL_MAX_PX) + 'px';
+        el.style.overflowY = full > CELL_MAX_PX ? 'auto' : 'hidden';
+    }
+    function growAllIn(scope) {
+        scope.querySelectorAll('textarea').forEach(autoGrow);
+    }
+    // Grow existing content on load, and on every keystroke.
+    growAllIn(tbody);
+    tbody.addEventListener('input', function(e) {
+        if (e.target.tagName === 'TEXTAREA') autoGrow(e.target);
+    });
+
+    // ─── Add a new line-item row ────────────────────────────────
+    function addRow(focusFirst) {
         const formIdx = parseInt(totalForms.value, 10);
         // Always clone from the empty-form template so we never inherit
         // values from an existing row.
@@ -406,6 +478,56 @@ document.addEventListener('DOMContentLoaded', function() {
 
         tbody.appendChild(newRow);
         totalForms.value = formIdx + 1;
+        growAllIn(newRow);
+        if (focusFirst) {
+            const first = newRow.querySelector('input:not([type=hidden]), textarea, select');
+            if (first) first.focus();
+        }
+        return newRow;
+    }
+
+    // Both the top and bottom "Add Item" buttons.
+    document.querySelectorAll('.add-item-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() { addRow(true); });
+    });
+
+    // ─── Excel-like keyboard navigation ─────────────────────────
+    // The editable cells of a row, in column order (skip hidden + the
+    // delete button).
+    function editableCells(row) {
+        return Array.from(row.querySelectorAll('input:not([type=hidden]):not([type=checkbox]), textarea, select'));
+    }
+    tbody.addEventListener('keydown', function(e) {
+        const cell = e.target;
+        if (!cell.matches('input, textarea, select')) return;
+        const row = cell.closest('tr.item-row');
+        if (!row) return;
+        const cells = editableCells(row);
+        const idx = cells.indexOf(cell);
+        const isLastRow = row === tbody.querySelector('tr.item-row:last-child');
+
+        // TAB on the last cell of the last row → start a fresh row.
+        if (e.key === 'Tab' && !e.shiftKey && idx === cells.length - 1 && isLastRow) {
+            e.preventDefault();
+            addRow(true);
+            return;
+        }
+
+        // ENTER in a single-line input → jump to the same column one row down
+        // (Excel style). Textareas keep Enter for new lines so descriptions
+        // can be multi-line.
+        if (e.key === 'Enter' && cell.tagName !== 'TEXTAREA') {
+            e.preventDefault();
+            const nextRow = row.nextElementSibling;
+            if (nextRow && nextRow.classList.contains('item-row')) {
+                const target = editableCells(nextRow)[idx];
+                if (target) target.focus();
+            } else {
+                const created = addRow(false);
+                const target = editableCells(created)[idx];
+                if (target) target.focus();
+            }
+        }
     });
 
     // Click handler for both flavours of delete:

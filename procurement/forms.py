@@ -19,7 +19,7 @@ class PurchaseOrderForm(forms.ModelForm):
             'project', 'project_name', 'end_user', 'mr_item_number',
             'delivery_incoterms', 'delivery_location',
             'lead_time', 'payment_terms_text', 'warranty',
-            'discount_rate', 'vat_rate',
+            'currency', 'discount_rate', 'vat_rate',
             'terms_and_conditions',
         ]
         widgets = {
@@ -92,6 +92,12 @@ class PurchaseOrderItemForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Description is required at the model level, but an EXISTING item that
+        # happens to have a blank description (common for BOM-seeded or sparse
+        # POs) must not block editing the rest of the PO — that silently
+        # discarded every change. New rows still need a description to count as
+        # "real" (see has_changed), so blank rows are dropped, never saved empty.
+        self.fields['description'].required = False
         for field in self.fields.values():
             if isinstance(field.widget, forms.Textarea):
                 field.widget.attrs['class'] = 'form-control form-control-sm'

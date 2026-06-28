@@ -93,7 +93,10 @@ def _amount_in_words(value, currency='SAR'):
     main_words = _spell(integer_part)
     base = f'{sign}{main_words} {currency}'
     if halala_part:
-        suffix = 'Halala' if halala_part == 1 else 'Halalas'
+        # Fractional unit name depends on the currency (Halalas / Cents / Fils).
+        singular, plural = PurchaseOrder.CURRENCY_FRACTIONS.get(
+            currency, ('Halala', 'Halalas'))
+        suffix = singular if halala_part == 1 else plural
         return f'{base} and {_under_hundred(halala_part)} {suffix} Only'
     return f'{base} Only'
 
@@ -877,7 +880,7 @@ def po_export_excel(request, pk):
     # ── Line Items Table ──
     table_row = 11
     col_headers = ['S No.', 'Make/Model', 'Item Descriptions / Specification',
-                    '', '', 'Quantity', 'UOM', 'Rate/unit (SAR)', 'Total Value (SAR)', 'Remarks']
+                    '', '', 'Quantity', 'UOM', f'Rate/unit ({po.currency})', f'Total Value ({po.currency})', 'Remarks']
     for col, h in enumerate(col_headers, 1):
         cell = ws.cell(row=table_row, column=col, value=h)
         cell.font = header_font
@@ -910,7 +913,7 @@ def po_export_excel(request, pk):
         ('Discount', float(po.discount_amount)),
         ('Gross Value', float(po.gross_value)),
         ('VAT', float(po.vat_amount)),
-        ('Total Value in SAR', float(po.total_value)),
+        (f'Total Value in {po.currency}', float(po.total_value)),
     ]
     for label, val in totals:
         ws.cell(row=row, column=3, value=label).font = bold
@@ -961,8 +964,13 @@ def po_export_excel(request, pk):
 # ─── PDF Export ───────────────────────────────────────────────
 
 @login_required
-def po_export_pdf(request, pk):
-    """Export a Purchase Order to PDF matching the original format."""
+def po_export_pdf(request, pk, unpriced=False):
+    """Export a Purchase Order to PDF matching the original format.
+
+    When ``unpriced`` is True, all commercial figures are omitted — the
+    Rate/Unit and Total columns, the totals block, and the amount-in-words
+    line — producing a scope-only copy safe to share without revealing pricing.
+    """
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm
@@ -1003,6 +1011,8 @@ def po_export_pdf(request, pk):
         )
     else:
         title_html = 'PURCHASE ORDER'
+    if unpriced:
+        title_html += ' <font size="9" color="#6C757D">— UNPRICED</font>'
     logo_path = find_static('images/leap_logo.jpg')
     if logo_path:
         from reportlab.platypus import Image
@@ -1066,32 +1076,55 @@ def po_export_pdf(request, pk):
     elements.append(Spacer(1, 5*mm))
 
     # ── Line Items Table ──
-    col_widths = [12*mm, 25*mm, 55*mm, 15*mm, 14*mm, 22*mm, 22*mm, 20*mm]
-    item_header = [
-        Paragraph('<b>S.No.</b>', small_style),
-        Paragraph('<b>Make/Model</b>', small_style),
-        Paragraph('<b>Item Description</b>', small_style),
-        Paragraph('<b>Qty</b>', small_style),
-        Paragraph('<b>UOM</b>', small_style),
-        Paragraph('<b>Rate/Unit</b>', small_style),
-        Paragraph('<b>Total (SAR)</b>', small_style),
-        Paragraph('<b>Remarks</b>', small_style),
-    ]
+    # Unpriced copies drop the Rate/Unit and Total columns; the freed width is
+    # redistributed to Description and Remarks so the table still fills the page.
+    if unpriced:
+        col_widths = [12*mm, 30*mm, 80*mm, 16*mm, 16*mm, 31*mm]
+        item_header = [
+            Paragraph('<b>S.No.</b>', small_style),
+            Paragraph('<b>Make/Model</b>', small_style),
+            Paragraph('<b>Item Description</b>', small_style),
+            Paragraph('<b>Qty</b>', small_style),
+            Paragraph('<b>UOM</b>', small_style),
+            Paragraph('<b>Remarks</b>', small_style),
+        ]
+    else:
+        col_widths = [12*mm, 25*mm, 55*mm, 15*mm, 14*mm, 22*mm, 22*mm, 20*mm]
+        item_header = [
+            Paragraph('<b>S.No.</b>', small_style),
+            Paragraph('<b>Make/Model</b>', small_style),
+            Paragraph('<b>Item Description</b>', small_style),
+            Paragraph('<b>Qty</b>', small_style),
+            Paragraph('<b>UOM</b>', small_style),
+            Paragraph('<b>Rate/Unit</b>', small_style),
+            Paragraph(f'<b>Total ({po.currency})</b>', small_style),
+            Paragraph('<b>Remarks</b>', small_style),
+        ]
     item_data = [item_header]
 
     dark_blue = colors.HexColor('#C41E3A')
 
     for item in items:
-        item_data.append([
-            Paragraph(str(item.serial_number), normal_style),
-            Paragraph(item.make_model or '', small_style),
-            Paragraph(item.description, small_style),
-            Paragraph(f'{item.quantity:,.0f}', right_style),
-            Paragraph(item.uom, small_style),
-            Paragraph(f'{item.rate_per_unit:,.2f}', right_style),
-            Paragraph(f'{item.total_value:,.2f}', right_bold),
-            Paragraph(item.remarks or '', small_style),
-        ])
+        if unpriced:
+            item_data.append([
+                Paragraph(str(item.serial_number), normal_style),
+                Paragraph(item.make_model or '', small_style),
+                Paragraph(item.description, small_style),
+                Paragraph(f'{item.quantity:,.0f}', right_style),
+                Paragraph(item.uom, small_style),
+                Paragraph(item.remarks or '', small_style),
+            ])
+        else:
+            item_data.append([
+                Paragraph(str(item.serial_number), normal_style),
+                Paragraph(item.make_model or '', small_style),
+                Paragraph(item.description, small_style),
+                Paragraph(f'{item.quantity:,.0f}', right_style),
+                Paragraph(item.uom, small_style),
+                Paragraph(f'{item.rate_per_unit:,.2f}', right_style),
+                Paragraph(f'{item.total_value:,.2f}', right_bold),
+                Paragraph(item.remarks or '', small_style),
+            ])
 
     item_table = Table(item_data, colWidths=col_widths, repeatRows=1)
     item_table.setStyle(TableStyle([
@@ -1108,48 +1141,49 @@ def po_export_pdf(request, pk):
     elements.append(item_table)
     elements.append(Spacer(1, 4*mm))
 
-    # ── Totals ──
-    totals_data = [
-        ['', '', 'Base Amount', '', '', '', f'{po.base_amount:,.2f}', ''],
-    ]
-    if po.discount_rate:
-        totals_data.append(['', '', f'Discount ({po.discount_rate:.0f}%)', '', '', '', f'-{po.discount_amount:,.2f}', ''])
-    totals_data.append(['', '', 'Gross Value', '', '', '', f'{po.gross_value:,.2f}', ''])
-    totals_data.append(['', '', f'VAT ({po.vat_rate:.0f}%)', '', '', '', f'{po.vat_amount:,.2f}', ''])
-    totals_data.append(['', '', 'Total Value in SAR', '', '', '', f'{po.total_value:,.2f}', ''])
-    total_row_idx = len(totals_data) - 1  # for SPAN/style refs below
+    # ── Totals ── (omitted entirely on unpriced copies)
+    if not unpriced:
+        totals_data = [
+            ['', '', 'Base Amount', '', '', '', f'{po.base_amount:,.2f}', ''],
+        ]
+        if po.discount_rate:
+            totals_data.append(['', '', f'Discount ({po.discount_rate:.0f}%)', '', '', '', f'-{po.discount_amount:,.2f}', ''])
+        totals_data.append(['', '', 'Gross Value', '', '', '', f'{po.gross_value:,.2f}', ''])
+        totals_data.append(['', '', f'VAT ({po.vat_rate:.0f}%)', '', '', '', f'{po.vat_amount:,.2f}', ''])
+        totals_data.append(['', '', f'Total Value in {po.currency}', '', '', '', f'{po.total_value:,.2f}', ''])
+        total_row_idx = len(totals_data) - 1  # for SPAN/style refs below
 
-    # Amount-in-words row sits inside the same totals table so it aligns
-    # to the totals column block (cols 2-6) instead of free-floating.
-    amt_words_style = ParagraphStyle(
-        'AmtWords', parent=styles['Normal'], fontSize=8, leading=11,
-    )
-    amt_words_para = Paragraph(
-        f'<b>Amount in words:</b> {_amount_in_words(po.total_value, currency="SAR")}',
-        amt_words_style,
-    )
-    totals_data.append(['', '', amt_words_para, '', '', '', '', ''])
-    amt_row_idx = len(totals_data) - 1
+        # Amount-in-words row sits inside the same totals table so it aligns
+        # to the totals column block (cols 2-6) instead of free-floating.
+        amt_words_style = ParagraphStyle(
+            'AmtWords', parent=styles['Normal'], fontSize=8, leading=11,
+        )
+        amt_words_para = Paragraph(
+            f'<b>Amount in words:</b> {_amount_in_words(po.total_value, currency=po.currency)}',
+            amt_words_style,
+        )
+        totals_data.append(['', '', amt_words_para, '', '', '', '', ''])
+        amt_row_idx = len(totals_data) - 1
 
-    totals_table = Table(totals_data, colWidths=col_widths)
-    totals_table.setStyle(TableStyle([
-        ('FONTNAME', (2, 0), (2, total_row_idx), 'Helvetica-Bold'),
-        ('FONTNAME', (6, 0), (6, total_row_idx), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 8),
-        ('ALIGN', (6, 0), (6, total_row_idx), 'RIGHT'),
-        ('LINEABOVE', (2, total_row_idx), (6, total_row_idx), 1, dark_blue),
-        ('LINEBELOW', (2, total_row_idx), (6, total_row_idx), 1.5, dark_blue),
-        ('BACKGROUND', (2, total_row_idx), (6, total_row_idx), colors.HexColor('#FBE8EC')),
-        # Amount-in-words row — span across the totals column block, left-aligned,
-        # vertically padded so it doesn't sit flush against the total row.
-        ('SPAN', (2, amt_row_idx), (6, amt_row_idx)),
-        ('VALIGN', (2, amt_row_idx), (6, amt_row_idx), 'TOP'),
-        ('TOPPADDING', (2, amt_row_idx), (6, amt_row_idx), 4),
-        ('BOTTOMPADDING', (2, amt_row_idx), (6, amt_row_idx), 0),
-        ('TOPPADDING', (0, 0), (-1, total_row_idx), 2),
-        ('BOTTOMPADDING', (0, 0), (-1, total_row_idx), 2),
-    ]))
-    elements.append(totals_table)
+        totals_table = Table(totals_data, colWidths=col_widths)
+        totals_table.setStyle(TableStyle([
+            ('FONTNAME', (2, 0), (2, total_row_idx), 'Helvetica-Bold'),
+            ('FONTNAME', (6, 0), (6, total_row_idx), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('ALIGN', (6, 0), (6, total_row_idx), 'RIGHT'),
+            ('LINEABOVE', (2, total_row_idx), (6, total_row_idx), 1, dark_blue),
+            ('LINEBELOW', (2, total_row_idx), (6, total_row_idx), 1.5, dark_blue),
+            ('BACKGROUND', (2, total_row_idx), (6, total_row_idx), colors.HexColor('#FBE8EC')),
+            # Amount-in-words row — span across the totals column block, left-aligned,
+            # vertically padded so it doesn't sit flush against the total row.
+            ('SPAN', (2, amt_row_idx), (6, amt_row_idx)),
+            ('VALIGN', (2, amt_row_idx), (6, amt_row_idx), 'TOP'),
+            ('TOPPADDING', (2, amt_row_idx), (6, amt_row_idx), 4),
+            ('BOTTOMPADDING', (2, amt_row_idx), (6, amt_row_idx), 0),
+            ('TOPPADDING', (0, 0), (-1, total_row_idx), 2),
+            ('BOTTOMPADDING', (0, 0), (-1, total_row_idx), 2),
+        ]))
+        elements.append(totals_table)
 
     # ── Approvals — rendered progressively as each stage is signed.
     # Order: SCM → PM → COO → CEO. CEO is omitted entirely for POs under
@@ -1272,9 +1306,17 @@ def po_export_pdf(request, pk):
 
     response = HttpResponse(buf.read(), content_type='application/pdf')
     prefix = 'PO_DRAFT' if is_draft else 'PO'
+    if unpriced:
+        prefix += '_UNPRICED'
     filename = _safe_filename(po.po_number, prefix=prefix, extension='pdf')
     response['Content-Disposition'] = f'inline; filename="{filename}"'
     return response
+
+
+@login_required
+def po_export_pdf_unpriced(request, pk):
+    """Unpriced PO PDF — same layout with all commercial figures removed."""
+    return po_export_pdf(request, pk, unpriced=True)
 
 
 # ─── Import from Excel ────────────────────────────────────────
@@ -1326,6 +1368,15 @@ def po_import_excel(request):
                 cost_center = code
                 break
 
+        # Currency is encoded in the rate/total column headers, e.g.
+        # "Rate/unit (USD)". Default to SAR if not found.
+        currency = 'SAR'
+        rate_header = (cell(11, 8) + ' ' + cell(11, 9)).upper()
+        for code, _label in PurchaseOrder.CURRENCY_CHOICES:
+            if code in rate_header:
+                currency = code
+                break
+
         vendor_name = cell(4, 2)
         vendor_contact_person = cell(5, 2)
         vendor_contact_email = cell(6, 2).rstrip("'")
@@ -1346,26 +1397,66 @@ def po_import_excel(request):
                 delivery_incoterms = code
                 break
 
-        # ── Parse discount & VAT from totals area ──
+        # ── Parse line items first (row 12 until the totals section) ──
+        # The number of items is variable, so NOTHING below the table sits at a
+        # fixed row. We scan from row 12 to the end of the sheet (no hard cap —
+        # the old code stopped at row 30 and silently dropped any item beyond
+        # ~18 rows) and stop when we reach the totals / T&C section. The totals
+        # and T&C scans then anchor to where the items actually ended.
+        TOTALS_LABELS = ('base amount', 'discount', 'gross value', 'vat', 'total value')
+        parsed_items = []
+        totals_start_row = ws.max_row + 1
+        for r in range(12, ws.max_row + 1):
+            sn = cell_raw(r, 1)
+            has_serial = isinstance(sn, (int, float))
+            desc = cell(r, 3)
+            make = cell(r, 2)
+            qty = cell_raw(r, 6)
+            rate = cell_raw(r, 8)
+
+            # The totals / T&C section starts at a label row with no serial
+            # number — stop there. Requiring no serial avoids a false match on a
+            # genuine item whose description happens to contain a totals word.
+            if not has_serial and (
+                (desc and any(t in desc.lower() for t in TOTALS_LABELS))
+                or 'TERMS AND CONDITIONS' in cell(r, 1).upper()
+            ):
+                totals_start_row = r
+                break
+
+            # Skip rows with no item content (e.g. the blank spacer row the
+            # export writes between the items and the totals).
+            if not (has_serial or desc or make or isinstance(qty, (int, float))):
+                continue
+
+            parsed_items.append({
+                'serial_number': int(sn) if has_serial else len(parsed_items) + 1,
+                'make_model': make,
+                'description': desc,
+                'quantity': Decimal(str(qty)) if isinstance(qty, (int, float)) else Decimal('0'),
+                'uom': cell(r, 7) or 'Nos',
+                'rate_per_unit': Decimal(str(rate)) if isinstance(rate, (int, float)) else Decimal('0'),
+                'remarks': cell(r, 10),
+            })
+
+        # ── Discount & VAT — scan the totals block just below the items. ──
         discount_rate = Decimal('0')
         vat_rate = Decimal('15')
-
-        # Scan rows 15-25 for discount/vat values
-        for r in range(15, 30):
+        for r in range(totals_start_row, min(totals_start_row + 8, ws.max_row + 1)):
             label = cell(r, 3).lower()
             if 'discount' in label:
                 val = cell_raw(r, 6)
-                if val and isinstance(val, (int, float)):
+                if isinstance(val, (int, float)):
                     discount_rate = Decimal(str(val * 100)) if val < 1 else Decimal(str(val))
             if 'vat' in label:
                 val = cell_raw(r, 6)
-                if val and isinstance(val, (int, float)):
+                if isinstance(val, (int, float)):
                     vat_rate = Decimal(str(val * 100)) if val < 1 else Decimal(str(val))
 
-        # ── Parse T&C ──
+        # ── T&C — everything under the "TERMS AND CONDITIONS" marker. ──
         terms_lines = []
         tc_started = False
-        for r in range(30, ws.max_row + 1):
+        for r in range(totals_start_row, ws.max_row + 1):
             a_val = cell(r, 1)
             b_val = cell(r, 2)
             if 'TERMS AND CONDITIONS' in a_val.upper():
@@ -1394,6 +1485,7 @@ def po_import_excel(request):
             mr_item_number=mr_item_number,
             delivery_incoterms=delivery_incoterms,
             delivery_location=delivery_location,
+            currency=currency,
             discount_rate=discount_rate,
             vat_rate=vat_rate,
             terms_and_conditions='\n'.join(terms_lines),
@@ -1401,38 +1493,10 @@ def po_import_excel(request):
             created_by=request.user,
         )
 
-        # ── Parse line items (starting at row 12 until blank/totals) ──
-        TOTALS_LABELS = ('base amount', 'discount', 'gross value', 'vat', 'total value')
-        item_count = 0
-        for r in range(12, 30):
-            sn = cell_raw(r, 1)
-            desc = cell(r, 3)
-
-            # Stop the moment we hit the totals section.
-            if desc and any(t in desc.lower() for t in TOTALS_LABELS):
-                break
-
-            if not desc:
-                continue
-
-            qty = cell_raw(r, 6)
-            rate = cell_raw(r, 8)
-
-            if qty is None and rate is None and not desc:
-                continue
-
-            PurchaseOrderItem.objects.create(
-                purchase_order=po,
-                serial_number=int(sn) if isinstance(sn, (int, float)) else item_count + 1,
-                make_model=cell(r, 2),
-                description=desc,
-                quantity=Decimal(str(qty)) if qty else Decimal('0'),
-                uom=cell(r, 7) or 'Nos',
-                rate_per_unit=Decimal(str(rate)) if rate else Decimal('0'),
-                remarks=cell(r, 10),
-                order=item_count,
-            )
-            item_count += 1
+        # ── Create the parsed line items ──
+        for idx, it in enumerate(parsed_items):
+            PurchaseOrderItem.objects.create(purchase_order=po, order=idx, **it)
+        item_count = len(parsed_items)
 
         messages.success(request, f'Imported PO {po.po_number} with {item_count} line items.')
         return redirect('procurement:po_detail', pk=po.pk)
