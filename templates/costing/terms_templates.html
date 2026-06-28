@@ -18,6 +18,7 @@
                             <tr>
                                 <th>Name</th>
                                 <th>Category</th>
+                                <th>Used in</th>
                                 <th>Content Preview</th>
                                 <th>Created</th>
                                 <th>Actions</th>
@@ -28,6 +29,11 @@
                             <tr>
                                 <td><strong>{{ tmpl.name }}</strong></td>
                                 <td><span class="badge bg-secondary">{{ tmpl.get_category_display }}</span></td>
+                                <td>
+                                    {% if tmpl.usage == 'sales' %}<span class="badge bg-info text-dark">Sales</span>
+                                    {% elif tmpl.usage == 'procurement' %}<span class="badge bg-warning text-dark">Procurement</span>
+                                    {% else %}<span class="badge bg-light text-dark border">Both</span>{% endif %}
+                                </td>
                                 <td class="text-muted" style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ tmpl.content|truncatewords:20 }}</td>
                                 <td>{{ tmpl.created_at|date:"d M Y" }}</td>
                                 <td>
@@ -41,7 +47,7 @@
                             </tr>
                             {% empty %}
                             <tr>
-                                <td colspan="5" class="text-center py-3 text-muted">No templates defined yet. Create one to get started.</td>
+                                <td colspan="6" class="text-center py-3 text-muted">No templates defined yet. Create one to get started.</td>
                             </tr>
                             {% endfor %}
                         </tbody>

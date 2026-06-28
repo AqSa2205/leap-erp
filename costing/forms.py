@@ -88,7 +88,7 @@ class ExchangeRateForm(forms.ModelForm):
 class TermsTemplateForm(forms.ModelForm):
     class Meta:
         model = TermsTemplate
-        fields = ['name', 'category', 'content']
+        fields = ['name', 'category', 'usage', 'content']
         widgets = {
             'content': forms.Textarea(attrs={'rows': 5}),
         }

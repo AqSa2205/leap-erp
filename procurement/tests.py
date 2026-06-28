@@ -432,3 +432,41 @@ class QuotationRetryTests(TestCase):
         qi.refresh_from_db()
         self.assertEqual(qi.status, 'failed')          # never stuck at pending
         self.assertIn('still down', qi.error)
+
+
+class TermsUsageSeparationTests(TestCase):
+    """Sales and procurement terms are kept in separate pickers."""
+
+    def setUp(self):
+        from costing.models import TermsTemplate
+        self.sales = TermsTemplate.objects.create(
+            name='Sales only', category='payment_terms', usage='sales', content='x')
+        self.proc = TermsTemplate.objects.create(
+            name='Proc only', category='payment_terms', usage='procurement', content='x')
+        self.both = TermsTemplate.objects.create(
+            name='Shared', category='payment_terms', usage='both', content='x')
+
+    def _names(self, terms_by_category):
+        out = []
+        for rows in terms_by_category.values():
+            out += [r['template'].name for r in rows]
+        return set(out)
+
+    def test_po_picker_excludes_sales_terms(self):
+        from procurement.views import _po_terms_by_category
+        names = self._names(_po_terms_by_category([]))
+        self.assertIn('Proc only', names)
+        self.assertIn('Shared', names)
+        self.assertNotIn('Sales only', names)
+
+    def test_po_quick_add_creates_procurement_term(self):
+        from costing.models import TermsTemplate
+        sa, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        u = User.objects.create_user('mgr', password='pw', role=sa)
+        self.client.force_login(u)
+        r = self.client.post(reverse('costing:terms_template_ajax_create'), {
+            'name': 'From PO', 'category': 'exclusions',
+            'content': 'no warranty', 'usage': 'procurement'})
+        self.assertEqual(r.status_code, 200)
+        t = TermsTemplate.objects.get(name='From PO')
+        self.assertEqual(t.usage, 'procurement')

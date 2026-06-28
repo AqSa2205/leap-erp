@@ -521,8 +521,8 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
         context['exchange_rates'] = exchange_rates
         context['conversion_rate'] = conversion_rate
 
-        # Terms templates for PDF selection
-        all_terms = TermsTemplate.objects.all()
+        # Terms templates for PDF selection — sales-side only (and shared 'both').
+        all_terms = TermsTemplate.objects.filter(usage__in=['sales', 'both'])
         selected_ids = set(sheet.selected_terms.values_list('pk', flat=True))
         terms_by_category = {}
         for cat_value, cat_label in TermsTemplate.CATEGORY_CHOICES:
@@ -936,15 +936,20 @@ def ajax_create_terms_template(request):
     name = (request.POST.get('name') or '').strip()
     category = (request.POST.get('category') or '').strip()
     content = (request.POST.get('content') or '').strip()
+    # Which library the new term joins — defaults to 'both' so a plain create
+    # behaves as before; the PO quick-add passes 'procurement'.
+    usage = (request.POST.get('usage') or 'both').strip()
     if not name or not category or not content:
         return JsonResponse({'error': 'name, category, and content are all required.'}, status=400)
     if category not in dict(TermsTemplate.CATEGORY_CHOICES):
         return JsonResponse({'error': 'Invalid category.'}, status=400)
+    if usage not in dict(TermsTemplate.USAGE_CHOICES):
+        usage = 'both'
     # Cap length to prevent runaway text in the global library.
     if len(name) > 255 or len(content) > 10_000:
         return JsonResponse({'error': 'Name or content too long.'}, status=400)
     template = TermsTemplate.objects.create(
-        name=name, category=category, content=content,
+        name=name, category=category, content=content, usage=usage,
         created_by=request.user,
     )
     preview = ' '.join(template.content.split()[:15])

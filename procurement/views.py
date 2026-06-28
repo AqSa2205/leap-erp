@@ -361,7 +361,8 @@ def _po_terms_by_category(selected_ids):
     """Build the terms_by_category structure used in PO create/edit/detail."""
     from costing.models import TermsTemplate
     selected_ids = set(selected_ids or [])
-    all_terms = TermsTemplate.objects.all()
+    # Procurement sees procurement-tagged terms (and shared 'both'), not sales.
+    all_terms = TermsTemplate.objects.filter(usage__in=['procurement', 'both'])
     terms_by_category = {}
     for cat_value, cat_label in TermsTemplate.CATEGORY_CHOICES:
         terms_by_category[cat_label] = [

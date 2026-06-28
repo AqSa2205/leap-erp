@@ -436,6 +436,8 @@
             </div>
             <form id="quickAddTermsForm" action="{% url 'costing:terms_template_ajax_create' %}" method="post">
                 {% csrf_token %}
+                {# Terms added from a PO join the procurement library, not sales. #}
+                <input type="hidden" name="usage" value="procurement">
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label fw-bold">Name</label>

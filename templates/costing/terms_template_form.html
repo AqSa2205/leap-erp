@@ -24,6 +24,12 @@
                         {% if form.category.errors %}<div class="text-danger small">{{ form.category.errors.0 }}</div>{% endif %}
                     </div>
                     <div class="mb-3">
+                        <label class="form-label fw-bold">Used in</label>
+                        {{ form.usage }}
+                        {% if form.usage.errors %}<div class="text-danger small">{{ form.usage.errors.0 }}</div>{% endif %}
+                        <small class="text-muted">Which side this term appears in — Sales (costing/quotation), Procurement (PO), or Both.</small>
+                    </div>
+                    <div class="mb-3">
                         <label class="form-label fw-bold">Content</label>
                         {{ form.content }}
                         {% if form.content.errors %}<div class="text-danger small">{{ form.content.errors.0 }}</div>{% endif %}

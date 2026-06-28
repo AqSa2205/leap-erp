@@ -55,8 +55,17 @@ class TermsTemplate(models.Model):
         ('payment_terms', 'Payment Terms'),
         ('conclusion', 'Conclusion'),
     ]
+    # Which side of the business a term belongs to. Sales terms (costing sheets /
+    # quotations) and procurement terms (purchase orders) are kept in separate
+    # pickers; 'both' appears in either.
+    USAGE_CHOICES = [
+        ('sales', 'Sales (Costing / Quotation)'),
+        ('procurement', 'Procurement (Purchase Order)'),
+        ('both', 'Both'),
+    ]
     name = models.CharField(max_length=255)
     category = models.CharField(max_length=30, choices=CATEGORY_CHOICES)
+    usage = models.CharField(max_length=12, choices=USAGE_CHOICES, default='both')
     content = models.TextField()
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
