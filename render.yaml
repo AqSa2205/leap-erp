@@ -10,10 +10,11 @@ services:
     runtime: python
     plan: free
     buildCommand: "./build.sh"
-    # --timeout 120 so a slow Cloudflare R2 upload (e.g. the signature image on
-    # PO approval) isn't killed by gunicorn's 30s default — that kill surfaces
-    # in the browser as an opaque "Network error".
-    startCommand: "gunicorn erp_leap.wsgi:application --timeout 120 --workers 2"
+    # --timeout 180 so slow object-storage I/O and the synchronous AI quotation
+    # extraction (a multi-second Claude call) aren't killed by gunicorn's 30s
+    # default — a kill strands the quotation import at "pending". Must exceed the
+    # Anthropic client timeout (100s) set in quotation_extract.py.
+    startCommand: "gunicorn erp_leap.wsgi:application --timeout 180 --workers 2"
     envVars:
       - key: DATABASE_URL
         fromDatabase:

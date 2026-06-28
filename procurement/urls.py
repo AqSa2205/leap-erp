@@ -13,6 +13,7 @@ urlpatterns = [
     # Import a supplier quotation PDF → AI extract → review → create PO.
     path('quotations/import/', views.quotation_import, name='quotation_import'),
     path('quotations/<int:pk>/review/', views.quotation_review, name='quotation_review'),
+    path('quotations/<int:pk>/retry/', views.quotation_retry, name='quotation_retry'),
     path('po/from-bom/<int:sheet_pk>/', views.po_create_from_bom, name='po_create_from_bom'),
     path('po/bom/<int:sheet_pk>/tracker/', views.bom_procurement_tracker, name='bom_procurement_tracker'),
     path('po/import/', views.po_import_excel, name='po_import'),

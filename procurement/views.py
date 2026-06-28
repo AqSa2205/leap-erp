@@ -462,24 +462,10 @@ def quotation_import(request):
         qi = QuotationImport.objects.create(
             file=f, original_filename=f.name, created_by=request.user,
             status='pending')
-
-        from .quotation_extract import extract_text_from_pdf, extract_quotation
-        try:
-            qi.file.open('rb')
-            text = extract_text_from_pdf(qi.file)
-            qi.file.close()
-            data, model = extract_quotation(text)
-            qi.extracted_data = data
-            qi.model_used = model
-            qi.status = 'extracted'
-            qi.save(update_fields=['extracted_data', 'model_used', 'status', 'updated_at'])
-        except Exception as e:
-            qi.status = 'failed'
-            qi.error = str(e)
-            qi.save(update_fields=['status', 'error', 'updated_at'])
-            messages.error(request, f'Could not extract this quotation: {e}')
+        ok, err = _extract_quotation_into(qi)
+        if not ok:
+            messages.error(request, f'Could not extract this quotation: {err}')
             return redirect('procurement:quotation_import')
-
         n = len(qi.line_items)
         messages.success(request, f'Extracted {n} line item{"" if n == 1 else "s"} — review and create the PO.')
         return redirect('procurement:quotation_review', pk=qi.pk)
@@ -488,6 +474,51 @@ def quotation_import(request):
         if not (request.user.is_super_admin_user or request.user.is_admin_user) \
         else QuotationImport.objects.all()[:25]
     return render(request, 'procurement/quotation_import.html', {'imports': imports})
+
+
+def _extract_quotation_into(qi):
+    """Run text + AI extraction into a QuotationImport. Always records an
+    outcome (extracted/failed) so the row never stays 'pending' as long as the
+    request completes. Returns (ok, error_message)."""
+    from .quotation_extract import extract_text_from_pdf, extract_quotation
+    try:
+        qi.file.open('rb')
+        text = extract_text_from_pdf(qi.file)
+        qi.file.close()
+        data, model = extract_quotation(text)
+        qi.extracted_data = data
+        qi.model_used = model
+        qi.status = 'extracted'
+        qi.error = ''
+        qi.save(update_fields=['extracted_data', 'model_used', 'status', 'error', 'updated_at'])
+        return True, ''
+    except Exception as e:
+        qi.status = 'failed'
+        qi.error = str(e)
+        qi.save(update_fields=['status', 'error', 'updated_at'])
+        return False, str(e)
+
+
+@login_required
+@require_POST
+def quotation_retry(request, pk):
+    """Re-run extraction on a pending/failed quotation (e.g. after the worker
+    was killed mid-call, or a transient API error)."""
+    qi = get_object_or_404(QuotationImport, pk=pk)
+    if not _can_procure(request.user):
+        messages.error(request, 'Permission denied.')
+        return redirect('procurement:po_list')
+    if qi.status == 'converted':
+        messages.info(request, 'This quotation has already been converted to a PO.')
+        return redirect('procurement:quotation_import')
+    qi.status = 'pending'
+    qi.save(update_fields=['status', 'updated_at'])
+    ok, err = _extract_quotation_into(qi)
+    if not ok:
+        messages.error(request, f'Extraction failed again: {err}')
+        return redirect('procurement:quotation_import')
+    messages.success(request, 'Extracted — review and create the PO.')
+    return redirect('procurement:quotation_review', pk=qi.pk)
 
 
 @login_required

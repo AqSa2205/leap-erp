@@ -389,3 +389,46 @@ class QuotationImportTests(TestCase):
         qi.refresh_from_db()
         self.assertEqual(qi.status, 'converted')
         self.assertEqual(qi.purchase_order_id, po.pk)
+
+
+class QuotationRetryTests(TestCase):
+    """A pending/failed quotation can be re-extracted without re-uploading."""
+
+    def setUp(self):
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('proc2', password='pw', role=self.sa_role)
+        self.client.force_login(self.user)
+
+    def _make(self, status='failed'):
+        from django.core.files.base import ContentFile
+        from procurement.models import QuotationImport
+        qi = QuotationImport.objects.create(
+            original_filename='q.pdf', status=status, created_by=self.user,
+            error='AI extraction failed: timeout')
+        qi.file.save('q.pdf', ContentFile(b'%PDF-1.4'), save=True)
+        return qi
+
+    def test_retry_reextracts_failed(self):
+        from unittest import mock
+        from procurement.models import QuotationImport
+        qi = self._make('failed')
+        fake = {'vendor_name': 'V', 'currency': 'SAR', 'vat_rate': 15,
+                'line_items': [{'description': 'A', 'quantity': 1, 'uom': 'Nos', 'unit_price': 2}]}
+        with mock.patch('procurement.quotation_extract.extract_text_from_pdf', return_value='t'), \
+             mock.patch('procurement.quotation_extract.extract_quotation', return_value=(fake, 'm')):
+            r = self.client.post(reverse('procurement:quotation_retry', kwargs={'pk': qi.pk}))
+        qi.refresh_from_db()
+        self.assertEqual(qi.status, 'extracted')
+        self.assertEqual(qi.error, '')
+        self.assertRedirects(r, reverse('procurement:quotation_review', kwargs={'pk': qi.pk}))
+
+    def test_retry_records_failure_again(self):
+        from unittest import mock
+        qi = self._make('pending')
+        with mock.patch('procurement.quotation_extract.extract_text_from_pdf', return_value='t'), \
+             mock.patch('procurement.quotation_extract.extract_quotation',
+                        side_effect=RuntimeError('still down')):
+            self.client.post(reverse('procurement:quotation_retry', kwargs={'pk': qi.pk}))
+        qi.refresh_from_db()
+        self.assertEqual(qi.status, 'failed')          # never stuck at pending
+        self.assertIn('still down', qi.error)

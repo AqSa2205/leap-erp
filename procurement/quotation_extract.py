@@ -148,7 +148,11 @@ def extract_quotation(text, *, model=None):
 
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=key)
+        # Bound the call: a slow/hung request must raise a catchable timeout
+        # (-> status 'failed' with a reason) rather than run until the web
+        # worker is killed, which would strand the import at 'pending'. The
+        # client timeout must stay below the gunicorn worker timeout.
+        client = anthropic.Anthropic(api_key=key, timeout=100.0, max_retries=1)
         # Cap the text so a huge multi-page quote stays within budget.
         prompt = f'Extract the quotation below.\n\n<quotation>\n{text[:60000]}\n</quotation>'
         msg = client.messages.create(

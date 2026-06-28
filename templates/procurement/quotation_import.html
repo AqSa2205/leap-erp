@@ -60,6 +60,13 @@
                                     <a href="{% url 'procurement:quotation_review' q.pk %}" class="btn btn-sm btn-primary">Review &amp; create PO</a>
                                     {% elif q.status == 'converted' and q.purchase_order_id %}
                                     <a href="{% url 'procurement:po_detail' q.purchase_order_id %}" class="btn btn-sm btn-outline-secondary">View PO</a>
+                                    {% elif q.status == 'pending' or q.status == 'failed' %}
+                                    <form method="post" action="{% url 'procurement:quotation_retry' q.pk %}" class="d-inline">
+                                        {% csrf_token %}
+                                        <button type="submit" class="btn btn-sm btn-outline-primary">
+                                            <i class="bi bi-arrow-clockwise me-1"></i>Retry extraction
+                                        </button>
+                                    </form>
                                     {% endif %}
                                 </td>
                             </tr>
