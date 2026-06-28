@@ -745,16 +745,29 @@ def po_approve_stage(request, pk, stage):
         if not po.can_user_approve_stage(request.user, stage):
             return JsonResponse({'error': 'You do not have permission to approve this stage.'}, status=403)
 
-        getattr(po, sig_field).save(
-            f'po{po.pk}_{stage}_sig.png',
-            ContentFile(clean),
-            save=False,
-        )
-        setattr(po, f'{stage}_approved_at', timezone.now())
-        setattr(po, f'{stage}_approved_by', request.user)
-        po.save(update_fields=[
-            f'{stage}_approved_at', f'{stage}_approved_by', sig_field, 'updated_at',
-        ])
+        # Persisting the signature writes to object storage (Cloudflare R2 in
+        # production). A storage/DB failure here must surface as a readable JSON
+        # error — otherwise it bubbles up as an HTML 500 the browser reports as
+        # an opaque "Network error". Log the full traceback for diagnosis.
+        try:
+            getattr(po, sig_field).save(
+                f'po{po.pk}_{stage}_sig.png',
+                ContentFile(clean),
+                save=False,
+            )
+            setattr(po, f'{stage}_approved_at', timezone.now())
+            setattr(po, f'{stage}_approved_by', request.user)
+            po.save(update_fields=[
+                f'{stage}_approved_at', f'{stage}_approved_by', sig_field, 'updated_at',
+            ])
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                'PO %s stage %s signature save failed', pk, stage)
+            return JsonResponse({
+                'error': 'Could not save the signature (storage error). '
+                         'Please try again; if it persists, contact support.',
+            }, status=500)
 
     new_cur = po.current_stage
     return JsonResponse({

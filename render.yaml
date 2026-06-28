@@ -10,7 +10,10 @@ services:
     runtime: python
     plan: free
     buildCommand: "./build.sh"
-    startCommand: "gunicorn erp_leap.wsgi:application"
+    # --timeout 120 so a slow Cloudflare R2 upload (e.g. the signature image on
+    # PO approval) isn't killed by gunicorn's 30s default — that kill surfaces
+    # in the browser as an opaque "Network error".
+    startCommand: "gunicorn erp_leap.wsgi:application --timeout 120 --workers 2"
     envVars:
       - key: DATABASE_URL
         fromDatabase:

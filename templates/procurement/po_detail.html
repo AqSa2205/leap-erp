@@ -643,10 +643,21 @@
             body: fd,
             headers: { 'X-CSRFToken': csrfToken },
         })
-        .then(function(r) { return r.json().then(function(j) { return {status: r.status, j: j}; }); })
+        .then(function(r) {
+            // Parse defensively: a 500/502 returns an HTML page, not JSON.
+            // Falling into the generic catch would hide the real status.
+            return r.text().then(function(t) {
+                var j;
+                try { j = JSON.parse(t); } catch (e) { j = null; }
+                return { status: r.status, j: j };
+            });
+        })
         .then(function(res) {
-            if (res.status !== 200 || !res.j.ok) {
-                signErrorBox.textContent = res.j.error || 'Could not approve.';
+            if (res.status !== 200 || !res.j || !res.j.ok) {
+                var msg = (res.j && res.j.error)
+                    ? res.j.error
+                    : ('Could not approve (server error ' + res.status + '). Please try again.');
+                signErrorBox.textContent = msg;
                 signErrorBox.classList.remove('d-none');
                 signSubmitBtn.disabled = false;
                 signSubmitBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Approve & Sign';
@@ -655,7 +666,7 @@
             window.location.reload();
         })
         .catch(function(err) {
-            signErrorBox.textContent = 'Network error — please try again.';
+            signErrorBox.textContent = 'Network error — please check your connection and try again.';
             signErrorBox.classList.remove('d-none');
             console.error(err);
             signSubmitBtn.disabled = false;
