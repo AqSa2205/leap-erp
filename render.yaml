@@ -40,3 +40,11 @@ services:
         sync: false
       - key: R2_ENDPOINT_URL
         sync: false
+      # Anthropic API key — powers AI quotation extraction (and the dev-tracking
+      # digest). Set the value in the Render dashboard → Environment; never
+      # commit it. Without it, quotation import shows "AI extraction is not
+      # configured".
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: PROCUREMENT_AI_MODEL
+        value: "claude-sonnet-4-6"
