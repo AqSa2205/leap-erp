@@ -15,9 +15,10 @@
 
 {% block extra_css %}
 <style>
-    /* Make TinyMCE editors fill the tab pane */
     .tox-tinymce { border-radius: 4px !important; }
-    .tab-pane .tox-tinymce { min-height: 450px; }
+    .section-block .tox-tinymce { min-height: 320px; }
+    .section-block.to-delete { opacity: 0.45; }
+    .section-block.to-delete .tox-tinymce { pointer-events: none; }
 </style>
 {% endblock %}
 
@@ -30,118 +31,119 @@
         <code class="ms-2">{{ object.proposal_reference }}</code>
     </div>
     <div class="d-flex align-items-center gap-2">
-        <span id="autosaveStatus" class="autosave-pill autosave-idle">
-            <i class="bi bi-cloud-check"></i>
-            <span class="autosave-text">All changes saved</span>
-        </span>
         <a href="{% url 'proposals:export_docx' object.pk %}" class="btn btn-success btn-sm">
             <i class="bi bi-file-earmark-word me-1"></i> Export DOCX
         </a>
     </div>
 </div>
 
-<style>
-    .autosave-pill {
-        display: inline-flex; align-items: center; gap: 0.35rem;
-        padding: 0.3rem 0.7rem; border-radius: 999px;
-        font-size: 0.78rem; font-weight: 500; transition: all 0.2s;
-    }
-    .autosave-idle   { background: #e8f5e9; color: #2e7d32; }
-    .autosave-dirty  { background: #fff3e0; color: #e65100; }
-    .autosave-saving { background: #e3f2fd; color: #0d47a1; }
-    .autosave-error  { background: #ffebee; color: #c62828; }
-</style>
+<!-- Heading library for the datalist (shared by Add Section and per-row heading inputs) -->
+<datalist id="section-heading-options">
+    {% for h in headings %}<option value="{{ h.name }}"></option>{% endfor %}
+</datalist>
 
+<!-- Add sections (its own form — tick any number, posts once, redirects back) -->
+<form method="post" action="{% url 'proposals:add_section' object.pk %}" class="card mb-3">
+    {% csrf_token %}
+    <div class="card-header d-flex flex-wrap justify-content-between align-items-center py-2 gap-2">
+        <strong><i class="bi bi-plus-square me-1"></i>Add sections</strong>
+        <div class="d-flex align-items-center gap-2">
+            {% if headings %}
+            <button type="button" class="btn btn-link btn-sm p-0" id="sectSelectAll">Select all</button>
+            <span class="text-muted">·</span>
+            <button type="button" class="btn btn-link btn-sm p-0" id="sectClear">Clear</button>
+            {% endif %}
+            <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-check2-all me-1"></i>Add selected</button>
+        </div>
+    </div>
+    <div class="card-body py-3">
+        {% if headings %}
+        <div class="row g-1 mb-2">
+            {% for h in headings %}
+            <div class="col-lg-3 col-md-4 col-sm-6">
+                <div class="form-check">
+                    <input class="form-check-input sect-pick" type="checkbox" name="heading"
+                           value="{{ h.name }}" id="pick-{{ h.pk }}">
+                    <label class="form-check-label" for="pick-{{ h.pk }}">{{ h.name }}</label>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        <hr class="my-2">
+        {% else %}
+        <p class="text-muted small mb-2">No headings in the library yet — add some in the admin, or type a custom one below.</p>
+        {% endif %}
+        <div class="d-flex flex-wrap gap-2 align-items-center">
+            <label class="small text-muted mb-0">Custom heading:</label>
+            <input type="text" name="custom_heading" class="form-control form-control-sm"
+                   placeholder="Type a custom heading (optional)" style="max-width:380px">
+            <span class="text-muted small">Library headings pre-fill their default content (editable).</span>
+        </div>
+    </div>
+</form>
+
+<!-- Main content form: edit/reorder/delete sections + engineering documents -->
 <form method="post" id="contentForm">
     {% csrf_token %}
+    {{ section_formset.management_form }}
     {{ eng_formset.management_form }}
 
     <div class="card">
-        <div class="card-header p-0">
-            <ul class="nav nav-tabs card-header-tabs" role="tablist" style="flex-wrap: nowrap; overflow-x: auto;">
-                {% for field_name, label in section_fields %}
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link {% if forloop.first %}active{% endif %}" id="tab-{{ field_name }}"
-                            data-bs-toggle="tab" data-bs-target="#pane-{{ field_name }}"
-                            type="button" role="tab" style="white-space:nowrap;">
-                        {{ label }}
-                    </button>
-                </li>
-                {% endfor %}
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="tab-eng-docs"
-                            data-bs-toggle="tab" data-bs-target="#pane-eng-docs"
-                            type="button" role="tab" style="white-space:nowrap;">
-                        Engineering Docs
-                    </button>
-                </li>
-            </ul>
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>Proposal Sections</strong>
+            <small class="text-muted">Edit the order number to reorder · tick Remove to delete on save</small>
         </div>
-
         <div class="card-body">
-            <div class="tab-content">
-                {% for field_name, label in section_fields %}
-                <div class="tab-pane fade {% if forloop.first %}show active{% endif %}"
-                     id="pane-{{ field_name }}" role="tabpanel">
-                    <div class="mb-3">
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                            <label class="form-label fw-bold mb-0">{{ label }}</label>
-                            <div class="d-flex gap-2 align-items-center">
-                                <select class="form-select form-select-sm" style="width:auto"
-                                        id="bp-select-{{ field_name }}" data-section="{{ field_name }}">
-                                    <option value="">Load Boilerplate...</option>
-                                    {% for bp in boilerplates %}
-                                    {% if bp.section == field_name %}
-                                    <option value="{{ bp.pk }}">{{ bp.name }}</option>
-                                    {% endif %}
-                                    {% endfor %}
-                                </select>
-                                <button type="button" class="btn btn-sm btn-outline-secondary btn-load-bp"
-                                        data-section="{{ field_name }}">
-                                    <i class="bi bi-arrow-down-circle"></i> Load
-                                </button>
-                                <button type="button" class="btn btn-sm btn-outline-primary btn-save-section"
-                                        data-section="{{ field_name }}">
-                                    <i class="bi bi-cloud-upload"></i> Save
-                                </button>
-                            </div>
-                        </div>
-                        <textarea id="id_{{ field_name }}" name="{{ field_name }}" class="tinymce-editor">{{ form|get_field_value:field_name }}</textarea>
+            {% if section_formset.forms %}
+            {% for sform in section_formset %}
+            <div class="border rounded p-3 mb-3 section-block" id="section-{{ forloop.counter0 }}">
+                {{ sform.id }}
+                <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+                    <span class="text-muted small">Order</span>
+                    {{ sform.order }}
+                    <div class="flex-grow-1" style="min-width:240px">
+                        {{ sform.heading }}
+                    </div>
+                    <div class="form-check mb-0 ms-auto">
+                        {{ sform.DELETE }}
+                        <label class="form-check-label small text-danger" for="{{ sform.DELETE.id_for_label }}">Remove</label>
                     </div>
                 </div>
-                {% endfor %}
-
-                <!-- Engineering Documents Tab -->
-                <div class="tab-pane fade" id="pane-eng-docs" role="tabpanel">
-                    <h6 class="fw-bold mb-3">Engineering Documents</h6>
-                    <table class="table table-sm">
-                        <thead>
-                            <tr>
-                                <th>Type</th>
-                                <th>Number</th>
-                                <th>Title</th>
-                                <th style="width:80px">Order</th>
-                                <th style="width:60px">Delete</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for ef in eng_formset %}
-                            <tr>
-                                <td>{{ ef.id }}{{ ef.doc_type }}</td>
-                                <td>{{ ef.doc_number }}</td>
-                                <td>{{ ef.doc_title }}</td>
-                                <td>{{ ef.order }}</td>
-                                <td class="text-center">
-                                    {% if ef.instance.pk %}
-                                    {{ ef.DELETE }}
-                                    {% endif %}
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
+                {% for e in sform.heading.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+                {{ sform.content }}
+                {% for e in sform.content.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
             </div>
+            {% endfor %}
+            {% else %}
+            <p class="text-muted mb-0">No sections yet. Use <strong>Add section</strong> above to build the proposal.</p>
+            {% endif %}
+
+            <!-- Engineering Documents -->
+            <h6 class="fw-bold mt-4 mb-3">Engineering Documents</h6>
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Number</th>
+                        <th>Title</th>
+                        <th style="width:80px">Order</th>
+                        <th style="width:60px">Delete</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ef in eng_formset %}
+                    <tr>
+                        <td>{{ ef.id }}{{ ef.doc_type }}</td>
+                        <td>{{ ef.doc_number }}</td>
+                        <td>{{ ef.doc_title }}</td>
+                        <td>{{ ef.order }}</td>
+                        <td class="text-center">
+                            {% if ef.instance.pk %}{{ ef.DELETE }}{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
         </div>
 
         <div class="card-footer d-flex justify-content-between">
@@ -158,13 +160,10 @@
 <script src="{% static 'tinymce/tinymce.min.js' %}"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    var csrfToken = '{{ csrf_token }}';
-    var saveSectionUrl = "{% url 'proposals:save_section' object.pk %}";
-
     // ─── TinyMCE Initialization ──────────────────────────────
     tinymce.init({
         selector: 'textarea.tinymce-editor',
-        height: 450,
+        height: 320,
         menubar: false,
         branding: false,
         promotion: false,
@@ -244,24 +243,10 @@ document.addEventListener('DOMContentLoaded', function() {
         formats: {
             p: { block: 'p', styles: { 'text-align': 'justify' } }
         },
-        // When user presses Enter, create justified paragraphs
         setup: function(editor) {
             editor.on('init', function() {
                 editor.getBody().style.fontFamily = "'Trebuchet MS', Trebuchet, Arial, sans-serif";
                 editor.getBody().style.textAlign = 'justify';
-            });
-            // When switching tabs, TinyMCE may need to recalculate size
-            editor.on('init', function() {
-                var tabEl = document.querySelector('[data-bs-target="#pane-' + editor.id.replace('id_', '') + '"]');
-                if (tabEl) {
-                    tabEl.addEventListener('shown.bs.tab', function() {
-                        editor.execCommand('mceAutoResize');
-                    });
-                }
-            });
-            // Autosave: mark this specific editor dirty on any change
-            editor.on('input keyup SetContent paste', function() {
-                if (window.__autosave) window.__autosave.markDirty(editor.id);
             });
         },
         // Table defaults
@@ -284,170 +269,23 @@ document.addEventListener('DOMContentLoaded', function() {
         tinymce.triggerSave();
     });
 
-    // ─── Per-section Save button ─────────────────────────────
-    document.querySelectorAll('.btn-save-section').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-            var section = this.dataset.section;
-            var editor = tinymce.get('id_' + section);
-            if (!editor) return;
-
-            var content = editor.getContent();
-            var saveBtn = this;
-            saveBtn.disabled = true;
-            saveBtn.innerHTML = '<i class="bi bi-hourglass"></i> Saving...';
-
-            var data = new FormData();
-            data.append('field', section);
-            data.append('value', content);
-
-            fetch(saveSectionUrl, {
-                method: 'POST',
-                headers: {'X-CSRFToken': csrfToken},
-                body: data,
-            })
-            .then(function(r) { return r.json(); })
-            .then(function(resp) {
-                saveBtn.disabled = false;
-                if (resp.ok) {
-                    saveBtn.innerHTML = '<i class="bi bi-check-lg"></i> Saved!';
-                    saveBtn.className = 'btn btn-sm btn-success btn-save-section';
-                    setTimeout(function() {
-                        saveBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Save';
-                        saveBtn.className = 'btn btn-sm btn-outline-primary btn-save-section';
-                    }, 2000);
-                } else {
-                    saveBtn.innerHTML = '<i class="bi bi-x-lg"></i> Error';
-                    saveBtn.className = 'btn btn-sm btn-danger btn-save-section';
-                    setTimeout(function() {
-                        saveBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Save';
-                        saveBtn.className = 'btn btn-sm btn-outline-primary btn-save-section';
-                    }, 2000);
-                }
-            })
-            .catch(function(err) {
-                console.error('Save failed:', err);
-                saveBtn.disabled = false;
-                saveBtn.innerHTML = '<i class="bi bi-cloud-upload"></i> Save';
-            });
-        });
+    // ─── Add-sections: select all / clear ──────────────────────
+    var picks = document.querySelectorAll('.sect-pick');
+    var selAll = document.getElementById('sectSelectAll');
+    var clr = document.getElementById('sectClear');
+    if (selAll) selAll.addEventListener('click', function() {
+        picks.forEach(function(p) { p.checked = true; });
+    });
+    if (clr) clr.addEventListener('click', function() {
+        picks.forEach(function(p) { p.checked = false; });
     });
 
-    // ─── Autosave controller ────────────────────────────────
-    // Tracks editor IDs that need saving in a Set. Every 5s, if
-    // anything is in the set, POSTs each dirty editor's content to
-    // save_section. Uses our own tracking instead of TinyMCE's
-    // editor.isDirty() — that flag doesn't reliably flip on keyup.
-    window.__autosave = (function () {
-        var statusEl = document.getElementById('autosaveStatus');
-        var textEl   = statusEl ? statusEl.querySelector('.autosave-text') : null;
-        var iconEl   = statusEl ? statusEl.querySelector('i') : null;
-        var dirtyIds = new Set();       // editor ids with unsaved changes
-        var lastSaved = null;
-        var saveInFlight = false;
-
-        function setState(state, text, icon) {
-            if (!statusEl) return;
-            statusEl.className = 'autosave-pill autosave-' + state;
-            if (textEl) textEl.textContent = text;
-            if (iconEl) iconEl.className = 'bi ' + icon;
-        }
-        function formatAgo(ts) {
-            if (!ts) return '';
-            var s = Math.round((Date.now() - ts) / 1000);
-            if (s < 60) return 'just now';
-            if (s < 3600) return Math.floor(s / 60) + ' min ago';
-            return Math.floor(s / 3600) + ' h ago';
-        }
-        function refreshIdleLabel() {
-            if (dirtyIds.size === 0 && !saveInFlight && lastSaved) {
-                setState('idle', 'Saved ' + formatAgo(lastSaved), 'bi-cloud-check');
-            }
-        }
-        setInterval(refreshIdleLabel, 20000);
-
-        function saveOne(editorId) {
-            var editor = tinymce.get(editorId);
-            if (!editor) return Promise.reject(new Error('editor missing'));
-            var section = editorId.replace(/^id_/, '');
-            var data = new FormData();
-            data.append('field', section);
-            data.append('value', editor.getContent());
-            return fetch(saveSectionUrl, {
-                method: 'POST',
-                headers: {'X-CSRFToken': csrfToken},
-                body: data,
-            }).then(function (r) { return r.json(); }).then(function (resp) {
-                if (!resp || !resp.ok) throw new Error('save rejected');
-            });
-        }
-
-        function saveAllDirty() {
-            if (saveInFlight || dirtyIds.size === 0) return;
-            saveInFlight = true;
-            var toSave = Array.from(dirtyIds);
-            dirtyIds.clear();   // typing during save will re-add
-            setState('saving', 'Saving…', 'bi-cloud-upload');
-            Promise.all(toSave.map(saveOne)).then(function () {
-                saveInFlight = false;
-                lastSaved = Date.now();
-                if (dirtyIds.size === 0) {
-                    setState('idle', 'Saved just now', 'bi-cloud-check');
-                } else {
-                    setState('dirty', 'Unsaved changes', 'bi-cloud-slash');
-                }
-            }).catch(function () {
-                saveInFlight = false;
-                // Re-queue all for retry
-                toSave.forEach(function (id) { dirtyIds.add(id); });
-                setState('error', 'Save failed — will retry', 'bi-exclamation-triangle');
-            });
-        }
-
-        setInterval(saveAllDirty, 5000);
-
-        // Warn before leaving with unsaved work
-        window.addEventListener('beforeunload', function (e) {
-            if (dirtyIds.size > 0 || saveInFlight) {
-                e.preventDefault();
-                e.returnValue = '';
-            }
-        });
-
-        return {
-            markDirty: function (editorId) {
-                if (editorId) dirtyIds.add(editorId);
-                setState('dirty', 'Unsaved changes', 'bi-cloud-slash');
-            },
-            saveAllNow: saveAllDirty,
-        };
-    })();
-
-    // ─── Boilerplate loading ─────────────────────────────────
-    document.querySelectorAll('.btn-load-bp').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-            var section = this.dataset.section;
-            var select = document.getElementById('bp-select-' + section);
-            var bpId = select.value;
-            if (!bpId) return;
-
-            fetch("{% url 'proposals:boilerplate_content' 0 %}".replace('0', bpId))
-                .then(function(r) { return r.json(); })
-                .then(function(data) {
-                    var editor = tinymce.get('id_' + section);
-                    if (!editor) return;
-                    var currentContent = editor.getContent().trim();
-                    if (currentContent && !confirm('Replace existing content with boilerplate?')) return;
-                    // Convert plain text to HTML paragraphs if needed
-                    var content = data.content;
-                    if (content && !content.includes('<')) {
-                        content = content.split('\n').filter(function(l) { return l.trim(); }).map(function(l) {
-                            return '<p>' + l + '</p>';
-                        }).join('');
-                    }
-                    editor.setContent(content);
-                })
-                .catch(function(err) { console.error('Failed to load boilerplate:', err); });
-        });
+    // ─── Dim a section row when its Remove box is ticked ────────
+    document.querySelectorAll('.section-block input[type="checkbox"][name$="-DELETE"]').forEach(function(box) {
+        var block = box.closest('.section-block');
+        function sync() { block.classList.toggle('to-delete', box.checked); }
+        box.addEventListener('change', sync);
+        sync();
     });
 });
 </script>

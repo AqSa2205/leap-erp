@@ -1,20 +1,21 @@
-from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
+from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView, View
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, render, redirect
 from django.urls import reverse_lazy, reverse
 from django.contrib import messages
 from django.http import JsonResponse
 from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required
-from django.db.models import Q
+from django.db.models import Q, Max
 
 from .models import (
     TechnicalProposal, ProposalBoilerplate,
     PrequalificationDocument, PQDAttachment,
+    ProposalSection, SectionHeading,
 )
 from .forms import (
     ProposalMetadataForm, ProposalContentForm, EngineeringDocumentFormSet,
-    ProposalFilterForm, ProposalBoilerplateForm,
+    ProposalSectionFormSet, ProposalFilterForm, ProposalBoilerplateForm,
     PQDMetadataForm, PQDFilterForm,
 )
 
@@ -202,46 +203,87 @@ class ProposalDeleteView(ProposalPermissionMixin, DeleteView):
 
 # ─── Tabbed Content Editor ────────────────────────────────────
 
-class ProposalEditContentView(ProposalPermissionMixin, UpdateView):
-    model = TechnicalProposal
-    form_class = ProposalContentForm
+def _can_edit_proposal(user, proposal):
+    return (user.is_super_admin_user or user.is_admin_user
+            or proposal.created_by == user)
+
+
+class ProposalEditContentView(LoginRequiredMixin, UserPassesTestMixin, View):
+    """Content editor: a dynamic, reorderable list of proposal sections (each a
+    heading + rich text) plus the engineering-documents table. Sections are
+    chosen from the heading library or typed custom."""
     template_name = 'proposals/proposal_edit_content.html'
 
+    def get_object(self):
+        return get_object_or_404(TechnicalProposal, pk=self.kwargs['pk'])
+
     def test_func(self):
+        return _can_edit_proposal(self.request.user, self.get_object())
+
+    def _context(self, obj, section_fs, eng_fs):
+        return {
+            'object': obj,
+            'section_formset': section_fs,
+            'eng_formset': eng_fs,
+            'headings': SectionHeading.objects.filter(is_active=True),
+        }
+
+    def get(self, request, pk):
         obj = self.get_object()
-        user = self.request.user
-        if user.is_super_admin_user or user.is_admin_user:
-            return True
-        return obj.created_by == user
+        return render(request, self.template_name, self._context(
+            obj,
+            ProposalSectionFormSet(instance=obj, prefix='sec'),
+            EngineeringDocumentFormSet(instance=obj, prefix='eng'),
+        ))
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        if self.request.POST:
-            context['eng_formset'] = EngineeringDocumentFormSet(
-                self.request.POST, instance=self.object, prefix='eng'
-            )
-        else:
-            context['eng_formset'] = EngineeringDocumentFormSet(
-                instance=self.object, prefix='eng'
-            )
-        context['section_fields'] = TechnicalProposal.SECTION_FIELDS
-        context['boilerplates'] = ProposalBoilerplate.objects.all()
-        return context
+    def post(self, request, pk):
+        obj = self.get_object()
+        section_fs = ProposalSectionFormSet(request.POST, instance=obj, prefix='sec')
+        eng_fs = EngineeringDocumentFormSet(request.POST, instance=obj, prefix='eng')
+        if section_fs.is_valid() and eng_fs.is_valid():
+            section_fs.save()
+            eng_fs.save()
+            messages.success(request, 'Proposal content saved.')
+            return redirect('proposals:detail', pk=obj.pk)
+        return render(request, self.template_name,
+                      self._context(obj, section_fs, eng_fs))
 
-    def form_valid(self, form):
-        context = self.get_context_data()
-        eng_formset = context['eng_formset']
-        if eng_formset.is_valid():
-            self.object = form.save()
-            eng_formset.instance = self.object
-            eng_formset.save()
-            messages.success(self.request, 'Proposal content saved.')
-            return super().form_valid(form)
-        else:
-            return self.form_invalid(form)
 
-    def get_success_url(self):
-        return reverse('proposals:detail', kwargs={'pk': self.object.pk})
+@login_required
+@require_POST
+def add_proposal_section(request, pk):
+    """Add one or more sections to a proposal at once — any number of checked
+    library headings (each pre-fills its default content) plus an optional typed
+    custom heading. Returns to the editor."""
+    proposal = get_object_or_404(TechnicalProposal, pk=pk)
+    if not _can_edit_proposal(request.user, proposal):
+        messages.error(request, 'Permission denied.')
+        return redirect('proposals:content', pk=pk)
+
+    # Checked library headings, in the order the form submitted them, plus an
+    # optional typed custom heading.
+    chosen = [h.strip() for h in request.POST.getlist('heading') if h.strip()]
+    custom = (request.POST.get('custom_heading') or '').strip()
+    if custom:
+        chosen.append(custom)
+    if not chosen:
+        messages.error(request, 'Pick at least one heading, or type a custom one.')
+        return redirect('proposals:content', pk=pk)
+
+    next_order = (proposal.sections.aggregate(m=Max('order'))['m'] or 0) + 1
+    for heading in chosen:
+        lib = SectionHeading.objects.filter(name__iexact=heading).first()
+        ProposalSection.objects.create(
+            proposal=proposal,
+            heading=lib.name if lib else heading,
+            content=(lib.default_content if lib else ''),
+            order=next_order)
+        next_order += 1
+
+    count = len(chosen)
+    messages.success(
+        request, f'{count} section{"" if count == 1 else "s"} added.')
+    return redirect('proposals:content', pk=pk)
 
 
 # ─── AJAX ─────────────────────────────────────────────────────

@@ -73,17 +73,15 @@
 </div>
 
 <!-- Sections -->
-{% for field_name, label in proposal.SECTION_FIELDS %}
-{% with content=proposal|getattr_filter:field_name %}
-{% if content %}
+{% for section in proposal.sections.all %}
 <div class="card mb-3">
-    <div class="card-header"><i class="bi bi-text-left me-2"></i>{{ label }}</div>
+    <div class="card-header"><i class="bi bi-text-left me-2"></i>{{ section.heading }}</div>
+    {% if section.content %}
     <div class="card-body">
-        <div style="font-family: 'Trebuchet MS', Trebuchet, Arial, sans-serif; font-size: 11pt; text-align: justify; line-height: 1.5;">{{ content|safe }}</div>
+        <div style="font-family: 'Trebuchet MS', Trebuchet, Arial, sans-serif; font-size: 11pt; text-align: justify; line-height: 1.5;">{{ section.content|safe }}</div>
     </div>
+    {% endif %}
 </div>
-{% endif %}
-{% endwith %}
 {% endfor %}
 
 <!-- Engineering Documents -->

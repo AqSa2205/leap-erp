@@ -177,20 +177,6 @@ def _replace_cover_page(body, proposal):
 
 # ── Body section content replacement ─────────────────────────
 
-HEADING_TO_FIELD = {
-    'covering letter': 'covering_letter',
-    'executive summary': 'executive_summary',
-    'company overview': 'company_overview',
-    'understanding of requirements': 'understanding_of_requirements',
-    'proposed technical solution': 'proposed_technical_solution',
-    'delivery and implementation': 'delivery_implementation',
-    'delivery': 'delivery_implementation',
-    'risk management': 'risk_management',
-    'service management': 'service_management',
-    'data protection': 'data_protection',
-    'assumptions': 'assumptions_constraints',
-}
-
 def _get_paragraph_text(para):
     return ''.join(
         (t.text or '') for t in para.findall(f'.//{{{WNS}}}t')
@@ -292,16 +278,38 @@ def _is_heading1(elem):
     return _get_paragraph_style(elem) == 'Heading1'
 
 
+def _set_heading_text(para, text):
+    """Set a heading paragraph's visible text, preserving run formatting and
+    stripping bookmark elements (so cloned headings don't duplicate IDs)."""
+    # Drop TOC bookmarks — duplicating their w:id across cloned headings
+    # would corrupt the document.
+    for tag in ('bookmarkStart', 'bookmarkEnd'):
+        for bm in para.findall(f'{{{WNS}}}{tag}'):
+            para.remove(bm)
+
+    t_elements = para.findall(f'.//{{{WNS}}}t')
+    if t_elements:
+        t_elements[0].text = text
+        t_elements[0].set(XML_SPACE, 'preserve')
+        for t in t_elements[1:]:
+            t.text = ''
+    else:
+        r = etree.SubElement(para, f'{{{WNS}}}r')
+        r.insert(0, _make_default_rPr())
+        t = etree.SubElement(r, f'{{{WNS}}}t')
+        t.text = text
+        t.set(XML_SPACE, 'preserve')
+
+
 def _replace_body_sections(xml_bytes, proposal, image_registry):
-    """Replace body section content between Heading1 paragraphs.
+    """Rebuild the proposal body from the user's ProposalSection rows.
 
-    Works with ALL body children (paragraphs, tables, etc.) so that
-    pre-filled tables between headings are also removed.
-
-    All Heading1 sections in the template are processed:
-    - Matched headings: content replaced with user's text from the form
-    - Unmatched headings (SUMMARY, OBJECTIVE, etc.): heading AND all
-      content between it and the next heading are removed entirely.
+    The template carries a fixed set of Heading1 sections. We keep everything
+    before the first Heading1 (cover page + table of contents) and the trailing
+    sectPr, wipe the old section region entirely, then emit one Heading1 +
+    content block per ProposalSection (in order), reusing the template's
+    Heading1 styling. Engineering documents, if any, are appended as a final
+    section using the template's documents table.
 
     image_registry: mutable list populated with image metadata as <img>
     tags are encountered. Used to later add image files and relationships
@@ -312,84 +320,96 @@ def _replace_body_sections(xml_bytes, proposal, image_registry):
     if body is None:
         return xml_bytes
 
-    # Work with ALL body children (paragraphs, tables, sectPr, etc.)
     children = list(body)
 
-    # Find all Heading1 positions among body children
-    heading_info = []  # (child_index, field_name_or_None)
-    for i, child in enumerate(children):
-        if not _is_heading1(child):
-            continue
-        text = _get_paragraph_text(child).lower()
-        matched_field = None
-        for key, field_name in HEADING_TO_FIELD.items():
-            if key in text:
-                matched_field = field_name
-                break
-        heading_info.append((i, matched_field))
-
-    if not heading_info:
+    # Find Heading1 positions — these delimit the template's section region.
+    heading_positions = [i for i, c in enumerate(children) if _is_heading1(c)]
+    if not heading_positions:
         return xml_bytes
+    first_heading_idx = heading_positions[0]
 
-    # Extract formatting from first content paragraph
+    # Heading template: reuse the first Heading1 paragraph's formatting.
+    heading_template = copy.deepcopy(children[first_heading_idx])
+
+    # Content formatting template: first non-empty plain content paragraph
+    # following any heading (Heading2/list paragraphs are skipped).
     pPr_template = None
     rPr_template = None
-    for hi_idx, (start_pos, _) in enumerate(heading_info):
-        end_pos = heading_info[hi_idx + 1][0] if hi_idx + 1 < len(heading_info) else len(children)
-        for ci in range(start_pos + 1, min(start_pos + 3, end_pos)):
-            candidate = children[ci]
-            if candidate.tag == f'{{{WNS}}}p' and _get_paragraph_text(candidate):
-                pPr_template, rPr_template = _extract_content_formatting(candidate)
+    for hpos in heading_positions:
+        for ci in range(hpos + 1, min(hpos + 4, len(children))):
+            cand = children[ci]
+            if (cand.tag == f'{{{WNS}}}p' and not _get_paragraph_style(cand)
+                    and _get_paragraph_text(cand)):
+                pPr_template, rPr_template = _extract_content_formatting(cand)
                 break
         if pPr_template is not None:
             break
 
-    # Work backwards to preserve indices
-    for hi_idx in range(len(heading_info) - 1, -1, -1):
-        start_pos, field_name = heading_info[hi_idx]
+    # Capture the engineering documents table (before we wipe the region) so we
+    # can re-emit it with the user's data after the sections.
+    eng_table_template = None
+    for tbl in body.findall(f'.//{{{WNS}}}tbl'):
+        header = ''.join(
+            (t.text or '') for t in tbl.findall(f'.//{{{WNS}}}t')[:8]
+        ).lower()
+        if 'document' in header:
+            eng_table_template = copy.deepcopy(tbl)
+            break
 
-        # End position: next Heading1 or end of children (but keep sectPr)
-        end_pos = heading_info[hi_idx + 1][0] if hi_idx + 1 < len(heading_info) else len(children)
-        # Don't remove the final sectPr (section properties) element
-        while end_pos > start_pos + 1 and children[end_pos - 1].tag == f'{{{WNS}}}sectPr':
-            end_pos -= 1
+    # Trailing sectPr boundary — preserve page/section setup at the end.
+    end_idx = len(children)
+    while end_idx > first_heading_idx and children[end_idx - 1].tag == f'{{{WNS}}}sectPr':
+        end_idx -= 1
 
-        # Remove ALL children between this heading and the next (paragraphs, tables, etc.)
-        for j in range(end_pos - 1, start_pos, -1):
-            body.remove(children[j])
+    # Anchor = last cover-page element we keep; new content is inserted after it.
+    anchor = children[first_heading_idx - 1]
 
-        if field_name is None:
-            # Unmatched heading — remove the heading itself too
-            body.remove(children[start_pos])
+    # Wipe the old section region (headings + content + leftover template junk).
+    for j in range(end_idx - 1, first_heading_idx - 1, -1):
+        body.remove(children[j])
+
+    # Build the new section blocks from the user's rows.
+    new_elements = []
+    for section in proposal.sections.all():
+        heading_para = copy.deepcopy(heading_template)
+        _set_heading_text(heading_para, section.heading)
+        new_elements.append(heading_para)
+
+        content = section.content or ''
+        if not content.strip():
             continue
-
-        # Matched heading — insert user content
-        content = getattr(proposal, field_name, '')
-        if not content:
-            continue
-
-        heading_para = children[start_pos]
-
-        # Check if content is HTML (from TinyMCE). Match real tags regardless of
-        # attributes — pasting from Word yields <p class="Para">, <span ...>,
-        # etc., which a bare "<p>" check would miss (dumping raw HTML).
         if _HTML_TAG_RE.search(content):
-            _insert_html_content(body, heading_para, content, pPr_template, rPr_template, image_registry)
+            new_elements.extend(
+                _html_to_elements(content, pPr_template, rPr_template, image_registry))
         else:
             for line in content.split('\n'):
-                new_para = _make_content_paragraph(line, pPr_template, rPr_template)
-                heading_para.addnext(new_para)
-                heading_para = new_para
+                new_elements.append(
+                    _make_content_paragraph(line, pPr_template, rPr_template))
 
-    # Fill engineering documents table (rebuild from user data)
+    # Engineering documents as a final section.
+    eng_docs = list(proposal.engineering_documents.all())
+    if eng_docs and eng_table_template is not None:
+        heading_para = copy.deepcopy(heading_template)
+        _set_heading_text(heading_para, 'Engineering Documents')
+        new_elements.append(heading_para)
+        new_elements.append(copy.deepcopy(eng_table_template))
+
+    # Insert everything after the cover region, before the trailing sectPr.
+    current = anchor
+    for el in new_elements:
+        current.addnext(el)
+        current = el
+
+    # Rebuild the engineering documents table rows from user data (operates in
+    # place on the table we just inserted).
     _fill_engineering_table(body, proposal)
 
     return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
 
-def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_template, image_registry):
-    """Convert HTML from TinyMCE to DOCX elements (paragraphs, tables, images)
-    and insert them after the given element.
+def _html_to_elements(html_content, pPr_template, rPr_template, image_registry):
+    """Convert HTML from TinyMCE to a list of DOCX elements (paragraphs, tables,
+    images). The caller is responsible for inserting them into the body.
 
     image_registry is a mutable list the parser appends (src, alt, width, height)
     tuples to as it encounters <img> tags. Each entry's index becomes the
@@ -695,11 +715,7 @@ def _insert_html_content(body, after_elem, html_content, pPr_template, rPr_templ
     parser.feed(html_content)
     # Flush any remaining text
     parser._flush_text()
-
-    current = after_elem
-    for elem in parser.elements:
-        current.addnext(elem)
-        current = elem
+    return parser.elements
 
 
 # ── Engineering documents table ───────────────────────────────
@@ -1050,12 +1066,15 @@ def _generate_fallback_docx(proposal):
 
     doc.add_page_break()
 
-    for field_name, label in proposal.SECTION_FIELDS:
-        content = getattr(proposal, field_name, '')
-        if content:
-            doc.add_heading(label, level=1)
-            for line in content.split('\n'):
-                doc.add_paragraph(line)
+    for section in proposal.sections.all():
+        doc.add_heading(section.heading, level=1)
+        # Strip HTML tags for the plain fallback; the templated exporter
+        # handles rich content properly.
+        text = re.sub(r'<[^>]+>', '', section.content or '')
+        from html import unescape
+        for line in unescape(text).split('\n'):
+            if line.strip():
+                doc.add_paragraph(line.strip())
 
     eng_docs = list(proposal.engineering_documents.all())
     if eng_docs:

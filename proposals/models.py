@@ -135,6 +135,43 @@ class EngineeringDocument(models.Model):
         return f"{self.doc_number} - {self.doc_title}"
 
 
+class SectionHeading(models.Model):
+    """Admin-editable library of proposal section headings. A proposal is built
+    by selecting headings from here (or typing a custom one). Each can carry
+    default content that pre-fills a new section."""
+    name = models.CharField(max_length=255, unique=True)
+    order = models.PositiveIntegerField(default=0)
+    default_content = models.TextField(
+        blank=True, help_text='Optional default text a new section pre-fills with (editable).')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['order', 'name']
+
+    def __str__(self):
+        return self.name
+
+
+class ProposalSection(models.Model):
+    """One section of a TechnicalProposal — a heading + rich-text content, in
+    order. The heading text is stored here (denormalised) so custom headings
+    work and library renames don't rewrite existing proposals."""
+    proposal = models.ForeignKey(
+        TechnicalProposal, on_delete=models.CASCADE, related_name='sections')
+    heading = models.CharField(max_length=255)
+    content = models.TextField(blank=True)
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'id']
+
+    def __str__(self):
+        return f'{self.proposal_id}: {self.heading}'
+
+
 class PrequalificationDocument(models.Model):
     """A Prequalification Document (PQD) — similar cover/header/footer to
     TechnicalProposal but with 7 sections, mixing rich-text content with

@@ -2,9 +2,29 @@ from django import forms
 from django.forms import inlineformset_factory
 from .models import (
     TechnicalProposal, EngineeringDocument, ProposalBoilerplate,
-    PrequalificationDocument,
+    PrequalificationDocument, ProposalSection, SectionHeading,
 )
 from projects.models import Project
+
+
+class ProposalSectionForm(forms.ModelForm):
+    class Meta:
+        model = ProposalSection
+        fields = ['heading', 'content', 'order']
+        widgets = {
+            'heading': forms.TextInput(attrs={
+                'class': 'form-control fw-bold', 'list': 'section-heading-options',
+                'placeholder': 'Section heading'}),
+            'content': forms.Textarea(attrs={'class': 'tinymce-editor'}),
+            'order': forms.NumberInput(attrs={
+                'class': 'form-control form-control-sm section-order', 'style': 'width:70px'}),
+        }
+
+
+ProposalSectionFormSet = inlineformset_factory(
+    TechnicalProposal, ProposalSection, form=ProposalSectionForm,
+    extra=0, can_delete=True,
+)
 
 
 class ProposalMetadataForm(forms.ModelForm):
