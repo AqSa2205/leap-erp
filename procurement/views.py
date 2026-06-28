@@ -730,13 +730,19 @@ def po_approve_stage(request, pk, stage):
     # The full traceback is logged for diagnosis.
     try:
         with transaction.atomic():
+            # Lock just the bare PO row to serialise concurrent approvals.
+            # We must NOT join here: on PostgreSQL "SELECT ... FOR UPDATE"
+            # cannot lock the nullable side of an outer join, and
+            # _visible_pos_for() select_related()s the nullable project /
+            # created_by FKs — so locking through it raises NotSupportedError
+            # (Postgres only; SQLite silently allows it). Lock the row, then
+            # scope-check region/role with a separate, unlocked query.
             try:
-                po = (
-                    _visible_pos_for(request.user)
-                    .select_for_update()
-                    .get(pk=pk)
-                )
+                po = PurchaseOrder.objects.select_for_update().get(pk=pk)
             except PurchaseOrder.DoesNotExist:
+                return JsonResponse({'error': 'PO not found or not in your scope.'}, status=404)
+
+            if not _visible_pos_for(request.user).filter(pk=pk).exists():
                 return JsonResponse({'error': 'PO not found or not in your scope.'}, status=404)
 
             if stage not in po.required_stages:

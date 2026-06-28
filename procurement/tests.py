@@ -55,6 +55,15 @@ class POApproveStageTests(TestCase):
         self.assertEqual(r.status_code, 400)
         self.assertIn('sequence', r.json()['error'].lower())
 
+    def test_out_of_scope_user_gets_404(self):
+        # A plain user who didn't create the PO can't see (or sign) it.
+        outsider = User.objects.create_user('outsider', password='pw')
+        self.client.force_login(outsider)
+        r = self.client.post(self._url('scm'), {'signature_data': _png_data_url()})
+        self.assertEqual(r.status_code, 404)
+        self.po.refresh_from_db()
+        self.assertIsNone(self.po.scm_approved_at)
+
     def test_storage_failure_returns_json_500_not_html(self):
         # Simulate object storage / DB write blowing up during the save. The
         # endpoint must answer with JSON 500 carrying the exception detail, not
