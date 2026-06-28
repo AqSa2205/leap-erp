@@ -1,0 +1,76 @@
+{% extends 'base.html' %}
+{% block title %}Import Quotation{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h1 class="h3 mb-0"><i class="bi bi-magic me-2"></i>Import Quotation → PO</h1>
+                <a href="{% url 'procurement:po_list' %}" class="btn btn-outline-secondary btn-sm">
+                    <i class="bi bi-arrow-left me-1"></i> Back to POs
+                </a>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-body">
+                    <p class="text-muted">
+                        Upload a supplier quotation PDF. It's read automatically — whatever the
+                        layout — into line items you can review and edit before the Purchase Order
+                        is created. Nothing is created until you confirm on the review screen.
+                    </p>
+                    <form method="post" enctype="multipart/form-data" class="d-flex flex-wrap gap-2 align-items-center">
+                        {% csrf_token %}
+                        <input type="file" name="quotation_file" accept="application/pdf" class="form-control" style="max-width:420px" required>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-upload me-1"></i> Upload &amp; Extract
+                        </button>
+                        <span class="text-muted small">PDF only. Large multi-page quotes are supported.</span>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header"><strong>Recent imports</strong></div>
+                <div class="card-body p-0">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr>
+                                <th>File</th>
+                                <th>Status</th>
+                                <th>Items</th>
+                                <th>Created</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for q in imports %}
+                            <tr>
+                                <td>{{ q.original_filename|default:q }}</td>
+                                <td>
+                                    {% if q.status == 'converted' %}<span class="badge bg-success">Converted</span>
+                                    {% elif q.status == 'extracted' %}<span class="badge bg-info text-dark">Awaiting review</span>
+                                    {% elif q.status == 'failed' %}<span class="badge bg-danger" title="{{ q.error }}">Failed</span>
+                                    {% else %}<span class="badge bg-secondary">Pending</span>{% endif %}
+                                </td>
+                                <td>{{ q.line_items|length }}</td>
+                                <td class="text-muted small">{{ q.created_at|date:"d M Y H:i" }}</td>
+                                <td class="text-end">
+                                    {% if q.status == 'extracted' %}
+                                    <a href="{% url 'procurement:quotation_review' q.pk %}" class="btn btn-sm btn-primary">Review &amp; create PO</a>
+                                    {% elif q.status == 'converted' and q.purchase_order_id %}
+                                    <a href="{% url 'procurement:po_detail' q.purchase_order_id %}" class="btn btn-sm btn-outline-secondary">View PO</a>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr><td colspan="5" class="text-center text-muted py-4">No quotations imported yet.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -368,6 +368,57 @@ class PurchaseOrderItem(models.Model):
         return (self.quantity * self.rate_per_unit).quantize(Decimal('0.01'))
 
 
+def quotation_upload_path(instance, filename):
+    return f'procurement/quotations/{filename}'
+
+
+class QuotationImport(models.Model):
+    """A supplier quotation PDF uploaded by procurement, AI-extracted into a
+    normalized structure, then reviewed and turned into a Purchase Order.
+
+    Vendor quotations arrive in many different layouts, so extraction is done
+    by an LLM into a common schema (stored in ``extracted_data``) rather than a
+    per-vendor parser. The file + extraction are kept for audit and re-review.
+    """
+
+    STATUS_CHOICES = [
+        ('pending', 'Pending extraction'),
+        ('extracted', 'Extracted — awaiting review'),
+        ('failed', 'Extraction failed'),
+        ('converted', 'Converted to PO'),
+    ]
+
+    file = models.FileField(upload_to=quotation_upload_path)
+    original_filename = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default='pending')
+    # Normalized extraction: {vendor_name, currency, project_name, vat_rate,
+    # notes, line_items: [{description, make_model, quantity, uom, unit_price}]}
+    extracted_data = models.JSONField(null=True, blank=True)
+    model_used = models.CharField(max_length=60, blank=True)
+    error = models.TextField(blank=True)
+
+    purchase_order = models.ForeignKey(
+        PurchaseOrder, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='source_quotations',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        related_name='quotation_imports',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.original_filename or f'Quotation #{self.pk}'
+
+    @property
+    def line_items(self):
+        return (self.extracted_data or {}).get('line_items', []) if self.extracted_data else []
+
+
 # ─── Procurement Summary (Internal / External) ────────────────
 
 

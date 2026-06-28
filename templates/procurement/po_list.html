@@ -12,6 +12,9 @@
             <p class="text-muted mb-0">{{ total_count }} total</p>
         </div>
         <div>
+            <a href="{% url 'procurement:quotation_import' %}" class="btn btn-primary me-2" title="Upload a supplier quotation PDF and auto-create a PO">
+                <i class="bi bi-magic"></i> Import Quotation
+            </a>
             <button type="button" class="btn btn-outline-success me-2" data-bs-toggle="modal" data-bs-target="#importModal">
                 <i class="bi bi-upload"></i> Import Excel
             </button>

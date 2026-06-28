@@ -11,13 +11,13 @@ from decimal import Decimal, InvalidOperation
 
 from .models import (
     PurchaseOrder, PurchaseOrderItem,
-    POSummaryEntry,
+    POSummaryEntry, QuotationImport,
     DeliveryNote, DeliveryNoteItem,
     InventoryReport, InventoryItem,
     FRCReport, FRCEntry, FRCInventory,
 )
 from .forms import (
-    PurchaseOrderForm, POItemFormSet, POFilterForm,
+    PurchaseOrderForm, PurchaseOrderItemForm, POItemFormSet, POFilterForm,
     DeliveryNoteForm, DNItemFormSet,
     InventoryReportForm, InventoryItemFormSet,
     FRCReportForm, FRCEntryFormSet, FRCInventoryForm,
@@ -416,6 +416,138 @@ class POCreateView(ProcurementPermissionMixin, CreateView):
 
     def get_success_url(self):
         return reverse('procurement:po_detail', kwargs={'pk': self.object.pk})
+
+
+# ─── Quotation import → PO (AI-assisted) ──────────────────────
+
+def _can_procure(user):
+    return bool(user.is_super_admin_user or user.is_admin_user
+                or getattr(user, 'is_procurement_user', False))
+
+
+def _prefilled_item_formset(items):
+    """A PO item formset pre-populated (unbound) from extracted quotation rows."""
+    from django.forms import inlineformset_factory
+    FS = inlineformset_factory(
+        PurchaseOrder, PurchaseOrderItem, form=PurchaseOrderItemForm,
+        extra=max(len(items), 1), can_delete=True)
+    initial = []
+    for i, it in enumerate(items):
+        initial.append({
+            'serial_number': i + 1,
+            'description': it.get('description', ''),
+            'make_model': it.get('make_model', ''),
+            'quantity': it.get('quantity') or 0,
+            'uom': it.get('uom') or 'Nos',
+            'rate_per_unit': it.get('unit_price') or 0,
+            'order': i,
+        })
+    return FS(prefix='items', initial=initial, instance=PurchaseOrder())
+
+
+@login_required
+def quotation_import(request):
+    """Upload a supplier quotation PDF; extract it into a structured draft the
+    user reviews before a PO is created."""
+    if not _can_procure(request.user):
+        messages.error(request, 'Only procurement team members can import quotations.')
+        return redirect('procurement:po_list')
+
+    if request.method == 'POST':
+        f = request.FILES.get('quotation_file')
+        if not f:
+            messages.error(request, 'Please choose a PDF quotation to upload.')
+            return redirect('procurement:quotation_import')
+
+        qi = QuotationImport.objects.create(
+            file=f, original_filename=f.name, created_by=request.user,
+            status='pending')
+
+        from .quotation_extract import extract_text_from_pdf, extract_quotation
+        try:
+            qi.file.open('rb')
+            text = extract_text_from_pdf(qi.file)
+            qi.file.close()
+            data, model = extract_quotation(text)
+            qi.extracted_data = data
+            qi.model_used = model
+            qi.status = 'extracted'
+            qi.save(update_fields=['extracted_data', 'model_used', 'status', 'updated_at'])
+        except Exception as e:
+            qi.status = 'failed'
+            qi.error = str(e)
+            qi.save(update_fields=['status', 'error', 'updated_at'])
+            messages.error(request, f'Could not extract this quotation: {e}')
+            return redirect('procurement:quotation_import')
+
+        n = len(qi.line_items)
+        messages.success(request, f'Extracted {n} line item{"" if n == 1 else "s"} — review and create the PO.')
+        return redirect('procurement:quotation_review', pk=qi.pk)
+
+    imports = QuotationImport.objects.filter(created_by=request.user)[:25] \
+        if not (request.user.is_super_admin_user or request.user.is_admin_user) \
+        else QuotationImport.objects.all()[:25]
+    return render(request, 'procurement/quotation_import.html', {'imports': imports})
+
+
+@login_required
+def quotation_review(request, pk):
+    """Review the extracted quotation in the PO editor and create the PO."""
+    qi = get_object_or_404(QuotationImport, pk=pk)
+    if not _can_procure(request.user):
+        messages.error(request, 'Permission denied.')
+        return redirect('procurement:po_list')
+
+    data = qi.extracted_data or {}
+
+    def _render(form, item_formset):
+        return render(request, 'procurement/po_form.html', {
+            'form': form,
+            'item_formset': item_formset,
+            'title': f'Review Quotation → Create PO',
+            'system_suggestions': PurchaseOrder.SYSTEM_SUGGESTIONS,
+            'procurement_team': _procurement_team_users(),
+            'terms_by_category': _po_terms_by_category([]),
+            'quotation': qi,
+            'is_quotation_review': True,
+        })
+
+    if request.method == 'POST':
+        form = PurchaseOrderForm(request.POST, user=request.user)
+        item_formset = POItemFormSet(request.POST, prefix='items')
+        if form.is_valid() and item_formset.is_valid():
+            po = form.save(commit=False)
+            po.created_by = request.user
+            po.save()
+            item_formset.instance = po
+            item_formset.save()
+            term_ids = [int(x) for x in request.POST.getlist('selected_terms') if x.isdigit()]
+            po.selected_terms.set(term_ids)
+            qi.purchase_order = po
+            qi.status = 'converted'
+            qi.save(update_fields=['purchase_order', 'status', 'updated_at'])
+            messages.success(request, f'Purchase Order {po.po_number} created from quotation.')
+            return redirect('procurement:po_detail', pk=po.pk)
+        return _render(form, item_formset)
+
+    # GET — pre-fill the PO editor from the extraction.
+    today = datetime.now().date()
+    initial = {
+        'po_date': today,
+        'vendor_name': data.get('vendor_name', ''),
+        'vendor_contact_person': data.get('vendor_contact_person', ''),
+        'vendor_contact_email': data.get('vendor_contact_email', ''),
+        'vendor_contact_tel': data.get('vendor_contact_tel', ''),
+        'project_name': data.get('project_name', ''),
+        'currency': data.get('currency', 'SAR'),
+        'vat_rate': data.get('vat_rate', 15),
+        'mr_item_number': data.get('quotation_reference', ''),
+        'po_issued_by': request.user.get_full_name() or request.user.username,
+        'issuer_email': request.user.email or '',
+    }
+    form = PurchaseOrderForm(initial=initial, user=request.user)
+    item_formset = _prefilled_item_formset(data.get('line_items', []))
+    return _render(form, item_formset)
 
 
 class PODetailView(ProcurementPermissionMixin, DetailView):

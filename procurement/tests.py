@@ -277,3 +277,115 @@ class POCurrencyTests(TestCase):
         ws = openpyxl.load_workbook(io.BytesIO(r.content)).active
         self.assertEqual(ws.cell(row=11, column=8).value, 'Rate/unit (AED)')
         self.assertEqual(ws.cell(row=11, column=9).value, 'Total Value (AED)')
+
+
+class QuotationImportTests(TestCase):
+    """Supplier quotation PDFs are AI-extracted into a normalized structure,
+    reviewed in the PO editor, then turned into a PO. The Anthropic call is
+    mocked — these tests cover normalization + the upload/review/create flow."""
+
+    def setUp(self):
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('proc', password='pw', role=self.sa_role)
+        self.client.force_login(self.user)
+        self.fake = {
+            'vendor_name': 'Al-Oufy', 'currency': 'USD', 'vat_rate': 15,
+            'project_name': 'Nariyah', 'quotation_reference': 'Q-9',
+            'line_items': [
+                {'description': 'RGS Conduit 1in', 'make_model': 'ITCC',
+                 'quantity': 150, 'uom': 'PCS', 'unit_price': 49.5},
+                {'description': 'RGS Lock Nut 1in', 'make_model': '',
+                 'quantity': 100, 'uom': 'PCS', 'unit_price': 1.0},
+            ],
+        }
+
+    def test_normalize_maps_currency_and_unit_price(self):
+        from procurement.quotation_extract import _normalize
+        out = _normalize({
+            'currency': 'SR',
+            'line_items': [
+                {'description': 'A', 'quantity': '5', 'unit_price': '2.50', 'uom': ''},
+                {'description': '', 'quantity': 1, 'unit_price': 1},  # dropped (no desc)
+            ],
+        })
+        self.assertEqual(out['currency'], 'SAR')
+        self.assertEqual(len(out['line_items']), 1)
+        self.assertEqual(out['line_items'][0]['uom'], 'Nos')   # default
+        self.assertEqual(out['line_items'][0]['unit_price'], 2.5)
+
+    def _upload(self):
+        from unittest import mock
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        with mock.patch('procurement.quotation_extract.extract_text_from_pdf', return_value='text'), \
+             mock.patch('procurement.quotation_extract.extract_quotation',
+                        return_value=(self.fake, 'claude-sonnet-4-6')):
+            up = SimpleUploadedFile('al.pdf', b'%PDF-1.4', content_type='application/pdf')
+            return self.client.post(reverse('procurement:quotation_import'),
+                                    {'quotation_file': up})
+
+    def test_upload_extracts_and_redirects_to_review(self):
+        from procurement.models import QuotationImport
+        r = self._upload()
+        qi = QuotationImport.objects.latest('id')
+        self.assertEqual(qi.status, 'extracted')
+        self.assertEqual(len(qi.line_items), 2)
+        self.assertRedirects(
+            r, reverse('procurement:quotation_review', kwargs={'pk': qi.pk}))
+
+    def test_review_page_prefills_extraction(self):
+        from procurement.models import QuotationImport
+        self._upload()
+        qi = QuotationImport.objects.latest('id')
+        r = self.client.get(reverse('procurement:quotation_review', kwargs={'pk': qi.pk}))
+        self.assertEqual(r.status_code, 200)
+        body = r.content.decode()
+        self.assertIn('Al-Oufy', body)
+        self.assertIn('RGS Conduit 1in', body)
+        self.assertIn('"USD" selected', body)
+
+    def test_extraction_failure_marks_failed(self):
+        from unittest import mock
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from procurement.models import QuotationImport
+        with mock.patch('procurement.quotation_extract.extract_text_from_pdf', return_value='text'), \
+             mock.patch('procurement.quotation_extract.extract_quotation',
+                        side_effect=RuntimeError('no API key')):
+            up = SimpleUploadedFile('x.pdf', b'%PDF-1.4', content_type='application/pdf')
+            self.client.post(reverse('procurement:quotation_import'), {'quotation_file': up})
+        qi = QuotationImport.objects.latest('id')
+        self.assertEqual(qi.status, 'failed')
+        self.assertIn('no API key', qi.error)
+
+    def test_review_creates_po_with_items(self):
+        from procurement.models import QuotationImport, PurchaseOrder
+        self._upload()
+        qi = QuotationImport.objects.latest('id')
+        data = {
+            'po_date': '2026-01-01', 'po_number': 'PO-Q-1', 'cost_center': 'projects',
+            'status': 'draft', 'vendor_name': 'Al-Oufy', 'po_issued_by': 'Q',
+            'vendor_contact_email': '', 'issuer_email': '', 'project_name': 'Nariyah',
+            'currency': 'USD', 'discount_rate': '0', 'vat_rate': '15', 'lead_time': '',
+            'payment_terms_text': '', 'warranty': '', 'terms_and_conditions': '',
+            'delivery_incoterms': '', 'delivery_location': '',
+            'items-TOTAL_FORMS': '2', 'items-INITIAL_FORMS': '0',
+            'items-MIN_NUM_FORMS': '0', 'items-MAX_NUM_FORMS': '1000',
+        }
+        def row(i, desc, qty, price):
+            return {f'items-{i}-id': '', f'items-{i}-serial_number': str(i + 1),
+                    f'items-{i}-description': desc, f'items-{i}-make_model': '',
+                    f'items-{i}-quantity': str(qty), f'items-{i}-uom': 'PCS',
+                    f'items-{i}-rate_per_unit': str(price), f'items-{i}-order': str(i),
+                    f'items-{i}-system': '', f'items-{i}-remarks': '',
+                    f'items-{i}-po_value_usd': '', f'items-{i}-advance_payment_sar': '',
+                    f'items-{i}-delivery_status': '', f'items-{i}-scm': ''}
+        data.update(row(0, 'RGS Conduit 1in', 150, 49.5))
+        data.update(row(1, 'RGS Lock Nut 1in', 100, 1.0))
+        r = self.client.post(
+            reverse('procurement:quotation_review', kwargs={'pk': qi.pk}), data)
+        po = PurchaseOrder.objects.get(po_number='PO-Q-1')
+        self.assertRedirects(r, reverse('procurement:po_detail', kwargs={'pk': po.pk}))
+        self.assertEqual(po.items.count(), 2)
+        self.assertEqual(po.currency, 'USD')
+        qi.refresh_from_db()
+        self.assertEqual(qi.status, 'converted')
+        self.assertEqual(qi.purchase_order_id, po.pk)

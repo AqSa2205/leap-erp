@@ -26,6 +26,17 @@
         <div class="col-lg-11">
             <h1 class="h3 mb-4">{{ title }}</h1>
 
+            {% if is_quotation_review %}
+            <div class="alert alert-info d-flex align-items-start gap-2">
+                <i class="bi bi-magic fs-5"></i>
+                <div>
+                    <strong>Reviewing extracted quotation{% if quotation %} — {{ quotation.original_filename }}{% endif %}.</strong>
+                    The fields and line items below were read from the PDF{% if quotation.model_used %} by {{ quotation.model_used }}{% endif %}.
+                    <span class="text-danger">Check every line — especially prices and quantities</span> — then set the PO Number and create the PO.
+                </div>
+            </div>
+            {% endif %}
+
             <form method="post" novalidate>
                 {% csrf_token %}
 

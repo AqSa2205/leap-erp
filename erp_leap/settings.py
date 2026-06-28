@@ -263,6 +263,8 @@ DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'Leap ERP <notificatio
 # AI digest (devtracking) — Anthropic-powered developer-progress reports.
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 DEVTRACKING_AI_MODEL = os.environ.get('DEVTRACKING_AI_MODEL', 'claude-sonnet-4-6')
+# Supplier-quotation PDF extraction (procurement) — defaults to the digest model.
+PROCUREMENT_AI_MODEL = os.environ.get('PROCUREMENT_AI_MODEL', 'claude-sonnet-4-6')
 
 # GitHub PR status (devtracking) — used to fetch live PR state for code tasks.
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
