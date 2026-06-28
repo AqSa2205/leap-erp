@@ -271,8 +271,14 @@ def add_proposal_section(request, pk):
         return redirect('proposals:content', pk=pk)
 
     next_order = (proposal.sections.aggregate(m=Max('order'))['m'] or 0) + 1
+    is_super = request.user.is_super_admin_user
     for heading in chosen:
         lib = SectionHeading.objects.filter(name__iexact=heading).first()
+        # A super admin's custom (non-library) headings join the shared library
+        # so they appear in the Add panel for every future proposal.
+        if lib is None and is_super:
+            lib_order = (SectionHeading.objects.aggregate(m=Max('order'))['m'] or 0) + 1
+            lib = SectionHeading.objects.create(name=heading, order=lib_order)
         ProposalSection.objects.create(
             proposal=proposal,
             heading=lib.name if lib else heading,

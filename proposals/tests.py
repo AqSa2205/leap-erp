@@ -9,7 +9,7 @@ from proposals.models import (
     TechnicalProposal, ProposalSection, SectionHeading,
 )
 from proposals.docx_export import generate_proposal_docx
-from accounts.models import User
+from accounts.models import User, Role
 
 
 class ProposalDocxExportTests(TestCase):
@@ -89,8 +89,9 @@ class ProposalDocxExportTests(TestCase):
 
 class AddSectionViewTests(TestCase):
     def setUp(self):
-        self.user = User.objects.create_superuser(
-            username='boss', email='boss@x.com', password='pw')
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user(
+            username='boss', email='boss@x.com', password='pw', role=self.sa_role)
         self.client.force_login(self.user)
         self.proposal = TechnicalProposal.objects.create(
             title='T', proposal_reference='TP-ADD', client_name='ACME',
@@ -146,3 +147,31 @@ class AddSectionViewTests(TestCase):
     def test_nothing_selected_is_rejected(self):
         self.client.post(self._url(), {'custom_heading': '  '})
         self.assertEqual(self.proposal.sections.count(), 0)
+
+    def test_super_admin_custom_heading_joins_library(self):
+        self.assertFalse(SectionHeading.objects.filter(name='Brand New Heading').exists())
+        self.client.post(self._url(), {'custom_heading': 'Brand New Heading'})
+        self.assertTrue(
+            SectionHeading.objects.filter(name='Brand New Heading').exists())
+
+    def test_existing_library_heading_not_duplicated(self):
+        SectionHeading.objects.update_or_create(name='Covering Letter')
+        before = SectionHeading.objects.filter(name__iexact='covering letter').count()
+        self.client.post(self._url(), {'custom_heading': 'covering letter'})
+        after = SectionHeading.objects.filter(name__iexact='covering letter').count()
+        self.assertEqual(before, after)  # no duplicate created
+
+    def test_non_super_admin_custom_heading_not_added_to_library(self):
+        rep_role, _ = Role.objects.get_or_create(name=Role.PROPOSAL_REP)
+        rep = User.objects.create_user('rep', password='x', role=rep_role)
+        proposal = TechnicalProposal.objects.create(
+            title='T2', proposal_reference='TP-REP', client_name='ACME',
+            revision_date=date(2026, 1, 1), prepared_by_initials='AJ',
+            created_by=rep)
+        self.client.force_login(rep)
+        url = reverse('proposals:add_section', kwargs={'pk': proposal.pk})
+        self.client.post(url, {'custom_heading': 'Rep Only Heading'})
+        # Section is added to the proposal, but the library is untouched.
+        self.assertTrue(proposal.sections.filter(heading='Rep Only Heading').exists())
+        self.assertFalse(
+            SectionHeading.objects.filter(name='Rep Only Heading').exists())
