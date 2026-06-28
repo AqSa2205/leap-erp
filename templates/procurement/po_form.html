@@ -4,19 +4,41 @@
 
 {% block extra_css %}
 <style>
-    /* Excel-like line-item grid: cells top-aligned so tall (multi-line)
-       descriptions read cleanly; textareas auto-grow via JS so long text is
-       fully visible instead of clipped. */
-    #item-table td, #item-table th { vertical-align: top; }
+    /* Excel-like line-item grid. The table is given a generous minimum width and
+       each column a minimum, so the cells never squash their values — the grid
+       scrolls horizontally instead. Cells are top-aligned so tall (multi-line)
+       descriptions read cleanly; textareas auto-grow via JS. */
+    #item-table { min-width: 1480px; }
+    #item-table td, #item-table th { vertical-align: top; padding: 3px 5px; }
+    #item-table input, #item-table textarea, #item-table select {
+        font-size: 0.85rem;
+        width: 100%;
+        box-sizing: border-box;
+    }
     #item-table textarea {
         overflow: hidden;
         resize: none;
         min-height: 34px;
         line-height: 1.3;
     }
-    #item-table input, #item-table textarea, #item-table select { font-size: 0.85rem; }
-    /* Keep the grid usable on smaller screens without squashing columns. */
-    #item-table { min-width: 1100px; }
+    /* Hide number-input spinner arrows so the Qty / Rate values aren't clipped. */
+    #item-table input[type=number]::-webkit-inner-spin-button,
+    #item-table input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    #item-table input[type=number] { -moz-appearance: textfield; }
+    /* Per-column minimum widths so every field shows its content. */
+    #item-table th:nth-child(1),  #item-table td:nth-child(1)  { min-width: 58px; }   /* S.No */
+    #item-table th:nth-child(2),  #item-table td:nth-child(2)  { min-width: 110px; }  /* System */
+    #item-table th:nth-child(3),  #item-table td:nth-child(3)  { min-width: 150px; }  /* Make/Model */
+    #item-table th:nth-child(4),  #item-table td:nth-child(4)  { min-width: 260px; }  /* Description */
+    #item-table th:nth-child(5),  #item-table td:nth-child(5)  { min-width: 80px; }   /* Qty */
+    #item-table th:nth-child(6),  #item-table td:nth-child(6)  { min-width: 72px; }   /* UOM */
+    #item-table th:nth-child(7),  #item-table td:nth-child(7)  { min-width: 100px; }  /* Rate/Unit */
+    #item-table th:nth-child(8),  #item-table td:nth-child(8)  { min-width: 100px; }  /* USD/EUR */
+    #item-table th:nth-child(9),  #item-table td:nth-child(9)  { min-width: 110px; }  /* Advance SAR */
+    #item-table th:nth-child(10), #item-table td:nth-child(10) { min-width: 150px; }  /* Delivery Status */
+    #item-table th:nth-child(11), #item-table td:nth-child(11) { min-width: 72px; }   /* SCM */
+    #item-table th:nth-child(12), #item-table td:nth-child(12) { min-width: 120px; }  /* Remarks */
+    #item-table th:nth-child(13), #item-table td:nth-child(13) { min-width: 48px; }   /* Del */
 </style>
 {% endblock %}
 
