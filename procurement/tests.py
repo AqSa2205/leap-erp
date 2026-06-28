@@ -56,13 +56,17 @@ class POApproveStageTests(TestCase):
         self.assertIn('sequence', r.json()['error'].lower())
 
     def test_storage_failure_returns_json_500_not_html(self):
-        # Simulate object storage / DB write blowing up during the save.
+        # Simulate object storage / DB write blowing up during the save. The
+        # endpoint must answer with JSON 500 carrying the exception detail, not
+        # an HTML 500 page (which the browser reports as "Network error").
         with mock.patch.object(PurchaseOrder, 'save', side_effect=Exception('R2 down')):
             r = self.client.post(self._url('scm'),
                                  {'signature_data': _png_data_url()})
         self.assertEqual(r.status_code, 500)
         self.assertEqual(r['Content-Type'], 'application/json')
-        self.assertIn('signature', r.json()['error'].lower())
+        err = r.json()['error']
+        self.assertIn('Approval failed', err)
+        self.assertIn('R2 down', err)
         # Nothing should have been committed.
         self.po.refresh_from_db()
         self.assertIsNone(self.po.scm_approved_at)

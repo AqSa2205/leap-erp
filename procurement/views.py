@@ -723,33 +723,34 @@ def po_approve_stage(request, pk, stage):
     sig_field = f'{stage}_signature'
     from django.core.files.base import ContentFile
 
-    with transaction.atomic():
-        try:
-            po = (
-                _visible_pos_for(request.user)
-                .select_for_update()
-                .get(pk=pk)
-            )
-        except PurchaseOrder.DoesNotExist:
-            return JsonResponse({'error': 'PO not found or not in your scope.'}, status=404)
+    # The whole approval — DB lookup, signature upload to object storage
+    # (Cloudflare R2 in production), and response building — is guarded so any
+    # failure surfaces as a readable JSON error with the exception detail,
+    # instead of an opaque HTML 500 the browser reports as a "Network error".
+    # The full traceback is logged for diagnosis.
+    try:
+        with transaction.atomic():
+            try:
+                po = (
+                    _visible_pos_for(request.user)
+                    .select_for_update()
+                    .get(pk=pk)
+                )
+            except PurchaseOrder.DoesNotExist:
+                return JsonResponse({'error': 'PO not found or not in your scope.'}, status=404)
 
-        if stage not in po.required_stages:
-            return JsonResponse({'error': 'This stage is not required for this PO.'}, status=400)
+            if stage not in po.required_stages:
+                return JsonResponse({'error': 'This stage is not required for this PO.'}, status=400)
 
-        cur = po.current_stage
-        if not cur or cur['key'] != stage:
-            return JsonResponse({
-                'error': f'Out of sequence — next pending stage is {(cur["label"] if cur else "(none, already released)")}.',
-            }, status=400)
+            cur = po.current_stage
+            if not cur or cur['key'] != stage:
+                return JsonResponse({
+                    'error': f'Out of sequence — next pending stage is {(cur["label"] if cur else "(none, already released)")}.',
+                }, status=400)
 
-        if not po.can_user_approve_stage(request.user, stage):
-            return JsonResponse({'error': 'You do not have permission to approve this stage.'}, status=403)
+            if not po.can_user_approve_stage(request.user, stage):
+                return JsonResponse({'error': 'You do not have permission to approve this stage.'}, status=403)
 
-        # Persisting the signature writes to object storage (Cloudflare R2 in
-        # production). A storage/DB failure here must surface as a readable JSON
-        # error — otherwise it bubbles up as an HTML 500 the browser reports as
-        # an opaque "Network error". Log the full traceback for diagnosis.
-        try:
             getattr(po, sig_field).save(
                 f'po{po.pk}_{stage}_sig.png',
                 ContentFile(clean),
@@ -760,24 +761,23 @@ def po_approve_stage(request, pk, stage):
             po.save(update_fields=[
                 f'{stage}_approved_at', f'{stage}_approved_by', sig_field, 'updated_at',
             ])
-        except Exception:
-            import logging
-            logging.getLogger(__name__).exception(
-                'PO %s stage %s signature save failed', pk, stage)
-            return JsonResponse({
-                'error': 'Could not save the signature (storage error). '
-                         'Please try again; if it persists, contact support.',
-            }, status=500)
 
-    new_cur = po.current_stage
-    return JsonResponse({
-        'ok': True,
-        'released': po.is_released,
-        'stage_signed': stage,
-        'next_stage': new_cur['key'] if new_cur else None,
-        'next_stage_label': new_cur['label'] if new_cur else None,
-        'approved_by': (request.user.get_full_name() or request.user.username),
-    })
+        new_cur = po.current_stage
+        return JsonResponse({
+            'ok': True,
+            'released': po.is_released,
+            'stage_signed': stage,
+            'next_stage': new_cur['key'] if new_cur else None,
+            'next_stage_label': new_cur['label'] if new_cur else None,
+            'approved_by': (request.user.get_full_name() or request.user.username),
+        })
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception(
+            'PO %s stage %s approval failed', pk, stage)
+        return JsonResponse({
+            'error': f'Approval failed: {type(e).__name__}: {e}',
+        }, status=500)
 
 
 class PODeleteView(ProcurementPermissionMixin, DeleteView):
