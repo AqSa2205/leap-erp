@@ -341,6 +341,9 @@ class Document(models.Model):
         ('technical_document', 'Technical Document'),
         ('po_document', 'Purchase Order'),
         ('contract', 'Contract'),
+        ('drawing', 'Drawing'),
+        ('scope_of_work', 'Scope of Work'),
+        ('instructions', 'Instructions'),
         ('other', 'Other'),
     ]
 
