@@ -14,6 +14,9 @@
     .fin-hero { background: linear-gradient(135deg, #C41E3A 0%, #a01830 100%); color:#fff; border:none; border-radius:14px; }
     .fin-list-table td, .fin-list-table th { vertical-align: middle; }
     .fin-list-table thead th { font-size:0.74rem; text-transform:uppercase; letter-spacing:0.3px; color:var(--leap-red,#C41E3A); border-bottom:2px solid var(--leap-red,#C41E3A); }
+    .fin-region-filter { width: 230px; }
+    .fin-region-filter .form-select:focus { box-shadow:none; border-color:#dee2e6; }
+    .fin-region-filter:focus-within { box-shadow:0 0 0 2px rgba(196,30,58,.15); border-radius:6px; }
 </style>
 {% endblock %}
 
@@ -36,7 +39,26 @@
             </div>
 
             <div class="card">
-                <div class="card-header bg-white"><i class="bi bi-folder2-open me-2 text-danger"></i><strong>Won Projects</strong></div>
+                <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
+                    <span class="d-flex align-items-center gap-2">
+                        <i class="bi bi-folder2-open text-danger"></i><strong>Won Projects</strong>
+                        <span class="badge rounded-pill bg-danger-subtle text-danger">{{ rows|length }}</span>
+                    </span>
+                    <form method="get" class="d-flex align-items-center">
+                        <div class="input-group input-group-sm fin-region-filter">
+                            <span class="input-group-text bg-white text-danger border-end-0"><i class="bi bi-geo-alt"></i></span>
+                            <select name="region" class="form-select border-start-0" onchange="this.form.submit()" aria-label="Filter by region">
+                                <option value="">All regions</option>
+                                {% for r in regions %}
+                                <option value="{{ r.pk }}" {% if selected_region == r.pk|stringformat:'s' %}selected{% endif %}>{{ r.name }}</option>
+                                {% endfor %}
+                            </select>
+                            {% if selected_region %}
+                            <a href="{% url 'finance:home' %}" class="btn btn-outline-secondary" title="Clear filter"><i class="bi bi-x-lg"></i></a>
+                            {% endif %}
+                        </div>
+                    </form>
+                </div>
                 <div class="card-body p-0">
                     <table class="table table-hover fin-list-table mb-0">
                         <thead>

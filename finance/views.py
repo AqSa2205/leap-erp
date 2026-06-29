@@ -60,10 +60,24 @@ def finance_home(request):
     if not request.user.is_super_admin_user:
         projects = projects.filter(region=request.user.region)
 
+    # Region filter. Super admin can pick any region; others are already scoped
+    # to their own region (the dropdown then just shows that one).
+    from projects.models import Region
+    if request.user.is_super_admin_user:
+        regions = Region.objects.order_by('name')
+    else:
+        regions = Region.objects.filter(pk=request.user.region_id)
+
+    selected_region = (request.GET.get('region') or '').strip()
+    if selected_region.isdigit():
+        projects = projects.filter(region_id=int(selected_region))
+
     finances = {f.project_id: f for f in ProjectFinance.objects.filter(
         project__in=projects)}
     rows = [{'project': p, 'finance': finances.get(p.id)} for p in projects]
-    return render(request, 'finance/home.html', {'rows': rows})
+    return render(request, 'finance/home.html', {
+        'rows': rows, 'regions': regions, 'selected_region': selected_region,
+    })
 
 
 @login_required
