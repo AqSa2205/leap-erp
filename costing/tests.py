@@ -443,3 +443,98 @@ class FileCleanupSignalTests(TestCase):
         self.assertNotEqual(rev.file.name, old_name)
         self.assertFalse(default_storage.exists(old_name))   # old reclaimed
         self.assertTrue(default_storage.exists(rev.file.name))  # new kept
+
+
+class MarginScenarioTests(TestCase):
+    """Finance margin analysis: Cost/Price/Profit per system for M1–M4."""
+
+    def setUp(self):
+        from decimal import Decimal
+        from accounts.models import User, Role
+        from costing.models import CostingSheet, CostingSection, CostingLineItem
+        self.sa, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('fin', password='pw', role=self.sa)
+        self.sheet = CostingSheet.objects.create(
+            title='S', created_by=self.user, margin=Decimal('40'),
+            margin_high=Decimal('50'), margin_medium=Decimal('25'),
+            margin_low=Decimal('20'))
+        sec = CostingSection.objects.create(
+            costing_sheet=self.sheet, section_number='1', title='CCTV SYSTEM', order=0)
+        CostingLineItem.objects.create(
+            section=sec, description='Cam', quantity=Decimal('2'),
+            base_unit_cost=Decimal('100'), supplier_currency='SAR',
+            margin=Decimal('40'))
+
+    def test_scenarios_cost_price_profit(self):
+        from decimal import Decimal
+        sc = {s['key']: s for s in self.sheet.margin_scenarios()}
+        # Cost is constant: unit_cost_sar(100) * qty(2) = 200
+        self.assertEqual(sc['M1']['total_cost'], Decimal('200.00'))
+        # M2 high 50%: price = 200/(1-0.5) = 400, profit = 200
+        self.assertEqual(sc['M2']['total_price'], Decimal('400.00'))
+        self.assertEqual(sc['M2']['total_profit'], Decimal('200.00'))
+        # M3 medium 25%: 200/0.75 = 266.67
+        self.assertEqual(sc['M3']['total_price'], Decimal('266.67'))
+        # M1 current (40%): 200/0.6 = 333.33
+        self.assertEqual(sc['M1']['total_price'], Decimal('333.34'))  # per-unit rounding
+        # one consolidated system row
+        self.assertEqual(len(sc['M1']['rows']), 1)
+        self.assertEqual(sc['M1']['rows'][0]['system'], 'CCTV SYSTEM')
+
+    def test_unset_scenario_marked_not_configured(self):
+        self.sheet.margin_high = None
+        self.sheet.save()
+        sc = {s['key']: s for s in self.sheet.margin_scenarios()}
+        self.assertFalse(sc['M2']['configured'])
+        self.assertTrue(sc['M1']['configured'])
+
+    def test_view_blocks_procurement_role(self):
+        from django.urls import reverse
+        from accounts.models import User, Role
+        proc_role, _ = Role.objects.get_or_create(name=Role.PROCUREMENT_OFF)
+        proc = User.objects.create_user('p', password='pw', role=proc_role)
+        self.client.force_login(proc)
+        r = self.client.get(reverse('costing:margin_analysis', kwargs={'pk': self.sheet.pk}))
+        self.assertEqual(r.status_code, 302)  # redirected away
+
+    def test_view_allows_super_admin(self):
+        from django.urls import reverse
+        self.client.force_login(self.user)  # super admin
+        r = self.client.get(reverse('costing:margin_analysis', kwargs={'pk': self.sheet.pk}))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(b'CCTV SYSTEM', r.content)
+
+    def test_view_allows_finance(self):
+        from django.urls import reverse
+        from accounts.models import User, Role
+        fin_role, _ = Role.objects.get_or_create(name=Role.FINANCE_REP)
+        fin = User.objects.create_user('finrep', password='pw', role=fin_role)
+        self.client.force_login(fin)
+        r = self.client.get(reverse('costing:margin_analysis', kwargs={'pk': self.sheet.pk}))
+        self.assertEqual(r.status_code, 200)
+
+    def test_view_blocks_non_finance_creator(self):
+        # A sales rep who created their own sheet is no longer allowed —
+        # access is finance + super admin only.
+        from django.urls import reverse
+        from accounts.models import User, Role
+        from costing.models import CostingSheet
+        sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        sales = User.objects.create_user('salesrep', password='pw', role=sales_role)
+        own_sheet = CostingSheet.objects.create(title='Own', created_by=sales)
+        self.client.force_login(sales)
+        r = self.client.get(reverse('costing:margin_analysis', kwargs={'pk': own_sheet.pk}))
+        self.assertEqual(r.status_code, 302)  # blocked
+
+    def test_post_updates_scenario_margins(self):
+        from decimal import Decimal
+        from django.urls import reverse
+        self.client.force_login(self.user)
+        r = self.client.post(
+            reverse('costing:margin_analysis', kwargs={'pk': self.sheet.pk}),
+            {'margin_high': '60', 'margin_medium': '40', 'margin_low': ''})
+        self.assertEqual(r.status_code, 302)
+        self.sheet.refresh_from_db()
+        self.assertEqual(self.sheet.margin_high, Decimal('60'))
+        self.assertEqual(self.sheet.margin_medium, Decimal('40'))
+        self.assertIsNone(self.sheet.margin_low)  # blank clears it

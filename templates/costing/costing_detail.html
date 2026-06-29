@@ -484,6 +484,9 @@
                     <a href="{% url 'costing:export_pdf' sheet.pk %}?unpriced=1" target="_blank" class="btn btn-outline-dark" title="BOM-only PDF without pricing — safe to share externally."><i class="bi bi-file-earmark-text"></i> BOM PDF (unpriced)</a>
                     {# Services-only PDF — page 1 summary shows the A.2 SERVICES block only (A/A.1/A.3 hidden); terms and the BOM pages are unchanged. #}
                     <a href="{% url 'costing:export_pdf' sheet.pk %}?services_only=1" target="_blank" class="btn btn-outline-danger bom-pricing-only" title="PDF with the page-1 summary showing the A.2 SERVICES block only."><i class="bi bi-file-earmark-pdf"></i> Services PDF (A.2)</a>
+                    {% if can_view_margin_analysis %}
+                    <a href="{% url 'costing:margin_analysis' sheet.pk %}" class="btn btn-outline-success bom-pricing-only" title="Internal Cost/Price/Profit comparison across margin scenarios M1–M4."><i class="bi bi-graph-up-arrow"></i> Margin Analysis</a>
+                    {% endif %}
                     {% if user.is_procurement_user or user.is_super_admin_user or user.is_admin_user %}
                     <a href="{% url 'procurement:bom_procurement_tracker' sheet.pk %}"
                        class="btn btn-outline-warning"

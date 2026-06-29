@@ -85,6 +85,57 @@ def _user_can_view_sheet(user, sheet):
     return False
 
 
+def _user_can_view_margin_analysis(user, sheet):
+    """Margin analysis exposes cost & profit and drives finance approval, so it
+    is restricted to the finance team and super admin only."""
+    if not getattr(user, 'is_authenticated', False):
+        return False
+    if user.is_super_admin_user:
+        return True
+    if getattr(user, 'is_finance_team_user', False):
+        # Region-scoped, but never lock finance out of a sheet with no project.
+        return sheet.project is None or sheet.project.region_id == user.region_id
+    return False
+
+
+@login_required
+def costing_margin_analysis(request, pk):
+    """Internal finance margin analysis — Cost / Price / Profit per consolidated
+    system under four margin scenarios (M1 current, M2/M3/M4 flat). The M2/M3/M4
+    margins are entered here (finance-owned), not in the sheet's pricing
+    defaults."""
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+    if not _user_can_view_margin_analysis(request.user, sheet):
+        messages.error(request, 'You do not have access to the margin analysis for this sheet.')
+        return redirect('costing:detail', pk=pk)
+
+    if request.method == 'POST':
+        from decimal import Decimal, InvalidOperation
+
+        def _parse(raw):
+            raw = (raw or '').strip()
+            if raw == '':
+                return None
+            try:
+                d = Decimal(raw)
+            except InvalidOperation:
+                return None
+            return max(Decimal('0'), min(Decimal('99'), d))
+
+        sheet.margin_high = _parse(request.POST.get('margin_high'))
+        sheet.margin_medium = _parse(request.POST.get('margin_medium'))
+        sheet.margin_low = _parse(request.POST.get('margin_low'))
+        sheet.save(update_fields=['margin_high', 'margin_medium', 'margin_low'])
+        messages.success(request, 'Margin scenarios updated.')
+        return redirect('costing:margin_analysis', pk=pk)
+
+    return render(request, 'costing/margin_analysis.html', {
+        'sheet': sheet,
+        'scenarios': sheet.margin_scenarios(),
+        'currency': 'SAR',  # computation is SAR-based (unit_cost_sar)
+    })
+
+
 def _user_team(user):
     """Which team a user belongs to for change-log / notification purposes."""
     if not getattr(user, 'is_authenticated', False):
@@ -431,6 +482,8 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         sheet = self.object
+        context['can_view_margin_analysis'] = _user_can_view_margin_analysis(
+            self.request.user, sheet)
 
         # Pre-load exchange rates and build rates dict (single query)
         exchange_rates = list(ExchangeRate.objects.all())

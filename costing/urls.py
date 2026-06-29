@@ -14,6 +14,7 @@ urlpatterns = [
     path('<int:pk>/delete/', views.CostingDeleteView.as_view(), name='delete'),
     path('<int:pk>/export/', login_required(views.costing_export_excel), name='export'),
     path('<int:pk>/export-pdf/', login_required(views.costing_export_pdf), name='export_pdf'),
+    path('<int:pk>/margin-analysis/', views.costing_margin_analysis, name='margin_analysis'),
     path('<int:pk>/import/', login_required(views.costing_import_excel), name='import_excel'),
     path('<int:pk>/update-params/', views.ajax_update_sheet_params, name='update_params'),
     path('exchange-rates/<int:pk>/update/', views.ajax_update_exchange_rate, name='exchange_rate_update'),

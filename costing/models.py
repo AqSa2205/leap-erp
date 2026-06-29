@@ -164,7 +164,19 @@ class CostingSheet(models.Model):
     title = models.CharField(max_length=255)
     customer_reference = models.CharField(max_length=255, blank=True)
     # Sheet-level default parameters (rates as whole numbers, e.g., 40 = 40%)
+    # margin = M1, the current structured margin the sheet is built on.
     margin = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('40'))
+    # M2/M3/M4 — flat margin scenarios for the internal finance margin analysis
+    # (high / medium / low). Blank = scenario not configured.
+    margin_high = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text='M2 — high margin % scenario (finance approval comparison).')
+    margin_medium = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text='M3 — medium margin % scenario.')
+    margin_low = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text='M4 — low margin % scenario.')
     discount_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
     shipping_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
     customs_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
@@ -412,6 +424,80 @@ class CostingSheet(models.Model):
     @property
     def total_installation_amount(self):
         return self._compute_totals()['total_installation_amount']
+
+    # ── Finance margin analysis (internal) ──────────────────────
+    # Bounds mirror CostingLineItem so the selling-price formula stays sane.
+    _SCENARIO_MIN = Decimal('0')
+    _SCENARIO_MAX = Decimal('0.99')
+
+    def _consolidated_cost_groups(self):
+        """Group non-optional sections by consolidated title (same key the
+        commercial offer uses) and accumulate, in SAR, the margin-0 cost and the
+        current structured (M1) selling price for each."""
+        from collections import OrderedDict
+        groups = OrderedDict()
+        for section in self.sections.all():
+            if section.is_optional or not section.section_number:
+                continue
+            key = (section.title or '').strip().upper() or '—'
+            g = groups.setdefault(key, {
+                'title': (section.title or '—').strip(),
+                'cost': Decimal('0'), 'price_m1': Decimal('0')})
+            for item in section.line_items.all():
+                g['cost'] += item.unit_cost_sar * item.quantity
+                g['price_m1'] += item.base_total_price
+        return groups
+
+    def margin_scenarios(self):
+        """Cost / Price / Profit per consolidated system for four margin
+        scenarios — M1 (current structure), and the flat M2/M3/M4 — for the
+        internal finance approval comparison. All figures in SAR; profit is the
+        pure margin (add-ons excluded). Price = Cost / (1 - margin).
+        """
+        groups = self._consolidated_cost_groups()
+
+        def _clamp(margin_pct):
+            m = Decimal(str(margin_pct)) / Decimal('100')
+            return max(self._SCENARIO_MIN, min(self._SCENARIO_MAX, m))
+
+        def _scenario(key, label, margin_pct, structured):
+            configured = structured or margin_pct is not None
+            rows, tot_cost, tot_price = [], Decimal('0'), Decimal('0')
+            if configured:
+                m = None if structured else _clamp(margin_pct)
+                for g in groups.values():
+                    cost = g['cost'].quantize(Decimal('0.01'))
+                    if structured:
+                        price = g['price_m1'].quantize(Decimal('0.01'))
+                    else:
+                        price = (g['cost'] / (Decimal('1') - m)).quantize(Decimal('0.01'))
+                    rows.append({'system': g['title'], 'cost': cost,
+                                 'price': price, 'profit': (price - cost).quantize(Decimal('0.01'))})
+                    tot_cost += cost
+                    tot_price += price
+            total_profit = tot_price - tot_cost
+            # Effective blended margin = profit / price (since price = cost/(1-m)).
+            # For flat scenarios this equals the flat margin; for M1 it's the
+            # real blended margin across the (possibly mixed) per-item margins.
+            eff = ((total_profit / tot_price * Decimal('100')).quantize(Decimal('0.01'))
+                   if tot_price else Decimal('0'))
+            return {
+                'key': key, 'label': label,
+                'margin_pct': (None if structured else margin_pct),
+                'structured': structured, 'configured': configured,
+                'effective_margin_pct': eff,
+                'rows': rows,
+                'total_cost': tot_cost.quantize(Decimal('0.01')),
+                'total_price': tot_price.quantize(Decimal('0.01')),
+                'total_profit': total_profit.quantize(Decimal('0.01')),
+            }
+
+        return [
+            _scenario('M1', 'M1 — Current', self.margin, True),
+            _scenario('M2', 'M2 — High', self.margin_high, False),
+            _scenario('M3', 'M3 — Medium', self.margin_medium, False),
+            _scenario('M4', 'M4 — Low', self.margin_low, False),
+        ]
 
 
 class ScopeOfWorkItem(models.Model):

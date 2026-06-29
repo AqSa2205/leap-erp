@@ -1,0 +1,77 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Margin Analysis — {{ sheet.title }}{% endblock %}
+{% block page_title %}Margin Analysis{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+        <div>
+            <h1 class="h4 mb-0">{{ sheet.title }}</h1>
+            <span class="text-muted small">Internal finance comparison · figures in {{ currency }}</span>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{% url 'costing:detail' sheet.pk %}" class="btn btn-outline-secondary btn-sm">
+                <i class="bi bi-arrow-left me-1"></i> Back to sheet
+            </a>
+        </div>
+    </div>
+
+    <!-- Margin scenario inputs (finance-owned, entered here) -->
+    <form method="post" class="card mb-3">
+        {% csrf_token %}
+        <div class="card-body py-2">
+            <div class="row g-2 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label small mb-1 fw-semibold">M1 — Current %</label>
+                    <input type="text" value="{{ sheet.margin|floatformat:'-2' }}" class="form-control form-control-sm bg-light" style="width:130px" readonly title="Set on the costing sheet itself">
+                </div>
+                <div class="col-auto">
+                    <label class="form-label small mb-1 fw-semibold">M2 — High %</label>
+                    <input type="number" step="0.01" min="0" max="99" name="margin_high"
+                           value="{{ sheet.margin_high|default_if_none:'' }}" class="form-control form-control-sm" style="width:130px" placeholder="e.g. 50">
+                </div>
+                <div class="col-auto">
+                    <label class="form-label small mb-1 fw-semibold">M3 — Medium %</label>
+                    <input type="number" step="0.01" min="0" max="99" name="margin_medium"
+                           value="{{ sheet.margin_medium|default_if_none:'' }}" class="form-control form-control-sm" style="width:130px" placeholder="e.g. 35">
+                </div>
+                <div class="col-auto">
+                    <label class="form-label small mb-1 fw-semibold">M4 — Low %</label>
+                    <input type="number" step="0.01" min="0" max="99" name="margin_low"
+                           value="{{ sheet.margin_low|default_if_none:'' }}" class="form-control form-control-sm" style="width:130px" placeholder="e.g. 25">
+                </div>
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-arrow-repeat me-1"></i>Update &amp; recalculate</button>
+                </div>
+                <div class="col-auto">
+                    <span class="text-muted small">M1 (current) comes from the sheet's own margin and can't be changed here.</span>
+                </div>
+            </div>
+        </div>
+    </form>
+
+    <div class="alert alert-secondary py-2 small">
+        <strong>Cost</strong> = actual cost at 0% margin ·
+        <strong>Price</strong> = Cost ÷ (1 − margin) ·
+        <strong>Profit</strong> = Price − Cost. M1 uses the sheet's current per-item margins;
+        M2/M3/M4 apply a single flat margin. Pass-through add-ons (shipping, customs, etc.) are excluded so profit reflects pure margin.
+    </div>
+
+    {% comment %}M1 (current) sits centered on top; M2/M3/M4 line up beneath it for easy side-by-side comparison against the current margin.{% endcomment %}
+    <div class="row g-3 mb-1 justify-content-center">
+        <div class="col-xxl-6 col-xl-7 col-lg-9">
+            {% include 'costing/_margin_scenario_card.html' with sc=scenarios.0 %}
+        </div>
+    </div>
+
+    <div class="row g-3">
+        {% for sc in scenarios|slice:"1:" %}
+        <div class="col-lg-4 col-md-6">
+            {% include 'costing/_margin_scenario_card.html' with sc=sc %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

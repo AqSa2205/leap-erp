@@ -1,0 +1,53 @@
+{% load humanize %}
+<div class="card h-100">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>{{ sc.label }}</strong>
+        {% if sc.structured %}
+            <span class="badge bg-primary" title="Sheet margin {{ sheet.margin|floatformat:'-2' }}% · effective blended {{ sc.effective_margin_pct }}%">
+                Current · {{ sheet.margin|floatformat:"-2" }}%{% if sc.effective_margin_pct != sheet.margin %} (eff {{ sc.effective_margin_pct }}%){% endif %}
+            </span>
+        {% elif sc.configured %}
+            <span class="badge bg-info text-dark">Flat {{ sc.margin_pct|floatformat:"-2" }}%</span>
+        {% else %}
+            <span class="badge bg-light text-muted border">Not set</span>
+        {% endif %}
+    </div>
+    <div class="card-body p-0">
+        {% if sc.configured %}
+        <table class="table table-sm mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>System</th>
+                    <th class="text-end">Cost</th>
+                    <th class="text-end">Price</th>
+                    <th class="text-end">Profit</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in sc.rows %}
+                <tr>
+                    <td>{{ r.system }}</td>
+                    <td class="text-end">{{ r.cost|floatformat:2|intcomma }}</td>
+                    <td class="text-end">{{ r.price|floatformat:2|intcomma }}</td>
+                    <td class="text-end {% if r.profit < 0 %}text-danger{% else %}text-success{% endif %}">{{ r.profit|floatformat:2|intcomma }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-3">No priced systems on this sheet.</td></tr>
+                {% endfor %}
+            </tbody>
+            <tfoot class="table-group-divider">
+                <tr class="fw-bold">
+                    <td>Total</td>
+                    <td class="text-end">{{ sc.total_cost|floatformat:2|intcomma }}</td>
+                    <td class="text-end">{{ sc.total_price|floatformat:2|intcomma }}</td>
+                    <td class="text-end {% if sc.total_profit < 0 %}text-danger{% else %}text-success{% endif %}">{{ sc.total_profit|floatformat:2|intcomma }}</td>
+                </tr>
+            </tfoot>
+        </table>
+        {% else %}
+        <div class="p-4 text-center text-muted">
+            This scenario's margin isn't set — enter the {{ sc.label }} % in the form above and recalculate.
+        </div>
+        {% endif %}
+    </div>
+</div>

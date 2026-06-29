@@ -69,9 +69,7 @@
                 </div>
                 {% endif %}
 
-                {# Line-item (formset) errors — without this a single bad row
-                   (e.g. a missing Item Description) silently blocks the whole
-                   save and the page just reloads with no explanation. #}
+                {% comment %}Line-item (formset) errors — without this a single bad row (e.g. a missing Item Description) silently blocks the whole save and the page just reloads with no explanation.{% endcomment %}
                 {% if item_formset.non_form_errors or item_formset.errors %}
                 <div class="alert alert-danger">
                     <strong><i class="bi bi-exclamation-triangle me-1"></i>The line items couldn't be saved — please fix these:</strong>
