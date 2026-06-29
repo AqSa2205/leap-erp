@@ -1,13 +1,17 @@
 {% load humanize %}
-<div class="card h-100">
-    <div class="card-header d-flex justify-content-between align-items-center">
+<div class="card h-100 {% if sc.key == 'M5' %}border-success border-2{% endif %}">
+    <div class="card-header d-flex justify-content-between align-items-center {% if sc.key == 'M5' %}bg-success-subtle{% endif %}">
         <strong>{{ sc.label }}</strong>
         {% if sc.structured %}
             <span class="badge bg-primary" title="Sheet margin {{ sheet.margin|floatformat:'-2' }}% · effective blended {{ sc.effective_margin_pct }}%">
                 Current · {{ sheet.margin|floatformat:"-2" }}%{% if sc.effective_margin_pct != sheet.margin %} (eff {{ sc.effective_margin_pct }}%){% endif %}
             </span>
         {% elif sc.configured %}
+            {% if sc.key == 'M5' %}
+            <span class="badge bg-success">Final · {{ sc.margin_pct|floatformat:"-2" }}%</span>
+            {% else %}
             <span class="badge bg-info text-dark">Flat {{ sc.margin_pct|floatformat:"-2" }}%</span>
+            {% endif %}
         {% else %}
             <span class="badge bg-light text-muted border">Not set</span>
         {% endif %}
@@ -36,11 +40,23 @@
                 {% endfor %}
             </tbody>
             <tfoot class="table-group-divider">
-                <tr class="fw-bold">
-                    <td>Total</td>
+                <tr class="fw-semibold">
+                    <td>Supply Total (A.1)</td>
                     <td class="text-end">{{ sc.total_cost|floatformat:2|intcomma }}</td>
                     <td class="text-end">{{ sc.total_price|floatformat:2|intcomma }}</td>
                     <td class="text-end {% if sc.total_profit < 0 %}text-danger{% else %}text-success{% endif %}">{{ sc.total_profit|floatformat:2|intcomma }}</td>
+                </tr>
+                <tr class="text-muted">
+                    <td>Services (A.2) <span class="small">— no margin</span></td>
+                    <td class="text-end">{{ sc.services|floatformat:2|intcomma }}</td>
+                    <td class="text-end">{{ sc.services|floatformat:2|intcomma }}</td>
+                    <td class="text-end">0.00</td>
+                </tr>
+                <tr class="fw-bold table-active">
+                    <td>Grand Total</td>
+                    <td class="text-end">{{ sc.grand_cost|floatformat:2|intcomma }}</td>
+                    <td class="text-end">{{ sc.grand_price|floatformat:2|intcomma }}</td>
+                    <td class="text-end {% if sc.grand_profit < 0 %}text-danger{% else %}text-success{% endif %}">{{ sc.grand_profit|floatformat:2|intcomma }}</td>
                 </tr>
             </tfoot>
         </table>
@@ -50,4 +66,15 @@
         </div>
         {% endif %}
     </div>
+    {% if sc.key == 'M5' and sc.configured and sheet.project_id %}
+    <div class="card-footer py-2 text-end bg-success-subtle">
+        <form method="post" action="{% url 'finance:approve_margin' sheet.pk sc.key %}" class="d-inline"
+              onsubmit="return confirm('Approve the Final margin ({{ sc.total_price|floatformat:2 }}) as the Project P.O Value and open the finance schedule?');">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-success">
+                <i class="bi bi-check2-circle me-1"></i>Approve Final &amp; set P.O Value
+            </button>
+        </form>
+    </div>
+    {% endif %}
 </div>

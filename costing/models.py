@@ -177,6 +177,9 @@ class CostingSheet(models.Model):
     margin_low = models.DecimalField(
         max_digits=5, decimal_places=2, null=True, blank=True,
         help_text='M4 — low margin % scenario.')
+    margin_final = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text='M5 — final/approved margin % (the one approved for the PO).')
     discount_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
     shipping_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
     customs_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
@@ -456,6 +459,13 @@ class CostingSheet(models.Model):
         """
         groups = self._consolidated_cost_groups()
 
+        # A.2 Services / Scope of Work — billed at cost (no margin applied), so
+        # it adds equally to grand cost and grand price (zero profit). sow_total
+        # is in the sheet's output currency; convert back to SAR for this view.
+        conv = self._conv_to_output_currency()
+        services = ((Decimal(str(self.sow_total)) / conv).quantize(Decimal('0.01'))
+                    if conv else Decimal('0'))
+
         def _clamp(margin_pct):
             m = Decimal(str(margin_pct)) / Decimal('100')
             return max(self._SCENARIO_MIN, min(self._SCENARIO_MAX, m))
@@ -481,6 +491,9 @@ class CostingSheet(models.Model):
             # real blended margin across the (possibly mixed) per-item margins.
             eff = ((total_profit / tot_price * Decimal('100')).quantize(Decimal('0.01'))
                    if tot_price else Decimal('0'))
+            # Grand total = supply (A.1, with margin) + services (A.2, no margin).
+            grand_cost = (tot_cost + services).quantize(Decimal('0.01'))
+            grand_price = (tot_price + services).quantize(Decimal('0.01'))
             return {
                 'key': key, 'label': label,
                 'margin_pct': (None if structured else margin_pct),
@@ -490,6 +503,10 @@ class CostingSheet(models.Model):
                 'total_cost': tot_cost.quantize(Decimal('0.01')),
                 'total_price': tot_price.quantize(Decimal('0.01')),
                 'total_profit': total_profit.quantize(Decimal('0.01')),
+                'services': services if configured else Decimal('0.00'),
+                'grand_cost': grand_cost if configured else Decimal('0.00'),
+                'grand_price': grand_price if configured else Decimal('0.00'),
+                'grand_profit': total_profit.quantize(Decimal('0.01')),  # services add 0 profit
             }
 
         return [
@@ -497,6 +514,7 @@ class CostingSheet(models.Model):
             _scenario('M2', 'M2 — High', self.margin_high, False),
             _scenario('M3', 'M3 — Medium', self.margin_medium, False),
             _scenario('M4', 'M4 — Low', self.margin_low, False),
+            _scenario('M5', 'M5 — Final (Approved)', self.margin_final, False),
         ]
 
 

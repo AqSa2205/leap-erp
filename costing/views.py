@@ -125,7 +125,8 @@ def costing_margin_analysis(request, pk):
         sheet.margin_high = _parse(request.POST.get('margin_high'))
         sheet.margin_medium = _parse(request.POST.get('margin_medium'))
         sheet.margin_low = _parse(request.POST.get('margin_low'))
-        sheet.save(update_fields=['margin_high', 'margin_medium', 'margin_low'])
+        sheet.margin_final = _parse(request.POST.get('margin_final'))
+        sheet.save(update_fields=['margin_high', 'margin_medium', 'margin_low', 'margin_final'])
         messages.success(request, 'Margin scenarios updated.')
         return redirect('costing:margin_analysis', pk=pk)
 

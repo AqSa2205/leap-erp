@@ -465,6 +465,21 @@ class MarginScenarioTests(TestCase):
             base_unit_cost=Decimal('100'), supplier_currency='SAR',
             margin=Decimal('40'))
 
+    def test_grand_total_includes_services_without_margin(self):
+        from decimal import Decimal
+        from costing.models import ScopeOfWorkItem
+        # A.2 Services billed at cost (no margin) — adds equally to grand
+        # cost and price, contributing zero profit.
+        ScopeOfWorkItem.objects.create(
+            costing_sheet=self.sheet, serial_number=1, description='Install',
+            quantity=Decimal('1'), uom='LOT', total_price=Decimal('500'))
+        sc = {s['key']: s for s in self.sheet.margin_scenarios()}
+        # M2 high 50%: supply price 400 + services 500 = grand 900
+        self.assertEqual(sc['M2']['services'], Decimal('500.00'))
+        self.assertEqual(sc['M2']['grand_price'], Decimal('900.00'))
+        self.assertEqual(sc['M2']['grand_cost'], Decimal('700.00'))   # 200 + 500
+        self.assertEqual(sc['M2']['grand_profit'], Decimal('200.00'))  # services add 0
+
     def test_scenarios_cost_price_profit(self):
         from decimal import Decimal
         sc = {s['key']: s for s in self.sheet.margin_scenarios()}

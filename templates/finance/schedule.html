@@ -1,0 +1,181 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Payment Schedule — {{ project.project_name }}{% endblock %}
+{% block page_title %}Cash-Flow Schedule{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'finance:home' %}">Finance</a>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">{{ project.project_name|truncatechars:60 }}</span>
+</nav>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .fin-header-card { background: linear-gradient(135deg, #C41E3A 0%, #a01830 100%); color: #fff; border: none; border-radius: 14px; }
+    .fin-stat { background: rgba(255,255,255,0.12); border-radius: 10px; padding: 10px 14px; }
+    .fin-stat .lbl { font-size: 0.7rem; opacity: 0.8; text-transform: uppercase; letter-spacing: 0.3px; }
+    .fin-stat .val { font-weight: 700; font-size: 1.05rem; }
+
+    #sched-table { min-width: 1500px; font-size: 0.82rem; }
+    #sched-table > :not(caption) > * > * { padding: 4px 6px; vertical-align: middle; }
+    #sched-table thead th { background: #f8f4f5; color: var(--leap-red, #C41E3A); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.3px; border-bottom: 2px solid var(--leap-red, #C41E3A); white-space: nowrap; }
+    #sched-table input, #sched-table textarea { font-size: 0.82rem; width: 100%; box-sizing: border-box; border: 1px solid #e3e3e3; border-radius: 5px; padding: 2px 5px; }
+    #sched-table input:focus { outline: none; border-color: var(--leap-red, #C41E3A); box-shadow: 0 0 0 2px rgba(196,30,58,.12); }
+    #sched-table input[type=number]::-webkit-inner-spin-button,
+    #sched-table input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    #sched-table tbody tr.milestone-main td:nth-child(2) input { font-weight: 600; }
+    #sched-table tbody tr.subrow td:nth-child(2) { padding-left: 24px; }
+    #sched-table tbody tr.subrow td:nth-child(2) input { font-style: italic; color: #666; }
+    #sched-table tbody tr:hover { background: #fafafa; }
+    .col-sub  { background: #fdeef1; }
+    #sched-table thead th.col-sub { background: #fbe0e6; }
+    .amount-cell { font-weight: 600; white-space: nowrap; }
+    .total-bad { color: #c62828; }
+    .total-ok  { color: #2e7d32; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-xxl-11">
+
+            <!-- Hero header -->
+            <div class="card fin-header-card mb-4">
+                <div class="card-body p-4">
+                    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+                        <div>
+                            <div class="d-flex align-items-center gap-2 mb-1">
+                                <h1 class="h3 mb-0 text-white">{{ project.project_name }}</h1>
+                                {% if pf.approved_margin %}<span class="badge bg-white text-danger">{{ pf.get_approved_margin_display }}</span>{% endif %}
+                            </div>
+                            <div class="opacity-75 small">Payment milestones &amp; cash-flow schedule</div>
+                        </div>
+                        <a href="{% url 'finance:home' %}" class="btn btn-light btn-sm text-danger"><i class="bi bi-arrow-left me-1"></i>All projects</a>
+                    </div>
+
+                    <div class="row g-3 mt-1">
+                        <div class="col-auto"><div class="fin-stat"><div class="lbl">Project P.O Value</div><div class="val">{{ pf.po_value|floatformat:2|intcomma }}</div></div></div>
+                        <div class="col-auto"><div class="fin-stat"><div class="lbl">Total Billed (Submitted)</div><div class="val">{{ totals.amount|floatformat:2|intcomma }}</div></div></div>
+                        <div class="col-auto"><div class="fin-stat"><div class="lbl">Submitted Weight</div><div class="val">{{ totals.submitted|floatformat:2 }}%</div></div></div>
+                        <div class="col-auto"><div class="fin-stat"><div class="lbl">Kickoff</div><div class="val">{{ pf.kickoff_date|date:"d M Y"|default:"—" }}</div></div></div>
+                        <div class="col-auto"><div class="fin-stat"><div class="lbl">Est. Start</div><div class="val">{{ pf.estimated_start_date|date:"d M Y"|default:"—" }}</div></div></div>
+                        <div class="col-auto"><div class="fin-stat"><div class="lbl">Est. End</div><div class="val">{{ pf.estimated_end_date|date:"d M Y"|default:"—" }}</div></div></div>
+                        <div class="col-auto"><div class="fin-stat"><div class="lbl">Milestones</div><div class="val">{{ display|length }}</div></div></div>
+                    </div>
+                </div>
+            </div>
+
+            <form method="post">
+                {% csrf_token %}
+
+                <!-- Parameters -->
+                <div class="card mb-4">
+                    <div class="card-header bg-white"><i class="bi bi-sliders me-2 text-danger"></i><strong>Parameters</strong></div>
+                    <div class="card-body">
+                        <div class="row g-3 align-items-end">
+                            <div class="col-md-2"><label class="form-label small fw-semibold">Project P.O Value</label>
+                                <input type="number" step="0.01" name="po_value" value="{{ pf.po_value|stringformat:'.2f' }}" class="form-control form-control-sm"></div>
+                            <div class="col-md-2"><label class="form-label small fw-semibold">Kickoff date</label>
+                                <input type="date" name="kickoff_date" value="{{ pf.kickoff_date|date:'Y-m-d' }}" class="form-control form-control-sm"></div>
+                            <div class="col-md-2"><label class="form-label small fw-semibold">Estimated start</label>
+                                <input type="date" name="estimated_start_date" value="{{ pf.estimated_start_date|date:'Y-m-d' }}" class="form-control form-control-sm"></div>
+                            <div class="col-md-2"><label class="form-label small fw-semibold">Estimated end</label>
+                                <input type="date" name="estimated_end_date" value="{{ pf.estimated_end_date|date:'Y-m-d' }}" class="form-control form-control-sm"></div>
+                            <div class="col-md-2"><label class="form-label small text-muted">Cert-approval gap (days)</label>
+                                <input type="number" name="cert_approval_gap" value="{{ pf.cert_approval_gap }}" class="form-control form-control-sm"></div>
+                            <div class="col-md-2"><label class="form-label small text-muted">Invoice gap (days)</label>
+                                <input type="number" name="invoice_gap" value="{{ pf.invoice_gap }}" class="form-control form-control-sm"></div>
+                            <div class="col-md-2"><label class="form-label small text-muted">Payment gap (days)</label>
+                                <input type="number" name="payment_gap" value="{{ pf.payment_gap }}" class="form-control form-control-sm"></div>
+                            <div class="col-md-2">
+                                <button type="submit" name="action" value="recompute" class="btn btn-outline-danger btn-sm w-100" title="Save, then fill all dates from kickoff + offsets">
+                                    <i class="bi bi-calendar-check me-1"></i>Recompute dates
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Schedule grid -->
+                <div class="card">
+                    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-list-ol me-2 text-danger"></i><strong>Payment Milestones</strong></span>
+                        <small class="text-muted">Each scenario column should total 100% · Submitted % drives the billed amount</small>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-sm table-borderless mb-0 align-middle" id="sched-table">
+                                <thead>
+                                    <tr>
+                                        <th>S.No</th>
+                                        <th>Total Milestones</th>
+                                        <th class="text-end">Best %</th>
+                                        <th class="text-end">Average %</th>
+                                        <th class="text-end">Proposed %</th>
+                                        <th class="text-end col-sub">Submitted %</th>
+                                        <th>Invoice No</th>
+                                        <th>From Kickoff (Days)</th>
+                                        <th>Remarks</th>
+                                        <th>Work Cert Prep</th>
+                                        <th>Work Cert Approval</th>
+                                        <th>Invoice Submission</th>
+                                        <th>Payment Receive</th>
+                                        <th class="text-end">Amount</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for d in display %}
+                                    {% with m=d.m %}
+                                    <tr class="{% if m.is_subrow %}subrow{% else %}milestone-main{% endif %}">
+                                        <td class="text-center text-muted">{{ d.serial|default_if_none:'' }}</td>
+                                        <td><input type="text" name="m-{{ m.pk }}-name" value="{{ m.name }}" style="min-width:230px"></td>
+                                        <td><input type="number" step="0.01" class="text-end" name="m-{{ m.pk }}-best_pct" value="{{ m.best_pct|default_if_none:'' }}"></td>
+                                        <td><input type="number" step="0.01" class="text-end" name="m-{{ m.pk }}-average_pct" value="{{ m.average_pct|default_if_none:'' }}"></td>
+                                        <td><input type="number" step="0.01" class="text-end" name="m-{{ m.pk }}-proposed_pct" value="{{ m.proposed_pct|default_if_none:'' }}"></td>
+                                        <td class="col-sub"><input type="number" step="0.01" class="text-end" name="m-{{ m.pk }}-submitted_pct" value="{{ m.submitted_pct|default_if_none:'' }}"></td>
+                                        <td><input type="text" name="m-{{ m.pk }}-invoice_no" value="{{ m.invoice_no }}" style="min-width:90px"></td>
+                                        <td><input type="number" class="text-end" name="m-{{ m.pk }}-from_kickoff_days" value="{{ m.from_kickoff_days|default_if_none:'' }}" style="min-width:80px"></td>
+                                        <td><input type="text" name="m-{{ m.pk }}-remarks" value="{{ m.remarks }}" style="min-width:120px"></td>
+                                        <td><input type="date" name="m-{{ m.pk }}-work_cert_prep_date" value="{{ m.work_cert_prep_date|date:'Y-m-d' }}" style="min-width:140px"></td>
+                                        <td><input type="date" name="m-{{ m.pk }}-work_cert_approval_date" value="{{ m.work_cert_approval_date|date:'Y-m-d' }}" style="min-width:140px"></td>
+                                        <td><input type="date" name="m-{{ m.pk }}-invoice_submission_date" value="{{ m.invoice_submission_date|date:'Y-m-d' }}" style="min-width:140px"></td>
+                                        <td><input type="date" name="m-{{ m.pk }}-payment_receive_date" value="{{ m.payment_receive_date|date:'Y-m-d' }}" style="min-width:140px"></td>
+                                        <td class="text-end amount-cell">{{ m.amount|floatformat:2|intcomma }}</td>
+                                        <td class="text-center">
+                                            <button type="submit" name="delete_id" value="{{ m.pk }}" class="btn btn-sm btn-link text-danger p-0" title="Delete row" formnovalidate><i class="bi bi-trash"></i></button>
+                                        </td>
+                                    </tr>
+                                    {% endwith %}
+                                    {% endfor %}
+                                </tbody>
+                                <tfoot>
+                                    <tr class="fw-bold border-top">
+                                        <td></td>
+                                        <td class="text-end">Total</td>
+                                        <td class="text-end {% if totals.best != 100 %}total-bad{% else %}total-ok{% endif %}">{{ totals.best|floatformat:2 }}%</td>
+                                        <td class="text-end {% if totals.average != 100 %}total-bad{% else %}total-ok{% endif %}">{{ totals.average|floatformat:2 }}%</td>
+                                        <td class="text-end {% if totals.proposed != 100 %}total-bad{% else %}total-ok{% endif %}">{{ totals.proposed|floatformat:2 }}%</td>
+                                        <td class="text-end col-sub {% if totals.submitted != 100 %}total-bad{% else %}total-ok{% endif %}">{{ totals.submitted|floatformat:2 }}%</td>
+                                        <td colspan="7"></td>
+                                        <td class="text-end amount-cell">{{ totals.amount|floatformat:2|intcomma }}</td>
+                                        <td></td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="card-footer bg-white d-flex flex-wrap gap-2 align-items-center">
+                        <button type="submit" name="action" value="save" class="btn btn-danger"><i class="bi bi-check-lg me-1"></i>Save schedule</button>
+                        <button type="submit" name="action" value="add_milestone" class="btn btn-outline-danger" formnovalidate><i class="bi bi-plus-lg me-1"></i>Add milestone</button>
+                        <button type="submit" name="action" value="add_subrow" class="btn btn-outline-secondary" formnovalidate><i class="bi bi-plus me-1"></i>Add progressive sub-row</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

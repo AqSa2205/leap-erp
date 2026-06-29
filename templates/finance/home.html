@@ -1,0 +1,79 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Finance{% endblock %}
+{% block page_title %}Finance{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <span class="crumb-current">Finance — Cash-Flow Schedules</span>
+</nav>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .fin-hero { background: linear-gradient(135deg, #C41E3A 0%, #a01830 100%); color:#fff; border:none; border-radius:14px; }
+    .fin-list-table td, .fin-list-table th { vertical-align: middle; }
+    .fin-list-table thead th { font-size:0.74rem; text-transform:uppercase; letter-spacing:0.3px; color:var(--leap-red,#C41E3A); border-bottom:2px solid var(--leap-red,#C41E3A); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-xxl-11">
+
+            <div class="card fin-hero mb-4">
+                <div class="card-body p-4 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <div>
+                        <h1 class="h3 mb-1 text-white"><i class="bi bi-cash-coin me-2"></i>Cash-Flow Schedules</h1>
+                        <div class="opacity-75 small">Payment milestone schedules for won projects</div>
+                    </div>
+                    <div class="text-end">
+                        <div class="display-6 fw-bold">{{ rows|length }}</div>
+                        <div class="opacity-75 small">Won projects</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header bg-white"><i class="bi bi-folder2-open me-2 text-danger"></i><strong>Won Projects</strong></div>
+                <div class="card-body p-0">
+                    <table class="table table-hover fin-list-table mb-0">
+                        <thead>
+                            <tr>
+                                <th>Project</th>
+                                <th>Region</th>
+                                <th class="text-end">P.O Value</th>
+                                <th>Approved Margin</th>
+                                <th>Schedule</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in rows %}
+                            <tr>
+                                <td><strong>{{ row.project.project_name }}</strong></td>
+                                <td>{{ row.project.region.name|default:"—" }}</td>
+                                <td class="text-end fw-semibold">{% if row.finance and row.finance.po_value %}{{ row.finance.po_value|floatformat:2|intcomma }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                                <td>{% if row.finance.approved_margin %}<span class="badge bg-danger-subtle text-danger border border-danger-subtle">{{ row.finance.get_approved_margin_display }}</span>{% else %}<span class="text-muted small">not set</span>{% endif %}</td>
+                                <td>
+                                    {% if row.finance %}<span class="badge bg-success-subtle text-success border border-success-subtle">Started</span>
+                                    {% else %}<span class="badge bg-light text-muted border">Not started</span>{% endif %}
+                                </td>
+                                <td class="text-end">
+                                    <a href="{% url 'finance:schedule' row.project.pk %}" class="btn btn-sm btn-outline-danger">
+                                        Open schedule <i class="bi bi-chevron-right"></i>
+                                    </a>
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr><td colspan="6" class="text-center text-muted py-5"><i class="bi bi-inbox fs-3 d-block mb-2 opacity-50"></i>No won projects in your scope yet.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
