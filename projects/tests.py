@@ -233,6 +233,31 @@ class LnaReferenceTests(TestCase):
         out = self._save(instance=p, project_name='Alpha', lna_revision='')
         self.assertEqual(out.proposal_reference, 'LNA 2158 - Alpha')
 
+    def test_auto_number_fills_gap_below_existing(self):
+        from projects.models import next_lna_reference_number
+        # 2870–2876 taken, then a project at 2890 (e.g. from an earlier skip).
+        for i in range(2870, 2877):
+            Project.objects.create(
+                project_name=f'P{i}', proposal_reference=f'LNA {i} - P{i}',
+                status=self.status, region=self.lna)
+        Project.objects.create(
+            project_name='High', proposal_reference='LNA 2890 - High',
+            status=self.status, region=self.lna)
+        # Gap 2877–2889 is reused rather than jumping to 2891.
+        self.assertEqual(next_lna_reference_number(), 2877)
+
+    def test_auto_number_never_collides_with_imports(self):
+        from projects.models import next_lna_reference_number
+        # If a dash-import already uses 2877, the next free number skips it.
+        for i in range(2870, 2877):
+            Project.objects.create(
+                project_name=f'P{i}', proposal_reference=f'LNA {i} - P{i}',
+                status=self.status, region=self.lna)
+        Project.objects.create(
+            project_name='Imp', proposal_reference='LNA-2877-Imported BSP-R04',
+            status=self.status, region=self.lna)
+        self.assertEqual(next_lna_reference_number(), 2878)
+
     def test_dash_format_revision_editable_in_place(self):
         # Imported dash-joined refs (LNA-2817-Name-R04) get only their trailing
         # revision swapped — the base is preserved byte-for-byte, never reformatted.

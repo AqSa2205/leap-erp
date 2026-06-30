@@ -97,17 +97,24 @@ def lna_reference_kind(ref):
 
 
 def next_lna_reference_number():
-    """Next LNA sequence number: max existing auto-ref number + 1, floored at
-    LNA_REFERENCE_START. Counts any recognizable LNA reference."""
-    highest = LNA_REFERENCE_START - 1
+    """Next LNA sequence number: the LOWEST free number from LNA_REFERENCE_START
+    upward — so gaps left by an earlier skip are reused rather than jumped over.
+
+    Every used number counts as taken (canonical, code AND imported dash-joined
+    refs) so a new number never collides with an existing project.
+    """
+    used = set()
     refs = (Project.objects
             .filter(proposal_reference__istartswith='LNA')
             .values_list('proposal_reference', flat=True))
     for ref in refs:
         parsed = parse_lna_reference(ref)
         if parsed:
-            highest = max(highest, parsed[0])
-    return highest + 1
+            used.add(parsed[0])
+    n = LNA_REFERENCE_START
+    while n in used:
+        n += 1
+    return n
 
 
 class Region(models.Model):
