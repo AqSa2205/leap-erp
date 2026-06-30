@@ -219,6 +219,20 @@ class LnaReferenceTests(TestCase):
         legacy.refresh_from_db()
         self.assertEqual(legacy.proposal_reference, 'LNA 2158 - Pkg 3 Renamed (R03)')
 
+    def test_revision_is_editable(self):
+        p = Project.objects.create(
+            project_name='Alpha', proposal_reference='LNA 2158 - Alpha (R03)',
+            status=self.status, region=self.lna)
+        # change revision R03 -> R04
+        out = self._save(instance=p, project_name='Alpha', lna_revision='R04')
+        self.assertEqual(out.proposal_reference, 'LNA 2158 - Alpha (R04)')
+        # bare number normalises to R5
+        out = self._save(instance=p, project_name='Alpha', lna_revision='5')
+        self.assertEqual(out.proposal_reference, 'LNA 2158 - Alpha (R5)')
+        # clearing removes the revision
+        out = self._save(instance=p, project_name='Alpha', lna_revision='')
+        self.assertEqual(out.proposal_reference, 'LNA 2158 - Alpha')
+
     def test_unparseable_reference_left_untouched(self):
         p = Project.objects.create(
             project_name='Demo', proposal_reference='DEMO-FIN-CLOSED',

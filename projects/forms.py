@@ -9,6 +9,14 @@ from .models import (
 class ProjectForm(forms.ModelForm):
     """Form for creating/editing projects"""
 
+    # Editable revision tag for LNA references, e.g. "R03" — appended to the
+    # auto reference as "LNA #### - <name> (R03)". Not a model field; the
+    # revision lives inside proposal_reference.
+    lna_revision = forms.CharField(
+        required=False, max_length=10,
+        widget=forms.TextInput(attrs={'placeholder': 'e.g. R03', 'data-lna-revision': '1'}),
+        help_text='Revision tag (optional), e.g. R03. Leave blank for none.')
+
     class Meta:
         model = Project
         fields = [
@@ -61,8 +69,23 @@ class ProjectForm(forms.ModelForm):
         if effective_region and getattr(effective_region, 'code', None) == 'LNA':
             ref.widget.attrs['readonly'] = 'readonly'
 
+        # Seed the revision input from the existing reference (if any).
+        if instance and instance.pk and not self.is_bound:
+            parsed = parse_lna_reference(instance.proposal_reference or '')
+            if parsed and parsed[1]:
+                self.initial['lna_revision'] = parsed[1]
+
     def _is_lna(self, region):
         return bool(region and getattr(region, 'code', None) == 'LNA')
+
+    def _clean_revision(self):
+        """Normalise the revision input to 'R<digits>' (or '' if blank)."""
+        import re as _re
+        raw = (self.cleaned_data.get('lna_revision') or '').strip().upper()
+        if not raw:
+            return ''
+        m = _re.match(r'^R?(\d+)$', raw)
+        return f'R{m.group(1)}' if m else raw
 
     def clean(self):
         cleaned = super().clean()
@@ -72,10 +95,12 @@ class ProjectForm(forms.ModelForm):
             existing = (self.instance.proposal_reference
                         if self.instance and self.instance.pk else '') or ''
             parsed = parse_lna_reference(existing)
+            # The revision input overrides whatever was embedded in the ref.
+            revision = self._clean_revision()
             if parsed:
-                # New or legacy LNA reference: keep the number (and any revision)
-                # and mirror the current project name.
-                number, revision = parsed
+                # New or legacy LNA reference: keep the number, mirror the
+                # current project name, apply the (editable) revision.
+                number = parsed[0]
                 cleaned['proposal_reference'] = build_lna_reference(number, name, revision)
             elif existing:
                 # Unparseable non-LNA reference: leave it exactly as-is.
@@ -83,7 +108,7 @@ class ProjectForm(forms.ModelForm):
             else:
                 # New LNA project: assign the next number.
                 cleaned['proposal_reference'] = build_lna_reference(
-                    next_lna_reference_number(), name)
+                    next_lna_reference_number(), name, revision)
         elif not cleaned.get('proposal_reference'):
             self.add_error('proposal_reference', 'This field is required.')
         return cleaned

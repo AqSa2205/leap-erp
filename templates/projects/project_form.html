@@ -25,9 +25,14 @@
                 </div>
                 <div class="col-md-6 mb-3">
                     <label class="form-label">Proposal Reference *</label>
-                    {{ form.proposal_reference }}
+                    <div class="input-group">
+                        {{ form.proposal_reference }}
+                        <input type="text" name="lna_revision" id="id_lna_revision" data-lna-revision="1"
+                               class="form-control" style="max-width:110px" placeholder="Rev (R03)"
+                               value="{{ form.lna_revision.value|default_if_none:'' }}">
+                    </div>
                     <div class="form-text" id="lna-ref-hint" style="display:none;">
-                        <i class="bi bi-info-circle"></i> Auto-generated for LNA (LNA #### - project name) and not editable.
+                        <i class="bi bi-info-circle"></i> Auto-generated for LNA (LNA #### - project name). Edit the revision box to set/change "(R##)".
                     </div>
                     {% if form.proposal_reference.errors %}<div class="text-danger small">{{ form.proposal_reference.errors.0 }}</div>{% endif %}
                 </div>
@@ -173,19 +178,30 @@
     var refField = document.getElementById('id_proposal_reference');
     var nameField = document.getElementById('id_project_name');
     var regionField = document.getElementById('id_region');
+    var revField = document.getElementById('id_lna_revision');
     var refHint = document.getElementById('lna-ref-hint');
+    function normRev(v) {
+        v = (v || '').trim().toUpperCase();
+        var m = v.match(/^R?(\d+)$/);
+        return m ? 'R' + m[1] : v;
+    }
     function syncLnaReference() {
         if (!refField || !regionField) return;
         var isLna = LNA_REGION_ID && String(regionField.value) === String(LNA_REGION_ID);
         if (refHint) refHint.style.display = isLna ? '' : 'none';
+        if (revField) revField.style.display = isLna ? '' : 'none';
         if (isLna) {
             refField.readOnly = true;
             refField.classList.add('bg-light');
             var current = (refField.value || '').trim();
-            // Leave a legacy LNA reference (not in "LNA #### - " form) untouched.
-            if (current && !/^LNA \d+ - /.test(current)) return;
+            // Pull the existing number out of the current reference (new or
+            // legacy format) so the live preview keeps it; fall back to the
+            // server-provided number.
+            var numMatch = current.match(/^LNA[\s\-_]*0*(\d+)/i);
+            var number = numMatch ? numMatch[1] : LNA_NUMBER;
             var name = nameField ? nameField.value.trim() : '';
-            refField.value = 'LNA ' + LNA_NUMBER + ' - ' + name;
+            var rev = revField ? normRev(revField.value) : '';
+            refField.value = 'LNA ' + number + ' - ' + name + (rev ? ' (' + rev + ')' : '');
         } else {
             refField.readOnly = false;
             refField.classList.remove('bg-light');
@@ -198,6 +214,10 @@
         nameField.addEventListener('input', syncLnaReference);
         nameField.addEventListener('change', syncLnaReference);
         nameField.addEventListener('blur', syncLnaReference);
+    }
+    if (revField) {
+        revField.addEventListener('input', syncLnaReference);
+        revField.addEventListener('blur', syncLnaReference);
     }
     syncLnaReference();
 
