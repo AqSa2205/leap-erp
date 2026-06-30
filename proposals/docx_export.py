@@ -779,44 +779,51 @@ def _fill_engineering_table(body, proposal):
 
 # ── Image injection (post-process ZIP) ────────────────────────
 
-def _resolve_image_path(src):
-    """Resolve an image URL/path to a local filesystem path.
+def _resolve_image_storage_key(src):
+    """Resolve an image URL/path to its storage key (relative to MEDIA), or None.
 
-    Handles:
-    - Absolute URLs (http://host/media/...)
-    - Server-relative URLs (/media/...)
-    - Page-relative URLs with ../ (../../../media/...)
-    - Plain relative paths (media/...)
+    Handles absolute URLs (http://host/media/...), server-relative (/media/...),
+    page-relative with ../ (../../../media/...) and plain relative (media/...).
+    The returned key works with the storage backend (local FS or Cloudflare R2).
     """
     if not src:
         return None
-    # Strip origin if present
     if src.startswith('http://') or src.startswith('https://'):
         try:
             from urllib.parse import urlparse
-            parsed = urlparse(src)
-            src = parsed.path
+            src = urlparse(src).path
         except Exception:
             return None
 
     media_prefix = settings.MEDIA_URL.strip('/')
-
-    # Look for the media prefix anywhere in the path (handles ../../../media/...)
-    if media_prefix:
-        # Normalize the path separators
-        src_normalized = src.replace('\\', '/')
-        marker = '/' + media_prefix + '/'
-        idx = src_normalized.find(marker)
-        if idx >= 0:
-            rel_path = src_normalized[idx + len(marker):]
-            return os.path.join(str(settings.MEDIA_ROOT), rel_path.replace('/', os.sep))
-        # Starts with the media prefix
-        src_clean = src_normalized.lstrip('./').lstrip('/')
-        if src_clean.startswith(media_prefix + '/'):
-            rel_path = src_clean[len(media_prefix) + 1:]
-            return os.path.join(str(settings.MEDIA_ROOT), rel_path.replace('/', os.sep))
-
+    if not media_prefix:
+        return None
+    src_normalized = src.replace('\\', '/')
+    marker = '/' + media_prefix + '/'
+    idx = src_normalized.find(marker)
+    if idx >= 0:
+        return src_normalized[idx + len(marker):]
+    src_clean = src_normalized.lstrip('./').lstrip('/')
+    if src_clean.startswith(media_prefix + '/'):
+        return src_clean[len(media_prefix) + 1:]
     return None
+
+
+def _read_image_bytes(src):
+    """Return (ext, bytes) for an image src via the storage backend (works for
+    local filesystem and R2), or (None, None) if it can't be read."""
+    key = _resolve_image_storage_key(src)
+    if not key:
+        return None, None
+    from django.core.files.storage import default_storage
+    try:
+        if not default_storage.exists(key):
+            return None, None
+        ext = os.path.splitext(key)[1].lower().lstrip('.') or 'png'
+        with default_storage.open(key, 'rb') as f:
+            return ext, f.read()
+    except Exception:
+        return None, None
 
 
 def _inject_images(modified_files, image_registry, all_names):
@@ -862,13 +869,12 @@ def _inject_images(modified_files, image_registry, all_names):
 
     for idx, img in enumerate(image_registry):
         placeholder = f'__LEAP_IMG_{idx}__'
-        path = _resolve_image_path(img['src'])
-        if not path or not os.path.exists(path):
-            # Missing file — leave placeholder in document.xml (will error but
-            # easier to debug than mysterious broken image references)
+        ext, data = _read_image_bytes(img['src'])
+        if data is None:
+            # Missing/unreadable — leave placeholder in document.xml (will error
+            # but easier to debug than mysterious broken image references)
             continue
 
-        ext = os.path.splitext(path)[1].lower().lstrip('.') or 'png'
         if ext not in ext_to_ct:
             ext = 'png'
         real_rid = f'rId{next_rid_num}'
@@ -878,8 +884,7 @@ def _inject_images(modified_files, image_registry, all_names):
         media_name = f'leap-image-{idx + 1}-{next_rid_num}.{ext}'
         zip_path = f'word/media/{media_name}'
 
-        with open(path, 'rb') as f:
-            modified_files[zip_path] = f.read()
+        modified_files[zip_path] = data
 
         rel = etree.SubElement(rels_root, f'{{{ns_rel}}}Relationship')
         rel.set('Id', real_rid)
