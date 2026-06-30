@@ -185,6 +185,7 @@
         var m = v.match(/^R?(\d+)$/);
         return m ? 'R' + m[1] : v;
     }
+    var TRAIL_REV = /\s*(\(\s*R\d+\s*\)|[-_]\s*R\d+|\sR\d+)\s*$/i;
     function syncLnaReference() {
         if (!refField || !regionField) return;
         var isLna = LNA_REGION_ID && String(regionField.value) === String(LNA_REGION_ID);
@@ -194,14 +195,35 @@
             refField.readOnly = true;
             refField.classList.add('bg-light');
             var current = (refField.value || '').trim();
-            // Pull the existing number out of the current reference (new or
-            // legacy format) so the live preview keeps it; fall back to the
-            // server-provided number.
-            var numMatch = current.match(/^LNA[\s\-_]*0*(\d+)/i);
-            var number = numMatch ? numMatch[1] : LNA_NUMBER;
-            var name = nameField ? nameField.value.trim() : '';
             var rev = revField ? normRev(revField.value) : '';
-            refField.value = 'LNA ' + number + ' - ' + name + (rev ? ' (' + rev + ')' : '');
+            var canonical = /^LNA \d+ - /.test(current);
+            // "Pure code" = LNA + number (+ optional revision) with NO embedded
+            // name — safe to canonicalise. A name in the middle = leave the base.
+            var baseNoRev = current.replace(TRAIL_REV, '');
+            var numOnly = baseNoRev.match(/^LNA[\s\-_]*0*(\d+)\s*$/i);
+            if (canonical || !current || numOnly) {
+                // Rebuild canonical from number + name + revision.
+                var numMatch = current.match(/^LNA[\s\-_]*0*(\d+)/i);
+                var number = numMatch ? numMatch[1] : LNA_NUMBER;
+                var name = nameField ? nameField.value.trim() : '';
+                refField.value = 'LNA ' + number + ' - ' + name + (rev ? ' (' + rev + ')' : '');
+            } else {
+                // Non-canonical (dash-joined / legacy) ref: only swap the
+                // trailing revision in place, preserving the base + style.
+                var m = current.match(TRAIL_REV);
+                var style = 'dash';
+                if (m) {
+                    var tok = m[1].replace(/^\s+/, '');
+                    if (tok.charAt(0) === '(') style = 'paren';
+                    else if (tok.charAt(0) === '-' || tok.charAt(0) === '_') style = 'dash';
+                    else style = 'space';
+                }
+                var base = current.replace(TRAIL_REV, '');
+                refField.value = !rev ? base
+                    : style === 'paren' ? base + ' (' + rev + ')'
+                    : style === 'space' ? base + ' ' + rev
+                    : base + '-' + rev;
+            }
         } else {
             refField.readOnly = false;
             refField.classList.remove('bg-light');

@@ -233,6 +233,28 @@ class LnaReferenceTests(TestCase):
         out = self._save(instance=p, project_name='Alpha', lna_revision='')
         self.assertEqual(out.proposal_reference, 'LNA 2158 - Alpha')
 
+    def test_dash_format_revision_editable_in_place(self):
+        # Imported dash-joined refs (LNA-2817-Name-R04) get only their trailing
+        # revision swapped — the base is preserved byte-for-byte, never reformatted.
+        p = Project.objects.create(
+            project_name='Security System Samha 380KV BSP',
+            proposal_reference='LNA-2817-Security System Samha 380KV BSP-R04',
+            status=self.status, region=self.lna)
+        out = self._save(instance=p, project_name=p.project_name, lna_revision='R05')
+        self.assertEqual(
+            out.proposal_reference, 'LNA-2817-Security System Samha 380KV BSP-R05')
+
+    def test_dash_format_rename_does_not_mangle_reference(self):
+        # Renaming a dash-format project leaves its reference untouched (no
+        # canonical rebuild that would inject project_name).
+        p = Project.objects.create(
+            project_name='Old', proposal_reference='LNA-2817-Old Name-R04',
+            status=self.status, region=self.lna)
+        p.project_name = 'New'
+        p.save()
+        p.refresh_from_db()
+        self.assertEqual(p.proposal_reference, 'LNA-2817-Old Name-R04')
+
     def test_unparseable_reference_left_untouched(self):
         p = Project.objects.create(
             project_name='Demo', proposal_reference='DEMO-FIN-CLOSED',

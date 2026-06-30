@@ -347,13 +347,13 @@ def _exchange_rates_json():
 def _lna_form_context(obj):
     """Context for the project form's LNA auto-reference behaviour: the LNA
     region id (so JS knows when to lock the field) and the number to preview."""
-    from .models import next_lna_reference_number, LNA_REFERENCE_RE
+    from .models import next_lna_reference_number, parse_lna_reference
     lna = Region.objects.filter(code='LNA').first()
     number = next_lna_reference_number()
     if obj and getattr(obj, 'pk', None) and obj.proposal_reference:
-        m = LNA_REFERENCE_RE.match(obj.proposal_reference)
-        if m:
-            number = int(m.group(1))
+        parsed = parse_lna_reference(obj.proposal_reference)
+        if parsed:
+            number = parsed[0]
     return {
         'lna_region_id': lna.id if lna else '',
         'lna_preview_number': number,

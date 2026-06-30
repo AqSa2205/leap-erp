@@ -1,8 +1,9 @@
 from django import forms
 from .models import (
     Project, Region, ProjectStatus, Document,
-    LNA_REFERENCE_RE, build_lna_reference, next_lna_reference_number,
-    parse_lna_reference,
+    build_lna_reference, next_lna_reference_number,
+    parse_lna_reference, lna_reference_kind,
+    split_trailing_revision, join_trailing_revision,
 )
 
 
@@ -94,14 +95,19 @@ class ProjectForm(forms.ModelForm):
         if self._is_lna(region):
             existing = (self.instance.proposal_reference
                         if self.instance and self.instance.pk else '') or ''
-            parsed = parse_lna_reference(existing)
+            kind = lna_reference_kind(existing)
             # The revision input overrides whatever was embedded in the ref.
             revision = self._clean_revision()
-            if parsed:
-                # New or legacy LNA reference: keep the number, mirror the
-                # current project name, apply the (editable) revision.
-                number = parsed[0]
+            if kind in ('canonical', 'code'):
+                # Rebuild from number + current name + revision.
+                number = parse_lna_reference(existing)[0]
                 cleaned['proposal_reference'] = build_lna_reference(number, name, revision)
+            elif kind == 'named':
+                # Name embedded in a non-canonical format: only swap the trailing
+                # revision in place, preserving the base and its style.
+                base, _old, style = split_trailing_revision(existing)
+                cleaned['proposal_reference'] = join_trailing_revision(
+                    base, revision, style or 'dash')
             elif existing:
                 # Unparseable non-LNA reference: leave it exactly as-is.
                 cleaned['proposal_reference'] = existing

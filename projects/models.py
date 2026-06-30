@@ -7,45 +7,98 @@ from django.conf import settings
 # Auto-generated LNA reference: "LNA <number> - <project name>", numbers
 # auto-incrementing from this floor. (Region code 'LNA'.)
 LNA_REFERENCE_START = 2870
-# Canonical (new) name-bearing format, optionally with a "(R03)" revision tail:
-#   LNA 2870 - Project Name
-#   LNA 2158 - Project Name (R03)
-LNA_REFERENCE_RE = re.compile(r'^LNA (\d+) - (.*?)(?:\s*\((R\d+)\))?$')
-# Legacy code formats carried over before the automation, e.g.
-#   LNA-2289  ·  LNA02156  ·  LNA02158-R03  ·  LNA-02168_R00  ·  LNA2117-R03
-# Captures the (zero-padded) number and an optional revision tag. There is no
-# project name embedded in these.
-LNA_LEGACY_RE = re.compile(
-    r'^LNA[\s\-_]*0*(\d+)(?:[\s\-_]+(R\d+))?\s*$', re.IGNORECASE)
+# Canonical (new) name-bearing format: "LNA 2870 - Project Name" (optionally with
+# a trailing revision). Used to decide when it's safe to rebuild the reference
+# from the project name. Non-canonical refs (legacy codes, dash-joined imports)
+# only get their trailing revision swapped, never reformatted.
+CANONICAL_LNA_RE = re.compile(r'^LNA \d+ - ')
+LNA_REFERENCE_RE = CANONICAL_LNA_RE  # back-compat alias
+# A trailing revision token in any style seen in the data:
+#   " (R03)"  ·  "-R03"  ·  "- R03"  ·  "_R03"  ·  " R03"
+_TRAILING_REV_RE = re.compile(
+    r'\s*(\(\s*R\d+\s*\)|[-_]\s*R\d+|\sR\d+)\s*$', re.IGNORECASE)
+# The LNA number right after the 'LNA' prefix (optional separators / zero pad).
+_LNA_NUMBER_RE = re.compile(r'^LNA[\s\-_]*0*(\d+)', re.IGNORECASE)
+
+
+def split_trailing_revision(ref):
+    """Split a reference into (base, revision, style). revision normalised to
+    'R<n>'; style is 'paren' | 'dash' | 'space' | None. base is everything
+    before the trailing revision, left untouched."""
+    ref = (ref or '').rstrip()
+    m = _TRAILING_REV_RE.search(ref)
+    if not m:
+        return ref, None, None
+    token = m.group(1)
+    num = re.search(r'R(\d+)', token, re.IGNORECASE)
+    revision = f'R{num.group(1)}' if num else None
+    lead = token.lstrip()
+    if lead.startswith('('):
+        style = 'paren'
+    elif lead[:1] in ('-', '_'):
+        style = 'dash'
+    else:
+        style = 'space'
+    return ref[:m.start()].rstrip(), revision, style
+
+
+def join_trailing_revision(base, revision, style='paren'):
+    """Re-attach a revision to a base in the given style."""
+    if not revision:
+        return base
+    revision = revision.upper()
+    if style == 'dash':
+        return f'{base}-{revision}'
+    if style == 'space':
+        return f'{base} {revision}'
+    return f'{base} ({revision})'
 
 
 def build_lna_reference(number, project_name, revision=None):
-    """Compose an LNA reference: 'LNA <number> - <name>', plus a ' (R03)' tail
-    when a revision is supplied. Capped to the field length."""
+    """Compose a canonical LNA reference: 'LNA <number> - <name>', plus a
+    ' (R03)' tail when a revision is supplied. Capped to the field length."""
     base = f'LNA {number} - {(project_name or "").strip()}'
-    if revision:
-        base = f'{base} ({revision.upper()})'
-    return base[:255]
+    return join_trailing_revision(base, revision, 'paren')[:255]
 
 
 def parse_lna_reference(ref):
-    """Parse an LNA reference (new or legacy) into (number, revision_or_None).
-    Returns None when the reference isn't a recognizable LNA number."""
+    """Parse any LNA reference into (number, revision_or_None). Handles the
+    canonical 'LNA #### - name (R03)', pure legacy codes ('LNA-2289',
+    'LNA02158-R03') and dash-joined imports ('LNA-2817-Name-R04'). Returns None
+    when there's no recognizable LNA number."""
     ref = (ref or '').strip()
     if not ref:
         return None
-    m = LNA_REFERENCE_RE.match(ref)
-    if m:
-        return int(m.group(1)), (m.group(3) or None)
-    m = LNA_LEGACY_RE.match(ref)
-    if m:
-        return int(m.group(1)), (m.group(2).upper() if m.group(2) else None)
-    return None
+    base, revision, _style = split_trailing_revision(ref)
+    m = _LNA_NUMBER_RE.match(base) or _LNA_NUMBER_RE.match(ref)
+    if not m:
+        return None
+    return int(m.group(1)), revision
+
+
+def lna_reference_kind(ref):
+    """Classify an LNA reference for how it should be maintained:
+      'canonical' — "LNA #### - name …"        → rebuilt from project name
+      'code'      — "LNA-2289" / "LNA02158-R03" → safe to canonicalise (no name)
+      'named'     — "LNA-2817-Name-R04"         → name embedded; only swap revision
+      None        — not an LNA reference        → leave untouched
+    """
+    ref = (ref or '').strip()
+    if not ref:
+        return None
+    if CANONICAL_LNA_RE.match(ref):
+        return 'canonical'
+    base, _rev, _style = split_trailing_revision(ref)
+    m = _LNA_NUMBER_RE.match(base)
+    if not m:
+        return None
+    remainder = base[m.end():].strip(' -_')
+    return 'code' if remainder == '' else 'named'
 
 
 def next_lna_reference_number():
     """Next LNA sequence number: max existing auto-ref number + 1, floored at
-    LNA_REFERENCE_START. Counts any recognizable LNA reference (new or legacy)."""
+    LNA_REFERENCE_START. Counts any recognizable LNA reference."""
     highest = LNA_REFERENCE_START - 1
     refs = (Project.objects
             .filter(proposal_reference__istartswith='LNA')
@@ -253,17 +306,17 @@ class Project(models.Model):
         return f"{self.proposal_reference} - {self.project_name}"
 
     def save(self, *args, **kwargs):
-        # Keep the auto LNA reference's name part in sync with project_name on
-        # EVERY save path (form, admin, scripts), so renaming a project always
-        # updates "LNA #### - <name>" while preserving its number (and any
-        # revision tag). Legacy code formats (LNA-2289, LNA02158-R03, …) are
-        # normalised into the name-bearing format too. References with no
-        # parseable LNA number are left untouched.
+        # Maintain the auto LNA reference on EVERY save path (form, admin,
+        # scripts). Canonical refs and pure legacy codes are (re)built as
+        # "LNA #### - <name> (R03)" so renaming reflects, preserving number +
+        # revision. Refs with a name already embedded in a non-canonical format
+        # (e.g. "LNA-2817-Name-R04") are left as-is — only their revision is
+        # edited, in place, via the form. Non-LNA refs are untouched.
         if (self.region_id and getattr(self.region, 'code', None) == 'LNA'
                 and self.proposal_reference):
-            parsed = parse_lna_reference(self.proposal_reference)
-            if parsed:
-                number, revision = parsed
+            kind = lna_reference_kind(self.proposal_reference)
+            if kind in ('canonical', 'code'):
+                number, revision = parse_lna_reference(self.proposal_reference)
                 self.proposal_reference = build_lna_reference(
                     number, self.project_name, revision)
         super().save(*args, **kwargs)
