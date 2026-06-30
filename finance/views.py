@@ -91,6 +91,10 @@ def project_schedule(request, project_pk):
     pf, _created = ProjectFinance.objects.get_or_create(
         project=project, defaults={'created_by': request.user})
     pf.seed_default_milestones()
+    # The P.O Value is fetched from the final approved margin (M5). When that's
+    # available it is the source of truth and the field is locked.
+    po_source_sheet = pf.sync_po_value_from_final_margin()
+    po_value_locked = po_source_sheet is not None
 
     if request.method == 'POST':
         # Delete is a button inside the main form, carrying the row id.
@@ -109,8 +113,10 @@ def project_schedule(request, project_pk):
             messages.success(request, 'Row added.')
             return redirect('finance:schedule', project_pk=project.pk)
 
-        # Save the header + all milestone rows.
-        pf.po_value = _parse_decimal(request.POST.get('po_value')) or Decimal('0')
+        # Save the header + all milestone rows. When the P.O Value is locked to
+        # the final approved margin, ignore any posted value (keep the synced one).
+        if not po_value_locked:
+            pf.po_value = _parse_decimal(request.POST.get('po_value')) or Decimal('0')
         pf.kickoff_date = _parse_date(request.POST.get('kickoff_date'))
         pf.estimated_start_date = _parse_date(request.POST.get('estimated_start_date'))
         pf.estimated_end_date = _parse_date(request.POST.get('estimated_end_date'))
@@ -165,6 +171,7 @@ def project_schedule(request, project_pk):
     }
     return render(request, 'finance/schedule.html', {
         'project': project, 'pf': pf, 'display': display, 'totals': totals,
+        'po_value_locked': po_value_locked, 'po_source_sheet': po_source_sheet,
     })
 
 

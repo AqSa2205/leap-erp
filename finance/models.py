@@ -83,6 +83,41 @@ class ProjectFinance(models.Model):
     def submitted_total_pct(self):
         return sum((m.submitted_pct or Decimal('0')) for m in self.milestones.all())
 
+    def _final_margin_sheet(self):
+        """The costing sheet whose final (M5) margin drives the P.O Value — the
+        approved source sheet, else any project sheet with a final margin set."""
+        if self.source_sheet_id and self.source_sheet.margin_final is not None:
+            return self.source_sheet
+        from costing.models import CostingSheet
+        return (CostingSheet.objects
+                .filter(project=self.project, margin_final__isnull=False)
+                .order_by('-updated_at').first())
+
+    def po_value_from_final_margin(self):
+        """P.O Value fetched from the final approved margin (M5) grand price on
+        the costing sheet, or None if no final margin is set anywhere."""
+        sheet = self._final_margin_sheet()
+        if sheet is None:
+            return None
+        scenario = next((s for s in sheet.margin_scenarios() if s['key'] == 'M5'), None)
+        if scenario and scenario['configured']:
+            return scenario['grand_price']
+        return None
+
+    def sync_po_value_from_final_margin(self):
+        """Pull the P.O Value from the final approved margin if available.
+        Returns the source sheet when synced, else None."""
+        value = self.po_value_from_final_margin()
+        if value is None:
+            return None
+        sheet = self._final_margin_sheet()
+        if self.po_value != value or self.source_sheet_id != getattr(sheet, 'id', None):
+            self.po_value = value
+            self.source_sheet = sheet
+            self.approved_margin = 'M5'
+            self.save(update_fields=['po_value', 'source_sheet', 'approved_margin', 'updated_at'])
+        return sheet
+
     def recompute_dates(self):
         """Fill every milestone's four dates from the kickoff + day offsets +
         standard gaps. Overwrites existing dates (the 'recompute' action)."""

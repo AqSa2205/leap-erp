@@ -76,8 +76,17 @@
                     <div class="card-header bg-white"><i class="bi bi-sliders me-2 text-danger"></i><strong>Parameters</strong></div>
                     <div class="card-body">
                         <div class="row g-3 align-items-end">
-                            <div class="col-md-2"><label class="form-label small fw-semibold">Project P.O Value</label>
-                                <input type="number" step="0.01" name="po_value" value="{{ pf.po_value|stringformat:'.2f' }}" class="form-control form-control-sm"></div>
+                            <div class="col-md-3"><label class="form-label small fw-semibold">Project P.O Value</label>
+                                {% if po_value_locked %}
+                                <input type="text" value="{{ pf.po_value|floatformat:2|intcomma }}" class="form-control form-control-sm bg-light fw-semibold" readonly
+                                       title="Fetched from the final approved margin (M5)">
+                                <div class="form-text small"><i class="bi bi-link-45deg"></i> From M5 (Final) on
+                                    <a href="{% url 'costing:margin_analysis' po_source_sheet.pk %}">{{ po_source_sheet.title|truncatechars:28 }}</a></div>
+                                {% else %}
+                                <input type="number" step="0.01" name="po_value" value="{{ pf.po_value|stringformat:'.2f' }}" class="form-control form-control-sm">
+                                <div class="form-text small text-muted">Approve a final margin (M5) to auto-fill this.</div>
+                                {% endif %}
+                            </div>
                             <div class="col-md-2"><label class="form-label small fw-semibold">Kickoff date</label>
                                 <input type="date" name="kickoff_date" value="{{ pf.kickoff_date|date:'Y-m-d' }}" class="form-control form-control-sm"></div>
                             <div class="col-md-2"><label class="form-label small fw-semibold">Estimated start</label>

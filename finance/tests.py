@@ -63,6 +63,23 @@ class FinanceScheduleTests(TestCase):
         self.client.force_login(fin)
         self.assertEqual(self.client.get(reverse('finance:home')).status_code, 200)
 
+    def test_po_value_fetched_from_final_margin_on_open(self):
+        sheet = CostingSheet.objects.create(
+            title='S', created_by=self.user, project=self.project,
+            margin=Decimal('40'), margin_final=Decimal('30'))
+        sec = CostingSection.objects.create(
+            costing_sheet=sheet, section_number='1', title='CCTV', order=0)
+        CostingLineItem.objects.create(
+            section=sec, description='Cam', quantity=Decimal('1'),
+            base_unit_cost=Decimal('100'), supplier_currency='SAR', margin=Decimal('40'))
+        # Opening the schedule fetches the P.O Value from M5 (final) grand price:
+        # 100 / (1 - 0.30) = 142.86
+        r = self.client.get(reverse('finance:schedule', kwargs={'project_pk': self.project.pk}))
+        pf = ProjectFinance.objects.get(project=self.project)
+        self.assertEqual(pf.po_value, Decimal('142.86'))
+        self.assertEqual(pf.approved_margin, 'M5')
+        self.assertIn(b'From M5 (Final)', r.content)
+
     def test_approve_margin_sets_po_value(self):
         sheet = CostingSheet.objects.create(
             title='S', created_by=self.user, project=self.project, margin=Decimal('40'))
