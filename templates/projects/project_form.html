@@ -193,7 +193,12 @@
         }
     }
     if (regionField) regionField.addEventListener('change', syncLnaReference);
-    if (nameField) nameField.addEventListener('input', syncLnaReference);
+    if (nameField) {
+        // input covers typing; change covers paste/autofill/programmatic set.
+        nameField.addEventListener('input', syncLnaReference);
+        nameField.addEventListener('change', syncLnaReference);
+        nameField.addEventListener('blur', syncLnaReference);
+    }
     syncLnaReference();
 
     // ── USD ↔ SAR / GBP auto-conversion ─────────────────────────

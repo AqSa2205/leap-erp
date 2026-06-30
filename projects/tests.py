@@ -199,12 +199,34 @@ class LnaReferenceTests(TestCase):
         p2 = self._save(instance=p, project_name='New Name')
         self.assertEqual(p2.proposal_reference, 'LNA 2870 - New Name')
 
-    def test_legacy_lna_reference_not_renumbered(self):
+    def test_legacy_lna_reference_converts_and_keeps_number(self):
+        # Legacy 'LNA-2289' becomes name-bearing on rename, keeping its number.
         legacy = Project.objects.create(
             project_name='Old', proposal_reference='LNA-2289',
             status=self.status, region=self.lna)
         p = self._save(instance=legacy, project_name='Old Renamed')
-        self.assertEqual(p.proposal_reference, 'LNA-2289')  # untouched
+        self.assertEqual(p.proposal_reference, 'LNA 2289 - Old Renamed')
+
+    def test_legacy_lna_reference_preserves_revision(self):
+        # 'LNA02158-R03' -> 'LNA 2158 - <name> (R03)', revision kept.
+        legacy = Project.objects.create(
+            project_name='Pkg 3', proposal_reference='LNA02158-R03',
+            status=self.status, region=self.lna)
+        legacy.refresh_from_db()  # save() normalises on create
+        self.assertEqual(legacy.proposal_reference, 'LNA 2158 - Pkg 3 (R03)')
+        legacy.project_name = 'Pkg 3 Renamed'
+        legacy.save()
+        legacy.refresh_from_db()
+        self.assertEqual(legacy.proposal_reference, 'LNA 2158 - Pkg 3 Renamed (R03)')
+
+    def test_unparseable_reference_left_untouched(self):
+        p = Project.objects.create(
+            project_name='Demo', proposal_reference='DEMO-FIN-CLOSED',
+            status=self.status, region=self.lna)
+        p.project_name = 'Demo Renamed'
+        p.save()
+        p.refresh_from_db()
+        self.assertEqual(p.proposal_reference, 'DEMO-FIN-CLOSED')
 
     def test_non_lna_requires_manual_reference(self):
         from projects.forms import ProjectForm
@@ -215,6 +237,26 @@ class LnaReferenceTests(TestCase):
     def test_non_lna_keeps_manual_reference(self):
         p = self._save(region=self.uk.pk, proposal_reference='LNUK-P999')
         self.assertEqual(p.proposal_reference, 'LNUK-P999')
+
+    def test_save_syncs_name_on_direct_rename(self):
+        # Renaming via a plain .save() (no form) still mirrors the name into the
+        # LNA reference, preserving the number.
+        p = Project.objects.create(
+            project_name='Alpha', proposal_reference='LNA 2870 - Alpha',
+            status=self.status, region=self.lna)
+        p.project_name = 'Beta Gamma'
+        p.save()
+        p.refresh_from_db()
+        self.assertEqual(p.proposal_reference, 'LNA 2870 - Beta Gamma')
+
+    def test_save_leaves_non_lna_reference_alone(self):
+        p = Project.objects.create(
+            project_name='UK One', proposal_reference='CUSTOM-1',
+            status=self.status, region=self.uk)
+        p.project_name = 'UK Two'
+        p.save()
+        p.refresh_from_db()
+        self.assertEqual(p.proposal_reference, 'CUSTOM-1')
 
     def test_lna_user_region_defaulted_and_field_locked(self):
         from accounts.models import User

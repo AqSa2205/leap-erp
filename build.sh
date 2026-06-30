@@ -28,6 +28,12 @@ print(f'Database engine: {connection.vendor}')
 echo "=== Collecting static files ==="
 python manage.py collectstatic --no-input
 
+echo "=== Safeguard: dumping project references before migrations ==="
+# Snapshot every proposal_reference before any migration rewrites them. Writes a
+# file AND echoes the full snapshot to this deploy log (durable restore source).
+# Never blocks the deploy if it can't run (e.g. table not created on first boot).
+python manage.py dump_project_references || echo "Reference dump skipped (likely first deploy)."
+
 echo "=== Running migrations ==="
 python manage.py migrate --run-syncdb
 python manage.py migrate accounts

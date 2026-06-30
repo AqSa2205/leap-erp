@@ -7,25 +7,53 @@ from django.conf import settings
 # Auto-generated LNA reference: "LNA <number> - <project name>", numbers
 # auto-incrementing from this floor. (Region code 'LNA'.)
 LNA_REFERENCE_START = 2870
-LNA_REFERENCE_RE = re.compile(r'^LNA (\d+) - ')
+# Canonical (new) name-bearing format, optionally with a "(R03)" revision tail:
+#   LNA 2870 - Project Name
+#   LNA 2158 - Project Name (R03)
+LNA_REFERENCE_RE = re.compile(r'^LNA (\d+) - (.*?)(?:\s*\((R\d+)\))?$')
+# Legacy code formats carried over before the automation, e.g.
+#   LNA-2289  ·  LNA02156  ·  LNA02158-R03  ·  LNA-02168_R00  ·  LNA2117-R03
+# Captures the (zero-padded) number and an optional revision tag. There is no
+# project name embedded in these.
+LNA_LEGACY_RE = re.compile(
+    r'^LNA[\s\-_]*0*(\d+)(?:[\s\-_]+(R\d+))?\s*$', re.IGNORECASE)
 
 
-def build_lna_reference(number, project_name):
-    """Compose an LNA reference string, capped to the field length."""
-    return f'LNA {number} - {(project_name or "").strip()}'[:255]
+def build_lna_reference(number, project_name, revision=None):
+    """Compose an LNA reference: 'LNA <number> - <name>', plus a ' (R03)' tail
+    when a revision is supplied. Capped to the field length."""
+    base = f'LNA {number} - {(project_name or "").strip()}'
+    if revision:
+        base = f'{base} ({revision.upper()})'
+    return base[:255]
+
+
+def parse_lna_reference(ref):
+    """Parse an LNA reference (new or legacy) into (number, revision_or_None).
+    Returns None when the reference isn't a recognizable LNA number."""
+    ref = (ref or '').strip()
+    if not ref:
+        return None
+    m = LNA_REFERENCE_RE.match(ref)
+    if m:
+        return int(m.group(1)), (m.group(3) or None)
+    m = LNA_LEGACY_RE.match(ref)
+    if m:
+        return int(m.group(1)), (m.group(2).upper() if m.group(2) else None)
+    return None
 
 
 def next_lna_reference_number():
     """Next LNA sequence number: max existing auto-ref number + 1, floored at
-    LNA_REFERENCE_START. Only references in the 'LNA <n> - ' format count."""
+    LNA_REFERENCE_START. Counts any recognizable LNA reference (new or legacy)."""
     highest = LNA_REFERENCE_START - 1
     refs = (Project.objects
-            .filter(proposal_reference__startswith='LNA ')
+            .filter(proposal_reference__istartswith='LNA')
             .values_list('proposal_reference', flat=True))
     for ref in refs:
-        m = LNA_REFERENCE_RE.match(ref or '')
-        if m:
-            highest = max(highest, int(m.group(1)))
+        parsed = parse_lna_reference(ref)
+        if parsed:
+            highest = max(highest, parsed[0])
     return highest + 1
 
 
@@ -223,6 +251,22 @@ class Project(models.Model):
 
     def __str__(self):
         return f"{self.proposal_reference} - {self.project_name}"
+
+    def save(self, *args, **kwargs):
+        # Keep the auto LNA reference's name part in sync with project_name on
+        # EVERY save path (form, admin, scripts), so renaming a project always
+        # updates "LNA #### - <name>" while preserving its number (and any
+        # revision tag). Legacy code formats (LNA-2289, LNA02158-R03, …) are
+        # normalised into the name-bearing format too. References with no
+        # parseable LNA number are left untouched.
+        if (self.region_id and getattr(self.region, 'code', None) == 'LNA'
+                and self.proposal_reference):
+            parsed = parse_lna_reference(self.proposal_reference)
+            if parsed:
+                number, revision = parsed
+                self.proposal_reference = build_lna_reference(
+                    number, self.project_name, revision)
+        super().save(*args, **kwargs)
 
     @property
     def weighted_value(self):

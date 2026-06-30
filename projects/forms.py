@@ -2,6 +2,7 @@ from django import forms
 from .models import (
     Project, Region, ProjectStatus, Document,
     LNA_REFERENCE_RE, build_lna_reference, next_lna_reference_number,
+    parse_lna_reference,
 )
 
 
@@ -70,12 +71,14 @@ class ProjectForm(forms.ModelForm):
         if self._is_lna(region):
             existing = (self.instance.proposal_reference
                         if self.instance and self.instance.pk else '') or ''
-            m = LNA_REFERENCE_RE.match(existing)
-            if m:
-                # Already auto-format: keep the number, mirror the current name.
-                cleaned['proposal_reference'] = build_lna_reference(int(m.group(1)), name)
+            parsed = parse_lna_reference(existing)
+            if parsed:
+                # New or legacy LNA reference: keep the number (and any revision)
+                # and mirror the current project name.
+                number, revision = parsed
+                cleaned['proposal_reference'] = build_lna_reference(number, name, revision)
             elif existing:
-                # Legacy LNA reference: leave it exactly as-is (don't renumber).
+                # Unparseable non-LNA reference: leave it exactly as-is.
                 cleaned['proposal_reference'] = existing
             else:
                 # New LNA project: assign the next number.
