@@ -155,9 +155,10 @@ def prequal_export(request, pk):
     # before each document, then the merged document PDFs.
     from .prequal_export import build_prequal_combined_pdf
     data, skipped = build_prequal_combined_pdf(sub)
-    if skipped:
-        messages.warning(request, 'Some documents could not be read and were skipped: '
-                         + ', '.join(skipped))
+    # NOTE: do NOT add a messages.* here — this response is a PDF, which cannot
+    # render the messages block, so the message would leak onto the next HTML
+    # page the user opens. Skipped documents are surfaced on the detail page
+    # instead (see prequal_detail's unreadable list).
     filename = (slugify(sub.reference or sub.title)[:80] or 'prequalification') + '.pdf'
     resp = HttpResponse(data, content_type='application/pdf')
     resp['Content-Disposition'] = f'inline; filename="{filename}"'
@@ -175,6 +176,19 @@ def prequal_library(request):
     return render(request, 'proposals/prequal/library.html', {'items': items})
 
 
+def _validate_pdf(upload):
+    """Return an error string if the upload isn't a usable PDF, else ''."""
+    if upload is None:
+        return ''
+    name = (upload.name or '').lower()
+    ctype = (getattr(upload, 'content_type', '') or '').lower()
+    if not (name.endswith('.pdf') or ctype == 'application/pdf'):
+        return 'Only PDF files can be added to the library — please upload a .pdf.'
+    if upload.size > 40 * 1024 * 1024:
+        return 'PDF is too large (max 40 MB).'
+    return ''
+
+
 @login_required
 @require_POST
 def prequal_library_save(request, pk):
@@ -182,12 +196,21 @@ def prequal_library_save(request, pk):
         messages.error(request, 'Permission denied.')
         return redirect('proposals:prequal_library')
     item = get_object_or_404(PrequalLibraryItem, pk=pk)
+    upload = request.FILES.get('pdf')
+    err = _validate_pdf(upload)
+    if err:
+        messages.error(request, f'{item.heading}: {err}')
+        return redirect('proposals:prequal_library')
     item.heading = (request.POST.get('heading') or item.heading).strip()
     item.order = _to_int(request.POST.get('order'), item.order)
     item.is_active = request.POST.get('is_active') == '1'
-    if request.FILES.get('pdf'):
-        item.pdf = request.FILES['pdf']
-    item.save()
+    if upload:
+        item.pdf = upload
+    try:
+        item.save()
+    except Exception as e:
+        messages.error(request, f'Could not save "{item.heading}": {e}')
+        return redirect('proposals:prequal_library')
     messages.success(request, f'Saved "{item.heading}".')
     return redirect('proposals:prequal_library')
 
@@ -202,11 +225,16 @@ def prequal_library_add(request):
     if not heading:
         messages.error(request, 'Heading is required.')
         return redirect('proposals:prequal_library')
+    upload = request.FILES.get('pdf')
+    err = _validate_pdf(upload)
+    if err:
+        messages.error(request, err)
+        return redirect('proposals:prequal_library')
     from django.db.models import Max
     nxt = (PrequalLibraryItem.objects.aggregate(m=Max('order'))['m'] or 0) + 1
     item = PrequalLibraryItem.objects.create(heading=heading, order=nxt)
-    if request.FILES.get('pdf'):
-        item.pdf = request.FILES['pdf']
+    if upload:
+        item.pdf = upload
         item.save()
     messages.success(request, f'Added "{heading}".')
     return redirect('proposals:prequal_library')
