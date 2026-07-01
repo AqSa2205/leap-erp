@@ -244,6 +244,10 @@
                                 <strong>Deployment:</strong><br>
                                 {{ employee.deployment|default:"-" }}
                             </p>
+                            <p class="mb-2">
+                                <strong>Office / Site:</strong><br>
+                                {% if employee.work_location %}{{ employee.get_work_location_display }}{% else %}-{% endif %}
+                            </p>
                             <p class="mb-0">
                                 <strong>Contract Type:</strong><br>
                                 {% if employee.contract_type %}

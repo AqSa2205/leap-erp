@@ -101,6 +101,9 @@
                     {{ filter_form.deployment }}
                 </div>
                 <div class="col-md-2">
+                    {{ filter_form.work_location }}
+                </div>
+                <div class="col-md-2">
                     {{ filter_form.status }}
                 </div>
                 <div class="col-md-2">
@@ -114,18 +117,33 @@
     </div>
 
     <!-- Employees Table -->
+    <!-- TEMPORARY bulk Office/Site back-fill — remove this form wrapper, the -->
+    <!-- checkbox column and the bulk bar once every employee has been set. -->
+    <form method="post" action="{% url 'hr:employee_bulk_work_location' %}">
+        {% csrf_token %}
+        <div class="card border-warning mb-2">
+            <div class="card-body py-2 d-flex flex-wrap align-items-center gap-2">
+                <span class="badge bg-warning text-dark">Bulk update</span>
+                <span class="text-muted small">Tick employees, then set their Office / Site in one click:</span>
+                <button type="submit" name="work_location" value="office" class="btn btn-sm btn-primary">Set selected → Office</button>
+                <button type="submit" name="work_location" value="site" class="btn btn-sm btn-secondary">Set selected → Site</button>
+                <span class="text-muted small ms-auto" id="selCount">0 selected</span>
+            </div>
+        </div>
     <div class="card">
         <div class="card-body p-0">
             <div class="table-responsive">
                 <table class="table table-hover mb-0">
                     <thead class="table-dark">
                         <tr>
+                            <th style="width:34px"><input type="checkbox" id="selAllEmp" class="form-check-input" title="Select all on this page"></th>
                             <th>#</th>
                             <th>Name</th>
                             <th>Iqama/Passport</th>
                             <th>Designation</th>
                             <th>Nationality</th>
                             <th>Deployment</th>
+                            <th>Office / Site</th>
                             <th>Contract</th>
                             <th>Mobile</th>
                             <th>Status</th>
@@ -136,6 +154,7 @@
                     <tbody>
                         {% for emp in employees %}
                         <tr>
+                            <td><input type="checkbox" name="employee_ids" value="{{ emp.pk }}" class="form-check-input emp-check"></td>
                             <td>{{ forloop.counter0|add:page_obj.start_index }}</td>
                             <td>
                                 <a href="{% url 'hr:employee_detail' emp.pk %}" class="text-decoration-none">
@@ -146,6 +165,11 @@
                             <td>{{ emp.designation|default:"-"|truncatechars:25 }}</td>
                             <td>{{ emp.nationality|default:"-" }}</td>
                             <td>{{ emp.deployment|default:"-" }}</td>
+                            <td>
+                                {% if emp.work_location == 'office' %}<span class="badge bg-primary">Office</span>
+                                {% elif emp.work_location == 'site' %}<span class="badge bg-secondary">Site</span>
+                                {% else %}<span class="text-muted">-</span>{% endif %}
+                            </td>
                             <td>
                                 {% if emp.contract_type %}
                                 <span class="badge {% if emp.contract_type == 'permanent' %}bg-success{% elif emp.contract_type == 'yearly' %}bg-warning text-dark{% else %}bg-info{% endif %}">
@@ -184,7 +208,7 @@
                         </tr>
                         {% empty %}
                         <tr>
-                            <td colspan="11" class="text-center py-5">
+                            <td colspan="13" class="text-center py-5">
                                 <i class="bi bi-people display-4 text-muted"></i>
                                 <p class="text-muted mt-3">No employees found.</p>
                                 <a href="{% url 'hr:employee_create' %}" class="btn btn-primary me-2">
@@ -201,6 +225,8 @@
             </div>
         </div>
     </div>
+    </form>
+    <!-- END TEMPORARY bulk Office/Site back-fill -->
 
     <!-- Pagination -->
     {% if page_obj.has_other_pages %}
@@ -229,4 +255,24 @@
     </nav>
     {% endif %}
 </div>
+
+{# TEMPORARY: select-all + count for the bulk Office/Site tool #}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var all = document.getElementById('selAllEmp');
+    var boxes = Array.prototype.slice.call(document.querySelectorAll('.emp-check'));
+    var count = document.getElementById('selCount');
+    function refresh() {
+        var n = boxes.filter(function (b) { return b.checked; }).length;
+        if (count) count.textContent = n + ' selected';
+        if (all) all.checked = n > 0 && n === boxes.length;
+    }
+    if (all) all.addEventListener('change', function () {
+        boxes.forEach(function (b) { b.checked = all.checked; });
+        refresh();
+    });
+    boxes.forEach(function (b) { b.addEventListener('change', refresh); });
+    refresh();
+});
+</script>
 {% endblock %}

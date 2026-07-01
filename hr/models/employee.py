@@ -18,6 +18,10 @@ class Employee(models.Model):
         ('yearly', 'Yearly'),
         ('ajeer', 'AJEER'),
     ]
+    WORK_LOCATION_CHOICES = [
+        ('office', 'Office'),
+        ('site', 'Site'),
+    ]
 
     iqama_number = models.CharField(max_length=50, unique=True, verbose_name='Iqama/Passport No.')
     iqama_issued_on = models.DateField(null=True, blank=True, verbose_name='Iqama Issue Date')
@@ -35,6 +39,9 @@ class Employee(models.Model):
     personal_email = models.EmailField(blank=True, verbose_name='Personal Email')
     documents_link = models.URLField(max_length=500, blank=True, verbose_name='Documents Link')
     deployment = models.CharField(max_length=100, blank=True, verbose_name='Deployment')
+    work_location = models.CharField(
+        max_length=10, choices=WORK_LOCATION_CHOICES, blank=True,
+        verbose_name='Office / Site')
     contract_type = models.CharField(max_length=20, choices=CONTRACT_CHOICES, blank=True, verbose_name='Contract Type')
     work_email = models.EmailField(blank=True, verbose_name='Work Email')
     mobile_number = models.CharField(max_length=20, blank=True, verbose_name='Mobile Number')

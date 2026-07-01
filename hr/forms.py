@@ -11,7 +11,7 @@ class EmployeeForm(forms.ModelForm):
             'full_name', 'designation', 'qualification',
             'date_of_birth', 'joining_date', 'nationality', 'marital_status',
             'blood_group', 'personal_email', 'documents_link', 'deployment',
-            'contract_type', 'work_email', 'mobile_number',
+            'work_location', 'contract_type', 'work_email', 'mobile_number',
             'is_active', 'inactive_from', 'user',
         ]
         widgets = {
@@ -33,6 +33,7 @@ class EmployeeForm(forms.ModelForm):
             'personal_email': forms.EmailInput(attrs={'class': 'form-control'}),
             'documents_link': forms.URLInput(attrs={'class': 'form-control'}),
             'deployment': forms.TextInput(attrs={'class': 'form-control'}),
+            'work_location': forms.Select(attrs={'class': 'form-select'}),
             'contract_type': forms.Select(attrs={'class': 'form-select'}),
             'work_email': forms.EmailInput(attrs={'class': 'form-control'}),
             'mobile_number': forms.TextInput(attrs={'class': 'form-control'}),
@@ -108,6 +109,11 @@ class EmployeeFilterForm(forms.Form):
             'class': 'form-control',
             'placeholder': 'Deployment...',
         }),
+    )
+    work_location = forms.ChoiceField(
+        required=False,
+        choices=[('', 'Office / Site')] + list(Employee.WORK_LOCATION_CHOICES),
+        widget=forms.Select(attrs={'class': 'form-select'}),
     )
     status = forms.ChoiceField(
         required=False,

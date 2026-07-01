@@ -208,6 +208,7 @@ class EmployeeListView(AdminRequiredMixin, ListView):
         contract_type = self.request.GET.get('contract_type', '')
         nationality = self.request.GET.get('nationality', '')
         deployment = self.request.GET.get('deployment', '')
+        work_location = self.request.GET.get('work_location', '')
         status = self.request.GET.get('status', '')
 
         if search:
@@ -223,6 +224,8 @@ class EmployeeListView(AdminRequiredMixin, ListView):
             queryset = queryset.filter(nationality__icontains=nationality)
         if deployment:
             queryset = queryset.filter(deployment__icontains=deployment)
+        if work_location:
+            queryset = queryset.filter(work_location=work_location)
         if status == 'active':
             queryset = queryset.filter(is_active=True)
         elif status == 'inactive':
@@ -308,6 +311,28 @@ class EmployeeDeleteView(AdminRequiredMixin, DeleteView):
     def delete(self, request, *args, **kwargs):
         messages.success(request, 'Employee deleted successfully.')
         return super().delete(request, *args, **kwargs)
+
+
+@login_required
+@require_POST
+def employee_bulk_work_location(request):
+    """TEMPORARY: bulk-set the Office/Site (work_location) for many employees at
+    once from the list page. Remove this view (and its URL + list-page controls)
+    once the initial back-fill is done."""
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:employee_list')
+    value = request.POST.get('work_location', '')
+    if value not in dict(Employee.WORK_LOCATION_CHOICES):
+        messages.error(request, 'Pick Office or Site.')
+        return redirect('hr:employee_list')
+    ids = [int(x) for x in request.POST.getlist('employee_ids') if x.isdigit()]
+    if not ids:
+        messages.error(request, 'Select at least one employee.')
+        return redirect('hr:employee_list')
+    updated = Employee.objects.filter(id__in=ids).update(work_location=value)
+    messages.success(request, f'Set {updated} employee(s) to {dict(Employee.WORK_LOCATION_CHOICES)[value]}.')
+    return redirect(request.META.get('HTTP_REFERER') or 'hr:employee_list')
 
 
 @login_required
