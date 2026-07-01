@@ -1755,7 +1755,16 @@ def attendance_grid(request):
         return redirect('hr:hr_dashboard')
 
     day = _parse_date(request.GET.get('date') or (request.POST.get('date') if request.method == 'POST' else None))
-    employees = list(Employee.objects.filter(is_active=True).order_by('full_name'))
+    # Office / Site segregation. 'office' tab = office + unassigned (so nobody is
+    # hidden until back-filled); 'site' tab = site only.
+    location = (request.GET.get('location') or request.POST.get('location') or 'office')
+    emp_qs = Employee.objects.filter(is_active=True)
+    if location == 'site':
+        emp_qs = emp_qs.filter(work_location='site')
+    else:
+        location = 'office'
+        emp_qs = emp_qs.exclude(work_location='site')
+    employees = list(emp_qs.order_by('full_name'))
 
     if request.method == 'POST':
         for emp in employees:
@@ -1778,7 +1787,7 @@ def attendance_grid(request):
                 defaults={'check_in': ci_t, 'check_out': co_t, 'status': status,
                           'hours_worked': hours, 'created_by': request.user})
         messages.success(request, f'Attendance saved for {day:%Y-%m-%d}.')
-        return redirect(f"{reverse('hr:attendance_grid')}?date={day:%Y-%m-%d}")
+        return redirect(f"{reverse('hr:attendance_grid')}?date={day:%Y-%m-%d}&location={location}")
 
     existing = {r.employee_id: r for r in AttendanceRecord.objects.filter(date=day)}
     rows = []
@@ -1791,7 +1800,8 @@ def attendance_grid(request):
         rows.append({'employee': emp, 'record': rec,
                      'status': rec.status if rec else preview_status, 'locked': locked,
                      'is_wfh': is_wfh})
-    return render(request, 'hr/attendance_grid.html', {'day': day, 'rows': rows})
+    return render(request, 'hr/attendance_grid.html', {
+        'day': day, 'rows': rows, 'location': location})
 
 
 @login_required
@@ -1839,13 +1849,21 @@ def attendance_matrix(request):
     period = request.GET.get('period') if request.GET.get('period') in ('week', 'month') else 'month'
     anchor = _parse_date(request.GET.get('date'))
     start, end = period_range(period, anchor)
-    employees = list(Employee.objects.filter(is_active=True).order_by('full_name'))
+    # Office / Site segregation (office tab = office + unassigned).
+    location = request.GET.get('location') or 'office'
+    emp_qs = Employee.objects.filter(is_active=True)
+    if location == 'site':
+        emp_qs = emp_qs.filter(work_location='site')
+    else:
+        location = 'office'
+        emp_qs = emp_qs.exclude(work_location='site')
+    employees = list(emp_qs.order_by('full_name'))
     days, rows, weekend_dates = build_matrix(employees, start, end, with_weekend_dates=True)
     prev_anchor = start - timedelta(days=1)
     next_anchor = end + timedelta(days=1)
     return render(request, 'hr/attendance_matrix.html', {
         'period': period, 'anchor': anchor, 'start': start, 'end': end,
-        'days': days, 'rows': rows,
+        'days': days, 'rows': rows, 'location': location,
         'prev_anchor': prev_anchor, 'next_anchor': next_anchor,
         'today': timezone.now().date(),
         'leave_types': LeaveType.objects.filter(is_active=True).order_by('name'),

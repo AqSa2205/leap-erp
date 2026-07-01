@@ -26,15 +26,30 @@
     </div>
 
     <!-- Date selector -->
-    <div class="card mb-4">
+    <div class="card mb-3">
         <div class="card-body py-3">
             <form method="get" class="d-flex align-items-center gap-3">
                 <label for="date-input" class="form-label mb-0 fw-semibold">Select Date</label>
                 <input type="date" id="date-input" name="date" value="{{ day|date:'Y-m-d' }}" class="form-control" style="max-width:200px;">
+                <input type="hidden" name="location" value="{{ location }}">
                 <button type="submit" class="btn btn-outline-primary">Apply</button>
             </form>
         </div>
     </div>
+
+    <!-- Office / Site tabs -->
+    <ul class="nav nav-tabs mb-3">
+        <li class="nav-item">
+            <a class="nav-link {% if location == 'office' %}active{% endif %}" href="?date={{ day|date:'Y-m-d' }}&location=office">
+                <i class="bi bi-building me-1"></i>Office
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link {% if location == 'site' %}active{% endif %}" href="?date={{ day|date:'Y-m-d' }}&location=site">
+                <i class="bi bi-geo-alt me-1"></i>Site
+            </a>
+        </li>
+    </ul>
 
     <!-- Attendance form -->
     <div class="card">
@@ -51,6 +66,7 @@
             <form method="post" id="attendanceForm">
                 {% csrf_token %}
                 <input type="hidden" name="date" value="{{ day|date:'Y-m-d' }}">
+                <input type="hidden" name="location" value="{{ location }}">
                 <div class="table-responsive">
                     <table class="table table-hover align-middle mb-0">
                         <thead class="table-light">

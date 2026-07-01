@@ -12,17 +12,31 @@
         </a>
     </div>
 
+    <!-- Office / Site tabs -->
+    <ul class="nav nav-tabs mb-3">
+        <li class="nav-item">
+            <a class="nav-link {% if location == 'office' %}active{% endif %}" href="?period={{ period }}&date={{ anchor|date:'Y-m-d' }}&location=office">
+                <i class="bi bi-building me-1"></i>Office
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link {% if location == 'site' %}active{% endif %}" href="?period={{ period }}&date={{ anchor|date:'Y-m-d' }}&location=site">
+                <i class="bi bi-geo-alt me-1"></i>Site
+            </a>
+        </li>
+    </ul>
+
     <div class="card mb-3"><div class="card-body py-2 d-flex flex-wrap gap-2 align-items-center">
         <div class="btn-group">
             <a class="btn btn-sm {% if period == 'week' %}btn-primary{% else %}btn-outline-primary{% endif %}"
-               href="?period=week&date={{ anchor|date:'Y-m-d' }}">Week</a>
+               href="?period=week&date={{ anchor|date:'Y-m-d' }}&location={{ location }}">Week</a>
             <a class="btn btn-sm {% if period == 'month' %}btn-primary{% else %}btn-outline-primary{% endif %}"
-               href="?period=month&date={{ anchor|date:'Y-m-d' }}">Month</a>
+               href="?period=month&date={{ anchor|date:'Y-m-d' }}&location={{ location }}">Month</a>
         </div>
         <div class="btn-group ms-2">
-            <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ prev_anchor|date:'Y-m-d' }}">&lsaquo; Prev</a>
-            <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ today|date:'Y-m-d' }}">Today</a>
-            <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ next_anchor|date:'Y-m-d' }}">Next &rsaquo;</a>
+            <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ prev_anchor|date:'Y-m-d' }}&location={{ location }}">&lsaquo; Prev</a>
+            <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ today|date:'Y-m-d' }}&location={{ location }}">Today</a>
+            <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ next_anchor|date:'Y-m-d' }}&location={{ location }}">Next &rsaquo;</a>
         </div>
         <div class="ms-auto d-flex align-items-center gap-2">
             <label for="leaveType" class="small text-muted mb-0">Mark-leave type</label>
