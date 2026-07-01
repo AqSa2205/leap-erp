@@ -83,9 +83,14 @@
                                     {% else %}<span class="badge bg-light text-muted border">Not started</span>{% endif %}
                                 </td>
                                 <td class="text-end">
-                                    <a href="{% url 'finance:schedule' row.project.pk %}" class="btn btn-sm btn-outline-danger">
-                                        Open schedule <i class="bi bi-chevron-right"></i>
-                                    </a>
+                                    <div class="btn-group btn-group-sm">
+                                        <a href="{% url 'finance:schedule' row.project.pk %}" class="btn btn-outline-danger" title="Cash inflow — payment milestones">
+                                            <i class="bi bi-arrow-up-circle me-1"></i>Inflow
+                                        </a>
+                                        <a href="{% url 'finance:cash_outflow' row.project.pk %}" class="btn btn-outline-success" title="Cash outflow — vendor payments">
+                                            <i class="bi bi-arrow-down-circle me-1"></i>Outflow
+                                        </a>
+                                    </div>
                                 </td>
                             </tr>
                             {% empty %}

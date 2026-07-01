@@ -1,0 +1,166 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Cash Outflow — {{ project.project_name }}{% endblock %}
+{% block page_title %}Cash Outflow{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'finance:home' %}">Finance</a>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">{{ project.project_name|truncatechars:60 }}</span>
+</nav>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .fin-header-card { background: linear-gradient(135deg, #1f6f54 0%, #14503c 100%); color: #fff; border: none; border-radius: 14px; }
+    .fin-stat { background: rgba(255,255,255,0.12); border-radius: 10px; padding: 10px 14px; }
+    .fin-stat .lbl { font-size: 0.7rem; opacity: 0.8; text-transform: uppercase; letter-spacing: 0.3px; }
+    .fin-stat .val { font-weight: 700; font-size: 1.05rem; }
+
+    .co-table { min-width: 2100px; font-size: 0.8rem; }
+    .co-table > :not(caption) > * > * { padding: 4px 5px; vertical-align: middle; }
+    .co-table thead th { background: #eef7f2; color: #14503c; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.2px; border-bottom: 2px solid #1f6f54; white-space: nowrap; text-align: center; }
+    .co-table input, .co-table textarea { font-size: 0.8rem; width: 100%; box-sizing: border-box; border: 1px solid #e3e3e3; border-radius: 5px; padding: 2px 5px; }
+    .co-table input:focus, .co-table textarea:focus { outline: none; border-color: #1f6f54; box-shadow: 0 0 0 2px rgba(31,111,84,.12); }
+    .co-table input[type=number]::-webkit-inner-spin-button,
+    .co-table input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    .co-table tbody tr:hover { background: #fafafa; }
+    .co-grp-date { background: #f4faf7; }
+    .co-grp-pct  { background: #fbf6ee; }
+    .co-table thead th.co-grp-date { background: #e4f2ea; }
+    .co-table thead th.co-grp-pct  { background: #f6ecd9; }
+    .co-total-cell { font-weight: 600; white-space: nowrap; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-xxl-12">
+
+            <!-- Hero header -->
+            <div class="card fin-header-card mb-4">
+                <div class="card-body p-4">
+                    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+                        <div>
+                            <h1 class="h3 mb-1 text-white"><i class="bi bi-arrow-down-circle me-2"></i>{{ project.project_name }}</h1>
+                            <div class="opacity-75 small">Cash outflow — vendor payments across A.1 Supply &amp; A.2 Services</div>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <a href="{% url 'finance:schedule' project.pk %}" class="btn btn-light btn-sm text-success"><i class="bi bi-arrow-up-circle me-1"></i>Cash inflow</a>
+                            <a href="{% url 'finance:home' %}" class="btn btn-outline-light btn-sm"><i class="bi bi-arrow-left me-1"></i>All projects</a>
+                        </div>
+                    </div>
+                    <div class="row g-3 mt-1">
+                        <div class="col-auto"><div class="fin-stat"><div class="lbl">A.1 Supply Total</div><div class="val">{{ totals.a1.total|floatformat:2|intcomma }}</div></div></div>
+                        <div class="col-auto"><div class="fin-stat"><div class="lbl">A.2 Services Total</div><div class="val">{{ totals.a2.total|floatformat:2|intcomma }}</div></div></div>
+                        <div class="col-auto"><div class="fin-stat"><div class="lbl">Grand Total Outflow</div><div class="val">{{ totals.all.total|floatformat:2|intcomma }}</div></div></div>
+                        <div class="col-auto"><div class="fin-stat"><div class="lbl">Source Costing</div><div class="val">{% if sheet %}{{ sheet.title|truncatechars:22 }}{% else %}—{% endif %}</div></div></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PO number suggestions pulled from procurement -->
+            <datalist id="po-list">
+                {% for po in po_numbers %}<option value="{{ po }}"></option>{% endfor %}
+            </datalist>
+
+            <form method="post">
+                {% csrf_token %}
+
+                <!-- Generate bar -->
+                <div class="card mb-3">
+                    <div class="card-body py-2 d-flex flex-wrap align-items-center gap-2">
+                        <button type="submit" name="action" value="generate" class="btn btn-sm btn-success" formnovalidate
+                                title="Create outflow rows from the final costing sheet's A.1 line items and A.2 services">
+                            <i class="bi bi-magic me-1"></i>Generate from costing
+                        </button>
+                        <span class="text-muted small">
+                            {% if sheet %}Pulls A.1 Supply line items &amp; A.2 Services from
+                                <strong>{{ sheet.title|truncatechars:40 }}</strong>. Already-listed lines are skipped.
+                            {% else %}<span class="text-danger">No costing sheet linked to this project yet.</span>{% endif %}
+                        </span>
+                    </div>
+                </div>
+
+                {% include 'finance/_cash_outflow_section.html' with part_label='A.1 — Scope of Supply' rows=a1_display sub=totals.a1 add_action='add_a1' add_label='Add supply row' %}
+
+                {% include 'finance/_cash_outflow_section.html' with part_label='A.2 — Scope of Services' rows=a2_display sub=totals.a2 add_action='add_a2' add_label='Add services row' %}
+
+                <!-- Grand total + save -->
+                <div class="card">
+                    <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-3">
+                        <button type="submit" name="action" value="save" class="btn btn-success"><i class="bi bi-check-lg me-1"></i>Save cash outflow</button>
+                        <div class="d-flex gap-4">
+                            <div><div class="text-muted small text-uppercase">Amount (SAR)</div><div class="h5 mb-0">{{ totals.all.amount|floatformat:2|intcomma }}</div></div>
+                            <div><div class="text-muted small text-uppercase">VAT (SAR)</div><div class="h5 mb-0">{{ totals.all.vat|floatformat:2|intcomma }}</div></div>
+                            <div><div class="text-muted small text-uppercase">Total (SAR)</div><div class="h4 mb-0 text-success fw-bold">{{ totals.all.total|floatformat:2|intcomma }}</div></div>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+// Excel-style keyboard navigation across every outflow grid:
+//   Enter -> down a row (same column, Shift+Enter = up);  Tab -> next column (Shift = back).
+// Plus live VAT (15%) + Total (amount + VAT) as the amount is typed.
+(function () {
+    var forms = document.querySelectorAll('table.co-table');
+
+    function inputsOf(table) {
+        return Array.prototype.slice.call(table.querySelectorAll('tbody tr input'));
+    }
+    function focusInput(el) {
+        el.focus();
+        if (el.select && el.type !== 'date' && el.type !== 'number') { try { el.select(); } catch (e) {} }
+    }
+    function moveVertical(table, input, dir) {
+        var col = input.closest('td').cellIndex;
+        var rows = Array.prototype.slice.call(table.querySelectorAll('tbody tr'));
+        var r = rows.indexOf(input.closest('tr'));
+        for (var i = r + dir; i >= 0 && i < rows.length; i += dir) {
+            var cell = rows[i].cells[col];
+            var next = cell && cell.querySelector('input');
+            if (next) { focusInput(next); return; }
+        }
+    }
+    function moveHorizontal(table, input, dir) {
+        var list = inputsOf(table);
+        var next = list[list.indexOf(input) + dir];
+        if (next) focusInput(next);
+    }
+
+    forms.forEach(function (table) {
+        table.addEventListener('keydown', function (e) {
+            var el = e.target;
+            if (!el.matches || !el.matches('input')) return;
+            if (e.key === 'Enter') { e.preventDefault(); moveVertical(table, el, e.shiftKey ? -1 : 1); }
+            else if (e.key === 'Tab') { e.preventDefault(); moveHorizontal(table, el, e.shiftKey ? -1 : 1); }
+        });
+    });
+
+    // Live VAT / Total recompute. Editing VAT or Total manually stops the auto
+    // link for that row (so overrides stick), tracked with data-vat-touched.
+    function recompute(row) {
+        var amount = parseFloat(row.querySelector('.co-amount').value) || 0;
+        var vatEl = row.querySelector('.co-vat');
+        var totEl = row.querySelector('.co-total');
+        if (!vatEl.dataset.touched) vatEl.value = (amount * 0.15).toFixed(2);
+        var vat = parseFloat(vatEl.value) || 0;
+        if (!totEl.dataset.touched) totEl.value = (amount + vat).toFixed(2);
+    }
+    document.querySelectorAll('tr.co-row').forEach(function (row) {
+        var amt = row.querySelector('.co-amount');
+        var vat = row.querySelector('.co-vat');
+        var tot = row.querySelector('.co-total');
+        if (amt) amt.addEventListener('input', function () { recompute(row); });
+        if (vat) vat.addEventListener('input', function () { vat.dataset.touched = '1'; recompute(row); });
+        if (tot) tot.addEventListener('input', function () { tot.dataset.touched = '1'; });
+    });
+})();
+</script>
+{% endblock %}

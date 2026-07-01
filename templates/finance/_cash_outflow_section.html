@@ -1,0 +1,78 @@
+{% load humanize %}
+{# One A.1 / A.2 outflow section. Expects: part_label, rows (display dicts),
+   sub (subtotal dict: amount/vat/total), add_action, add_label. #}
+<div class="card mb-3">
+    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-diagram-3 me-2 text-success"></i><strong>{{ part_label }}</strong>
+            <span class="badge rounded-pill bg-success-subtle text-success ms-1">{{ rows|length }}</span></span>
+        <small class="text-muted">Each row: up to 6 staged vendor payments · VAT auto 15% (editable)</small>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-sm table-borderless mb-0 align-middle co-table">
+                <thead>
+                    <tr>
+                        <th>S.No</th>
+                        <th style="min-width:220px">Description</th>
+                        <th style="min-width:120px">PO Number</th>
+                        <th class="co-grp-date">1st Pay Date</th>
+                        <th class="co-grp-date">2nd Pay Date</th>
+                        <th class="co-grp-date">3rd Pay Date</th>
+                        <th class="co-grp-date">4th Pay Date</th>
+                        <th class="co-grp-date">5th Pay Date</th>
+                        <th class="co-grp-date">6th Pay Date</th>
+                        <th class="co-grp-pct">1st %</th>
+                        <th class="co-grp-pct">2nd %</th>
+                        <th class="co-grp-pct">3rd %</th>
+                        <th class="co-grp-pct">4th %</th>
+                        <th class="co-grp-pct">5th %</th>
+                        <th class="co-grp-pct">6th %</th>
+                        <th class="text-end">Amount (SAR)</th>
+                        <th class="text-end">VAT (SAR)</th>
+                        <th class="text-end">Total (SAR)</th>
+                        <th style="min-width:140px">Remarks</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for d in rows %}
+                    {% with r=d.r %}
+                    <tr class="co-row">
+                        <td class="text-center text-muted">{{ d.serial }}</td>
+                        <td><input type="text" name="r-{{ r.pk }}-description" value="{{ r.description }}"></td>
+                        <td><input type="text" list="po-list" name="r-{{ r.pk }}-po_number" value="{{ r.po_number }}"></td>
+                        {% for dt in d.dates %}
+                        <td class="co-grp-date"><input type="date" name="r-{{ r.pk }}-date_{{ forloop.counter }}" value="{{ dt|date:'Y-m-d' }}" style="min-width:135px"></td>
+                        {% endfor %}
+                        {% for p in d.pcts %}
+                        <td class="co-grp-pct"><input type="number" step="0.01" class="text-end" name="r-{{ r.pk }}-pct_{{ forloop.counter }}" value="{{ p|default_if_none:'' }}" style="min-width:70px"></td>
+                        {% endfor %}
+                        <td><input type="number" step="0.01" class="text-end co-amount" name="r-{{ r.pk }}-amount" value="{{ r.amount|stringformat:'.2f' }}" style="min-width:110px"></td>
+                        <td><input type="number" step="0.01" class="text-end co-vat" name="r-{{ r.pk }}-vat" value="{{ r.vat|stringformat:'.2f' }}" style="min-width:100px"></td>
+                        <td><input type="number" step="0.01" class="text-end co-total" name="r-{{ r.pk }}-total_amount" value="{{ r.total_amount|stringformat:'.2f' }}" style="min-width:110px"></td>
+                        <td><input type="text" name="r-{{ r.pk }}-remarks" value="{{ r.remarks }}" style="min-width:140px"></td>
+                        <td class="text-center">
+                            <button type="submit" name="delete_id" value="{{ r.pk }}" class="btn btn-sm btn-link text-danger p-0" title="Delete row" formnovalidate><i class="bi bi-trash"></i></button>
+                        </td>
+                    </tr>
+                    {% endwith %}
+                    {% empty %}
+                    <tr><td colspan="21" class="text-center text-muted py-3">No rows yet — use <em>Generate from costing</em> or add one below.</td></tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr class="fw-bold border-top">
+                        <td colspan="15" class="text-end">Subtotal</td>
+                        <td class="text-end co-total-cell">{{ sub.amount|floatformat:2|intcomma }}</td>
+                        <td class="text-end co-total-cell">{{ sub.vat|floatformat:2|intcomma }}</td>
+                        <td class="text-end co-total-cell text-success">{{ sub.total|floatformat:2|intcomma }}</td>
+                        <td colspan="2"></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>
+    <div class="card-footer bg-white py-2">
+        <button type="submit" name="action" value="{{ add_action }}" class="btn btn-sm btn-outline-success" formnovalidate><i class="bi bi-plus-lg me-1"></i>{{ add_label }}</button>
+    </div>
+</div>

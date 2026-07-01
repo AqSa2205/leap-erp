@@ -7,7 +7,7 @@ from django.views.decorators.http import require_POST
 
 from projects.models import Project
 from costing.models import CostingSheet
-from .models import ProjectFinance, PaymentMilestone
+from .models import ProjectFinance, PaymentMilestone, CashOutflowRow
 
 
 def _can_finance(user):
@@ -172,6 +172,145 @@ def project_schedule(request, project_pk):
     return render(request, 'finance/schedule.html', {
         'project': project, 'pf': pf, 'display': display, 'totals': totals,
         'po_value_locked': po_value_locked, 'po_source_sheet': po_source_sheet,
+    })
+
+
+def _final_costing_sheet(project):
+    """The costing sheet the outflow is generated from — the final (M5) sheet
+    if one exists, else the project's most recently updated sheet."""
+    sheet = (CostingSheet.objects
+             .filter(project=project, margin_final__isnull=False)
+             .order_by('-updated_at').first())
+    if sheet is None:
+        sheet = (CostingSheet.objects.filter(project=project)
+                 .order_by('-updated_at').first())
+    return sheet
+
+
+def _generate_outflow_rows(project, sheet):
+    """Create outflow rows from the sheet's A.1 line items and A.2 SOW items,
+    skipping any costing line already listed (matched by source_ref). Amounts
+    are the SAR cost we pay out; VAT defaults to 15%. Returns rows added."""
+    existing = set(CashOutflowRow.objects.filter(project=project)
+                   .exclude(source_ref='').values_list('source_ref', flat=True))
+    vat_rate = CashOutflowRow.VAT_RATE
+    added = 0
+
+    order = CashOutflowRow.objects.filter(project=project, part='A1').count()
+    for section in sheet.sections.filter(is_optional=False).order_by('order'):
+        for item in section.line_items.all().order_by('order', 'item_number'):
+            ref = f'line:{item.pk}'
+            if ref in existing:
+                continue
+            amount = (item.unit_cost_sar * item.quantity).quantize(Decimal('0.01'))
+            vat = (amount * vat_rate).quantize(Decimal('0.01'))
+            desc = f'{item.item_number} — {item.description}'.strip(' —')
+            CashOutflowRow.objects.create(
+                project=project, part='A1', order=order, description=desc,
+                amount=amount, vat=vat, total_amount=amount + vat, source_ref=ref)
+            order += 1
+            added += 1
+
+    order = CashOutflowRow.objects.filter(project=project, part='A2').count()
+    for sow in sheet.scope_of_work_items.all().order_by('order', 'serial_number'):
+        ref = f'sow:{sow.pk}'
+        if ref in existing:
+            continue
+        amount = (sow.total_price or Decimal('0')).quantize(Decimal('0.01'))
+        vat = (amount * vat_rate).quantize(Decimal('0.01'))
+        CashOutflowRow.objects.create(
+            project=project, part='A2', order=order, description=sow.description,
+            amount=amount, vat=vat, total_amount=amount + vat, source_ref=ref)
+        order += 1
+        added += 1
+
+    return added
+
+
+@login_required
+def project_cash_outflow(request, project_pk):
+    """Per-project cash-OUTFLOW schedule — vendor payments split into
+    A.1 Scope of Supply and A.2 Scope of Services."""
+    project = get_object_or_404(Project, pk=project_pk)
+    if not _can_finance(request.user):
+        messages.error(request, 'Finance access is limited to the finance team.')
+        return redirect('dashboard:index')
+
+    sheet = _final_costing_sheet(project)
+
+    if request.method == 'POST':
+        if request.POST.get('delete_id'):
+            CashOutflowRow.objects.filter(
+                project=project, pk=_parse_int(request.POST['delete_id'])).delete()
+            messages.success(request, 'Row deleted.')
+            return redirect('finance:cash_outflow', project_pk=project.pk)
+
+        action = request.POST.get('action', 'save')
+        if action == 'generate':
+            if sheet is None:
+                messages.error(request, 'No costing sheet found for this project to generate from.')
+            else:
+                n = _generate_outflow_rows(project, sheet)
+                messages.success(
+                    request,
+                    f'{n} row(s) generated from the costing sheet.' if n
+                    else 'No new rows — every costing line is already listed.')
+            return redirect('finance:cash_outflow', project_pk=project.pk)
+
+        if action in ('add_a1', 'add_a2'):
+            part = 'A2' if action == 'add_a2' else 'A1'
+            CashOutflowRow.objects.create(
+                project=project, part=part,
+                order=CashOutflowRow.objects.filter(project=project, part=part).count())
+            messages.success(request, 'Row added.')
+            return redirect('finance:cash_outflow', project_pk=project.pk)
+
+        # Save every row.
+        for r in CashOutflowRow.objects.filter(project=project):
+            p = f'r-{r.pk}-'
+            r.description = (request.POST.get(p + 'description') or '').strip()
+            r.po_number = (request.POST.get(p + 'po_number') or '').strip()
+            for i in range(1, 7):
+                setattr(r, f'date_{i}', _parse_date(request.POST.get(f'{p}date_{i}')))
+                setattr(r, f'pct_{i}', _parse_decimal(request.POST.get(f'{p}pct_{i}')))
+            r.amount = _parse_decimal(request.POST.get(p + 'amount')) or Decimal('0')
+            r.vat = _parse_decimal(request.POST.get(p + 'vat')) or Decimal('0')
+            r.total_amount = _parse_decimal(request.POST.get(p + 'total_amount')) or Decimal('0')
+            r.remarks = (request.POST.get(p + 'remarks') or '').strip()
+            r.save()
+        messages.success(request, 'Cash outflow saved.')
+        return redirect('finance:cash_outflow', project_pk=project.pk)
+
+    def _display(rows):
+        out = []
+        for idx, r in enumerate(rows, start=1):
+            out.append({
+                'r': r, 'serial': idx,
+                'dates': [getattr(r, f'date_{i}') for i in range(1, 7)],
+                'pcts': [getattr(r, f'pct_{i}') for i in range(1, 7)],
+            })
+        return out
+
+    all_rows = list(CashOutflowRow.objects.filter(project=project))
+    a1 = [r for r in all_rows if r.part == 'A1']
+    a2 = [r for r in all_rows if r.part == 'A2']
+
+    def _tot(rows, f):
+        return sum((getattr(x, f) or Decimal('0')) for x in rows)
+
+    totals = {
+        'a1': {'amount': _tot(a1, 'amount'), 'vat': _tot(a1, 'vat'), 'total': _tot(a1, 'total_amount')},
+        'a2': {'amount': _tot(a2, 'amount'), 'vat': _tot(a2, 'vat'), 'total': _tot(a2, 'total_amount')},
+    }
+    totals['all'] = {k: totals['a1'][k] + totals['a2'][k] for k in ('amount', 'vat', 'total')}
+
+    po_numbers = list(project.purchase_orders.exclude(po_number='')
+                      .order_by('po_number').values_list('po_number', flat=True))
+
+    return render(request, 'finance/cash_outflow.html', {
+        'project': project, 'sheet': sheet,
+        'a1_display': _display(a1), 'a2_display': _display(a2),
+        'totals': totals, 'po_numbers': po_numbers,
     })
 
 

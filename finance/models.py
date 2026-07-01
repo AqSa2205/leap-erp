@@ -184,3 +184,68 @@ class PaymentMilestone(models.Model):
         """Billed amount for this milestone = Submitted % × Project P.O Value."""
         pct = self.submitted_pct or Decimal('0')
         return (self.project_finance.po_value * pct / Decimal('100')).quantize(Decimal('0.01'))
+
+
+class CashOutflowRow(models.Model):
+    """One row of a project's cash-OUTFLOW schedule — money the company pays
+    out to vendors, the mirror of the inbound payment milestones.
+
+    Rows are generated from the final costing sheet's two commercial parts —
+    A.1 Scope of Supply (costing line items) and A.2 Scope of Services
+    (scope-of-work items) — then edited by finance: a procurement PO number,
+    up to six staged vendor payments (date + %), and the amount / VAT / total
+    in SAR.
+    """
+
+    PART_CHOICES = [
+        ('A1', 'A.1 — Scope of Supply'),
+        ('A2', 'A.2 — Scope of Services'),
+    ]
+    VAT_RATE = Decimal('0.15')  # standard KSA VAT
+
+    project = models.ForeignKey(
+        'projects.Project', on_delete=models.CASCADE, related_name='cash_outflow_rows')
+    part = models.CharField(max_length=2, choices=PART_CHOICES)
+    order = models.PositiveIntegerField(default=0)
+    description = models.TextField(blank=True)
+    po_number = models.CharField(
+        max_length=100, blank=True,
+        help_text='Procurement PO covering this outflow.')
+
+    # Up to six staged vendor payments (date + % of the row amount).
+    date_1 = models.DateField(null=True, blank=True)
+    date_2 = models.DateField(null=True, blank=True)
+    date_3 = models.DateField(null=True, blank=True)
+    date_4 = models.DateField(null=True, blank=True)
+    date_5 = models.DateField(null=True, blank=True)
+    date_6 = models.DateField(null=True, blank=True)
+    pct_1 = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    pct_2 = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    pct_3 = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    pct_4 = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    pct_5 = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    pct_6 = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+
+    amount = models.DecimalField(
+        max_digits=16, decimal_places=2, default=Decimal('0'),
+        help_text='Amount in SAR (net, before VAT).')
+    vat = models.DecimalField(
+        max_digits=16, decimal_places=2, default=Decimal('0'),
+        help_text='VAT in SAR (15% of amount by default; editable).')
+    total_amount = models.DecimalField(
+        max_digits=16, decimal_places=2, default=Decimal('0'),
+        help_text='Total in SAR (amount + VAT).')
+    remarks = models.TextField(blank=True)
+
+    # Traces the costing line that seeded this row, so re-generation is
+    # idempotent (an already-listed line is skipped). Blank = manual row.
+    source_ref = models.CharField(max_length=40, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['part', 'order', 'id']
+
+    def __str__(self):
+        return f'{self.get_part_display()}: {self.description[:40]}'
