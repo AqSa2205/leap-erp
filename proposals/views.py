@@ -84,7 +84,10 @@ class ProposalPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
         user = self.request.user
         if user.is_super_admin_user:
             return queryset
-        elif user.is_admin_user or user.is_manager_user:
+        elif (user.is_admin_user or user.is_manager_user
+              or getattr(user, 'is_proposal_team_user', False)):
+            # Proposal team (head + reps) see every proposal in their region —
+            # they own the technical-proposal workflow.
             return queryset.filter(
                 Q(created_by=user) |
                 Q(project__region=user.region)

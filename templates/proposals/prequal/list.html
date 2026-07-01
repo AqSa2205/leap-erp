@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+{% block title %}Prequalification{% endblock %}
+{% block page_title %}Prequalification{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail"><span class="crumb-current">Prequalification</span></nav>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+        <p class="text-muted mb-0">Pick standard documents and combine them into one PDF.</p>
+        <div class="d-flex gap-2">
+            {% if can_manage_library %}
+            <a href="{% url 'proposals:prequal_library' %}" class="btn btn-outline-secondary"><i class="bi bi-folder2-open me-1"></i>Manage Library</a>
+            {% endif %}
+            <a href="{% url 'proposals:prequal_create' %}" class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i>New Prequalification</a>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body p-0">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr><th>Title</th><th>Project</th><th>Client</th><th>Documents</th><th>Updated</th><th></th></tr>
+                </thead>
+                <tbody>
+                    {% for s in submissions %}
+                    <tr>
+                        <td><a href="{% url 'proposals:prequal_detail' s.pk %}" class="fw-bold text-decoration-none">{{ s.title }}</a></td>
+                        <td>{{ s.project.project_name|default:"—" }}</td>
+                        <td>{{ s.client_name|default:"—" }}</td>
+                        <td><span class="badge bg-secondary">{{ s.selected_items.count }}</span></td>
+                        <td class="text-muted small">{{ s.updated_at|date:"d M Y" }}</td>
+                        <td class="text-end">
+                            <a href="{% url 'proposals:prequal_edit' s.pk %}" class="btn btn-sm btn-outline-secondary">Edit</a>
+                            <a href="{% url 'proposals:prequal_export' s.pk %}" target="_blank" class="btn btn-sm btn-outline-danger">Combined PDF</a>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="6" class="text-center text-muted py-4">No prequalifications yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

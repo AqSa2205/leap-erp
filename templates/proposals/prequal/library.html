@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+{% block title %}Prequalification Library{% endblock %}
+{% block page_title %}Prequalification Library{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail">
+    <a href="{% url 'proposals:prequal_list' %}">Prequalification</a>
+    <span class="crumb-sep">›</span><span class="crumb-current">Library</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <p class="text-muted">The shared set of standard PDFs. Upload a PDF for each heading; submissions pick from these.</p>
+
+    <div class="card mb-3">
+        <div class="card-header"><strong>Add a heading</strong></div>
+        <form method="post" action="{% url 'proposals:prequal_library_add' %}" enctype="multipart/form-data" class="card-body d-flex flex-wrap gap-2 align-items-end">
+            {% csrf_token %}
+            <div><label class="form-label small mb-1">Heading</label><input type="text" name="heading" class="form-control form-control-sm" style="width:280px" required></div>
+            <div><label class="form-label small mb-1">PDF (optional)</label><input type="file" name="pdf" accept="application/pdf" class="form-control form-control-sm"></div>
+            <button class="btn btn-primary btn-sm">Add</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <div class="card-header"><strong>{{ items|length }} headings</strong></div>
+        <div class="card-body">
+            {% for item in items %}
+            <div class="border rounded p-2 mb-2 d-flex flex-wrap align-items-end gap-2">
+                <form method="post" action="{% url 'proposals:prequal_library_save' item.pk %}" enctype="multipart/form-data" class="d-flex flex-wrap align-items-end gap-2 flex-grow-1">
+                    {% csrf_token %}
+                    <div><label class="form-label small mb-0 text-muted">Order</label><input type="number" name="order" value="{{ item.order }}" class="form-control form-control-sm" style="width:64px"></div>
+                    <div class="flex-grow-1" style="min-width:220px"><label class="form-label small mb-0 text-muted">Heading</label><input type="text" name="heading" value="{{ item.heading }}" class="form-control form-control-sm"></div>
+                    <div><label class="form-label small mb-0 text-muted">Replace PDF</label><input type="file" name="pdf" accept="application/pdf" class="form-control form-control-sm" style="max-width:230px"></div>
+                    <div class="form-check mb-1"><input type="checkbox" name="is_active" value="1" class="form-check-input" id="act{{ item.pk }}" {% if item.is_active %}checked{% endif %}><label class="form-check-label small" for="act{{ item.pk }}">Active</label></div>
+                    <div>
+                        {% if item.pdf %}<a href="{{ item.pdf.url }}" target="_blank" class="badge bg-success text-decoration-none align-self-center"><i class="bi bi-file-earmark-pdf me-1"></i>View</a>{% else %}<span class="badge bg-warning text-dark">No PDF</span>{% endif %}
+                    </div>
+                    <button class="btn btn-sm btn-primary">Save</button>
+                </form>
+                <form method="post" action="{% url 'proposals:prequal_library_delete' item.pk %}" onsubmit="return confirm('Delete this heading?');">{% csrf_token %}
+                    <button class="btn btn-sm btn-outline-danger" title="Delete"><i class="bi bi-trash"></i></button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -2,7 +2,29 @@ from django.contrib import admin
 from .models import (
     TechnicalProposal, EngineeringDocument, ProposalBoilerplate,
     SectionHeading, ProposalSection,
+    PrequalLibraryItem, PrequalSubmission,
 )
+
+
+@admin.register(PrequalLibraryItem)
+class PrequalLibraryItemAdmin(admin.ModelAdmin):
+    """The shared 25-PDF prequalification library — upload each heading's PDF."""
+    list_display = ['order', 'heading', 'has_pdf', 'is_active', 'updated_at']
+    list_editable = ['order', 'is_active']
+    list_display_links = ['heading']
+    list_filter = ['is_active']
+    search_fields = ['heading']
+
+    @admin.display(boolean=True, description='PDF')
+    def has_pdf(self, obj):
+        return bool(obj.pdf)
+
+
+@admin.register(PrequalSubmission)
+class PrequalSubmissionAdmin(admin.ModelAdmin):
+    list_display = ['title', 'project', 'client_name', 'created_by', 'updated_at']
+    search_fields = ['title', 'client_name', 'reference']
+    filter_horizontal = ['selected_items']
 
 
 class EngineeringDocumentInline(admin.TabularInline):

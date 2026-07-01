@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+{% block title %}{{ sub.title }}{% endblock %}
+{% block page_title %}{{ sub.title }}{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail">
+    <a href="{% url 'proposals:prequal_list' %}">Prequalification</a>
+    <span class="crumb-sep">›</span><span class="crumb-current">{{ sub.title|truncatechars:50 }}</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+        <div class="text-muted small">
+            {% if sub.project %}{{ sub.project.proposal_reference }} · {% endif %}
+            {% if sub.client_name %}{{ sub.client_name }} · {% endif %}
+            {{ selected|length }} document{{ selected|length|pluralize }} selected
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{% url 'proposals:prequal_edit' sub.pk %}" class="btn btn-outline-secondary"><i class="bi bi-pencil me-1"></i>Edit selection</a>
+            <a href="{% url 'proposals:prequal_export' sub.pk %}" target="_blank" class="btn btn-danger"><i class="bi bi-file-earmark-pdf me-1"></i>Combined PDF</a>
+            <form method="post" action="{% url 'proposals:prequal_delete' sub.pk %}" onsubmit="return confirm('Delete this prequalification?');">{% csrf_token %}
+                <button class="btn btn-outline-danger"><i class="bi bi-trash"></i></button></form>
+        </div>
+    </div>
+
+    {% if missing_count %}
+    <div class="alert alert-warning py-2 small"><i class="bi bi-exclamation-triangle me-1"></i>{{ missing_count }} selected document{{ missing_count|pluralize }} ha{{ missing_count|pluralize:'s,ve' }} no PDF in the library and will be skipped in the combined file.</div>
+    {% endif %}
+
+    <div class="card">
+        <div class="card-header"><strong>Combined order</strong> <span class="text-muted small">— PDFs merge top-to-bottom</span></div>
+        <div class="card-body p-0">
+            <ol class="list-group list-group-numbered list-group-flush">
+                {% for it in selected %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <span>{{ it.heading }}</span>
+                    <a href="{{ it.pdf.url }}" target="_blank" class="btn btn-sm btn-outline-secondary"><i class="bi bi-eye me-1"></i>Preview</a>
+                </li>
+                {% empty %}
+                <li class="list-group-item text-center text-muted py-4">No documents with a PDF selected. <a href="{% url 'proposals:prequal_edit' sub.pk %}">Select some</a>.</li>
+                {% endfor %}
+            </ol>
+        </div>
+    </div>
+</div>
+{% endblock %}

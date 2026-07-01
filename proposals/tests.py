@@ -175,3 +175,123 @@ class AddSectionViewTests(TestCase):
         self.assertTrue(proposal.sections.filter(heading='Rep Only Heading').exists())
         self.assertFalse(
             SectionHeading.objects.filter(name='Rep Only Heading').exists())
+
+
+class ProposalTeamVisibilityTests(TestCase):
+    """Proposal head + reps see every technical proposal in their region."""
+
+    def setUp(self):
+        from projects.models import Region, ProjectStatus, Project
+        self.r1 = Region.objects.create(name='RegA', code='RGA')
+        self.r2 = Region.objects.create(name='RegB', code='RGB')
+        self.st = ProjectStatus.objects.create(name='Open', category='open')
+        self.head_role, _ = Role.objects.get_or_create(name=Role.PROPOSAL_HEAD)
+        self.rep_role, _ = Role.objects.get_or_create(name=Role.PROPOSAL_REP)
+        self.head = User.objects.create_user('phead', password='x', role=self.head_role, region=self.r1)
+        self.author = User.objects.create_user('author', password='x')
+        self.pa = Project.objects.create(project_name='PA', region=self.r1, status=self.st, proposal_reference='RA-1')
+        self.pb = Project.objects.create(project_name='PB', region=self.r2, status=self.st, proposal_reference='RB-1')
+        TechnicalProposal.objects.create(
+            title='InRegion', proposal_reference='TP-A', client_name='C',
+            revision_date=date(2026, 1, 1), prepared_by_initials='A',
+            project=self.pa, created_by=self.author)
+        TechnicalProposal.objects.create(
+            title='OtherRegion', proposal_reference='TP-B', client_name='C',
+            revision_date=date(2026, 1, 1), prepared_by_initials='A',
+            project=self.pb, created_by=self.author)
+
+    def test_proposal_head_sees_region_proposals(self):
+        from proposals.views import ProposalPermissionMixin
+        class _Req: pass
+        req = _Req(); req.user = self.head
+        m = ProposalPermissionMixin(); m.request = req
+        titles = set(m.get_queryset().values_list('title', flat=True))
+        self.assertIn('InRegion', titles)
+        self.assertNotIn('OtherRegion', titles)
+
+    def test_proposal_rep_sees_region_proposals(self):
+        from proposals.views import ProposalPermissionMixin
+        rep = User.objects.create_user('prep', password='x', role=self.rep_role, region=self.r1)
+        class _Req: pass
+        req = _Req(); req.user = rep
+        m = ProposalPermissionMixin(); m.request = req
+        titles = set(m.get_queryset().values_list('title', flat=True))
+        self.assertEqual(titles, {'InRegion'})
+
+
+class PrequalificationTests(TestCase):
+    """Prequalification v2: a library of PDFs, selected and merged into one PDF."""
+
+    def setUp(self):
+        import io
+        from reportlab.pdfgen import canvas
+        from django.core.files.base import ContentFile
+        from proposals.models import PrequalLibraryItem, PrequalSubmission
+        self.sa, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('pq', password='pw', role=self.sa)
+        self.client.force_login(self.user)
+
+        def mkpdf(txt):
+            b = io.BytesIO(); c = canvas.Canvas(b); c.drawString(100, 750, txt)
+            c.showPage(); c.save(); return b.getvalue()
+
+        self.a = PrequalLibraryItem.objects.create(heading='Doc A', order=0)
+        self.a.pdf.save('a.pdf', ContentFile(mkpdf('A')), save=True)
+        self.b = PrequalLibraryItem.objects.create(heading='Doc B', order=1)
+        self.b.pdf.save('b.pdf', ContentFile(mkpdf('B')), save=True)
+        self.nopdf = PrequalLibraryItem.objects.create(heading='No PDF', order=2)
+        self.sub = PrequalSubmission.objects.create(title='S1', created_by=self.user)
+
+    def test_merge_combines_selected_pdfs_in_order_skipping_missing(self):
+        import io
+        from pypdf import PdfReader
+        from proposals.prequal_views import merge_prequal_pdfs
+        self.sub.selected_items.set([self.b, self.a, self.nopdf])
+        data, skipped = merge_prequal_pdfs(self.sub)
+        reader = PdfReader(io.BytesIO(data))
+        self.assertEqual(len(reader.pages), 2)        # nopdf skipped
+        self.assertEqual(skipped, [])                  # nopdf has no pdf -> not even attempted
+        # order follows library order (A before B), not selection order
+        self.assertEqual([i.heading for i in self.sub.selected_in_order()], ['Doc A', 'Doc B'])
+
+    def test_branded_combined_has_cover_toc_and_dividers(self):
+        import io
+        from pypdf import PdfReader
+        from proposals.prequal_export import build_prequal_combined_pdf
+        self.sub.title = 'PQ'; self.sub.client_name = 'Client'; self.sub.reference = 'R1'; self.sub.save()
+        self.sub.selected_items.set([self.a, self.b])  # 1 page each
+        data, skipped = build_prequal_combined_pdf(self.sub)
+        reader = PdfReader(io.BytesIO(data))
+        # cover(1) + toc(1) + [divider+1]*2 = 6 pages
+        self.assertEqual(len(reader.pages), 6)
+        self.assertIn('Table of Contents', reader.pages[1].extract_text() or '')
+        self.assertIn('SECTION 1', reader.pages[2].extract_text() or '')
+
+    def test_export_returns_pdf(self):
+        from django.urls import reverse
+        self.sub.selected_items.set([self.a])
+        r = self.client.get(reverse('proposals:prequal_export', kwargs={'pk': self.sub.pk}))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r['Content-Type'], 'application/pdf')
+
+    def test_edit_saves_selection(self):
+        from django.urls import reverse
+        r = self.client.post(reverse('proposals:prequal_edit', kwargs={'pk': self.sub.pk}),
+                             {'title': 'S1', 'items': [str(self.a.pk), str(self.b.pk)]})
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(set(self.sub.selected_items.values_list('pk', flat=True)),
+                         {self.a.pk, self.b.pk})
+
+    def test_library_upload_replaces_pdf(self):
+        import io
+        from django.urls import reverse
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from reportlab.pdfgen import canvas
+        b = io.BytesIO(); c = canvas.Canvas(b); c.drawString(100, 750, 'NEW'); c.showPage(); c.save()
+        up = SimpleUploadedFile('new.pdf', b.getvalue(), content_type='application/pdf')
+        r = self.client.post(
+            reverse('proposals:prequal_library_save', kwargs={'pk': self.nopdf.pk}),
+            {'heading': 'No PDF', 'order': '2', 'is_active': '1', 'pdf': up})
+        self.assertEqual(r.status_code, 302)
+        self.nopdf.refresh_from_db()
+        self.assertTrue(self.nopdf.pdf)

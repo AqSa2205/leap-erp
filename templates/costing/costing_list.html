@@ -10,13 +10,27 @@
         <div class="row align-items-center">
             <div class="col-md-8">
                 <form method="get" class="row g-2">
-                    <div class="col-md-4">
+                    {% if request.GET.view %}<input type="hidden" name="view" value="{{ request.GET.view }}">{% endif %}
+                    <div class="col-md-3">
                         {{ filter_form.search }}
                     </div>
                     <div class="col-md-2">
-                        {{ filter_form.status }}
+                        <select name="worked_by" class="form-select">
+                            <option value="">All people</option>
+                            {% for p in people %}
+                            <option value="{{ p.pk }}" {% if selected_worked_by == p.pk|stringformat:'s' %}selected{% endif %}>{{ p.get_full_name|default:p.username }}</option>
+                            {% endfor %}
+                        </select>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
+                        <select name="region" class="form-select">
+                            <option value="">All regions</option>
+                            {% for r in regions %}
+                            <option value="{{ r.pk }}" {% if selected_region == r.pk|stringformat:'s' %}selected{% endif %}>{{ r.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
                         <select name="stage" class="form-select">
                             <option value="">All workflow stages</option>
                             {% for code, label in workflow_stage_choices %}
@@ -60,12 +74,13 @@
                         <th>Title</th>
                         <th>Reference</th>
                         <th>Project</th>
+                        <th>Region</th>
                         <th>Customer Ref</th>
                         <th>Stage</th>
                         <th>Margin</th>
                         <th>Currency</th>
                         <th>Status</th>
-                        <th>Created By</th>
+                        <th>Worked On By</th>
                         <th>Updated</th>
                         <th>Actions</th>
                     </tr>
@@ -86,6 +101,9 @@
                             {% else %}—{% endif %}
                         </td>
                         <td>{{ sheet.project.project_name|default:"-" }}</td>
+                        <td>
+                            {% if sheet.project.region %}<span class="badge bg-secondary">{{ sheet.project.region.name }}</span>{% else %}<span class="text-muted">—</span>{% endif %}
+                        </td>
                         <td>{{ sheet.customer_reference|default:"-" }}</td>
                         <td>
                             {% if sheet.workflow_stage == 'bom_in_progress' %}
@@ -107,7 +125,10 @@
                             <span class="badge bg-success">Final</span>
                             {% endif %}
                         </td>
-                        <td>{% if sheet.created_by %}{{ sheet.created_by.get_full_name|default:sheet.created_by.username }}{% else %}-{% endif %}</td>
+                        <td>
+                            {% if sheet.created_by %}{{ sheet.created_by.get_full_name|default:sheet.created_by.username }}{% else %}-{% endif %}
+                            {% for c in sheet.additional_contacts.all %}<br><span class="text-muted small">+ {{ c.get_full_name|default:c.username }}</span>{% endfor %}
+                        </td>
                         <td>{{ sheet.updated_at|date:"d M Y" }}</td>
                         <td>
                             <a href="{% url 'costing:detail' sheet.pk %}" class="btn btn-sm btn-outline-primary" title="View">
@@ -120,7 +141,7 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="11" class="text-center py-4 text-muted">
+                        <td colspan="12" class="text-center py-4 text-muted">
                             No costing sheets found. <a href="{% url 'costing:create' %}">Create one</a>.
                         </td>
                     </tr>

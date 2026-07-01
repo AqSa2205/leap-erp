@@ -295,3 +295,78 @@ class PQDAttachment(models.Model):
     @property
     def is_powerpoint(self):
         return self.extension in ('ppt', 'pptx')
+
+
+# ─── Prequalification v2 — PDF library + selective merge ──────────
+
+def prequal_library_upload_path(instance, filename):
+    return f'prequal/library/{filename}'
+
+
+class PrequalLibraryItem(models.Model):
+    """One standard prequalification document: a heading and its PDF. Admin-
+    managed shared library (the ~25 standard company documents) reused across
+    every submission. A submission ticks which of these to combine."""
+
+    heading = models.CharField(max_length=255, unique=True)
+    order = models.PositiveIntegerField(default=0)
+    pdf = models.FileField(
+        upload_to=prequal_library_upload_path, null=True, blank=True,
+        help_text='The PDF for this heading (e.g. ISO 9001 certificate).')
+    description = models.CharField(max_length=500, blank=True)
+    is_active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['order', 'heading']
+
+    def __str__(self):
+        return self.heading
+
+    @property
+    def has_pdf(self):
+        return bool(self.pdf)
+
+
+class PrequalSubmission(models.Model):
+    """A named prequalification built for a project — remembers which library
+    headings were selected, so it can be reopened, re-edited and re-exported
+    into a single combined PDF."""
+
+    project = models.ForeignKey(
+        'projects.Project', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='prequal_submissions')
+    title = models.CharField(max_length=255)
+    client_name = models.CharField(max_length=255, blank=True)
+    reference = models.CharField(max_length=100, blank=True)
+
+    # ── Cover-page title-block fields (left metadata panel) ──
+    # PROJECT DEP — three stacked initials (also used for prepared/reviewed/approved)
+    dep_1 = models.CharField('Project Dep 1', max_length=10, blank=True)
+    dep_2 = models.CharField('Project Dep 2', max_length=10, blank=True)
+    dep_3 = models.CharField('Project Dep 3', max_length=10, blank=True)
+    description_month = models.CharField(max_length=20, blank=True, help_text='e.g. JUN/2026')
+    description_text = models.CharField(max_length=100, blank=True, help_text='e.g. 2870 TECHNICAL PROPOSAL')
+    cover_date = models.CharField(max_length=30, blank=True, help_text='DATE band value')
+    revision = models.CharField(max_length=10, blank=True, help_text='REV, e.g. A')
+    report_no = models.CharField(max_length=50, blank=True, help_text='REPORT NO.')
+    block_date = models.CharField(max_length=20, blank=True, help_text='Date in PREPARED/REVIEWED/APPROVED blocks, e.g. JUN-2026')
+
+    selected_items = models.ManyToManyField(
+        PrequalLibraryItem, blank=True, related_name='submissions')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        related_name='prequal_submissions')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return self.title
+
+    def selected_in_order(self):
+        """Selected library items that have a PDF, in library (heading) order."""
+        return self.selected_items.filter(is_active=True, pdf__isnull=False).exclude(pdf='').order_by('order', 'heading')

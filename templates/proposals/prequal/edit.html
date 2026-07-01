@@ -1,0 +1,113 @@
+{% extends 'base.html' %}
+{% block title %}{{ sub.title }} — Select Documents{% endblock %}
+{% block page_title %}Select Documents{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail">
+    <a href="{% url 'proposals:prequal_list' %}">Prequalification</a>
+    <span class="crumb-sep">›</span><span class="crumb-current">{{ sub.title|truncatechars:50 }}</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="card mb-3">
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-4"><label class="form-label small fw-semibold">Title</label>
+                        <input type="text" name="title" value="{{ sub.title }}" class="form-control form-control-sm" required></div>
+                    <div class="col-md-4"><label class="form-label small fw-semibold">Project</label>
+                        <select name="project" class="form-select form-select-sm">
+                            <option value="">— None —</option>
+                            {% for p in projects %}<option value="{{ p.pk }}" {% if sub.project_id == p.pk %}selected{% endif %}>{{ p.proposal_reference }} — {{ p.project_name|truncatechars:30 }}</option>{% endfor %}
+                        </select></div>
+                    <div class="col-md-2"><label class="form-label small">Client</label>
+                        <input type="text" name="client_name" value="{{ sub.client_name }}" class="form-control form-control-sm"></div>
+                    <div class="col-md-2"><label class="form-label small">Reference</label>
+                        <input type="text" name="reference" value="{{ sub.reference }}" class="form-control form-control-sm"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cover page title-block fields -->
+        <div class="card mb-3">
+            <div class="card-header py-2"><i class="bi bi-file-earmark-ruled me-2 text-danger"></i><strong>Cover page (title block)</strong>
+                <span class="text-muted small ms-2">These fill the left panel of the combined PDF cover. Blank = default.</span></div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <label class="form-label small fw-semibold">PROJECT DEP (three initials)</label>
+                        <div class="d-flex gap-1">
+                            <input type="text" name="dep_1" value="{{ sub.dep_1 }}" class="form-control form-control-sm text-center" placeholder="HI" maxlength="10">
+                            <input type="text" name="dep_2" value="{{ sub.dep_2 }}" class="form-control form-control-sm text-center" placeholder="AF" maxlength="10">
+                            <input type="text" name="dep_3" value="{{ sub.dep_3 }}" class="form-control form-control-sm text-center" placeholder="SI" maxlength="10">
+                        </div>
+                    </div>
+                    <div class="col-md-3"><label class="form-label small fw-semibold">Description — month/year</label>
+                        <input type="text" name="description_month" value="{{ sub.description_month }}" class="form-control form-control-sm" placeholder="JUN/2026"></div>
+                    <div class="col-md-5"><label class="form-label small fw-semibold">Description — text</label>
+                        <input type="text" name="description_text" value="{{ sub.description_text }}" class="form-control form-control-sm" placeholder="2870 TECHNICAL PROPOSAL"></div>
+
+                    <div class="col-md-3"><label class="form-label small fw-semibold">DATE</label>
+                        <input type="text" name="cover_date" value="{{ sub.cover_date }}" class="form-control form-control-sm" placeholder="e.g. 01-JUN-2026"></div>
+                    <div class="col-md-2"><label class="form-label small fw-semibold">REV</label>
+                        <input type="text" name="revision" value="{{ sub.revision }}" class="form-control form-control-sm" placeholder="A" maxlength="10"></div>
+                    <div class="col-md-4"><label class="form-label small fw-semibold">REPORT NO.</label>
+                        <input type="text" name="report_no" value="{{ sub.report_no }}" class="form-control form-control-sm" placeholder="Report number"></div>
+                    <div class="col-md-3"><label class="form-label small fw-semibold">Block date <span class="text-muted">(prepared/reviewed/approved)</span></label>
+                        <input type="text" name="block_date" value="{{ sub.block_date }}" class="form-control form-control-sm" placeholder="JUN-2026"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <strong>Documents to combine</strong>
+                <div class="d-flex align-items-center gap-2">
+                    <button type="button" class="btn btn-link btn-sm p-0" id="selAll">Select all</button><span class="text-muted">·</span>
+                    <button type="button" class="btn btn-link btn-sm p-0" id="selWithPdf">Only ones with a PDF</button><span class="text-muted">·</span>
+                    <button type="button" class="btn btn-link btn-sm p-0" id="selClear">Clear</button>
+                    {% if can_manage_library %}<span class="text-muted">·</span><a href="{% url 'proposals:prequal_library' %}" class="small">Manage library</a>{% endif %}
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="row g-2">
+                    {% for row in items %}
+                    <div class="col-lg-6">
+                        <div class="border rounded p-2 d-flex align-items-center gap-2 {% if not row.item.has_pdf %}bg-light{% endif %}">
+                            <input class="form-check-input m-0 doc-pick" type="checkbox" name="items" value="{{ row.item.pk }}"
+                                   id="it{{ row.item.pk }}" data-haspdf="{{ row.item.has_pdf|yesno:'1,0' }}" {% if row.selected %}checked{% endif %}>
+                            <label class="form-check-label flex-grow-1" for="it{{ row.item.pk }}">
+                                <span class="fw-semibold">{{ row.item.order|add:1 }}. {{ row.item.heading }}</span>
+                                {% if not row.item.has_pdf %}<span class="badge bg-warning text-dark ms-1">No PDF</span>{% endif %}
+                            </label>
+                            {% if row.item.has_pdf %}
+                            <a href="{{ row.item.pdf.url }}" target="_blank" class="btn btn-sm btn-outline-secondary" title="Preview"><i class="bi bi-eye"></i></a>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="card-footer d-flex justify-content-between">
+                <a href="{% url 'proposals:prequal_detail' sub.pk %}" class="btn btn-outline-secondary">Back</a>
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Save selection</button>
+                </div>
+            </div>
+        </div>
+    </form>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var picks = document.querySelectorAll('.doc-pick');
+    function set(fn) { picks.forEach(fn); }
+    document.getElementById('selAll').onclick = function(){ set(function(p){p.checked=true;}); };
+    document.getElementById('selClear').onclick = function(){ set(function(p){p.checked=false;}); };
+    document.getElementById('selWithPdf').onclick = function(){ set(function(p){p.checked = p.dataset.haspdf === '1';}); };
+});
+</script>
+{% endblock %}

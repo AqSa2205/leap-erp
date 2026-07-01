@@ -1,0 +1,40 @@
+{% extends 'base.html' %}
+{% block title %}New Prequalification{% endblock %}
+{% block page_title %}New Prequalification{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail">
+    <a href="{% url 'proposals:prequal_list' %}">Prequalification</a>
+    <span class="crumb-sep">›</span><span class="crumb-current">New</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center"><div class="col-lg-7">
+        <form method="post" class="card">
+            {% csrf_token %}
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Title *</label>
+                    <input type="text" name="title" class="form-control" required placeholder="e.g. Aramco Prequalification 2026">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Project</label>
+                    <select name="project" class="form-select">
+                        <option value="">— None —</option>
+                        {% for p in projects %}<option value="{{ p.pk }}">{{ p.proposal_reference }} — {{ p.project_name }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="row g-3">
+                    <div class="col-md-6"><label class="form-label">Client</label><input type="text" name="client_name" class="form-control"></div>
+                    <div class="col-md-6"><label class="form-label">Reference</label><input type="text" name="reference" class="form-control"></div>
+                </div>
+            </div>
+            <div class="card-footer d-flex justify-content-between">
+                <a href="{% url 'proposals:prequal_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                <button type="submit" class="btn btn-primary">Create &amp; select documents</button>
+            </div>
+        </form>
+    </div></div>
+</div>
+{% endblock %}

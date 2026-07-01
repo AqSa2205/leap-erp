@@ -1,6 +1,7 @@
 from django.urls import path
 from django.contrib.auth.decorators import login_required
 from . import views
+from . import prequal_views
 
 app_name = 'proposals'
 
@@ -32,6 +33,19 @@ urlpatterns = [
     path('pqd/<int:pk>/export/', views.pqd_export, name='pqd_export'),
     path('pqd/<int:pk>/upload/', views.ajax_pqd_upload_attachment, name='pqd_upload'),
     path('pqd/attachment/<int:pk>/delete/', views.ajax_pqd_delete_attachment, name='pqd_delete_attachment'),
+
+    # Prequalification v2 — PDF library + selective merge (replaces the PQD flow)
+    path('prequalification/', prequal_views.prequal_list, name='prequal_list'),
+    path('prequalification/create/', prequal_views.prequal_create, name='prequal_create'),
+    path('prequalification/<int:pk>/', prequal_views.prequal_detail, name='prequal_detail'),
+    path('prequalification/<int:pk>/edit/', prequal_views.prequal_edit, name='prequal_edit'),
+    path('prequalification/<int:pk>/delete/', prequal_views.prequal_delete, name='prequal_delete'),
+    path('prequalification/<int:pk>/export/', prequal_views.prequal_export, name='prequal_export'),
+    # Library management (admin)
+    path('prequalification/library/', prequal_views.prequal_library, name='prequal_library'),
+    path('prequalification/library/add/', prequal_views.prequal_library_add, name='prequal_library_add'),
+    path('prequalification/library/<int:pk>/save/', prequal_views.prequal_library_save, name='prequal_library_save'),
+    path('prequalification/library/<int:pk>/delete/', prequal_views.prequal_library_delete, name='prequal_library_delete'),
 
     # Boilerplate
     path('boilerplate/', views.BoilerplateListView.as_view(), name='boilerplate_list'),

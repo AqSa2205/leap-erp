@@ -339,3 +339,30 @@ class LnaReferenceTests(TestCase):
         f = ProjectForm(user=u)
         self.assertEqual(f.initial.get('region'), self.uk.id)
         self.assertNotIn('readonly', f.fields['proposal_reference'].widget.attrs)
+
+
+class ProposalTeamDocumentVisibilityTests(TestCase):
+    """Proposal team sees Client RFQ (and other) documents in their region."""
+
+    def setUp(self):
+        from django.core.files.base import ContentFile
+        from accounts.models import User, Role
+        from projects.models import Region, ProjectStatus, Project, Document
+        self.r1 = Region.objects.create(name='RegA', code='DRA')
+        self.r2 = Region.objects.create(name='RegB', code='DRB')
+        self.st = ProjectStatus.objects.create(name='Open', category='open')
+        head_role, _ = Role.objects.get_or_create(name=Role.PROPOSAL_HEAD)
+        self.head = User.objects.create_user('phd', password='x', role=head_role, region=self.r1)
+        self.author = User.objects.create_user('auth', password='x')
+        pa = Project.objects.create(project_name='PA', region=self.r1, status=self.st, proposal_reference='DRA-1')
+        pb = Project.objects.create(project_name='PB', region=self.r2, status=self.st, proposal_reference='DRB-1')
+        self.da = Document.objects.create(name='rfqA', document_type='rfq', project=pa, uploaded_by=self.author)
+        self.da.file.save('a.pdf', ContentFile(b'x'), save=True)
+        self.db = Document.objects.create(name='rfqB', document_type='rfq', project=pb, uploaded_by=self.author)
+        self.db.file.save('b.pdf', ContentFile(b'x'), save=True)
+
+    def test_proposal_head_sees_region_rfqs(self):
+        from projects.views import _documents_visible_to
+        names = set(_documents_visible_to(self.head).values_list('name', flat=True))
+        self.assertIn('rfqA', names)
+        self.assertNotIn('rfqB', names)

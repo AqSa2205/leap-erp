@@ -879,7 +879,10 @@ def _documents_visible_to(user):
     qs = Document.objects.select_related('project', 'project__region', 'uploaded_by')
     if user.is_super_admin_user:
         return qs
-    if user.is_admin_user or user.is_manager_user:
+    if (user.is_admin_user or user.is_manager_user
+            or getattr(user, 'is_proposal_team_user', False)):
+        # Proposal team (head + reps) see documents (Client RFQ etc.) on every
+        # project in their region, plus their own standalone uploads.
         return qs.filter(
             Q(project__region=user.region) |
             Q(project__isnull=True, uploaded_by=user)

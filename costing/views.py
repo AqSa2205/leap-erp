@@ -388,28 +388,50 @@ class CostingListView(CapabilityRequiredMixin, CostingPermissionMixin, ListView)
         return True
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = (super().get_queryset()
+                    .select_related('project__region')
+                    .prefetch_related('additional_contacts'))
         search = self.request.GET.get('search')
-        status = self.request.GET.get('status')
         stage = self.request.GET.get('stage')
+        region = self.request.GET.get('region')
+        worked_by = self.request.GET.get('worked_by')
         if search:
             queryset = queryset.filter(
                 Q(title__icontains=search) |
                 Q(customer_reference__icontains=search) |
                 Q(project__project_name__icontains=search)
             )
-        if status:
-            queryset = queryset.filter(status=status)
         if stage:
             queryset = queryset.filter(workflow_stage=stage)
+        if region and region.isdigit():
+            queryset = queryset.filter(project__region_id=int(region))
+        if worked_by and worked_by.isdigit():
+            # "Worked on by" = created it or is a credited contributor.
+            queryset = queryset.filter(
+                Q(created_by_id=int(worked_by)) |
+                Q(additional_contacts__id=int(worked_by))
+            ).distinct()
         return queryset.order_by('-updated_at')
 
     def get_context_data(self, **kwargs):
+        from projects.models import Region
+        from accounts.models import User
         context = super().get_context_data(**kwargs)
         context['filter_form'] = CostingFilterForm(self.request.GET)
         context['total_count'] = self.get_queryset().count()
         context['workflow_stage_choices'] = CostingSheet.WORKFLOW_STAGE_CHOICES
         context['selected_stage'] = self.request.GET.get('stage', '')
+        context['regions'] = Region.objects.order_by('name')
+        context['selected_region'] = self.request.GET.get('region', '')
+        # People who created or contributed to any sheet in scope — for the
+        # "Worked On By" filter. Built from the same scoped queryset.
+        base = super().get_queryset()
+        people_ids = set(base.values_list('created_by_id', flat=True))
+        people_ids |= set(base.values_list('additional_contacts__id', flat=True))
+        people_ids.discard(None)
+        context['people'] = User.objects.filter(id__in=people_ids).order_by(
+            'first_name', 'last_name', 'username')
+        context['selected_worked_by'] = self.request.GET.get('worked_by', '')
         return context
 
 
