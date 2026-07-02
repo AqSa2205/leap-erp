@@ -1026,7 +1026,12 @@
         <div class="nav-section" data-section="finance"><span>Finance</span><i class="bi bi-chevron-down section-chevron"></i></div>
         <ul class="nav flex-column nav-section-items" data-section-items="finance">
             <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.app_name == 'finance' and request.resolver_match.url_name not in 'budgeting_list sheet_budget' %}active{% endif %}" href="{% url 'finance:home' %}" data-title="Finance — Won Projects">
+                <a class="nav-link {% if request.resolver_match.url_name == 'margin_analysis_list' or request.resolver_match.url_name == 'margin_analysis' %}active{% endif %}" href="{% url 'finance:margin_analysis_list' %}" data-title="Finance — Margin Analysis">
+                    <i class="bi bi-graph-up-arrow"></i> <span>Margin Analysis</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'finance' and request.resolver_match.url_name not in 'budgeting_list sheet_budget margin_analysis_list' %}active{% endif %}" href="{% url 'finance:home' %}" data-title="Finance — Won Projects">
                     <i class="bi bi-cash-coin"></i> <span>Cash-Flow Schedules</span>
                 </a>
             </li>

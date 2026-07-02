@@ -344,6 +344,36 @@ def project_cash_outflow(request, project_pk):
 
 
 @login_required
+def margin_analysis_list(request):
+    """Finance landing for margin analysis — costed sheets in the finance user's
+    region (finalized or in the finance stages), each linking to its M1–M5
+    margin analysis where finance sets the scenarios and approves a margin."""
+    if not _can_finance(request.user):
+        messages.error(request, 'Finance access is limited to the finance team.')
+        return redirect('dashboard:index')
+
+    sheets = (CostingSheet.objects
+              .filter(workflow_stage__in=['finalized', 'finance_review', 'finance_approved'])
+              .select_related('project', 'project__region', 'project__status')
+              .order_by('-updated_at'))
+    if not request.user.is_super_admin_user:
+        sheets = sheets.filter(project__region=request.user.region)
+
+    from projects.models import Region
+    if request.user.is_super_admin_user:
+        regions = Region.objects.order_by('name')
+    else:
+        regions = Region.objects.filter(pk=request.user.region_id)
+    selected_region = (request.GET.get('region') or '').strip()
+    if selected_region.isdigit():
+        sheets = sheets.filter(project__region_id=int(selected_region))
+
+    return render(request, 'finance/margin_analysis_list.html', {
+        'sheets': sheets, 'regions': regions, 'selected_region': selected_region,
+    })
+
+
+@login_required
 def budgeting_list(request):
     """Finance budgeting landing — costing sheets ready for / under finance
     budgeting (finalized by sales, in review, or already approved)."""
@@ -351,8 +381,10 @@ def budgeting_list(request):
         messages.error(request, 'Finance access is limited to the finance team.')
         return redirect('dashboard:index')
 
+    # Only sheets that have been sent to finance for budgeting (in review) or
+    # already approved — not ones sales merely finalized but hasn't handed over.
     sheets = (CostingSheet.objects
-              .filter(workflow_stage__in=['finalized', 'finance_review', 'finance_approved'])
+              .filter(workflow_stage__in=['finance_review', 'finance_approved'])
               .select_related('project', 'project__region', 'project__status')
               .order_by('-updated_at'))
     if not request.user.is_super_admin_user:
