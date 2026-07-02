@@ -40,6 +40,9 @@
     .th-calc { display:block; font-size:0.6rem; font-weight:400; color:#888; text-transform:none; letter-spacing:0; }
     #sched-table thead th.th-auto { background:#f4f4f4; color:#666; }
     #sched-table input[readonly] { background:#f4f4f4; color:#555; cursor:not-allowed; }
+    /* Manually-entered value columns (Best/Avg/Proposed/Submitted %, Invoice No,
+       From Kickoff, Remarks) — coloured so they stand out from the rest. */
+    #sched-table input.co-entry { color:#0a58ca; font-weight:600; }
 </style>
 {% endblock %}
 
@@ -153,13 +156,13 @@
                                     <tr class="{% if m.is_subrow %}subrow{% else %}milestone-main{% endif %}">
                                         <td class="text-center text-muted">{{ d.serial|default_if_none:'' }}</td>
                                         <td><input type="text" name="m-{{ m.pk }}-name" value="{{ m.name }}" style="min-width:230px"></td>
-                                        <td><input type="number" step="0.01" class="text-end" name="m-{{ m.pk }}-best_pct" value="{{ m.best_pct|default_if_none:'' }}"></td>
-                                        <td><input type="number" step="0.01" class="text-end" name="m-{{ m.pk }}-average_pct" value="{{ m.average_pct|default_if_none:'' }}"></td>
-                                        <td><input type="number" step="0.01" class="text-end" name="m-{{ m.pk }}-proposed_pct" value="{{ m.proposed_pct|default_if_none:'' }}"></td>
-                                        <td class="col-sub"><input type="number" step="0.01" class="text-end" name="m-{{ m.pk }}-submitted_pct" value="{{ m.submitted_pct|default_if_none:'' }}"></td>
-                                        <td><input type="text" name="m-{{ m.pk }}-invoice_no" value="{{ m.invoice_no }}" style="min-width:90px"></td>
-                                        <td><input type="number" class="text-end" name="m-{{ m.pk }}-from_kickoff_days" value="{{ m.from_kickoff_days|default_if_none:'' }}" style="min-width:80px"></td>
-                                        <td><input type="text" name="m-{{ m.pk }}-remarks" value="{{ m.remarks }}" style="min-width:120px"></td>
+                                        <td><input type="number" step="0.01" class="text-end co-entry" name="m-{{ m.pk }}-best_pct" value="{{ m.best_pct|default_if_none:'' }}"></td>
+                                        <td><input type="number" step="0.01" class="text-end co-entry" name="m-{{ m.pk }}-average_pct" value="{{ m.average_pct|default_if_none:'' }}"></td>
+                                        <td><input type="number" step="0.01" class="text-end co-entry" name="m-{{ m.pk }}-proposed_pct" value="{{ m.proposed_pct|default_if_none:'' }}"></td>
+                                        <td class="col-sub"><input type="number" step="0.01" class="text-end co-entry" name="m-{{ m.pk }}-submitted_pct" value="{{ m.submitted_pct|default_if_none:'' }}"></td>
+                                        <td><input type="text" class="co-entry" name="m-{{ m.pk }}-invoice_no" value="{{ m.invoice_no }}" style="min-width:90px"></td>
+                                        <td><input type="number" class="text-end co-entry" name="m-{{ m.pk }}-from_kickoff_days" value="{{ m.from_kickoff_days|default_if_none:'' }}" style="min-width:80px"></td>
+                                        <td><input type="text" class="co-entry" name="m-{{ m.pk }}-remarks" value="{{ m.remarks }}" style="min-width:120px"></td>
                                         <td><input type="date" class="js-prep" name="m-{{ m.pk }}-work_cert_prep_date" value="{{ m.work_cert_prep_date|date:'Y-m-d' }}" style="min-width:140px"></td>
                                         <td><input type="date" class="js-approval bg-light" name="m-{{ m.pk }}-work_cert_approval_date" value="{{ m.work_cert_approval_date|date:'Y-m-d' }}" style="min-width:140px" readonly title="Auto: prep + cert-approval gap"></td>
                                         <td><input type="date" class="js-submission bg-light" name="m-{{ m.pk }}-invoice_submission_date" value="{{ m.invoice_submission_date|date:'Y-m-d' }}" style="min-width:140px" readonly title="Auto: approval + invoice gap"></td>
