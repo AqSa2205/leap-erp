@@ -34,6 +34,12 @@
     .amount-cell { font-weight: 600; white-space: nowrap; }
     .total-bad { color: #c62828; }
     .total-ok  { color: #2e7d32; }
+    .col-period { background: #eef5ff; }
+    #sched-table thead th.col-period { background: #dcebff; color: #1c4b82; border-bottom-color: #1c4b82; }
+    .th-manual { display:block; font-size:0.6rem; font-weight:600; color:#2e7d32; text-transform:none; letter-spacing:0; }
+    .th-calc { display:block; font-size:0.6rem; font-weight:400; color:#888; text-transform:none; letter-spacing:0; }
+    #sched-table thead th.th-auto { background:#f4f4f4; color:#666; }
+    #sched-table input[readonly] { background:#f4f4f4; color:#555; cursor:not-allowed; }
 </style>
 {% endblock %}
 
@@ -131,11 +137,13 @@
                                         <th>Invoice No</th>
                                         <th>From Kickoff (Days)</th>
                                         <th>Remarks</th>
-                                        <th>Work Cert Prep</th>
-                                        <th>Work Cert Approval</th>
-                                        <th>Invoice Submission</th>
-                                        <th>Payment Receive</th>
+                                        <th>Work Cert Prep <span class="th-manual">manual</span></th>
+                                        <th class="th-auto">Work Cert Approval <span class="th-calc">= prep + {{ pf.cert_approval_gap }}d</span></th>
+                                        <th class="th-auto">Invoice Submission <span class="th-calc">= approval + {{ pf.invoice_gap }}d</span></th>
+                                        <th class="th-auto">Payment Receive <span class="th-calc">= est. start + {{ pf.payment_gap }}d</span></th>
+                                        <th>Actual Payment Receive <span class="th-manual">manual</span></th>
                                         <th class="text-end">Amount</th>
+                                        {% for pr in periods %}<th class="text-end col-period">{{ pr.label }}</th>{% endfor %}
                                         <th></th>
                                     </tr>
                                 </thead>
@@ -152,11 +160,15 @@
                                         <td><input type="text" name="m-{{ m.pk }}-invoice_no" value="{{ m.invoice_no }}" style="min-width:90px"></td>
                                         <td><input type="number" class="text-end" name="m-{{ m.pk }}-from_kickoff_days" value="{{ m.from_kickoff_days|default_if_none:'' }}" style="min-width:80px"></td>
                                         <td><input type="text" name="m-{{ m.pk }}-remarks" value="{{ m.remarks }}" style="min-width:120px"></td>
-                                        <td><input type="date" name="m-{{ m.pk }}-work_cert_prep_date" value="{{ m.work_cert_prep_date|date:'Y-m-d' }}" style="min-width:140px"></td>
-                                        <td><input type="date" name="m-{{ m.pk }}-work_cert_approval_date" value="{{ m.work_cert_approval_date|date:'Y-m-d' }}" style="min-width:140px"></td>
-                                        <td><input type="date" name="m-{{ m.pk }}-invoice_submission_date" value="{{ m.invoice_submission_date|date:'Y-m-d' }}" style="min-width:140px"></td>
-                                        <td><input type="date" name="m-{{ m.pk }}-payment_receive_date" value="{{ m.payment_receive_date|date:'Y-m-d' }}" style="min-width:140px"></td>
+                                        <td><input type="date" class="js-prep" name="m-{{ m.pk }}-work_cert_prep_date" value="{{ m.work_cert_prep_date|date:'Y-m-d' }}" style="min-width:140px"></td>
+                                        <td><input type="date" class="js-approval bg-light" name="m-{{ m.pk }}-work_cert_approval_date" value="{{ m.work_cert_approval_date|date:'Y-m-d' }}" style="min-width:140px" readonly title="Auto: prep + cert-approval gap"></td>
+                                        <td><input type="date" class="js-submission bg-light" name="m-{{ m.pk }}-invoice_submission_date" value="{{ m.invoice_submission_date|date:'Y-m-d' }}" style="min-width:140px" readonly title="Auto: approval + invoice gap"></td>
+                                        <td><input type="date" class="js-payment bg-light" name="m-{{ m.pk }}-payment_receive_date" value="{{ m.payment_receive_date|date:'Y-m-d' }}" style="min-width:140px" readonly title="Auto: estimated start + payment gap"></td>
+                                        <td><input type="date" name="m-{{ m.pk }}-actual_payment_receive_date" value="{{ m.actual_payment_receive_date|date:'Y-m-d' }}" style="min-width:140px"></td>
                                         <td class="text-end amount-cell">{{ m.amount|floatformat:2|intcomma }}</td>
+                                        {% for c in d.period_cells %}
+                                        <td class="col-period"><input type="number" step="0.01" class="text-end" name="m-{{ m.pk }}-period-{{ c.key }}" value="{{ c.value }}" style="min-width:95px"></td>
+                                        {% endfor %}
                                         <td class="text-center">
                                             <button type="submit" name="delete_id" value="{{ m.pk }}" class="btn btn-sm btn-link text-danger p-0" title="Delete row" formnovalidate><i class="bi bi-trash"></i></button>
                                         </td>
@@ -172,8 +184,9 @@
                                         <td class="text-end {% if totals.average != 100 %}total-bad{% else %}total-ok{% endif %}">{{ totals.average|floatformat:2 }}%</td>
                                         <td class="text-end {% if totals.proposed != 100 %}total-bad{% else %}total-ok{% endif %}">{{ totals.proposed|floatformat:2 }}%</td>
                                         <td class="text-end col-sub {% if totals.submitted != 100 %}total-bad{% else %}total-ok{% endif %}">{{ totals.submitted|floatformat:2 }}%</td>
-                                        <td colspan="7"></td>
+                                        <td colspan="8"></td>
                                         <td class="text-end amount-cell">{{ totals.amount|floatformat:2|intcomma }}</td>
+                                        {% for p in totals.periods %}<td class="text-end col-period amount-cell">{{ p.total|floatformat:2|intcomma }}</td>{% endfor %}
                                         <td></td>
                                     </tr>
                                 </tfoot>
@@ -207,7 +220,7 @@
     function cellInput(row, colIndex) {
         var cell = row.cells[colIndex];
         if (!cell) return null;
-        return cell.querySelector('input, textarea');
+        return cell.querySelector('input:not([readonly]), textarea');
     }
     function colIndexOf(input) {
         var td = input.closest('td');
@@ -227,7 +240,7 @@
     // Build the flat, left-to-right / top-to-bottom order of all grid inputs.
     function allInputs() {
         return Array.prototype.slice.call(
-            table.querySelectorAll('tbody tr input, tbody tr textarea'));
+            table.querySelectorAll('tbody tr input:not([readonly]), tbody tr textarea'));
     }
     function moveHorizontal(input, dir) {
         var list = allInputs();
@@ -257,6 +270,42 @@
             e.preventDefault();
             moveHorizontal(el, e.shiftKey ? -1 : 1);
         }
+    });
+})();
+
+// Live derived dates: Work-Cert-Approval = prep + cert gap; Invoice-Submission
+// = approval + invoice gap; Payment-Receive = estimated start + payment gap.
+// (The server re-derives these on save; this is just instant feedback.)
+(function () {
+    var CFG = {
+        certGap: {{ pf.cert_approval_gap|default:0 }},
+        invoiceGap: {{ pf.invoice_gap|default:0 }},
+        paymentGap: {{ pf.payment_gap|default:0 }},
+        estStart: "{{ pf.estimated_start_date|date:'Y-m-d' }}"
+    };
+    function addDays(iso, days) {
+        if (!iso) return '';
+        var p = iso.split('-');
+        var d = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2]));
+        d.setUTCDate(d.getUTCDate() + (parseInt(days, 10) || 0));
+        return d.toISOString().slice(0, 10);
+    }
+    var paymentDate = CFG.estStart ? addDays(CFG.estStart, CFG.paymentGap) : '';
+
+    document.querySelectorAll('#sched-table tbody tr').forEach(function (row) {
+        var prep = row.querySelector('.js-prep');
+        var approval = row.querySelector('.js-approval');
+        var submission = row.querySelector('.js-submission');
+        var payment = row.querySelector('.js-payment');
+        if (!prep) return;
+        function sync() {
+            var a = prep.value ? addDays(prep.value, CFG.certGap) : '';
+            if (approval) approval.value = a;
+            if (submission) submission.value = a ? addDays(a, CFG.invoiceGap) : '';
+        }
+        prep.addEventListener('change', sync);
+        prep.addEventListener('input', sync);
+        if (payment) payment.value = paymentDate;  // same for every row
     });
 })();
 </script>

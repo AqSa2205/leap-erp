@@ -1,6 +1,7 @@
 import base64
 import io
 from datetime import date
+from decimal import Decimal
 from unittest import mock
 
 from django.test import TestCase
@@ -470,3 +471,55 @@ class TermsUsageSeparationTests(TestCase):
         self.assertEqual(r.status_code, 200)
         t = TermsTemplate.objects.get(name='From PO')
         self.assertEqual(t.usage, 'procurement')
+
+
+class BudgetProcurementFlowTests(TestCase):
+    """Procurement works from the finance-approved budget, not the costing
+    sheet: budgeted price flows onto the PO and the costing sheet is off-limits."""
+
+    def setUp(self):
+        from projects.models import Region, ProjectStatus, Project
+        from costing.models import CostingSheet, CostingSection, CostingLineItem
+        self.sa, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.proc_role, _ = Role.objects.get_or_create(name=Role.PROCUREMENT_MGR)
+        self.region = Region.objects.create(name='Arabia')
+        self.won = ProjectStatus.objects.create(name='Won', category='won')
+        self.project = Project.objects.create(
+            project_name='P', status=self.won, region=self.region)
+        self.sheet = CostingSheet.objects.create(
+            title='S', project=self.project, margin=Decimal('30'),
+            discount_rate=Decimal('0'), workflow_stage='finance_approved')
+        self.sec = CostingSection.objects.create(
+            costing_sheet=self.sheet, section_number='A.1', title='CCTV', order=0)
+        self.item = CostingLineItem.objects.create(
+            section=self.sec, item_number='1', description='Cam', quantity=Decimal('2'),
+            unit='EA', make='Bosch', model_number='X1', vendor_name='Acme',
+            base_unit_cost=Decimal('100'), supplier_currency='SAR')
+        self.proc = User.objects.create_user(
+            'proc', password='pw', role=self.proc_role, region=self.region)
+
+    def test_budget_flows_to_po_at_budgeted_price(self):
+        from procurement.models import PurchaseOrder, PurchaseOrderItem
+        self.client.force_login(self.proc)
+        # Approved-budget list shows the sheet; tracker opens.
+        self.assertEqual(self.client.get(reverse('procurement:approved_budgets')).status_code, 200)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        self.assertEqual(self.client.get(turl).status_code, 200)
+        # Create a PO from the one supply line.
+        r = self.client.post(turl, {'item_ids': [str(self.item.pk)]})
+        self.assertEqual(r.status_code, 302)
+        po = PurchaseOrder.objects.filter(project=self.project).latest('id')
+        pi = po.items.get(source_bom_item=self.item)
+        # rate = budgeted unit price; vendor carried over; PO vendor pre-filled.
+        self.assertEqual(pi.rate_per_unit, self.item.budget_unit_price())
+        self.assertEqual(pi.vendor_name, 'Acme')
+        self.assertEqual(po.vendor_name, 'Acme')
+        self.assertEqual(pi.make_model, 'Bosch X1')
+        # Budgeted price at default equals the costing line price (margin 30%).
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.budget_line_price(), self.item.base_total_price)
+
+    def test_procurement_cannot_open_costing_sheet(self):
+        self.client.force_login(self.proc)
+        r = self.client.get(reverse('costing:detail', kwargs={'pk': self.sheet.pk}))
+        self.assertNotEqual(r.status_code, 200)  # locked out (404/403/redirect)

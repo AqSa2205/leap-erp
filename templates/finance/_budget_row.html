@@ -1,0 +1,20 @@
+{% load humanize %}
+{% comment %}
+One budget line. Expects: row (dict with item/cost/disc/margin/price/sales_price/variance),
+prefix ('line' for A.1 CostingLineItem, 'sow' for A.2 ScopeOfWorkItem), editable.
+{% endcomment %}
+<tr class="bud-row" data-sales="{{ row.sales_price|stringformat:'.2f' }}" data-basecost="{{ row.base_cost|stringformat:'.2f' }}" data-cdisc="{{ row.cost_disc|stringformat:'.4f' }}" data-cmargin="{{ row.cost_margin|stringformat:'.4f' }}">
+    <td class="text-center text-muted">{% if prefix == 'sow' %}{{ row.item.serial_number }}{% else %}{{ row.item.item_number }}{% endif %}</td>
+    <td>{{ row.item.description }}</td>
+    <td class="text-end">{{ row.item.quantity|floatformat:"-2" }}</td>
+    <td><input type="number" step="0.01" class="text-end b-cost" name="{{ prefix }}-{{ row.item.pk }}-budget" value="{{ row.cost|stringformat:'.2f' }}" {% if not editable %}readonly{% endif %}></td>
+    <td class="col-pct"><input type="number" step="0.01" class="text-end b-disc" name="{{ prefix }}-{{ row.item.pk }}-disc" value="{{ row.disc|default_if_none:'' }}" placeholder="{{ row.eff_disc|floatformat:2 }}" {% if not editable %}readonly{% endif %}></td>
+    <td class="col-pct"><input type="number" step="0.01" class="text-end b-margin" name="{{ prefix }}-{{ row.item.pk }}-margin" value="{{ row.margin|default_if_none:'' }}" placeholder="{{ row.eff_margin|floatformat:2 }}" {% if not editable %}readonly{% endif %}></td>
+    <td class="col-price">
+        <input type="number" step="0.01" class="text-end b-price" name="{{ prefix }}-{{ row.item.pk }}-price" value="{{ row.price|stringformat:'.2f' }}" {% if not editable %}readonly{% endif %}>
+        <input type="hidden" class="b-price-manual" name="{{ prefix }}-{{ row.item.pk }}-price_manual" value="{% if row.price_manual %}1{% else %}0{% endif %}">
+    </td>
+    <td class="text-end sales-cell">{{ row.sales_price|floatformat:2|intcomma }}</td>
+    <td class="text-end b-var">{{ row.variance|floatformat:2|intcomma }}</td>
+    <td><input type="text" name="{{ prefix }}-{{ row.item.pk }}-remarks" value="{{ row.item.budget_remarks }}" {% if not editable %}readonly{% endif %}></td>
+</tr>

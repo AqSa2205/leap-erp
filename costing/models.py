@@ -180,6 +180,12 @@ class CostingSheet(models.Model):
     margin_final = models.DecimalField(
         max_digits=5, decimal_places=2, null=True, blank=True,
         help_text='M5 — final/approved margin % (the one approved for the PO).')
+    # Finance budgeting defaults — used ONLY on the finance budget screen; they
+    # never affect the costing sheet's own pricing. Blank falls back to the
+    # sheet's margin / discount_rate above so the budget starts from the same
+    # preset the sales team used.
+    budget_margin = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    budget_discount_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     discount_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
     shipping_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
     customs_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
@@ -532,6 +538,17 @@ class ScopeOfWorkItem(models.Model):
         help_text='If set, shows this text instead of the number (e.g. "Included", "TBD")')
     order = models.PositiveIntegerField(default=0)
 
+    # Finance budgeting — the cost finance approves to spend on this service,
+    # set on the finance budget screen. Blank = not yet budgeted (defaults to
+    # the sales cost above). budget_margin / budget_discount are budget-only
+    # overrides (blank = use the sheet's budget default).
+    budgeted_cost = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    budget_margin = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    budget_discount = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    # Manual budgeted-price override. Blank = derive from cost + margin/discount.
+    budget_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    budget_remarks = models.TextField(blank=True)
+
     @property
     def display_price(self):
         """Show price_text if set, otherwise the numeric total_price."""
@@ -675,6 +692,18 @@ class CostingLineItem(models.Model):
     installation_pct = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text='Installation %. If blank, uses sheet rate.')
     margin = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text='Item-specific margin. If blank, uses sheet margin.')
     order = models.IntegerField(default=0)
+
+    # Finance budgeting — the SAR cost finance approves to spend on this line,
+    # set on the finance budget screen. Blank = not yet budgeted (defaults to
+    # the line's base cost, base_total_cost_sar). budget_margin / budget_discount
+    # are budget-only overrides (blank = use the sheet's budget default). None of
+    # these affect the costing sheet's own pricing.
+    budgeted_cost = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    budget_margin = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    budget_discount = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    # Manual budgeted-price override. Blank = derive from cost + margin/discount.
+    budget_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    budget_remarks = models.TextField(blank=True)
 
     class Meta:
         ordering = ['order', 'item_number']
@@ -828,6 +857,58 @@ class CostingLineItem(models.Model):
         result = (self.unit_cost * self.exchange_rate_to_sar).quantize(Decimal('0.01'))
         self._computed['unit_cost_sar'] = result
         return result
+
+    @property
+    def total_cost_sar(self):
+        """Total line cost in SAR = unit cost (SAR) × quantity — the sales-side
+        cost finance budgets against."""
+        return (self.unit_cost_sar * self.quantity).quantize(Decimal('0.01'))
+
+    @property
+    def base_total_cost_sar(self):
+        """Base (pre-discount) line cost in SAR × quantity — the budget's
+        default 'Cost', so applying the preset discount + margin reproduces the
+        costing price before add-ons."""
+        return (self.base_unit_cost * self.exchange_rate_to_sar
+                * self.quantity).quantize(Decimal('0.01'))
+
+    def budget_line_price(self):
+        """The finance-approved budgeted price for this line (total for the
+        quantity), matching the finance budget screen. This is what procurement
+        receives — the costing sheet itself is not exposed to them.
+
+        Mirrors finance.views.sheet_budget: a manual price override wins; else
+        the price is anchored to the costing sales price and scaled by the
+        budgeted cost + the (per-line → sheet → costing) margin/discount.
+        """
+        if self.budget_price is not None:
+            return self.budget_price
+        sheet = self.sheet
+        base_cost = self.base_total_cost_sar
+        budgeted_cost = self.budgeted_cost if self.budgeted_cost is not None else base_cost
+        cost_disc = self.effective_discount_pct * Decimal('100')
+        cost_margin = self.effective_margin * Decimal('100')
+        disc = (self.budget_discount if self.budget_discount is not None
+                else (sheet.budget_discount_rate if sheet.budget_discount_rate is not None else cost_disc))
+        margin = (self.budget_margin if self.budget_margin is not None
+                  else (sheet.budget_margin if sheet.budget_margin is not None else cost_margin))
+
+        def factor(d, m):
+            return (Decimal('1') - d / Decimal('100')) / (Decimal('1') - min(m, Decimal('99')) / Decimal('100'))
+
+        f_cost = factor(cost_disc, cost_margin)
+        if base_cost and f_cost:
+            return (self.base_total_price * (budgeted_cost / base_cost)
+                    * (factor(disc, margin) / f_cost)).quantize(Decimal('0.01'))
+        return (budgeted_cost * factor(disc, margin)).quantize(Decimal('0.01'))
+
+    def budget_unit_price(self):
+        """Budgeted price per unit = budgeted line price ÷ quantity (so a PO's
+        rate × qty reproduces the budgeted line total)."""
+        qty = self.quantity or Decimal('1')
+        if not qty:
+            return Decimal('0')
+        return (self.budget_line_price() / qty).quantize(Decimal('0.01'))
 
     @property
     def base_unit_price(self):

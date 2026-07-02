@@ -119,24 +119,38 @@ class ProjectFinance(models.Model):
         return sheet
 
     def recompute_dates(self):
-        """Fill every milestone's four dates from the kickoff + day offsets +
-        standard gaps. Overwrites existing dates (the 'recompute' action)."""
-        if not self.kickoff_date:
-            return
+        """Re-derive every milestone's auto dates (approval, submission,
+        payment-receive) from its manual Work-Cert-Prep date + the standard
+        gaps and the project's estimated start. Manual dates are untouched."""
         for m in self.milestones.all():
-            if m.from_kickoff_days is None:
-                continue
-            prep = self.kickoff_date + timedelta(days=m.from_kickoff_days)
-            approval = prep + timedelta(days=self.cert_approval_gap)
-            submission = approval + timedelta(days=self.invoice_gap)
-            payment = submission + timedelta(days=self.payment_gap)
-            m.work_cert_prep_date = prep
-            m.work_cert_approval_date = approval
-            m.invoice_submission_date = submission
-            m.payment_receive_date = payment
+            m.apply_derived_dates()
             m.save(update_fields=[
-                'work_cert_prep_date', 'work_cert_approval_date',
-                'invoice_submission_date', 'payment_receive_date'])
+                'work_cert_approval_date', 'invoice_submission_date',
+                'payment_receive_date'])
+
+    def timeline_periods(self):
+        """Month columns spanning the project timeline, from the estimated
+        start through the estimated end, stepped by the payment gap (≈30 days
+        per month). Returns [{'key': 'YYYY-MM', 'label': 'Jan 2026'}, …].
+
+        e.g. start Jan / end Jun, gap 30 → Jan Feb Mar Apr May Jun (6);
+             gap 60 → Jan Mar May (3).
+        """
+        import calendar
+        start, end = self.estimated_start_date, self.estimated_end_date
+        if not start or not end or (start.year, start.month) > (end.year, end.month):
+            return []
+        step = max(1, round((self.payment_gap or 30) / 30))
+        periods, y, m, guard = [], start.year, start.month, 0
+        while (y, m) <= (end.year, end.month) and guard < 240:
+            periods.append({'key': f'{y:04d}-{m:02d}',
+                            'label': f'{calendar.month_abbr[m]} {y}'})
+            m += step
+            while m > 12:
+                m -= 12
+                y += 1
+            guard += 1
+        return periods
 
 
 class PaymentMilestone(models.Model):
@@ -167,11 +181,18 @@ class PaymentMilestone(models.Model):
     proposed_pct = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     submitted_pct = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
 
-    # Dates — auto-computed from kickoff + offsets unless overridden.
+    # Work-Cert-Prep is entered manually; approval and invoice-submission are
+    # derived from it + the standard gaps. Payment-receive is derived from the
+    # project's estimated start + payment gap. Actual payment-receive is manual.
     work_cert_prep_date = models.DateField(null=True, blank=True)
     work_cert_approval_date = models.DateField(null=True, blank=True)
     invoice_submission_date = models.DateField(null=True, blank=True)
     payment_receive_date = models.DateField(null=True, blank=True)
+    actual_payment_receive_date = models.DateField(null=True, blank=True)
+
+    # Manually-scheduled payment amounts spread across the project timeline
+    # months (see ProjectFinance.timeline_periods). Keyed 'YYYY-MM' -> amount.
+    period_amounts = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ['order', 'id']
@@ -179,11 +200,35 @@ class PaymentMilestone(models.Model):
     def __str__(self):
         return self.name
 
+    def apply_derived_dates(self):
+        """Fill the auto dates from the manual Work-Cert-Prep date + the
+        project gaps, and the estimated-start-driven payment-receive date.
+        Manual fields (prep, actual payment) are left as-is."""
+        pf = self.project_finance
+        if self.work_cert_prep_date:
+            self.work_cert_approval_date = (
+                self.work_cert_prep_date + timedelta(days=pf.cert_approval_gap or 0))
+            self.invoice_submission_date = (
+                self.work_cert_approval_date + timedelta(days=pf.invoice_gap or 0))
+        else:
+            self.work_cert_approval_date = None
+            self.invoice_submission_date = None
+        if pf.estimated_start_date:
+            self.payment_receive_date = (
+                pf.estimated_start_date + timedelta(days=pf.payment_gap or 0))
+        else:
+            self.payment_receive_date = None
+
     @property
     def amount(self):
         """Billed amount for this milestone = Submitted % × Project P.O Value."""
         pct = self.submitted_pct or Decimal('0')
         return (self.project_finance.po_value * pct / Decimal('100')).quantize(Decimal('0.01'))
+
+    def period_amount(self, key):
+        """The scheduled payment amount for a timeline month key, or ''."""
+        val = (self.period_amounts or {}).get(key)
+        return '' if val is None else val
 
 
 class CashOutflowRow(models.Model):

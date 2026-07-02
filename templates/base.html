@@ -974,6 +974,11 @@
                     <i class="bi bi-speedometer2"></i> <span>Overview</span>
                 </a>
             </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'approved_budgets' or request.resolver_match.url_name == 'bom_procurement_tracker' %}active{% endif %}" href="{% url 'procurement:approved_budgets' %}" data-title="Approved Budgets">
+                    <i class="bi bi-clipboard-check"></i> <span>Approved Budgets</span>
+                </a>
+            </li>
             {% if user|can:'po.nav' %}
             <li class="nav-item">
                 <a class="nav-link {% if 'po_' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'procurement:po_list' %}" data-title="Purchase Orders">
@@ -1021,8 +1026,13 @@
         <div class="nav-section" data-section="finance"><span>Finance</span><i class="bi bi-chevron-down section-chevron"></i></div>
         <ul class="nav flex-column nav-section-items" data-section-items="finance">
             <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.app_name == 'finance' %}active{% endif %}" href="{% url 'finance:home' %}" data-title="Finance — Won Projects">
+                <a class="nav-link {% if request.resolver_match.app_name == 'finance' and request.resolver_match.url_name not in 'budgeting_list sheet_budget' %}active{% endif %}" href="{% url 'finance:home' %}" data-title="Finance — Won Projects">
                     <i class="bi bi-cash-coin"></i> <span>Cash-Flow Schedules</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'budgeting_list' or request.resolver_match.url_name == 'sheet_budget' %}active{% endif %}" href="{% url 'finance:budgeting_list' %}" data-title="Finance — Costing Budgeting">
+                    <i class="bi bi-clipboard-data"></i> <span>Costing Budgeting</span>
                 </a>
             </li>
         </ul>

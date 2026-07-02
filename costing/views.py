@@ -74,14 +74,8 @@ def _user_can_view_sheet(user, sheet):
     # review and ongoing finance reference.
     if getattr(user, 'is_finance_team_user', False):
         return bool(sheet.project and sheet.project.region_id == user.region_id)
-    # Procurement only sees BOMs whose project is Won and in their region.
-    if getattr(user, 'is_procurement_user', False):
-        return bool(
-            sheet.project
-            and sheet.project.region_id == user.region_id
-            and sheet.project.status
-            and sheet.project.status.category == 'won'
-        )
+    # Procurement no longer sees the costing sheet at all — they work from the
+    # finance-approved budget (Procurement → Approved Budgets) instead.
     return False
 
 
@@ -353,12 +347,9 @@ class CostingPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
             # the full pricing breakdown to budget.
             return queryset.filter(project__region=user.region)
         elif getattr(user, 'is_procurement_user', False):
-            # Procurement sees BOMs (no pricing) for Won projects in their
-            # own region only — that's when their work begins.
-            return queryset.filter(
-                project__region=user.region,
-                project__status__category='won',
-            )
+            # Procurement no longer sees costing sheets — they work from the
+            # finance-approved budget (Procurement → Approved Budgets).
+            return queryset.none()
         else:
             return queryset.filter(created_by=user)
 

@@ -126,6 +126,7 @@ def project_schedule(request, project_pk):
         pf.notes = (request.POST.get('notes') or '').strip()
         pf.save()
 
+        periods = pf.timeline_periods()
         for m in pf.milestones.all():
             p = f'm-{m.pk}-'
             m.name = (request.POST.get(p + 'name') or m.name).strip()
@@ -136,18 +137,29 @@ def project_schedule(request, project_pk):
             m.average_pct = _parse_decimal(request.POST.get(p + 'average_pct'))
             m.proposed_pct = _parse_decimal(request.POST.get(p + 'proposed_pct'))
             m.submitted_pct = _parse_decimal(request.POST.get(p + 'submitted_pct'))
+            # Manual dates. Approval / submission / payment-receive are always
+            # re-derived below, so posted values for them are ignored.
             m.work_cert_prep_date = _parse_date(request.POST.get(p + 'work_cert_prep_date'))
-            m.work_cert_approval_date = _parse_date(request.POST.get(p + 'work_cert_approval_date'))
-            m.invoice_submission_date = _parse_date(request.POST.get(p + 'invoice_submission_date'))
-            m.payment_receive_date = _parse_date(request.POST.get(p + 'payment_receive_date'))
+            m.actual_payment_receive_date = _parse_date(request.POST.get(p + 'actual_payment_receive_date'))
+            m.apply_derived_dates()
+            # Timeline month amounts — keep only non-empty cells.
+            amounts = {}
+            for pr in periods:
+                raw = _parse_decimal(request.POST.get(f'{p}period-{pr["key"]}'))
+                if raw is not None:
+                    amounts[pr['key']] = str(raw)
+            m.period_amounts = amounts
             m.save()
 
         if action == 'recompute':
             pf.recompute_dates()
-            messages.success(request, 'Dates recalculated from kickoff + offsets.')
+            messages.success(request, 'Dates recalculated from the prep dates + gaps.')
         else:
             messages.success(request, 'Schedule saved.')
         return redirect('finance:schedule', project_pk=project.pk)
+
+    # Timeline month columns (after the Amount column).
+    periods = pf.timeline_periods()
 
     # Build display rows with running S.No (sub-rows are unnumbered).
     milestones = list(pf.milestones.all())
@@ -156,11 +168,26 @@ def project_schedule(request, project_pk):
     for m in milestones:
         if not m.is_subrow:
             serial += 1
-        display.append({'m': m, 'serial': (None if m.is_subrow else serial)})
+        display.append({
+            'm': m, 'serial': (None if m.is_subrow else serial),
+            'period_cells': [{'key': pr['key'], 'value': m.period_amount(pr['key'])}
+                             for pr in periods],
+        })
 
     # Per-scenario column totals for the footer.
     def _col_total(field):
         return sum((getattr(m, field) or Decimal('0')) for m in milestones)
+
+    def _period_total(key):
+        tot = Decimal('0')
+        for m in milestones:
+            raw = (m.period_amounts or {}).get(key)
+            if raw not in (None, ''):
+                try:
+                    tot += Decimal(str(raw))
+                except (InvalidOperation, ValueError):
+                    pass
+        return tot
 
     totals = {
         'best': _col_total('best_pct'),
@@ -168,9 +195,11 @@ def project_schedule(request, project_pk):
         'proposed': _col_total('proposed_pct'),
         'submitted': _col_total('submitted_pct'),
         'amount': sum((m.amount for m in milestones), Decimal('0')),
+        'periods': [{'key': pr['key'], 'total': _period_total(pr['key'])} for pr in periods],
     }
     return render(request, 'finance/schedule.html', {
         'project': project, 'pf': pf, 'display': display, 'totals': totals,
+        'periods': periods,
         'po_value_locked': po_value_locked, 'po_source_sheet': po_source_sheet,
     })
 
@@ -311,6 +340,208 @@ def project_cash_outflow(request, project_pk):
         'project': project, 'sheet': sheet,
         'a1_display': _display(a1), 'a2_display': _display(a2),
         'totals': totals, 'po_numbers': po_numbers,
+    })
+
+
+@login_required
+def budgeting_list(request):
+    """Finance budgeting landing — costing sheets ready for / under finance
+    budgeting (finalized by sales, in review, or already approved)."""
+    if not _can_finance(request.user):
+        messages.error(request, 'Finance access is limited to the finance team.')
+        return redirect('dashboard:index')
+
+    sheets = (CostingSheet.objects
+              .filter(workflow_stage__in=['finalized', 'finance_review', 'finance_approved'])
+              .select_related('project', 'project__region', 'project__status')
+              .order_by('-updated_at'))
+    if not request.user.is_super_admin_user:
+        sheets = sheets.filter(project__region=request.user.region)
+
+    from projects.models import Region
+    if request.user.is_super_admin_user:
+        regions = Region.objects.order_by('name')
+    else:
+        regions = Region.objects.filter(pk=request.user.region_id)
+    selected_region = (request.GET.get('region') or '').strip()
+    if selected_region.isdigit():
+        sheets = sheets.filter(project__region_id=int(selected_region))
+
+    return render(request, 'finance/budgeting_list.html', {
+        'sheets': sheets, 'regions': regions, 'selected_region': selected_region,
+    })
+
+
+def _can_edit_budget(user, sheet):
+    """Finance may edit the budget until the sheet is finance-approved; after
+    that only a super admin can touch it."""
+    if user.is_super_admin_user:
+        return True
+    return sheet.workflow_stage != 'finance_approved'
+
+
+@login_required
+def sheet_budget(request, sheet_pk):
+    """Line-item cost budget for a costing sheet — finance sets a budgeted cost
+    per A.1 supply line and A.2 service, then approves & releases to procurement."""
+    from costing.models import ExchangeRate
+    sheet = get_object_or_404(
+        CostingSheet.objects.select_related('project', 'project__region'), pk=sheet_pk)
+    if not _can_finance(request.user):
+        messages.error(request, 'Finance access is limited to the finance team.')
+        return redirect('dashboard:index')
+    # Region scope (super admin sees all).
+    if (not request.user.is_super_admin_user and sheet.project
+            and sheet.project.region_id != request.user.region_id):
+        messages.error(request, 'That costing sheet is outside your region.')
+        return redirect('finance:budgeting_list')
+
+    editable = _can_edit_budget(request.user, sheet)
+
+    if request.method == 'POST':
+        if not editable:
+            messages.error(request, 'This budget is approved and locked.')
+            return redirect('finance:sheet_budget', sheet_pk=sheet.pk)
+        # Sheet-level budget defaults (budget-only — never touch sheet.margin /
+        # sheet.discount_rate that drive the real costing).
+        sheet.budget_margin = _parse_decimal(request.POST.get('budget_margin'))
+        sheet.budget_discount_rate = _parse_decimal(request.POST.get('budget_discount_rate'))
+        sheet.save(update_fields=['budget_margin', 'budget_discount_rate', 'updated_at'])
+        def _price_override(prefix, pk):
+            # Store a manual price only when the row's price field was actually
+            # overridden (flag set by JS); otherwise it stays formula-driven.
+            if (request.POST.get(f'{prefix}-{pk}-price_manual') or '0') == '1':
+                return _parse_decimal(request.POST.get(f'{prefix}-{pk}-price'))
+            return None
+        for section in sheet.sections.filter(is_optional=False):
+            for item in section.line_items.all():
+                item.budgeted_cost = _parse_decimal(request.POST.get(f'line-{item.pk}-budget'))
+                item.budget_discount = _parse_decimal(request.POST.get(f'line-{item.pk}-disc'))
+                item.budget_margin = _parse_decimal(request.POST.get(f'line-{item.pk}-margin'))
+                item.budget_price = _price_override('line', item.pk)
+                item.budget_remarks = (request.POST.get(f'line-{item.pk}-remarks') or '').strip()
+                item.save(update_fields=['budgeted_cost', 'budget_discount', 'budget_margin',
+                                         'budget_price', 'budget_remarks'])
+        for sow in sheet.scope_of_work_items.all():
+            sow.budgeted_cost = _parse_decimal(request.POST.get(f'sow-{sow.pk}-budget'))
+            sow.budget_discount = _parse_decimal(request.POST.get(f'sow-{sow.pk}-disc'))
+            sow.budget_margin = _parse_decimal(request.POST.get(f'sow-{sow.pk}-margin'))
+            sow.budget_price = _price_override('sow', sow.pk)
+            sow.budget_remarks = (request.POST.get(f'sow-{sow.pk}-remarks') or '').strip()
+            sow.save(update_fields=['budgeted_cost', 'budget_discount', 'budget_margin',
+                                    'budget_price', 'budget_remarks'])
+        messages.success(request, 'Budget saved.')
+        return redirect('finance:sheet_budget', sheet_pk=sheet.pk)
+
+    rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
+
+    # Sheet-level budget default boxes (shown at the top). They fall back to the
+    # costing sheet's own margin/discount. When finance sets a box it becomes a
+    # global override applied to every line; when unset, each line uses its own
+    # costing margin/discount so the budgeted price starts equal to the sales
+    # price (variance 0).
+    box_margin = sheet.budget_margin if sheet.budget_margin is not None else (sheet.margin or Decimal('0'))
+    box_discount = sheet.budget_discount_rate if sheet.budget_discount_rate is not None else (sheet.discount_rate or Decimal('0'))
+    global_margin = sheet.budget_margin        # None until finance sets the box
+    global_discount = sheet.budget_discount_rate
+
+    def _resolve(override, glob, costing_default):
+        if override is not None:
+            return override
+        if glob is not None:
+            return glob
+        return costing_default
+
+    def _factor(disc, margin):
+        return (Decimal('1') - disc / Decimal('100')) / (Decimal('1') - min(margin, Decimal('99')) / Decimal('100'))
+
+    def _price(cost, disc, margin):
+        """Plain budgeted price = cost × (1 − disc%) / (1 − margin%)."""
+        return (cost * _factor(disc, margin)).quantize(Decimal('0.01'))
+
+    def _scaled_price(sales_price, base_cost, cost, disc, margin, cost_disc, cost_margin):
+        """Budgeted price anchored to the costing sales price: scale it by the
+        cost change and the margin/discount change. At the costing defaults this
+        returns the sales price exactly (variance 0, no rounding drift)."""
+        f_cost = _factor(cost_disc, cost_margin)
+        if base_cost and f_cost:
+            return (sales_price * (cost / base_cost)
+                    * (_factor(disc, margin) / f_cost)).quantize(Decimal('0.01'))
+        return _price(cost, disc, margin)
+
+    cost_total = price_total = sales_total = Decimal('0')
+
+    def _row(base_cost, budgeted_cost, ov_disc, ov_margin, item, sales_price, cost_disc, cost_margin):
+        # Sales price = the line's actual price on the costing sheet (fixed).
+        # Effective margin/discount: per-line override → global box → the line's
+        # own costing value. The budgeted price is anchored to the sales price so
+        # it starts equal to it and moves only when finance changes cost /
+        # margin / discount; a manual price override wins.
+        disc = _resolve(ov_disc, global_discount, cost_disc)
+        margin = _resolve(ov_margin, global_margin, cost_margin)
+        manual = item.budget_price is not None
+        price = (item.budget_price if manual else
+                 _scaled_price(sales_price, base_cost, budgeted_cost, disc, margin, cost_disc, cost_margin))
+        return {
+            'item': item, 'cost': budgeted_cost, 'disc': ov_disc, 'margin': ov_margin,
+            'eff_disc': disc, 'eff_margin': margin, 'price': price, 'base_cost': base_cost,
+            'cost_disc': cost_disc, 'cost_margin': cost_margin, 'price_manual': manual,
+            'sales_price': sales_price, 'variance': price - sales_price,
+        }
+
+    sections = []
+    for section in sheet.sections.filter(is_optional=False).order_by('order', 'section_number'):
+        lines, sec_cost, sec_price, sec_sales = [], Decimal('0'), Decimal('0'), Decimal('0')
+        for item in section.line_items.all().order_by('order', 'item_number'):
+            item.set_exchange_rates_cache(rates)
+            item.set_sheet_cache(sheet)
+            base_cost = item.base_total_cost_sar
+            budgeted_cost = item.budgeted_cost if item.budgeted_cost is not None else base_cost
+            # Sales Price = the line's actual costing price (before add-ons), in SAR;
+            # the line's own effective margin/discount are the per-line defaults.
+            row = _row(base_cost, budgeted_cost, item.budget_discount, item.budget_margin,
+                       item, item.base_total_price,
+                       item.effective_discount_pct * Decimal('100'),
+                       item.effective_margin * Decimal('100'))
+            lines.append(row)
+            sec_cost += budgeted_cost
+            sec_price += row['price']
+            sec_sales += row['sales_price']
+        if lines:
+            sections.append({'section': section, 'lines': lines,
+                             'cost': sec_cost, 'price': sec_price, 'sales': sec_sales})
+            cost_total += sec_cost
+            price_total += sec_price
+            sales_total += sec_sales
+
+    services, svc_cost, svc_price, svc_sales = [], Decimal('0'), Decimal('0'), Decimal('0')
+    for sow in sheet.scope_of_work_items.all().order_by('order', 'serial_number'):
+        base_cost = sow.total_price or Decimal('0')
+        budgeted_cost = sow.budgeted_cost if sow.budgeted_cost is not None else base_cost
+        # Services are billed at cost on the costing sheet — Sales Price = cost,
+        # and their costing margin/discount default to 0.
+        row = _row(base_cost, budgeted_cost, sow.budget_discount, sow.budget_margin,
+                   sow, base_cost, Decimal('0'), Decimal('0'))
+        services.append(row)
+        svc_cost += budgeted_cost
+        svc_price += row['price']
+        svc_sales += row['sales_price']
+    cost_total += svc_cost
+    price_total += svc_price
+    sales_total += svc_sales
+
+    can_approve = (sheet.workflow_stage == 'finance_review'
+                   and (request.user.is_super_admin_user
+                        or getattr(request.user, 'is_finance_team_user', False)))
+
+    return render(request, 'finance/sheet_budget.html', {
+        'sheet': sheet, 'sections': sections, 'services': services,
+        'box_margin': box_margin, 'box_discount': box_discount,
+        'box_margin_set': global_margin is not None,
+        'box_discount_set': global_discount is not None,
+        'cost_total': cost_total, 'price_total': price_total, 'sales_total': sales_total,
+        'variance_total': price_total - sales_total,
+        'editable': editable, 'can_approve': can_approve,
     })
 
 

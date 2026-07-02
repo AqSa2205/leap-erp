@@ -656,30 +656,44 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
         return reverse('procurement:po_detail', kwargs={'pk': self.object.pk})
 
 
+def _uniform_vendor(items):
+    """The single non-empty vendor shared by all items, else '' (for pre-filling
+    a PO's header vendor when every picked line is from the same vendor)."""
+    vendors = {(li.vendor_name or '').strip() for li in items}
+    vendors = {v for v in vendors if v}
+    return vendors.pop() if len(vendors) == 1 else ''
+
+
 @login_required
 def po_create_from_bom(request, sheet_pk):
-    """Seed a draft PO with line items copied from a costing sheet's BOM.
+    """Seed a draft PO with every supply line from a finance-approved budget,
+    pre-priced at the budgeted unit price.
 
-    Procurement-only. The user is dropped onto the PO edit screen with all
-    items pre-filled (description / make-model / qty / uom) so they only
-    need to add vendor, prices, and any extra rows.
+    Procurement works from the finance budget (not the costing sheet). Items are
+    pre-filled (description / make-model / vendor / qty / uom / rate) so the user
+    only confirms the PO number and vendor. A.1 supply lines only.
     """
     user = request.user
     if not (user.is_super_admin_user or user.is_admin_user or user.is_procurement_user):
-        messages.error(request, 'Only procurement team members can create POs from a BOM.')
-        return redirect('costing:detail', pk=sheet_pk)
+        messages.error(request, 'Only procurement team members can create POs from a budget.')
+        return redirect('procurement:approved_budgets')
 
-    from costing.models import CostingSheet
+    from costing.models import CostingSheet, ExchangeRate
     sheet = get_object_or_404(CostingSheet, pk=sheet_pk)
+    rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
 
-    today = datetime.now().date()
-    # PO number must be unique; use a deterministic placeholder the user
-    # will replace before saving the real PO number.
+    picks = []
+    for section in sheet.sections.filter(is_optional=False).order_by('order', 'section_number'):
+        for item in section.line_items.all().order_by('order', 'item_number'):
+            item.set_exchange_rates_cache(rates)
+            item.set_sheet_cache(sheet)
+            picks.append((section, item))
+
     placeholder_po_number = f'DRAFT-S{sheet.pk}-{int(datetime.now().timestamp())}'
     po = PurchaseOrder.objects.create(
-        po_date=today,
+        po_date=datetime.now().date(),
         po_number=placeholder_po_number,
-        vendor_name='',
+        vendor_name=_uniform_vendor([li for _, li in picks]),
         po_issued_by=user.get_full_name() or user.username,
         issuer_email=user.email or '',
         project=sheet.project,
@@ -688,89 +702,108 @@ def po_create_from_bom(request, sheet_pk):
     )
 
     serial = 1
-    for section in sheet.sections.all():
-        for item in section.line_items.all():
-            make_model = ' '.join(filter(None, [item.make, item.model_number])).strip()
-            PurchaseOrderItem.objects.create(
-                purchase_order=po,
-                serial_number=serial,
-                system=section.title or '',
-                make_model=make_model,
-                description=item.description,
-                quantity=item.quantity,
-                uom=item.unit or 'Nos',
-                rate_per_unit=Decimal('0'),
-                order=serial,
-            )
-            serial += 1
+    for section, item in picks:
+        make_model = ' '.join(filter(None, [item.make, item.model_number])).strip()
+        PurchaseOrderItem.objects.create(
+            purchase_order=po,
+            serial_number=serial,
+            system=section.title or '',
+            make_model=make_model,
+            vendor_name=item.vendor_name or '',
+            description=item.description,
+            quantity=item.quantity,
+            uom=item.unit or 'Nos',
+            rate_per_unit=item.budget_unit_price(),
+            order=serial,
+        )
+        serial += 1
 
     copied = serial - 1
     messages.success(
         request,
-        f'Draft PO seeded with {copied} item{"" if copied == 1 else "s"} from BOM "{sheet.title}". '
-        f'Replace the placeholder PO number, add the vendor, fill in rates, then save.',
+        f'Draft PO seeded with {copied} budgeted item{"" if copied == 1 else "s"}. '
+        f'Replace the placeholder PO number, confirm the vendor, then save.',
     )
     return redirect('procurement:po_update', pk=po.pk)
 
 
 @login_required
+def approved_budgets(request):
+    """Procurement landing — finance-approved budgets ready to procure, in the
+    user's region. Procurement works from these budgets, not the costing sheet."""
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user or user.is_procurement_user):
+        messages.error(request, 'Only procurement team members can view approved budgets.')
+        return redirect('procurement:dashboard')
+
+    from costing.models import CostingSheet
+    sheets = (CostingSheet.objects
+              .filter(workflow_stage='finance_approved')
+              .select_related('project', 'project__region', 'finance_approved_by')
+              .order_by('-finance_approved_at', '-updated_at'))
+    if not (user.is_super_admin_user or user.is_admin_user):
+        sheets = sheets.filter(project__region=user.region)
+
+    return render(request, 'procurement/approved_budgets.html', {'sheets': sheets})
+
+
+@login_required
 def bom_procurement_tracker(request, sheet_pk):
-    """Stateful BOM-to-PO procurement page.
+    """Approved-budget procurement page (procurement never sees the costing sheet).
 
-    Lists every BOM line item with its current procurement status — items
-    already on a PO show the PO number(s); un-procured items have a
-    checkbox. The user picks items for *this* PO and submits; a draft PO
-    is created with PurchaseOrderItem.source_bom_item pointing back to
-    each chosen line so the same item can't be re-picked next time and
-    each row carries a permanent back-link to the PO it ended up in.
-
-    Multi-PO from the same BOM works naturally: subsequent visits show
-    only the still-available items as checkboxes; already-procured rows
-    are read-only with PO links.
+    Lists the finance-approved budget's A.1 supply lines with their budgeted
+    unit/line price, qty, vendor, make/model and unit, plus a per-line
+    procurement status. The user picks lines for *this* PO and submits; a draft
+    PO is created pre-priced at the budgeted unit price, with each item carrying
+    its vendor and a source_bom_item back-link so it can't be re-picked. The
+    PO's header vendor is pre-filled when every picked line shares one vendor.
     """
     user = request.user
     if not (user.is_super_admin_user or user.is_admin_user or user.is_procurement_user):
-        messages.error(request, 'Only procurement team members can issue POs from a BOM.')
-        return redirect('costing:detail', pk=sheet_pk)
+        messages.error(request, 'Only procurement team members can procure a budget.')
+        return redirect('procurement:approved_budgets')
 
-    from costing.models import CostingSheet, CostingLineItem
+    from costing.models import CostingSheet, CostingLineItem, ExchangeRate
     sheet = get_object_or_404(CostingSheet, pk=sheet_pk)
 
-    # Region scope (super admins bypass).
-    if (
-        not user.is_super_admin_user
-        and getattr(user, 'is_procurement_user', False)
-        and (not sheet.project or sheet.project.region_id != user.region_id)
-    ):
-        messages.error(request, 'You can only procure BOMs for projects in your region.')
-        return redirect('costing:detail', pk=sheet_pk)
+    # Region scope (super admin / admin bypass).
+    if (not (user.is_super_admin_user or user.is_admin_user)
+            and (not sheet.project or sheet.project.region_id != user.region_id)):
+        messages.error(request, 'You can only procure budgets for projects in your region.')
+        return redirect('procurement:approved_budgets')
 
-    # Procurement only kicks off after the project is Won AND finance has
-    # signed off on the costing sheet's budget.
     project_status = sheet.project.status if sheet.project else None
     if not project_status or project_status.category != 'won':
-        messages.error(
-            request,
-            'BOM procurement is only available for projects with a Won status.',
-        )
-        return redirect('costing:detail', pk=sheet_pk)
+        messages.error(request, 'Procurement is only available for Won projects.')
+        return redirect('procurement:approved_budgets')
     if sheet.workflow_stage != 'finance_approved':
         messages.error(
             request,
-            f'BOM procurement is locked until finance approves the budget. Current stage: {sheet.get_workflow_stage_display()}.',
-        )
-        return redirect('costing:detail', pk=sheet_pk)
+            f'This budget is not finance-approved yet. Current stage: {sheet.get_workflow_stage_display()}.')
+        return redirect('procurement:approved_budgets')
+
+    rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
 
     if request.method == 'POST':
         item_ids = [int(x) for x in request.POST.getlist('item_ids') if x.isdigit()]
         if not item_ids:
             messages.error(request, 'Pick at least one item to add to the PO.')
         else:
+            picked = list(
+                CostingLineItem.objects
+                .filter(pk__in=item_ids, section__costing_sheet=sheet, section__is_optional=False)
+                .select_related('section'))
+            # Skip items claimed by another PO between render and POST.
+            picked = [li for li in picked if not li.procured_po_items.exists()]
+            if not picked:
+                messages.warning(request, 'Every item you picked is already on another PO — nothing to add.')
+                return redirect('procurement:bom_procurement_tracker', sheet_pk=sheet.pk)
+
             placeholder_po_number = f'DRAFT-S{sheet.pk}-{int(datetime.now().timestamp())}'
             po = PurchaseOrder.objects.create(
                 po_date=datetime.now().date(),
                 po_number=placeholder_po_number,
-                vendor_name='',
+                vendor_name=_uniform_vendor(picked),
                 po_issued_by=user.get_full_name() or user.username,
                 issuer_email=user.email or '',
                 project=sheet.project,
@@ -778,62 +811,51 @@ def bom_procurement_tracker(request, sheet_pk):
                 created_by=user,
             )
             serial = 1
-            picked = (
-                CostingLineItem.objects
-                .filter(pk__in=item_ids, section__costing_sheet=sheet)
-                .select_related('section')
-            )
             for li in picked:
-                # Defensive: skip items that were claimed by another PO
-                # between the page render and this POST.
-                if li.procured_po_items.exists():
-                    continue
+                li.set_exchange_rates_cache(rates)
+                li.set_sheet_cache(sheet)
                 make_model = ' '.join(filter(None, [li.make, li.model_number])).strip()
                 PurchaseOrderItem.objects.create(
                     purchase_order=po,
                     serial_number=serial,
                     system=li.section.title or '',
                     make_model=make_model,
+                    vendor_name=li.vendor_name or '',
                     description=li.description,
                     quantity=li.quantity,
                     uom=li.unit or 'Nos',
-                    rate_per_unit=Decimal('0'),
+                    rate_per_unit=li.budget_unit_price(),
                     order=serial,
                     source_bom_item=li,
                 )
                 serial += 1
-
-            copied = serial - 1
-            if copied == 0:
-                messages.warning(
-                    request,
-                    'Every item you picked is already on another PO — nothing to add.',
-                )
-                po.delete()
-                return redirect('procurement:bom_procurement_tracker', sheet_pk=sheet.pk)
             messages.success(
                 request,
-                f'Draft PO seeded with {copied} item{"" if copied == 1 else "s"} from BOM. '
-                f'Replace the placeholder PO number, add the vendor, fill rates, then save.',
-            )
+                f'Draft PO seeded with {serial - 1} budgeted item{"" if serial - 1 == 1 else "s"}. '
+                f'Replace the placeholder PO number, confirm the vendor, then save.')
             return redirect('procurement:po_update', pk=po.pk)
 
-    # Build per-section item lists with procurement status.
+    # Build per-section rows (A.1 supply, non-optional) with budgeted prices.
     rows = []
-    available_count = 0
-    procured_count = 0
-    for section in sheet.sections.prefetch_related('line_items__procured_po_items__purchase_order').all():
+    available_count = procured_count = 0
+    budget_total = Decimal('0')
+    for section in (sheet.sections.filter(is_optional=False)
+                    .prefetch_related('line_items__procured_po_items__purchase_order')
+                    .order_by('order', 'section_number')):
         section_items = []
-        for li in section.line_items.all():
+        for li in section.line_items.all().order_by('order', 'item_number'):
+            li.set_exchange_rates_cache(rates)
+            li.set_sheet_cache(sheet)
             procured = list(li.procured_po_items.select_related('purchase_order').all())
+            line_price = li.budget_line_price()
+            budget_total += line_price
             if procured:
                 procured_count += 1
             else:
                 available_count += 1
             section_items.append({
-                'item': li,
-                'procured_in': procured,  # list of PurchaseOrderItem
-                'is_available': not procured,
+                'item': li, 'procured_in': procured, 'is_available': not procured,
+                'unit_price': li.budget_unit_price(), 'line_price': line_price,
             })
         if section_items:
             rows.append({'section': section, 'items': section_items})
@@ -844,6 +866,7 @@ def bom_procurement_tracker(request, sheet_pk):
         'total_count': available_count + procured_count,
         'available_count': available_count,
         'procured_count': procured_count,
+        'budget_total': budget_total,
     })
 
 

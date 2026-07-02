@@ -1,0 +1,97 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Finance — Budgeting{% endblock %}
+{% block page_title %}Costing Budgeting{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'finance:home' %}">Finance</a>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">Budgeting</span>
+</nav>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .fin-hero { background: linear-gradient(135deg, #5b3fa0 0%, #402c73 100%); color:#fff; border:none; border-radius:14px; }
+    .bud-table td, .bud-table th { vertical-align: middle; }
+    .bud-table thead th { font-size:0.74rem; text-transform:uppercase; letter-spacing:0.3px; color:#402c73; border-bottom:2px solid #5b3fa0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-xxl-11">
+
+            <div class="card fin-hero mb-4">
+                <div class="card-body p-4 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <div>
+                        <h1 class="h3 mb-1 text-white"><i class="bi bi-clipboard-data me-2"></i>Costing Budgeting</h1>
+                        <div class="opacity-75 small">Set the approved cost budget for sales costing sheets, then release to procurement</div>
+                    </div>
+                    <a href="{% url 'finance:home' %}" class="btn btn-outline-light btn-sm"><i class="bi bi-arrow-left me-1"></i>Finance home</a>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
+                    <span class="d-flex align-items-center gap-2">
+                        <i class="bi bi-folder2-open" style="color:#5b3fa0"></i><strong>Costing Sheets</strong>
+                        <span class="badge rounded-pill" style="background:#ece7f6;color:#5b3fa0">{{ sheets|length }}</span>
+                    </span>
+                    <form method="get" class="d-flex align-items-center">
+                        <div class="input-group input-group-sm" style="width:230px">
+                            <span class="input-group-text bg-white border-end-0" style="color:#5b3fa0"><i class="bi bi-geo-alt"></i></span>
+                            <select name="region" class="form-select border-start-0" onchange="this.form.submit()" aria-label="Filter by region">
+                                <option value="">All regions</option>
+                                {% for r in regions %}
+                                <option value="{{ r.pk }}" {% if selected_region == r.pk|stringformat:'s' %}selected{% endif %}>{{ r.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="card-body p-0">
+                    <table class="table table-hover bud-table mb-0">
+                        <thead>
+                            <tr>
+                                <th>Costing Sheet</th>
+                                <th>Project</th>
+                                <th>Region</th>
+                                <th>Stage</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for s in sheets %}
+                            <tr>
+                                <td><strong>{{ s.title }}</strong></td>
+                                <td>{{ s.project.project_name|default:"—" }}</td>
+                                <td>{{ s.project.region.name|default:"—" }}</td>
+                                <td>
+                                    {% if s.workflow_stage == 'finance_approved' %}
+                                        <span class="badge bg-success-subtle text-success border border-success-subtle">Approved — released</span>
+                                    {% elif s.workflow_stage == 'finance_review' %}
+                                        <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">Budgeting in progress</span>
+                                    {% else %}
+                                        <span class="badge bg-light text-muted border">Finalized (not yet sent)</span>
+                                    {% endif %}
+                                </td>
+                                <td class="text-end">
+                                    <a href="{% url 'finance:sheet_budget' s.pk %}" class="btn btn-sm" style="background:#5b3fa0;color:#fff">
+                                        Open budget <i class="bi bi-chevron-right"></i>
+                                    </a>
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr><td colspan="5" class="text-center text-muted py-5"><i class="bi bi-inbox fs-3 d-block mb-2 opacity-50"></i>No costing sheets in your scope are ready for budgeting yet.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

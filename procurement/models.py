@@ -320,6 +320,9 @@ class PurchaseOrderItem(models.Model):
                   'or type a custom value. Drives grouping in the procurement summary.',
     )
     make_model = models.CharField(max_length=255, blank=True, verbose_name="Make/Model")
+    vendor_name = models.CharField(
+        max_length=255, blank=True, verbose_name="Vendor",
+        help_text='Vendor for this line (carried over from the finance budget).')
     description = models.TextField(verbose_name="Item Description / Specification")
     quantity = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('1'), verbose_name="Quantity")
     uom = models.CharField(max_length=50, default='Nos', verbose_name="UOM")

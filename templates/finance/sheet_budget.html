@@ -1,0 +1,296 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Budget — {{ sheet.title }}{% endblock %}
+{% block page_title %}Costing Budget{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'finance:home' %}">Finance</a>
+    <span class="crumb-sep">›</span>
+    <a href="{% url 'finance:budgeting_list' %}">Budgeting</a>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">{{ sheet.title|truncatechars:50 }}</span>
+</nav>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .bud-hero { background: linear-gradient(135deg, #5b3fa0 0%, #402c73 100%); color:#fff; border:none; border-radius:14px; }
+    .bud-stat { background: rgba(255,255,255,0.12); border-radius:10px; padding:10px 14px; }
+    .bud-stat .lbl { font-size:0.7rem; opacity:0.8; text-transform:uppercase; letter-spacing:0.3px; }
+    .bud-stat .val { font-weight:700; font-size:1.05rem; }
+
+    .bud-param { width:96px; text-align:center; font-weight:600; }
+    #bud-table { min-width: 1300px; font-size: 0.84rem; }
+    #bud-table > :not(caption) > * > * { padding: 5px 8px; vertical-align: middle; }
+    #bud-table thead th { background:#f2effa; color:#402c73; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.3px; border-bottom:2px solid #5b3fa0; white-space:nowrap; }
+    #bud-table input { font-size:0.84rem; width:100%; box-sizing:border-box; border:1px solid #e3e3e3; border-radius:5px; padding:2px 6px; }
+    #bud-table input:focus { outline:none; border-color:#5b3fa0; box-shadow:0 0 0 2px rgba(91,63,160,.12); }
+    #bud-table input[type=number]::-webkit-inner-spin-button,
+    #bud-table input[type=number]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+    #bud-table tr.sec-head td { background:#efeafc; font-weight:600; color:#402c73; }
+    #bud-table tr.sub-row td { background:#faf9fe; font-weight:600; }
+    .col-pct { background:#fbf6ee; }
+    #bud-table thead th.col-pct { background:#f6ecd9; }
+    .col-price { background:#eef5ff; }
+    #bud-table thead th.col-price { background:#dcebff; }
+    .sales-cell { color:#555; white-space:nowrap; }
+    .var-pos { color:#c62828; }   /* over sales price */
+    .var-neg { color:#2e7d32; }   /* under sales price */
+    .var-zero { color:#888; }
+    #bud-table input[readonly] { background:#f4f4f4; color:#555; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-xxl-12">
+
+            <!-- Hero -->
+            <div class="card bud-hero mb-4">
+                <div class="card-body p-4">
+                    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+                        <div>
+                            <div class="d-flex align-items-center gap-2 mb-1">
+                                <h1 class="h3 mb-0 text-white">{{ sheet.title }}</h1>
+                                {% if sheet.workflow_stage == 'finance_approved' %}
+                                    <span class="badge bg-light text-success">Approved — released</span>
+                                {% elif sheet.workflow_stage == 'finance_review' %}
+                                    <span class="badge bg-light text-warning-emphasis">Budgeting in progress</span>
+                                {% else %}
+                                    <span class="badge bg-light text-dark">{{ sheet.get_workflow_stage_display }}</span>
+                                {% endif %}
+                            </div>
+                            <div class="opacity-75 small">{{ sheet.project.project_name|default:"No linked project" }} · Line-item cost budget</div>
+                        </div>
+                        <a href="{% url 'finance:budgeting_list' %}" class="btn btn-outline-light btn-sm"><i class="bi bi-arrow-left me-1"></i>All budgets</a>
+                    </div>
+                    <div class="row g-3 mt-1">
+                        <div class="col-auto"><div class="bud-stat"><div class="lbl">Budgeted Cost</div><div class="val" id="stat-cost">{{ cost_total|floatformat:2|intcomma }}</div></div></div>
+                        <div class="col-auto"><div class="bud-stat"><div class="lbl">Budgeted Price</div><div class="val" id="stat-price">{{ price_total|floatformat:2|intcomma }}</div></div></div>
+                        <div class="col-auto"><div class="bud-stat"><div class="lbl">Sales Price</div><div class="val">{{ sales_total|floatformat:2|intcomma }}</div></div></div>
+                        <div class="col-auto"><div class="bud-stat"><div class="lbl">Variance vs Sales</div><div class="val" id="stat-var">{{ variance_total|floatformat:2|intcomma }}</div></div></div>
+                    </div>
+                </div>
+            </div>
+
+            {% if not editable %}
+            <div class="alert alert-secondary d-flex align-items-center"><i class="bi bi-lock-fill me-2"></i>
+                This budget is approved and released for procurement — read-only. (A super admin can still edit.)</div>
+            {% endif %}
+
+            <form method="post">
+                {% csrf_token %}
+
+                <!-- Sheet-level budget defaults (do NOT change the costing sheet) -->
+                <div class="card mb-3">
+                    <div class="card-body py-2 d-flex flex-wrap align-items-center gap-3">
+                        <span class="fw-semibold" style="color:#402c73"><i class="bi bi-sliders me-1"></i>Budget defaults</span>
+                        <div class="d-flex align-items-center gap-2">
+                            <label class="small text-muted mb-0">Margin %</label>
+                            <input type="number" step="0.01" id="budget_margin" name="budget_margin" data-set="{% if box_margin_set %}1{% else %}0{% endif %}" class="form-control form-control-sm bud-param" value="{{ box_margin|stringformat:'.2f' }}" {% if not editable %}readonly{% endif %}>
+                        </div>
+                        <div class="d-flex align-items-center gap-2">
+                            <label class="small text-muted mb-0">Discount %</label>
+                            <input type="number" step="0.01" id="budget_discount_rate" name="budget_discount_rate" data-set="{% if box_discount_set %}1{% else %}0{% endif %}" class="form-control form-control-sm bud-param" value="{{ box_discount|stringformat:'.2f' }}" {% if not editable %}readonly{% endif %}>
+                        </div>
+                        <span class="text-muted small ms-auto">Preset from the costing sheet · editing a box applies it to every line unless overridden below</span>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-clipboard-data me-2" style="color:#5b3fa0"></i><strong>Cost Budget</strong></span>
+                        <small class="text-muted">Price = Cost × (1 − Disc%) ÷ (1 − Margin%) · Variance = Budgeted Price − Sales Price</small>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-sm table-borderless mb-0 align-middle" id="bud-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width:52px">S.No</th>
+                                        <th>Description</th>
+                                        <th class="text-end" style="width:80px">Qty</th>
+                                        <th class="text-end" style="width:140px">Budgeted Cost (SAR)</th>
+                                        <th class="text-end col-pct" style="width:90px">Disc %</th>
+                                        <th class="text-end col-pct" style="width:90px">Margin %</th>
+                                        <th class="text-end col-price" style="width:150px">Budgeted Price (SAR)</th>
+                                        <th class="text-end" style="width:140px">Sales Price (SAR)</th>
+                                        <th class="text-end" style="width:130px">Variance</th>
+                                        <th style="width:170px">Remarks</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <!-- A.1 Scope of Supply -->
+                                    <tr class="sec-head"><td colspan="10">A.1 — Scope of Supply</td></tr>
+                                    {% for sec in sections %}
+                                    <tr class="sub-row">
+                                        <td></td>
+                                        <td colspan="2">{{ sec.section.section_number }} {{ sec.section.title }}</td>
+                                        <td class="text-end">{{ sec.cost|floatformat:2|intcomma }}</td>
+                                        <td colspan="2"></td>
+                                        <td class="text-end">{{ sec.price|floatformat:2|intcomma }}</td>
+                                        <td class="text-end sales-cell">{{ sec.sales|floatformat:2|intcomma }}</td>
+                                        <td colspan="2"></td>
+                                    </tr>
+                                    {% for ln in sec.lines %}
+                                    {% include 'finance/_budget_row.html' with row=ln prefix='line' editable=editable %}
+                                    {% endfor %}
+                                    {% empty %}
+                                    <tr><td colspan="10" class="text-muted text-center py-2">No supply line items.</td></tr>
+                                    {% endfor %}
+
+                                    <!-- A.2 Scope of Services -->
+                                    <tr class="sec-head"><td colspan="10">A.2 — Scope of Services</td></tr>
+                                    {% for sv in services %}
+                                    {% include 'finance/_budget_row.html' with row=sv prefix='sow' editable=editable %}
+                                    {% empty %}
+                                    <tr><td colspan="10" class="text-muted text-center py-2">No services.</td></tr>
+                                    {% endfor %}
+                                </tbody>
+                                <tfoot>
+                                    <tr class="fw-bold border-top" style="background:#f2effa">
+                                        <td colspan="3" class="text-end">TOTAL</td>
+                                        <td class="text-end" id="grand-cost">{{ cost_total|floatformat:2|intcomma }}</td>
+                                        <td colspan="2"></td>
+                                        <td class="text-end col-price" id="grand-price">{{ price_total|floatformat:2|intcomma }}</td>
+                                        <td class="text-end sales-cell">{{ sales_total|floatformat:2|intcomma }}</td>
+                                        <td class="text-end" id="grand-var">{{ variance_total|floatformat:2|intcomma }}</td>
+                                        <td></td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+                    </div>
+                    {% if editable %}
+                    <div class="card-footer bg-white">
+                        <button type="submit" class="btn" style="background:#5b3fa0;color:#fff"><i class="bi bi-check-lg me-1"></i>Save budget</button>
+                    </div>
+                    {% endif %}
+                </div>
+            </form>
+
+            {% if can_approve %}
+            <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}" class="card mt-3">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="finance_approve">
+                <div class="card-body">
+                    <h6 class="mb-2"><i class="bi bi-send-check me-1 text-success"></i>Approve budget &amp; release for procurement</h6>
+                    <p class="text-muted small mb-2">Save the budget first, then approve. This moves the sheet to <strong>Finance approved</strong> and notifies procurement.</p>
+                    <textarea name="note" rows="2" class="form-control form-control-sm mb-2" placeholder="Optional finance note (visible on the costing sheet)"></textarea>
+                    <button type="submit" class="btn btn-success"><i class="bi bi-check2-circle me-1"></i>Approve budget &amp; release to procurement</button>
+                </div>
+            </form>
+            {% endif %}
+
+        </div>
+    </div>
+</div>
+
+<script>
+// Live budgeted price (cost × (1−disc) ÷ (1−margin)) + variance vs sales price,
+// with sheet-level default margin/discount and per-line overrides. Plus Excel
+// Enter/Tab navigation.
+(function () {
+    var table = document.getElementById('bud-table');
+    if (!table) return;
+    var defMarginEl = document.getElementById('budget_margin');
+    var defDiscEl = document.getElementById('budget_discount_rate');
+
+    function num(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; }
+    function fmt(n) { return n.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}); }
+    function paint(cell, val) {
+        cell.textContent = fmt(val);
+        cell.classList.remove('var-pos', 'var-neg', 'var-zero');
+        cell.classList.add(val > 0.005 ? 'var-pos' : (val < -0.005 ? 'var-neg' : 'var-zero'));
+    }
+    function factor(disc, margin) {
+        return (1 - disc / 100) / (1 - Math.min(margin, 99) / 100);
+    }
+    function isManual(row) { return row.querySelector('.b-price-manual').value === '1'; }
+    function boxActive(el) { return el && el.dataset.set === '1'; }
+    // Budgeted price anchored to the costing sales price, scaled by the cost and
+    // margin/discount change (mirrors the server). Effective disc/margin: per-line
+    // override → box (if finance set it) → the line's costing default.
+    function formulaPrice(row) {
+        var cost = num(row.querySelector('.b-cost').value);
+        var dEl = row.querySelector('.b-disc'), mEl = row.querySelector('.b-margin');
+        var disc = dEl.value !== '' ? num(dEl.value)
+                 : (boxActive(defDiscEl) ? num(defDiscEl.value) : num(row.dataset.cdisc));
+        var margin = mEl.value !== '' ? num(mEl.value)
+                   : (boxActive(defMarginEl) ? num(defMarginEl.value) : num(row.dataset.cmargin));
+        var sales = num(row.dataset.sales), base = num(row.dataset.basecost);
+        var fCost = factor(num(row.dataset.cdisc), num(row.dataset.cmargin));
+        if (base > 0 && fCost) return sales * (cost / base) * (factor(disc, margin) / fCost);
+        return cost * factor(disc, margin);
+    }
+    // Recolour variances and refresh cost/price/variance totals from the
+    // current price-input values (which may be manual overrides).
+    function totals() {
+        var ct = 0, pt = 0, st = 0;
+        table.querySelectorAll('tr.bud-row').forEach(function (row) {
+            var cost = num(row.querySelector('.b-cost').value);
+            var price = num(row.querySelector('.b-price').value);
+            var sales = num(row.dataset.sales);
+            paint(row.querySelector('.b-var'), price - sales);
+            ct += cost; pt += price; st += sales;
+        });
+        document.getElementById('grand-cost').textContent = fmt(ct);
+        document.getElementById('grand-price').textContent = fmt(pt);
+        paint(document.getElementById('grand-var'), pt - st);
+        document.getElementById('stat-cost').textContent = fmt(ct);
+        document.getElementById('stat-price').textContent = fmt(pt);
+        paint(document.getElementById('stat-var'), pt - st);
+    }
+    table.addEventListener('input', function (e) {
+        var t = e.target, row = t.closest && t.closest('tr.bud-row');
+        if (!row) return;
+        if (t.matches('.b-cost, .b-disc, .b-margin')) {
+            // Editing cost/disc/margin re-derives the price (clears any override).
+            row.querySelector('.b-price-manual').value = '0';
+            row.querySelector('.b-price').value = formulaPrice(row).toFixed(2);
+            totals();
+        } else if (t.matches('.b-price')) {
+            // Typing a price directly makes it a manual override.
+            row.querySelector('.b-price-manual').value = '1';
+            totals();
+        }
+    });
+    // Changing a default box re-derives only the formula-driven (non-override) rows.
+    function applyDefaults() {
+        table.querySelectorAll('tr.bud-row').forEach(function (row) {
+            if (!isManual(row)) row.querySelector('.b-price').value = formulaPrice(row).toFixed(2);
+        });
+        totals();
+    }
+    if (defMarginEl) defMarginEl.addEventListener('input', function () { defMarginEl.dataset.set = '1'; applyDefaults(); });
+    if (defDiscEl) defDiscEl.addEventListener('input', function () { defDiscEl.dataset.set = '1'; applyDefaults(); });
+    totals();  // initial variance colouring
+
+    // Keyboard nav (skips read-only inputs).
+    function inputs() { return Array.prototype.slice.call(table.querySelectorAll('tbody input:not([readonly])')); }
+    function focusEl(el) { el.focus(); if (el.type !== 'number') { try { el.select(); } catch (e) {} } }
+    table.addEventListener('keydown', function (e) {
+        var el = e.target;
+        if (!el.matches || !el.matches('input')) return;
+        var list = inputs();
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            var col = el.closest('td').cellIndex;
+            var rows = Array.prototype.slice.call(table.querySelectorAll('tbody tr.bud-row'));
+            var r = rows.indexOf(el.closest('tr')), dir = e.shiftKey ? -1 : 1;
+            for (var k = r + dir; k >= 0 && k < rows.length; k += dir) {
+                var cell = rows[k].cells[col];
+                var nx = cell && cell.querySelector('input:not([readonly])');
+                if (nx) { focusEl(nx); break; }
+            }
+        } else if (e.key === 'Tab') {
+            e.preventDefault();
+            var nx2 = list[list.indexOf(el) + (e.shiftKey ? -1 : 1)];
+            if (nx2) focusEl(nx2);
+        }
+    });
+})();
+</script>
+{% endblock %}
