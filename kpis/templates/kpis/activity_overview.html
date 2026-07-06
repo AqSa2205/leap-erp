@@ -46,10 +46,15 @@
                         <h1 class="h3 mb-1 text-white"><i class="bi bi-activity me-2"></i>Team Activity</h1>
                         <div class="opacity-75 small">How active each person is across the ERP, by region &amp; department — {{ data.period_label }}</div>
                     </div>
-                    <div class="d-flex align-items-center gap-3">
+                    <div class="d-flex align-items-center gap-3 flex-wrap">
                         <div class="ta-stat text-center"><div class="lbl">Total actions</div><div class="val">{{ data.grand_total|default:0 }}</div></div>
                         <form method="get" class="d-flex gap-2 align-items-center">
-                            <input type="hidden" name="sort" value="{{ data.sort }}">
+                            <select name="region" class="form-select form-select-sm" onchange="this.form.submit()" style="min-width:170px;" aria-label="Filter by region">
+                                <option value="">All regions</option>
+                                {% for r in regions %}
+                                <option value="{{ r.pk }}" {% if selected_region == r.pk|stringformat:'s' %}selected{% endif %}>{{ r.name }}</option>
+                                {% endfor %}
+                            </select>
                             <select name="period" class="form-select form-select-sm" onchange="this.form.submit()" style="min-width:150px;">
                                 {% for val, lbl in period_options %}
                                 <option value="{{ val }}" {% if val == period %}selected{% endif %}>{{ lbl }}</option>

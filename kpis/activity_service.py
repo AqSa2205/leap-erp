@@ -2,9 +2,11 @@
 registry. One grouped query per metric for the overview (not per-user)."""
 from django.contrib.auth import get_user_model
 
+from collections import defaultdict
+
 from .activity import (
-    ACTIVITY_METRICS, ACTIVITY_BY_KEY, MODULE_ORDER, CYCLE_LABELS,
-    DEPARTMENT_ACTIVITY, all_cycle_data,
+    ACTIVITY_METRICS, ACTIVITY_BY_KEY, MODULE_ORDER, CYCLE_LABELS, CYCLE_METRICS,
+    PROC_CYCLE_KEY, DEPARTMENT_ACTIVITY, all_cycle_data,
 )
 from .periods import period_bounds, label_for, period_options
 
@@ -46,10 +48,13 @@ ROLE_TO_DEPT = {
 }
 
 
-def build_activity_overview(period):
+def build_activity_overview(period, region_id=None):
     """Team activity grouped region → department, where each department shows
     only the actions it owns (count columns) plus its workflow stage cycle-time
-    (avg-days column). Totals count a person's own-department actions only."""
+    (avg-days column). Totals count a person's own-department actions only.
+
+    region_id: a Region pk to scope to one region, else None (all regions).
+    """
     start, end = activity_window(period)
     metric_counts = {m.key: m.counts(start, end) for m in ACTIVITY_METRICS}
     cycle_data = all_cycle_data(start, end)
@@ -58,6 +63,8 @@ def build_activity_overview(period):
     users = (User.objects.filter(is_active=True)
              .select_related('role', 'region')
              .order_by('first_name', 'last_name', 'username'))
+    if region_id is not None:
+        users = users.filter(region_id=region_id)
 
     # region_id -> {region, users: [...]}. A person is placed into every
     # department they ACTUALLY did work in (not just their role's) so that, e.g.,
@@ -119,11 +126,41 @@ def build_activity_overview(period):
         })
     regions.sort(key=lambda x: (x['region'] is None, (x['name'] or '').lower()))
 
+    # ── Graphical insights (aggregate over the current scope) ──────────────────
+    dept_totals = defaultdict(int)
+    displayed_uids = set()
+    for reg in regions:
+        for d in reg['departments']:
+            dept_totals[d['label']] += d['total']
+            for r in d['rows']:
+                displayed_uids.add(r['user'].id)
+
+    by_department = [{'label': _DEPT_LABEL[k], 'total': dept_totals[_DEPT_LABEL[k]]}
+                     for k in _DEPT_ORDER if dept_totals.get(_DEPT_LABEL[k])]
+    by_region = [{'label': reg['name'], 'total': reg['total']}
+                 for reg in regions if reg['total']]
+
+    cycle_keys = [cm.key for cm in CYCLE_METRICS] + [PROC_CYCLE_KEY]
+    cycle_avg = []
+    for key in cycle_keys:
+        vals = [cycle_data[key][uid] for uid in displayed_uids
+                if cycle_data.get(key, {}).get(uid) is not None]
+        if vals:
+            cycle_avg.append({'label': CYCLE_LABELS[key],
+                              'avg': round(sum(vals) / len(vals), 1)})
+
+    charts = {
+        'by_department': by_department,
+        'by_region': by_region if len(by_region) > 1 else [],
+        'cycle_avg': cycle_avg,
+    }
+
     return {
         'period': period,
         'period_label': _period_label(period),
         'regions': regions,
         'grand_total': grand_total,
+        'charts': charts,
     }
 
 

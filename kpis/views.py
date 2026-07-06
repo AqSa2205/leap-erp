@@ -170,11 +170,17 @@ def _resolve_activity_period(request):
 @require_capability('kpis.activity')
 def activity_overview(request):
     period = _resolve_activity_period(request)
-    data = build_activity_overview(period)
+    from projects.models import Region
+    regions = Region.objects.order_by('name')
+    selected_region = (request.GET.get('region') or '').strip()
+    region_id = int(selected_region) if selected_region.isdigit() else None
+    data = build_activity_overview(period, region_id=region_id)
     return render(request, 'kpis/activity_overview.html', {
         'data': data,
         'period': period,
         'period_options': activity_period_options(),
+        'regions': regions,
+        'selected_region': selected_region,
     })
 
 
