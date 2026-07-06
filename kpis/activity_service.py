@@ -59,21 +59,34 @@ def build_activity_overview(period):
              .select_related('role', 'region')
              .order_by('first_name', 'last_name', 'username'))
 
-    # region_id -> {region, depts: {dept_key: [user, ...]}}
+    # region_id -> {region, users: [...]}. A person is placed into every
+    # department they ACTUALLY did work in (not just their role's) so that, e.g.,
+    # a manager who starts costing is credited under Sales — bias-free tracking.
     region_map = {}
     for u in users:
-        bucket = region_map.setdefault(u.region_id, {'region': u.region, 'depts': {}})
-        dept = ROLE_TO_DEPT.get(u.role.name if u.role else None, 'other')
-        bucket['depts'].setdefault(dept, []).append(u)
+        region_map.setdefault(u.region_id, {'region': u.region, 'users': []})['users'].append(u)
 
-    def _build_dept(dkey, dept_users):
+    def _home_dept(u):
+        return ROLE_TO_DEPT.get(u.role.name if u.role else None, 'other')
+
+    def _has_dept_activity(u, count_keys, cycle_keys):
+        if any(metric_counts[k].get(u.id, 0) for k in count_keys):
+            return True
+        return any(cycle_data.get(k, {}).get(u.id) is not None for k in cycle_keys)
+
+    def _build_dept(dkey, region_users):
         cfg = DEPARTMENT_ACTIVITY.get(dkey, {'metrics': [], 'cycles': []})
         count_keys, cycle_keys = cfg['metrics'], cfg['cycles']
         columns = [{'key': k, 'label': ACTIVITY_BY_KEY[k].label, 'kind': 'count'} for k in count_keys]
         columns += [{'key': k, 'label': CYCLE_LABELS[k], 'kind': 'cycle'} for k in cycle_keys]
 
         rows, dept_total = [], 0
-        for u in dept_users:
+        for u in region_users:
+            home = _home_dept(u) == dkey
+            # Show a person here if it's their home department OR they did any of
+            # this department's work (crediting cross-department contributions).
+            if not home and not _has_dept_activity(u, count_keys, cycle_keys):
+                continue
             cells, total = [], 0
             for k in count_keys:
                 v = metric_counts[k].get(u.id, 0)
@@ -82,31 +95,27 @@ def build_activity_overview(period):
             for k in cycle_keys:
                 v = cycle_data.get(k, {}).get(u.id)
                 cells.append({'kind': 'cycle', 'display': f'{v}d' if v is not None else '—'})
-            rows.append({'user': u, 'cells': cells, 'total': total})
+            rows.append({'user': u, 'cells': cells, 'total': total, 'is_home': home})
             dept_total += total
-        rows.sort(key=lambda r: r['total'], reverse=True)
+        if not rows:
+            return None
+        # Most active first; a genuine contributor outranks a zero-activity home member.
+        rows.sort(key=lambda r: (r['total'], r['is_home']), reverse=True)
         return {'key': dkey, 'label': _DEPT_LABEL[dkey], 'columns': columns,
                 'rows': rows, 'total': dept_total}
 
     regions, grand_total = [], 0
     for info in region_map.values():
-        departments = []
-        region_total = region_people = 0
-        for dkey in _DEPT_ORDER:
-            dept_users = info['depts'].get(dkey)
-            if not dept_users:
-                continue
-            d = _build_dept(dkey, dept_users)
-            departments.append(d)
-            region_total += d['total']
-            region_people += len(d['rows'])
+        departments = [d for d in (_build_dept(dk, info['users']) for dk in _DEPT_ORDER) if d]
+        region_total = sum(d['total'] for d in departments)
+        people = len({r['user'].id for d in departments for r in d['rows']})
         grand_total += region_total
         regions.append({
             'region': info['region'],
             'name': info['region'].name if info['region'] else 'No region',
             'departments': departments,
             'total': region_total,
-            'people': region_people,
+            'people': people,
         })
     regions.sort(key=lambda x: (x['region'] is None, (x['name'] or '').lower()))
 

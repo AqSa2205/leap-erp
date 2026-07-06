@@ -470,6 +470,27 @@ class ActivityServiceTests(TestCase):
         # Management owns projects_created → total reflects it.
         self.assertEqual(boss_row['total'], 1)
 
+    def test_cross_department_work_credited_to_that_department(self):
+        # A manager (Management) who STARTS COSTING should surface under Sales,
+        # flagged cross-dept — bias-free crediting of the action, not the role.
+        from kpis.activity_service import build_activity_overview
+        mgr_role, _ = Role.objects.get_or_create(name=Role.MANAGER)
+        mgr = User.objects.create_user('mgr', password='pw', role=mgr_role, region=self.region)
+        proj = Project.objects.create(project_name='P5', proposal_reference='P5',
+                                      status=self.status, region=self.region)
+        CostingSheet.objects.create(
+            title='S2', project=proj, workflow_stage='costing_in_progress',
+            costing_started_at=timezone.now(), costing_started_by=mgr)
+        data = build_activity_overview('all')
+        ksa = next(reg for reg in data['regions'] if reg['name'] == 'KSA')
+        sales = next(d for d in ksa['departments'] if d['key'] == 'sales')
+        row = next(r for r in sales['rows'] if r['user'].id == mgr.id)
+        self.assertFalse(row['is_home'])          # flagged as cross-department
+        self.assertEqual(row['total'], 1)          # costing_started counted here
+        # And they still appear in their own Management department.
+        mgmt = next(d for d in ksa['departments'] if d['key'] == 'management')
+        self.assertIn(mgr.id, {r['user'].id for r in mgmt['rows']})
+
     def test_finance_budgeting_cycle_time(self):
         from kpis.activity_service import build_activity_overview
         fin_role, _ = Role.objects.get_or_create(name=Role.FINANCE_HEAD)
