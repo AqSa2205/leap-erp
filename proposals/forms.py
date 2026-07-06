@@ -52,7 +52,11 @@ class ProposalMetadataForm(forms.ModelForm):
         self.fields['project'].required = False
         self.fields['project'].queryset = Project.objects.select_related('region').all()
 
-        if self.user and not self.user.is_super_admin_user:
+        # Super admins and the AI team can link a proposal to any existing
+        # project (AI works cross-region and usually has no region set);
+        # everyone else is scoped to their own region.
+        if (self.user and not self.user.is_super_admin_user
+                and not getattr(self.user, 'is_ai_team_user', False)):
             self.fields['project'].queryset = Project.objects.filter(
                 region=self.user.region
             ).select_related('region')
@@ -138,7 +142,11 @@ class PQDMetadataForm(forms.ModelForm):
         self.fields['project'].required = False
         self.fields['project'].queryset = Project.objects.select_related('region').all()
 
-        if self.user and not self.user.is_super_admin_user:
+        # Super admins and the AI team can link a proposal to any existing
+        # project (AI works cross-region and usually has no region set);
+        # everyone else is scoped to their own region.
+        if (self.user and not self.user.is_super_admin_user
+                and not getattr(self.user, 'is_ai_team_user', False)):
             self.fields['project'].queryset = Project.objects.filter(
                 region=self.user.region
             ).select_related('region')

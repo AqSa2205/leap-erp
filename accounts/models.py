@@ -214,6 +214,11 @@ class User(AbstractUser):
         return bool(self.role and self.role.name in AI_DEVELOPER_ROLE_NAMES)
 
     @property
+    def is_ai_team_user(self):
+        """The whole AI department — head + developers/engineers/interns."""
+        return self.is_ai_head_user or self.is_ai_developer_user
+
+    @property
     def is_sales_team_user(self):
         """Sales side: reps, managers, admins, super admins.
         These users see the full costing sheet (including pricing)."""

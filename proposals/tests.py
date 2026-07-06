@@ -295,3 +295,36 @@ class PrequalificationTests(TestCase):
         self.assertEqual(r.status_code, 302)
         self.nopdf.refresh_from_db()
         self.assertTrue(self.nopdf.pdf)
+
+
+class AIProposalAccessTests(TestCase):
+    """The AI department can create a technical proposal and link it to an
+    existing project (even though AI users usually have no region)."""
+
+    def setUp(self):
+        from projects.models import Region, ProjectStatus, Project
+        self.role, _ = Role.objects.get_or_create(name=Role.AI_ENGINEER)
+        self.ai = User.objects.create_user('ai_eng', password='pw', role=self.role, region=None)
+        self.region = Region.objects.create(name='KSA', code='LNKSA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.project = Project.objects.create(
+            project_name='P', proposal_reference='P-1', status=self.status, region=self.region)
+
+    def test_ai_user_sees_all_projects_in_form(self):
+        from proposals.forms import ProposalMetadataForm
+        self.assertTrue(self.ai.is_ai_team_user)
+        f = ProposalMetadataForm(user=self.ai)
+        self.assertIn(self.project, list(f.fields['project'].queryset))
+
+    def test_ai_user_creates_proposal_linked_to_project(self):
+        from proposals.models import TechnicalProposal
+        self.client.force_login(self.ai)
+        self.assertEqual(self.client.get(reverse('proposals:create')).status_code, 200)
+        r = self.client.post(reverse('proposals:create'), {
+            'title': 'AI Proposal', 'project': str(self.project.pk),
+            'proposal_reference': 'AI-1', 'document_type': 'Technical Proposal',
+            'client_name': 'ACME', 'region_entity': 'LNKSA', 'revision': 'R00',
+            'revision_date': '2026-07-06', 'prepared_by_initials': 'AI', 'status': 'draft'})
+        self.assertEqual(r.status_code, 302)
+        tp = TechnicalProposal.objects.get(created_by=self.ai)
+        self.assertEqual(tp.project_id, self.project.pk)
