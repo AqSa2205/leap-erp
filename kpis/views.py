@@ -170,8 +170,7 @@ def _resolve_activity_period(request):
 @require_capability('kpis.activity')
 def activity_overview(request):
     period = _resolve_activity_period(request)
-    sort = request.GET.get('sort', 'total')
-    data = build_activity_overview(period, sort=sort)
+    data = build_activity_overview(period)
     return render(request, 'kpis/activity_overview.html', {
         'data': data,
         'period': period,

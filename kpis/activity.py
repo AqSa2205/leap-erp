@@ -3,6 +3,7 @@ review. Each metric is one grouped COUNT query over an existing model, keyed by
 an actor FK and time-scoped by a date field. No new tables — reads the
 created_by / handover fields already on the records.
 """
+from collections import defaultdict
 from dataclasses import dataclass
 
 from django.apps import apps
@@ -100,3 +101,103 @@ ACTIVITY_METRICS = [
 
 def headline_metrics():
     return [m for m in ACTIVITY_METRICS if m.headline]
+
+
+ACTIVITY_BY_KEY = {m.key: m for m in ACTIVITY_METRICS}
+
+
+# ── Workflow cycle-time metrics ───────────────────────────────────────────────
+# Average days a person's stage takes, tied to the handover timestamps on the
+# costing sheet: pipeline → BOM handed to sales → sales hands to finance →
+# finance budgets → procurement raises the PO. Attributed to the actor who
+# COMPLETED the stage, windowed by that completion date.
+@dataclass(frozen=True)
+class CycleMetric:
+    key: str
+    department: str
+    label: str
+    model_path: str
+    actor_field: str      # who completed the stage
+    start_field: str      # start datetime (may traverse a FK, e.g. project__created_at)
+    end_field: str        # completion datetime
+
+    def per_actor_avg(self, start, end):
+        """{user_id: avg_days} over records whose stage COMPLETED in the window."""
+        Model = apps.get_model(self.model_path)
+        qs = Model.objects.filter(**{
+            f'{self.actor_field}__isnull': False,
+            f'{self.start_field}__isnull': False,
+            f'{self.end_field}__isnull': False,
+        })
+        if start is not None:
+            qs = qs.filter(**{f'{self.end_field}__date__gte': start,
+                              f'{self.end_field}__date__lt': end})
+        acc = defaultdict(list)
+        for actor_id, s, e in qs.values_list(self.actor_field, self.start_field, self.end_field):
+            if s and e:
+                days = (e - s).total_seconds() / 86400.0
+                if days >= 0:
+                    acc[actor_id].append(days)
+        return {uid: round(sum(v) / len(v), 1) for uid, v in acc.items()}
+
+
+PROC_CYCLE_KEY = 'cyc_procurement'
+
+CYCLE_METRICS = [
+    CycleMetric('cyc_proposal', 'proposal', 'Avg days: pipeline → sales',
+                'costing.CostingSheet', 'handed_over_by', 'project__created_at', 'handed_over_at'),
+    CycleMetric('cyc_sales', 'sales', 'Avg days: sales → finance',
+                'costing.CostingSheet', 'finance_review_by', 'handed_over_at', 'finance_review_at'),
+    CycleMetric('cyc_finance', 'finance', 'Avg days: budgeting',
+                'costing.CostingSheet', 'finance_approved_by', 'finance_review_at', 'finance_approved_at'),
+]
+
+CYCLE_LABELS = {cm.key: cm.label for cm in CYCLE_METRICS}
+CYCLE_LABELS[PROC_CYCLE_KEY] = 'Avg days: finance → PO'
+
+
+def _procurement_cycle_avg(start, end):
+    """Avg days from a project's finance approval (budget released) to the PO
+    being raised, per PO creator — the procurement leg of the chain."""
+    from procurement.models import PurchaseOrder
+    from costing.models import CostingSheet
+    approved = {}
+    for pid, ts in (CostingSheet.objects
+                    .filter(finance_approved_at__isnull=False, project__isnull=False)
+                    .values_list('project_id', 'finance_approved_at')):
+        if pid not in approved or ts < approved[pid]:
+            approved[pid] = ts
+    pos = PurchaseOrder.objects.filter(created_by__isnull=False, project__isnull=False)
+    if start is not None:
+        pos = pos.filter(po_date__gte=start, po_date__lt=end)
+    acc = defaultdict(list)
+    for uid, pid, po_date in pos.values_list('created_by', 'project_id', 'po_date'):
+        ts = approved.get(pid)
+        if not ts:
+            continue
+        days = (po_date - ts.date()).days
+        if days >= 0:
+            acc[uid].append(days)
+    return {uid: round(sum(v) / len(v), 1) for uid, v in acc.items()}
+
+
+def all_cycle_data(start, end):
+    """{cycle_key: {user_id: avg_days}} for every cycle metric."""
+    data = {cm.key: cm.per_actor_avg(start, end) for cm in CYCLE_METRICS}
+    data[PROC_CYCLE_KEY] = _procurement_cycle_avg(start, end)
+    return data
+
+
+# ── Which activity a department owns ──────────────────────────────────────────
+# Each department's Team Activity table shows only the actions it's responsible
+# for (count columns) plus its stage cycle-time (avg-days column). Finance is
+# budgeting-only (no BOM/proposal); procurement is POs/DNs + the finance→PO time.
+DEPARTMENT_ACTIVITY = {
+    'management':  {'metrics': ['projects_created', 'status_changes', 'documents_uploaded'], 'cycles': []},
+    'proposal':    {'metrics': ['boms_created', 'tech_proposals', 'pqds', 'boms_handed_to_sales'], 'cycles': ['cyc_proposal']},
+    'sales':       {'metrics': ['costing_started', 'sales_finalised', 'handed_to_finance'], 'cycles': ['cyc_sales']},
+    'finance':     {'metrics': ['finance_approved'], 'cycles': ['cyc_finance']},
+    'procurement': {'metrics': ['pos_created', 'po_scm_approvals', 'delivery_notes', 'inventory_reports'], 'cycles': [PROC_CYCLE_KEY]},
+    'ai':          {'metrics': ['stacks_created', 'tasks_completed'], 'cycles': []},
+    'other':       {'metrics': ['projects_created', 'documents_uploaded'], 'cycles': []},
+}

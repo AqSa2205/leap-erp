@@ -435,17 +435,59 @@ class ActivityServiceTests(TestCase):
         Project.objects.create(project_name='P2', proposal_reference='P2',
                                status=self.status, region=self.region, created_by=self.active1)
 
-    def test_overview_all_active_users_with_totals(self):
+    def test_overview_groups_by_region_then_department(self):
         from kpis.activity_service import build_activity_overview
+        self.active1.region = self.region
+        self.active1.save()
+        self.active2.region = self.region
+        self.active2.save()
         data = build_activity_overview('all')
-        ids = [r['user'].id for r in data['rows']]
-        self.assertIn(self.active1.id, ids)
-        self.assertIn(self.active2.id, ids)
-        self.assertNotIn(self.inactive.id, ids)
-        top = data['rows'][0]
-        self.assertEqual(top['user'].id, self.active1.id)
-        self.assertEqual(top['total'], 2)
-        self.assertEqual(top['headline']['projects_created'], 2)
+        # Inactive users never appear.
+        all_ids = {r['user'].id for reg in data['regions']
+                   for d in reg['departments'] for r in d['rows']}
+        self.assertNotIn(self.inactive.id, all_ids)
+        # Sales reps land under the Sales department within their region.
+        ksa = next(reg for reg in data['regions'] if reg['name'] == 'KSA')
+        sales = next(d for d in ksa['departments'] if d['key'] == 'sales')
+        self.assertEqual({r['user'].id for r in sales['rows']},
+                         {self.active1.id, self.active2.id})
+        # Sales shows only its own actions — no pipeline/BOM columns.
+        col_keys = {c['key'] for c in sales['columns']}
+        self.assertIn('sales_finalised', col_keys)
+        self.assertNotIn('projects_created', col_keys)
+        self.assertNotIn('boms_created', col_keys)
+
+    def test_department_total_counts_only_own_metrics(self):
+        from kpis.activity_service import build_activity_overview
+        admin_role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        boss = User.objects.create_user('boss', password='pw', role=admin_role)
+        Project.objects.create(project_name='P3', proposal_reference='P3',
+                               status=self.status, region=self.region, created_by=boss)
+        data = build_activity_overview('all')
+        noreg = next(reg for reg in data['regions'] if reg['name'] == 'No region')
+        mgmt = next(d for d in noreg['departments'] if d['key'] == 'management')
+        boss_row = next(r for r in mgmt['rows'] if r['user'].id == boss.id)
+        # Management owns projects_created → total reflects it.
+        self.assertEqual(boss_row['total'], 1)
+
+    def test_finance_budgeting_cycle_time(self):
+        from kpis.activity_service import build_activity_overview
+        fin_role, _ = Role.objects.get_or_create(name=Role.FINANCE_HEAD)
+        fin = User.objects.create_user('fin', password='pw', role=fin_role, region=self.region)
+        proj = Project.objects.create(project_name='P4', proposal_reference='P4',
+                                      status=self.status, region=self.region)
+        review = timezone.make_aware(datetime.datetime(2026, 1, 1, 9, 0))
+        approved = timezone.make_aware(datetime.datetime(2026, 1, 4, 9, 0))  # 3 days
+        CostingSheet.objects.create(
+            title='S', project=proj, workflow_stage='finance_approved',
+            finance_review_at=review, finance_review_by=fin,
+            finance_approved_at=approved, finance_approved_by=fin)
+        data = build_activity_overview('all')
+        ksa = next(reg for reg in data['regions'] if reg['name'] == 'KSA')
+        finance = next(d for d in ksa['departments'] if d['key'] == 'finance')
+        row = next(r for r in finance['rows'] if r['user'].id == fin.id)
+        cyc = next(c for c in row['cells'] if c['kind'] == 'cycle')
+        self.assertEqual(cyc['display'], '3.0d')
 
     def test_user_detail_grouped_by_module(self):
         from kpis.activity_service import build_user_activity
