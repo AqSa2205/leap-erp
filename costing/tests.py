@@ -553,3 +553,41 @@ class MarginScenarioTests(TestCase):
         self.assertEqual(self.sheet.margin_high, Decimal('60'))
         self.assertEqual(self.sheet.margin_medium, Decimal('40'))
         self.assertIsNone(self.sheet.margin_low)  # blank clears it
+
+
+class RenumberOnDeleteTests(TestCase):
+    """Deleting a middle line item re-sequences the section's item numbers
+    (gap-free), preserving sub-items and named rows."""
+
+    def setUp(self):
+        from costing.models import CostingSection, CostingLineItem
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('sa2', password='x', role=role)
+        self.client.force_login(self.user)
+        self.sheet = CostingSheet.objects.create(title='S', created_by=self.user, margin=Decimal('30'))
+        self.sec = CostingSection.objects.create(costing_sheet=self.sheet, section_number='1', title='A', order=0)
+        self.items = []
+        for o, n in enumerate(['1.1', '1.2', '1.3', '1.4']):
+            self.items.append(CostingLineItem.objects.create(
+                section=self.sec, item_number=n, description='x', quantity=Decimal('1'),
+                base_unit_cost=Decimal('1'), supplier_currency='SAR', order=o))
+
+    def _nums(self):
+        return [i.item_number for i in self.sec.line_items.all().order_by('order', 'item_number')]
+
+    def test_delete_middle_row_renumbers(self):
+        # Delete "1.2" via the delete view — remaining rows close the gap.
+        r = self.client.post(reverse('costing:item_delete', kwargs={'pk': self.items[1].pk}))
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(self._nums(), ['1.1', '1.2', '1.3'])
+
+    def test_named_row_preserved_on_renumber(self):
+        from costing.models import CostingLineItem
+        CostingLineItem.objects.create(
+            section=self.sec, item_number='Services', description='svc', quantity=Decimal('1'),
+            base_unit_cost=Decimal('0'), supplier_currency='SAR', order=1)
+        # order now: 1.1(0), Services(1), 1.2(1→resorts), ... delete 1.1
+        self.client.post(reverse('costing:item_delete', kwargs={'pk': self.items[0].pk}))
+        self.assertIn('Services', self._nums())          # named row untouched
+        numeric = [n for n in self._nums() if n[0].isdigit()]
+        self.assertEqual(numeric, ['1.1', '1.2', '1.3'])  # gap-free

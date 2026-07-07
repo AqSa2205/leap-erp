@@ -872,8 +872,13 @@ class LineItemDeleteView(_SheetChildPermissionMixin, DeleteView):
         return reverse('costing:detail', kwargs={'pk': self.object.section.costing_sheet.pk})
 
     def form_valid(self, form):
-        messages.success(self.request, 'Line item deleted successfully.')
-        return super().form_valid(form)
+        section = self.object.section
+        response = super().form_valid(form)  # deletes the row, then redirects
+        # Re-sequence the section so a middle-row delete doesn't leave a gap.
+        _renumber_section(section)
+        _resequence_order(section, list(section.line_items.all().order_by('order', 'item_number')))
+        messages.success(self.request, 'Line item deleted and numbers updated.')
+        return response
 
 
 # ─── Exchange Rates ───────────────────────────────────────────
@@ -1623,6 +1628,35 @@ def _assign_hierarchical_number(ordered_items, anchor, new_item):
     return changes
 
 
+def _renumber_section(section):
+    """Close gaps in a section's item numbers after a delete, WITHOUT flattening
+    the hierarchy: each numeric row becomes the next sibling under its parent's
+    (possibly renumbered) prefix, so sub-items (1.2.1) follow their parent and
+    named/blank rows (e.g. "Services") are left untouched and don't consume a
+    slot. Deleting a middle row therefore re-sequences the rest automatically.
+    """
+    from collections import defaultdict
+    items = list(section.line_items.all().order_by('order', 'item_number'))
+    old_to_new = {}
+    counter = defaultdict(int)
+    for item in items:
+        num = (item.item_number or '').strip()
+        segs = num.split('.')
+        if not num or not segs[-1].isdigit():
+            continue  # named row / blank — leave as-is, don't count as a sibling
+        parent_old = '.'.join(segs[:-1])
+        # The parent's new prefix: its renumbered value if we already renumbered
+        # it, else the original prefix (the section number or an ancestor we
+        # don't touch).
+        new_parent = old_to_new.get(parent_old, parent_old)
+        counter[new_parent] += 1
+        new_num = f'{new_parent}.{counter[new_parent]}' if new_parent else str(counter[new_parent])
+        old_to_new[num] = new_num
+        if new_num != num:
+            CostingLineItem.objects.filter(pk=item.pk).update(item_number=new_num)
+            item.item_number = new_num
+
+
 @login_required
 @require_POST
 def ajax_add_line_item(request, pk):
@@ -1747,9 +1781,9 @@ def bulk_delete_page(request, pk):
                 pk__in=selected_ids, section=section
             ).delete()[0]
 
-            # Close the position gap left by the deleted rows, but DON'T rewrite
-            # item_numbers — flattening would destroy hierarchical numbering
-            # (1.2.1, named "Services" rows, etc.). Numbers are the user's to set.
+            # Close the gap: re-sequence item numbers (hierarchy-preserving) and
+            # the invisible order field so deleted middle rows don't leave holes.
+            _renumber_section(section)
             _resequence_order(
                 section,
                 list(section.line_items.all().order_by('order', 'item_number')),
@@ -3561,6 +3595,11 @@ def costing_export_pdf(request, pk):
         elements.append(Spacer(1, 3 * mm))
 
     # ─── PAGE 2+: DETAILED BOM WITH ALL LINE ITEMS ───
+    # Drop any trailing spacer(s): when the terms nearly fill page 1 a dangling
+    # spacer spills onto a fresh page (showing only the header) before the forced
+    # break, producing a blank page. A spacer right before a PageBreak is wasted.
+    while elements and isinstance(elements[-1], Spacer):
+        elements.pop()
     # Switch to the "bom" page template (larger top margin + canvas header)
     elements.append(NextPageTemplate('bom'))
     elements.append(PageBreak())
