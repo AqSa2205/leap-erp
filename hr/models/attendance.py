@@ -57,6 +57,10 @@ class AttendanceRecord(models.Model):
     check_in = models.TimeField(null=True, blank=True)
     check_out = models.TimeField(null=True, blank=True)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='absent')
+    SOURCE_CHOICES = [('manual', 'Manual'), ('wifi', 'Auto (Wi-Fi)')]
+    source = models.CharField(
+        max_length=10, choices=SOURCE_CHOICES, default='manual',
+        help_text='How this record was set — manual entry or the Wi-Fi attendance agent.')
     hours_worked = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     note = models.CharField(max_length=300, blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')

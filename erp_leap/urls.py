@@ -26,6 +26,8 @@ urlpatterns = [
     path('kpis/', include('kpis.urls')),
     path('company/', include('company.urls')),
     path('finance/', include('finance.urls')),
+    path('api/attendance/', include('attendance.urls')),
+    path('attendance/', include('attendance.ui_urls')),
 ]
 
 # Whitenoise serves STATIC_URL in production but not MEDIA_URL, so route media

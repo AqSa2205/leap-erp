@@ -1224,6 +1224,13 @@
                                 <i class="bi bi-house-door"></i> <span>Work From Home</span>
                             </a>
                         </li>
+                        {% if user.is_super_admin_user or user.is_admin_user %}
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if request.resolver_match.app_name == 'attendance_ui' %}active{% endif %}" href="{% url 'attendance_ui:attendance_devices' %}">
+                                <i class="bi bi-wifi"></i> <span>Wi-Fi Devices</span>
+                            </a>
+                        </li>
+                        {% endif %}
                     </ul>
                 </div>
             </li>

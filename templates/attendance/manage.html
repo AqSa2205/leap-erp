@@ -1,0 +1,162 @@
+{% extends 'base.html' %}
+{% block title %}Wi-Fi Attendance — Devices{% endblock %}
+{% block page_title %}Wi-Fi Attendance{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'hr:hr_dashboard' %}">HR</a>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">Wi-Fi Attendance Setup</span>
+</nav>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .wa-hero { background: linear-gradient(135deg, #1f6f54 0%, #14503c 100%); color:#fff; border:none; border-radius:14px; }
+    .wa-table thead th { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.3px; color:#14503c; border-bottom:2px solid #1f6f54; white-space:nowrap; }
+    .wa-table td, .wa-table th { vertical-align: middle; }
+    .wa-token { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:0.78rem; }
+    .form-error { color:#c62828; font-size:0.78rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-xxl-11">
+
+            <div class="card wa-hero mb-4">
+                <div class="card-body p-4">
+                    <h1 class="h3 mb-1 text-white"><i class="bi bi-wifi me-2"></i>Wi-Fi Attendance Setup</h1>
+                    <div class="opacity-75 small">Register office access points and employee laptops. A laptop's agent counts toward attendance only when it's on a registered AP and the user is active during work hours.</div>
+                </div>
+            </div>
+
+            <div class="row g-4">
+                <!-- Office access points -->
+                <div class="col-lg-5">
+                    <div class="card h-100">
+                        <div class="card-header bg-white d-flex align-items-center gap-2">
+                            <i class="bi bi-router text-success"></i><strong>Office Access Points</strong>
+                            <span class="badge rounded-pill bg-success-subtle text-success ms-auto">{{ networks|length }}</span>
+                        </div>
+                        <div class="card-body">
+                            <form method="post" class="row g-2 align-items-start mb-3">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="add_network">
+                                <div class="col-6">
+                                    {{ net_form.bssid }}
+                                    {% for e in net_form.bssid.errors %}<div class="form-error">{{ e }}</div>{% endfor %}
+                                </div>
+                                <div class="col-4">{{ net_form.label }}</div>
+                                <div class="col-2 d-grid"><button class="btn btn-sm btn-success"><i class="bi bi-plus-lg"></i></button></div>
+                            </form>
+                            <div class="text-muted small mb-2">Read each AP's BSSID with <code>netsh wlan show interfaces</code>.</div>
+                            <div class="table-responsive">
+                                <table class="table table-sm wa-table align-middle mb-0">
+                                    <thead><tr><th>Label</th><th>BSSID</th><th>Active</th><th></th></tr></thead>
+                                    <tbody>
+                                        {% for n in networks %}
+                                        <tr>
+                                            <td>{{ n.label|default:"—" }}</td>
+                                            <td class="wa-token">{{ n.bssid }}</td>
+                                            <td>
+                                                <form method="post" class="d-inline">{% csrf_token %}
+                                                    <input type="hidden" name="action" value="toggle_network">
+                                                    <input type="hidden" name="pk" value="{{ n.pk }}">
+                                                    <button class="btn btn-sm {% if n.is_active %}btn-success{% else %}btn-outline-secondary{% endif %} py-0 px-2">
+                                                        {% if n.is_active %}On{% else %}Off{% endif %}
+                                                    </button>
+                                                </form>
+                                            </td>
+                                            <td class="text-end">
+                                                <form method="post" class="d-inline" onsubmit="return confirm('Remove this access point?');">{% csrf_token %}
+                                                    <input type="hidden" name="action" value="delete_network">
+                                                    <input type="hidden" name="pk" value="{{ n.pk }}">
+                                                    <button class="btn btn-sm btn-outline-danger py-0 px-1"><i class="bi bi-trash"></i></button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                        {% empty %}
+                                        <tr><td colspan="4" class="text-center text-muted py-3">No access points yet.</td></tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Registered devices -->
+                <div class="col-lg-7">
+                    <div class="card h-100">
+                        <div class="card-header bg-white d-flex align-items-center gap-2">
+                            <i class="bi bi-laptop text-success"></i><strong>Registered Devices</strong>
+                            <span class="badge rounded-pill bg-success-subtle text-success">{{ devices|length }}</span>
+                            <a href="{% url 'attendance_ui:attendance_tokens_export' %}" class="btn btn-sm btn-outline-secondary ms-auto">
+                                <i class="bi bi-download me-1"></i>Token map (CSV)
+                            </a>
+                        </div>
+                        <div class="card-body">
+                            <form method="post" class="row g-2 align-items-start mb-3">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="add_device">
+                                <div class="col-6">{{ dev_form.employee }}</div>
+                                <div class="col-4">{{ dev_form.label }}</div>
+                                <div class="col-2 d-grid"><button class="btn btn-sm btn-success"><i class="bi bi-plus-lg"></i></button></div>
+                            </form>
+                            <div class="table-responsive">
+                                <table class="table table-sm wa-table align-middle mb-0">
+                                    <thead><tr><th>Employee</th><th>Device</th><th>Token</th><th>Active</th><th>Last seen</th><th></th></tr></thead>
+                                    <tbody>
+                                        {% for d in devices %}
+                                        <tr>
+                                            <td>{{ d.employee.full_name }}</td>
+                                            <td>{{ d.label|default:"—" }}</td>
+                                            <td>
+                                                <span class="wa-token">{{ d.token|slice:":10" }}…</span>
+                                                <button type="button" class="btn btn-sm btn-link p-0 ms-1 copy-token" data-token="{{ d.token }}" title="Copy token"><i class="bi bi-clipboard"></i></button>
+                                            </td>
+                                            <td>
+                                                <form method="post" class="d-inline">{% csrf_token %}
+                                                    <input type="hidden" name="action" value="toggle_device">
+                                                    <input type="hidden" name="pk" value="{{ d.pk }}">
+                                                    <button class="btn btn-sm {% if d.is_active %}btn-success{% else %}btn-outline-secondary{% endif %} py-0 px-2">
+                                                        {% if d.is_active %}On{% else %}Off{% endif %}
+                                                    </button>
+                                                </form>
+                                            </td>
+                                            <td class="small text-muted">{% if d.last_seen_at %}{{ d.last_seen_at|date:"d M H:i" }}{% else %}—{% endif %}</td>
+                                            <td class="text-end">
+                                                <form method="post" class="d-inline" onsubmit="return confirm('Remove this device? Its token stops working.');">{% csrf_token %}
+                                                    <input type="hidden" name="action" value="delete_device">
+                                                    <input type="hidden" name="pk" value="{{ d.pk }}">
+                                                    <button class="btn btn-sm btn-outline-danger py-0 px-1"><i class="bi bi-trash"></i></button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                        {% empty %}
+                                        <tr><td colspan="6" class="text-center text-muted py-3">No devices registered yet.</td></tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.querySelectorAll('.copy-token').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+        navigator.clipboard.writeText(btn.dataset.token).then(function () {
+            var i = btn.querySelector('i');
+            i.className = 'bi bi-check2 text-success';
+            setTimeout(function () { i.className = 'bi bi-clipboard'; }, 1200);
+        });
+    });
+});
+</script>
+{% endblock %}
