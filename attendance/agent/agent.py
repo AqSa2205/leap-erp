@@ -1,8 +1,11 @@
-"""Leap ERP — Wi-Fi attendance agent (Windows).
+r"""Leap ERP — Wi-Fi attendance agent (Windows).
 
-Runs on each employee laptop. Every minute it reads the BSSID of the connected
-Wi-Fi and how long the user has been idle, and POSTs a heartbeat to the ERP.
-The ERP decides whether it counts (office AP + active + work hours).
+Runs on each employee laptop. The scheduled task fires it **at logon**, and it
+sends **one** check-in per launch (a once-a-day "the laptop connected at the
+office today" mark), reading the connected Wi-Fi BSSID and the user's idle time.
+Right after logon the Wi-Fi may not be up yet, so it retries briefly until the
+ERP records the visit (counted), then exits. The ERP decides whether it counts
+(office AP + active + work hours).
 
 Config (per machine) — token is injected at deploy time, never hard-coded:
   - Env var  LEAP_ATT_TOKEN, or
@@ -21,7 +24,10 @@ import urllib.request
 
 # Set this to your cloud ERP base URL before building the exe.
 ENDPOINT = "https://leap-erp.onrender.com/api/attendance/checkin/"
-INTERVAL_SECONDS = 60
+# One check-in per logon: retry until the ERP records it (Wi-Fi may lag at
+# logon), then exit. ~15 tries x 30s ≈ 7.5 min max before giving up.
+RETRY_MAX = 15
+RETRY_INTERVAL_SECONDS = 30
 CONFIG_PATH = os.path.join(os.environ.get("PROGRAMDATA", r"C:\ProgramData"),
                            "LeapAttendance", "config.json")
 
@@ -47,10 +53,12 @@ def current_bssid():
     except Exception:
         return ""
     for line in out.splitlines():
-        s = line.strip()
-        if s.lower().startswith("bssid"):
-            # "BSSID                  : a1:b2:c3:d4:e5:f6"
-            return s.split(":", 1)[1].strip().lower()
+        if ":" not in line:
+            continue
+        label, value = line.split(":", 1)
+        # Windows labels this "BSSID" or (Win 11) "AP BSSID".
+        if "bssid" in label.lower():
+            return value.strip().lower()
     return ""
 
 
@@ -72,6 +80,8 @@ def idle_seconds():
 
 
 def send(token):
+    """POST one check-in. Returns the parsed JSON reply, or None if the request
+    failed (offline / Wi-Fi not up yet / ERP unreachable)."""
     payload = json.dumps({
         "token": token,
         "bssid": current_bssid(),
@@ -82,18 +92,22 @@ def send(token):
         ENDPOINT, data=payload, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            resp.read()
+            return json.loads(resp.read().decode() or "{}")
     except Exception:
-        pass  # offline / ERP down — just try again next tick
+        return None
 
 
 def main():
     token = load_token()
     if not token:
         return  # not provisioned yet
-    while True:
-        send(token)
-        time.sleep(INTERVAL_SECONDS)
+    # One check-in per launch. Keep trying until the ERP counts the visit (the
+    # office Wi-Fi may take a moment to connect after logon), then exit.
+    for _ in range(RETRY_MAX):
+        result = send(token)
+        if result and result.get("counted"):
+            break
+        time.sleep(RETRY_INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":

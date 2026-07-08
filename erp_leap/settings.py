@@ -91,12 +91,12 @@ INSTALLED_APPS = [
 ]
 
 # ── Wi-Fi automatic attendance ────────────────────────────────────────────────
-# A ping counts only when the laptop is active and within these local (Riyadh)
-# work hours; a day is "present" once it accumulates ATT_MIN_MINUTES_PRESENT.
-ATT_MAX_IDLE_SECONDS = 300      # idle longer than this → the ping doesn't count
-ATT_WORK_START = "06:00"        # local work-window start (HH:MM)
+# Once-a-day model: the agent checks in at logon, and a single office
+# connection during work hours marks the employee present for that day.
+ATT_MAX_IDLE_SECONDS = 300      # idle longer than this → the check-in doesn't count
+ATT_WORK_START = "06:00"        # local (Riyadh) work-window start (HH:MM)
 ATT_WORK_END = "20:00"          # local work-window end
-ATT_MIN_MINUTES_PRESENT = 60    # active minutes needed to mark the day present
+ATT_MIN_MINUTES_PRESENT = 1     # a single counted check-in = present for the day
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",

@@ -27,12 +27,12 @@ New-Item -ItemType Directory -Force -Path $dir | Out-Null
 Copy-Item -Path $src -Destination $exe -Force
 @{ token = $Token } | ConvertTo-Json | Set-Content -Path (Join-Path $dir 'config.json') -Encoding UTF8
 
-# Run in the logged-in user's session (needed to read Wi-Fi + idle time), at
-# logon, hidden, and auto-restart if it ever exits.
+# Runs once at each logon in the user's session (needs it to read Wi-Fi + idle).
+# The agent sends one check-in and exits, so no restart loop is needed.
 $action    = New-ScheduledTaskAction -Execute $exe
 $trigger   = New-ScheduledTaskTrigger -AtLogOn
 $settings  = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
-                 -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
+                 -DontStopIfGoingOnBatteries
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 
 Register-ScheduledTask -TaskName $task -Action $action -Trigger $trigger -Settings $settings `
