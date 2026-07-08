@@ -63,7 +63,10 @@ an **elevated PowerShell** run with THAT laptop's token (from the Token map CSV)
 powershell -ExecutionPolicy Bypass -File install.ps1 -Token "PASTE_DEVICE_TOKEN"
 ```
 It installs to `C:\ProgramData\LeapAttendance`, writes the token, and registers a
-hidden **run-at-logon** scheduled task (auto-restarts). Remove with `uninstall.ps1`.
+scheduled task that fires on **logon** and every **30 min (06:00–20:00)** with
+*Start when available* — so a run missed while the laptop slept fires right after
+it wakes (waking + Windows Hello is an *unlock*, not a logon). Remove with
+`uninstall.ps1`.
 
 For fleets: push the exe + a per-machine token the same way via **GPO** (copy +
 scheduled task) or **Intune** (wrap as .intunewin); the token is the only
