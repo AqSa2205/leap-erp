@@ -9,8 +9,6 @@ detection overrides a manual present/absent for that day. It only leaves alone
 the authoritative manual states HR must set by hand (leave / holiday / weekend /
 WFH), which Wi-Fi can't know about.
 """
-from decimal import Decimal
-
 from django.utils import timezone
 
 
@@ -36,18 +34,18 @@ def sync_hr_attendance(day):
         return  # leave / holiday / weekend / WFH — HR-set, keep it
 
     check_in = timezone.localtime(day.first_seen).time() if day.first_seen else None
-    check_out = timezone.localtime(day.last_seen).time() if day.last_seen else None
     status = 'present'
     if check_in and expected_in_by and check_in > expected_in_by:
         status = 'late'
-    hours = (Decimal(day.active_minutes) / Decimal('60')).quantize(Decimal('0.01'))
 
     if rec is None:
         rec = AttendanceRecord(employee=day.employee, date=day.date)
     rec.check_in = check_in
-    rec.check_out = check_out
+    # Once-a-day model detects arrival only — departure is unknown, so no
+    # check-out / hours are recorded.
+    rec.check_out = None
     rec.status = status
-    rec.hours_worked = hours
+    rec.hours_worked = None
     rec.source = 'wifi'
     rec.note = 'Auto (Wi-Fi)'
     rec.save()
