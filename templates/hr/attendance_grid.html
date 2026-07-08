@@ -81,7 +81,12 @@
                             {% for row in rows %}
                             <tr>
                                 <td class="ps-3">
-                                    <div class="fw-semibold">{{ row.employee.full_name }}</div>
+                                    <div class="fw-semibold">
+                                        {{ row.employee.full_name }}
+                                        {% if row.record and row.record.source == 'wifi' %}
+                                        <span class="badge bg-info-subtle text-info border border-info-subtle ms-1" title="Auto-marked by Wi-Fi attendance"><i class="bi bi-wifi"></i> Auto</span>
+                                        {% endif %}
+                                    </div>
                                     {% if row.employee.designation %}
                                     <div class="text-muted small">{{ row.employee.designation }}</div>
                                     {% endif %}
