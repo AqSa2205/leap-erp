@@ -1,0 +1,5 @@
+# PyInstaller build artifacts — rebuilt from agent.py, not tracked.
+build/
+dist/
+*.spec
+__pycache__/

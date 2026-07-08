@@ -20,7 +20,7 @@ import time
 import urllib.request
 
 # Set this to your cloud ERP base URL before building the exe.
-ENDPOINT = "https://YOUR-ERP-HOST/api/attendance/checkin/"
+ENDPOINT = "https://leap-erp.onrender.com/api/attendance/checkin/"
 INTERVAL_SECONDS = 60
 CONFIG_PATH = os.path.join(os.environ.get("PROGRAMDATA", r"C:\ProgramData"),
                            "LeapAttendance", "config.json")

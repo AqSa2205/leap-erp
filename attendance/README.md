@@ -44,13 +44,30 @@ Unknown/inactive token → `401`.
 - **Prune heartbeats:** `python manage.py prune_heartbeats --days 30`
   (schedule daily — the table grows by one row per machine per minute).
 
-## Agent (Phase 3)
+## Agent (Phase 3) — build
 
-`attendance/agent/agent.py` — Windows agent. Set `ENDPOINT`, then
-`pyinstaller --onefile --noconsole agent.py` → `agent.exe`. Provision each
-machine's token via env var `LEAP_ATT_TOKEN` or
-`%PROGRAMDATA%\LeapAttendance\config.json`. Deploy via GPO/Intune with a
-"run at logon, hidden, restart on failure" scheduled task.
+`attendance/agent/agent.py` — Windows agent (ENDPOINT is set to the live ERP).
+Build the standalone exe (from `attendance/agent/`):
+
+```
+python -m PyInstaller --onefile --noconsole --name LeapAttendanceAgent agent.py
+```
+→ `dist/LeapAttendanceAgent.exe` (one exe serves every laptop; only the token differs).
+
+## Deploy to a laptop (Phase 4)
+
+Copy `dist\LeapAttendanceAgent.exe` **and** `install.ps1` to the laptop, then in
+an **elevated PowerShell** run with THAT laptop's token (from the Token map CSV):
+
+```
+powershell -ExecutionPolicy Bypass -File install.ps1 -Token "PASTE_DEVICE_TOKEN"
+```
+It installs to `C:\ProgramData\LeapAttendance`, writes the token, and registers a
+hidden **run-at-logon** scheduled task (auto-restarts). Remove with `uninstall.ps1`.
+
+For fleets: push the exe + a per-machine token the same way via **GPO** (copy +
+scheduled task) or **Intune** (wrap as .intunewin); the token is the only
+per-machine value.
 
 ## Notes
 
