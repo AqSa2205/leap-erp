@@ -193,6 +193,21 @@ class RegistrationUITests(TestCase):
         self.client.post(self.url, {'action': 'delete_device', 'pk': dev.pk})
         self.assertFalse(RegisteredDevice.objects.filter(pk=dev.pk).exists())
 
+    def test_register_device_with_asset_autofills_serial(self):
+        from datetime import date
+        from hr.models import Asset, AssetAssignment
+        self.client.force_login(self.admin)
+        asset = Asset.objects.create(asset_name='Dell 5540', asset_type='Laptop', serial_number='SN-9')
+        AssetAssignment.objects.create(asset=asset, employee=self.emp, assigned_at=date(2026, 1, 1))
+        # The page carries the employee's assets for the dropdown.
+        self.assertContains(self.client.get(self.url), 'SN-9')
+        # Registering with the asset links it and auto-fills the serial.
+        self.client.post(self.url, {'action': 'add_device', 'employee': self.emp.pk,
+                                    'asset_id': asset.pk, 'serial_number': '', 'label': 'LT'})
+        dev = RegisteredDevice.objects.get(employee=self.emp)
+        self.assertEqual(dev.asset_id, asset.pk)
+        self.assertEqual(dev.serial_number, 'SN-9')
+
     def test_token_csv_export(self):
         self.client.force_login(self.admin)
         dev = RegisteredDevice.objects.create(employee=self.emp, label='LT')

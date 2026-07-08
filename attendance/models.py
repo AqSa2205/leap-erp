@@ -45,6 +45,11 @@ class RegisteredDevice(models.Model):
 
     employee = models.ForeignKey(
         'hr.Employee', on_delete=models.CASCADE, related_name='attendance_devices')
+    asset = models.ForeignKey(
+        'hr.Asset', on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+        help_text="The employee's laptop from the HR asset register.")
+    serial_number = models.CharField(
+        max_length=255, blank=True, help_text='Auto-filled from the selected asset.')
     label = models.CharField(
         max_length=120, blank=True, help_text='e.g. hostname or asset tag')
     token = models.CharField(max_length=64, unique=True, default=_gen_token, editable=False)

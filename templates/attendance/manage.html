@@ -100,18 +100,26 @@
                             <form method="post" class="row g-2 align-items-start mb-3">
                                 {% csrf_token %}
                                 <input type="hidden" name="action" value="add_device">
-                                <div class="col-6">{{ dev_form.employee }}</div>
-                                <div class="col-4">{{ dev_form.label }}</div>
-                                <div class="col-2 d-grid"><button class="btn btn-sm btn-success"><i class="bi bi-plus-lg"></i></button></div>
+                                <div class="col-md-3">{{ dev_form.employee }}</div>
+                                <div class="col-md-3">
+                                    <select name="asset_id" id="asset-select" class="form-select form-select-sm">
+                                        <option value="">— pick employee first —</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-2">{{ dev_form.serial_number }}</div>
+                                <div class="col-md-3">{{ dev_form.label }}</div>
+                                <div class="col-md-1 d-grid"><button class="btn btn-sm btn-success"><i class="bi bi-plus-lg"></i></button></div>
                             </form>
+                            {{ emp_assets|json_script:"emp-assets" }}
                             <div class="table-responsive">
                                 <table class="table table-sm wa-table align-middle mb-0">
-                                    <thead><tr><th>Employee</th><th>Device</th><th>Token</th><th>Active</th><th>Last seen</th><th></th></tr></thead>
+                                    <thead><tr><th>Employee</th><th>Device</th><th>Serial</th><th>Token</th><th>Active</th><th>Last seen</th><th></th></tr></thead>
                                     <tbody>
                                         {% for d in devices %}
                                         <tr>
                                             <td>{{ d.employee.full_name }}</td>
                                             <td>{{ d.label|default:"—" }}</td>
+                                            <td class="wa-token">{{ d.serial_number|default:"—" }}</td>
                                             <td>
                                                 <span class="wa-token">{{ d.token|slice:":10" }}…</span>
                                                 <button type="button" class="btn btn-sm btn-link p-0 ms-1 copy-token" data-token="{{ d.token }}" title="Copy token"><i class="bi bi-clipboard"></i></button>
@@ -135,7 +143,7 @@
                                             </td>
                                         </tr>
                                         {% empty %}
-                                        <tr><td colspan="6" class="text-center text-muted py-3">No devices registered yet.</td></tr>
+                                        <tr><td colspan="7" class="text-center text-muted py-3">No devices registered yet.</td></tr>
                                         {% endfor %}
                                     </tbody>
                                 </table>
@@ -158,5 +166,32 @@ document.querySelectorAll('.copy-token').forEach(function (btn) {
         });
     });
 });
+
+// Device form: show only the selected employee's assets, auto-fill the serial.
+(function () {
+    var map = {};
+    try { map = JSON.parse(document.getElementById('emp-assets').textContent); } catch (e) {}
+    var empSel = document.querySelector('select[name="employee"]');
+    var assetSel = document.getElementById('asset-select');
+    var serial = document.querySelector('input[name="serial_number"]');
+    if (!empSel || !assetSel) return;
+
+    function fillAssets() {
+        var list = map[empSel.value] || [];
+        var opts = ['<option value="">' + (list.length ? '— select laptop —' : '— no assets on record —') + '</option>'];
+        list.forEach(function (a) {
+            var lbl = a.name + (a.serial ? ' (' + a.serial + ')' : '');
+            opts.push('<option value="' + a.id + '" data-serial="' + (a.serial || '') + '">' + lbl + '</option>');
+        });
+        assetSel.innerHTML = opts.join('');
+        if (serial) serial.value = '';
+    }
+    empSel.addEventListener('change', fillAssets);
+    assetSel.addEventListener('change', function () {
+        var opt = assetSel.selectedOptions[0];
+        if (serial) serial.value = opt ? (opt.getAttribute('data-serial') || '') : '';
+    });
+    fillAssets();
+})();
 </script>
 {% endblock %}

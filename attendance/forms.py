@@ -29,11 +29,13 @@ class OfficeNetworkForm(forms.ModelForm):
 class RegisteredDeviceForm(forms.ModelForm):
     class Meta:
         model = RegisteredDevice
-        fields = ['employee', 'label']
+        fields = ['employee', 'serial_number', 'label']
         widgets = {
             'employee': forms.Select(attrs={'class': 'form-select form-select-sm'}),
+            'serial_number': forms.TextInput(attrs={'class': 'form-control form-control-sm',
+                                                    'placeholder': 'serial (auto from asset)'}),
             'label': forms.TextInput(attrs={'class': 'form-control form-control-sm',
-                                            'placeholder': 'hostname / asset tag'}),
+                                            'placeholder': 'hostname'}),
         }
 
     def __init__(self, *args, **kwargs):
