@@ -107,12 +107,14 @@ class HRSyncTests(TestCase):
                 content_type='application/json')
 
     def test_counted_ping_creates_hr_record(self):
+        from datetime import time as t
         from hr.models import AttendanceRecord
         self._ping()
         rec = AttendanceRecord.objects.get(employee=self.emp)
         self.assertEqual(rec.source, 'wifi')
         self.assertIn(rec.status, ('present', 'late'))
         self.assertIsNotNone(rec.check_in)
+        self.assertEqual(rec.check_out, t(18, 0))   # standard 6 PM check-out
 
     def test_manual_present_overridden_by_wifi(self):
         # Option B: Wi-Fi is authoritative for present/absent, so a manual

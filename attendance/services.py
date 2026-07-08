@@ -9,11 +9,25 @@ detection overrides a manual present/absent for that day. It only leaves alone
 the authoritative manual states HR must set by hand (leave / holiday / weekend /
 WFH), which Wi-Fi can't know about.
 """
+from datetime import datetime, time as _time
+from decimal import Decimal
+
+from django.conf import settings
 from django.utils import timezone
 
 
 # HR statuses that are authoritative and must never be overwritten by Wi-Fi.
 _PROTECTED_STATUSES = {'leave', 'holiday', 'weekend', 'wfh'}
+
+
+def _fixed_checkout():
+    """The standard check-out time stamped on auto records (default 18:00)."""
+    raw = getattr(settings, 'ATT_CHECKOUT_TIME', '18:00')
+    try:
+        h, m = str(raw).split(':')
+        return _time(int(h), int(m))
+    except (ValueError, AttributeError):
+        return _time(18, 0)
 
 
 def sync_hr_attendance(day):
@@ -38,14 +52,21 @@ def sync_hr_attendance(day):
     if check_in and expected_in_by and check_in > expected_in_by:
         status = 'late'
 
+    # Arrival is detected; departure isn't, so stamp a standard 6 PM check-out
+    # and compute hours from the real check-in to it.
+    check_out = _fixed_checkout()
+    hours = None
+    if check_in:
+        delta = (datetime.combine(day.date, check_out)
+                 - datetime.combine(day.date, check_in)).total_seconds() / 3600.0
+        hours = Decimal(str(round(max(0.0, delta), 2)))
+
     if rec is None:
         rec = AttendanceRecord(employee=day.employee, date=day.date)
     rec.check_in = check_in
-    # Once-a-day model detects arrival only — departure is unknown, so no
-    # check-out / hours are recorded.
-    rec.check_out = None
+    rec.check_out = check_out
     rec.status = status
-    rec.hours_worked = None
+    rec.hours_worked = hours
     rec.source = 'wifi'
     rec.note = 'Auto (Wi-Fi)'
     rec.save()

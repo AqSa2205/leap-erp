@@ -97,6 +97,7 @@ ATT_MAX_IDLE_SECONDS = 300      # idle longer than this → the check-in doesn't
 ATT_WORK_START = "06:00"        # local (Riyadh) work-window start (HH:MM)
 ATT_WORK_END = "20:00"          # local work-window end
 ATT_MIN_MINUTES_PRESENT = 1     # a single counted check-in = present for the day
+ATT_CHECKOUT_TIME = "18:00"     # fixed check-out stamped on auto records (HH:MM)
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
