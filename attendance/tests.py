@@ -114,20 +114,21 @@ class HRSyncTests(TestCase):
         self.assertIn(rec.status, ('present', 'late'))
         self.assertIsNotNone(rec.check_in)
 
-    def test_manual_entry_not_clobbered(self):
-        from datetime import time as t, date
+    def test_manual_present_overridden_by_wifi(self):
+        # Option B: Wi-Fi is authoritative for present/absent, so a manual
+        # present is replaced by the real detection (source becomes wifi).
+        from datetime import time as t
         from hr.models import AttendanceRecord
         from django.utils import timezone
         today = timezone.localdate()
-        manual = AttendanceRecord.objects.create(
+        AttendanceRecord.objects.create(
             employee=self.emp, date=today, check_in=t(8, 0), check_out=t(17, 0),
             status='present', source='manual', note='HR entered')
         self._ping()
-        manual.refresh_from_db()
-        # The manual check-in / note / source are preserved.
-        self.assertEqual(manual.check_in, t(8, 0))
-        self.assertEqual(manual.note, 'HR entered')
-        self.assertEqual(manual.source, 'manual')
+        rec = AttendanceRecord.objects.get(employee=self.emp, date=today)
+        self.assertEqual(rec.source, 'wifi')
+        self.assertIn(rec.status, ('present', 'late'))
+        self.assertEqual(rec.note, 'Auto (Wi-Fi)')
 
     def test_leave_status_not_clobbered(self):
         from hr.models import AttendanceRecord
