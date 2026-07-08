@@ -25,7 +25,10 @@ if (-not (Test-Path $src)) { throw "LeapAttendanceAgent.exe not found next to th
 
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 Copy-Item -Path $src -Destination $exe -Force
-@{ token = $Token } | ConvertTo-Json | Set-Content -Path (Join-Path $dir 'config.json') -Encoding UTF8
+# Write config.json as UTF-8 WITHOUT a BOM (Set-Content -Encoding UTF8 adds one
+# on PowerShell 5.1, which the agent's JSON parser can't read).
+$json = @{ token = $Token } | ConvertTo-Json
+[System.IO.File]::WriteAllText((Join-Path $dir 'config.json'), $json, (New-Object System.Text.UTF8Encoding($false)))
 
 # Runs once at each logon in the user's session (needs it to read Wi-Fi + idle).
 # The agent sends one check-in and exits, so no restart loop is needed.

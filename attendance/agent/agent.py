@@ -37,7 +37,9 @@ def load_token():
     if token:
         return token
     try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
+        # utf-8-sig tolerates a BOM (PowerShell 5.1 writes one) so json.load
+        # doesn't choke on the first byte.
+        with open(CONFIG_PATH, "r", encoding="utf-8-sig") as fh:
             return (json.load(fh).get("token") or "").strip()
     except (OSError, ValueError):
         return ""
