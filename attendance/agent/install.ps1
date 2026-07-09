@@ -45,11 +45,22 @@ $trigDay.Repetition = (New-ScheduledTaskTrigger -Once -At 6:00am `
                           -RepetitionInterval (New-TimeSpan -Minutes 30) `
                           -RepetitionDuration (New-TimeSpan -Hours 14)).Repetition
 
+# On workstation UNLOCK (waking + Windows Hello / PIN is an unlock, not a logon,
+# so this is what fires the instant someone sits back down at the office).
+$scClass    = Get-CimClass -Namespace ROOT\Microsoft\Windows\TaskScheduler `
+                           -ClassName MSFT_TaskSessionStateChangeTrigger
+$trigUnlock = New-CimInstance -CimClass $scClass -ClientOnly -Property @{
+                  StateChange = 8   # TASK_SESSION_UNLOCK
+                  UserId      = "$env:USERDOMAIN\$env:USERNAME"
+                  Enabled     = $true
+              }
+
 $settings  = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
-                 -DontStopIfGoingOnBatteries
+                 -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
+                 -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 
-Register-ScheduledTask -TaskName $task -Action $action -Trigger $trigLogon, $trigDay `
+Register-ScheduledTask -TaskName $task -Action $action -Trigger $trigLogon, $trigDay, $trigUnlock `
                        -Settings $settings -Principal $principal -Force | Out-Null
 Start-ScheduledTask -TaskName $task
 

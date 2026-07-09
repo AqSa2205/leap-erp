@@ -24,10 +24,10 @@ import urllib.request
 
 # Set this to your cloud ERP base URL before building the exe.
 ENDPOINT = "https://leap-erp.onrender.com/api/attendance/checkin/"
-# One check-in per logon: retry until the ERP records it (Wi-Fi may lag at
-# logon), then exit. ~15 tries x 30s ≈ 7.5 min max before giving up.
-RETRY_MAX = 15
-RETRY_INTERVAL_SECONDS = 30
+# One check-in per launch: retry until the ERP records it (Wi-Fi lags for a few
+# seconds after wake/logon), then exit. Short interval so it succeeds quickly.
+RETRY_MAX = 30
+RETRY_INTERVAL_SECONDS = 10
 CONFIG_PATH = os.path.join(os.environ.get("PROGRAMDATA", r"C:\ProgramData"),
                            "LeapAttendance", "config.json")
 
@@ -103,12 +103,14 @@ def main():
     token = load_token()
     if not token:
         return  # not provisioned yet
-    # One check-in per launch. Keep trying until the ERP counts the visit (the
-    # office Wi-Fi may take a moment to connect after logon), then exit.
+    # One check-in per launch. Wait for Wi-Fi to (re)connect before sending —
+    # right after wake/logon there's no BSSID for a few seconds, so skip the
+    # server round-trip until we have one; then send until the ERP counts it.
     for _ in range(RETRY_MAX):
-        result = send(token)
-        if result and result.get("counted"):
-            break
+        if current_bssid():
+            result = send(token)
+            if result and result.get("counted"):
+                break
         time.sleep(RETRY_INTERVAL_SECONDS)
 
 
