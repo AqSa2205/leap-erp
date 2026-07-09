@@ -19,6 +19,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import time
 import urllib.request
 
@@ -99,6 +100,37 @@ def send(token):
         return None
 
 
+def run_test():
+    """One-off diagnostic: do a single check-in and show/log the result, so an
+    installer can confirm a laptop works without opening the ERP.
+    Invoke with:  LeapAttendanceAgent.exe --test
+    """
+    token = load_token()
+    bssid = current_bssid()
+    if not token:
+        msg = "NO TOKEN configured.\nRun install.ps1 with this device's token."
+    else:
+        result = send(token)
+        if result is None:
+            msg = f"Could NOT reach the ERP.\nWi-Fi BSSID: {bssid or '(not connected)'}\nCheck internet / Wi-Fi."
+        elif result.get("counted"):
+            msg = f"SUCCESS - attendance recorded (Present).\nWi-Fi BSSID: {bssid}"
+        else:
+            msg = ("Reached ERP but NOT counted.\n"
+                   f"Wi-Fi BSSID: {bssid or '(not connected)'}\n"
+                   f"Reason: {result.get('reason')}")
+    try:
+        with open(os.path.join(os.path.dirname(CONFIG_PATH), "last-test.txt"),
+                  "w", encoding="utf-8") as fh:
+            fh.write(msg)
+    except OSError:
+        pass
+    try:
+        ctypes.windll.user32.MessageBoxW(0, msg, "Leap Attendance - Test", 0x40)
+    except Exception:
+        print(msg)
+
+
 def main():
     token = load_token()
     if not token:
@@ -115,4 +147,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--test" in sys.argv:
+        run_test()
+    else:
+        main()

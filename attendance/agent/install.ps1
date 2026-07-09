@@ -64,4 +64,7 @@ Register-ScheduledTask -TaskName $task -Action $action -Trigger $trigLogon, $tri
                        -Settings $settings -Principal $principal -Force | Out-Null
 Start-ScheduledTask -TaskName $task
 
-Write-Host "Leap Attendance agent installed and started (task '$task', runs at every logon)." -ForegroundColor Green
+Write-Host "Leap Attendance agent installed (task '$task': logon + unlock + 30-min)." -ForegroundColor Green
+# Instant confirmation: fire a one-off test check-in that pops the result.
+Start-Process -FilePath $exe -ArgumentList '--test'
+Write-Host "A popup will show whether this laptop's check-in COUNTED." -ForegroundColor Cyan
