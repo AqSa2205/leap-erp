@@ -546,12 +546,12 @@ def costing_pipeline_pdf(request):
         'Submission date', 'Pipeline created', 'Handed to sales', 'Sales finalised',
     ]
     data = [[Paragraph(c, head) for c in columns]]
-    for s in sheets:
+    for row_no, s in enumerate(sheets, start=1):
         proj = s.project
         ref = proj.proposal_reference if proj else ''
         _base, revision, _style = split_trailing_revision(ref or '')
         data.append([
-            Paragraph(str(proj.serial_number) if proj and proj.serial_number else '—', cell),
+            Paragraph(str(row_no), cell),
             Paragraph(s.title or '—', cell),
             Paragraph(ref or '—', cell),
             Paragraph(revision or '—', cell),
