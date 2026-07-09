@@ -394,12 +394,11 @@ class HardeningTests(TestCase):
     def test_grid_renders_present_presets_on_working_row(self):
         self.client.force_login(self.admin)
         resp = self.client.get(reverse('hr:attendance_grid') + '?date=2026-07-13')  # Monday (working)
-        self.assertContains(resp, 'Mark all present')
-        # The per-row Present button carries the employee pk in data-pk (only the
-        # rendered button has the literal `data-pk=`; the JS uses .dataset.pk).
+        # The bulk "Mark all present" (which stamped everyone 08:15) was removed —
+        # attendance times now come from the Wi-Fi agent.
+        self.assertNotContains(resp, 'Mark all present')
+        # The per-row manual controls remain for corrections.
         self.assertContains(resp, 'data-pk="%d"' % self.emp.pk)
-        self.assertContains(resp, '08:15')   # default check-in baked into the JS
-        self.assertContains(resp, '18:00')   # default check-out (6:00 PM)
         self.assertContains(resp, 'present-btn')
         self.assertContains(resp, 'absent-btn')  # per-row Absent (clears times -> Absent on save)
         self.assertContains(resp, 'unsavedBar')  # sticky 'unsaved changes' reminder
