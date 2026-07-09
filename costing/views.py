@@ -514,9 +514,23 @@ def costing_pipeline_pdf(request):
     LEAP_GREEN_LT = colors.HexColor('#6c757d')  # accent mid grey
     LEAP_ROW_ALT = colors.HexColor('#f2f2f2')   # alternating row grey
     sheets = apply_costing_list_filters(
-        costing_scoped_queryset(request.user).select_related('project__region'),
+        costing_scoped_queryset(request.user)
+        .select_related('project__region')
+        .prefetch_related('sections__line_items'),
         request.GET,
     ).order_by('project__proposal_reference', 'title')
+
+    # Est. value column = the costing sheet's grand total (stored in SAR).
+    # Inject the exchange-rate + sheet caches once so per-item cost conversions
+    # don't fire N+1 queries while computing each sheet's total.
+    rates_dict = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
+
+    def _sheet_total_sar(sheet):
+        for section in sheet.sections.all():
+            for item in section.line_items.all():
+                item.set_exchange_rates_cache(rates_dict)
+                item.set_sheet_cache(sheet)
+        return sheet.grand_total
 
     from datetime import datetime as _dt
     def _d(dt):
@@ -558,7 +572,7 @@ def costing_pipeline_pdf(request):
             Paragraph(s.customer_reference or '—', cell),
             Paragraph((proj.end_user if proj else '') or '—', cell),
             Paragraph(proj.get_priority_display() if proj and proj.priority else '—', cell),
-            Paragraph(_money(proj.estimated_value if proj else None), cell),
+            Paragraph(_money(_sheet_total_sar(s)), cell),
             Paragraph(s.stage_badge['label'], cell),
             Paragraph(_d(proj.submission_deadline if proj else None), cell),
             Paragraph(_d(s.created_at), cell),
