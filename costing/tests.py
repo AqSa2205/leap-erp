@@ -707,3 +707,42 @@ class CommercialPipelineTests(TestCase):
         resp = self.client.get(reverse('costing:pipeline_pdf'))
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.content.startswith(b'%PDF'))
+
+    def test_stage_durations_in_whole_days(self):
+        from django.utils import timezone
+        from datetime import timedelta
+        base = timezone.now() - timedelta(days=30)
+        sheet = self._sheet('finalized')
+        # Stamp the milestone timestamps at known spacings.
+        CostingSheet.objects.filter(pk=sheet.pk).update(
+            created_at=base,
+            bom_started_at=base + timedelta(days=2),
+            handed_over_at=base + timedelta(days=5),
+            costing_started_at=base + timedelta(days=6),
+            finalized_at=base + timedelta(days=10),
+        )
+        sheet.refresh_from_db()
+        self.assertEqual(sheet.days_to_start_bom, 2)
+        self.assertEqual(sheet.days_bom_to_handover, 3)
+        self.assertEqual(sheet.days_handover_to_costing, 1)
+        self.assertEqual(sheet.days_costing_to_finalize, 4)
+        labels = [d['label'] for d in sheet.stage_durations()]
+        self.assertEqual(len(labels), 4)
+
+    def test_stage_durations_skip_missing_steps(self):
+        # A sheet only handed over has just the first two durations available.
+        from django.utils import timezone
+        from datetime import timedelta
+        base = timezone.now() - timedelta(days=10)
+        sheet = self._sheet('ready_for_costing')
+        CostingSheet.objects.filter(pk=sheet.pk).update(
+            created_at=base,
+            bom_started_at=base + timedelta(days=1),
+            handed_over_at=base + timedelta(days=4),
+        )
+        sheet.refresh_from_db()
+        self.assertEqual(sheet.days_to_start_bom, 1)
+        self.assertEqual(sheet.days_bom_to_handover, 3)
+        self.assertIsNone(sheet.days_handover_to_costing)
+        self.assertIsNone(sheet.days_costing_to_finalize)
+        self.assertEqual(len(sheet.stage_durations()), 2)
