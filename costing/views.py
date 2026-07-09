@@ -516,21 +516,25 @@ def costing_pipeline_pdf(request):
     sheets = apply_costing_list_filters(
         costing_scoped_queryset(request.user)
         .select_related('project__region')
-        .prefetch_related('sections__line_items'),
+        .prefetch_related('sections__line_items', 'scope_of_work_items'),
         request.GET,
     ).order_by('project__proposal_reference', 'title')
 
-    # Est. value column = the costing sheet's grand total (stored in SAR).
-    # Inject the exchange-rate + sheet caches once so per-item cost conversions
-    # don't fire N+1 queries while computing each sheet's total.
+    # Est. value column = the sheet's TOTAL CONTRACT PRICE (A.1 grand total +
+    # A.2 scope of work), expressed in SAR. grand_total is already SAR; the SOW
+    # is in the sheet's output currency, so divide it back by the SAR→output
+    # rate. Inject the rate + sheet caches once to avoid N+1 while iterating.
     rates_dict = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
 
-    def _sheet_total_sar(sheet):
+    def _sheet_contract_sar(sheet):
+        sheet.set_rates_cache(rates_dict)
         for section in sheet.sections.all():
             for item in section.line_items.all():
                 item.set_exchange_rates_cache(rates_dict)
                 item.set_sheet_cache(sheet)
-        return sheet.grand_total
+        conv = sheet._conv_to_output_currency() or Decimal('1')
+        sow_sar = (sheet.sow_total / conv) if conv else sheet.sow_total
+        return sheet.grand_total + sow_sar
 
     from datetime import datetime as _dt
     def _d(dt):
@@ -572,7 +576,7 @@ def costing_pipeline_pdf(request):
             Paragraph(s.customer_reference or '—', cell),
             Paragraph((proj.end_user if proj else '') or '—', cell),
             Paragraph(proj.get_priority_display() if proj and proj.priority else '—', cell),
-            Paragraph(_money(_sheet_total_sar(s)), cell),
+            Paragraph(_money(_sheet_contract_sar(s)), cell),
             Paragraph(s.stage_badge['label'], cell),
             Paragraph(_d(proj.submission_deadline if proj else None), cell),
             Paragraph(_d(s.created_at), cell),
