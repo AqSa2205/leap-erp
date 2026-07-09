@@ -54,6 +54,9 @@ class RegisteredDevice(models.Model):
         max_length=120, blank=True, help_text='e.g. hostname or asset tag')
     token = models.CharField(max_length=64, unique=True, default=_gen_token, editable=False)
     is_active = models.BooleanField(default=True)
+    first_seen_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text='First successful office check-in — the day auto-attendance activated for this device.')
     last_seen_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

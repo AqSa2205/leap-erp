@@ -113,7 +113,7 @@
                             {{ emp_assets|json_script:"emp-assets" }}
                             <div class="table-responsive">
                                 <table class="table table-sm wa-table align-middle mb-0">
-                                    <thead><tr><th>Employee</th><th>Device</th><th>Serial</th><th>Token</th><th>Active</th><th>Last seen</th><th></th></tr></thead>
+                                    <thead><tr><th>Employee</th><th>Device</th><th>Serial</th><th>Token</th><th>Active</th><th>Activated</th><th>Last seen</th><th></th></tr></thead>
                                     <tbody>
                                         {% for d in devices %}
                                         <tr>
@@ -133,6 +133,7 @@
                                                     </button>
                                                 </form>
                                             </td>
+                                            <td class="small">{% if d.first_seen_at %}<span class="badge bg-success-subtle text-success border border-success-subtle">{{ d.first_seen_at|date:"d M Y" }}</span>{% else %}<span class="text-muted">not yet</span>{% endif %}</td>
                                             <td class="small text-muted">{% if d.last_seen_at %}{{ d.last_seen_at|date:"d M H:i" }}{% else %}—{% endif %}</td>
                                             <td class="text-end">
                                                 <form method="post" class="d-inline" onsubmit="return confirm('Remove this device? Its token stops working.');">{% csrf_token %}
@@ -143,7 +144,7 @@
                                             </td>
                                         </tr>
                                         {% empty %}
-                                        <tr><td colspan="7" class="text-center text-muted py-3">No devices registered yet.</td></tr>
+                                        <tr><td colspan="8" class="text-center text-muted py-3">No devices registered yet.</td></tr>
                                         {% endfor %}
                                     </tbody>
                                 </table>

@@ -59,6 +59,25 @@ class CheckInTests(TestCase):
         self.device.refresh_from_db()
         self.assertIsNotNone(self.device.last_seen_at)
 
+    def test_first_seen_stamped_on_first_counted_checkin(self):
+        self.assertIsNone(self.device.first_seen_at)
+        with _wide_hours():
+            self._post(token=self.device.token, bssid=OFFICE_BSSID, idle_seconds=0)
+        self.device.refresh_from_db()
+        activated = self.device.first_seen_at
+        self.assertIsNotNone(activated)          # stamped on activation
+        # A later check-in doesn't move it.
+        with _wide_hours():
+            self._post(token=self.device.token, bssid=OFFICE_BSSID, idle_seconds=0)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.first_seen_at, activated)
+
+    def test_first_seen_not_stamped_when_not_counted(self):
+        with _wide_hours():
+            self._post(token=self.device.token, bssid='ff:ff:ff:ff:ff:ff', idle_seconds=0)
+        self.device.refresh_from_db()
+        self.assertIsNone(self.device.first_seen_at)   # off_network → not activated
+
     def test_wrong_network_not_counted(self):
         with _wide_hours():
             r = self._post(token=self.device.token, bssid='ff:ff:ff:ff:ff:ff', idle_seconds=0)

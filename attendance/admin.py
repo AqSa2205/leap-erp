@@ -12,10 +12,10 @@ class OfficeNetworkAdmin(admin.ModelAdmin):
 
 @admin.register(RegisteredDevice)
 class RegisteredDeviceAdmin(admin.ModelAdmin):
-    list_display = ('employee', 'label', 'serial_number', 'token', 'is_active', 'last_seen_at')
+    list_display = ('employee', 'label', 'serial_number', 'token', 'is_active', 'first_seen_at', 'last_seen_at')
     list_filter = ('is_active',)
     search_fields = ('employee__full_name', 'employee__iqama_number', 'label', 'serial_number', 'token')
-    readonly_fields = ('token', 'last_seen_at', 'created_at')
+    readonly_fields = ('token', 'first_seen_at', 'last_seen_at', 'created_at')
     autocomplete_fields = ('employee', 'asset')
 
 

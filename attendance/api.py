@@ -76,7 +76,12 @@ def checkin(request):
         device=device, bssid=bssid, idle_seconds=idle,
         counted=counted, reason=reason, hostname=hostname)
     device.last_seen_at = now
-    device.save(update_fields=['last_seen_at'])
+    fields = ['last_seen_at']
+    # Stamp the activation moment on the first successful (counted) check-in.
+    if counted and device.first_seen_at is None:
+        device.first_seen_at = now
+        fields.append('first_seen_at')
+    device.save(update_fields=fields)
 
     if counted:
         day, _ = AttendanceDay.objects.get_or_create(
