@@ -238,16 +238,6 @@
                 {% endif %}
             </div>
         </div>
-        {% with durations=sheet.stage_durations %}
-        {% if durations %}
-        <div class="mt-2 d-flex flex-wrap align-items-center gap-2">
-            <span class="small text-muted"><i class="bi bi-stopwatch me-1"></i>Cycle time:</span>
-            {% for d in durations %}
-            <span class="badge bg-white text-dark border">{{ d.label }}: {{ d.days }} day{{ d.days|pluralize }}</span>
-            {% endfor %}
-        </div>
-        {% endif %}
-        {% endwith %}
         {% if sheet.handover_note %}
         <div class="mt-2 small">
             <i class="bi bi-sticky me-1"></i><strong>Handover note:</strong> {{ sheet.handover_note }}

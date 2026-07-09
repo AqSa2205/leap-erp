@@ -545,9 +545,9 @@ def costing_pipeline_pdf(request):
         return dt.strftime('%d %b %Y')
 
     styles = getSampleStyleSheet()
-    cell = ParagraphStyle('cell', parent=styles['Normal'], fontSize=7, leading=8.5)
-    head = ParagraphStyle('head', parent=styles['Normal'], fontSize=7,
-                          leading=8.5, textColor=colors.white, alignment=TA_CENTER)
+    cell = ParagraphStyle('cell', parent=styles['Normal'], fontSize=7.5, leading=9)
+    head = ParagraphStyle('head', parent=styles['Normal'], fontSize=7.5,
+                          leading=9, textColor=colors.white, alignment=TA_CENTER)
     title_style = ParagraphStyle('t', parent=styles['Title'], fontSize=20,
                                  textColor=LEAP_GREEN, alignment=TA_RIGHT, leading=24)
     sub_style = ParagraphStyle('sub', parent=styles['Normal'], fontSize=9,
@@ -558,14 +558,10 @@ def costing_pipeline_pdf(request):
     def _money(v):
         return f'{v:,.0f}' if v else '—'
 
-    def _days(v):
-        return str(v) if v is not None else '—'
-
     columns = [
         'Sr #', 'Title', 'Reference', 'Rev', 'Customer Ref', 'End user',
         'Priority', 'Est. value (SAR)', 'Stage',
         'Submission date', 'Pipeline created', 'Handed to sales', 'Sales finalised',
-        'Days to start BOM', 'Days to handover', 'Days sales to start', 'Days to finalise',
     ]
     data = [[Paragraph(c, head) for c in columns]]
     for row_no, s in enumerate(sheets, start=1):
@@ -586,10 +582,6 @@ def costing_pipeline_pdf(request):
             Paragraph(_d(s.created_at), cell),
             Paragraph(_d(s.handed_over_at), cell),
             Paragraph(_d(s.finalized_at), cell),
-            Paragraph(_days(s.days_to_start_bom), cell),
-            Paragraph(_days(s.days_bom_to_handover), cell),
-            Paragraph(_days(s.days_handover_to_costing), cell),
-            Paragraph(_days(s.days_costing_to_finalize), cell),
         ])
     if len(data) == 1:
         data.append([Paragraph('No costing sheets match the current filters.', cell)]
@@ -597,9 +589,8 @@ def costing_pipeline_pdf(request):
 
     page_w = landscape(A4)[0] - 20 * mm
     widths = [w * page_w for w in
-              (0.025, 0.125, 0.078, 0.028, 0.075, 0.075, 0.04, 0.07, 0.075,
-               0.053, 0.053, 0.053, 0.053,
-               0.0475, 0.0475, 0.0475, 0.0475)]
+              (0.035, 0.13, 0.09, 0.04, 0.09, 0.095, 0.05, 0.085, 0.085,
+               0.075, 0.075, 0.075, 0.075)]
     table = Table(data, colWidths=widths, repeatRows=1)
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), LEAP_GREEN),

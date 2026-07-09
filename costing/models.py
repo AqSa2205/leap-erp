@@ -328,45 +328,6 @@ class CostingSheet(models.Model):
             (self.get_workflow_stage_display(), 'bg-secondary'))
         return {'label': label, 'css': css}
 
-    # ─── Cycle-time helpers: whole days between consecutive milestones ───
-    @staticmethod
-    def _days_between(start, end):
-        """Whole days from `start` to `end`, or None if either is missing."""
-        if start and end:
-            return max((end - start).days, 0)
-        return None
-
-    @property
-    def days_to_start_bom(self):
-        """Days the proposal team took to start the BOM (created → BOM started)."""
-        return self._days_between(self.created_at, self.bom_started_at)
-
-    @property
-    def days_bom_to_handover(self):
-        """Days building the BOM before handover (BOM started → handed to sales)."""
-        return self._days_between(self.bom_started_at, self.handed_over_at)
-
-    @property
-    def days_handover_to_costing(self):
-        """Days for sales to start costing (handed over → costing started)."""
-        return self._days_between(self.handed_over_at, self.costing_started_at)
-
-    @property
-    def days_costing_to_finalize(self):
-        """Days for sales to finalise (costing started → finalised)."""
-        return self._days_between(self.costing_started_at, self.finalized_at)
-
-    def stage_durations(self):
-        """List of {'label', 'days'} for each completed stage transition —
-        used on the sheet detail banner and the pipeline PDF."""
-        steps = [
-            ('To start BOM', self.days_to_start_bom),
-            ('BOM → sales', self.days_bom_to_handover),
-            ('Sales to start', self.days_handover_to_costing),
-            ('To finalise', self.days_costing_to_finalize),
-        ]
-        return [{'label': lbl, 'days': d} for lbl, d in steps if d is not None]
-
     def _compute_totals(self):
         """Compute all sheet totals in a single pass. Results are cached on the instance.
 
