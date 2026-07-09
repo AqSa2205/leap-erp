@@ -9,16 +9,30 @@ from decimal import Decimal
 # Index in the sequence = how far along; `most_advanced_stage` uses it to pick a
 # single badge for a project that has several costing sheets.
 WORKFLOW_STAGE_SEQUENCE = [
-    'bom_in_progress', 'ready_for_costing', 'costing_in_progress',
+    'bom_not_started', 'bom_in_progress', 'ready_for_costing', 'costing_in_progress',
     'finalized', 'finance_review', 'finance_approved',
 ]
 PIPELINE_STAGE_LABELS = {
+    'bom_not_started':     ('BOM not started',   'bg-light text-dark'),
     'bom_in_progress':     ('BOM in progress',   'bg-secondary'),
     'ready_for_costing':   ('Handed to Sales',   'bg-info text-dark'),
     'costing_in_progress': ('Sales costing',     'bg-primary'),
     'finalized':           ('Sales finalised',   'bg-warning text-dark'),
     'finance_review':      ('Handed to Finance', 'bg-dark'),
     'finance_approved':    ('Finance approved',  'bg-success'),
+}
+
+# Short badge (label + Bootstrap style) shown per-sheet on the Costing list and
+# used for the stage-count tabs. Same stages as PIPELINE_STAGE_LABELS but with
+# the wording the teams use for their own step.
+STAGE_BADGES = {
+    'bom_not_started':     ('BOM not started',   'bg-light text-dark border'),
+    'bom_in_progress':     ('BOM in progress',   'bg-warning text-dark'),
+    'ready_for_costing':   ('Ready for costing',  'bg-info text-dark'),
+    'costing_in_progress': ('Costing started',    'bg-primary'),
+    'finalized':           ('Sales finalised',    'bg-dark'),
+    'finance_review':      ('Finance budgeting',  'bg-secondary'),
+    'finance_approved':    ('Finance approved',   'bg-success'),
 }
 
 
@@ -146,6 +160,7 @@ class CostingSheet(models.Model):
     # stage (per existing policy); the stage just gives visibility and
     # drives the filters/notifications.
     WORKFLOW_STAGE_CHOICES = [
+        ('bom_not_started',     'BOM — not started'),
         ('bom_in_progress',     'BOM — in progress by Proposal'),
         ('ready_for_costing',   'Ready for costing (handed over to Sales)'),
         ('costing_in_progress', 'Costing — in progress by Sales'),
@@ -230,7 +245,15 @@ class CostingSheet(models.Model):
 
     # Workflow stage + handover bookkeeping
     workflow_stage = models.CharField(
-        max_length=24, choices=WORKFLOW_STAGE_CHOICES, default='bom_in_progress',
+        max_length=24, choices=WORKFLOW_STAGE_CHOICES, default='bom_not_started',
+    )
+    bom_started_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text='When the proposal team started building the BOM.')
+    bom_started_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='costing_sheets_bom_started',
     )
     enforce_stage_barriers = models.BooleanField(
         default=True,
@@ -296,6 +319,14 @@ class CostingSheet(models.Model):
 
     def __str__(self):
         return self.title
+
+    @property
+    def stage_badge(self):
+        """{'label', 'css'} for this sheet's own workflow stage (list display)."""
+        label, css = STAGE_BADGES.get(
+            self.workflow_stage,
+            (self.get_workflow_stage_display(), 'bg-secondary'))
+        return {'label': label, 'css': css}
 
     def _compute_totals(self):
         """Compute all sheet totals in a single pass. Results are cached on the instance.

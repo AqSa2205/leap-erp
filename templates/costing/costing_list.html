@@ -44,11 +44,38 @@
                     <div class="col-md-1">
                         <a href="{% url 'costing:list' %}" class="btn btn-outline-secondary w-100">Clear</a>
                     </div>
+
+                    <!-- Timeline filter: quick presets + custom date range (pipeline created date) -->
+                    <div class="col-12"><hr class="my-2"></div>
+                    <div class="col-md-3">
+                        <label class="form-label small text-muted mb-1"><i class="bi bi-clock-history me-1"></i>Timeline (pipeline created)</label>
+                        <select name="period" class="form-select form-select-sm">
+                            <option value="">All time</option>
+                            <option value="6m" {% if selected_period == '6m' %}selected{% endif %}>Last 6 months</option>
+                            <option value="1m" {% if selected_period == '1m' %}selected{% endif %}>Last month</option>
+                            <option value="1w" {% if selected_period == '1w' %}selected{% endif %}>Last week</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small text-muted mb-1">From</label>
+                        <input type="date" name="date_from" value="{{ date_from }}" class="form-control form-control-sm">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small text-muted mb-1">To</label>
+                        <input type="date" name="date_to" value="{{ date_to }}" class="form-control form-control-sm">
+                    </div>
+                    <div class="col-md-3 d-flex align-items-end">
+                        <button type="submit" class="btn btn-sm btn-outline-primary w-100">Apply timeline</button>
+                    </div>
+                    <div class="col-12"><span class="small text-muted">A date range overrides the preset.</span></div>
                 </form>
             </div>
             <div class="col-md-4 text-end">
                 <a href="{% url 'costing:create' %}" class="btn btn-primary">
                     <i class="bi bi-plus-lg me-1"></i> New Costing Sheet
+                </a>
+                <a href="{% url 'costing:pipeline_pdf' %}{% if request.GET.urlencode %}?{{ request.GET.urlencode }}{% endif %}" class="btn btn-outline-danger ms-1" title="Export the pipeline (current filters) as PDF">
+                    <i class="bi bi-file-earmark-pdf me-1"></i> Export PDF
                 </a>
                 <a href="{% url 'costing:import_new' %}" class="btn btn-success ms-1">
                     <i class="bi bi-upload me-1"></i> Import Excel
@@ -59,6 +86,21 @@
             </div>
         </div>
     </div>
+</div>
+
+<!-- Workflow-stage count tabs — click to filter the list by stage -->
+<div class="d-flex flex-wrap gap-2 mb-4">
+    <a href="{% url 'costing:list' %}{% if querystring_no_stage %}?{{ querystring_no_stage }}{% endif %}"
+       class="btn btn-sm {% if not selected_stage %}btn-dark{% else %}btn-outline-dark{% endif %} d-flex align-items-center gap-2">
+        <span>All</span><span class="badge bg-light text-dark">{{ total_all }}</span>
+    </a>
+    {% for sc in stage_counts %}
+    <a href="?{% if querystring_no_stage %}{{ querystring_no_stage }}&amp;{% endif %}stage={{ sc.code }}"
+       class="btn btn-sm {% if selected_stage == sc.code %}btn-dark{% else %}btn-outline-secondary{% endif %} d-flex align-items-center gap-2">
+        <span class="badge {{ sc.css }}">{{ sc.label }}</span>
+        <span class="fw-semibold">{{ sc.count }}</span>
+    </a>
+    {% endfor %}
 </div>
 
 <div class="card">
@@ -76,10 +118,9 @@
                         <th>Project</th>
                         <th>Region</th>
                         <th>Customer Ref</th>
-                        <th>Stage</th>
+                        <th>Workflow Progress</th>
                         <th>Margin</th>
                         <th>Currency</th>
-                        <th>Status</th>
                         <th>Worked On By</th>
                         <th>Updated</th>
                         <th>Actions</th>
@@ -106,25 +147,10 @@
                         </td>
                         <td>{{ sheet.customer_reference|default:"-" }}</td>
                         <td>
-                            {% if sheet.workflow_stage == 'bom_in_progress' %}
-                            <span class="badge bg-warning text-dark"><i class="bi bi-pencil-square me-1"></i>BOM</span>
-                            {% elif sheet.workflow_stage == 'ready_for_costing' %}
-                            <span class="badge bg-primary"><i class="bi bi-arrow-right-square me-1"></i>Ready</span>
-                            {% elif sheet.workflow_stage == 'costing_in_progress' %}
-                            <span class="badge bg-success"><i class="bi bi-cash-coin me-1"></i>Costing</span>
-                            {% elif sheet.workflow_stage == 'finalized' %}
-                            <span class="badge bg-dark"><i class="bi bi-check2-circle me-1"></i>Final</span>
-                            {% endif %}
+                            <span class="badge {{ sheet.stage_badge.css }}">{{ sheet.stage_badge.label }}</span>
                         </td>
                         <td>{{ sheet.margin }}%</td>
                         <td>{{ sheet.output_currency }}</td>
-                        <td>
-                            {% if sheet.status == 'draft' %}
-                            <span class="badge bg-warning text-dark">Draft</span>
-                            {% else %}
-                            <span class="badge bg-success">Final</span>
-                            {% endif %}
-                        </td>
                         <td>
                             {% if sheet.created_by %}{{ sheet.created_by.get_full_name|default:sheet.created_by.username }}{% else %}-{% endif %}
                             {% for c in sheet.additional_contacts.all %}<br><span class="text-muted small">+ {{ c.get_full_name|default:c.username }}</span>{% endfor %}
@@ -141,7 +167,7 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="12" class="text-center py-4 text-muted">
+                        <td colspan="11" class="text-center py-4 text-muted">
                             No costing sheets found. <a href="{% url 'costing:create' %}">Create one</a>.
                         </td>
                     </tr>

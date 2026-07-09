@@ -143,7 +143,8 @@
 <!-- Workflow Stage banner -->
 {% with stage=sheet.workflow_stage project_won=sheet.project.status.category|default:''|stringformat:'s' %}
 <div class="card mb-3 border-0 shadow-sm" style="background:
-    {% if stage == 'bom_in_progress' %}#fff3cd
+    {% if stage == 'bom_not_started' %}#f8f9fa
+    {% elif stage == 'bom_in_progress' %}#fff3cd
     {% elif stage == 'ready_for_costing' %}#cfe2ff
     {% elif stage == 'costing_in_progress' %}#d1e7dd
     {% elif stage == 'finalized' %}#e2e3e5
@@ -154,7 +155,9 @@
         <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
             <div>
                 <strong>Workflow:</strong>
-                {% if stage == 'bom_in_progress' %}
+                {% if stage == 'bom_not_started' %}
+                <span class="badge bg-light text-dark border"><i class="bi bi-hourglass me-1"></i>BOM not started · awaiting proposal team</span>
+                {% elif stage == 'bom_in_progress' %}
                 <span class="badge bg-warning text-dark"><i class="bi bi-pencil-square me-1"></i>BOM in progress · proposal team</span>
                 {% elif stage == 'ready_for_costing' %}
                 <span class="badge bg-primary"><i class="bi bi-arrow-right-square me-1"></i>Ready for costing · handed over to sales</span>
@@ -174,6 +177,15 @@
                 {% endif %}
             </div>
             <div class="d-flex gap-2">
+                {# Start BOM: proposal team picks up a brand-new pipeline sheet. #}
+                {% if stage == 'bom_not_started' and user.is_proposal_team_user %}
+                <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="start_bom">
+                    <button type="submit" class="btn btn-sm btn-warning"><i class="bi bi-play-fill me-1"></i>Start BOM</button>
+                </form>
+                {% endif %}
+
                 {# Hand over: available when sheet is still in BOM phase. Both teams can click; intent is that proposals does. #}
                 {% if stage == 'bom_in_progress' %}
                 <button type="button" class="btn btn-sm btn-warning" data-bs-toggle="modal" data-bs-target="#handoverModal">

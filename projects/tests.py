@@ -141,6 +141,17 @@ class PipelineVisibilityTests(TestCase):
             'contact_with': '', 'remarks': '', 'notes': '', 'portal_url': '',
         }
 
+    def test_create_autocreates_bom_not_started_sheet(self):
+        # A new pipeline project auto-gets a costing sheet at "BOM not started"
+        # so it appears on the costing list for the proposal team to pick up.
+        from costing.models import CostingSheet
+        self.client.force_login(self.admin)
+        self.client.post(reverse('projects:create'), self._create_post('LNA-BOM'))
+        proj = Project.objects.get(project_name='New Pipeline')
+        sheet = CostingSheet.objects.get(project=proj)
+        self.assertEqual(sheet.workflow_stage, 'bom_not_started')
+        self.assertEqual(sheet.created_by, self.admin)
+
     def test_create_notifies_region_sales_and_proposal(self):
         from notifications.models import Notification
         self.client.force_login(self.admin)

@@ -471,6 +471,22 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
         # granted by ProjectPermissionMixin.
         from accounts.models import User, Role
         project = self.object
+
+        # A new commercial-pipeline project starts its costing workflow at
+        # "BOM not started" — auto-create the sheet so it shows on the Costing
+        # list and the proposal team can pick it up ("Start BOM").
+        from costing.models import CostingSheet
+        CostingSheet.objects.create(
+            project=project,
+            title=project.project_name or project.proposal_reference or f'Project {project.pk}',
+            customer_reference=project.proposal_reference or '',
+            customer_name=project.customer or '',
+            end_user=project.end_user or '',
+            contact_person=project.contact_with or '',
+            created_by=self.request.user,
+            workflow_stage='bom_not_started',
+        )
+
         team_roles = [
             Role.MANAGER, Role.SALES_REP, Role.PROPOSAL_HEAD, Role.PROPOSAL_REP,
         ]

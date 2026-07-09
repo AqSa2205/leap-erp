@@ -591,3 +591,100 @@ class RenumberOnDeleteTests(TestCase):
         self.assertIn('Services', self._nums())          # named row untouched
         numeric = [n for n in self._nums() if n[0].isdigit()]
         self.assertEqual(numeric, ['1.1', '1.2', '1.3'])  # gap-free
+
+
+class CommercialPipelineTests(TestCase):
+    """The commercial-pipeline additions: the Start-BOM transition off the new
+    'BOM not started' first stage, the stage-count tabs on the costing list, and
+    the pipeline PDF export."""
+
+    def setUp(self):
+        self.region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.project = Project.objects.create(
+            project_name='Pipeline P', proposal_reference='REF-PIPE',
+            status=self.status, region=self.region)
+
+        def mkuser(username, role_name):
+            role, _ = Role.objects.get_or_create(name=role_name)
+            u = User.objects.create_user(username, password='x')
+            u.role = role; u.region = self.region; u.save()
+            return u
+        self.superadmin = mkuser('sa', Role.SUPER_ADMIN)
+        self.proposal = mkuser('pr', Role.PROPOSAL_REP)
+        self.sales = mkuser('sr', Role.SALES_REP)
+
+    def _sheet(self, stage='bom_not_started'):
+        return CostingSheet.objects.create(
+            title='S', project=self.project, created_by=self.proposal,
+            workflow_stage=stage)
+
+    def _transition(self, user, sheet, action):
+        self.client.force_login(user)
+        return self.client.post(
+            reverse('costing:workflow_transition', kwargs={'pk': sheet.pk}),
+            {'action': action})
+
+    def test_proposal_starts_bom(self):
+        sheet = self._sheet('bom_not_started')
+        self._transition(self.proposal, sheet, 'start_bom')
+        sheet.refresh_from_db()
+        self.assertEqual(sheet.workflow_stage, 'bom_in_progress')
+        self.assertIsNotNone(sheet.bom_started_at)
+        self.assertEqual(sheet.bom_started_by, self.proposal)
+
+    def test_sales_cannot_start_bom(self):
+        sheet = self._sheet('bom_not_started')
+        self._transition(self.sales, sheet, 'start_bom')
+        sheet.refresh_from_db()
+        self.assertEqual(sheet.workflow_stage, 'bom_not_started')  # unchanged
+
+    def test_default_stage_is_bom_not_started(self):
+        sheet = CostingSheet.objects.create(
+            title='D', project=self.project, created_by=self.proposal)
+        self.assertEqual(sheet.workflow_stage, 'bom_not_started')
+
+    def test_list_shows_stage_tabs_and_progress(self):
+        self._sheet('bom_not_started')
+        self.client.force_login(self.superadmin)
+        resp = self.client.get(reverse('costing:list'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'BOM not started')      # tab + row badge
+        self.assertContains(resp, 'Workflow Progress')    # renamed column header
+        self.assertContains(resp, 'Export PDF')
+
+    def test_pipeline_pdf_export(self):
+        self._sheet('bom_in_progress')
+        self.client.force_login(self.superadmin)
+        resp = self.client.get(reverse('costing:pipeline_pdf'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+        self.assertTrue(resp.content.startswith(b'%PDF'))
+
+    def test_timeline_period_filter(self):
+        from django.utils import timezone
+        from datetime import timedelta
+        old = self._sheet('bom_in_progress')
+        CostingSheet.objects.filter(pk=old.pk).update(
+            created_at=timezone.now() - timedelta(days=60))
+        recent = self._sheet('bom_in_progress')  # created just now
+        self.client.force_login(self.superadmin)
+        ids = [s.pk for s in self.client.get(
+            reverse('costing:list'), {'period': '1m'}).context['sheets']]
+        self.assertIn(recent.pk, ids)
+        self.assertNotIn(old.pk, ids)   # older than 1 month → filtered out
+
+    def test_timeline_date_range_filter(self):
+        from django.utils import timezone
+        from datetime import timedelta
+        old = self._sheet('bom_in_progress')
+        CostingSheet.objects.filter(pk=old.pk).update(
+            created_at=timezone.now() - timedelta(days=60))
+        recent = self._sheet('bom_in_progress')
+        frm = (timezone.now() - timedelta(days=90)).date().isoformat()
+        to = (timezone.now() - timedelta(days=30)).date().isoformat()
+        self.client.force_login(self.superadmin)
+        ids = [s.pk for s in self.client.get(
+            reverse('costing:list'), {'date_from': frm, 'date_to': to}).context['sheets']]
+        self.assertIn(old.pk, ids)      # inside the 90–30 days-ago window
+        self.assertNotIn(recent.pk, ids)

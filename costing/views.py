@@ -34,6 +34,7 @@ def _safe_filename(name, suffix='', extension=''):
     return f'{safe}{extension}'
 
 from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, TermsTemplate, ScopeOfWorkItem, ClientRemarkTemplate, ClientRemarkPair
+from .models import WORKFLOW_STAGE_SEQUENCE, STAGE_BADGES
 from notifications.services import notify_users
 
 
@@ -232,7 +233,7 @@ def _strict_stage_edit(user, sheet, stage):
     app (sheet.project.region == user.region).
     """
     region_ok = bool(sheet.project and sheet.project.region_id == user.region_id)
-    if stage == 'bom_in_progress':
+    if stage in ('bom_not_started', 'bom_in_progress'):
         # Proposal team owns BOM building (pricing still field-gated elsewhere).
         return bool(getattr(user, 'is_proposal_team_user', False))
     if stage == 'ready_for_costing':
@@ -311,8 +312,8 @@ def _edit_lock_reason(user, sheet):
     if not getattr(sheet, 'enforce_stage_barriers', False):
         return ''  # legacy/finance locks have their own existing banners
     stage = sheet.workflow_stage
-    if stage == 'bom_in_progress':
-        return ('The Proposal team is still building this BOM. It unlocks for Sales '
+    if stage in ('bom_not_started', 'bom_in_progress'):
+        return ('The Proposal team owns this BOM. It unlocks for Sales '
                 'after handover and "Start costing".')
     if stage == 'ready_for_costing':
         return ('Handed to Sales. Click "Start costing" to begin — the sheet is '
@@ -322,36 +323,93 @@ def _edit_lock_reason(user, sheet):
     return ''
 
 
+def costing_scoped_queryset(user):
+    """Role/region-scoped base queryset of costing sheets for `user`.
+
+    Shared by CostingPermissionMixin (class views) and the pipeline PDF
+    (a function view) so both apply identical visibility rules.
+    """
+    queryset = CostingSheet.objects.select_related('project', 'created_by').all()
+    if (
+        user.is_super_admin_user
+        or getattr(user, 'is_proposal_team_user', False)
+    ):
+        # Super admins and proposal team see every sheet (proposal team
+        # is the source of BOMs, so they need full visibility).
+        return queryset
+    elif user.is_admin_user or user.is_manager_user:
+        return queryset.filter(
+            Q(created_by=user) |
+            Q(project__region=user.region)
+        )
+    elif getattr(user, 'is_sales_rep_user', False):
+        # Sales reps see all sheets in their region — they need visibility
+        # of BOM-stage sheets from the proposal team so they can cost them.
+        return queryset.filter(project__region=user.region)
+    elif getattr(user, 'is_finance_team_user', False):
+        # Finance team sees every sheet in their region — they need
+        # the full pricing breakdown to budget.
+        return queryset.filter(project__region=user.region)
+    elif getattr(user, 'is_procurement_user', False):
+        # Procurement no longer sees costing sheets — they work from the
+        # finance-approved budget (Procurement → Approved Budgets).
+        return queryset.none()
+    else:
+        return queryset.filter(created_by=user)
+
+
+def apply_costing_list_filters(queryset, GET, include_stage=True):
+    """Apply the Costing list's search / stage / region / worked-by filters.
+
+    `include_stage=False` skips the workflow-stage filter — used to build the
+    stage-count tabs, which must show totals across every stage regardless of
+    the currently-selected tab.
+    """
+    search = GET.get('search')
+    stage = GET.get('stage')
+    region = GET.get('region')
+    worked_by = GET.get('worked_by')
+    if search:
+        queryset = queryset.filter(
+            Q(title__icontains=search) |
+            Q(customer_reference__icontains=search) |
+            Q(project__project_name__icontains=search)
+        )
+    if include_stage and stage:
+        queryset = queryset.filter(workflow_stage=stage)
+    if region and region.isdigit():
+        queryset = queryset.filter(project__region_id=int(region))
+    if worked_by and worked_by.isdigit():
+        # "Worked on by" = created it or is a credited contributor.
+        queryset = queryset.filter(
+            Q(created_by_id=int(worked_by)) |
+            Q(additional_contacts__id=int(worked_by))
+        ).distinct()
+
+    # Timeline filter — on when the pipeline (costing sheet) was created.
+    # An explicit date range wins; otherwise a quick preset (1w / 1m / 6m).
+    from datetime import timedelta
+    from django.utils import timezone
+    from django.utils.dateparse import parse_date
+    period = GET.get('period')
+    date_from = GET.get('date_from')
+    date_to = GET.get('date_to')
+    if date_from or date_to:
+        d1 = parse_date(date_from) if date_from else None
+        d2 = parse_date(date_to) if date_to else None
+        if d1:
+            queryset = queryset.filter(created_at__date__gte=d1)
+        if d2:
+            queryset = queryset.filter(created_at__date__lte=d2)
+    elif period in ('1w', '1m', '6m'):
+        days = {'1w': 7, '1m': 30, '6m': 183}[period]
+        queryset = queryset.filter(created_at__gte=timezone.now() - timedelta(days=days))
+    return queryset
+
+
 class CostingPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
-        queryset = CostingSheet.objects.select_related('project', 'created_by').all()
-        user = self.request.user
-        if (
-            user.is_super_admin_user
-            or getattr(user, 'is_proposal_team_user', False)
-        ):
-            # Super admins and proposal team see every sheet (proposal team
-            # is the source of BOMs, so they need full visibility).
-            return queryset
-        elif user.is_admin_user or user.is_manager_user:
-            return queryset.filter(
-                Q(created_by=user) |
-                Q(project__region=user.region)
-            )
-        elif getattr(user, 'is_sales_rep_user', False):
-            # Sales reps see all sheets in their region — they need visibility
-            # of BOM-stage sheets from the proposal team so they can cost them.
-            return queryset.filter(project__region=user.region)
-        elif getattr(user, 'is_finance_team_user', False):
-            # Finance team sees every sheet in their region — they need
-            # the full pricing breakdown to budget.
-            return queryset.filter(project__region=user.region)
-        elif getattr(user, 'is_procurement_user', False):
-            # Procurement no longer sees costing sheets — they work from the
-            # finance-approved budget (Procurement → Approved Budgets).
-            return queryset.none()
-        else:
-            return queryset.filter(created_by=user)
+        return costing_scoped_queryset(self.request.user)
 
 
 class _SheetChildPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
@@ -379,30 +437,11 @@ class CostingListView(CapabilityRequiredMixin, CostingPermissionMixin, ListView)
         return True
 
     def get_queryset(self):
-        queryset = (super().get_queryset()
+        queryset = (costing_scoped_queryset(self.request.user)
                     .select_related('project__region')
                     .prefetch_related('additional_contacts'))
-        search = self.request.GET.get('search')
-        stage = self.request.GET.get('stage')
-        region = self.request.GET.get('region')
-        worked_by = self.request.GET.get('worked_by')
-        if search:
-            queryset = queryset.filter(
-                Q(title__icontains=search) |
-                Q(customer_reference__icontains=search) |
-                Q(project__project_name__icontains=search)
-            )
-        if stage:
-            queryset = queryset.filter(workflow_stage=stage)
-        if region and region.isdigit():
-            queryset = queryset.filter(project__region_id=int(region))
-        if worked_by and worked_by.isdigit():
-            # "Worked on by" = created it or is a credited contributor.
-            queryset = queryset.filter(
-                Q(created_by_id=int(worked_by)) |
-                Q(additional_contacts__id=int(worked_by))
-            ).distinct()
-        return queryset.order_by('-updated_at')
+        return apply_costing_list_filters(
+            queryset, self.request.GET).order_by('-updated_at')
 
     def get_context_data(self, **kwargs):
         from projects.models import Region
@@ -414,9 +453,31 @@ class CostingListView(CapabilityRequiredMixin, CostingPermissionMixin, ListView)
         context['selected_stage'] = self.request.GET.get('stage', '')
         context['regions'] = Region.objects.order_by('name')
         context['selected_region'] = self.request.GET.get('region', '')
+        context['selected_period'] = self.request.GET.get('period', '')
+        context['date_from'] = self.request.GET.get('date_from', '')
+        context['date_to'] = self.request.GET.get('date_to', '')
+        # Stage-count tabs. Counts respect the search/region/worked-by filters
+        # but NOT the stage filter, so every tab shows its true total.
+        base_no_stage = apply_costing_list_filters(
+            costing_scoped_queryset(self.request.user),
+            self.request.GET, include_stage=False)
+        stage_counts = []
+        for code in WORKFLOW_STAGE_SEQUENCE:
+            label, css = STAGE_BADGES[code]
+            stage_counts.append({
+                'code': code, 'label': label, 'css': css,
+                'count': base_no_stage.filter(workflow_stage=code).count(),
+            })
+        context['stage_counts'] = stage_counts
+        context['total_all'] = base_no_stage.count()
+        # Preserve the non-stage filters when switching tabs / exporting.
+        qs = self.request.GET.copy()
+        qs.pop('stage', None)
+        qs.pop('page', None)
+        context['querystring_no_stage'] = qs.urlencode()
         # People who created or contributed to any sheet in scope — for the
         # "Worked On By" filter. Built from the same scoped queryset.
-        base = super().get_queryset()
+        base = costing_scoped_queryset(self.request.user)
         people_ids = set(base.values_list('created_by_id', flat=True))
         people_ids |= set(base.values_list('additional_contacts__id', flat=True))
         people_ids.discard(None)
@@ -424,6 +485,145 @@ class CostingListView(CapabilityRequiredMixin, CostingPermissionMixin, ListView)
             'first_name', 'last_name', 'username')
         context['selected_worked_by'] = self.request.GET.get('worked_by', '')
         return context
+
+
+@login_required
+def costing_pipeline_pdf(request):
+    """Landscape PDF of the commercial pipeline: one row per costing sheet with
+    its workflow stage and the date each stage started. Respects the same
+    role/region scoping and the search/stage/region/worked-by filters as the
+    Costing list, so it exports exactly what the user is looking at."""
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import mm
+        from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+        from reportlab.lib.utils import ImageReader
+        from reportlab.platypus import (
+            SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image,
+        )
+    except ImportError:
+        messages.error(request, 'reportlab is required for PDF export. Install with: pip install reportlab')
+        return redirect('costing:list')
+
+    from django.utils import timezone
+
+    # Grey theme palette
+    LEAP_GREEN = colors.HexColor('#404040')     # header dark grey
+    LEAP_GREEN_LT = colors.HexColor('#6c757d')  # accent mid grey
+    LEAP_ROW_ALT = colors.HexColor('#f2f2f2')   # alternating row grey
+    sheets = apply_costing_list_filters(
+        costing_scoped_queryset(request.user).select_related('project__region'),
+        request.GET,
+    ).order_by('project__proposal_reference', 'title')
+
+    def _d(dt):
+        return timezone.localtime(dt).strftime('%d %b %Y') if dt else '—'
+
+    styles = getSampleStyleSheet()
+    cell = ParagraphStyle('cell', parent=styles['Normal'], fontSize=7.5, leading=9)
+    head = ParagraphStyle('head', parent=styles['Normal'], fontSize=7.5,
+                          leading=9, textColor=colors.white, alignment=TA_CENTER)
+    title_style = ParagraphStyle('t', parent=styles['Title'], fontSize=20,
+                                 textColor=LEAP_GREEN, alignment=TA_RIGHT, leading=24)
+    sub_style = ParagraphStyle('sub', parent=styles['Normal'], fontSize=9,
+                               textColor=colors.HexColor('#666666'), alignment=TA_RIGHT)
+
+    columns = [
+        'Title', 'Reference', 'Customer Ref', 'Stage',
+        'Pipeline created', 'BOM in progress', 'Handed to sales', 'Costing started',
+        'Sales finalised', 'Finance budgeting', 'Finance approved',
+    ]
+    data = [[Paragraph(c, head) for c in columns]]
+    for s in sheets:
+        ref = s.project.proposal_reference if s.project else ''
+        data.append([
+            Paragraph(s.title or '—', cell),
+            Paragraph(ref or '—', cell),
+            Paragraph(s.customer_reference or '—', cell),
+            Paragraph(s.stage_badge['label'], cell),
+            Paragraph(_d(s.created_at), cell),
+            Paragraph(_d(s.bom_started_at), cell),
+            Paragraph(_d(s.handed_over_at), cell),
+            Paragraph(_d(s.costing_started_at), cell),
+            Paragraph(_d(s.finalized_at), cell),
+            Paragraph(_d(s.finance_review_at), cell),
+            Paragraph(_d(s.finance_approved_at), cell),
+        ])
+    if len(data) == 1:
+        data.append([Paragraph('No costing sheets match the current filters.', cell)]
+                    + [Paragraph('', cell) for _ in columns[1:]])
+
+    page_w = landscape(A4)[0] - 20 * mm
+    widths = [w * page_w for w in
+              (0.15, 0.09, 0.10, 0.10, 0.0787, 0.0787, 0.0787, 0.0787, 0.0787, 0.0787, 0.0787)]
+    table = Table(data, colWidths=widths, repeatRows=1)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), LEAP_GREEN),
+        ('LINEBELOW', (0, 0), (-1, 0), 1.2, LEAP_GREEN_LT),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#d5d5d5')),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, LEAP_ROW_ALT]),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+    ]))
+
+    # ─── Branded header: Leap logo (left) + title & timestamp (right) ───
+    import os
+    from django.contrib.staticfiles.finders import find as find_static
+    logo_path = find_static('images/leap_logo.jpg')
+    if not logo_path:
+        logo_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), 'static', 'images', 'leap_logo.jpg')
+    if logo_path and not os.path.exists(logo_path):
+        logo_path = None
+
+    generated = timezone.localtime(timezone.now()).strftime('%d %b %Y at %H:%M')
+    title_block = [
+        Paragraph('Commercial Pipeline', title_style),
+        Paragraph('Costing workflow status', sub_style),
+        Paragraph(f'Generated {generated}', sub_style),
+    ]
+    if logo_path:
+        iw, ih = ImageReader(logo_path).getSize()
+        logo_w = 48 * mm
+        logo = Image(logo_path, width=logo_w, height=logo_w * ih / float(iw))
+        header = Table([[logo, title_block]], colWidths=[logo_w + 4 * mm, page_w - logo_w - 4 * mm])
+    else:
+        header = Table([[title_block]], colWidths=[page_w])
+    header.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+
+    import io as _io
+    buf = _io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(A4),
+        leftMargin=10 * mm, rightMargin=10 * mm,
+        topMargin=10 * mm, bottomMargin=12 * mm,
+        title='Commercial Pipeline')
+    story = [
+        header,
+        Spacer(1, 3 * mm),
+        Table([['']], colWidths=[page_w], rowHeights=[2],
+              style=TableStyle([('BACKGROUND', (0, 0), (-1, -1), LEAP_GREEN)])),
+        Spacer(1, 5 * mm),
+        table,
+    ]
+    doc.build(story)
+    buf.seek(0)
+
+    from django.http import HttpResponse
+    resp = HttpResponse(buf.getvalue(), content_type='application/pdf')
+    resp['Content-Disposition'] = 'inline; filename="Commercial_Pipeline.pdf"'
+    return resp
 
 
 class _ProjectAutofillContextMixin:
@@ -2169,6 +2369,18 @@ def costing_workflow_transition(request, pk):
     now = timezone.now()
 
     transitions = {
+        'start_bom': {
+            'from': {'bom_not_started'},
+            'to':   'bom_in_progress',
+            'allowed_teams': {'proposal'},
+            'sets':  lambda: {
+                'workflow_stage': 'bom_in_progress',
+                'bom_started_at': now,
+                'bom_started_by': user,
+            },
+            'verb': 'started building the BOM',
+            'notify_team': 'sales',
+        },
         'handover': {
             'from': {'bom_in_progress'},
             'to':   'ready_for_costing',
