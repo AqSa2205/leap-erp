@@ -223,6 +223,18 @@ class Project(models.Model):
         verbose_name="Project Stage"
     )
 
+    PRIORITY_CHOICES = [
+        ('high', 'High'),
+        ('medium', 'Medium'),
+        ('low', 'Low'),
+    ]
+    priority = models.CharField(
+        max_length=10,
+        choices=PRIORITY_CHOICES,
+        blank=True,
+        help_text="Pipeline priority"
+    )
+
     status = models.ForeignKey(
         ProjectStatus,
         on_delete=models.PROTECT,

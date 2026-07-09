@@ -688,3 +688,22 @@ class CommercialPipelineTests(TestCase):
             reverse('costing:list'), {'date_from': frm, 'date_to': to}).context['sheets']]
         self.assertIn(old.pk, ids)      # inside the 90–30 days-ago window
         self.assertNotIn(recent.pk, ids)
+
+    def test_pipeline_pdf_with_project_fields(self):
+        # The PDF pulls Sr #, revision (from the reference), end user, priority,
+        # estimated value and submission date off the project; make sure a fully
+        # populated project renders (guards the date-vs-datetime + display paths).
+        from datetime import date
+        from decimal import Decimal
+        self.project.serial_number = 42
+        self.project.proposal_reference = 'LNA 2817 (R03)'
+        self.project.end_user = 'Acme Power'
+        self.project.priority = 'high'
+        self.project.estimated_value = Decimal('1234567.00')
+        self.project.submission_deadline = date(2026, 5, 20)
+        self.project.save()
+        self._sheet('ready_for_costing')
+        self.client.force_login(self.superadmin)
+        resp = self.client.get(reverse('costing:pipeline_pdf'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.content.startswith(b'%PDF'))

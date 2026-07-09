@@ -159,6 +159,7 @@
                 <span class="badge bg-light text-dark border"><i class="bi bi-hourglass me-1"></i>BOM not started · awaiting proposal team</span>
                 {% elif stage == 'bom_in_progress' %}
                 <span class="badge bg-warning text-dark"><i class="bi bi-pencil-square me-1"></i>BOM in progress · proposal team</span>
+                {% if sheet.bom_started_at %}<small class="text-muted ms-2">Started {{ sheet.bom_started_at|date:"d M Y H:i" }}{% if sheet.bom_started_by %} by {{ sheet.bom_started_by.get_full_name|default:sheet.bom_started_by.username }}{% endif %}</small>{% endif %}
                 {% elif stage == 'ready_for_costing' %}
                 <span class="badge bg-primary"><i class="bi bi-arrow-right-square me-1"></i>Ready for costing · handed over to sales</span>
                 {% if sheet.handed_over_at %}<small class="text-muted ms-2">Handed over {{ sheet.handed_over_at|date:"d M Y H:i" }}{% if sheet.handed_over_by %} by {{ sheet.handed_over_by.get_full_name|default:sheet.handed_over_by.username }}{% endif %}</small>{% endif %}

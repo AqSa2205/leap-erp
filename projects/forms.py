@@ -23,7 +23,7 @@ class ProjectForm(forms.ModelForm):
         fields = [
             'project_name', 'proposal_reference', 'client_rfq_reference',
             'po_number', 'submission_deadline', 'estimated_po_date',
-            'owner', 'customer', 'end_user', 'project_stage', 'status', 'region', 'year', 'estimated_value',
+            'owner', 'customer', 'end_user', 'project_stage', 'priority', 'status', 'region', 'year', 'estimated_value',
             'estimated_value_usd', 'estimated_value_per_annum', 'estimated_gp',
             'actual_sales', 'po_award_quarter', 'success_quotient', 'minimum_achievement',
             'contact_with', 'remarks', 'notes', 'portal_url'
@@ -34,6 +34,7 @@ class ProjectForm(forms.ModelForm):
             'remarks': forms.Textarea(attrs={'rows': 3}),
             'notes': forms.Textarea(attrs={'rows': 3}),
             'year': forms.Select(choices=[('', 'Select Year')] + Project.YEAR_CHOICES),
+            'priority': forms.Select(choices=[('', 'Select Priority')] + Project.PRIORITY_CHOICES),
         }
 
     def __init__(self, *args, **kwargs):

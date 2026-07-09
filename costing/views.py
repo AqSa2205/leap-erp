@@ -518,8 +518,13 @@ def costing_pipeline_pdf(request):
         request.GET,
     ).order_by('project__proposal_reference', 'title')
 
+    from datetime import datetime as _dt
     def _d(dt):
-        return timezone.localtime(dt).strftime('%d %b %Y') if dt else '—'
+        if not dt:
+            return '—'
+        if isinstance(dt, _dt):        # datetime → localise; plain date → as-is
+            dt = timezone.localtime(dt)
+        return dt.strftime('%d %b %Y')
 
     styles = getSampleStyleSheet()
     cell = ParagraphStyle('cell', parent=styles['Normal'], fontSize=7.5, leading=9)
@@ -530,26 +535,35 @@ def costing_pipeline_pdf(request):
     sub_style = ParagraphStyle('sub', parent=styles['Normal'], fontSize=9,
                                textColor=colors.HexColor('#666666'), alignment=TA_RIGHT)
 
+    from projects.models import split_trailing_revision
+
+    def _money(v):
+        return f'{v:,.0f}' if v else '—'
+
     columns = [
-        'Title', 'Reference', 'Customer Ref', 'Stage',
-        'Pipeline created', 'BOM in progress', 'Handed to sales', 'Costing started',
-        'Sales finalised', 'Finance budgeting', 'Finance approved',
+        'Sr #', 'Title', 'Reference', 'Rev', 'Customer Ref', 'End user',
+        'Priority', 'Est. value (SAR)', 'Stage',
+        'Submission date', 'Pipeline created', 'Handed to sales', 'Sales finalised',
     ]
     data = [[Paragraph(c, head) for c in columns]]
     for s in sheets:
-        ref = s.project.proposal_reference if s.project else ''
+        proj = s.project
+        ref = proj.proposal_reference if proj else ''
+        _base, revision, _style = split_trailing_revision(ref or '')
         data.append([
+            Paragraph(str(proj.serial_number) if proj and proj.serial_number else '—', cell),
             Paragraph(s.title or '—', cell),
             Paragraph(ref or '—', cell),
+            Paragraph(revision or '—', cell),
             Paragraph(s.customer_reference or '—', cell),
+            Paragraph((proj.end_user if proj else '') or '—', cell),
+            Paragraph(proj.get_priority_display() if proj and proj.priority else '—', cell),
+            Paragraph(_money(proj.estimated_value if proj else None), cell),
             Paragraph(s.stage_badge['label'], cell),
+            Paragraph(_d(proj.submission_deadline if proj else None), cell),
             Paragraph(_d(s.created_at), cell),
-            Paragraph(_d(s.bom_started_at), cell),
             Paragraph(_d(s.handed_over_at), cell),
-            Paragraph(_d(s.costing_started_at), cell),
             Paragraph(_d(s.finalized_at), cell),
-            Paragraph(_d(s.finance_review_at), cell),
-            Paragraph(_d(s.finance_approved_at), cell),
         ])
     if len(data) == 1:
         data.append([Paragraph('No costing sheets match the current filters.', cell)]
@@ -557,7 +571,8 @@ def costing_pipeline_pdf(request):
 
     page_w = landscape(A4)[0] - 20 * mm
     widths = [w * page_w for w in
-              (0.15, 0.09, 0.10, 0.10, 0.0787, 0.0787, 0.0787, 0.0787, 0.0787, 0.0787, 0.0787)]
+              (0.035, 0.13, 0.09, 0.04, 0.09, 0.095, 0.05, 0.085, 0.085,
+               0.075, 0.075, 0.075, 0.075)]
     table = Table(data, colWidths=widths, repeatRows=1)
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), LEAP_GREEN),

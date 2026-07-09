@@ -312,6 +312,12 @@
                                 <td><span class="badge {% if project.project_stage == 'procurement' %}bg-primary{% else %}bg-warning text-dark{% endif %}">{{ project.get_project_stage_display }}</span></td>
                             </tr>
                             {% endif %}
+                            {% if project.priority %}
+                            <tr>
+                                <th class="text-muted">Priority</th>
+                                <td><span class="badge {% if project.priority == 'high' %}bg-danger{% elif project.priority == 'medium' %}bg-warning text-dark{% else %}bg-secondary{% endif %}">{{ project.get_priority_display }}</span></td>
+                            </tr>
+                            {% endif %}
                         </table>
                     </div>
                     <div class="col-md-6">
