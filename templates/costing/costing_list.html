@@ -5,6 +5,9 @@
 {% block page_title %}Costing Sheets{% endblock %}
 
 {% block content %}
+<style>
+    tr.clickable-row { cursor: pointer; transition: background-color 0.15s; }
+</style>
 <div class="card mb-4">
     <div class="card-body">
         <div class="row align-items-center">
@@ -132,7 +135,7 @@
                 </thead>
                 <tbody>
                     {% for sheet in sheets %}
-                    <tr>
+                    <tr class="clickable-row" data-href="{% url 'costing:detail' sheet.pk %}">
                         <td>
                             <a href="{% url 'costing:detail' sheet.pk %}" class="text-decoration-none fw-bold">
                                 {{ sheet.title }}
@@ -202,4 +205,15 @@
     </ul>
 </nav>
 {% endif %}
+
+<script>
+// Make each costing-sheet row clickable — open the sheet, but skip clicks on
+// links/buttons/inputs so the existing controls (edit, reference link…) still work.
+document.querySelectorAll('tr.clickable-row').forEach(function (row) {
+    row.addEventListener('click', function (e) {
+        if (e.target.closest('a, button, input, select, [data-no-row-click]')) return;
+        if (row.dataset.href) window.location.href = row.dataset.href;
+    });
+});
+</script>
 {% endblock %}
