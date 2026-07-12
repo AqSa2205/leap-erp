@@ -757,3 +757,50 @@ class CommercialPipelineTests(TestCase):
         resp = self.client.get(reverse('costing:pipeline_pdf'))
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.content.startswith(b'%PDF'))
+
+    # ─── Cycle-time (working days per stage) ───
+    def _aware(self, y, m, d):
+        from datetime import datetime
+        from django.utils import timezone
+        return timezone.make_aware(datetime(y, m, d, 10, 0))
+
+    def test_working_days_skips_weekend(self):
+        from costing.models import working_days_between
+        # 2026-07-09 Thu → 2026-07-12 Sun: Fri+Sat skipped, only Sun counts = 1.
+        self.assertEqual(working_days_between(self._aware(2026, 7, 9),
+                                              self._aware(2026, 7, 12)), 1)
+        # Same day = 0; missing bound = None.
+        self.assertEqual(working_days_between(self._aware(2026, 7, 9),
+                                              self._aware(2026, 7, 9)), 0)
+        self.assertIsNone(working_days_between(None, self._aware(2026, 7, 9)))
+
+    def test_cycle_rows_days_and_person(self):
+        sheet = self._sheet('finalized')
+        CostingSheet.objects.filter(pk=sheet.pk).update(
+            bom_started_at=self._aware(2026, 7, 5),      # Sun
+            handed_over_at=self._aware(2026, 7, 7),      # Tue
+            costing_started_at=self._aware(2026, 7, 7),  # Tue
+            finalized_at=self._aware(2026, 7, 9),        # Thu
+            bom_started_by=self.proposal, finalized_by=self.sales)
+        sheet.refresh_from_db()
+        rows = sheet.cycle_rows()
+        self.assertEqual(len(rows), 3)         # BOM, Pickup, Finalise (no Finance)
+        self.assertEqual(rows[0]['days'], 2)   # BOM: Sun→Tue = Mon,Tue
+        self.assertEqual(rows[1]['days'], 0)   # Pickup: Tue→Tue same day
+        self.assertEqual(rows[2]['days'], 2)   # Finalise: Tue→Thu = Wed,Thu
+        self.assertEqual(rows[0]['person'], self.proposal)
+        self.assertEqual(rows[2]['person'], self.sales)
+
+    def test_list_shows_cycle_columns(self):
+        self._sheet('costing_in_progress')
+        self.client.force_login(self.superadmin)
+        resp = self.client.get(reverse('costing:list'))
+        self.assertContains(resp, 'In stage')       # cycle column header
+        self.assertContains(resp, 'Finalise')
+
+    def test_projects_list_shows_cycle_columns(self):
+        self._sheet('costing_in_progress')
+        self.client.force_login(self.superadmin)
+        resp = self.client.get(reverse('projects:list'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'In stage')

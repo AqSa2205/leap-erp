@@ -1,6 +1,28 @@
 from django.db import models
 from django.conf import settings
 from decimal import Decimal
+from datetime import timedelta
+
+
+def working_days_between(start, end):
+    """Whole working days from `start` to `end`, excluding the KSA Fri/Sat
+    weekend. Returns None if either bound is missing, 0 if same day / end<=start.
+
+    Both bounds are aware datetimes; only the local calendar date matters.
+    """
+    if not start or not end:
+        return None
+    from django.utils import timezone
+    s = timezone.localtime(start).date()
+    e = timezone.localtime(end).date()
+    if e <= s:
+        return 0
+    days, d = 0, s
+    while d < e:
+        d += timedelta(days=1)
+        if d.weekday() not in (4, 5):   # Mon=0 … Fri=4, Sat=5 → KSA weekend
+            days += 1
+    return days
 
 
 # ─── Commercial-pipeline workflow badge ──────────────────────────────────────
@@ -327,6 +349,67 @@ class CostingSheet(models.Model):
             self.workflow_stage,
             (self.get_workflow_stage_display(), 'bg-secondary'))
         return {'label': label, 'css': css}
+
+    # ─── Cycle time (working days per stage) for the management views ───
+    def cycle_rows(self):
+        """Per-stage turnaround in working days + who did it. Each row:
+        {'label', 'team', 'days' (int|None), 'person' (User|None)}.
+        A stage with a missing start/end shows days=None (—)."""
+        c = self
+        stages = [
+            ('BOM',            'Proposal', c.bom_started_at or c.created_at, c.handed_over_at,      c.bom_started_by or c.created_by),
+            ('Sales pickup',   'Sales',    c.handed_over_at,                 c.costing_started_at,   c.costing_started_by),
+            ('Sales finalise', 'Sales',    c.costing_started_at or c.handed_over_at, c.finalized_at, c.finalized_by),
+        ]
+        rows = []
+        for lbl, team, s, e, p in stages:
+            wd = working_days_between(s, e)
+            rows.append({'label': lbl, 'team': team, 'days': wd,
+                         'display': (f'{wd}d' if wd is not None else '—'),
+                         'person': p})
+        return rows
+
+    def _current_stage_start(self):
+        if self.workflow_stage == 'finance_approved':
+            return None   # workflow complete — "in current stage" not meaningful
+        return {
+            'bom_not_started':     self.created_at,
+            'bom_in_progress':     self.bom_started_at or self.created_at,
+            'ready_for_costing':   self.handed_over_at,
+            'costing_in_progress': self.costing_started_at,
+            'finalized':           self.finalized_at,
+            'finance_review':      self.finance_review_at,
+        }.get(self.workflow_stage)
+
+    @property
+    def days_in_current_stage(self):
+        """Working days the sheet has sat in its current stage (None if done)."""
+        from django.utils import timezone
+        return working_days_between(self._current_stage_start(), timezone.now())
+
+    @property
+    def current_stage_display(self):
+        d = self.days_in_current_stage
+        return f'{d}d' if d is not None else '—'
+
+    @property
+    def current_stage_level(self):
+        """Bootstrap severity for the 'in current stage' badge (colour flag)."""
+        d = self.days_in_current_stage
+        if d is None:
+            return ''
+        if d > 3:
+            return 'danger'
+        if d > 1:
+            return 'warning text-dark'
+        return 'success'
+
+    @property
+    def total_cycle_days(self):
+        """Working days from creation to finalisation (or to now if not yet)."""
+        from django.utils import timezone
+        end = self.finalized_at or self.finance_approved_at or timezone.now()
+        return working_days_between(self.created_at, end)
 
     def _compute_totals(self):
         """Compute all sheet totals in a single pass. Results are cached on the instance.

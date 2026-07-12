@@ -163,6 +163,10 @@
                         <th>Region</th>
                         <th>Status</th>
                         <th>Workflow</th>
+                        <th title="Working days Proposal spent on the BOM">BOM</th>
+                        <th title="Working days it waited for Sales to start">→ Pickup</th>
+                        <th title="Working days Sales took to finalise">Finalise</th>
+                        <th title="Working days in the current stage">In stage</th>
                         {% if not user.is_procurement_user %}
                         <th class="text-end">Actual / Costing</th>
                         {% endif %}
@@ -211,6 +215,19 @@
                             <span class="badge bg-light text-muted border">Not started</span>
                             {% endif %}
                         </td>
+                        {% if project.cycle_sheet %}
+                        {% for r in project.cycle_sheet.cycle_rows %}
+                        <td class="text-nowrap">
+                            <span class="fw-semibold">{{ r.display }}</span>
+                            {% if r.person %}<div class="text-muted small">{{ r.person.get_full_name|default:r.person.username }}</div>{% endif %}
+                        </td>
+                        {% endfor %}
+                        <td>
+                            {% if project.cycle_sheet.current_stage_level %}<span class="badge bg-{{ project.cycle_sheet.current_stage_level }}">{{ project.cycle_sheet.current_stage_display }}</span>{% else %}<span class="text-muted">{{ project.cycle_sheet.current_stage_display }}</span>{% endif %}
+                        </td>
+                        {% else %}
+                        <td colspan="4" class="text-center text-muted">—</td>
+                        {% endif %}
                         {% if not user.is_procurement_user %}
                         <td class="text-end">
                             {% with sv=project.sales_resolved %}
@@ -261,7 +278,7 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="{% if user.is_procurement_user %}8{% else %}9{% endif %}" class="text-center text-muted py-5">
+                        <td colspan="{% if user.is_procurement_user %}12{% else %}13{% endif %}" class="text-center text-muted py-5">
                             <i class="bi bi-folder-x fs-1 d-block mb-2"></i>
                             No commercial proposals found.
                         </td>
