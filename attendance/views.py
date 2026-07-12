@@ -68,11 +68,32 @@ def manage(request):
             messages.success(request, 'Device removed.')
             return redirect('attendance_ui:attendance_devices')
 
+    # Connection status per laptop, from last_seen_at (stamped on every check-in
+    # the agent sends) — so admins can see which laptops are actually connecting
+    # without needing shell access.
+    from django.utils import timezone
+    today = timezone.localdate()
+    devices = list(RegisteredDevice.objects.select_related('employee', 'asset').all())
+    connected_today = never = stale = 0
+    for d in devices:
+        if d.last_seen_at is None:
+            d.conn = 'never'; never += 1
+        elif timezone.localtime(d.last_seen_at).date() == today:
+            d.conn = 'today'; connected_today += 1
+        else:
+            d.conn = 'stale'; stale += 1
+
     return render(request, 'attendance/manage.html', {
         'net_form': net_form,
         'dev_form': dev_form,
         'networks': OfficeNetwork.objects.all(),
-        'devices': RegisteredDevice.objects.select_related('employee', 'asset').all(),
+        'devices': devices,
+        'device_summary': {
+            'total': len(devices),
+            'connected_today': connected_today,
+            'stale': stale,
+            'never': never,
+        },
         'emp_assets': _employee_assets_map(),
     })
 

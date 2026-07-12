@@ -89,9 +89,12 @@
                 <!-- Registered devices -->
                 <div class="col-lg-7">
                     <div class="card h-100">
-                        <div class="card-header bg-white d-flex align-items-center gap-2">
+                        <div class="card-header bg-white d-flex align-items-center flex-wrap gap-2">
                             <i class="bi bi-laptop text-success"></i><strong>Registered Devices</strong>
-                            <span class="badge rounded-pill bg-success-subtle text-success">{{ devices|length }}</span>
+                            <span class="badge rounded-pill bg-success-subtle text-success">{{ devices|length }} total</span>
+                            <span class="badge rounded-pill bg-success" title="Sent a check-in today">{{ device_summary.connected_today }} connected today</span>
+                            {% if device_summary.stale %}<span class="badge rounded-pill bg-warning text-dark" title="Connected before, but not today">{{ device_summary.stale }} stale</span>{% endif %}
+                            {% if device_summary.never %}<span class="badge rounded-pill bg-secondary" title="Never sent a check-in — agent not working">{{ device_summary.never }} never connected</span>{% endif %}
                             <a href="{% url 'attendance_ui:attendance_tokens_export' %}" class="btn btn-sm btn-outline-secondary ms-auto">
                                 <i class="bi bi-download me-1"></i>Token map (CSV)
                             </a>
@@ -113,7 +116,7 @@
                             {{ emp_assets|json_script:"emp-assets" }}
                             <div class="table-responsive">
                                 <table class="table table-sm wa-table align-middle mb-0">
-                                    <thead><tr><th>Employee</th><th>Device</th><th>Serial</th><th>Token</th><th>Active</th><th>Activated</th><th>Last seen</th><th></th></tr></thead>
+                                    <thead><tr><th>Employee</th><th>Device</th><th>Serial</th><th>Token</th><th>Active</th><th>Status</th><th>Activated</th><th>Last seen</th><th></th></tr></thead>
                                     <tbody>
                                         {% for d in devices %}
                                         <tr>
@@ -133,6 +136,11 @@
                                                     </button>
                                                 </form>
                                             </td>
+                                            <td>
+                                                {% if d.conn == 'today' %}<span class="badge bg-success"><i class="bi bi-wifi me-1"></i>Connected today</span>
+                                                {% elif d.conn == 'stale' %}<span class="badge bg-warning text-dark"><i class="bi bi-wifi-off me-1"></i>Stale</span>
+                                                {% else %}<span class="badge bg-secondary"><i class="bi bi-dash-circle me-1"></i>Never connected</span>{% endif %}
+                                            </td>
                                             <td class="small">{% if d.first_seen_at %}<span class="badge bg-success-subtle text-success border border-success-subtle">{{ d.first_seen_at|date:"d M Y" }}</span>{% else %}<span class="text-muted">not yet</span>{% endif %}</td>
                                             <td class="small text-muted">{% if d.last_seen_at %}{{ d.last_seen_at|date:"d M H:i" }}{% else %}—{% endif %}</td>
                                             <td class="text-end">
@@ -144,7 +152,7 @@
                                             </td>
                                         </tr>
                                         {% empty %}
-                                        <tr><td colspan="8" class="text-center text-muted py-3">No devices registered yet.</td></tr>
+                                        <tr><td colspan="9" class="text-center text-muted py-3">No devices registered yet.</td></tr>
                                         {% endfor %}
                                     </tbody>
                                 </table>

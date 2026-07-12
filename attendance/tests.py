@@ -238,6 +238,18 @@ class RegistrationUITests(TestCase):
         self.assertEqual(r['Content-Type'], 'text/csv')
         self.assertIn(dev.token, r.content.decode())
 
+    def test_device_connection_status_and_summary(self):
+        self.client.force_login(self.admin)
+        RegisteredDevice.objects.create(employee=self.emp, label='LT-never')
+        RegisteredDevice.objects.create(
+            employee=self.emp, label='LT-today', last_seen_at=timezone.now())
+        resp = self.client.get(self.url)
+        self.assertContains(resp, 'Connected today')       # per-row badge
+        self.assertContains(resp, 'Never connected')       # per-row badge
+        self.assertContains(resp, 'connected today')       # header summary
+        self.assertEqual(resp.context['device_summary']['connected_today'], 1)
+        self.assertEqual(resp.context['device_summary']['never'], 1)
+
 
 class ModelTests(TestCase):
     def test_bssid_normalised_lowercase(self):
