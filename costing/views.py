@@ -366,17 +366,28 @@ def apply_costing_list_filters(queryset, GET, include_stage=True):
     the currently-selected tab.
     """
     search = GET.get('search')
-    stage = GET.get('stage')
+    stages = [s for s in GET.getlist('stage') if s]  # multi-select
     region = GET.get('region')
     worked_by = GET.get('worked_by')
     if search:
+        # Broad search — match the typed text against every field shown on the
+        # list (and the customer info), so "search" finds anything on screen.
         queryset = queryset.filter(
             Q(title__icontains=search) |
+            Q(customer_name__icontains=search) |
             Q(customer_reference__icontains=search) |
-            Q(project__project_name__icontains=search)
-        )
-    if include_stage and stage:
-        queryset = queryset.filter(workflow_stage=stage)
+            Q(output_currency__icontains=search) |
+            Q(project__project_name__icontains=search) |
+            Q(project__proposal_reference__icontains=search) |
+            Q(project__customer__icontains=search) |
+            Q(project__end_user__icontains=search) |
+            Q(project__region__name__icontains=search) |
+            Q(created_by__first_name__icontains=search) |
+            Q(created_by__last_name__icontains=search) |
+            Q(created_by__username__icontains=search)
+        ).distinct()
+    if include_stage and stages:
+        queryset = queryset.filter(workflow_stage__in=stages)
     if region and region.isdigit():
         queryset = queryset.filter(project__region_id=int(region))
     if worked_by and worked_by.isdigit():
@@ -450,31 +461,42 @@ class CostingListView(CapabilityRequiredMixin, CostingPermissionMixin, ListView)
         context['filter_form'] = CostingFilterForm(self.request.GET)
         context['total_count'] = self.get_queryset().count()
         context['workflow_stage_choices'] = CostingSheet.WORKFLOW_STAGE_CHOICES
-        context['selected_stage'] = self.request.GET.get('stage', '')
+        selected_stages = self.request.GET.getlist('stage')
+        context['selected_stages'] = selected_stages
         context['regions'] = Region.objects.order_by('name')
         context['selected_region'] = self.request.GET.get('region', '')
         context['selected_period'] = self.request.GET.get('period', '')
         context['date_from'] = self.request.GET.get('date_from', '')
         context['date_to'] = self.request.GET.get('date_to', '')
-        # Stage-count tabs. Counts respect the search/region/worked-by filters
-        # but NOT the stage filter, so every tab shows its true total.
+        # Base querystring (all filters except stage/page) — used to build each
+        # tab's toggle URL and to preserve filters when exporting.
+        base_qs = self.request.GET.copy()
+        base_qs.pop('stage', None)
+        base_qs.pop('page', None)
+        context['querystring_no_stage'] = base_qs.urlencode()
+        # Stage-count tabs double as a multi-select filter: each button toggles
+        # its stage on/off. Counts ignore the stage filter so totals stay stable.
         base_no_stage = apply_costing_list_filters(
             costing_scoped_queryset(self.request.user),
             self.request.GET, include_stage=False)
         stage_counts = []
         for code in WORKFLOW_STAGE_SEQUENCE:
             label, css = STAGE_BADGES[code]
+            active = code in selected_stages
+            # Clicking removes the stage if already on, else adds it.
+            new_stages = ([s for s in selected_stages if s != code]
+                          if active else selected_stages + [code])
+            tq = base_qs.copy()
+            tq.setlist('stage', new_stages)
+            enc = tq.urlencode()
             stage_counts.append({
                 'code': code, 'label': label, 'css': css,
                 'count': base_no_stage.filter(workflow_stage=code).count(),
+                'active': active,
+                'toggle_url': '?' + enc if enc else '?',
             })
         context['stage_counts'] = stage_counts
         context['total_all'] = base_no_stage.count()
-        # Preserve the non-stage filters when switching tabs / exporting.
-        qs = self.request.GET.copy()
-        qs.pop('stage', None)
-        qs.pop('page', None)
-        context['querystring_no_stage'] = qs.urlencode()
         # People who created or contributed to any sheet in scope — for the
         # "Worked On By" filter. Built from the same scoped queryset.
         base = costing_scoped_queryset(self.request.user)
@@ -485,6 +507,74 @@ class CostingListView(CapabilityRequiredMixin, CostingPermissionMixin, ListView)
             'first_name', 'last_name', 'username')
         context['selected_worked_by'] = self.request.GET.get('worked_by', '')
         return context
+
+
+def _pipeline_export_data(request):
+    """(columns, rows) for the commercial-pipeline export — shared by the PDF
+    and Excel so both stay identical. Honours the same scoping + list filters.
+    rows are plain strings (already formatted)."""
+    from django.utils import timezone
+    from datetime import datetime as _dt
+    from projects.models import split_trailing_revision
+
+    sheets = apply_costing_list_filters(
+        costing_scoped_queryset(request.user)
+        .select_related('project__region')
+        .prefetch_related('sections__line_items', 'scope_of_work_items'),
+        request.GET,
+    ).order_by('project__proposal_reference', 'title')
+
+    # Est. value = the sheet's TOTAL CONTRACT PRICE (A.1 grand total + A.2 scope
+    # of work) in SAR. Inject the rate/sheet caches once to avoid N+1.
+    rates_dict = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
+
+    def _contract_sar(sheet):
+        sheet.set_rates_cache(rates_dict)
+        for section in sheet.sections.all():
+            for item in section.line_items.all():
+                item.set_exchange_rates_cache(rates_dict)
+                item.set_sheet_cache(sheet)
+        conv = sheet._conv_to_output_currency() or Decimal('1')
+        sow_sar = (sheet.sow_total / conv) if conv else sheet.sow_total
+        return sheet.grand_total + sow_sar
+
+    def _d(dt):
+        if not dt:
+            return '—'
+        if isinstance(dt, _dt):        # datetime → localise; plain date → as-is
+            dt = timezone.localtime(dt)
+        return dt.strftime('%d %b %Y')
+
+    def _money(v):
+        return f'{v:,.0f}' if v else '—'
+
+    columns = [
+        'Sr #', 'Title', 'Reference', 'Rev', 'Customer Name', 'End user',
+        'Priority', 'Est. value (SAR)', 'Stage',
+        'Submission date', 'Pipeline created', 'Handed to sales', 'Sales finalised',
+    ]
+    rows = []
+    for row_no, s in enumerate(sheets, start=1):
+        proj = s.project
+        ref = proj.proposal_reference if proj else ''
+        _b, revision, _st = split_trailing_revision(ref or '')
+        customer = s.customer_name or (proj.customer if proj else '') or '—'
+        rows.append([
+            str(row_no),
+            s.title or '—',
+            ref or '—',
+            revision or '—',
+            customer,
+            (proj.end_user if proj else '') or '—',
+            proj.get_priority_display() if proj and proj.priority else '—',
+            _money(_contract_sar(s)),
+            s.stage_badge['label'],
+            _d(proj.submission_deadline if proj else None),
+            _d(s.created_at),
+            _d(s.handed_over_at),
+            _d(s.finalized_at),
+        ])
+    return columns, rows
 
 
 @login_required
@@ -513,36 +603,6 @@ def costing_pipeline_pdf(request):
     LEAP_GREEN = colors.HexColor('#404040')     # header dark grey
     LEAP_GREEN_LT = colors.HexColor('#6c757d')  # accent mid grey
     LEAP_ROW_ALT = colors.HexColor('#f2f2f2')   # alternating row grey
-    sheets = apply_costing_list_filters(
-        costing_scoped_queryset(request.user)
-        .select_related('project__region')
-        .prefetch_related('sections__line_items', 'scope_of_work_items'),
-        request.GET,
-    ).order_by('project__proposal_reference', 'title')
-
-    # Est. value column = the sheet's TOTAL CONTRACT PRICE (A.1 grand total +
-    # A.2 scope of work), expressed in SAR. grand_total is already SAR; the SOW
-    # is in the sheet's output currency, so divide it back by the SAR→output
-    # rate. Inject the rate + sheet caches once to avoid N+1 while iterating.
-    rates_dict = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
-
-    def _sheet_contract_sar(sheet):
-        sheet.set_rates_cache(rates_dict)
-        for section in sheet.sections.all():
-            for item in section.line_items.all():
-                item.set_exchange_rates_cache(rates_dict)
-                item.set_sheet_cache(sheet)
-        conv = sheet._conv_to_output_currency() or Decimal('1')
-        sow_sar = (sheet.sow_total / conv) if conv else sheet.sow_total
-        return sheet.grand_total + sow_sar
-
-    from datetime import datetime as _dt
-    def _d(dt):
-        if not dt:
-            return '—'
-        if isinstance(dt, _dt):        # datetime → localise; plain date → as-is
-            dt = timezone.localtime(dt)
-        return dt.strftime('%d %b %Y')
 
     styles = getSampleStyleSheet()
     cell = ParagraphStyle('cell', parent=styles['Normal'], fontSize=7.5, leading=9)
@@ -553,37 +613,11 @@ def costing_pipeline_pdf(request):
     sub_style = ParagraphStyle('sub', parent=styles['Normal'], fontSize=9,
                                textColor=colors.HexColor('#666666'), alignment=TA_RIGHT)
 
-    from projects.models import split_trailing_revision
-
-    def _money(v):
-        return f'{v:,.0f}' if v else '—'
-
-    columns = [
-        'Sr #', 'Title', 'Reference', 'Rev', 'Customer Ref', 'End user',
-        'Priority', 'Est. value (SAR)', 'Stage',
-        'Submission date', 'Pipeline created', 'Handed to sales', 'Sales finalised',
-    ]
+    columns, rows = _pipeline_export_data(request)
     data = [[Paragraph(c, head) for c in columns]]
-    for row_no, s in enumerate(sheets, start=1):
-        proj = s.project
-        ref = proj.proposal_reference if proj else ''
-        _base, revision, _style = split_trailing_revision(ref or '')
-        data.append([
-            Paragraph(str(row_no), cell),
-            Paragraph(s.title or '—', cell),
-            Paragraph(ref or '—', cell),
-            Paragraph(revision or '—', cell),
-            Paragraph(s.customer_reference or '—', cell),
-            Paragraph((proj.end_user if proj else '') or '—', cell),
-            Paragraph(proj.get_priority_display() if proj and proj.priority else '—', cell),
-            Paragraph(_money(_sheet_contract_sar(s)), cell),
-            Paragraph(s.stage_badge['label'], cell),
-            Paragraph(_d(proj.submission_deadline if proj else None), cell),
-            Paragraph(_d(s.created_at), cell),
-            Paragraph(_d(s.handed_over_at), cell),
-            Paragraph(_d(s.finalized_at), cell),
-        ])
-    if len(data) == 1:
+    for r in rows:
+        data.append([Paragraph(c, cell) for c in r])
+    if not rows:
         data.append([Paragraph('No costing sheets match the current filters.', cell)]
                     + [Paragraph('', cell) for _ in columns[1:]])
 
@@ -656,6 +690,71 @@ def costing_pipeline_pdf(request):
     from django.http import HttpResponse
     resp = HttpResponse(buf.getvalue(), content_type='application/pdf')
     resp['Content-Disposition'] = 'inline; filename="Commercial_Pipeline.pdf"'
+    return resp
+
+
+@login_required
+def costing_pipeline_excel(request):
+    """Excel export of the commercial pipeline — same columns/rows as the PDF,
+    honouring the current list filters."""
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        messages.error(request, 'openpyxl is required for Excel export.')
+        return redirect('costing:list')
+    from django.utils import timezone
+
+    columns, rows = _pipeline_export_data(request)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Commercial Pipeline'
+    ncols = len(columns)
+
+    # Title + generated timestamp (merged across the table width).
+    ws.append(['Commercial Pipeline — Costing workflow status'])
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
+    ws['A1'].font = Font(bold=True, size=14, color='404040')
+    generated = timezone.localtime(timezone.now()).strftime('%d %b %Y at %H:%M')
+    ws.append([f'Generated {generated}'])
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncols)
+    ws['A2'].font = Font(italic=True, size=9, color='666666')
+    ws.append([])  # spacer row
+
+    header_idx = ws.max_row + 1
+    ws.append(columns)
+    header_fill = PatternFill('solid', fgColor='404040')
+    header_font = Font(bold=True, color='FFFFFF', size=10)
+    thin = Side(style='thin', color='D5D5D5')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for c in ws[header_idx]:
+        c.fill = header_fill
+        c.font = header_font
+        c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+    for r in rows:
+        ws.append(r)
+
+    widths = [6, 30, 20, 7, 24, 20, 10, 16, 18, 15, 15, 15, 15]
+    for i, w in enumerate(widths[:ncols], start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    for row in ws.iter_rows(min_row=header_idx, max_row=ws.max_row,
+                            min_col=1, max_col=ncols):
+        for c in row:
+            c.border = border
+    ws.freeze_panes = ws.cell(row=header_idx + 1, column=1)
+
+    import io as _io
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    from django.http import HttpResponse
+    resp = HttpResponse(
+        buf.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    resp['Content-Disposition'] = 'attachment; filename="Commercial_Pipeline.xlsx"'
     return resp
 
 

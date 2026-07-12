@@ -30,14 +30,8 @@
                             {% endfor %}
                         </select>
                     </div>
-                    <div class="col-md-2">
-                        <select name="stage" class="form-select">
-                            <option value="">All workflow stages</option>
-                            {% for code, label in workflow_stage_choices %}
-                            <option value="{{ code }}" {% if selected_stage == code %}selected{% endif %}>{{ label }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
+                    {# Stage selection is driven by the count buttons below; keep it across form submits. #}
+                    {% for st in selected_stages %}<input type="hidden" name="stage" value="{{ st }}">{% endfor %}
                     <div class="col-md-2">
                         <button type="submit" class="btn btn-primary w-100">Filter</button>
                     </div>
@@ -77,6 +71,9 @@
                 <a href="{% url 'costing:pipeline_pdf' %}{% if request.GET.urlencode %}?{{ request.GET.urlencode }}{% endif %}" target="_blank" rel="noopener" class="btn btn-outline-danger ms-1" title="Open the pipeline (current filters) as a PDF in a new tab">
                     <i class="bi bi-file-earmark-pdf me-1"></i> Export PDF
                 </a>
+                <a href="{% url 'costing:pipeline_excel' %}{% if request.GET.urlencode %}?{{ request.GET.urlencode }}{% endif %}" class="btn btn-outline-success ms-1" title="Download the pipeline (current filters) as Excel">
+                    <i class="bi bi-file-earmark-excel me-1"></i> Export Excel
+                </a>
                 <a href="{% url 'costing:import_new' %}" class="btn btn-success ms-1">
                     <i class="bi bi-upload me-1"></i> Import Excel
                 </a>
@@ -88,20 +85,22 @@
     </div>
 </div>
 
-<!-- Workflow-stage count tabs — click to filter the list by stage -->
-<div class="d-flex flex-wrap gap-2 mb-4">
+<!-- Workflow-stage count buttons — click to toggle each stage (multi-select) -->
+<div class="d-flex flex-wrap gap-2 mb-2">
     <a href="{% url 'costing:list' %}{% if querystring_no_stage %}?{{ querystring_no_stage }}{% endif %}"
-       class="btn btn-sm {% if not selected_stage %}btn-dark{% else %}btn-outline-dark{% endif %} d-flex align-items-center gap-2">
+       class="btn btn-sm {% if not selected_stages %}btn-dark{% else %}btn-outline-dark{% endif %} d-flex align-items-center gap-2">
         <span>All</span><span class="badge bg-light text-dark">{{ total_all }}</span>
     </a>
     {% for sc in stage_counts %}
-    <a href="?{% if querystring_no_stage %}{{ querystring_no_stage }}&amp;{% endif %}stage={{ sc.code }}"
-       class="btn btn-sm {% if selected_stage == sc.code %}btn-dark{% else %}btn-outline-secondary{% endif %} d-flex align-items-center gap-2">
+    <a href="{{ sc.toggle_url }}"
+       class="btn btn-sm {% if sc.active %}btn-dark{% else %}btn-outline-secondary{% endif %} d-flex align-items-center gap-2">
+        {% if sc.active %}<i class="bi bi-check-lg"></i>{% endif %}
         <span class="badge {{ sc.css }}">{{ sc.label }}</span>
         <span class="fw-semibold">{{ sc.count }}</span>
     </a>
     {% endfor %}
 </div>
+<div class="small text-muted mb-4">Click stages to filter — pick more than one to combine them.</div>
 
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
@@ -117,7 +116,7 @@
                         <th>Reference</th>
                         <th>Project</th>
                         <th>Region</th>
-                        <th>Customer Ref</th>
+                        <th>Customer Name</th>
                         <th>Workflow Progress</th>
                         <th>Margin</th>
                         <th>Currency</th>
@@ -145,7 +144,7 @@
                         <td>
                             {% if sheet.project.region %}<span class="badge bg-secondary">{{ sheet.project.region.name }}</span>{% else %}<span class="text-muted">—</span>{% endif %}
                         </td>
-                        <td>{{ sheet.customer_reference|default:"-" }}</td>
+                        <td>{% if sheet.customer_name %}{{ sheet.customer_name }}{% elif sheet.project.customer %}{{ sheet.project.customer }}{% else %}-{% endif %}</td>
                         <td>
                             <span class="badge {{ sheet.stage_badge.css }}">{{ sheet.stage_badge.label }}</span>
                         </td>

@@ -651,7 +651,37 @@ class CommercialPipelineTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, 'BOM not started')      # tab + row badge
         self.assertContains(resp, 'Workflow Progress')    # renamed column header
+        self.assertContains(resp, 'Customer Name')        # renamed column header
         self.assertContains(resp, 'Export PDF')
+
+    def test_list_renders_sheet_without_project(self):
+        # A sheet with no linked project must not crash the Customer Name cell.
+        CostingSheet.objects.create(
+            title='Orphan', project=None, created_by=self.proposal,
+            workflow_stage='bom_in_progress')
+        self.client.force_login(self.superadmin)
+        resp = self.client.get(reverse('costing:list'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Orphan')
+
+    def test_list_search_matches_customer_and_reference(self):
+        match = CostingSheet.objects.create(
+            title='ZZ', project=self.project, created_by=self.proposal,
+            customer_name='Aramco Digital', workflow_stage='bom_in_progress')
+        other = CostingSheet.objects.create(
+            title='Unrelated', project=self.project, created_by=self.proposal,
+            customer_name='Someone Else', workflow_stage='bom_in_progress')
+        self.client.force_login(self.superadmin)
+        # Search by customer name finds the sheet…
+        ids = [s.pk for s in self.client.get(
+            reverse('costing:list'), {'search': 'Aramco'}).context['sheets']]
+        self.assertIn(match.pk, ids)
+        self.assertNotIn(other.pk, ids)
+        # …and searching by the project reference finds both (same project).
+        ids2 = [s.pk for s in self.client.get(
+            reverse('costing:list'), {'search': 'REF-PIPE'}).context['sheets']]
+        self.assertIn(match.pk, ids2)
+        self.assertIn(other.pk, ids2)
 
     def test_pipeline_pdf_export(self):
         self._sheet('bom_in_progress')
@@ -660,6 +690,26 @@ class CommercialPipelineTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp['Content-Type'], 'application/pdf')
         self.assertTrue(resp.content.startswith(b'%PDF'))
+
+    def test_pipeline_excel_export(self):
+        self._sheet('bom_in_progress')
+        self.client.force_login(self.superadmin)
+        resp = self.client.get(reverse('costing:pipeline_excel'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('spreadsheetml', resp['Content-Type'])
+        self.assertTrue(resp.content.startswith(b'PK'))   # .xlsx is a zip
+
+    def test_stage_multiselect_filter(self):
+        a = self._sheet('bom_in_progress')
+        b = self._sheet('ready_for_costing')
+        c = self._sheet('finalized')
+        self.client.force_login(self.superadmin)
+        ids = [s.pk for s in self.client.get(
+            reverse('costing:list'),
+            {'stage': ['bom_in_progress', 'ready_for_costing']}).context['sheets']]
+        self.assertIn(a.pk, ids)
+        self.assertIn(b.pk, ids)
+        self.assertNotIn(c.pk, ids)   # finalized excluded
 
     def test_timeline_period_filter(self):
         from django.utils import timezone
