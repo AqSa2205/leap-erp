@@ -118,10 +118,11 @@
                         <th>Region</th>
                         <th>Customer Name</th>
                         <th>Workflow Progress</th>
-                        <th title="Working days Proposal spent on the BOM">BOM<br><small class="text-muted fw-normal">Proposal</small></th>
-                        <th title="Working days it waited for Sales to start costing">→ Pickup<br><small class="text-muted fw-normal">Sales</small></th>
-                        <th title="Working days Sales took to finalise">Finalise<br><small class="text-muted fw-normal">Sales</small></th>
-                        <th title="Working days in the current stage (weekends excluded)">In stage</th>
+                        <th>BOM started</th>
+                        <th>Handed to sales</th>
+                        <th>Costing started</th>
+                        <th>Finalised</th>
+                        <th title="Working days from pipeline created to Sales finalised (weekends excluded)">Duration</th>
                         <th>Margin</th>
                         <th>Currency</th>
                         <th>Worked On By</th>
@@ -152,15 +153,13 @@
                         <td>
                             <span class="badge {{ sheet.stage_badge.css }}">{{ sheet.stage_badge.label }}</span>
                         </td>
-                        {% for r in sheet.cycle_rows %}
+                        {% for m in sheet.milestone_rows %}
                         <td class="text-nowrap">
-                            <span class="fw-semibold">{{ r.display }}</span>
-                            {% if r.person %}<div class="text-muted small">{{ r.person.get_full_name|default:r.person.username }}</div>{% endif %}
+                            <span class="fw-semibold">{{ m.date }}</span>
+                            {% if m.person %}<div class="text-muted small">{{ m.person.get_full_name|default:m.person.username }}</div>{% endif %}
                         </td>
                         {% endfor %}
-                        <td>
-                            {% if sheet.current_stage_level %}<span class="badge bg-{{ sheet.current_stage_level }}">{{ sheet.current_stage_display }}</span>{% else %}<span class="text-muted">{{ sheet.current_stage_display }}</span>{% endif %}
-                        </td>
+                        <td class="fw-semibold">{{ sheet.total_cycle_display }}</td>
                         <td>{{ sheet.margin }}%</td>
                         <td>{{ sheet.output_currency }}</td>
                         <td>
@@ -179,7 +178,7 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="15" class="text-center py-4 text-muted">
+                        <td colspan="16" class="text-center py-4 text-muted">
                             No costing sheets found. <a href="{% url 'costing:create' %}">Create one</a>.
                         </td>
                     </tr>

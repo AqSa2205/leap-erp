@@ -404,12 +404,34 @@ class CostingSheet(models.Model):
             return 'warning text-dark'
         return 'success'
 
+    def milestone_rows(self):
+        """Date each milestone happened + who did it, for the management views.
+        [{'label', 'date' (str), 'person' (User|None)}] — '—' when not reached."""
+        from django.utils import timezone
+
+        def _dt(x):
+            return timezone.localtime(x).strftime('%d %b %y') if x else '—'
+        c = self
+        ms = [
+            ('BOM started',     c.bom_started_at,     c.bom_started_by),
+            ('Handed to sales', c.handed_over_at,     c.handed_over_by),
+            ('Costing started', c.costing_started_at, c.costing_started_by),
+            ('Finalised',       c.finalized_at,       c.finalized_by),
+        ]
+        return [{'label': lbl, 'date': _dt(x), 'person': p} for lbl, x, p in ms]
+
     @property
     def total_cycle_days(self):
-        """Working days from creation to finalisation (or to now if not yet)."""
+        """Working days from pipeline creation to Sales finalisation (or to now
+        if not yet finalised)."""
         from django.utils import timezone
-        end = self.finalized_at or self.finance_approved_at or timezone.now()
+        end = self.finalized_at or timezone.now()
         return working_days_between(self.created_at, end)
+
+    @property
+    def total_cycle_display(self):
+        d = self.total_cycle_days
+        return f'{d}d' if d is not None else '—'
 
     def _compute_totals(self):
         """Compute all sheet totals in a single pass. Results are cached on the instance.

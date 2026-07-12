@@ -795,12 +795,28 @@ class CommercialPipelineTests(TestCase):
         self._sheet('costing_in_progress')
         self.client.force_login(self.superadmin)
         resp = self.client.get(reverse('costing:list'))
-        self.assertContains(resp, 'In stage')       # cycle column header
-        self.assertContains(resp, 'Finalise')
+        self.assertContains(resp, 'BOM started')     # milestone-date header
+        self.assertContains(resp, 'Duration')
 
     def test_projects_list_shows_cycle_columns(self):
         self._sheet('costing_in_progress')
         self.client.force_login(self.superadmin)
         resp = self.client.get(reverse('projects:list'))
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, 'In stage')
+        self.assertContains(resp, 'Duration')
+
+    def test_milestone_rows_show_dates_and_person(self):
+        sheet = self._sheet('finalized')
+        CostingSheet.objects.filter(pk=sheet.pk).update(
+            bom_started_at=self._aware(2026, 7, 5),
+            handed_over_at=self._aware(2026, 7, 7),
+            finalized_at=self._aware(2026, 7, 9),
+            bom_started_by=self.proposal, finalized_by=self.sales)
+        sheet.refresh_from_db()
+        mr = sheet.milestone_rows()
+        self.assertEqual(len(mr), 4)                 # BOM, Handed, Costing, Finalised
+        self.assertIn('Jul 26', mr[0]['date'])       # a real date, not days
+        self.assertEqual(mr[2]['date'], '—')         # costing_started never set
+        self.assertEqual(mr[0]['person'], self.proposal)
+        # Duration = working days created → finalised (weekends excluded).
+        self.assertIsNotNone(sheet.total_cycle_days)

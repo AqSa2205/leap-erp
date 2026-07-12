@@ -625,22 +625,20 @@ def costing_pipeline_pdf(request):
                                textColor=colors.HexColor('#666666'), alignment=TA_RIGHT)
 
     base_columns, base_rows, sheet_list = _pipeline_export_data(request)
-    # PDF stays compact: base columns + a cycle-time SUMMARY (total + in-stage).
-    columns = base_columns + ['Total days', 'In stage']
+    # PDF stays compact: base columns + the total Duration (created → finalised).
+    columns = base_columns + ['Duration']
     data = [[Paragraph(c, head) for c in columns]]
     for r, s in zip(base_rows, sheet_list):
-        data.append([Paragraph(c, cell) for c in r] + [
-            Paragraph(_cycle_days_str(s.total_cycle_days), cell),
-            Paragraph(_cycle_days_str(s.days_in_current_stage), cell),
-        ])
+        data.append([Paragraph(c, cell) for c in r]
+                    + [Paragraph(s.total_cycle_display, cell)])
     if not base_rows:
         data.append([Paragraph('No costing sheets match the current filters.', cell)]
                     + [Paragraph('', cell) for _ in columns[1:]])
 
     page_w = landscape(A4)[0] - 20 * mm
     widths = [w * page_w for w in
-              (0.03, 0.11, 0.08, 0.033, 0.08, 0.08, 0.043, 0.078, 0.078,
-               0.068, 0.068, 0.068, 0.068, 0.05, 0.045)]
+              (0.03, 0.12, 0.085, 0.035, 0.085, 0.085, 0.045, 0.08, 0.08,
+               0.072, 0.072, 0.072, 0.072, 0.055)]
     table = Table(data, colWidths=widths, repeatRows=1)
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), LEAP_GREEN),
@@ -723,22 +721,23 @@ def costing_pipeline_excel(request):
     from django.utils import timezone
 
     base_columns, base_rows, sheet_list = _pipeline_export_data(request)
-    # Excel carries the FULL cycle-time breakdown: days + who, per stage.
+    # Excel carries the FULL breakdown: each milestone DATE + who did it, and the
+    # total Duration (pipeline created → finalised).
     cycle_columns = [
-        'BOM days', 'BOM by', 'Pickup days', 'Pickup by',
-        'Finalise days', 'Finalise by',
-        'Total days', 'In current stage',
+        'BOM started', 'BOM by', 'Handed to sales', 'Handed by',
+        'Costing started', 'Costing by', 'Finalised', 'Finalised by',
+        'Duration',
     ]
     columns = base_columns + cycle_columns
     rows = []
     for r, s in zip(base_rows, sheet_list):
-        cr = s.cycle_rows()   # [BOM, Pickup, Finalise]
+        mr = s.milestone_rows()   # [BOM started, Handed to sales, Costing started, Finalised]
         rows.append(r + [
-            cr[0]['display'], _person_name(cr[0]['person']),
-            cr[1]['display'], _person_name(cr[1]['person']),
-            cr[2]['display'], _person_name(cr[2]['person']),
-            _cycle_days_str(s.total_cycle_days),
-            _cycle_days_str(s.days_in_current_stage),
+            mr[0]['date'], _person_name(mr[0]['person']),
+            mr[1]['date'], _person_name(mr[1]['person']),
+            mr[2]['date'], _person_name(mr[2]['person']),
+            mr[3]['date'], _person_name(mr[3]['person']),
+            s.total_cycle_display,
         ])
 
     wb = openpyxl.Workbook()
@@ -771,7 +770,7 @@ def costing_pipeline_excel(request):
         ws.append(r)
 
     widths = [6, 30, 20, 7, 24, 20, 10, 16, 18, 15, 15, 15, 15,
-              10, 16, 11, 16, 12, 16, 10, 14]
+              13, 16, 14, 16, 14, 16, 12, 16, 11]
     for i, w in enumerate(widths[:ncols], start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
     for row in ws.iter_rows(min_row=header_idx, max_row=ws.max_row,
