@@ -802,6 +802,22 @@
     {% block extra_css %}{% endblock %}
 </head>
 <body>
+    <!-- Global loading overlay — shows while navigating to a slow page / opening a PDF -->
+    <div id="global-loading" aria-hidden="true">
+        <div class="gl-box">
+            <div class="spinner-border" role="status" aria-hidden="true"></div>
+            <div class="gl-text">Please wait…</div>
+        </div>
+    </div>
+    <style>
+        #global-loading{position:fixed;inset:0;background:rgba(20,20,20,.5);display:none;
+            align-items:center;justify-content:center;z-index:20000;}
+        #global-loading.show{display:flex;}
+        #global-loading .gl-box{background:#fff;border-radius:12px;padding:22px 30px;
+            box-shadow:0 12px 34px rgba(0,0,0,.28);text-align:center;min-width:180px;}
+        #global-loading .spinner-border{color:#14503c;width:2.5rem;height:2.5rem;}
+        #global-loading .gl-text{margin-top:12px;font-weight:600;color:#333;}
+    </style>
     {% if user.is_authenticated %}
     <!-- Sidebar Overlay for mobile -->
     <div class="sidebar-overlay" id="sidebarOverlay"></div>
@@ -1828,6 +1844,53 @@
             d.textContent = str || '';
             return d.innerHTML;
         }
+    })();
+    </script>
+
+    <!-- Global "please wait" overlay controller -->
+    <script>
+    (function () {
+        var overlay = document.getElementById('global-loading');
+        var textEl = overlay ? overlay.querySelector('.gl-text') : null;
+        var fallback;
+        function show(msg) {
+            if (!overlay) return;
+            if (textEl) textEl.textContent = msg || 'Please wait…';
+            overlay.classList.add('show');
+            overlay.setAttribute('aria-hidden', 'false');
+        }
+        function hide() {
+            if (!overlay) return;
+            overlay.classList.remove('show');
+            overlay.setAttribute('aria-hidden', 'true');
+        }
+        // Expose so any page can trigger it manually: LeapLoading.show('...')
+        window.LeapLoading = { show: show, hide: hide };
+
+        // Real navigation (same-tab link click or form submit that loads a new
+        // page) fires beforeunload — but a file DOWNLOAD or a target="_blank"
+        // link does NOT, so the overlay never hangs on those.
+        window.addEventListener('beforeunload', function () {
+            show('Loading, please wait…');
+            // Safety net: clear if the navigation is somehow cancelled.
+            clearTimeout(fallback);
+            fallback = setTimeout(hide, 30000);
+        });
+
+        // Hide on (re)display: normal load AND back/forward cache restore.
+        window.addEventListener('pageshow', hide);
+
+        // Brief feedback for links that open a new tab (e.g. PDF preview) —
+        // the current page stays, so auto-dismiss after a few seconds.
+        document.addEventListener('click', function (e) {
+            var a = e.target.closest('a[target="_blank"]');
+            if (!a || a.hasAttribute('data-no-loading')) return;
+            var href = a.getAttribute('href') || '';
+            if (!href || href.charAt(0) === '#') return;
+            show(a.dataset.loadingText || 'Opening…');
+            clearTimeout(fallback);
+            fallback = setTimeout(hide, 5000);
+        }, true);
     })();
     </script>
 </body>

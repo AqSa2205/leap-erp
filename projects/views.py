@@ -167,6 +167,10 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         project = self.object
+        # Edit/delete permission for this specific project (the model helpers
+        # need the project instance, which templates can't pass to a method).
+        context['can_edit'] = self.request.user.can_edit_project(project)
+        context['can_delete'] = self.request.user.can_delete_project()
         context['history'] = project.history.select_related(
             'old_status', 'new_status', 'changed_by'
         ).all()[:10]

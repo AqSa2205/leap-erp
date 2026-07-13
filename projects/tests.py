@@ -121,6 +121,19 @@ class PipelineVisibilityTests(TestCase):
         r = self.client.get(reverse('projects:edit', kwargs={'pk': self.lna_proj.pk}))
         self.assertEqual(r.status_code, 404)  # not in the owner-scoped edit queryset
 
+    def test_detail_shows_edit_button_when_allowed(self):
+        edit_url = reverse('projects:edit', kwargs={'pk': self.lna_proj.pk})
+        # Admin owns / can edit the region project → Edit button present.
+        self.client.force_login(self.admin)
+        r = self.client.get(reverse('projects:detail', kwargs={'pk': self.lna_proj.pk}))
+        self.assertTrue(r.context['can_edit'])
+        self.assertContains(r, edit_url)
+        # Sales rep can view but doesn't own it → no Edit button.
+        self.client.force_login(self.sales)
+        r = self.client.get(reverse('projects:detail', kwargs={'pk': self.lna_proj.pk}))
+        self.assertFalse(r.context['can_edit'])
+        self.assertNotContains(r, edit_url)
+
     def test_sales_can_edit_own_project(self):
         own = Project.objects.create(
             project_name='Own', proposal_reference='LNA-OWN',
