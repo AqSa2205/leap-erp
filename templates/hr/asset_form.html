@@ -78,6 +78,19 @@
                         <h5 class="border-bottom pb-2 mb-3">
                             <i class="bi bi-person"></i> Assignment Details
                         </h5>
+                        <div class="row mb-2">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Select Employee</label>
+                                <select id="employee-picker" class="form-select">
+                                    <option value="">— pick an employee —</option>
+                                    {% for e in employees %}
+                                    <option value="{{ e.pk }}">{{ e.full_name }}</option>
+                                    {% endfor %}
+                                </select>
+                                <div class="form-text">Auto-fills the name &amp; designation below.</div>
+                            </div>
+                        </div>
+                        {{ employees_json|json_script:"asset-employees" }}
                         <div class="row mb-4">
                             <div class="col-md-4 mb-3">
                                 <label class="form-label">Employee Name</label>
@@ -168,6 +181,21 @@
                             var wrap = document.getElementById('decommission-fields');
                             function sync(){ if (cb && wrap) wrap.style.display = cb.checked ? '' : 'none'; }
                             if (cb){ cb.addEventListener('change', sync); sync(); }
+                        })();
+                        // Pick an employee -> auto-fill Employee Name + Designation.
+                        (function(){
+                            var map = {};
+                            try { map = JSON.parse(document.getElementById('asset-employees').textContent); } catch(e){}
+                            var picker = document.getElementById('employee-picker');
+                            var nameInput = document.querySelector('[name="employee_name"]');
+                            var desigInput = document.querySelector('[name="designation"]');
+                            if (!picker) return;
+                            picker.addEventListener('change', function(){
+                                var d = map[picker.value];
+                                if (!d) return;
+                                if (nameInput) nameInput.value = d.name || '';
+                                if (desigInput) desigInput.value = d.designation || '';
+                            });
                         })();
                         </script>
 

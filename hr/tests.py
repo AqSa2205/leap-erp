@@ -198,6 +198,18 @@ class LeaveAdminViewTests(TestCase):
         self.assertRedirects(resp, reverse('hr:holiday_list'))
         self.assertEqual(Holiday.objects.filter(name='Eid').count(), 1)
 
+    def test_asset_form_has_employee_picker_autofill(self):
+        from hr.models import Employee
+        Employee.objects.create(iqama_number='EMP-AST', full_name='Dana Ali',
+                                designation='Network Engineer', is_active=True)
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse('hr:asset_create'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'employee-picker')          # the dropdown
+        self.assertContains(resp, 'asset-employees')          # the JSON map
+        self.assertContains(resp, 'Dana Ali')                 # employee option
+        self.assertContains(resp, 'Network Engineer')         # designation in the map
+
 
 class LeaveRecordViewTests(TestCase):
     def setUp(self):

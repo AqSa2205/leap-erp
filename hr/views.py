@@ -674,6 +674,18 @@ class AssetDetailView(AdminRequiredMixin, DetailView):
     context_object_name = 'asset'
 
 
+def _asset_employees_context():
+    """Active employees for the asset form's 'pick employee' dropdown, plus a
+    map (pk -> name/designation) so selecting one auto-fills the text fields.
+    Returned as a dict for json_script (which serialises it in the template)."""
+    emps = list(Employee.objects.filter(is_active=True).order_by('full_name'))
+    data = {
+        str(e.pk): {'name': e.full_name, 'designation': e.designation or ''}
+        for e in emps
+    }
+    return emps, data
+
+
 class AssetCreateView(AdminRequiredMixin, CreateView):
     model = Asset
     form_class = AssetForm
@@ -689,6 +701,7 @@ class AssetCreateView(AdminRequiredMixin, CreateView):
         context = super().get_context_data(**kwargs)
         context['title'] = 'Add New Asset'
         context['button_text'] = 'Save Asset'
+        context['employees'], context['employees_json'] = _asset_employees_context()
         return context
 
 
@@ -706,6 +719,7 @@ class AssetUpdateView(AdminRequiredMixin, UpdateView):
         context = super().get_context_data(**kwargs)
         context['title'] = 'Edit Asset'
         context['button_text'] = 'Update Asset'
+        context['employees'], context['employees_json'] = _asset_employees_context()
         return context
 
 
