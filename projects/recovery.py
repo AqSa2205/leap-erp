@@ -32,6 +32,43 @@ def _copy_instance(model, src_obj, dst_db):
     return obj
 
 
+def deleted_project_ids():
+    """Project ids present in the recovery copy but missing from the live DB —
+    i.e. everything deleted at/after the restore point."""
+    if not recovery_available():
+        raise RuntimeError("RECOVERY_DATABASE_URL is not configured.")
+    from projects.models import Project
+    rec = set(Project.objects.using(REC).values_list('pk', flat=True))
+    live = set(Project.objects.using(DST).values_list('pk', flat=True))
+    return sorted(rec - live)
+
+
+def list_deleted_projects():
+    """[{pk, reference, name}] for every project missing from the live DB."""
+    from projects.models import Project
+    ids = deleted_project_ids()
+    rows = (Project.objects.using(REC).filter(pk__in=ids)
+            .values('pk', 'proposal_reference', 'project_name'))
+    return [{'pk': r['pk'], 'reference': r['proposal_reference'],
+             'name': r['project_name']} for r in rows]
+
+
+def run_recovery_all(with_cascaded=True, commit=False):
+    """Recover EVERY project missing from the live DB (whole-pipeline restore).
+    Returns {'count', 'projects': [reports...], 'committed'}."""
+    from django.db import transaction
+    ids = deleted_project_ids()
+    reports = []
+    if commit:
+        with transaction.atomic(using=DST):   # all-or-nothing
+            for pk in ids:
+                reports.append(run_recovery(pk=pk, with_cascaded=with_cascaded, commit=True))
+    else:
+        for pk in ids:
+            reports.append(run_recovery(pk=pk, with_cascaded=with_cascaded, commit=False))
+    return {'count': len(ids), 'projects': reports, 'committed': commit}
+
+
 def run_recovery(reference=None, pk=None, with_cascaded=True, commit=False):
     """Plan (and, if commit=True, apply) the recovery. Returns a report dict.
 

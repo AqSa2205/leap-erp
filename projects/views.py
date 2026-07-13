@@ -1362,28 +1362,47 @@ def project_recovery(request):
         messages.error(request, 'Project recovery is restricted to super administrators.')
         return redirect('projects:list')
 
-    from .recovery import recovery_available, run_recovery
+    from .recovery import (recovery_available, run_recovery, run_recovery_all,
+                           list_deleted_projects)
     ctx = {
         'available': recovery_available(),
         'reference': (request.POST.get('reference') or '').strip(),
         'pk_raw': (request.POST.get('pk') or '').strip(),
         'with_cascaded': request.POST.get('with_cascaded', '1') == '1',
         'report': None,
+        'all_report': None,
+        'deleted_list': None,
         'error': None,
         'committed': False,
     }
-    if request.method == 'POST' and ctx['available']:
-        action = request.POST.get('action')          # 'preview' or 'apply'
-        pk = int(ctx['pk_raw']) if ctx['pk_raw'].isdigit() else None
+    # Always show how many projects are missing (whole-pipeline view).
+    if ctx['available']:
         try:
-            report = run_recovery(
-                reference=ctx['reference'] or None, pk=pk,
-                with_cascaded=ctx['with_cascaded'], commit=(action == 'apply'))
-            ctx['report'] = report
-            ctx['committed'] = report['committed']
-            if report['committed']:
-                messages.success(
-                    request, f"Recovered project {report['reference']} (id {report['pk']}).")
+            ctx['deleted_list'] = list_deleted_projects()
+        except (RuntimeError, Exception):
+            ctx['deleted_list'] = None
+
+    if request.method == 'POST' and ctx['available']:
+        action = request.POST.get('action')   # preview / apply / preview_all / apply_all
+        try:
+            if action in ('preview_all', 'apply_all'):
+                ctx['all_report'] = run_recovery_all(
+                    with_cascaded=ctx['with_cascaded'], commit=(action == 'apply_all'))
+                ctx['committed'] = ctx['all_report']['committed']
+                if ctx['committed']:
+                    messages.success(
+                        request, f"Recovered {ctx['all_report']['count']} deleted project(s).")
+                    ctx['deleted_list'] = list_deleted_projects()   # refresh
+            else:
+                pk = int(ctx['pk_raw']) if ctx['pk_raw'].isdigit() else None
+                report = run_recovery(
+                    reference=ctx['reference'] or None, pk=pk,
+                    with_cascaded=ctx['with_cascaded'], commit=(action == 'apply'))
+                ctx['report'] = report
+                ctx['committed'] = report['committed']
+                if report['committed']:
+                    messages.success(
+                        request, f"Recovered project {report['reference']} (id {report['pk']}).")
         except (ValueError, RuntimeError) as e:
             ctx['error'] = str(e)
     return render(request, 'projects/project_recovery.html', ctx)

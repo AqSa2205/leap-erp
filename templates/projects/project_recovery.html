@@ -34,6 +34,44 @@
 
           {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
 
+          <!-- Whole-pipeline restore -->
+          {% if deleted_list is not None %}
+          <div class="border rounded p-3 mb-4 bg-light">
+            <h6 class="mb-2"><i class="bi bi-stack me-1"></i>Restore the entire pipeline</h6>
+            {% if deleted_list %}
+            <p class="mb-2"><strong>{{ deleted_list|length }}</strong> project(s) exist in the recovery copy but are missing from the live system (i.e. deleted at/after your restore point):</p>
+            <div style="max-height:180px;overflow:auto;" class="mb-2">
+              <table class="table table-sm mb-0">
+                {% for d in deleted_list %}<tr><td class="text-muted">#{{ d.pk }}</td><td><code>{{ d.reference }}</code></td><td>{{ d.name }}</td></tr>{% endfor %}
+              </table>
+            </div>
+            <form method="post" class="d-flex align-items-center gap-2">
+              {% csrf_token %}
+              <input type="hidden" name="with_cascaded" value="{% if with_cascaded %}1{% else %}0{% endif %}">
+              <button type="submit" name="action" value="preview_all" class="btn btn-outline-primary btn-sm">
+                <i class="bi bi-search me-1"></i>Preview all
+              </button>
+              <button type="submit" name="action" value="apply_all" class="btn btn-danger btn-sm"
+                      onclick="return confirm('Restore ALL {{ deleted_list|length }} deleted projects? This writes to the live database.');">
+                <i class="bi bi-arrow-counterclockwise me-1"></i>Restore all {{ deleted_list|length }}
+              </button>
+            </form>
+            {% else %}
+            <p class="text-muted mb-0">No missing projects — the live system already has every project that was in the recovery copy.</p>
+            {% endif %}
+          </div>
+
+          {% if all_report %}
+          <div class="alert {% if committed %}alert-success{% else %}alert-info{% endif %}">
+            {% if committed %}Restored{% else %}Preview:{% endif %} <strong>{{ all_report.count }}</strong> project(s){% if not committed %} would be restored{% endif %}.
+            {% if committed %} Verify the pipeline, then remove <code>RECOVERY_DATABASE_URL</code> and delete the recovery DB.{% endif %}
+          </div>
+          {% endif %}
+
+          <hr>
+          <h6 class="text-muted">…or restore a single project</h6>
+          {% endif %}
+
           <form method="post" class="row g-3">
             {% csrf_token %}
             <div class="col-md-6">
