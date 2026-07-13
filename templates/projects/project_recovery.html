@@ -1,0 +1,109 @@
+{% extends 'base.html' %}
+{% block title %}Project Recovery{% endblock %}
+{% block page_title %}Project Recovery{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+  <div class="row justify-content-center">
+    <div class="col-lg-9">
+
+      <div class="card mb-4">
+        <div class="card-header bg-dark text-white">
+          <i class="bi bi-arrow-counterclockwise me-2"></i>Restore a deleted Commercial Pipeline project
+        </div>
+        <div class="card-body">
+          <p class="text-muted">
+            Rebuilds a hard‑deleted project from a Render Point‑in‑Time‑Recovery copy:
+            recreates the project, relinks its surviving costing sheets / BOMs / POs /
+            proposals, and (optionally) restores its finance budget &amp; revisions.
+          </p>
+
+          {% if not available %}
+          <div class="alert alert-warning">
+            <strong>Recovery database not connected.</strong> First:
+            <ol class="mb-0 mt-2">
+              <li>Render → your Postgres DB → <b>Recovery</b> → restore to just before the deletion (creates a new instance).</li>
+              <li>Copy that instance's <b>Internal Database URL</b>.</li>
+              <li>Render → your <b>web service</b> → <b>Environment</b> → add
+                  <code>RECOVERY_DATABASE_URL</code> = that URL → save (it redeploys).</li>
+              <li>Come back to this page.</li>
+            </ol>
+          </div>
+          {% else %}
+          <div class="alert alert-success py-2"><i class="bi bi-plug me-1"></i>Recovery database connected.</div>
+
+          {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+
+          <form method="post" class="row g-3">
+            {% csrf_token %}
+            <div class="col-md-6">
+              <label class="form-label">Project reference (proposal reference)</label>
+              <input type="text" name="reference" value="{{ reference }}" class="form-control"
+                     placeholder="e.g. LNA 2817 - Acme">
+              <div class="form-text">The Customer Ref shown on one of the orphaned costing sheets.</div>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">…or project ID</label>
+              <input type="text" name="pk" value="{{ pk_raw }}" class="form-control" placeholder="optional">
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="with_cascaded" value="1" id="wc"
+                       {% if with_cascaded %}checked{% endif %}>
+                <label class="form-check-label" for="wc">Restore finance &amp; revisions too</label>
+              </div>
+            </div>
+            <div class="col-12">
+              <button type="submit" name="action" value="preview" class="btn btn-outline-primary">
+                <i class="bi bi-search me-1"></i>Preview (no changes)
+              </button>
+              {% if report and not committed %}
+              <button type="submit" name="action" value="apply" class="btn btn-danger ms-2"
+                      onclick="return confirm('Apply the recovery? This writes to the live database.');">
+                <i class="bi bi-check2-circle me-1"></i>Apply recovery
+              </button>
+              {% endif %}
+            </div>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if report %}
+      <div class="card">
+        <div class="card-header {% if committed %}bg-success text-white{% else %}bg-light{% endif %}">
+          {% if committed %}<i class="bi bi-check2-circle me-1"></i>Recovered{% else %}Preview{% endif %}
+          — {{ report.reference }} (id {{ report.pk }}) · {{ report.name }}
+        </div>
+        <div class="card-body">
+          <p><strong>Project row:</strong>
+            {% if report.already_exists %}already exists (kept){% else %}{% if committed %}recreated{% else %}will be recreated{% endif %}{% endif %}
+          </p>
+          <div class="row">
+            <div class="col-md-6">
+              <h6>Relinked (surviving rows)</h6>
+              <table class="table table-sm">
+                {% for r in report.relinks %}<tr><td>{{ r.label }}</td><td class="text-end">{{ r.count }}</td></tr>{% empty %}<tr><td class="text-muted" colspan="2">none</td></tr>{% endfor %}
+              </table>
+            </div>
+            <div class="col-md-6">
+              <h6>Cascade‑deleted children</h6>
+              <table class="table table-sm">
+                {% for r in report.recreations %}<tr><td>{{ r.label }} <span class="text-muted small">[{{ r.on_delete }}]</span></td><td class="text-end">{% if report.with_cascaded %}{% if committed %}restored {% else %}recreate {% endif %}{% else %}skipped {% endif %}{{ r.count }}</td></tr>{% empty %}<tr><td class="text-muted" colspan="2">none</td></tr>{% endfor %}
+              </table>
+            </div>
+          </div>
+          {% if committed %}
+          <div class="alert alert-info mb-0">
+            Done. Verify the project in the Commercial Pipeline, then remove
+            <code>RECOVERY_DATABASE_URL</code> from the web service and delete the recovery DB instance.
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
+    </div>
+  </div>
+</div>
+{% endblock %}

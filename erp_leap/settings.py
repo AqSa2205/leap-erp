@@ -151,6 +151,14 @@ else:
         }
     }
 
+# Optional read-only "recovery" connection — a Render Point-in-Time-Recovery
+# copy of the DB. Set RECOVERY_DATABASE_URL only while running the
+# `recover_project` management command; leave it unset in normal operation.
+RECOVERY_DATABASE_URL = os.environ.get('RECOVERY_DATABASE_URL')
+if RECOVERY_DATABASE_URL:
+    DATABASES['recovery'] = dj_database_url.config(
+        env='RECOVERY_DATABASE_URL', conn_max_age=0, conn_health_checks=True)
+
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [

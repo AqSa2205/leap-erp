@@ -1351,3 +1351,39 @@ def pipeline_print_pdf(request):
     stamp = timezone.localtime().strftime('%Y%m%d_%H%M')
     resp['Content-Disposition'] = f'inline; filename="commercial_pipeline_{stamp}.pdf"'
     return resp
+
+
+@login_required
+def project_recovery(request):
+    """Super-admin browser tool to restore a hard-deleted Project from a Render
+    Point-in-Time-Recovery copy (set RECOVERY_DATABASE_URL on the web service).
+    Preview first, then apply. See projects/recovery.py."""
+    if not getattr(request.user, 'is_super_admin_user', False):
+        messages.error(request, 'Project recovery is restricted to super administrators.')
+        return redirect('projects:list')
+
+    from .recovery import recovery_available, run_recovery
+    ctx = {
+        'available': recovery_available(),
+        'reference': (request.POST.get('reference') or '').strip(),
+        'pk_raw': (request.POST.get('pk') or '').strip(),
+        'with_cascaded': request.POST.get('with_cascaded', '1') == '1',
+        'report': None,
+        'error': None,
+        'committed': False,
+    }
+    if request.method == 'POST' and ctx['available']:
+        action = request.POST.get('action')          # 'preview' or 'apply'
+        pk = int(ctx['pk_raw']) if ctx['pk_raw'].isdigit() else None
+        try:
+            report = run_recovery(
+                reference=ctx['reference'] or None, pk=pk,
+                with_cascaded=ctx['with_cascaded'], commit=(action == 'apply'))
+            ctx['report'] = report
+            ctx['committed'] = report['committed']
+            if report['committed']:
+                messages.success(
+                    request, f"Recovered project {report['reference']} (id {report['pk']}).")
+        except (ValueError, RuntimeError) as e:
+            ctx['error'] = str(e)
+    return render(request, 'projects/project_recovery.html', ctx)

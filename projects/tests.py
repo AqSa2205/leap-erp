@@ -390,3 +390,28 @@ class ProposalTeamDocumentVisibilityTests(TestCase):
         names = set(_documents_visible_to(self.head).values_list('name', flat=True))
         self.assertIn('rfqA', names)
         self.assertNotIn('rfqB', names)
+
+
+class ProjectRecoveryViewTests(TestCase):
+    """The super-admin browser recovery page: gated to super admins, and shows
+    setup instructions when no recovery DB is connected (the normal state)."""
+
+    def setUp(self):
+        from accounts.models import Role, User
+        self.su = User.objects.create_user('surec', password='x')
+        self.su.role = Role.objects.get_or_create(name=Role.SUPER_ADMIN)[0]
+        self.su.save()
+        self.other = User.objects.create_user('orec', password='x')
+        self.other.role = Role.objects.get_or_create(name=Role.SALES_REP)[0]
+        self.other.save()
+
+    def test_non_superadmin_blocked(self):
+        self.client.force_login(self.other)
+        self.assertEqual(self.client.get(reverse('projects:recover')).status_code, 302)
+
+    def test_superadmin_sees_setup_instructions(self):
+        self.client.force_login(self.su)
+        r = self.client.get(reverse('projects:recover'))
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.context['available'])   # no recovery DB in tests
+        self.assertContains(r, 'Recovery database not connected')
