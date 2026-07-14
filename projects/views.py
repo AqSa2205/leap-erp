@@ -617,53 +617,6 @@ class ProjectDeleteView(ProjectPermissionMixin, DeleteView):
         return super().form_valid(form)
 
 
-class ProjectBulkDeleteView(LoginRequiredMixin, UserPassesTestMixin, View):
-    """Delete all projects matching the current filters (admin only)"""
-
-    REGION_CODE_MAP = ProjectListView.REGION_CODE_MAP
-
-    def test_func(self):
-        return self.request.user.can_delete_project()
-
-    def post(self, request):
-        queryset = Project.objects.select_related('status', 'region', 'owner').all()
-
-        # Apply the same filters as ProjectListView
-        search = request.POST.get('search')
-        region = request.POST.get('region')
-        year = request.POST.get('year')
-        status = request.POST.get('status')
-        category = request.POST.get('category')
-        quarter = request.POST.get('quarter')
-        owner = request.POST.get('owner')
-
-        if search:
-            queryset = queryset.filter(
-                Q(project_name__icontains=search) |
-                Q(proposal_reference__icontains=search) |
-                Q(client_rfq_reference__icontains=search)
-            )
-        if region:
-            region_codes = self.REGION_CODE_MAP.get(region, [])
-            if region_codes:
-                queryset = queryset.filter(region__code__in=region_codes)
-        if year:
-            queryset = queryset.filter(year=year)
-        if status:
-            queryset = queryset.filter(status_id=status)
-        if category:
-            queryset = queryset.filter(status__category=category)
-        if quarter:
-            queryset = queryset.filter(po_award_quarter=quarter)
-        if owner:
-            queryset = queryset.filter(owner_id=owner)
-
-        count = queryset.count()
-        queryset.delete()
-        messages.success(request, f'{count} project(s) deleted successfully.')
-        return redirect('projects:list')
-
-
 class ProjectImportView(LoginRequiredMixin, UserPassesTestMixin, View):
     """Import projects from an Excel file"""
 
