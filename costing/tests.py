@@ -88,10 +88,11 @@ class StrictGateTests(TestCase):
         from costing.views import _user_can_edit_sheet
         return _user_can_edit_sheet(user, sheet)
 
-    def test_bom_stage_proposal_only(self):
+    def test_bom_stage_proposal_and_sales(self):
+        # BOM stage is now open to proposal, sales and admins.
         s = self._sheet('bom_in_progress')
         self.assertTrue(self._can(self.proposal, s))
-        self.assertFalse(self._can(self.sales, s))
+        self.assertTrue(self._can(self.sales, s))
         self.assertTrue(self._can(self.superadmin, s))
 
     def test_ready_for_costing_locked_for_all(self):
@@ -174,8 +175,9 @@ class BarrierEndpointTests(TestCase):
             reverse('costing:add_sow_item', kwargs={'pk': sheet.pk}),
             {'description': 'Cabling works', 'quantity': '1'})
 
-    def test_sales_blocked_during_bom(self):
-        self.assertEqual(self._mutate(self.sales, self._sheet('bom_in_progress')).status_code, 403)
+    def test_sales_allowed_during_bom(self):
+        # BOM stage opened to sales/admins — sales can now edit a BOM sheet.
+        self.assertEqual(self._mutate(self.sales, self._sheet('bom_in_progress')).status_code, 200)
 
     def test_proposal_allowed_during_bom(self):
         self.assertEqual(self._mutate(self.proposal, self._sheet('bom_in_progress')).status_code, 200)
@@ -214,11 +216,11 @@ class DetailCanEditContextTests(TestCase):
                                            created_by=self.proposal, workflow_stage=stage)
 
     def test_context_can_edit_per_role(self):
+        # BOM stage is open to proposal AND sales/admins now.
         s = self._sheet('bom_in_progress')
         self.client.force_login(self.sales)
         resp = self.client.get(reverse('costing:detail', kwargs={'pk': s.pk}))
-        self.assertFalse(resp.context['can_edit'])
-        self.assertTrue(resp.context['edit_lock_reason'])  # non-empty reason shown
+        self.assertTrue(resp.context['can_edit'])
         self.client.force_login(self.proposal)
         resp = self.client.get(reverse('costing:detail', kwargs={'pk': s.pk}))
         self.assertTrue(resp.context['can_edit'])
@@ -633,11 +635,12 @@ class CommercialPipelineTests(TestCase):
         self.assertIsNotNone(sheet.bom_started_at)
         self.assertEqual(sheet.bom_started_by, self.proposal)
 
-    def test_sales_cannot_start_bom(self):
+    def test_sales_can_start_bom(self):
+        # Start BOM is now open to sales/admins as well as proposal.
         sheet = self._sheet('bom_not_started')
         self._transition(self.sales, sheet, 'start_bom')
         sheet.refresh_from_db()
-        self.assertEqual(sheet.workflow_stage, 'bom_not_started')  # unchanged
+        self.assertEqual(sheet.workflow_stage, 'bom_in_progress')
 
     def test_default_stage_is_bom_not_started(self):
         sheet = CostingSheet.objects.create(

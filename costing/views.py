@@ -71,6 +71,10 @@ def _user_can_view_sheet(user, sheet):
     # Proposal team sees every sheet as a BOM (no pricing) regardless of region
     if getattr(user, 'is_proposal_team_user', False):
         return True
+    # Sales team (incl. sales reps) sees sheets in their region — matches the
+    # region-scoped costing list and lets them work the BOM/costing stages.
+    if getattr(user, 'is_sales_team_user', False):
+        return bool(sheet.project and sheet.project.region_id == user.region_id)
     # Finance team can view sheets in their region — needed for budgeting
     # review and ongoing finance reference.
     if getattr(user, 'is_finance_team_user', False):
@@ -234,8 +238,10 @@ def _strict_stage_edit(user, sheet, stage):
     """
     region_ok = bool(sheet.project and sheet.project.region_id == user.region_id)
     if stage in ('bom_not_started', 'bom_in_progress'):
-        # Proposal team owns BOM building (pricing still field-gated elsewhere).
-        return bool(getattr(user, 'is_proposal_team_user', False))
+        # BOM stage: proposal team OR sales team (which includes admins/managers)
+        # can start and build the BOM. (Pricing is still field-gated elsewhere.)
+        return bool(getattr(user, 'is_proposal_team_user', False)
+                    or getattr(user, 'is_sales_team_user', False))
     if stage == 'ready_for_costing':
         # Handoff checkpoint — locked until Sales clicks "Start costing".
         return False
@@ -313,8 +319,8 @@ def _edit_lock_reason(user, sheet):
         return ''  # legacy/finance locks have their own existing banners
     stage = sheet.workflow_stage
     if stage in ('bom_not_started', 'bom_in_progress'):
-        return ('The Proposal team owns this BOM. It unlocks for Sales '
-                'after handover and "Start costing".')
+        return ('This BOM is owned by the Proposal or Sales team (and admins) '
+                'at the BOM stage — read-only for other teams.')
     if stage == 'ready_for_costing':
         return ('Handed to Sales. Click "Start costing" to begin — the sheet is '
                 'locked until then.')
@@ -2537,7 +2543,7 @@ def costing_workflow_transition(request, pk):
         'start_bom': {
             'from': {'bom_not_started'},
             'to':   'bom_in_progress',
-            'allowed_teams': {'proposal'},
+            'allowed_teams': {'proposal', 'sales'},   # + admins/managers (sales team)
             'sets':  lambda: {
                 'workflow_stage': 'bom_in_progress',
                 'bom_started_at': now,

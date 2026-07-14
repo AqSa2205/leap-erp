@@ -178,8 +178,8 @@
                 {% endif %}
             </div>
             <div class="d-flex gap-2">
-                {# Start BOM: proposal team picks up a brand-new pipeline sheet. #}
-                {% if stage == 'bom_not_started' and user.is_proposal_team_user %}
+                {# Start BOM: proposal team, sales team or admins can pick up a brand-new pipeline sheet. #}
+                {% if stage == 'bom_not_started' and user.is_proposal_team_user or stage == 'bom_not_started' and user.is_sales_team_user %}
                 <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}" class="d-inline">
                     {% csrf_token %}
                     <input type="hidden" name="action" value="start_bom">
