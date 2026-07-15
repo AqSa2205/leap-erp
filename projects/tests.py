@@ -68,6 +68,109 @@ class PipelineListBadgeTests(TestCase):
         self.assertContains(resp, 'Handed to Finance')
 
 
+class PipelineValueSummaryTests(TestCase):
+    """The Won / Hot-Leads headline split on the pipeline list.
+
+    Won  = closed contract value; Hot Leads = costing value (both converted
+    to SAR). hot_no_costing_count = hot leads without a priced costing sheet.
+    """
+
+    def setUp(self):
+        from decimal import Decimal
+        from costing.models import ExchangeRate
+        self.Decimal = Decimal
+        self.lna = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        self.uk = Region.objects.create(name='UK', code='UK', currency='GBP')
+        self.won = ProjectStatus.objects.create(name='Won', category='won')
+        self.hot = ProjectStatus.objects.create(name='Hot', category='hot_lead')
+        self.active = ProjectStatus.objects.create(name='Open', category='active')
+        # rate_to_usd = units per 1 USD. (Rows may be migration-seeded.)
+        ExchangeRate.objects.update_or_create(
+            currency_code='SAR', defaults={'rate_to_usd': Decimal('3.75')})
+        ExchangeRate.objects.update_or_create(
+            currency_code='GBP', defaults={'rate_to_usd': Decimal('0.80')})
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('boss', password='x')
+        self.user.role = role
+        self.user.region = self.lna
+        self.user.save()
+        self.client.force_login(self.user)
+
+    def _summary(self):
+        from costing.models import ExchangeRate
+        from projects.views import _pipeline_value_summary
+        rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
+        qs = Project.objects.prefetch_related('costing_sheets__sections__line_items')
+        return _pipeline_value_summary(qs, rates)
+
+    def test_won_uses_costing_value_when_priced(self):
+        D = self.Decimal
+        proj = Project.objects.create(project_name='W1', proposal_reference='W-1',
+                                      status=self.won, region=self.lna)
+        # scope_of_work_total feeds contract_total without building line items.
+        CostingSheet.objects.create(title='S', project=proj, created_by=self.user,
+                                    output_currency='SAR', scope_of_work_total=D('10000'))
+        s = self._summary()
+        self.assertEqual(s['won_count'], 1)
+        self.assertEqual(s['won_value_sar'], D('10000'))
+
+    def test_won_falls_back_to_actual_sales(self):
+        D = self.Decimal
+        Project.objects.create(project_name='W2', proposal_reference='W-2',
+                               status=self.won, region=self.lna, actual_sales=D('5000'))
+        s = self._summary()
+        self.assertEqual(s['won_count'], 1)
+        self.assertEqual(s['won_value_sar'], D('5000'))
+
+    def test_hot_lead_without_costing_is_counted(self):
+        D = self.Decimal
+        Project.objects.create(project_name='H1', proposal_reference='H-1',
+                               status=self.hot, region=self.lna, estimated_value=D('2000'))
+        s = self._summary()
+        self.assertEqual(s['hot_count'], 1)
+        self.assertEqual(s['hot_no_costing_count'], 1)   # estimate, not costing
+        self.assertEqual(s['hot_value_sar'], D('2000'))
+
+    def test_hot_lead_with_costing_not_flagged(self):
+        D = self.Decimal
+        proj = Project.objects.create(project_name='H2', proposal_reference='H-2',
+                                      status=self.hot, region=self.lna)
+        CostingSheet.objects.create(title='S', project=proj, created_by=self.user,
+                                    output_currency='SAR', scope_of_work_total=D('7000'))
+        s = self._summary()
+        self.assertEqual(s['hot_count'], 1)
+        self.assertEqual(s['hot_no_costing_count'], 0)   # priced sheet exists
+        self.assertEqual(s['hot_value_sar'], D('7000'))
+
+    def test_gbp_won_converts_to_sar(self):
+        D = self.Decimal
+        # UK won project, actual_sales in GBP → SAR = 800 / 0.80 * 3.75 = 3750.
+        Project.objects.create(project_name='UKW', proposal_reference='UK-W',
+                               status=self.won, region=self.uk, actual_sales=D('800'))
+        s = self._summary()
+        self.assertEqual(s['won_value_sar'], D('3750'))
+
+    def test_active_projects_excluded_from_both_buckets(self):
+        D = self.Decimal
+        Project.objects.create(project_name='A1', proposal_reference='A-1',
+                               status=self.active, region=self.lna,
+                               estimated_value=D('9999'), actual_sales=D('9999'))
+        s = self._summary()
+        self.assertEqual(s['won_count'], 0)
+        self.assertEqual(s['hot_count'], 0)
+        self.assertEqual(s['won_value_sar'], D('0'))
+        self.assertEqual(s['hot_value_sar'], D('0'))
+
+    def test_list_page_renders_split_cards(self):
+        D = self.Decimal
+        Project.objects.create(project_name='W', proposal_reference='W-9',
+                               status=self.won, region=self.lna, actual_sales=D('1000'))
+        resp = self.client.get(reverse('projects:list'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Won Value')
+        self.assertContains(resp, 'Hot Leads Value')
+
+
 class PipelineVisibilityTests(TestCase):
     """Sales + proposal teams see their whole region's pipeline (view), but can
     only edit projects they own. Creating a project notifies the region team."""

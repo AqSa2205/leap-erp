@@ -118,16 +118,26 @@ class ProjectListView(CapabilityRequiredMixin, ProjectPermissionMixin, ListView)
         # Add summary stats
         queryset = self.get_queryset()
         context['total_count'] = queryset.count()
-        context['total_value'] = queryset.aggregate(Sum('estimated_value'))['estimated_value__sum'] or 0
+
+        # Exchange rates are loaded once per request and injected onto every
+        # sheet so contract_total avoids a per-row ExchangeRate query.
+        from costing.models import ExchangeRate, pipeline_stage_badge, WORKFLOW_STAGE_SEQUENCE
+        rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
+
+        # Headline value split: Won vs Hot Leads, in SAR (converted so
+        # cross-region projects sum correctly). Computed over the FULL
+        # filtered queryset — not just the current page — so it reflects
+        # every matching project. Prefetch sections__line_items here because
+        # the SAR value comes from each sheet's contract_total (grand_total).
+        summary_qs = queryset.filter(
+            status__category__in=['won', 'hot_lead']
+        ).prefetch_related('costing_sheets__sections__line_items')
+        context['value_summary'] = _pipeline_value_summary(summary_qs, rates)
 
         # Decorate each visible row with its resolved sales-value dict so
         # the template can render the same "Actual / Costing / Estimate /
         # Not started" logic the detail page uses. The prefetch on
         # get_queryset() means this is O(rows) without extra queries.
-        # Exchange rates are loaded once per request and injected onto every
-        # sheet so contract_total avoids a per-row ExchangeRate query.
-        from costing.models import ExchangeRate, pipeline_stage_badge, WORKFLOW_STAGE_SEQUENCE
-        rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
 
         def _stage_rank(s):
             try:
@@ -380,6 +390,62 @@ PRICED_WORKFLOW_STAGES = {
     'costing_in_progress', 'finalized', 'finance_review', 'finance_approved',
 }
 PENDING_WORKFLOW_STAGES = {'bom_in_progress', 'ready_for_costing'}
+
+
+def _pipeline_value_summary(projects, rates):
+    """Split the pipeline's contract value into Won vs Hot-Lead buckets.
+
+    All amounts are converted to SAR so projects from different regions
+    (SAR, GBP, …) can be summed into one figure. Each project's value is
+    resolved with the SAME rule the rows use (_resolve_project_sales_value):
+    the live costing-sheet contract total when a priced sheet exists, else
+    actual sales (won) / estimate as a fallback.
+
+    ``rates`` maps currency_code -> rate_to_usd (units of that currency per
+    1 USD, e.g. SAR≈3.75, GBP≈0.79). To convert amount X→SAR we go via USD:
+    ``X / rate_to_usd[cur] * rate_to_usd['SAR']``.
+
+    Returns a dict of Decimals + counts, including ``hot_no_costing_count``:
+    hot-lead projects that don't yet have a priced costing sheet.
+    """
+    sar_rate = rates.get('SAR') or Decimal('1')
+
+    def _to_sar(amount, currency):
+        if not amount:
+            return Decimal('0')
+        cur = (currency or 'SAR').upper()
+        if cur == 'SAR':
+            return Decimal(amount)
+        cur_rate = rates.get(cur)
+        if not cur_rate or not sar_rate:
+            return Decimal(amount)          # missing rate → leave as-is
+        return (Decimal(amount) / cur_rate) * sar_rate
+
+    summary = {
+        'won_value_sar':        Decimal('0'),
+        'won_count':            0,
+        'hot_value_sar':        Decimal('0'),
+        'hot_count':            0,
+        'hot_no_costing_count': 0,
+    }
+    for project in projects:
+        category = project.status_category
+        if category not in ('won', 'hot_lead'):
+            continue
+        sheets = list(project.costing_sheets.all())
+        for s in sheets:
+            s.set_rates_cache(rates)
+        resolved = _resolve_project_sales_value(project, sheets)
+        value_sar = _to_sar(resolved['amount'], resolved['currency'])
+        if category == 'won':
+            summary['won_value_sar'] += value_sar
+            summary['won_count'] += 1
+        else:  # hot_lead
+            summary['hot_value_sar'] += value_sar
+            summary['hot_count'] += 1
+            if resolved['source'] != 'costing':
+                summary['hot_no_costing_count'] += 1
+    return summary
 
 
 def _resolve_project_sales_value(project, costing_sheets=None):

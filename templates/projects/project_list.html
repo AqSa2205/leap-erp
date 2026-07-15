@@ -56,7 +56,7 @@
 {% block content %}
 <!-- Summary Cards -->
 <div class="row mb-4">
-    <div class="{% if user.is_procurement_user %}col-md-12{% else %}col-md-6 mb-3 mb-md-0{% endif %}">
+    <div class="{% if user.is_procurement_user %}col-md-12{% else %}col-md-4 mb-3 mb-md-0{% endif %}">
         <div class="card summary-card projects-card">
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center">
@@ -70,15 +70,41 @@
         </div>
     </div>
     {% if not user.is_procurement_user %}
-    <div class="col-md-6">
+    <div class="col-md-4 mb-3 mb-md-0">
         <div class="card summary-card value-card">
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h6 class="text-muted mb-1">Total Value</h6>
-                        <h3 class="mb-0" style="color: #C41E3A;">{{ total_value|floatformat:2|intcomma }}</h3>
+                        <h6 class="text-muted mb-1">Won Value
+                            <span class="text-muted fw-normal">· {{ value_summary.won_count|intcomma }} project{{ value_summary.won_count|pluralize }}</span>
+                        </h6>
+                        <h3 class="mb-0" style="color: #198754;">SAR {{ value_summary.won_value_sar|floatformat:0|intcomma }}</h3>
+                        <small class="text-muted">Closed contract value</small>
                     </div>
-                    <i class="bi bi-cash-stack fs-1 opacity-25" style="color: #C41E3A;"></i>
+                    <i class="bi bi-trophy-fill fs-1 opacity-25" style="color: #198754;"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card summary-card value-card">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-1">Hot Leads Value
+                            <span class="text-muted fw-normal">· {{ value_summary.hot_count|intcomma }} project{{ value_summary.hot_count|pluralize }}</span>
+                        </h6>
+                        <h3 class="mb-0" style="color: #fd7e14;">SAR {{ value_summary.hot_value_sar|floatformat:0|intcomma }}</h3>
+                        <small class="text-muted">
+                            {% if value_summary.hot_no_costing_count %}
+                                <i class="bi bi-exclamation-triangle-fill" style="color: #fd7e14;"></i>
+                                {{ value_summary.hot_no_costing_count|intcomma }} awaiting costing
+                            {% else %}
+                                All costing started
+                            {% endif %}
+                        </small>
+                    </div>
+                    <i class="bi bi-fire fs-1 opacity-25" style="color: #fd7e14;"></i>
                 </div>
             </div>
         </div>
