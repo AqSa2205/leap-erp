@@ -129,8 +129,8 @@
                 {{ filter_form.status }}
             </div>
             <div class="col-lg-2 col-md-3 col-6">
-                <label class="form-label small text-muted fw-semibold">Category</label>
-                {{ filter_form.category }}
+                <label class="form-label small text-muted fw-semibold">Workflow Status</label>
+                {{ filter_form.workflow_stage }}
             </div>
             {% if request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_manager_user %}
             <div class="col-lg-2 col-md-3 col-6">

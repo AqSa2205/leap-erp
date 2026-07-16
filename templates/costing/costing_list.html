@@ -33,6 +33,14 @@
                             {% endfor %}
                         </select>
                     </div>
+                    <div class="col-md-2">
+                        <select name="status" class="form-select">
+                            <option value="">All statuses</option>
+                            {% for s in statuses %}
+                            <option value="{{ s.pk }}" {% if selected_status == s.pk|stringformat:'s' %}selected{% endif %}>{{ s.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
                     {# Stage selection is driven by the count buttons below; keep it across form submits. #}
                     {% for st in selected_stages %}<input type="hidden" name="stage" value="{{ st }}">{% endfor %}
                     <div class="col-md-2">
@@ -103,7 +111,21 @@
     </a>
     {% endfor %}
 </div>
-<div class="small text-muted mb-4">Click stages to filter — pick more than one to combine them.</div>
+{% if finalized_outcomes %}
+<!-- Sales-finalised outcome shortcuts: split the finalised stage by deal outcome -->
+<div class="d-flex flex-wrap gap-2 mb-2 align-items-center">
+    <span class="small text-muted me-1">Finalised outcome:</span>
+    {% for fo in finalized_outcomes %}
+    <a href="{{ fo.toggle_url }}"
+       class="btn btn-sm {% if fo.active %}btn-dark{% else %}btn-outline-secondary{% endif %} d-flex align-items-center gap-2">
+        {% if fo.active %}<i class="bi bi-check-lg"></i>{% endif %}
+        <span>{{ fo.label }}</span>
+        <span class="fw-semibold">{{ fo.count }}</span>
+    </a>
+    {% endfor %}
+</div>
+{% endif %}
+<div class="small text-muted mb-4">Click stages to filter — pick more than one to combine them. Finalised-outcome shortcuts filter the Sales-finalised stage by deal outcome.</div>
 
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">

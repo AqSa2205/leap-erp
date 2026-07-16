@@ -364,16 +364,19 @@ def costing_scoped_queryset(user):
         return queryset.filter(created_by=user)
 
 
-def apply_costing_list_filters(queryset, GET, include_stage=True):
-    """Apply the Costing list's search / stage / region / worked-by filters.
+def apply_costing_list_filters(queryset, GET, include_stage=True, include_status=True):
+    """Apply the Costing list's search / stage / region / status / worked-by filters.
 
     `include_stage=False` skips the workflow-stage filter — used to build the
     stage-count tabs, which must show totals across every stage regardless of
-    the currently-selected tab.
+    the currently-selected tab. `include_status=False` likewise skips the
+    project-status filter — used for the finalised-outcome buttons, whose
+    counts must stay independent of the currently-selected status.
     """
     search = GET.get('search')
     stages = [s for s in GET.getlist('stage') if s]  # multi-select
     region = GET.get('region')
+    status = GET.get('status')
     worked_by = GET.get('worked_by')
     if search:
         # Broad search — match the typed text against every field shown on the
@@ -396,6 +399,10 @@ def apply_costing_list_filters(queryset, GET, include_stage=True):
         queryset = queryset.filter(workflow_stage__in=stages)
     if region and region.isdigit():
         queryset = queryset.filter(project__region_id=int(region))
+    if include_status and status and status.isdigit():
+        # Filter by the linked project's pipeline status (Open, Submitted,
+        # Won, Lost, Ongoing, …). Sheets with no project are excluded.
+        queryset = queryset.filter(project__status_id=int(status))
     if worked_by and worked_by.isdigit():
         # "Worked on by" = created it or is a credited contributor.
         queryset = queryset.filter(
@@ -461,7 +468,7 @@ class CostingListView(CapabilityRequiredMixin, CostingPermissionMixin, ListView)
             queryset, self.request.GET).order_by('-updated_at')
 
     def get_context_data(self, **kwargs):
-        from projects.models import Region
+        from projects.models import Region, ProjectStatus
         from accounts.models import User
         context = super().get_context_data(**kwargs)
         context['filter_form'] = CostingFilterForm(self.request.GET)
@@ -471,6 +478,9 @@ class CostingListView(CapabilityRequiredMixin, CostingPermissionMixin, ListView)
         context['selected_stages'] = selected_stages
         context['regions'] = Region.objects.order_by('name')
         context['selected_region'] = self.request.GET.get('region', '')
+        context['statuses'] = ProjectStatus.objects.filter(is_active=True).order_by('order', 'name')
+        selected_status = self.request.GET.get('status', '')
+        context['selected_status'] = selected_status
         context['selected_period'] = self.request.GET.get('period', '')
         context['date_from'] = self.request.GET.get('date_from', '')
         context['date_to'] = self.request.GET.get('date_to', '')
@@ -503,6 +513,38 @@ class CostingListView(CapabilityRequiredMixin, CostingPermissionMixin, ListView)
             })
         context['stage_counts'] = stage_counts
         context['total_all'] = base_no_stage.count()
+
+        # Finalised-outcome shortcut buttons: at the 'finalized' (Sales
+        # finalised) stage, split by the project's outcome status — Won /
+        # Lost / Submitted. Each button applies BOTH stage=finalized and
+        # status=<pk>. Counts ignore the current stage AND status selection
+        # (include_status=False) so they always show the true totals.
+        base_no_stage_status = apply_costing_list_filters(
+            costing_scoped_queryset(self.request.user),
+            self.request.GET, include_stage=False, include_status=False)
+        status_by_name = {
+            s.name.lower(): s
+            for s in ProjectStatus.objects.filter(
+                name__in=['Won', 'Lost', 'Submitted'])
+        }
+        finalized_outcomes = []
+        for name in ('Won', 'Lost', 'Submitted'):
+            st = status_by_name.get(name.lower())
+            if not st:
+                continue
+            tq = base_qs.copy()
+            tq.setlist('stage', ['finalized'])
+            tq['status'] = str(st.pk)
+            enc = tq.urlencode()
+            finalized_outcomes.append({
+                'label': f'Sales finalised — {st.name}',
+                'count': base_no_stage_status.filter(
+                    workflow_stage='finalized', project__status_id=st.pk).count(),
+                'active': (selected_stages == ['finalized']
+                           and selected_status == str(st.pk)),
+                'toggle_url': '?' + enc if enc else '?',
+            })
+        context['finalized_outcomes'] = finalized_outcomes
         # People who created or contributed to any sheet in scope — for the
         # "Worked On By" filter. Built from the same scoped queryset.
         base = costing_scoped_queryset(self.request.user)

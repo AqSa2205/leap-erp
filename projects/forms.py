@@ -172,8 +172,11 @@ class ProjectFilterForm(forms.Form):
         empty_label='All Statuses',
         widget=forms.Select(attrs={'class': 'form-select'})
     )
-    category = forms.ChoiceField(
-        choices=[('', 'All Categories')] + ProjectStatus.CATEGORY_CHOICES,
+    # Commercial-pipeline workflow stage. Choices are populated in __init__
+    # from CostingSheet.WORKFLOW_STAGE_CHOICES (imported there to avoid a
+    # module-load import cycle with costing.models). The extra 'none' option
+    # matches projects with no costing sheet started yet.
+    workflow_stage = forms.ChoiceField(
         required=False,
         widget=forms.Select(attrs={'class': 'form-select'})
     )
@@ -189,6 +192,12 @@ class ProjectFilterForm(forms.Form):
 
     def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
+        # Populate workflow-stage choices from the costing app.
+        from costing.models import CostingSheet
+        self.fields['workflow_stage'].choices = (
+            [('', 'All Workflow Stages'), ('none', 'Not started (no costing)')]
+            + CostingSheet.WORKFLOW_STAGE_CHOICES
+        )
         # Populate owner choices based on user role
         from accounts.models import User
         if user and user.is_super_admin_user:

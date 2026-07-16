@@ -77,7 +77,7 @@ class ProjectListView(CapabilityRequiredMixin, ProjectPermissionMixin, ListView)
         region = self.request.GET.get('region')
         year = self.request.GET.get('year')
         status = self.request.GET.get('status')
-        category = self.request.GET.get('category')
+        workflow_stage = self.request.GET.get('workflow_stage')
         quarter = self.request.GET.get('quarter')
         owner = self.request.GET.get('owner')
 
@@ -96,8 +96,15 @@ class ProjectListView(CapabilityRequiredMixin, ProjectPermissionMixin, ListView)
             queryset = queryset.filter(year=year)
         if status:
             queryset = queryset.filter(status_id=status)
-        if category:
-            queryset = queryset.filter(status__category=category)
+        if workflow_stage == 'none':
+            # Projects that have no costing sheet yet (workflow not started).
+            queryset = queryset.filter(costing_sheets__isnull=True)
+        elif workflow_stage:
+            # Any costing sheet at this stage. distinct() guards against a
+            # project with multiple sheets appearing more than once.
+            queryset = queryset.filter(
+                costing_sheets__workflow_stage=workflow_stage
+            ).distinct()
         if quarter:
             queryset = queryset.filter(po_award_quarter=quarter)
         if owner:
@@ -1228,7 +1235,7 @@ def _apply_pipeline_filters(request, queryset):
     region   = g.get('region')
     year     = g.get('year')
     status   = g.get('status')
-    category = g.get('category')
+    workflow_stage = g.get('workflow_stage')
     quarter  = g.get('quarter')
     owner    = g.get('owner')
     if search:
@@ -1245,8 +1252,12 @@ def _apply_pipeline_filters(request, queryset):
         queryset = queryset.filter(year=year)
     if status:
         queryset = queryset.filter(status_id=status)
-    if category:
-        queryset = queryset.filter(status__category=category)
+    if workflow_stage == 'none':
+        queryset = queryset.filter(costing_sheets__isnull=True)
+    elif workflow_stage:
+        queryset = queryset.filter(
+            costing_sheets__workflow_stage=workflow_stage
+        ).distinct()
     if quarter:
         queryset = queryset.filter(po_award_quarter=quarter)
     if owner:
@@ -1258,7 +1269,7 @@ def _apply_pipeline_filters(request, queryset):
 def pipeline_print_pdf(request):
     """Render the currently-filtered Commercial Pipeline list as PDF.
 
-    Honors the same ?search=/region/status/category/owner/year/quarter
+    Honors the same ?search=/region/status/workflow_stage/owner/year/quarter
     querystring as the on-screen list view so users can preview in the
     browser then "Print PDF" and get the exact same rows.
     """
@@ -1288,7 +1299,7 @@ def pipeline_print_pdf(request):
 
     # Filter summary line for the PDF header
     summary_parts = []
-    for key in ('search', 'region', 'year', 'status', 'category', 'quarter', 'owner'):
+    for key in ('search', 'region', 'year', 'status', 'workflow_stage', 'quarter', 'owner'):
         val = request.GET.get(key)
         if val:
             summary_parts.append(f'{key}={val}')
