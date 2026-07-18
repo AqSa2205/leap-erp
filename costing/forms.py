@@ -40,6 +40,7 @@ class CostingSheetForm(forms.ModelForm):
             ).select_related('region')
 
 
+
 class CostingSectionForm(forms.ModelForm):
     class Meta:
         model = CostingSection
