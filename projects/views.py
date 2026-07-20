@@ -1,6 +1,8 @@
 from decimal import Decimal, InvalidOperation
 
 from django.shortcuts import render, redirect, get_object_or_404
+from django.http import Http404
+from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib import messages
@@ -677,7 +679,12 @@ class ProjectUpdateView(ProjectPermissionMixin, UpdateView):
 
 
 class ProjectDeleteView(ProjectPermissionMixin, DeleteView):
-    """Delete a project (admin only)"""
+    """Soft-delete a project (admin only).
+
+    The row is retained and simply hidden, so nothing cascades into finance
+    rows or history, and costing sheets / POs keep their project link. Deleted
+    projects can be restored from the recycle bin.
+    """
     model = Project
     template_name = 'projects/project_confirm_delete.html'
     success_url = reverse_lazy('projects:list')
@@ -686,8 +693,53 @@ class ProjectDeleteView(ProjectPermissionMixin, DeleteView):
         return self.request.user.can_delete_project()
 
     def form_valid(self, form):
-        messages.success(self.request, 'Project deleted successfully.')
-        return super().form_valid(form)
+        project = self.get_object()
+        project.soft_delete(user=self.request.user)
+        messages.success(
+            self.request,
+            f'Project "{project.project_name}" moved to the recycle bin. '
+            f'You can restore it from Projects → Recycle Bin.')
+        return redirect(self.success_url)
+
+
+class ProjectRecycleBinView(LoginRequiredMixin, UserPassesTestMixin, ListView):
+    """Soft-deleted projects, most recently deleted first."""
+    model = Project
+    template_name = 'projects/project_recycle_bin.html'
+    context_object_name = 'projects'
+    paginate_by = 50
+
+    def test_func(self):
+        return self.request.user.can_delete_project()
+
+    def get_queryset(self):
+        # all_objects to see past the default manager's is_deleted filter.
+        qs = (Project.all_objects
+              .filter(is_deleted=True)
+              .select_related('status', 'region', 'owner', 'deleted_by')
+              .order_by('-deleted_at'))
+        user = self.request.user
+        if not user.is_super_admin_user:
+            qs = qs.filter(region=user.region)
+        return qs
+
+
+@login_required
+@require_POST
+def project_restore(request, pk):
+    """Restore a soft-deleted project from the recycle bin."""
+    if not request.user.can_delete_project():
+        messages.error(request, 'You do not have permission to restore projects.')
+        return redirect('projects:recycle_bin')
+
+    project = get_object_or_404(Project.all_objects, pk=pk, is_deleted=True)
+    if (not request.user.is_super_admin_user
+            and project.region_id != request.user.region_id):
+        raise Http404('Project not found.')
+
+    project.restore()
+    messages.success(request, f'Project "{project.project_name}" restored.')
+    return redirect('projects:detail', pk=project.pk)
 
 
 class ProjectImportView(LoginRequiredMixin, UserPassesTestMixin, View):

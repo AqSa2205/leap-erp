@@ -11,6 +11,16 @@ import dj_database_url
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Load local developer settings from a .env file if one exists (see
+# .env.example). override=False means real environment variables always win,
+# so a stray .env in a deployed checkout can never shadow Render's config.
+# .env is gitignored — it must never be committed.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(BASE_DIR / '.env', override=False)
+except ImportError:  # python-dotenv is optional; env vars still work without it
+    pass
+
 
 # Environment detection — production is auto-detected on Render even
 # if DJANGO_ENV isn't set, so we don't fall through to insecure defaults.

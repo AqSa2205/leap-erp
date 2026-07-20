@@ -1,0 +1,89 @@
+{% extends 'base.html' %}
+
+{% block title %}Recycle Bin - Leap Networks ERP{% endblock %}
+{% block page_title %}Recycle Bin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <p class="text-muted mb-0">
+        Deleted projects are kept here with all their costing sheets, purchase
+        orders and finance records intact. Restoring one puts it back exactly
+        as it was.
+    </p>
+    <a href="{% url 'projects:list' %}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i> Back to Pipeline
+    </a>
+</div>
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-trash me-2"></i>Deleted Projects</span>
+        <span class="badge bg-secondary">{{ page_obj.paginator.count|default:projects|length }} total</span>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Reference</th>
+                        <th>Project</th>
+                        <th>Region</th>
+                        <th>Status</th>
+                        <th>Deleted</th>
+                        <th>Deleted by</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for project in projects %}
+                    <tr>
+                        <td><code>{{ project.proposal_reference }}</code></td>
+                        <td class="fw-semibold">{{ project.project_name }}</td>
+                        <td>
+                            {% if project.region %}<span class="badge bg-secondary">{{ project.region.name }}</span>
+                            {% else %}<span class="text-muted">—</span>{% endif %}
+                        </td>
+                        <td>{{ project.status.name|default:"—" }}</td>
+                        <td class="text-nowrap">{{ project.deleted_at|date:"d M Y, H:i"|default:"—" }}</td>
+                        <td>
+                            {% if project.deleted_by %}
+                            {{ project.deleted_by.get_full_name|default:project.deleted_by.username }}
+                            {% else %}<span class="text-muted">—</span>{% endif %}
+                        </td>
+                        <td class="text-end">
+                            <form method="post" action="{% url 'projects:restore' project.pk %}" class="d-inline">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-sm btn-success">
+                                    <i class="bi bi-arrow-counterclockwise me-1"></i>Restore
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="7" class="text-center py-5 text-muted">
+                            <i class="bi bi-check2-circle display-6 d-block mb-2"></i>
+                            Recycle bin is empty — nothing has been deleted.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% if is_paginated %}
+<nav class="mt-3">
+    <ul class="pagination justify-content-center">
+        {% if page_obj.has_previous %}
+        <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}">&laquo; Previous</a></li>
+        {% endif %}
+        <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
+        {% if page_obj.has_next %}
+        <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}">Next &raquo;</a></li>
+        {% endif %}
+    </ul>
+</nav>
+{% endif %}
+{% endblock %}
