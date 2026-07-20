@@ -31,6 +31,9 @@
     #item-table th:nth-child(3),  #item-table td:nth-child(3)  { min-width: 150px; }  /* Make/Model */
     #item-table th:nth-child(4),  #item-table td:nth-child(4)  { min-width: 260px; }  /* Description */
     #item-table th:nth-child(5),  #item-table td:nth-child(5)  { min-width: 80px; }   /* Qty */
+    /* Qty reads as a count, not a sum — centre it so the column scans cleanly. */
+    #item-table th:nth-child(5) { text-align: center; }
+    #item-table td:nth-child(5) input { text-align: center; }
     #item-table th:nth-child(6),  #item-table td:nth-child(6)  { min-width: 72px; }   /* UOM */
     #item-table th:nth-child(7),  #item-table td:nth-child(7)  { min-width: 100px; }  /* Rate/Unit */
     #item-table th:nth-child(8),  #item-table td:nth-child(8)  { min-width: 100px; }  /* USD/EUR */
@@ -376,15 +379,46 @@
                             {% for item in items_list %}
                             <div class="col-md-6 col-lg-4 mb-2">
                                 <div class="form-check">
-                                    <input class="form-check-input" type="checkbox"
+                                    <input class="form-check-input po-term-check" type="checkbox"
                                            name="selected_terms"
                                            value="{{ item.template.pk }}"
                                            id="term-{{ item.template.pk }}"
+                                           data-term="{{ item.template.pk }}"
                                            {% if item.selected %}checked{% endif %}>
                                     <label class="form-check-label" for="term-{{ item.template.pk }}">
                                         <strong>{{ item.template.name }}</strong>
-                                        <br><small class="text-muted">{{ item.template.content|truncatewords:15 }}</small>
+                                        {% if item.is_overridden %}
+                                        <span class="badge bg-warning text-dark ms-1" data-edited-badge="{{ item.template.pk }}">Edited for this PO</span>
+                                        {% endif %}
+                                        <br><small class="text-muted">{{ item.content|truncatewords:15 }}</small>
                                     </label>
+                                    {% comment %}
+                                    Per-PO wording. Saved to POTermOverride, never back to the
+                                    shared TermsTemplate — editing here leaves every other PO
+                                    (and the library) untouched. Clearing it back to the original
+                                    text drops the override automatically.
+                                    {% endcomment %}
+                                    <div class="mt-1 ms-4 ps-1 po-term-edit-wrap" data-term-wrap="{{ item.template.pk }}"
+                                         {% if not item.selected %}style="display:none;"{% endif %}>
+                                        <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none po-term-edit-toggle"
+                                                data-term-toggle="{{ item.template.pk }}">
+                                            <i class="bi bi-pencil-square me-1"></i>Edit text for this PO
+                                        </button>
+                                        <div class="po-term-editor mt-1" data-term-editor="{{ item.template.pk }}" style="display:none;">
+                                            <textarea class="form-control form-control-sm po-term-text"
+                                                      name="term_content_{{ item.template.pk }}"
+                                                      data-term-text="{{ item.template.pk }}"
+                                                      data-original="{{ item.template.content }}"
+                                                      rows="5">{{ item.content }}</textarea>
+                                            <div class="d-flex justify-content-between align-items-center mt-1">
+                                                <small class="text-muted">Applies to this PO only.</small>
+                                                <button type="button" class="btn btn-sm btn-outline-secondary py-0 po-term-reset"
+                                                        data-term-reset="{{ item.template.pk }}">
+                                                    Reset to template
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                             {% endfor %}
@@ -734,6 +768,64 @@ document.addEventListener('DOMContentLoaded', function() {
         } finally {
             submitBtn.disabled = false;
         }
+    });
+})();
+
+// ─── Per-PO terms editing ───
+// The textarea is only submitted for terms that stay ticked; the server drops
+// any override whose text matches the shared template, so "Reset to template"
+// is just restoring the original text and saving.
+(function () {
+    function wrapFor(id) { return document.querySelector('[data-term-wrap="' + id + '"]'); }
+    function editorFor(id) { return document.querySelector('[data-term-editor="' + id + '"]'); }
+    function textFor(id) { return document.querySelector('[data-term-text="' + id + '"]'); }
+
+    // Only show the edit affordance while the term is actually selected.
+    document.querySelectorAll('.po-term-check').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+            var wrap = wrapFor(this.dataset.term);
+            if (wrap) wrap.style.display = this.checked ? '' : 'none';
+        });
+    });
+
+    document.addEventListener('click', function (e) {
+        var toggle = e.target.closest('.po-term-edit-toggle');
+        if (toggle) {
+            var ed = editorFor(toggle.dataset.termToggle);
+            if (ed) ed.style.display = (ed.style.display === 'none') ? '' : 'none';
+            return;
+        }
+        var reset = e.target.closest('.po-term-reset');
+        if (reset) {
+            var ta = textFor(reset.dataset.termReset);
+            if (ta) {
+                ta.value = ta.dataset.original;
+                ta.dispatchEvent(new Event('input'));
+            }
+        }
+    });
+
+    // Live "Edited for this PO" badge so the state is obvious before saving.
+    document.querySelectorAll('.po-term-text').forEach(function (ta) {
+        ta.addEventListener('input', function () {
+            var id = this.dataset.termText;
+            var norm = function (s) {
+                return s.replace(/\r\n/g, '\n').split('\n')
+                        .map(function (l) { return l.replace(/\s+$/, ''); }).join('\n').trim();
+            };
+            var changed = norm(this.value) !== norm(this.dataset.original);
+            var label = this.closest('.form-check').querySelector('.form-check-label');
+            var badge = label ? label.querySelector('[data-edited-badge]') : null;
+            if (changed && !badge && label) {
+                badge = document.createElement('span');
+                badge.className = 'badge bg-warning text-dark ms-1';
+                badge.setAttribute('data-edited-badge', id);
+                badge.textContent = 'Edited for this PO';
+                label.querySelector('strong').after(badge);
+            } else if (!changed && badge) {
+                badge.remove();
+            }
+        });
     });
 })();
 </script>

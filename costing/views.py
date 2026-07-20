@@ -1365,9 +1365,28 @@ class TermsTemplateListView(LoginRequiredMixin, ListView):
     template_name = 'costing/terms_templates.html'
     context_object_name = 'templates'
 
+    # ?usage=procurement (or =sales) narrows the library to one side of the
+    # business. 'both' templates always show, since they apply either way.
+    USAGE_FILTERS = ('sales', 'procurement')
+
+    def _usage(self):
+        usage = self.request.GET.get('usage', '')
+        return usage if usage in self.USAGE_FILTERS else ''
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        usage = self._usage()
+        if usage:
+            qs = qs.filter(usage__in=[usage, 'both'])
+        return qs
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['form'] = TermsTemplateForm()
+        usage = self._usage()
+        # Pre-select the filtered side on the Add form so a template created
+        # from the Procurement view defaults to procurement, not 'both'.
+        context['form'] = TermsTemplateForm(initial={'usage': usage} if usage else None)
+        context['usage'] = usage
         # Pass through ?next=… so the form (and Back button) can return the
         # user to wherever they came from (e.g. a PO edit page).
         context['next_url'] = _safe_next_url(self.request, self.request.GET.get('next'))
@@ -1382,7 +1401,13 @@ class TermsTemplateCreateView(LoginRequiredMixin, CreateView):
 
     def get_success_url(self):
         nxt = _safe_next_url(self.request, self.request.POST.get('next'))
-        return nxt or str(self.success_url)
+        if nxt:
+            return nxt
+        # Land back on the same Sales/Procurement tab the user was filtered to.
+        usage = self.request.POST.get('usage_filter', '')
+        if usage in TermsTemplateListView.USAGE_FILTERS:
+            return f'{self.success_url}?usage={usage}'
+        return str(self.success_url)
 
     def form_valid(self, form):
         form.instance.created_by = self.request.user

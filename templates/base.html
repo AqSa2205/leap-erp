@@ -1034,6 +1034,16 @@
                     <i class="bi bi-box2-heart"></i> <span>FRC Stock</span>
                 </a>
             </li>
+            <li class="nav-item">
+                {% comment %}
+                The T&C library lives in the costing app, but procurement users
+                can't see the Costing section — surface the procurement-filtered
+                view here so PO terms are manageable from this module.
+                {% endcomment %}
+                <a class="nav-link {% if 'terms_template' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'costing:terms_templates' %}?usage=procurement" data-title="T&amp;C Templates">
+                    <i class="bi bi-file-text"></i> <span>T&amp;C Templates</span>
+                </a>
+            </li>
         </ul>
         {% endif %}
 

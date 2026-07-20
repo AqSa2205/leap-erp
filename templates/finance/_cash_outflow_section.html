@@ -1,6 +1,8 @@
 {% load humanize %}
-{# One A.1 / A.2 outflow section. Expects: part_label, rows (display dicts),
-   sub (subtotal dict: amount/vat/total), add_action, add_label. #}
+{% comment %}
+One A.1 / A.2 outflow section. Expects: part_label, rows (display dicts),
+sub (subtotal dict: amount/vat/total), add_action, add_label.
+{% endcomment %}
 <div class="card mb-3">
     <div class="card-header bg-white d-flex justify-content-between align-items-center">
         <span><i class="bi bi-diagram-3 me-2 text-success"></i><strong>{{ part_label }}</strong>

@@ -357,19 +357,73 @@ class POListView(CapabilityRequiredMixin, ProcurementPermissionMixin, ListView):
         return context
 
 
-def _po_terms_by_category(selected_ids):
-    """Build the terms_by_category structure used in PO create/edit/detail."""
+def _po_terms_by_category(selected_ids, po=None, posted=None):
+    """Build the terms_by_category structure used in PO create/edit/detail.
+
+    When ``po`` is given, each entry carries the PO's effective text —  its
+    per-PO override if one exists, otherwise the shared template text — plus
+    an ``is_overridden`` flag so the UI can show that it has been customised.
+    ``posted`` (a POST QueryDict) re-fills edited text after a failed submit
+    so the user doesn't lose their wording.
+    """
     from costing.models import TermsTemplate
     selected_ids = set(selected_ids or [])
+    overrides = po.term_override_map() if po is not None else {}
     # Procurement sees procurement-tagged terms (and shared 'both'), not sales.
     all_terms = TermsTemplate.objects.filter(usage__in=['procurement', 'both'])
     terms_by_category = {}
     for cat_value, cat_label in TermsTemplate.CATEGORY_CHOICES:
-        terms_by_category[cat_label] = [
-            {'template': t, 'selected': t.pk in selected_ids}
-            for t in all_terms if t.category == cat_value
-        ]
+        entries = []
+        for t in all_terms:
+            if t.category != cat_value:
+                continue
+            content = overrides.get(t.pk, t.content)
+            is_overridden = t.pk in overrides
+            if posted is not None:
+                raw = posted.get(f'term_content_{t.pk}')
+                if raw is not None:
+                    content = raw
+                    is_overridden = _normalise_terms(raw) != _normalise_terms(t.content)
+            entries.append({
+                'template': t,
+                'selected': t.pk in selected_ids,
+                'content': content,
+                'is_overridden': is_overridden,
+            })
+        terms_by_category[cat_label] = entries
     return terms_by_category
+
+
+def _normalise_terms(text):
+    """Compare terms text ignoring trailing spaces and line-ending style."""
+    return '\n'.join(line.rstrip() for line in (text or '').replace('\r\n', '\n').split('\n')).strip()
+
+
+def _save_po_term_overrides(po, post_data, user=None):
+    """Persist per-PO edits of the selected terms templates.
+
+    Only stores text that actually differs from the shared template — editing
+    a term back to its original wording deletes the override row, and terms
+    that get de-selected drop their override too. The TermsTemplate itself is
+    never written to here, so other POs are unaffected.
+    """
+    from .models import POTermOverride
+
+    selected_ids = set(po.selected_terms.values_list('pk', flat=True))
+    for tmpl in po.selected_terms.all():
+        raw = post_data.get(f'term_content_{tmpl.pk}')
+        if raw is None:
+            continue
+        if _normalise_terms(raw) == _normalise_terms(tmpl.content):
+            POTermOverride.objects.filter(purchase_order=po, template=tmpl).delete()
+        else:
+            POTermOverride.objects.update_or_create(
+                purchase_order=po, template=tmpl,
+                defaults={'content': raw.replace('\r\n', '\n').strip(),
+                          'updated_by': user if user and user.is_authenticated else None},
+            )
+    # Drop overrides for terms no longer attached to this PO.
+    po.term_overrides.exclude(template_id__in=selected_ids).delete()
 
 
 class POCreateView(ProcurementPermissionMixin, CreateView):
@@ -390,7 +444,8 @@ class POCreateView(ProcurementPermissionMixin, CreateView):
         if self.request.POST:
             context['item_formset'] = POItemFormSet(self.request.POST, prefix='items')
             posted_term_ids = [int(x) for x in self.request.POST.getlist('selected_terms') if x.isdigit()]
-            context['terms_by_category'] = _po_terms_by_category(posted_term_ids)
+            context['terms_by_category'] = _po_terms_by_category(
+                posted_term_ids, posted=self.request.POST)
         else:
             context['item_formset'] = POItemFormSet(prefix='items')
             context['terms_by_category'] = _po_terms_by_category([])
@@ -410,6 +465,7 @@ class POCreateView(ProcurementPermissionMixin, CreateView):
             item_formset.save()
             term_ids = [int(x) for x in self.request.POST.getlist('selected_terms') if x.isdigit()]
             self.object.selected_terms.set(term_ids)
+            _save_po_term_overrides(self.object, self.request.POST, self.request.user)
             messages.success(self.request, f'Purchase Order {self.object.po_number} created successfully.')
             return redirect(self.get_success_url())
         else:
@@ -555,6 +611,7 @@ def quotation_review(request, pk):
             item_formset.save()
             term_ids = [int(x) for x in request.POST.getlist('selected_terms') if x.isdigit()]
             po.selected_terms.set(term_ids)
+            _save_po_term_overrides(po, request.POST, request.user)
             qi.purchase_order = po
             qi.status = 'converted'
             qi.save(update_fields=['purchase_order', 'status', 'updated_at'])
@@ -595,8 +652,9 @@ class PODetailView(ProcurementPermissionMixin, DetailView):
         po = self.object
         context['items'] = po.items.all()
         context['terms_by_category'] = _po_terms_by_category(
-            po.selected_terms.values_list('pk', flat=True)
+            po.selected_terms.values_list('pk', flat=True), po=po
         )
+        context['resolved_terms'] = po.resolved_terms()
         # Per-stage approval permission for the current viewer — keys
         # ('scm','pm','coo','ceo') the user is authorised to sign.
         context['approvable_stages'] = {
@@ -628,11 +686,12 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
         if self.request.POST:
             context['item_formset'] = POItemFormSet(self.request.POST, instance=self.object, prefix='items')
             posted_term_ids = [int(x) for x in self.request.POST.getlist('selected_terms') if x.isdigit()]
-            context['terms_by_category'] = _po_terms_by_category(posted_term_ids)
+            context['terms_by_category'] = _po_terms_by_category(
+                posted_term_ids, po=self.object, posted=self.request.POST)
         else:
             context['item_formset'] = POItemFormSet(instance=self.object, prefix='items')
             current_ids = list(self.object.selected_terms.values_list('pk', flat=True))
-            context['terms_by_category'] = _po_terms_by_category(current_ids)
+            context['terms_by_category'] = _po_terms_by_category(current_ids, po=self.object)
         context['title'] = f'Edit PO: {self.object.po_number}'
         context['system_suggestions'] = PurchaseOrder.SYSTEM_SUGGESTIONS
         context['procurement_team'] = _procurement_team_users()
@@ -647,6 +706,7 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
             item_formset.save()
             term_ids = [int(x) for x in self.request.POST.getlist('selected_terms') if x.isdigit()]
             self.object.selected_terms.set(term_ids)
+            _save_po_term_overrides(self.object, self.request.POST, self.request.user)
             messages.success(self.request, f'Purchase Order {self.object.po_number} updated successfully.')
             return redirect(self.get_success_url())
         else:
@@ -1025,18 +1085,40 @@ def po_export_excel(request, pk):
     ws = wb.active
     ws.title = 'PURCHASE ORDER'
 
+    # One field per column — no merged item cells. The previous version merged
+    # the description across C:E but only bordered the top-left cell, so Excel
+    # rendered half-open boxes; a flat grid keeps every cell bordered.
+    COL_SNO, COL_SYSTEM, COL_MAKE, COL_DESC = 1, 2, 3, 4
+    COL_QTY, COL_UOM, COL_RATE, COL_TOTAL, COL_REMARKS = 5, 6, 7, 8, 9
+    LAST_COL = COL_REMARKS
+
     # Styles
     bold = Font(bold=True)
     bold_red = Font(bold=True, color='C41E3A', size=11)
+    title_font = Font(bold=True, color='C41E3A', size=16)
+    label_font = Font(bold=True, size=9, color='595959')
     header_font = Font(bold=True, color='FFFFFF', size=10)
-    header_fill = PatternFill(start_color='1F4E79', end_color='1F4E79', fill_type='solid')
+    header_fill = PatternFill(start_color='C41E3A', end_color='C41E3A', fill_type='solid')
+    total_fill = PatternFill(start_color='FBE8EC', end_color='FBE8EC', fill_type='solid')
     thin_border = Border(
         left=Side(style='thin'), right=Side(style='thin'),
         top=Side(style='thin'), bottom=Side(style='thin')
     )
     wrap = Alignment(wrap_text=True, vertical='top')
+    center = Alignment(horizontal='center', vertical='center')
+    money_fmt = '#,##0.00'
+    qty_fmt = '#,##0.##'
+
+    # ── Title ──
+    ws.merge_cells(start_row=1, start_column=1, end_row=2, end_column=LAST_COL)
+    title_cell = ws.cell(row=1, column=1, value='PURCHASE ORDER')
+    title_cell.font = title_font
+    title_cell.alignment = center
+    ws.row_dimensions[1].height = 24
 
     # ── Header Section ──
+    # Two label/value pairs per row: labels in A and F, values spanning the
+    # columns beside them so long vendor/project names stay readable.
     headers_left = [
         ('PO Date', po.po_date.strftime('%d-%b-%Y') if po.po_date else ''),
         ('PO S. No.', po.po_number),
@@ -1056,75 +1138,110 @@ def po_export_excel(request, pk):
         ('Delivery Location', po.delivery_location),
     ]
 
-    for i, (label, value) in enumerate(headers_left, 1):
-        ws.cell(row=i, column=1, value=label).font = bold
-        ws.cell(row=i, column=2, value=str(value))
+    header_start = 4
+    for i, (label, value) in enumerate(headers_left):
+        r = header_start + i
+        lc = ws.cell(row=r, column=1, value=label)
+        lc.font = label_font
+        lc.border = thin_border
+        vc = ws.cell(row=r, column=2, value=str(value or ''))
+        vc.alignment = Alignment(vertical='center')
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=4)
+        for c in (2, 3, 4):
+            ws.cell(row=r, column=c).border = thin_border
 
-    for i, (label, value) in enumerate(headers_right, 1):
-        ws.cell(row=i, column=5, value=label).font = bold
-        ws.cell(row=i, column=6, value=str(value))
+    for i, (label, value) in enumerate(headers_right):
+        r = header_start + i
+        lc = ws.cell(row=r, column=COL_UOM, value=label)
+        lc.font = label_font
+        lc.border = thin_border
+        vc = ws.cell(row=r, column=COL_RATE, value=str(value or ''))
+        vc.alignment = Alignment(vertical='center')
+        ws.merge_cells(start_row=r, start_column=COL_RATE, end_row=r, end_column=LAST_COL)
+        for c in (COL_RATE, COL_TOTAL, COL_REMARKS):
+            ws.cell(row=r, column=c).border = thin_border
 
     # ── Line Items Table ──
-    table_row = 11
-    col_headers = ['S No.', 'Make/Model', 'Item Descriptions / Specification',
-                    '', '', 'Quantity', 'UOM', f'Rate/unit ({po.currency})', f'Total Value ({po.currency})', 'Remarks']
+    table_row = header_start + max(len(headers_left), len(headers_right)) + 1
+    col_headers = [
+        'S No.', 'System', 'Make/Model', 'Item Descriptions / Specification',
+        'Quantity', 'UOM', 'Rate/unit (%s)' % po.currency,
+        'Total Value (%s)' % po.currency, 'Remarks',
+    ]
     for col, h in enumerate(col_headers, 1):
         cell = ws.cell(row=table_row, column=col, value=h)
         cell.font = header_font
         cell.fill = header_fill
         cell.border = thin_border
-        cell.alignment = Alignment(horizontal='center', wrap_text=True)
-
-    # Merge description header across C-E
-    ws.merge_cells(start_row=table_row, start_column=3, end_row=table_row, end_column=5)
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    ws.row_dimensions[table_row].height = 28
 
     row = table_row + 1
     for item in items:
-        ws.cell(row=row, column=1, value=item.serial_number).border = thin_border
-        ws.cell(row=row, column=2, value=item.make_model).border = thin_border
-        desc_cell = ws.cell(row=row, column=3, value=item.description)
-        desc_cell.border = thin_border
-        desc_cell.alignment = wrap
-        ws.merge_cells(start_row=row, start_column=3, end_row=row, end_column=5)
-        ws.cell(row=row, column=6, value=float(item.quantity)).border = thin_border
-        ws.cell(row=row, column=7, value=item.uom).border = thin_border
-        ws.cell(row=row, column=8, value=float(item.rate_per_unit)).border = thin_border
-        ws.cell(row=row, column=9, value=float(item.total_value)).border = thin_border
-        ws.cell(row=row, column=10, value=item.remarks).border = thin_border
+        ws.cell(row=row, column=COL_SNO, value=item.serial_number).alignment = center
+        ws.cell(row=row, column=COL_SYSTEM, value=item.system or '')
+        ws.cell(row=row, column=COL_MAKE, value=item.make_model or '')
+        ws.cell(row=row, column=COL_DESC, value=item.description or '').alignment = wrap
+        qty_cell = ws.cell(row=row, column=COL_QTY, value=float(item.quantity))
+        qty_cell.alignment = center
+        qty_cell.number_format = qty_fmt
+        ws.cell(row=row, column=COL_UOM, value=item.uom or '').alignment = center
+        rate_cell = ws.cell(row=row, column=COL_RATE, value=float(item.rate_per_unit))
+        rate_cell.number_format = money_fmt
+        tot_cell = ws.cell(row=row, column=COL_TOTAL, value=float(item.total_value))
+        tot_cell.number_format = money_fmt
+        tot_cell.font = bold
+        ws.cell(row=row, column=COL_REMARKS, value=item.remarks or '').alignment = wrap
+        for c in range(1, LAST_COL + 1):
+            ws.cell(row=row, column=c).border = thin_border
         row += 1
 
     # ── Totals ──
+    # Label sits in the Rate column and the figure in the Total column, so the
+    # numbers line up under the item totals instead of floating mid-table.
     row += 1
-    totals = [
-        ('Base Amount', float(po.base_amount)),
-        ('Discount', float(po.discount_amount)),
-        ('Gross Value', float(po.gross_value)),
-        ('VAT', float(po.vat_amount)),
-        (f'Total Value in {po.currency}', float(po.total_value)),
-    ]
-    for label, val in totals:
-        ws.cell(row=row, column=3, value=label).font = bold
-        if label == 'VAT':
-            ws.cell(row=row, column=6, value=float(po.vat_rate / 100))
-            ws.cell(row=row, column=6).number_format = '0%'
-        if label == 'Discount':
-            ws.cell(row=row, column=6, value=float(po.discount_rate / 100))
-            ws.cell(row=row, column=6).number_format = '0%'
-        val_cell = ws.cell(row=row, column=9, value=val)
+    totals = [('Base Amount', float(po.base_amount), None)]
+    if po.discount_rate:
+        totals.append(('Discount (%.0f%%)' % po.discount_rate, -float(po.discount_amount), None))
+    totals.append(('Gross Value', float(po.gross_value), None))
+    totals.append(('VAT (%.0f%%)' % po.vat_rate, float(po.vat_amount), None))
+    totals.append(('Total Value in %s' % po.currency, float(po.total_value), 'grand'))
+
+    for label, val, kind in totals:
+        label_cell = ws.cell(row=row, column=COL_RATE, value=label)
+        label_cell.font = bold
+        label_cell.alignment = Alignment(horizontal='right')
+        label_cell.border = thin_border
+        val_cell = ws.cell(row=row, column=COL_TOTAL, value=val)
         val_cell.font = bold
-        val_cell.number_format = '#,##0.00'
+        val_cell.number_format = money_fmt
+        val_cell.border = thin_border
+        if kind == 'grand':
+            label_cell.fill = total_fill
+            val_cell.fill = total_fill
         row += 1
 
+    # Amount in words — mirrors the PDF so both documents read identically.
+    row += 1
+    words_cell = ws.cell(
+        row=row, column=1,
+        value='Amount in words: %s' % _amount_in_words(po.total_value, currency=po.currency))
+    words_cell.font = bold
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=LAST_COL)
+    words_cell.alignment = Alignment(wrap_text=True, vertical='center')
+
     # ── T&C ──
-    selected_terms_xl = list(po.selected_terms.all())
+    # Read through resolved_terms() so a PO-specific edit of a term appears
+    # here exactly as it does in the PDF, without touching the shared template.
+    selected_terms_xl = po.resolved_terms()
     if po.terms_and_conditions or selected_terms_xl:
         row += 2
         ws.cell(row=row, column=1, value='TERMS AND CONDITIONS').font = bold_red
         row += 1
-        for tmpl in selected_terms_xl:
-            ws.cell(row=row, column=2, value=tmpl.name).font = bold
+        for entry in selected_terms_xl:
+            ws.cell(row=row, column=2, value=entry['template'].name).font = bold
             row += 1
-            for line in tmpl.content.split('\n'):
+            for line in entry['content'].split('\n'):
                 if line.strip():
                     ws.cell(row=row, column=2, value=line.strip()).alignment = wrap
                     row += 1
@@ -1134,10 +1251,19 @@ def po_export_excel(request, pk):
                     ws.cell(row=row, column=2, value=line.strip()).alignment = wrap
                     row += 1
 
-    # Column widths
-    widths = [8, 18, 15, 15, 15, 10, 8, 14, 14, 18]
+    # Column widths — one entry per column, in the order defined above.
+    widths = [8, 14, 22, 55, 11, 9, 15, 17, 26]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+
+    # Keep the item header visible while scrolling, and make the sheet print as
+    # a tidy landscape page rather than spilling columns onto a second sheet.
+    ws.freeze_panes = ws.cell(row=table_row + 1, column=1)
+    ws.page_setup.orientation = 'landscape'
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.print_title_rows = '%d:%d' % (table_row, table_row)
 
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -1188,6 +1314,10 @@ def po_export_pdf(request, pk, unpriced=False):
     tc_style = ParagraphStyle('TC', parent=styles['Normal'], fontSize=7, leading=9)
     right_style = ParagraphStyle('Right', parent=styles['Normal'], fontSize=8, alignment=TA_RIGHT)
     right_bold = ParagraphStyle('RightBold', parent=styles['Normal'], fontSize=8, alignment=TA_RIGHT, fontName='Helvetica-Bold')
+    # Qty is a count, not a money column — centred so it scans cleanly and
+    # matches the PO detail table and the Excel export.
+    center_style = ParagraphStyle('Center', parent=styles['Normal'], fontSize=8, alignment=TA_CENTER)
+    small_center = ParagraphStyle('SmallCenter', parent=styles['Normal'], fontSize=7, alignment=TA_CENTER)
 
     # ── Logo + Title ──
     if is_draft:
@@ -1271,7 +1401,7 @@ def po_export_pdf(request, pk, unpriced=False):
             Paragraph('<b>S.No.</b>', small_style),
             Paragraph('<b>Make/Model</b>', small_style),
             Paragraph('<b>Item Description</b>', small_style),
-            Paragraph('<b>Qty</b>', small_style),
+            Paragraph('<b>Qty</b>', small_center),
             Paragraph('<b>UOM</b>', small_style),
             Paragraph('<b>Remarks</b>', small_style),
         ]
@@ -1281,7 +1411,7 @@ def po_export_pdf(request, pk, unpriced=False):
             Paragraph('<b>S.No.</b>', small_style),
             Paragraph('<b>Make/Model</b>', small_style),
             Paragraph('<b>Item Description</b>', small_style),
-            Paragraph('<b>Qty</b>', small_style),
+            Paragraph('<b>Qty</b>', small_center),
             Paragraph('<b>UOM</b>', small_style),
             Paragraph('<b>Rate/Unit</b>', small_style),
             Paragraph(f'<b>Total ({po.currency})</b>', small_style),
@@ -1297,7 +1427,7 @@ def po_export_pdf(request, pk, unpriced=False):
                 Paragraph(str(item.serial_number), normal_style),
                 Paragraph(item.make_model or '', small_style),
                 Paragraph(item.description, small_style),
-                Paragraph(f'{item.quantity:,.0f}', right_style),
+                Paragraph(f'{item.quantity:,.0f}', center_style),
                 Paragraph(item.uom, small_style),
                 Paragraph(item.remarks or '', small_style),
             ])
@@ -1306,7 +1436,7 @@ def po_export_pdf(request, pk, unpriced=False):
                 Paragraph(str(item.serial_number), normal_style),
                 Paragraph(item.make_model or '', small_style),
                 Paragraph(item.description, small_style),
-                Paragraph(f'{item.quantity:,.0f}', right_style),
+                Paragraph(f'{item.quantity:,.0f}', center_style),
                 Paragraph(item.uom, small_style),
                 Paragraph(f'{item.rate_per_unit:,.2f}', right_style),
                 Paragraph(f'{item.total_value:,.2f}', right_bold),
@@ -1445,7 +1575,10 @@ def po_export_pdf(request, pk, unpriced=False):
     # ── Terms & Conditions ──
     from costing.models import TermsTemplate as _TermsTemplate
 
-    selected_terms = list(po.selected_terms.all())
+    # resolved_terms() applies any per-PO edits over the shared template text.
+    resolved = po.resolved_terms()
+    selected_terms = [e['template'] for e in resolved]
+    term_text = {e['template'].pk: e['content'] for e in resolved}
     legacy_tc = (po.terms_and_conditions or '').strip()
 
     if selected_terms or legacy_tc:
@@ -1467,7 +1600,8 @@ def po_export_pdf(request, pk, unpriced=False):
         for cat_value, _cat_label in _TermsTemplate.CATEGORY_CHOICES:
             for tmpl in terms_grouped.get(cat_value, []):
                 elements.append(Paragraph(f'<b>{_xml_escape(tmpl.name)}</b>', sub_hdr_style))
-                for line in [l.strip() for l in tmpl.content.splitlines() if l.strip()]:
+                _content = term_text.get(tmpl.pk, tmpl.content)
+                for line in [l.strip() for l in _content.splitlines() if l.strip()]:
                     elements.append(Paragraph(_xml_escape(line), tc_style))
                 elements.append(Spacer(1, 1*mm))
 

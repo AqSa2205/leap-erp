@@ -276,8 +276,11 @@ class POCurrencyTests(TestCase):
         r = self.client.get(reverse('procurement:po_export', kwargs={'pk': po.pk}))
         self.assertEqual(r.status_code, 200)
         ws = openpyxl.load_workbook(io.BytesIO(r.content)).active
-        self.assertEqual(ws.cell(row=11, column=8).value, 'Rate/unit (AED)')
-        self.assertEqual(ws.cell(row=11, column=9).value, 'Total Value (AED)')
+        # Match on the header text rather than fixed coordinates so the
+        # assertion survives layout changes to the sheet.
+        header_texts = {c.value for row in ws.iter_rows() for c in row if c.value}
+        self.assertIn('Rate/unit (AED)', header_texts)
+        self.assertIn('Total Value (AED)', header_texts)
 
 
 class QuotationImportTests(TestCase):
@@ -523,3 +526,93 @@ class BudgetProcurementFlowTests(TestCase):
         self.client.force_login(self.proc)
         r = self.client.get(reverse('costing:detail', kwargs={'pk': self.sheet.pk}))
         self.assertNotEqual(r.status_code, 200)  # locked out (404/403/redirect)
+
+
+class POTermOverrideTests(TestCase):
+    """Terms are picked from the shared TermsTemplate library, but a PO can
+    reword one for itself. The override is scoped to that PO — the template
+    and every other PO using it must stay exactly as they were."""
+
+    def setUp(self):
+        from costing.models import TermsTemplate
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('ovr', password='pw', role=self.sa_role)
+        self.client.force_login(self.user)
+        self.original = 'ORIGINAL LINE ONE\nORIGINAL LINE TWO'
+        self.tmpl = TermsTemplate.objects.create(
+            name='Payment', category='payment_terms', usage='procurement',
+            content=self.original)
+        self.po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='OVR-1', vendor_name='V',
+            po_issued_by='T', cost_center='projects', created_by=self.user)
+        self.po.selected_terms.add(self.tmpl)
+
+    def _save(self, text, po=None):
+        from django.http import QueryDict
+        from procurement.views import _save_po_term_overrides
+        qd = QueryDict(mutable=True)
+        qd[f'term_content_{self.tmpl.pk}'] = text
+        _save_po_term_overrides(po or self.po, qd, self.user)
+
+    def test_no_override_falls_back_to_template(self):
+        entry = self.po.resolved_terms()[0]
+        self.assertEqual(entry['content'], self.original)
+        self.assertFalse(entry['is_overridden'])
+
+    def test_edit_is_scoped_to_this_po(self):
+        self._save('CUSTOM WORDING')
+        entry = self.po.resolved_terms()[0]
+        self.assertEqual(entry['content'], 'CUSTOM WORDING')
+        self.assertTrue(entry['is_overridden'])
+
+        # The shared template must not have been written to.
+        self.tmpl.refresh_from_db()
+        self.assertEqual(self.tmpl.content, self.original)
+
+        # …and a different PO on the same template still sees the original.
+        other = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='OVR-2', vendor_name='V2',
+            po_issued_by='T', cost_center='projects', created_by=self.user)
+        other.selected_terms.add(self.tmpl)
+        self.assertEqual(other.resolved_terms()[0]['content'], self.original)
+
+    def test_editing_back_to_template_text_drops_the_override(self):
+        from procurement.models import POTermOverride
+        self._save('CUSTOM WORDING')
+        self.assertEqual(POTermOverride.objects.filter(purchase_order=self.po).count(), 1)
+        # Trailing whitespace / CRLF differences must not count as an edit.
+        self._save(self.original.replace('\n', '\r\n') + '   ')
+        self.assertEqual(POTermOverride.objects.filter(purchase_order=self.po).count(), 0)
+
+    def test_deselecting_a_term_drops_its_override(self):
+        from procurement.models import POTermOverride
+        self._save('CUSTOM WORDING')
+        self.po.selected_terms.clear()
+        self._save('CUSTOM WORDING')
+        self.assertEqual(POTermOverride.objects.filter(purchase_order=self.po).count(), 0)
+
+    def test_exports_use_the_edited_text(self):
+        import io
+        from django.utils import timezone
+        from procurement.models import PurchaseOrderItem
+        PurchaseOrderItem.objects.create(
+            purchase_order=self.po, serial_number=1, description='D',
+            quantity=1, uom='Nos', rate_per_unit=10, order=0)
+        self._save('CUSTOM WORDING FOR EXPORT')
+        for s in self.po.required_stages:      # release so Excel is unlocked
+            setattr(self.po, f'{s}_approved_at', timezone.now())
+            setattr(self.po, f'{s}_approved_by', self.user)
+        self.po.save()
+
+        import openpyxl
+        r = self.client.get(reverse('procurement:po_export', kwargs={'pk': self.po.pk}))
+        ws = openpyxl.load_workbook(io.BytesIO(r.content)).active
+        cells = {str(c.value) for row in ws.iter_rows() for c in row if c.value}
+        self.assertIn('CUSTOM WORDING FOR EXPORT', cells)
+        self.assertNotIn('ORIGINAL LINE ONE', cells)
+
+        from pypdf import PdfReader
+        r = self.client.get(reverse('procurement:po_export_pdf', kwargs={'pk': self.po.pk}))
+        text = ''.join(p.extract_text() for p in PdfReader(io.BytesIO(r.content)).pages)
+        self.assertIn('CUSTOM WORDING FOR EXPORT', text)
+        self.assertNotIn('ORIGINAL LINE ONE', text)

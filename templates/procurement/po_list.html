@@ -4,6 +4,9 @@
 {% block title %}Purchase Orders{% endblock %}
 
 {% block content %}
+<style>
+    tr.clickable-row { cursor: pointer; transition: background-color 0.15s; }
+</style>
 <div class="container-fluid">
     <!-- Header -->
     <div class="d-flex justify-content-between align-items-center mb-4">
@@ -65,7 +68,7 @@
                     </thead>
                     <tbody>
                         {% for po in purchase_orders %}
-                        <tr>
+                        <tr class="clickable-row" data-href="{% url 'procurement:po_detail' po.pk %}">
                             <td>
                                 <a href="{% url 'procurement:po_detail' po.pk %}" class="text-decoration-none">
                                     <strong>{{ po.po_number }}</strong>
@@ -176,4 +179,15 @@
         </div>
     </div>
 </div>
+
+<script>
+// Make each PO row clickable — open the PO, but skip clicks on links/buttons/inputs
+// so the row's action buttons (view, edit, Excel, PDF) still work on their own.
+document.querySelectorAll('tr.clickable-row').forEach(function (row) {
+    row.addEventListener('click', function (e) {
+        if (e.target.closest('a, button, input, select, [data-no-row-click]')) return;
+        if (row.dataset.href) window.location.href = row.dataset.href;
+    });
+});
+</script>
 {% endblock %}

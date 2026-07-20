@@ -286,6 +286,34 @@ class PurchaseOrder(models.Model):
         """Just the stages that have been signed, in order."""
         return [s for s in self.approval_status if s['is_approved']]
 
+    def term_override_map(self):
+        """{template_id: edited content} for this PO's customised terms."""
+        return {o.template_id: o.content for o in self.term_overrides.all()}
+
+    def resolved_terms(self):
+        """Selected terms with their effective text, in category order.
+
+        Returns dicts of ``{template, content, is_overridden}``. Every export
+        must read terms through here so a PO-specific edit shows up in the
+        PDF and the Excel identically, while the shared template is untouched.
+        """
+        from costing.models import TermsTemplate
+
+        overrides = self.term_override_map()
+        selected = list(self.selected_terms.all())
+        order = [c for c, _ in TermsTemplate.CATEGORY_CHOICES]
+        selected.sort(key=lambda t: (order.index(t.category)
+                                     if t.category in order else len(order),
+                                     t.name))
+        return [
+            {
+                'template': t,
+                'content': overrides.get(t.pk, t.content),
+                'is_overridden': t.pk in overrides,
+            }
+            for t in selected
+        ]
+
     def can_user_approve_stage(self, user, stage_key):
         """Permission gate per stage.
 
@@ -873,3 +901,37 @@ class FRCInventory(models.Model):
         if self.unit_cost:
             return self.unit_cost * Decimal(str(self.available_stock))
         return Decimal('0')
+
+
+class POTermOverride(models.Model):
+    """Per-PO edit of a selected Terms & Conditions template.
+
+    Terms are picked from the shared TermsTemplate library, but a given PO
+    often needs a tweak — a different payment split, a project-specific
+    delivery clause. Storing the edited text here keeps it scoped to the one
+    PO: the shared template, and every other PO using it, stay untouched.
+
+    A row exists only while the text differs from the template. Resetting an
+    override deletes the row, so the PO falls back to live template text.
+    """
+
+    purchase_order = models.ForeignKey(
+        PurchaseOrder, on_delete=models.CASCADE, related_name='term_overrides'
+    )
+    template = models.ForeignKey(
+        'costing.TermsTemplate', on_delete=models.CASCADE, related_name='po_overrides'
+    )
+    content = models.TextField(verbose_name="Edited Content")
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='po_term_overrides',
+    )
+
+    class Meta:
+        unique_together = ['purchase_order', 'template']
+        verbose_name = "PO Terms Override"
+        verbose_name_plural = "PO Terms Overrides"
+
+    def __str__(self):
+        return f"{self.purchase_order.po_number} — {self.template.name} (edited)"
