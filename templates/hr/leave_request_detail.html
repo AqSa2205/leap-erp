@@ -1,0 +1,109 @@
+{% extends 'base.html' %}
+{% block title %}Leave Request — {{ leave_request.employee.full_name }}{% endblock %}
+{% block content %}
+<div class="container-fluid">
+  <div class="row justify-content-center">
+    <div class="col-lg-8">
+      <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="h3 mb-0">{{ leave_request.employee.full_name }} — {{ leave_request.leave_type.name }}</h1>
+        <a href="{% url 'hr:leave_request_list' %}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Back to Queue</a>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-body">
+          <p class="mb-1"><strong>Dates:</strong> {{ leave_request.start_date }} – {{ leave_request.end_date }} ({{ leave_request.days }} days)</p>
+          <p class="mb-1"><strong>Reason:</strong> {{ leave_request.employee_reason|default:"—" }}</p>
+          <p class="mb-1"><strong>Status:</strong>
+            {% if leave_request.status == 'approved' %}<span class="badge bg-success">Approved</span>
+            {% elif leave_request.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
+            {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
+            {% if leave_request.is_overridden %}
+              <span class="badge bg-info text-dark">Overridden by {{ leave_request.overridden_by.get_full_name|default:leave_request.overridden_by.username }}</span>
+            {% endif %}
+          </p>
+          {% if leave_request.status == 'disapproved' and leave_request.salary_deduction_applicable %}
+          <p class="text-danger mb-1"><i class="bi bi-exclamation-triangle"></i> Disapproved — Salary Deduction Applicable
+            {% if leave_request.salary_deduction_note %}<br><small>{{ leave_request.salary_deduction_note }}</small>{% endif %}
+          </p>
+          {% endif %}
+          {% if leave_request.document %}
+          <p class="mb-0"><strong>Document:</strong>
+            <a href="{% url 'hr:leave_request_document' leave_request.pk %}"><i class="bi bi-paperclip"></i> View attached document</a>
+          </p>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header"><h5 class="mb-0">Approvals</h5></div>
+        <div class="card-body">
+          <ul class="list-unstyled mb-0">
+            {% for a in leave_request.approvals.all %}
+            <li class="mb-2">
+              <strong>{{ a.approver.get_full_name|default:a.approver.username }}:</strong>
+              {% if a.decision == 'approved' %}<span class="badge bg-success">Approved</span>
+              {% elif a.decision == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
+              {% elif a.decision == 'skipped' %}<span class="badge bg-secondary">Skipped (overridden)</span>
+              {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
+              {% if a.comment %}<div class="text-muted small">{{ a.comment }}</div>{% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+
+          {% if is_approver and my_approval.decision == 'pending' and leave_request.status == 'pending' %}
+          <form method="post" class="border-top pt-3 mt-3">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="decide">
+            <div class="mb-2"><textarea name="comment" class="form-control" rows="2" placeholder="Optional comment"></textarea></div>
+            <button type="submit" name="decision" value="approved" class="btn btn-success btn-sm">Approve</button>
+            <button type="submit" name="decision" value="disapproved" class="btn btn-danger btn-sm">Disapprove</button>
+          </form>
+          {% endif %}
+
+          {% if request.user.is_super_admin_user and leave_request.status == 'pending' %}
+          <form method="post" class="border-top pt-3 mt-3">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="override">
+            <div class="mb-2">
+              <label class="form-label small">Superadmin override (use only if an approver is unavailable)</label>
+              <textarea name="reason" class="form-control" rows="2" placeholder="Reason — required" required></textarea>
+            </div>
+            <button type="submit" name="decision" value="approved" class="btn btn-outline-success btn-sm">Override — Approve</button>
+            <button type="submit" name="decision" value="disapproved" class="btn btn-outline-danger btn-sm">Override — Disapprove</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h5 class="mb-0">Notes</h5></div>
+        <div class="card-body">
+          {% for n in visible_notes %}
+          <div class="mb-2 {% if n.is_internal %}bg-light p-2 rounded{% endif %}">
+            <strong>{{ n.author.get_full_name|default:n.author.username }}</strong>
+            {% if n.is_internal %}<span class="badge bg-secondary">Internal</span>{% endif %}
+            <div class="small text-muted">{{ n.created_at }}</div>
+            <div>{{ n.note }}</div>
+          </div>
+          {% empty %}
+          <p class="text-muted mb-0">No notes yet.</p>
+          {% endfor %}
+
+          {% if request.user.is_super_admin_user %}
+          <form method="post" class="border-top pt-3 mt-3">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="add_note">
+            <div class="mb-2"><textarea name="note" class="form-control" rows="2" placeholder="Add a note the employee can see" required></textarea></div>
+            <div class="form-check mb-2">
+              <input type="checkbox" name="is_internal" value="1" class="form-check-input" id="internalNote">
+              <label class="form-check-label small" for="internalNote">Internal only (hidden from employee)</label>
+            </div>
+            <button type="submit" class="btn btn-sm btn-primary">Add Note</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

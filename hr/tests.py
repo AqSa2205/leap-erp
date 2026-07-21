@@ -1557,3 +1557,67 @@ class LeaveRequestQueueViewTests(TestCase):
         new_req = LeaveRequest.objects.exclude(pk=self.pending.pk).get()
         self.assertEqual(new_req.created_by, self.superadmin)
         self.assertEqual(new_req.approvals.count(), 0)  # approvals seeded in Task 4f alongside submission wiring — see note below
+
+
+class LeaveRequestDetailViewTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.superadmin = make_user('detail_super', password='x')
+        self.superadmin.set_password('testpass123')
+        from accounts.models import Role
+        role, _ = Role.objects.get_or_create(name='super_admin')
+        self.superadmin.role = role
+        self.superadmin.save()
+        self.aamna = make_user('detail_aamna', password='x')
+        self.aamna.set_password('testpass123')
+        self.aamna.save()
+        LeaveApprover.objects.create(user=self.aamna)
+        self.ali = make_user('detail_ali', password='x')
+        self.ali.set_password('testpass123')
+        self.ali.save()
+        LeaveApprover.objects.create(user=self.ali)
+        self.req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 3))
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=self.aamna)
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=self.ali)
+
+    def test_detail_page_loads(self):
+        self.client.login(username='detail_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_approver_can_decide_via_post(self):
+        self.client.login(username='detail_aamna', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                                {'action': 'decide', 'decision': 'approved', 'comment': 'ok'})
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.approvals.get(approver=self.aamna).decision, 'approved')
+
+    def test_add_note_visible_to_employee_by_default(self):
+        self.client.login(username='detail_super', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                                {'action': 'add_note', 'note': 'Please bring the certificate.'})
+        self.assertEqual(resp.status_code, 302)
+        note = self.req.notes.get()
+        self.assertFalse(note.is_internal)
+
+    def test_override_by_superadmin(self):
+        self.client.login(username='detail_super', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                                {'action': 'override', 'decision': 'approved', 'reason': 'Ali is on leave'})
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'approved')
+        self.assertTrue(self.req.is_overridden)
+
+    def test_non_approver_non_superadmin_cannot_decide(self):
+        outsider = make_user('detail_outsider', password='x')
+        outsider.set_password('testpass123')
+        outsider.save()
+        self.client.login(username='detail_outsider', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertEqual(resp.status_code, 403)

@@ -2073,3 +2073,62 @@ class WFHRecordDeleteView(AdminRequiredMixin, DeleteView):
     model = WFHRecord
     template_name = 'hr/wfhrecord_confirm_delete.html'
     success_url = reverse_lazy('hr:wfh_list')
+
+
+class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
+    model = LeaveRequest
+    template_name = 'hr/leave_request_detail.html'
+    context_object_name = 'leave_request'
+
+    def test_func(self):
+        # Broader than SuperAdminRequiredMixin's plain super-admin check: a designated
+        # approver must also be able to open the detail page and record their decision.
+        # Whether they're the *specific* pending approver for *this* request is enforced
+        # per-action in post() (see the 'decide' branch) — this is just page access.
+        return self.request.user.is_super_admin_user or is_designated_approver(self.request.user)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['is_approver'] = is_designated_approver(self.request.user)
+        ctx['my_approval'] = self.object.approvals.filter(approver=self.request.user).first()
+        ctx['visible_notes'] = self.object.notes.filter(is_internal=False) if not self.request.user.is_super_admin_user \
+            else self.object.notes.all()
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        from hr.leave_approval_services import record_approver_decision, override_finalize
+        self.object = self.get_object()
+        action = request.POST.get('action')
+
+        if action == 'decide':
+            approval = self.object.approvals.filter(approver=request.user).first()
+            if not approval:
+                return HttpResponse('You are not a designated approver for this request.', status=403)
+            try:
+                record_approver_decision(self.object, request.user, request.POST.get('decision'),
+                                         comment=request.POST.get('comment', ''))
+                messages.success(request, 'Your decision has been recorded.')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+
+        elif action == 'override':
+            if not request.user.is_super_admin_user:
+                return HttpResponse('Super admin required.', status=403)
+            try:
+                override_finalize(self.object, request.user, request.POST.get('decision'),
+                                  request.POST.get('reason', ''))
+                messages.success(request, 'Request finalized via override.')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+
+        elif action == 'add_note':
+            from .models import LeaveRequestNote
+            note_text = request.POST.get('note', '').strip()
+            if note_text:
+                LeaveRequestNote.objects.create(
+                    leave_request=self.object, author=request.user, note=note_text,
+                    is_internal=bool(request.POST.get('is_internal')),
+                )
+                messages.success(request, 'Note added.')
+
+        return redirect('hr:leave_request_detail', pk=self.object.pk)

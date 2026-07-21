@@ -68,6 +68,7 @@ urlpatterns = [
     path('leave-requests/', views.LeaveRequestListView.as_view(), name='leave_request_list'),
     path('leave-requests/create/', views.LeaveRequestCreateView.as_view(), name='leave_request_create'),
     path('leave-requests/<int:pk>/document/', views.leave_request_document_download, name='leave_request_document'),
+    path('leave-requests/<int:pk>/', views.LeaveRequestDetailView.as_view(), name='leave_request_detail'),
     path('leave/entitlements/', views.entitlement_year, name='entitlement_year'),
     path('<int:pk>/leave/', views.EmployeeLeaveSummaryView.as_view(), name='leave_summary'),
     path('<int:pk>/attendance/', views.AttendanceHistoryView.as_view(), name='attendance_history'),
