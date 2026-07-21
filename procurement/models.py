@@ -131,6 +131,10 @@ class PurchaseOrder(models.Model):
     selected_terms = models.ManyToManyField(
         'costing.TermsTemplate', blank=True, related_name='purchase_orders'
     )
+    # Comma-separated TermsTemplate ids in the order the user selected them.
+    # The M2M above stores membership only; its ordering is not reliable
+    # (Django's .add() uses a set internally), so print order lives here.
+    terms_order = models.CharField(max_length=500, blank=True, default='')
 
     # Approval workflow — sequential SCM → PM → COO → CEO. CEO is only
     # required when total_value crosses CEO_APPROVAL_THRESHOLD. Each stage
@@ -291,20 +295,22 @@ class PurchaseOrder(models.Model):
         return {o.template_id: o.content for o in self.term_overrides.all()}
 
     def resolved_terms(self):
-        """Selected terms with their effective text, in category order.
+        """Selected terms with their effective text, in the order they were selected.
 
         Returns dicts of ``{template, content, is_overridden}``. Every export
-        must read terms through here so a PO-specific edit shows up in the
-        PDF and the Excel identically, while the shared template is untouched.
-        """
-        from costing.models import TermsTemplate
+        must read terms through here so a PO-specific edit shows up in the PDF
+        and the Excel identically, while the shared template is untouched.
 
+        Order follows ``terms_order`` (the sequence the user selected them),
+        NOT TermsTemplate's alphabetical Meta.ordering. Any selected term not
+        listed in terms_order (e.g. legacy data) falls to the end, ordered by
+        pk, so nothing is ever dropped.
+        """
         overrides = self.term_override_map()
         selected = list(self.selected_terms.all())
-        order = [c for c, _ in TermsTemplate.CATEGORY_CHOICES]
-        selected.sort(key=lambda t: (order.index(t.category)
-                                     if t.category in order else len(order),
-                                     t.name))
+        order_ids = [int(x) for x in self.terms_order.split(',') if x.strip().isdigit()]
+        pos = {pk: i for i, pk in enumerate(order_ids)}
+        selected.sort(key=lambda t: (pos.get(t.pk, len(pos)), t.pk))
         return [
             {
                 'template': t,
