@@ -15,13 +15,13 @@ from datetime import datetime, date, timedelta
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-from .models import Employee, Asset, AssetAssignment, Vehicle, VehicleDocument, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay, WFHRecord
+from .models import Employee, Asset, AssetAssignment, Vehicle, VehicleDocument, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay, WFHRecord, LeaveRequest
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm, AssetIssueForm, AssetReturnForm,
     VehicleForm, VehicleFilterForm, EmployeeDocumentForm, VehicleDocumentForm,
     LeaveTypeForm, HolidayForm, WorkingDayForm, LeaveRecordForm, WFHRecordForm,
-    AttendanceSettingsForm,
+    AttendanceSettingsForm, LeaveRequestForm,
 )
 from .leave_services import generate_year_entitlements
 from .attendance_services import derive_status
@@ -1689,6 +1689,42 @@ class LeaveRecordDeleteView(AdminRequiredMixin, DeleteView):
 
     def get_success_url(self):
         return reverse_lazy('hr:leave_summary', kwargs={'pk': self.object.employee_id})
+
+
+class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
+    """FIFO queue: oldest pending first, then a paginated history of decided requests."""
+    model = LeaveRequest
+    template_name = 'hr/leave_request_list.html'
+    context_object_name = 'pending_requests'
+    paginate_by = None  # pending list is expected to stay small; history is paginated separately below
+
+    def get_queryset(self):
+        return LeaveRequest.objects.filter(status='pending').select_related('employee', 'leave_type').order_by('created_at')
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['decided_requests'] = (
+            LeaveRequest.objects.exclude(status='pending')
+            .select_related('employee', 'leave_type').order_by('-decided_at')[:50])
+        return ctx
+
+
+class LeaveRequestCreateView(SuperAdminRequiredMixin, CreateView):
+    model = LeaveRequest
+    form_class = LeaveRequestForm
+    template_name = 'hr/leave_request_form.html'
+    success_url = reverse_lazy('hr:leave_request_list')
+
+    def form_valid(self, form):
+        from hr.leave_approval_services import submit_leave_request
+        leave_request = submit_leave_request(
+            employee=form.cleaned_data['employee'], leave_type=form.cleaned_data['leave_type'],
+            start_date=form.cleaned_data['start_date'], end_date=form.cleaned_data['end_date'],
+            employee_reason=form.cleaned_data['employee_reason'], document=form.cleaned_data['document'],
+            created_by=self.request.user,
+        )
+        messages.success(self.request, 'Leave request logged and sent for approval.')
+        return redirect(self.success_url)
 
 
 class EmployeeLeaveSummaryView(AdminRequiredMixin, DetailView):

@@ -1516,3 +1516,44 @@ class LeaveRequestDocumentAccessTests(TestCase):
     def test_anonymous_redirected_to_login(self):
         resp = self.client.get(reverse('hr:leave_request_document', args=[self.req.pk]))
         self.assertEqual(resp.status_code, 302)
+
+
+class LeaveRequestQueueViewTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.superadmin = make_user('queue_super')
+        self.superadmin.set_password('testpass123')
+        from accounts.models import Role
+        role, _ = Role.objects.get_or_create(name='super_admin')
+        self.superadmin.role = role
+        self.superadmin.save()
+        self.plain_user = make_user('queue_plain', password='x')
+        self.plain_user.set_password('testpass123')
+        self.plain_user.save()
+        self.pending = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 3))
+
+    def test_super_admin_can_view_queue(self):
+        self.client.login(username='queue_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, self.emp.full_name)
+
+    def test_non_super_admin_forbidden(self):
+        self.client.login(username='queue_plain', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_admin_can_log_request_on_employees_behalf(self):
+        self.client.login(username='queue_super', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_create'), {
+            'employee': self.emp.pk, 'leave_type': self.marriage.pk,
+            'start_date': '2026-09-01', 'end_date': '2026-09-02', 'employee_reason': 'Family event',
+        })
+        self.assertEqual(resp.status_code, 302)
+        new_req = LeaveRequest.objects.exclude(pk=self.pending.pk).get()
+        self.assertEqual(new_req.created_by, self.superadmin)
+        self.assertEqual(new_req.approvals.count(), 0)  # approvals seeded in Task 4f alongside submission wiring — see note below

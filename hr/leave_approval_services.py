@@ -97,3 +97,24 @@ def _finalize(leave_request, status):
             verb=f'Your {leave_request.leave_type.name} leave request was {verb}',
             description=leave_request.override_reason if leave_request.is_overridden else '',
         )
+
+
+def submit_leave_request(*, employee, leave_type, start_date, end_date, employee_reason='', document=None, created_by):
+    """Create a LeaveRequest and snapshot the currently-active LeaveApprover
+    roster onto it as LeaveRequestApproval rows. Used by both the employee
+    self-service form and the admin's 'log on behalf of' form so the two
+    submission paths can never drift out of sync."""
+    from hr.models import LeaveApprover, LeaveRequest, LeaveRequestApproval
+    leave_request = LeaveRequest.objects.create(
+        employee=employee, leave_type=leave_type, start_date=start_date, end_date=end_date,
+        employee_reason=employee_reason, document=document, created_by=created_by,
+    )
+    for approver in LeaveApprover.objects.filter(is_active=True):
+        LeaveRequestApproval.objects.create(leave_request=leave_request, approver=approver.user)
+    if employee.user_id:
+        from notifications.services import notify_users
+        notify_users(
+            recipients=[employee.user], verb='Your leave request was submitted and is pending approval',
+            actor=created_by,
+        )
+    return leave_request

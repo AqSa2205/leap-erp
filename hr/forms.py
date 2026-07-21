@@ -1,5 +1,5 @@
 from django import forms
-from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, VehicleDocument, LeaveType, Holiday, LeaveRecord, AttendanceSettings, WorkingDay, WFHRecord
+from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, VehicleDocument, LeaveType, Holiday, LeaveRecord, AttendanceSettings, WorkingDay, WFHRecord, LeaveRequest
 
 
 class EmployeeForm(forms.ModelForm):
@@ -422,6 +422,24 @@ class WFHRecordForm(forms.ModelForm):
             'end_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
             'note': forms.TextInput(attrs={'class': 'form-control'}),
         }
+
+
+class LeaveRequestForm(forms.ModelForm):
+    class Meta:
+        model = LeaveRequest
+        fields = ['employee', 'leave_type', 'start_date', 'end_date', 'employee_reason', 'document']
+        widgets = {
+            'employee': forms.Select(attrs={'class': 'form-select'}),
+            'leave_type': forms.Select(attrs={'class': 'form-select'}),
+            'start_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'end_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'employee_reason': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
+            'document': forms.ClearableFileInput(attrs={'class': 'form-control'}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['leave_type'].queryset = LeaveType.objects.filter(is_accumulative=False, is_active=True)
 
 
 WEEKDAY_CHOICES = [(0, 'Mon'), (1, 'Tue'), (2, 'Wed'), (3, 'Thu'), (4, 'Fri'), (5, 'Sat'), (6, 'Sun')]
