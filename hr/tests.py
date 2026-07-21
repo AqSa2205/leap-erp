@@ -1502,9 +1502,16 @@ class LeaveRequestDocumentAccessTests(TestCase):
         self.assertEqual(resp.status_code, 200)
 
     def test_unrelated_user_forbidden(self):
+        # 404, not 403 — an unauthorized user must not be able to distinguish
+        # "this request doesn't exist" from "it exists but isn't yours".
         self.client.login(username='doc_stranger', password='testpass123')
         resp = self.client.get(reverse('hr:leave_request_document', args=[self.req.pk]))
-        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_nonexistent_request_also_404s_indistinguishably(self):
+        self.client.login(username='doc_stranger', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_document', args=[999999]))
+        self.assertEqual(resp.status_code, 404)
 
     def test_anonymous_redirected_to_login(self):
         resp = self.client.get(reverse('hr:leave_request_document', args=[self.req.pk]))

@@ -1178,11 +1178,18 @@ def leave_request_document_download(request, pk):
     holds sensitive personal documents and needs a real permission check."""
     from django.http import FileResponse, Http404
     from .models import LeaveRequest
-    leave_request = get_object_or_404(LeaveRequest, pk=pk)
+    # Look up without get_object_or_404 and check authorization before ever
+    # confirming the object exists — otherwise a nonexistent pk (404) and an
+    # existing-but-forbidden pk (403) are distinguishable, letting any
+    # authenticated user enumerate valid LeaveRequest ids. Both "doesn't
+    # exist" and "exists but you can't see it" collapse to the same 404.
+    leave_request = LeaveRequest.objects.filter(pk=pk).first()
     user = request.user
-    is_owner = leave_request.employee.user_id == user.id
-    if not (is_owner or is_designated_approver(user) or user.is_super_admin_user):
-        return HttpResponse('Forbidden', status=403)
+    is_owner = bool(leave_request) and leave_request.employee.user_id == user.id
+    authorized = leave_request is not None and (
+        is_owner or is_designated_approver(user) or user.is_super_admin_user)
+    if not authorized:
+        raise Http404('No such leave request.')
     if not leave_request.document:
         raise Http404('No document attached to this request.')
     return FileResponse(leave_request.document.open('rb'), as_attachment=True,
