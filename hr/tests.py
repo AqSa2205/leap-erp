@@ -1614,6 +1614,13 @@ class LeaveRequestDetailViewTests(TestCase):
         self.assertEqual(self.req.status, 'approved')
         self.assertTrue(self.req.is_overridden)
 
+    def test_add_note_by_non_superadmin_approver_forbidden(self):
+        self.client.login(username='detail_aamna', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                                {'action': 'add_note', 'note': 'Should not be allowed.'})
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(self.req.notes.count(), 0)
+
     def test_non_approver_non_superadmin_cannot_decide(self):
         outsider = make_user('detail_outsider', password='x')
         outsider.set_password('testpass123')

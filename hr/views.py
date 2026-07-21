@@ -2122,6 +2122,8 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
                 messages.error(request, str(exc))
 
         elif action == 'add_note':
+            if not request.user.is_super_admin_user:
+                return HttpResponse('Super admin required.', status=403)
             from .models import LeaveRequestNote
             note_text = request.POST.get('note', '').strip()
             if note_text:
