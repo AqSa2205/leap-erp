@@ -894,9 +894,10 @@ class EntitlementYearGroupedTests(TestCase):
         self.assertEqual(len(groups), 1)
         g = groups[0]
         self.assertEqual(g['employee'].pk, self.emp.pk)
-        self.assertEqual(g['total_entitled'], Decimal('45'))   # 30 + 15
+        # Only Annual is accumulative (Task 1's rule) — Sick no longer counts toward the top-level total.
+        self.assertEqual(g['total_entitled'], Decimal('30'))   # Annual only; Sick is conditional
         self.assertEqual(g['total_taken'], Decimal('8'))       # only annual taken
-        self.assertEqual(g['total_remaining'], Decimal('37'))  # 45 - 8
+        self.assertEqual(g['total_remaining'], Decimal('22'))  # 30 - 8
         self.assertEqual(len(g['rows']), 2)                    # per-type breakdown
         annual_row = next(r for r in g['rows'] if r['leave_type'].pk == self.annual.pk)
         self.assertEqual(annual_row['taken'], Decimal('8'))
