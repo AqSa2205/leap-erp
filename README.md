@@ -134,12 +134,15 @@ pipeline to an accidental deletion on production. Please take them literally.
 ```
 feat/<your-name>-<short-description>   ← your work; short-lived (1–2 days)
         ↓  pull request + review
-dev                                    ← integration branch
-        ↓
-test                                   ← staging (own service + own database)
+dev                                    ← integration branch (test locally here)
         ↓  pull request + review
-main                                   ← PRODUCTION — deploys live on push
+main                                   ← PRODUCTION — deploys live on merge
 ```
+
+There is no separate staging environment — everything is tested locally
+against SQLite before it reaches `dev`, and `dev` is verified locally before
+it is merged to `main`. Both `dev` and `main` are protected: no direct
+pushes, everything goes through a pull request.
 
 Day-to-day:
 
@@ -158,8 +161,7 @@ git push -u origin feat/yourname-what-youre-doing
 - **One feature per branch**, merged within a couple of days. Long-lived
   branches are what cause painful conflicts — not the number of people.
 - **Rebase daily.** Conflicts then arrive in three-line doses.
-- **Only ever force-push your own `feat/` branch.** Never `dev`, `test`, or
-  `main`.
+- **Only ever force-push your own `feat/` branch.** Never `dev` or `main`.
 - **Never merge `main` backwards into `dev`.** Changes flow one direction.
 - Where possible, **split work by module** (procurement / HR / costing). The
   large view files are conflict magnets when two people edit them at once.
