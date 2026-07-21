@@ -1362,3 +1362,72 @@ class LeaveApprovalModelsTests(TestCase):
         LeaveRequestNote.objects.create(leave_request=req, author=self.aamna, note='Looks fine.')
         self.assertEqual(req.approvals.count(), 2)
         self.assertEqual(req.notes.count(), 1)
+
+
+from hr.leave_approval_services import record_approver_decision, override_finalize
+
+
+class LeaveApprovalServiceTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.aamna = make_user('aamna_khan')
+        self.ali = make_user('ali_sultan')
+        LeaveApprover.objects.create(user=self.aamna)
+        LeaveApprover.objects.create(user=self.ali)
+        self.req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 3))
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=self.aamna)
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=self.ali)
+
+    def test_stays_pending_after_one_approval(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'pending')
+        self.assertIsNone(self.req.leave_record)
+
+    def test_fully_approved_creates_leave_record(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        record_approver_decision(self.req, self.ali, 'approved')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'approved')
+        self.assertIsNotNone(self.req.leave_record)
+        self.assertEqual(self.req.leave_record.employee, self.emp)
+        self.assertEqual(self.req.leave_record.days, Decimal('3'))
+
+    def test_one_disapproval_is_decisive(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        record_approver_decision(self.req, self.ali, 'disapproved', comment='Not enough notice')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'disapproved')
+        self.assertTrue(self.req.salary_deduction_applicable)
+        self.assertIsNone(self.req.leave_record)
+
+    def test_non_approver_cannot_decide(self):
+        stranger = make_user('someone_else')
+        with self.assertRaises(ValueError):
+            record_approver_decision(self.req, stranger, 'approved')
+
+    def test_override_approve_finalizes_and_skips_remaining(self):
+        superadmin = make_user('super1')
+        override_finalize(self.req, superadmin, 'approved', reason='Ali is on leave; approving on his behalf.')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'approved')
+        self.assertTrue(self.req.is_overridden)
+        self.assertIsNotNone(self.req.leave_record)
+        skipped = self.req.approvals.filter(decision='skipped')
+        self.assertEqual(skipped.count(), 2)  # neither had decided yet
+
+    def test_override_requires_reason(self):
+        superadmin = make_user('super2')
+        with self.assertRaises(ValueError):
+            override_finalize(self.req, superadmin, 'approved', reason='')
+
+    def test_override_on_already_decided_request_rejected(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        record_approver_decision(self.req, self.ali, 'approved')
+        superadmin = make_user('super3')
+        with self.assertRaises(ValueError):
+            override_finalize(self.req, superadmin, 'disapproved', reason='Too late anyway')
