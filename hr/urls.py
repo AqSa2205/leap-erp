@@ -65,6 +65,7 @@ urlpatterns = [
     # Leave Records, Summary & Entitlements
     path('leave/record/create/', views.LeaveRecordCreateView.as_view(), name='leave_record_create'),
     path('leave/record/<int:pk>/delete/', views.LeaveRecordDeleteView.as_view(), name='leave_record_delete'),
+    path('leave-requests/<int:pk>/document/', views.leave_request_document_download, name='leave_request_document'),
     path('leave/entitlements/', views.entitlement_year, name='entitlement_year'),
     path('<int:pk>/leave/', views.EmployeeLeaveSummaryView.as_view(), name='leave_summary'),
     path('<int:pk>/attendance/', views.AttendanceHistoryView.as_view(), name='attendance_history'),

@@ -1464,3 +1464,48 @@ class LeaveApprovalNotificationTests(TestCase):
     def test_employee_notified_on_disapproval(self):
         record_approver_decision(self.req, self.aamna, 'disapproved')
         self.assertTrue(Notification.objects.filter(recipient=self.emp_user, verb__icontains='disapproved').exists())
+
+
+from django.core.files.uploadedfile import SimpleUploadedFile
+
+
+class LeaveRequestDocumentAccessTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.emp_user = make_user('doc_emp_user', password='x')
+        self.emp_user.set_password('testpass123')
+        self.emp_user.save()
+        self.emp.user = self.emp_user
+        self.emp.save(update_fields=['user'])
+        self.aamna = make_user('doc_aamna')
+        self.aamna.set_password('testpass123')
+        self.aamna.save()
+        LeaveApprover.objects.create(user=self.aamna)
+        self.stranger = make_user('doc_stranger')
+        self.stranger.set_password('testpass123')
+        self.stranger.save()
+        self.req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 3),
+            document=SimpleUploadedFile('cert.pdf', b'dummy-bytes'))
+
+    def test_owner_can_download(self):
+        self.client.login(username='doc_emp_user', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_document', args=[self.req.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_approver_can_download(self):
+        self.client.login(username='doc_aamna', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_document', args=[self.req.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_unrelated_user_forbidden(self):
+        self.client.login(username='doc_stranger', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_document', args=[self.req.pk]))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_anonymous_redirected_to_login(self):
+        resp = self.client.get(reverse('hr:leave_request_document', args=[self.req.pk]))
+        self.assertEqual(resp.status_code, 302)

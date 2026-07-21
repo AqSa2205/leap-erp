@@ -33,6 +33,21 @@ class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
         return self.request.user.is_super_admin_user or self.request.user.is_admin_user
 
 
+class SuperAdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
+    """Stricter than AdminRequiredMixin — Super Admin only, no 'admin' role.
+    Used for the conditional-leave approval queue per the access-control spec."""
+    def test_func(self):
+        return self.request.user.is_super_admin_user
+
+
+def is_designated_approver(user):
+    """True if `user` currently holds active approval authority for conditional
+    leave requests. This — not a username check — is what makes Aamna Khan and
+    Ali Sultan (or whoever holds these rows) able to actually approve/reject."""
+    from .models import LeaveApprover
+    return LeaveApprover.objects.filter(user=user, is_active=True).exists()
+
+
 @login_required
 def hr_dashboard(request):
     """Comprehensive HR Admin Dashboard with employees, assets, vehicles, and assignments."""
@@ -1153,6 +1168,26 @@ def asset_export(request):
 # ═══════════════════════════════════════════════════════════════
 # EMPLOYEE DOCUMENTS
 # ═══════════════════════════════════════════════════════════════
+
+@login_required
+def leave_request_document_download(request, pk):
+    """Stream a LeaveRequest's uploaded document only to the employee it
+    belongs to, a designated approver, or a super admin — never via a public
+    media URL. This deliberately does NOT follow the EmployeeDocument/
+    medical_certificate pattern (those link straight to MEDIA_URL); this field
+    holds sensitive personal documents and needs a real permission check."""
+    from django.http import FileResponse, Http404
+    from .models import LeaveRequest
+    leave_request = get_object_or_404(LeaveRequest, pk=pk)
+    user = request.user
+    is_owner = leave_request.employee.user_id == user.id
+    if not (is_owner or is_designated_approver(user) or user.is_super_admin_user):
+        return HttpResponse('Forbidden', status=403)
+    if not leave_request.document:
+        raise Http404('No document attached to this request.')
+    return FileResponse(leave_request.document.open('rb'), as_attachment=True,
+                        filename=leave_request.document.name.rsplit('/', 1)[-1])
+
 
 @login_required
 def employee_document_upload(request, pk):
