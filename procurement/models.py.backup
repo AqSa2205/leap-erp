@@ -1,19 +1,6 @@
 from django.db import models
 from django.conf import settings
 from decimal import Decimal
-import datetime
-from django.core.exceptions import ValidationError
-from django.core.validators import MinLengthValidator
-
-
-def validate_not_numeric_only(value):
-    """Reject values that are only digits (e.g., '12345') - a company
-    name must contain at least one non-numeric character."""
-    if value and value.strip().isdigit():
-        raise ValidationError(
-            "Company name cannot be numbers only. Please enter a valid "
-            "company name (e.g., 'Acme Ltd', 'Acme Company')."
-        )
 
 
 class PurchaseOrder(models.Model):
@@ -144,10 +131,6 @@ class PurchaseOrder(models.Model):
     selected_terms = models.ManyToManyField(
         'costing.TermsTemplate', blank=True, related_name='purchase_orders'
     )
-    # Comma-separated TermsTemplate ids in the order the user selected them.
-    # The M2M above stores membership only; its ordering is not reliable
-    # (Django's .add() uses a set internally), so print order lives here.
-    terms_order = models.CharField(max_length=500, blank=True, default='')
 
     # Approval workflow — sequential SCM → PM → COO → CEO. CEO is only
     # required when total_value crosses CEO_APPROVAL_THRESHOLD. Each stage
@@ -302,36 +285,6 @@ class PurchaseOrder(models.Model):
     def approved_stages(self):
         """Just the stages that have been signed, in order."""
         return [s for s in self.approval_status if s['is_approved']]
-
-    def term_override_map(self):
-        """{template_id: edited content} for this PO's customised terms."""
-        return {o.template_id: o.content for o in self.term_overrides.all()}
-
-    def resolved_terms(self):
-        """Selected terms with their effective text, in the order they were selected.
-
-        Returns dicts of ``{template, content, is_overridden}``. Every export
-        must read terms through here so a PO-specific edit shows up in the PDF
-        and the Excel identically, while the shared template is untouched.
-
-        Order follows ``terms_order`` (the sequence the user selected them),
-        NOT TermsTemplate's alphabetical Meta.ordering. Any selected term not
-        listed in terms_order (e.g. legacy data) falls to the end, ordered by
-        pk, so nothing is ever dropped.
-        """
-        overrides = self.term_override_map()
-        selected = list(self.selected_terms.all())
-        order_ids = [int(x) for x in self.terms_order.split(',') if x.strip().isdigit()]
-        pos = {pk: i for i, pk in enumerate(order_ids)}
-        selected.sort(key=lambda t: (pos.get(t.pk, len(pos)), t.pk))
-        return [
-            {
-                'template': t,
-                'content': overrides.get(t.pk, t.content),
-                'is_overridden': t.pk in overrides,
-            }
-            for t in selected
-        ]
 
     def can_user_approve_stage(self, user, stage_key):
         """Permission gate per stage.
@@ -528,20 +481,17 @@ class DeliveryNote(models.Model):
     """Delivery Note for goods dispatched to clients/sites."""
 
     # Sold To
-    sold_to_company = models.CharField(
-    max_length=255,
-    verbose_name="Sold To (Company)",
-    validators=[validate_not_numeric_only],)
+    sold_to_company = models.CharField(max_length=255, verbose_name="Sold To (Company)")
     sold_to_address = models.TextField(blank=True, verbose_name="Sold To (Address)")
 
     # Delivery
-    delivery_address = models.TextField(blank=True, verbose_name="Delivery Address", validators=[MinLengthValidator(10)])
+    delivery_address = models.TextField(blank=True, verbose_name="Delivery Address")
 
     # Contact
     attention = models.CharField(max_length=255, blank=True, verbose_name="Attention")
     mobile = models.CharField(max_length=100, blank=True, verbose_name="Mobile")
     email = models.EmailField(blank=True, verbose_name="Email")
-    date = models.DateField(verbose_name="Date", default=datetime.date.today)
+    date = models.DateField(verbose_name="Date")
 
     # Project / PO
     project_title = models.CharField(max_length=500, blank=True, verbose_name="Project Title")
@@ -923,37 +873,3 @@ class FRCInventory(models.Model):
         if self.unit_cost:
             return self.unit_cost * Decimal(str(self.available_stock))
         return Decimal('0')
-
-
-class POTermOverride(models.Model):
-    """Per-PO edit of a selected Terms & Conditions template.
-
-    Terms are picked from the shared TermsTemplate library, but a given PO
-    often needs a tweak — a different payment split, a project-specific
-    delivery clause. Storing the edited text here keeps it scoped to the one
-    PO: the shared template, and every other PO using it, stay untouched.
-
-    A row exists only while the text differs from the template. Resetting an
-    override deletes the row, so the PO falls back to live template text.
-    """
-
-    purchase_order = models.ForeignKey(
-        PurchaseOrder, on_delete=models.CASCADE, related_name='term_overrides'
-    )
-    template = models.ForeignKey(
-        'costing.TermsTemplate', on_delete=models.CASCADE, related_name='po_overrides'
-    )
-    content = models.TextField(verbose_name="Edited Content")
-    updated_at = models.DateTimeField(auto_now=True)
-    updated_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
-        null=True, blank=True, related_name='po_term_overrides',
-    )
-
-    class Meta:
-        unique_together = ['purchase_order', 'template']
-        verbose_name = "PO Terms Override"
-        verbose_name_plural = "PO Terms Overrides"
-
-    def __str__(self):
-        return f"{self.purchase_order.po_number} — {self.template.name} (edited)"

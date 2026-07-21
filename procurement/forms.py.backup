@@ -85,8 +85,6 @@ class PurchaseOrderItemForm(forms.ModelForm):
                 'placeholder': 'System',
                 'autocomplete': 'off',
             }),
-            'quantity': forms.NumberInput(attrs={'step': '0.01', 'min': '0'}),
-            'rate_per_unit': forms.NumberInput(attrs={'step': '0.01', 'min': '0'}),
             'po_value_usd': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'placeholder': 'USD/EUR'}),
             'advance_payment_sar': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'placeholder': 'Advance SAR'}),
             'scm': forms.TextInput(attrs={'placeholder': 'ST / ZH', 'maxlength': '10'}),
@@ -105,30 +103,6 @@ class PurchaseOrderItemForm(forms.ModelForm):
                 field.widget.attrs['class'] = 'form-control form-control-sm'
             else:
                 field.widget.attrs['class'] = 'form-control form-control-sm'
-
-    def clean_quantity(self):
-        value = self.cleaned_data.get('quantity')
-        if value is not None and value < 0:
-            raise forms.ValidationError('Quantity cannot be negative.')
-        return value
-
-    def clean_rate_per_unit(self):
-        value = self.cleaned_data.get('rate_per_unit')
-        if value is not None and value < 0:
-            raise forms.ValidationError('Rate/Unit cannot be negative.')
-        return value
-
-    def clean_po_value_usd(self):
-        value = self.cleaned_data.get('po_value_usd')
-        if value is not None and value < 0:
-            raise forms.ValidationError('PO Value (USD/EUR) cannot be negative.')
-        return value
-
-    def clean_advance_payment_sar(self):
-        value = self.cleaned_data.get('advance_payment_sar')
-        if value is not None and value < 0:
-            raise forms.ValidationError('Advance Payment (SAR) cannot be negative.')
-        return value
 
     def has_changed(self):
         """An unsaved row is only considered "real" if the user typed
@@ -199,6 +173,7 @@ class DeliveryNoteForm(forms.ModelForm):
                 field.widget.attrs['class'] = 'form-control'
             else:
                 field.widget.attrs['class'] = 'form-control'
+
         self.fields['project'].required = False
         self.fields['purchase_order'].required = False
         self.fields['project'].queryset = Project.objects.select_related('region').all()
@@ -209,22 +184,6 @@ class DeliveryNoteForm(forms.ModelForm):
                 region=self.user.region
             ).select_related('region')
 
-    def clean_sold_to_company(self):
-        value = self.cleaned_data.get('sold_to_company', '')
-        if value and value.strip().isdigit():
-            raise forms.ValidationError(
-                "Company name cannot be numbers only. Please enter a valid "
-                "company name (e.g., 'Leap Ltd', 'Leap Company')."
-            )
-        return value
-
-    def clean_delivery_address(self):
-        value = self.cleaned_data.get('delivery_address', '')
-        if value and len(value.strip()) < 10:
-            raise forms.ValidationError(
-                "Delivery address must be at least 10 characters."
-            )
-        return value
 
 class DeliveryNoteItemForm(forms.ModelForm):
     class Meta:
