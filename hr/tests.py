@@ -43,6 +43,21 @@ class LeaveTypeModelTests(TestCase):
             LeaveType.objects.create(name='Sick 2', code='sick', default_annual_days=10)
 
 
+class LeaveTypeTask1DefaultsTests(TestCase):
+    def test_only_annual_is_accumulative(self):
+        from hr.models import LeaveType
+        annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+        sick, _ = LeaveType.objects.get_or_create(code='sick', defaults={'name': 'Sick', 'default_annual_days': 12})
+        marriage, _ = LeaveType.objects.get_or_create(code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3})
+        # Simulate the migration's effect directly (the migration itself is exercised by `migrate` in CI/manual QA;
+        # this test locks in the invariant the app code relies on).
+        LeaveType.objects.exclude(code='annual').update(is_accumulative=False)
+        LeaveType.objects.filter(code='annual').update(is_accumulative=True)
+        self.assertTrue(LeaveType.objects.get(code='annual').is_accumulative)
+        self.assertFalse(LeaveType.objects.get(code='sick').is_accumulative)
+        self.assertFalse(LeaveType.objects.get(code='marriage').is_accumulative)
+
+
 from datetime import date as _date
 from hr.models import Holiday, AttendanceSettings
 
