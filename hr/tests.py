@@ -1365,6 +1365,7 @@ class LeaveApprovalModelsTests(TestCase):
 
 
 from hr.leave_approval_services import record_approver_decision, override_finalize
+from notifications.models import Notification
 
 
 class LeaveApprovalServiceTests(TestCase):
@@ -1431,3 +1432,35 @@ class LeaveApprovalServiceTests(TestCase):
         superadmin = make_user('super3')
         with self.assertRaises(ValueError):
             override_finalize(self.req, superadmin, 'disapproved', reason='Too late anyway')
+
+
+class LeaveApprovalNotificationTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.emp_user = make_user('emp_user')
+        self.emp.user = self.emp_user
+        self.emp.save(update_fields=['user'])
+        self.aamna = make_user('aamna_khan')
+        self.ali = make_user('ali_sultan')
+        LeaveApprover.objects.create(user=self.aamna)
+        LeaveApprover.objects.create(user=self.ali)
+        self.req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 3))
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=self.aamna)
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=self.ali)
+
+    def test_other_approver_notified_after_first_decision(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        self.assertTrue(Notification.objects.filter(recipient=self.ali).exists())
+
+    def test_employee_notified_on_final_approval(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        record_approver_decision(self.req, self.ali, 'approved')
+        self.assertTrue(Notification.objects.filter(recipient=self.emp_user, verb__icontains='approved').exists())
+
+    def test_employee_notified_on_disapproval(self):
+        record_approver_decision(self.req, self.aamna, 'disapproved')
+        self.assertTrue(Notification.objects.filter(recipient=self.emp_user, verb__icontains='disapproved').exists())

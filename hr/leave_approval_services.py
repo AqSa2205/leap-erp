@@ -10,6 +10,7 @@ balance-deducting LeaveRecord or sets the salary-deduction flag.
 from django.utils import timezone
 
 from hr.models import LeaveRecord
+from notifications.services import notify_users
 
 
 def record_approver_decision(leave_request, approver_user, decision, comment=''):
@@ -28,6 +29,17 @@ def record_approver_decision(leave_request, approver_user, decision, comment='')
     approval.save(update_fields=['decision', 'comment', 'decided_at'])
 
     _reconcile(leave_request)
+    leave_request.refresh_from_db()
+    if leave_request.status == 'pending':
+        remaining = leave_request.pending_approvers()
+        if remaining:
+            notify_users(
+                recipients=remaining,
+                verb=f'{approver_user.get_full_name() or approver_user.username} decided on a leave request awaiting your review',
+                actor=approver_user,
+                description=f'{leave_request.employee.full_name} — {leave_request.leave_type.name} '
+                            f'({leave_request.start_date} to {leave_request.end_date})',
+            )
     return leave_request
 
 
@@ -78,3 +90,10 @@ def _finalize(leave_request, status):
         'status', 'decided_at', 'leave_record', 'salary_deduction_applicable',
         'is_overridden', 'overridden_by', 'override_reason',
     ])
+    if leave_request.employee.user_id:
+        verb = 'approved' if status == 'approved' else 'disapproved'
+        notify_users(
+            recipients=[leave_request.employee.user],
+            verb=f'Your {leave_request.leave_type.name} leave request was {verb}',
+            description=leave_request.override_reason if leave_request.is_overridden else '',
+        )
