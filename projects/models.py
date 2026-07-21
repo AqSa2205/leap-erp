@@ -158,6 +158,18 @@ class ProjectStatus(models.Model):
         return self.name
 
 
+class ProjectManager(models.Manager):
+    """Default manager — hides soft-deleted projects.
+
+    Every existing queryset (`Project.objects...`) therefore skips deleted
+    rows automatically. Use `Project.all_objects` to include them, which the
+    recycle bin does.
+    """
+
+    def get_queryset(self):
+        return super().get_queryset().filter(is_deleted=False)
+
+
 class Project(models.Model):
     """Main project/bid tracking model"""
     QUARTER_CHOICES = [
@@ -318,11 +330,48 @@ class Project(models.Model):
         related_name='created_projects'
     )
 
+    # Soft delete — a "deleted" project is hidden everywhere but retained in
+    # the database so it can be restored from the recycle bin.
+    #
+    # A hard delete is genuinely destructive here: it CASCADEs into
+    # ProjectFinance, CashOutflowRow, ProjectHistory and ProjectRevision, and
+    # SET_NULLs the project link on costing sheets, purchase orders and
+    # proposals — so even restoring the project row later leaves those
+    # relationships broken. Soft delete keeps every relationship intact.
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='deleted_projects'
+    )
+
+    # `objects` hides soft-deleted rows so existing code needs no changes;
+    # `all_objects` sees everything and backs the recycle bin.
+    objects = ProjectManager()
+    all_objects = models.Manager()
+
     class Meta:
         ordering = ['-created_at']
 
     def __str__(self):
         return f"{self.proposal_reference} - {self.project_name}"
+
+    def soft_delete(self, user=None):
+        """Hide the project without touching any related record."""
+        from django.utils import timezone
+        self.is_deleted = True
+        self.deleted_at = timezone.now()
+        self.deleted_by = user if (user and user.is_authenticated) else None
+        self.save(update_fields=['is_deleted', 'deleted_at', 'deleted_by', 'updated_at'])
+
+    def restore(self):
+        """Bring a soft-deleted project back, relationships intact."""
+        self.is_deleted = False
+        self.deleted_at = None
+        self.deleted_by = None
+        self.save(update_fields=['is_deleted', 'deleted_at', 'deleted_by', 'updated_at'])
 
     def save(self, *args, **kwargs):
         # Maintain the auto LNA reference on EVERY save path (form, admin,

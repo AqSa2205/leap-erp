@@ -867,10 +867,17 @@
             {% endif %}
             {% if user|can:'pipeline.nav' %}
             <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.app_name == 'projects' and 'document' not in request.resolver_match.url_name %}active{% endif %}" href="{% url 'projects:list' %}" data-title="Commercial Pipeline">
+                <a class="nav-link {% if request.resolver_match.app_name == 'projects' and 'document' not in request.resolver_match.url_name and request.resolver_match.url_name != 'recycle_bin' %}active{% endif %}" href="{% url 'projects:list' %}" data-title="Commercial Pipeline">
                     <i class="bi bi-folder"></i> <span>Commercial Pipeline</span>
                 </a>
             </li>
+            {% if user.is_super_admin_user or user.is_admin_user %}
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'recycle_bin' %}active{% endif %}" href="{% url 'projects:recycle_bin' %}" data-title="Recycle Bin">
+                    <i class="bi bi-trash"></i> <span>Recycle Bin</span>
+                </a>
+            </li>
+            {% endif %}
             {% endif %}
             {# ─── Proposals (clickable + collapsible sub-groups) ─── #}
             <li class="nav-item">

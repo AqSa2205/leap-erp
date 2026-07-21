@@ -518,3 +518,90 @@ class ProjectRecoveryViewTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertFalse(r.context['available'])   # no recovery DB in tests
         self.assertContains(r, 'Recovery database not connected')
+
+
+class ProjectSoftDeleteTests(TestCase):
+    """Deleting a project must be reversible and must not destroy anything.
+
+    A hard delete CASCADEs into finance/history rows and SET_NULLs the project
+    link on costing sheets and purchase orders — the failure mode that
+    previously cost this project its commercial pipeline. Soft delete has to
+    leave every one of those relationships intact.
+    """
+
+    def setUp(self):
+        self.admin = User.objects.create_user('sdadmin', password='x')
+        self.admin.role = Role.objects.get_or_create(name=Role.SUPER_ADMIN)[0]
+        self.admin.save()
+        self.region = Region.objects.create(name='LNA', code='LNA')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.project = Project.objects.create(
+            project_name='Aramco Tank Farm', proposal_reference='SD-REF-1',
+            region=self.region, status=self.status, created_by=self.admin)
+        self.client.force_login(self.admin)
+
+    def test_default_manager_hides_deleted_but_all_objects_sees_it(self):
+        self.project.soft_delete(user=self.admin)
+        self.assertFalse(Project.objects.filter(pk=self.project.pk).exists())
+        self.assertTrue(Project.all_objects.filter(pk=self.project.pk).exists())
+
+    def test_delete_view_soft_deletes_and_keeps_related_records(self):
+        sheet = CostingSheet.objects.create(
+            title='BOM 1', project=self.project, created_by=self.admin)
+
+        r = self.client.post(
+            reverse('projects:delete', kwargs={'pk': self.project.pk}))
+        self.assertEqual(r.status_code, 302)
+
+        # Row retained, just hidden.
+        self.project.refresh_from_db()
+        self.assertTrue(self.project.is_deleted)
+        self.assertIsNotNone(self.project.deleted_at)
+        self.assertEqual(self.project.deleted_by, self.admin)
+
+        # The critical assertion: the costing sheet still exists AND still
+        # points at the project (a hard delete would have nulled project_id).
+        sheet.refresh_from_db()
+        self.assertEqual(sheet.project_id, self.project.pk)
+
+    def test_restore_brings_it_back(self):
+        self.project.soft_delete(user=self.admin)
+        r = self.client.post(
+            reverse('projects:restore', kwargs={'pk': self.project.pk}))
+        self.assertEqual(r.status_code, 302)
+        self.project.refresh_from_db()
+        self.assertFalse(self.project.is_deleted)
+        self.assertIsNone(self.project.deleted_at)
+        self.assertIsNone(self.project.deleted_by)
+        self.assertTrue(Project.objects.filter(pk=self.project.pk).exists())
+
+    def test_deleted_project_is_gone_from_the_pipeline_list(self):
+        r = self.client.get(reverse('projects:list'))
+        self.assertContains(r, 'Aramco Tank Farm')
+        self.project.soft_delete(user=self.admin)
+        r = self.client.get(reverse('projects:list'))
+        self.assertNotContains(r, 'Aramco Tank Farm')
+
+    def test_recycle_bin_lists_deleted_and_requires_permission(self):
+        self.project.soft_delete(user=self.admin)
+        r = self.client.get(reverse('projects:recycle_bin'))
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'Aramco Tank Farm')
+
+        rep = User.objects.create_user('sdrep', password='x')
+        rep.role = Role.objects.get_or_create(name=Role.SALES_REP)[0]
+        rep.save()
+        self.client.force_login(rep)
+        # UserPassesTestMixin denies an authenticated-but-unauthorised user
+        # with 403 rather than bouncing them to the login page.
+        self.assertEqual(self.client.get(reverse('projects:recycle_bin')).status_code, 403)
+
+    def test_restore_requires_permission(self):
+        self.project.soft_delete(user=self.admin)
+        rep = User.objects.create_user('sdrep2', password='x')
+        rep.role = Role.objects.get_or_create(name=Role.SALES_REP)[0]
+        rep.save()
+        self.client.force_login(rep)
+        self.client.post(reverse('projects:restore', kwargs={'pk': self.project.pk}))
+        self.project.refresh_from_db()
+        self.assertTrue(self.project.is_deleted)   # still deleted

@@ -16,7 +16,11 @@
                     <strong>{{ object.proposal_reference }}</strong><br>
                     {{ object.project_name }}
                 </div>
-                <p class="text-muted small mb-4">This action cannot be undone. All related history will also be deleted.</p>
+                <p class="text-muted small mb-4">
+                    This moves the project to the <strong>Recycle Bin</strong>, where an
+                    admin can restore it. Its costing sheets, purchase orders, finance
+                    records and history are all kept intact.
+                </p>
 
                 <form method="post">
                     {% csrf_token %}
