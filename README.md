@@ -171,6 +171,55 @@ python manage.py test          # full suite must pass (do not use pytest)
 python manage.py makemigrations --check --dry-run   # no uncommitted model changes
 ```
 
+### Avoiding merge conflicts
+
+Most conflicts are habits, not git. With more than one person on the repo:
+
+1. **Keep branches short and small.** One feature per branch, opened and
+   merged within a day or two. A branch's *lifespan* causes conflicts far
+   more than the number of people. A 200-line PR reviews in minutes; a
+   2000-line one blocks everyone.
+2. **Rebase on `dev` every morning** before you write code:
+   ```bash
+   git checkout dev && git pull origin dev
+   git checkout feat/your-branch
+   git rebase dev
+   ```
+   Conflicts then arrive in three-line doses instead of a 300-line mess at
+   merge time.
+3. **Split work by module and say so.** Each person owns an app
+   (procurement / hr / costing / …). The large view files are conflict
+   magnets when two people edit them the same day — a one-line "I'm in the
+   costing PDF export today" in the team chat prevents it.
+
+### Working with migrations (read this — it is the #1 thing that breaks)
+
+Django numbers migrations sequentially, so two people who both run
+`makemigrations` on their own branch each create an `0022_*` — and when both
+merge, Django refuses to run with a "conflicting migrations" error.
+
+- **Pull `dev` immediately before `makemigrations`**, so your migration
+  number follows the latest one on `dev`.
+- **One model change per PR.** Do not batch unrelated migrations together.
+- **Never edit or delete a migration that has already merged to `dev` or
+  `main`.** It has already run on production; changing it corrupts the
+  migration history. Write a new migration instead.
+- **Flag every migration in your PR description**, especially anything with
+  `RemoveField`, `DeleteModel`, or `RunPython` — those are destructive and
+  get a careful review before they reach production.
+- If a collision slips through, the fix is:
+  ```bash
+  git checkout dev && git pull origin dev
+  git checkout feat/your-branch && git rebase dev
+  python manage.py makemigrations --merge   # only if genuinely needed
+  ```
+
+### Never commit these
+
+`db.sqlite3` and `.env` are gitignored — keep it that way. If either shows up
+in `git status`, something is wrong; do not force it in. A committed
+`db.sqlite3` overwrites everyone else's local database on their next pull.
+
 ## Project Structure
 
 ```
