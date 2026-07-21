@@ -1628,3 +1628,34 @@ class LeaveRequestDetailViewTests(TestCase):
         self.client.login(username='detail_outsider', password='testpass123')
         resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
         self.assertEqual(resp.status_code, 403)
+
+
+class MyProfileLeaveRequestTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.user = make_user('profile_user', password='x')
+        self.user.set_password('testpass123')
+        self.user.save()
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+
+    def test_profile_shows_own_requests(self):
+        LeaveRequest.objects.create(employee=self.emp, leave_type=self.marriage,
+                                    start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 2))
+        self.client.login(username='profile_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Marriage')
+
+    def test_employee_can_submit_own_request(self):
+        self.client.login(username='profile_user', password='testpass123')
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'request_leave', 'leave_type': self.marriage.pk,
+            'start_date': '2026-09-10', 'end_date': '2026-09-11', 'employee_reason': 'Wedding',
+        })
+        self.assertEqual(resp.status_code, 302)
+        req = LeaveRequest.objects.get(employee=self.emp)
+        self.assertEqual(req.created_by, self.user)
+        self.assertEqual(req.status, 'pending')

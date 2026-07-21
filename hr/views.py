@@ -163,12 +163,35 @@ def my_profile(request):
     """Self-service portal: the logged-in user's own HR record — attendance,
     leave balance, assets held, documents (iqama/passport), and any vehicle.
     Shows a friendly prompt if the account isn't linked to an employee yet."""
+    from decimal import Decimal
     from django.db.models import Q
     from django.utils import timezone
     from .models import AttendanceRecord, Asset, Vehicle
+    from .forms import LeaveRequestForm
+    from .leave_approval_services import submit_leave_request
 
     emp = getattr(request.user, 'employee_profile', None)
     context = {'employee': emp}
+
+    is_leave_request_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'request_leave')
+    form = LeaveRequestForm(request.POST, request.FILES) if is_leave_request_post else LeaveRequestForm()
+    # Self-service: drop the 'employee' field before validation — it's implied to be
+    # the logged-in employee, never a field the employee gets to pick for themselves.
+    if 'employee' in form.fields:
+        del form.fields['employee']
+    if is_leave_request_post:
+        if form.is_valid():
+            submit_leave_request(
+                employee=emp, leave_type=form.cleaned_data['leave_type'],
+                start_date=form.cleaned_data['start_date'], end_date=form.cleaned_data['end_date'],
+                employee_reason=form.cleaned_data['employee_reason'], document=form.cleaned_data['document'],
+                created_by=request.user,
+            )
+            messages.success(request, 'Leave request submitted and sent for approval.')
+            return redirect('hr:my_profile')
+    context['leave_request_form'] = form
+
     if emp:
         today = timezone.localtime(timezone.now()).date()
         # Assets in custody. The roster tracks holders two ways: proper
@@ -184,10 +207,19 @@ def my_profile(request):
         context['assets'] = Asset.objects.filter(id__in=asset_ids).order_by('asset_name')
         # Documents (iqama/passport copies, contracts, etc.).
         context['documents'] = emp.documents.all()
-        # Leave balance for the current year.
-        context['entitlements'] = (
+        # Leave balance for the current year. The summary total only counts
+        # standard accrued allowances (Annual) — conditional/incidental
+        # leave (Sick, Marriage, Umrah, etc.) still appears in the per-type rows but
+        # is excluded from the aggregate so it doesn't inflate it.
+        entitlements = (
             emp.leave_entitlements.filter(year=today.year)
             .select_related('leave_type'))
+        context['entitlements'] = entitlements
+        accumulative = [e for e in entitlements if e.leave_type.is_accumulative]
+        context['leave_total_entitled'] = sum((e.entitled_days for e in accumulative), Decimal('0'))
+        context['leave_total_remaining'] = sum((e.remaining_days for e in accumulative), Decimal('0'))
+        # This employee's own leave requests (pending/approved/disapproved), newest first.
+        context['leave_requests'] = emp.leave_requests.select_related('leave_type').order_by('-created_at')[:10]
         # Attendance summary for the current month.
         month_records = AttendanceRecord.objects.filter(
             employee=emp, date__year=today.year, date__month=today.month)
