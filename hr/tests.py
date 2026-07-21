@@ -83,11 +83,19 @@ class HolidayAndSettingsTests(TestCase):
 
 from decimal import Decimal
 from django.core.exceptions import ValidationError
-from hr.models import Employee, LeaveEntitlement, LeaveRecord
+from django.contrib.auth import get_user_model
+from hr.models import (Employee, LeaveEntitlement, LeaveRecord,
+                       LeaveApprover, LeaveRequest, LeaveRequestApproval, LeaveRequestNote)
+
+User = get_user_model()
 
 
 def make_employee(iqama='E1', name='Ali', joining=None):
     return Employee.objects.create(iqama_number=iqama, full_name=name, joining_date=joining)
+
+
+def make_user(username, **kwargs):
+    return User.objects.create(username=username, **kwargs)
 
 
 class LeaveEntitlementTests(TestCase):
@@ -1316,3 +1324,40 @@ class AssetDecommissionTests(TestCase):
         names = [a.asset_name for a in r.context['assets']]
         self.assertIn('Dead One', names)
         self.assertNotIn('Old Laptop', names)
+
+
+class LeaveApprovalModelsTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.aamna = make_user('aamna_khan')
+        self.ali = make_user('ali_sultan')
+        LeaveApprover.objects.create(user=self.aamna)
+        LeaveApprover.objects.create(user=self.ali)
+
+    def test_days_autocomputed(self):
+        req = LeaveRequest(employee=self.emp, leave_type=self.marriage,
+                           start_date=_date(2026, 7, 5), end_date=_date(2026, 7, 7))
+        req.save()
+        self.assertEqual(req.days, Decimal('3'))
+
+    def test_end_before_start_rejected(self):
+        req = LeaveRequest(employee=self.emp, leave_type=self.marriage,
+                           start_date=_date(2026, 7, 9), end_date=_date(2026, 7, 5))
+        with self.assertRaises(ValidationError):
+            req.full_clean()
+
+    def test_default_status_is_pending(self):
+        req = LeaveRequest.objects.create(employee=self.emp, leave_type=self.marriage,
+                                          start_date=_date(2026, 7, 5), end_date=_date(2026, 7, 7))
+        self.assertEqual(req.status, 'pending')
+
+    def test_approval_rows_are_separate_from_notes(self):
+        req = LeaveRequest.objects.create(employee=self.emp, leave_type=self.marriage,
+                                          start_date=_date(2026, 7, 5), end_date=_date(2026, 7, 7))
+        LeaveRequestApproval.objects.create(leave_request=req, approver=self.aamna)
+        LeaveRequestApproval.objects.create(leave_request=req, approver=self.ali)
+        LeaveRequestNote.objects.create(leave_request=req, author=self.aamna, note='Looks fine.')
+        self.assertEqual(req.approvals.count(), 2)
+        self.assertEqual(req.notes.count(), 1)
