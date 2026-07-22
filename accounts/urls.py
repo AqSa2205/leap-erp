@@ -16,6 +16,7 @@ urlpatterns = [
     # Password Reset (admin-controlled)
     path('users/<int:pk>/send-reset/', views.send_reset_link, name='send_reset_link'),
     path('users/send-reset-all/', views.send_reset_link_all, name='send_reset_all'),
+    path('forgot-password/', views.forgot_password, name='forgot_password'),
     path('reset-password/<str:token>/', views.reset_password_form, name='reset_password'),
     path('reset-requests/', views.reset_requests_list, name='reset_requests'),
     path('reset-requests/<int:pk>/reject/', views.reject_reset, name='reject_reset'),

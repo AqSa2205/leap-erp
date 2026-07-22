@@ -26,19 +26,25 @@
                 <form method="post">
                     {% csrf_token %}
                     <div class="mb-3">
-                        <label class="form-label small text-muted fw-medium">Username</label>
+                        <label class="form-label small text-muted fw-medium">Username or Email</label>
                         <div class="input-group">
                             <span class="input-group-text bg-light border-end-0"><i class="bi bi-person text-danger"></i></span>
-                            <input type="text" name="username" class="form-control border-start-0 ps-0" placeholder="Enter username" required>
+                            <input type="text" name="username" class="form-control border-start-0 ps-0" placeholder="Enter username or email" required>
                         </div>
                     </div>
-                    <div class="mb-4">
+                    <div class="mb-2">
                         <label class="form-label small text-muted fw-medium">Password</label>
                         <div class="input-group">
                             <span class="input-group-text bg-light border-end-0"><i class="bi bi-lock text-danger"></i></span>
-                            <input type="password" name="password" class="form-control border-start-0 ps-0" placeholder="Enter password" required>
+                            <input type="password" name="password" id="id_login_password" class="form-control border-start-0 border-end-0 ps-0" placeholder="Enter password" required>
+                            <button type="button" class="input-group-text bg-light border-start-0" id="toggle_login_password" aria-label="Show password">
+                                <i class="bi bi-eye text-danger"></i>
+                            </button>
                         </div>
                     </div>
+                    <p class="text-end mb-3">
+                        <a href="{% url 'accounts:forgot_password' %}" class="small text-muted">Forgot password?</a>
+                    </p>
                     <button type="submit" class="btn w-100 py-2 fw-medium" style="background: #C41E3A; color: #fff;">
                         <i class="bi bi-box-arrow-in-right me-2"></i>Sign In
                     </button>
@@ -52,4 +58,41 @@
         </div>
     </div>
 </div>
+
+<script>
+    (function () {
+        var toggleBtn = document.getElementById('toggle_login_password');
+        var passwordInput = document.getElementById('id_login_password');
+        if (!toggleBtn || !passwordInput) {
+            return;
+        }
+        function show() {
+            var icon = toggleBtn.querySelector('i');
+            passwordInput.setAttribute('type', 'text');
+            if (icon) {
+                icon.classList.remove('bi-eye');
+                icon.classList.add('bi-eye-slash');
+            }
+            toggleBtn.setAttribute('aria-label', 'Hide password');
+        }
+
+        function hide() {
+            var icon = toggleBtn.querySelector('i');
+            passwordInput.setAttribute('type', 'password');
+            if (icon) {
+                icon.classList.remove('bi-eye-slash');
+                icon.classList.add('bi-eye');
+            }
+            toggleBtn.setAttribute('aria-label', 'Show password');
+        }
+
+        // Hold-to-reveal: visible only while the button is actively pressed.
+        toggleBtn.addEventListener('mousedown', show);
+        toggleBtn.addEventListener('touchstart', show);
+        toggleBtn.addEventListener('mouseup', hide);
+        toggleBtn.addEventListener('mouseleave', hide);
+        toggleBtn.addEventListener('touchend', hide);
+        toggleBtn.addEventListener('touchcancel', hide);
+    })();
+</script>
 {% endblock %}

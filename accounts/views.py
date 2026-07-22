@@ -7,7 +7,8 @@ from django.contrib import messages
 from django.views.generic import ListView, CreateView, UpdateView, DeleteView
 from django.urls import reverse_lazy
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.contrib.auth.password_validation import validate_password
 from django.views.decorators.http import require_POST
 from django.db import transaction
 
@@ -157,8 +158,17 @@ def fix_admin_role(request):
 # PASSWORD RESET
 # ═══════════════════════════════════════════════════════════════
 
-def _build_reset_email_html(user_name, reset_url):
-    """Build a professional HTML email for password reset."""
+def _build_reset_email_html(user_name, reset_url, self_requested=False):
+    """Build a professional HTML email for password reset. self_requested
+    distinguishes the self-service 'Forgot Password?' flow from an admin
+    sending a reset link on the user's behalf — same template, one line of
+    copy adjusted so the email doesn't falsely imply an admin acted."""
+    initiator_text = (
+        'You requested a password reset for your <strong>Leap Networks ERP</strong> account.'
+        if self_requested else
+        'A password reset has been initiated for your <strong>Leap Networks ERP</strong> '
+        'account by the system administrator.'
+    )
     return f'''<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
@@ -181,8 +191,7 @@ def _build_reset_email_html(user_name, reset_url):
             <p style="color:#333; font-size:16px; margin:0 0 20px;">Hi <strong>{user_name}</strong>,</p>
 
             <p style="color:#555; font-size:14px; line-height:1.7; margin:0 0 25px;">
-                A password reset has been initiated for your <strong>Leap Networks ERP</strong> account
-                by the system administrator. Click the button below to set your new password.
+                {initiator_text} Click the button below to set your new password.
             </p>
 
             <!-- CTA Button -->
@@ -338,8 +347,52 @@ def send_reset_link_all(request):
     return redirect('accounts:user_list')
 
 
+def forgot_password(request):
+    """Self-service entry point: an unauthenticated user requests a reset
+    link by email. The response is always the same neutral message whether
+    or not the email matches an active account with an email on file —
+    revealing that difference would let an outsider enumerate valid
+    usernames/emails. Reuses the same PasswordResetRequest + token-consuming
+    reset_password_form flow as the admin-triggered send_reset_link, just
+    with created_by left null (nobody sent it on the user's behalf)."""
+    from .forms import ForgotPasswordForm
+
+    form = ForgotPasswordForm(request.POST or None)
+    submitted = False
+
+    if request.method == 'POST' and form.is_valid():
+        submitted = True
+        email = form.cleaned_data['email']
+        user = User.objects.filter(email__iexact=email, is_active=True).exclude(email='').first()
+        if user:
+            token = secrets.token_urlsafe(48)
+            PasswordResetRequest.objects.create(user=user, token=token, status='pending_user')
+
+            reset_url = request.build_absolute_uri(f'/accounts/reset-password/{token}/')
+            user_name = user.get_full_name() or user.username
+            subject = 'Password Reset — Leap Networks ERP'
+            html_body = _build_reset_email_html(user_name, reset_url, self_requested=True)
+            plain_body = (
+                f'Hi {user_name},\n\n'
+                f'You requested a password reset for your Leap Networks ERP account.\n\n'
+                f'Reset your password: {reset_url}\n\n'
+                f'This link expires in 7 days. Your new password takes effect immediately.\n\n'
+                f'If you did not request this, please ignore this email.\n\n'
+                f'Leap Networks ERP System'
+            )
+            try:
+                from django.core.mail import EmailMultiAlternatives
+                mail = EmailMultiAlternatives(subject, plain_body, settings.DEFAULT_FROM_EMAIL, [user.email])
+                mail.attach_alternative(html_body, 'text/html')
+                mail.send(fail_silently=False)
+            except Exception:
+                logger.exception('Failed to send self-service password reset email for user id %s', user.pk)
+
+    return render(request, 'accounts/forgot_password.html', {'form': form, 'submitted': submitted})
+
+
 def reset_password_form(request, token):
-    """User clicks link from email — sets new password (pending approval)."""
+    """User clicks link from email — sets new password immediately."""
     reset_req = get_object_or_404(PasswordResetRequest, token=token)
 
     if reset_req.status not in ('pending_user',):
@@ -360,13 +413,6 @@ def reset_password_form(request, token):
         password1 = request.POST.get('password1', '')
         password2 = request.POST.get('password2', '')
 
-        if not password1 or len(password1) < 8:
-            return render(request, 'accounts/reset_password.html', {
-                'error': 'Password must be at least 8 characters.',
-                'reset_req': reset_req,
-                'token': token,
-            })
-
         if password1 != password2:
             return render(request, 'accounts/reset_password.html', {
                 'error': 'Passwords do not match.',
@@ -374,13 +420,39 @@ def reset_password_form(request, token):
                 'token': token,
             })
 
-        # Apply password immediately
-        user = reset_req.user
-        user.set_password(password1)
-        user.save()
+        try:
+            validate_password(password1, user=reset_req.user)
+        except ValidationError as exc:
+            return render(request, 'accounts/reset_password.html', {
+                'error': ' '.join(exc.messages),
+                'reset_req': reset_req,
+                'token': token,
+            })
 
-        reset_req.status = 'approved'
-        reset_req.save()
+        with transaction.atomic():
+            # Re-fetch under a row lock and re-check status inside the
+            # transaction — closes the window where two concurrent
+            # submissions of the same link could otherwise both "succeed".
+            reset_req = PasswordResetRequest.objects.select_for_update().get(pk=reset_req.pk)
+            if reset_req.status != 'pending_user':
+                return render(request, 'accounts/reset_password.html', {
+                    'error': 'This reset link has already been used or expired.',
+                    'reset_req': reset_req,
+                })
+
+            user = reset_req.user
+            user.set_password(password1)
+            user.save()
+
+            reset_req.status = 'approved'
+            reset_req.save()
+
+            # A user may have several unused reset links outstanding (e.g. an
+            # admin re-sent one, or "forgot password" was used twice). Once
+            # any one of them is consumed, the rest must stop working too.
+            PasswordResetRequest.objects.filter(
+                user=user, status='pending_user',
+            ).exclude(pk=reset_req.pk).update(status='expired')
 
         return render(request, 'accounts/reset_password.html', {
             'success': True,

@@ -20,6 +20,18 @@ class CustomAuthenticationForm(AuthenticationForm):
     )
 
 
+class ForgotPasswordForm(forms.Form):
+    """Self-service 'Forgot Password?' entry point — just an email, since the
+    view's response is deliberately identical whether or not it matches an
+    account (see accounts.views.forgot_password)."""
+    email = forms.EmailField(
+        widget=forms.EmailInput(attrs={
+            'class': 'form-control border-start-0 ps-0',
+            'placeholder': 'you@example.com',
+        })
+    )
+
+
 class CustomUserCreationForm(UserCreationForm):
     """Form for creating new users"""
     class Meta:
