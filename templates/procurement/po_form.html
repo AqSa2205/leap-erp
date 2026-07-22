@@ -371,6 +371,9 @@
                         </button>
                     </div>
                     <div class="card-body" id="poTermsCardBody">
+                        {# Records the order terms are ticked, so the PDF/Excel print
+                           them in the sequence the user chose rather than alphabetically. #}
+                        <input type="hidden" name="selected_terms_ordered" id="selectedTermsOrdered" value="{{ selected_terms_ordered }}">
                         {% for category_label, items_list in terms_by_category.items %}
                         {% if items_list %}
                         {% with first=items_list.0 %}
@@ -826,6 +829,40 @@ document.addEventListener('DOMContentLoaded', function() {
                 badge.remove();
             }
         });
+    });
+})();
+
+// ─── Track the order terms are selected ───
+// The PDF/Excel print terms in this order. We keep a running list of ticked
+// term ids: appended when checked, removed when unchecked. Seeded from the
+// hidden field so editing a PO preserves its stored order. Uses event
+// delegation so quick-added terms are covered automatically.
+(function () {
+    const hidden = document.getElementById('selectedTermsOrdered');
+    if (!hidden) return;
+
+    let order = (hidden.value || '').split(',').map(s => s.trim()).filter(Boolean);
+
+    function checkedIds() {
+        return Array.from(document.querySelectorAll('input[name="selected_terms"]:checked'))
+            .map(c => c.value);
+    }
+    function save() { hidden.value = order.join(','); }
+
+    // Reconcile the seeded order with what is actually ticked right now.
+    const checked = checkedIds();
+    order = order.filter(id => checked.includes(id));
+    checked.forEach(id => { if (!order.includes(id)) order.push(id); });
+    save();
+
+    document.addEventListener('change', function (e) {
+        const cb = e.target;
+        if (!cb || cb.name !== 'selected_terms') return;
+        const id = cb.value;
+        const i = order.indexOf(id);
+        if (cb.checked) { if (i === -1) order.push(id); }
+        else if (i !== -1) { order.splice(i, 1); }
+        save();
     });
 })();
 </script>
