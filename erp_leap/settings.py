@@ -158,6 +158,7 @@ else:
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / "db.sqlite3",
+            "OPTIONS": {"timeout": 20},
         }
     }
 
@@ -173,9 +174,10 @@ if RECOVERY_DATABASE_URL:
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
-    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator", "OPTIONS": {"min_length": 8}},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+    {"NAME": "accounts.validators.ComplexityValidator"},
 ]
 
 
@@ -267,6 +269,11 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # Custom User Model
 AUTH_USER_MODEL = "accounts.User"
 
+# Login accepts either username or email (see accounts.backends).
+AUTHENTICATION_BACKENDS = [
+    "accounts.backends.EmailOrUsernameBackend",
+]
+
 
 # Crispy Forms
 CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
@@ -279,14 +286,26 @@ LOGIN_REDIRECT_URL = "dashboard:index"
 LOGOUT_REDIRECT_URL = "accounts:login"
 
 
-# Email configuration (SendGrid SMTP)
-EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend')
-EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.sendgrid.net')
-EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 587))
-EMAIL_USE_TLS = True
-EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', 'apikey')
-EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
+# Email configuration (Microsoft Graph API, not SMTP)
+# Standard SMTP is abandoned entirely — Microsoft 365's Security Defaults
+# policy blocks plain SMTP AUTH tenant-wide (confirmed: 535 5.7.139
+# "Authentication unsuccessful... security defaults policy"), and that's a
+# tenant-wide policy, not something fixable per-mailbox from here. Graph API
+# calls instead authenticate as an Azure AD app registration (OAuth2
+# client-credentials flow), which that policy doesn't affect. See
+# notifications/graph_email_backend.py — every existing send_mail()/
+# EmailMultiAlternatives call in the codebase is unchanged; only this
+# backend class differs.
+EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'notifications.graph_email_backend.MicrosoftGraphEmailBackend')
+MS_TENANT_ID = os.environ.get('MS_TENANT_ID', '')
+MS_CLIENT_ID = os.environ.get('MS_CLIENT_ID', '')
+MS_CLIENT_SECRET = os.environ.get('MS_CLIENT_SECRET', '')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'Leap ERP <notifications@leap-arabia.com>')
+# The mailbox Graph actually sends as (the /users/{sender}/sendMail path) —
+# derived from DEFAULT_FROM_EMAIL's bare address so the two can't drift apart,
+# but overridable independently via MS_GRAPH_SENDER if that's ever needed.
+from email.utils import parseaddr as _parseaddr
+MS_GRAPH_SENDER = os.environ.get('MS_GRAPH_SENDER') or _parseaddr(DEFAULT_FROM_EMAIL)[1]
 
 
 # AI digest (devtracking) — Anthropic-powered developer-progress reports.
@@ -297,6 +316,12 @@ PROCUREMENT_AI_MODEL = os.environ.get('PROCUREMENT_AI_MODEL', 'claude-sonnet-4-6
 
 # GitHub PR status (devtracking) — used to fetch live PR state for code tasks.
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
+
+# django.contrib.messages defaults ERROR's tag to the string "error", which
+# has no matching Bootstrap class (Bootstrap uses "alert-danger") — every
+# error message site-wide was rendering with no red/danger styling at all.
+from django.contrib.messages import constants as message_constants
+MESSAGE_TAGS = {message_constants.ERROR: 'danger'}
 
 
 # Security settings for production

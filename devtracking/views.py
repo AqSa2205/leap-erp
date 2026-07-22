@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.http import HttpResponseForbidden, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
@@ -84,7 +86,31 @@ class TaskAssignView(CapabilityRequiredMixin, CreateView):
     template_name = 'devtracking/task_form.html'
     success_url = reverse_lazy('devtracking:tasks')
 
+    def get_form(self, form_class=None):
+        # Unlike TaskEditView (which reuses this same form and allows a blank
+        # developer to send a task back to the backlog), an *assignment* must
+        # always name a developer — the template already labels it "Developer *".
+        # Without this, a blank submission creates a developer=None task and
+        # notify_users([None]) crashes downstream.
+        form = super().get_form(form_class)
+        form.fields['developer'].required = True
+        return form
+
     def form_valid(self, form):
+        # Rapid repeat clicks on Assign used to fire one POST per click and
+        # create a duplicate task per click. If an identical task (same
+        # developer/title, assigned by the same user) was just created a
+        # moment ago, treat this submission as a resubmission, not a new task.
+        duplicate = DevTask.objects.filter(
+            developer=form.cleaned_data['developer'],
+            title=form.cleaned_data['title'],
+            assigned_by=self.request.user,
+            created_at__gte=timezone.now() - timedelta(seconds=10),
+        ).first()
+        if duplicate:
+            self.object = duplicate
+            return redirect(self.get_success_url())
+
         form.instance.assigned_by = self.request.user
         response = super().form_valid(form)
         notify_users(

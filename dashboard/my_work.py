@@ -235,13 +235,16 @@ def my_work(request):
             })
 
     # ─── Unread notifications (last 8) ─────────────────────────
-    notif_qs = Notification.objects.filter(recipient=user, is_read=False).select_related('actor').order_by('-created_at')[:8]
+    unread_notif_qs = Notification.objects.filter(recipient=user, is_read=False).select_related('actor').order_by('-created_at')
+    notif_unread_count = unread_notif_qs.count()
+    notif_qs = unread_notif_qs[:8]
 
     return render(request, 'dashboard/my_work.html', {
-        'action_items':    action_items,
-        'drafts':          drafts,
-        'stale':           stale,
-        'pricing_changes': pricing_changes,
-        'notifications':   notif_qs,
-        'flags':           flags,
+        'action_items':       action_items,
+        'drafts':             drafts,
+        'stale':              stale,
+        'pricing_changes':    pricing_changes,
+        'notifications':      notif_qs,
+        'notif_unread_count': notif_unread_count,
+        'flags':              flags,
     })
