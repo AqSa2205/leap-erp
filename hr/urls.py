@@ -49,6 +49,7 @@ urlpatterns = [
     path('leave-types/', views.LeaveTypeListView.as_view(), name='leavetype_list'),
     path('leave-types/create/', views.LeaveTypeCreateView.as_view(), name='leavetype_create'),
     path('leave-types/<int:pk>/edit/', views.LeaveTypeUpdateView.as_view(), name='leavetype_update'),
+    path('leave-types/<int:pk>/delete/', views.LeaveTypeDeleteView.as_view(), name='leavetype_delete'),
 
     # Holidays
     path('holidays/', views.HolidayListView.as_view(), name='holiday_list'),
@@ -63,8 +64,12 @@ urlpatterns = [
     path('working-days/<int:pk>/delete/', views.WorkingDayDeleteView.as_view(), name='workingday_delete'),
 
     # Leave Records, Summary & Entitlements
-    path('leave/record/create/', views.LeaveRecordCreateView.as_view(), name='leave_record_create'),
+    path('leave/record/create/', views.LeaveRequestCreateView.as_view(), name='leave_record_create'),
     path('leave/record/<int:pk>/delete/', views.LeaveRecordDeleteView.as_view(), name='leave_record_delete'),
+    path('leave-requests/', views.LeaveRequestListView.as_view(), name='leave_request_list'),
+    path('leave-requests/create/', views.LeaveRequestCreateView.as_view(), name='leave_request_create'),
+    path('leave-requests/<int:pk>/document/', views.leave_request_document_download, name='leave_request_document'),
+    path('leave-requests/<int:pk>/', views.LeaveRequestDetailView.as_view(), name='leave_request_detail'),
     path('leave/entitlements/', views.entitlement_year, name='entitlement_year'),
     path('<int:pk>/leave/', views.EmployeeLeaveSummaryView.as_view(), name='leave_summary'),
     path('<int:pk>/attendance/', views.AttendanceHistoryView.as_view(), name='attendance_history'),

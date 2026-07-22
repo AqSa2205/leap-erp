@@ -1207,6 +1207,13 @@
                 </a>
                 <div class="collapse {% if 'leave' in request.resolver_match.url_name or 'entitlement' in request.resolver_match.url_name or 'holiday' in request.resolver_match.url_name or 'leavetype' in request.resolver_match.url_name %}show{% endif %}" id="leaveSubmenu">
                     <ul class="nav flex-column ms-3">
+                        {% if user.is_super_admin_user or user.leave_dashboard_access.is_active %}
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if 'leave_request' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:leave_request_list' %}">
+                                <i class="bi bi-inboxes"></i> <span>Leave Requests</span>
+                            </a>
+                        </li>
+                        {% endif %}
                         <li class="nav-item">
                             <a class="nav-link py-1 {% if 'entitlement' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:entitlement_year' %}">
                                 <i class="bi bi-bar-chart-steps"></i> <span>Entitlements</span>

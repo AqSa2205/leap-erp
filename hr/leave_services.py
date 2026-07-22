@@ -1,4 +1,83 @@
-"""Leave entitlement generation."""
+"""Leave entitlement generation and submission validation."""
+
+
+def validate_leave_submission(employee, leave_type, start_date, end_date, lock=False):
+    """Raises ValueError if this leave submission is invalid:
+    - no entitlement set up for this employee/type/year,
+    - it would exceed the remaining balance once OTHER still-pending
+      requests for the same employee/type/year are also counted as already
+      spoken-for (a pending request doesn't yet have a LeaveRecord, so
+      remaining_days alone doesn't know about it — without this, two
+      individually-valid submissions could together exceed the entitlement),
+    - it overlaps another pending request or already-taken/approved leave
+      (LeaveRecord) this employee has, REGARDLESS of leave type (a person
+      cannot be on two kinds of leave at once).
+
+    With lock=True, the relevant LeaveEntitlement row is locked
+    (select_for_update) for the rest of the caller's transaction — the
+    caller MUST be inside transaction.atomic() and must create the
+    LeaveRequest before that transaction commits, or concurrent submissions
+    for the same employee/type/year can still race past each other."""
+    from decimal import Decimal
+    from .models import LeaveEntitlement, LeaveRequest, LeaveRecord
+
+    entitlement_qs = LeaveEntitlement.objects.filter(
+        employee=employee, leave_type=leave_type, year=start_date.year)
+    if lock:
+        entitlement_qs = entitlement_qs.select_for_update()
+    entitlement = entitlement_qs.first()
+    if entitlement is None:
+        raise ValueError(
+            f'No leave entitlement has been set up for {leave_type.name} in {start_date.year} '
+            f'for {employee.full_name}; contact HR before submitting this request.')
+
+    requested_days = Decimal((end_date - start_date).days + 1)
+    pending_days = sum(
+        (r.days or Decimal('0') for r in LeaveRequest.objects.filter(
+            employee=employee, leave_type=leave_type, status='pending', start_date__year=start_date.year)),
+        Decimal('0'))
+    available_days = entitlement.remaining_days - pending_days
+
+    if requested_days > available_days:
+        if pending_days:
+            raise ValueError(
+                f'This request is {requested_days} day(s), but only {available_days} day(s) of '
+                f'{leave_type.name} remain for {employee.full_name} in {start_date.year} '
+                f'({pending_days} day(s) are already tied up in other pending requests). '
+                'Reduce the date range, wait for those to be decided, or contact HR.')
+        raise ValueError(
+            f'This request is {requested_days} day(s), but only {available_days} day(s) of '
+            f'{leave_type.name} remain for {employee.full_name} in {start_date.year}. '
+            'Reduce the date range or contact HR.')
+
+    if LeaveRequest.objects.filter(
+            employee=employee, status='pending',
+            start_date__lte=end_date, end_date__gte=start_date).exists():
+        raise ValueError(
+            'This date range overlaps with another leave request you already have pending '
+            '(regardless of leave type — you cannot be on two leaves at once).')
+    if LeaveRecord.objects.filter(
+            employee=employee, start_date__lte=end_date, end_date__gte=start_date).exists():
+        raise ValueError(
+            'This date range overlaps with leave you have already taken or been approved for.')
+
+
+def generate_entitlements_for_employee(employee, year, actor=None):
+    """Create this one employee's missing LeaveEntitlement rows for `year`,
+    using each leave type's flat default_annual_days (Annual included).
+    Existing (employee, type, year) rows are left untouched. Returns rows
+    created. Shared by generate_year_entitlements (all employees, bulk) and
+    Employee.save() (a single newly-created employee)."""
+    from hr.models import LeaveType, LeaveEntitlement
+    created = 0
+    for lt in LeaveType.objects.filter(is_active=True):
+        _, was_created = LeaveEntitlement.objects.get_or_create(
+            employee=employee, leave_type=lt, year=year,
+            defaults={'entitled_days': lt.default_annual_days, 'created_by': actor},
+        )
+        if was_created:
+            created += 1
+    return created
 
 
 def generate_year_entitlements(year, actor=None):
@@ -6,28 +85,23 @@ def generate_year_entitlements(year, actor=None):
     using each leave type's flat default_annual_days (Annual included). Existing
     (employee, type, year) rows are left untouched. Returns rows created.
     """
-    from hr.models import Employee, LeaveType, LeaveEntitlement
+    from hr.models import Employee
     created = 0
-    leave_types = list(LeaveType.objects.filter(is_active=True))
     for emp in Employee.objects.filter(is_active=True):
-        for lt in leave_types:
-            _, was_created = LeaveEntitlement.objects.get_or_create(
-                employee=emp, leave_type=lt, year=year,
-                defaults={'entitled_days': lt.default_annual_days, 'created_by': actor},
-            )
-            if was_created:
-                created += 1
+        created += generate_entitlements_for_employee(emp, year, actor=actor)
     return created
 
 
-def reapply_leave_type_defaults(year=None):
+def reapply_leave_type_defaults(year=None, leave_type=None):
     """Force every entitlement's day count to match its leave type's current
     default_annual_days. Overwrites custom values (the leave type is the source
-    of truth). Optionally scoped to a single `year`. Returns rows updated.
+    of truth). Optionally scoped to a single `year` and/or a single `leave_type`
+    (an instance or pk). Returns rows updated.
     """
     from hr.models import LeaveType, LeaveEntitlement
     updated = 0
-    for lt in LeaveType.objects.all():
+    leave_types = [leave_type] if leave_type is not None else LeaveType.objects.all()
+    for lt in leave_types:
         qs = LeaveEntitlement.objects.filter(leave_type=lt)
         if year is not None:
             qs = qs.filter(year=year)

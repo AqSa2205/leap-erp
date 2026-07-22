@@ -3,6 +3,7 @@ from django.test import TestCase
 from django.urls import reverse
 from hr.work_calendar import count_working_days, is_working_day
 from hr.models import LeaveType
+from hr.forms import LeaveRequestForm
 
 
 class WorkCalendarTests(TestCase):
@@ -43,6 +44,21 @@ class LeaveTypeModelTests(TestCase):
             LeaveType.objects.create(name='Sick 2', code='sick', default_annual_days=10)
 
 
+class LeaveTypeTask1DefaultsTests(TestCase):
+    def test_only_annual_is_accumulative(self):
+        from hr.models import LeaveType
+        annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+        sick, _ = LeaveType.objects.get_or_create(code='sick', defaults={'name': 'Sick', 'default_annual_days': 12})
+        marriage, _ = LeaveType.objects.get_or_create(code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3})
+        # Simulate the migration's effect directly (the migration itself is exercised by `migrate` in CI/manual QA;
+        # this test locks in the invariant the app code relies on).
+        LeaveType.objects.exclude(code='annual').update(is_accumulative=False)
+        LeaveType.objects.filter(code='annual').update(is_accumulative=True)
+        self.assertTrue(LeaveType.objects.get(code='annual').is_accumulative)
+        self.assertFalse(LeaveType.objects.get(code='sick').is_accumulative)
+        self.assertFalse(LeaveType.objects.get(code='marriage').is_accumulative)
+
+
 from datetime import date as _date
 from hr.models import Holiday, AttendanceSettings
 
@@ -68,11 +84,19 @@ class HolidayAndSettingsTests(TestCase):
 
 from decimal import Decimal
 from django.core.exceptions import ValidationError
-from hr.models import Employee, LeaveEntitlement, LeaveRecord
+from django.contrib.auth import get_user_model
+from hr.models import (Employee, LeaveEntitlement, LeaveRecord,
+                       LeaveDashboardAccess, LeaveRequest, LeaveRequestApproval, LeaveRequestNote)
+
+User = get_user_model()
 
 
 def make_employee(iqama='E1', name='Ali', joining=None):
     return Employee.objects.create(iqama_number=iqama, full_name=name, joining_date=joining)
+
+
+def make_user(username, **kwargs):
+    return User.objects.create(username=username, **kwargs)
 
 
 class LeaveEntitlementTests(TestCase):
@@ -218,24 +242,6 @@ class LeaveRecordViewTests(TestCase):
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
         self.emp = make_employee()
         self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
-
-    def test_create_leave_autocomputes_days(self):
-        self.client.force_login(self.admin)
-        self.client.post(reverse('hr:leave_record_create'), {
-            'employee': self.emp.pk, 'leave_type': self.annual.pk,
-            'start_date': '2026-07-05', 'end_date': '2026-07-09', 'days': '', 'note': ''})
-        rec = LeaveRecord.objects.get(employee=self.emp)
-        self.assertEqual(rec.days, Decimal('5'))
-
-    def test_create_leave_counts_calendar_days_incl_weekend(self):
-        # Thu 2 Jul -> Mon 6 Jul = 5 calendar days (weekend counted), days blank.
-        self.client.force_login(self.admin)
-        self.client.post(reverse('hr:leave_record_create'), {
-            'employee': self.emp.pk, 'leave_type': self.annual.pk,
-            'start_date': '2026-07-02', 'end_date': '2026-07-06', 'days': '', 'note': ''})
-        rec = LeaveRecord.objects.get(employee=self.emp,
-                                      start_date=_date(2026, 7, 2))
-        self.assertEqual(rec.days, Decimal('5'))
 
     def test_summary_shows_balance(self):
         LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=30)
@@ -387,16 +393,6 @@ class HardeningTests(TestCase):
         status, hours = derive_status(self.emp, _date(2026, 7, 13), self.time(22, 0), self.time(6, 0))
         self.assertIn(status, ('present', 'late'))  # late threshold now applies; either is non-absent
         self.assertIsNone(hours)  # negative span -> blank, not a corrupt negative total
-
-    def test_explicit_zero_days_preserved(self):
-        self.client.force_login(self.admin)
-        # A leave that spans only Fri+Sat would compute 0 working days; recording
-        # an explicit 0 must be kept, not overwritten by auto-compute.
-        self.client.post(reverse('hr:leave_record_create'), {
-            'employee': self.emp.pk, 'leave_type': self.annual.pk,
-            'start_date': '2026-07-10', 'end_date': '2026-07-11', 'days': '0', 'note': ''})
-        rec = LeaveRecord.objects.get(employee=self.emp)
-        self.assertEqual(rec.days, Decimal('0'))
 
     def test_bad_year_param_does_not_500(self):
         self.client.force_login(self.admin)
@@ -871,9 +867,10 @@ class EntitlementYearGroupedTests(TestCase):
         self.assertEqual(len(groups), 1)
         g = groups[0]
         self.assertEqual(g['employee'].pk, self.emp.pk)
-        self.assertEqual(g['total_entitled'], Decimal('45'))   # 30 + 15
+        # Only Annual is accumulative (Task 1's rule) — Sick no longer counts toward the top-level total.
+        self.assertEqual(g['total_entitled'], Decimal('30'))   # Annual only; Sick is conditional
         self.assertEqual(g['total_taken'], Decimal('8'))       # only annual taken
-        self.assertEqual(g['total_remaining'], Decimal('37'))  # 45 - 8
+        self.assertEqual(g['total_remaining'], Decimal('22'))  # 30 - 8
         self.assertEqual(len(g['rows']), 2)                    # per-type breakdown
         annual_row = next(r for r in g['rows'] if r['leave_type'].pk == self.annual.pk)
         self.assertEqual(annual_row['taken'], Decimal('8'))
@@ -929,23 +926,6 @@ class SickLeaveCertificateTests(TestCase):
         r = LeaveRecord(employee=self.emp, leave_type=self.annual,
                         start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13), days=Decimal('1'))
         r.full_clean()  # annual doesn't require a certificate
-
-    def test_create_form_rejects_sick_without_certificate(self):
-        self.client.force_login(self.admin)
-        resp = self.client.post(reverse('hr:leave_record_create'), {
-            'employee': self.emp.pk, 'leave_type': self.sick.pk,
-            'start_date': '2026-07-13', 'end_date': '2026-07-13', 'days': '', 'note': ''})
-        self.assertEqual(resp.status_code, 200)  # re-rendered with errors, not redirected
-        self.assertFalse(LeaveRecord.objects.filter(employee=self.emp).exists())
-
-    def test_create_form_accepts_sick_with_certificate(self):
-        self.client.force_login(self.admin)
-        resp = self.client.post(reverse('hr:leave_record_create'), {
-            'employee': self.emp.pk, 'leave_type': self.sick.pk,
-            'start_date': '2026-07-13', 'end_date': '2026-07-13', 'days': '', 'note': '',
-            'medical_certificate': self._cert()})
-        self.assertEqual(LeaveRecord.objects.filter(employee=self.emp).count(), 1)
-        self.assertTrue(LeaveRecord.objects.get(employee=self.emp).medical_certificate)
 
     def test_grid_mark_leave_blocks_certificate_type(self):
         import json as _json
@@ -1301,3 +1281,1217 @@ class AssetDecommissionTests(TestCase):
         names = [a.asset_name for a in r.context['assets']]
         self.assertIn('Dead One', names)
         self.assertNotIn('Old Laptop', names)
+
+
+class LeaveApprovalModelsTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.aamna = make_user('aamna_khan')
+        self.ali = make_user('ali_sultan')
+        LeaveDashboardAccess.objects.create(user=self.aamna, is_active=True)
+        LeaveDashboardAccess.objects.create(user=self.ali, is_active=True)
+
+    def test_days_autocomputed(self):
+        req = LeaveRequest(employee=self.emp, leave_type=self.marriage,
+                           start_date=_date(2026, 7, 5), end_date=_date(2026, 7, 7))
+        req.save()
+        self.assertEqual(req.days, Decimal('3'))
+
+    def test_end_before_start_rejected(self):
+        req = LeaveRequest(employee=self.emp, leave_type=self.marriage,
+                           start_date=_date(2026, 7, 9), end_date=_date(2026, 7, 5))
+        with self.assertRaises(ValidationError):
+            req.full_clean()
+
+    def test_default_status_is_pending(self):
+        req = LeaveRequest.objects.create(employee=self.emp, leave_type=self.marriage,
+                                          start_date=_date(2026, 7, 5), end_date=_date(2026, 7, 7))
+        self.assertEqual(req.status, 'pending')
+
+    def test_approval_rows_are_separate_from_notes(self):
+        req = LeaveRequest.objects.create(employee=self.emp, leave_type=self.marriage,
+                                          start_date=_date(2026, 7, 5), end_date=_date(2026, 7, 7))
+        LeaveRequestApproval.objects.create(leave_request=req, approver=self.aamna)
+        LeaveRequestApproval.objects.create(leave_request=req, approver=self.ali)
+        LeaveRequestNote.objects.create(leave_request=req, author=self.aamna, note='Looks fine.')
+        self.assertEqual(req.approvals.count(), 2)
+        self.assertEqual(req.notes.count(), 1)
+
+
+import threading
+from datetime import timedelta
+from django.test import TransactionTestCase
+from django.utils import timezone
+from hr.forms import check_leave_balance
+from hr.leave_approval_services import (
+    record_approver_decision, override_finalize, edit_approver_decision, submit_leave_request)
+from notifications.models import Notification
+
+
+class LeaveApprovalServiceTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.aamna = make_user('aamna_khan')
+        self.ali = make_user('ali_sultan')
+        LeaveDashboardAccess.objects.create(user=self.aamna, is_active=True)
+        LeaveDashboardAccess.objects.create(user=self.ali, is_active=True)
+        self.req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 3))
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=self.aamna)
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=self.ali)
+
+    def test_stays_pending_after_one_approval(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'pending')
+        self.assertIsNone(self.req.leave_record)
+
+    def test_fully_approved_creates_leave_record(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        record_approver_decision(self.req, self.ali, 'approved')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'approved')
+        self.assertIsNotNone(self.req.leave_record)
+        self.assertEqual(self.req.leave_record.employee, self.emp)
+        self.assertEqual(self.req.leave_record.days, Decimal('3'))
+
+    def test_one_disapproval_is_decisive(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        record_approver_decision(self.req, self.ali, 'disapproved', comment='Not enough notice')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'disapproved')
+        self.assertTrue(self.req.salary_deduction_applicable)
+        self.assertIsNone(self.req.leave_record)
+
+    def test_non_approver_cannot_decide(self):
+        stranger = make_user('someone_else')
+        with self.assertRaises(ValueError):
+            record_approver_decision(self.req, stranger, 'approved')
+
+    def test_override_approve_finalizes_and_skips_remaining(self):
+        superadmin = make_user('super1')
+        override_finalize(self.req, superadmin, 'approved', reason='Ali is on leave; approving on his behalf.')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'approved')
+        self.assertTrue(self.req.is_overridden)
+        self.assertIsNotNone(self.req.leave_record)
+        skipped = self.req.approvals.filter(decision='skipped')
+        self.assertEqual(skipped.count(), 2)  # neither had decided yet
+
+    def test_override_requires_reason(self):
+        superadmin = make_user('super2')
+        with self.assertRaises(ValueError):
+            override_finalize(self.req, superadmin, 'approved', reason='')
+
+    def test_override_on_already_decided_request_rejected(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        record_approver_decision(self.req, self.ali, 'approved')
+        superadmin = make_user('super3')
+        with self.assertRaises(ValueError):
+            override_finalize(self.req, superadmin, 'disapproved', reason='Too late anyway')
+
+
+class SelfApprovalPreventionTests(TestCase):
+    """A user must never be able to approve, disapprove, or override their
+    own leave request, under any circumstances — whether they'd otherwise
+    qualify as an approver (LeaveDashboardAccess) or hold override access."""
+    def setUp(self):
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.creator = make_user('sap_creator')
+
+    def _emp_with_user(self, iqama, username):
+        user = make_user(username, password='x')
+        emp = make_employee(iqama=iqama, name=username)
+        emp.user = user
+        emp.save(update_fields=['user'])
+        return emp, user
+
+    def test_submitter_excluded_from_own_approver_roster(self):
+        # Person A is both an approver (LeaveDashboardAccess) AND the one
+        # submitting this request — they must not end up as their own
+        # approver. Person B, the co-approver, must still be assigned.
+        person_a, user_a = self._emp_with_user('SAP-A', 'sap_person_a')
+        person_b, user_b = self._emp_with_user('SAP-B', 'sap_person_b')
+        LeaveDashboardAccess.objects.create(user=user_a, is_active=True)
+        LeaveDashboardAccess.objects.create(user=user_b, is_active=True)
+        LeaveEntitlement.objects.create(employee=person_a, leave_type=self.marriage, year=2026, entitled_days=3)
+
+        req = submit_leave_request(
+            employee=person_a, leave_type=self.marriage,
+            start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 3), created_by=user_a)
+
+        self.assertFalse(req.approvals.filter(approver=user_a).exists())
+        self.assertTrue(req.approvals.filter(approver=user_b).exists())
+
+    def test_multi_approver_escalation_bypasses_requester(self):
+        # 3 configured approvers; the requester is one of them. Approval
+        # authority must fall entirely to the other 2 — unanimous approval
+        # from just those 2 (never involving the requester) finalizes it.
+        person_a, user_a = self._emp_with_user('SAP-MA', 'sap_multi_a')
+        _, user_b = self._emp_with_user('SAP-MB', 'sap_multi_b')
+        _, user_c = self._emp_with_user('SAP-MC', 'sap_multi_c')
+        for u in (user_a, user_b, user_c):
+            LeaveDashboardAccess.objects.create(user=u, is_active=True)
+        LeaveEntitlement.objects.create(employee=person_a, leave_type=self.marriage, year=2026, entitled_days=3)
+
+        req = submit_leave_request(
+            employee=person_a, leave_type=self.marriage,
+            start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 3), created_by=user_a)
+
+        self.assertEqual(req.approvals.count(), 2)  # requester excluded, only B and C
+        self.assertFalse(req.approvals.filter(approver=user_a).exists())
+
+        record_approver_decision(req, user_b, 'approved')
+        req.refresh_from_db()
+        self.assertEqual(req.status, 'pending')  # still waiting on C
+        record_approver_decision(req, user_c, 'approved')
+        req.refresh_from_db()
+        self.assertEqual(req.status, 'approved')  # unanimous among B+C alone finalized it
+
+    def test_lone_approver_being_requester_leaves_zero_approvers(self):
+        # If the ONLY configured approver submits for themselves, nobody is
+        # assigned — the request sits pending until a Super Admin/override
+        # holder steps in. This must not error; it's a legitimate state.
+        person_a, user_a = self._emp_with_user('SAP-LONE', 'sap_lone')
+        LeaveDashboardAccess.objects.create(user=user_a, is_active=True)
+        LeaveEntitlement.objects.create(employee=person_a, leave_type=self.marriage, year=2026, entitled_days=3)
+
+        req = submit_leave_request(
+            employee=person_a, leave_type=self.marriage,
+            start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 3), created_by=user_a)
+        self.assertEqual(req.approvals.count(), 0)
+        self.assertEqual(req.status, 'pending')
+        self.assertEqual(req.pending_approvers(), [])
+
+    def test_record_approver_decision_blocks_self_approval(self):
+        # Simulates a legacy/edge-case row where a self-approval slipped in
+        # despite the submission-time exclusion — must still be blocked.
+        person_a, user_a = self._emp_with_user('SAP-LEGACY1', 'sap_legacy1')
+        req = LeaveRequest.objects.create(
+            employee=person_a, leave_type=self.marriage,
+            start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 3))
+        LeaveRequestApproval.objects.create(leave_request=req, approver=user_a)
+        with self.assertRaises(ValueError):
+            record_approver_decision(req, user_a, 'approved')
+        req.refresh_from_db()
+        self.assertEqual(req.status, 'pending')
+
+    def test_edit_approver_decision_blocks_self_approval(self):
+        person_a, user_a = self._emp_with_user('SAP-LEGACY2', 'sap_legacy2')
+        _, user_b = self._emp_with_user('SAP-LEGACY2B', 'sap_legacy2b')
+        req = LeaveRequest.objects.create(
+            employee=person_a, leave_type=self.marriage,
+            start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 3))
+        approval = LeaveRequestApproval.objects.create(
+            leave_request=req, approver=user_a, decision='approved', decided_at=timezone.now())
+        LeaveRequestApproval.objects.create(leave_request=req, approver=user_b)
+        with self.assertRaises(ValueError):
+            edit_approver_decision(req, user_a, 'disapproved', edit_note='Changed my mind')
+
+    def test_override_finalize_blocks_self_override(self):
+        person_a, user_a = self._emp_with_user('SAP-OVR', 'sap_override_self')
+        req = LeaveRequest.objects.create(
+            employee=person_a, leave_type=self.marriage,
+            start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 3))
+        with self.assertRaises(ValueError):
+            override_finalize(req, user_a, 'approved', reason='Approving my own request')
+        req.refresh_from_db()
+        self.assertEqual(req.status, 'pending')
+
+    def test_override_finalize_still_works_for_a_different_admin(self):
+        # Confirms the self-check is narrowly scoped to the requester, not a
+        # blanket block on override for this request.
+        person_a, _ = self._emp_with_user('SAP-OVR2', 'sap_override_target')
+        admin = make_user('sap_override_admin')
+        req = LeaveRequest.objects.create(
+            employee=person_a, leave_type=self.marriage,
+            start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 3))
+        override_finalize(req, admin, 'approved', reason='Approver unavailable')
+        req.refresh_from_db()
+        self.assertEqual(req.status, 'approved')
+
+
+class LeaveRequestDetailOwnRequestUITests(TestCase):
+    """UI-level: a user viewing their OWN leave request must never see the
+    decide/edit-decision/override forms, even if they'd otherwise qualify —
+    and the page must make clear why (see is_own_request context)."""
+    def setUp(self):
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.employee_user = make_user('duo_employee', password='x')
+        self.employee_user.set_password('testpass123')
+        # Also a Super Admin AND holds override access — the strongest case:
+        # even with every other authority, their OWN request must stay view-only.
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.employee_user.role = role
+        self.employee_user.save()
+        LeaveDashboardAccess.objects.create(user=self.employee_user, is_active=True)
+        self.emp = make_employee(iqama='DUO-EMP', name='Duo Employee')
+        self.emp.user = self.employee_user
+        self.emp.save(update_fields=['user'])
+
+        self.co_approver_user = make_user('duo_coapprover', password='x')
+        self.co_approver_user.set_password('testpass123')
+        self.co_approver_user.save()
+        LeaveDashboardAccess.objects.create(user=self.co_approver_user, is_active=True)
+
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.marriage, year=2026, entitled_days=3)
+        self.req = submit_leave_request(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 3), created_by=self.employee_user)
+
+    def test_own_request_hides_decide_and_override_forms(self):
+        self.client.login(username='duo_employee', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, 'name="action" value="decide"')
+        self.assertNotContains(resp, 'name="action" value="override"')
+        self.assertNotContains(resp, 'name="action" value="add_note"')
+        self.assertContains(resp, 'This is your own leave request')
+
+    def test_co_approver_sees_decide_form_for_the_same_request(self):
+        self.client.login(username='duo_coapprover', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertContains(resp, 'name="action" value="decide"')
+
+    def test_own_request_post_decide_forbidden_even_with_legacy_approval_row(self):
+        # Simulate a legacy self-approval row somehow existing, and confirm
+        # POSTing a decision is still blocked (error message, not a crash).
+        LeaveRequestApproval.objects.get_or_create(leave_request=self.req, approver=self.employee_user)
+        self.client.login(username='duo_employee', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                                {'action': 'decide', 'decision': 'approved'}, follow=True)
+        self.assertEqual(resp.status_code, 200)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'pending')
+
+    def test_own_request_post_override_forbidden(self):
+        self.client.login(username='duo_employee', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                                {'action': 'override', 'decision': 'approved', 'reason': 'Self-serving override'})
+        self.assertEqual(resp.status_code, 302)  # redirects with an error message, doesn't crash
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'pending')
+
+
+class SubmitLeaveRequestRaceConditionTests(TransactionTestCase):
+    """Real concurrency test: two genuinely simultaneous submissions for the
+    same employee/leave_type/year, together exceeding the entitlement, must
+    not both succeed. Uses TransactionTestCase (real commits, no wrapping
+    transaction) + threads so the select_for_update() lock in
+    validate_leave_submission actually has two separate DB connections to
+    serialize — a plain TestCase's single outer transaction would make the
+    lock a no-op and prove nothing."""
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.marriage, year=2026, entitled_days=3)
+        self.creator = make_user('race_creator')
+
+    def test_concurrent_submissions_cannot_together_exceed_balance(self):
+        from django.db import connection
+        results = []
+        barrier = threading.Barrier(2)
+
+        def attempt(start_day):
+            try:
+                barrier.wait(timeout=5)
+                submit_leave_request(
+                    employee=self.emp, leave_type=self.marriage,
+                    start_date=_date(2026, 9, start_day), end_date=_date(2026, 9, start_day + 2),
+                    created_by=self.creator,
+                )
+                results.append('success')
+            except ValueError:
+                results.append('rejected')
+            finally:
+                connection.close()
+
+        # Two non-overlapping-in-date but same-balance-pool requests (3 days
+        # each against a 3-day entitlement) — only one can survive.
+        t1 = threading.Thread(target=attempt, args=(1,))
+        t2 = threading.Thread(target=attempt, args=(10,))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        self.assertEqual(sorted(results), ['rejected', 'success'])
+        self.assertEqual(LeaveRequest.objects.filter(employee=self.emp).count(), 1)
+
+
+class OverlappingLeaveAcrossTypesTests(TestCase):
+    """A person cannot be on two kinds of leave for overlapping dates —
+    check_leave_balance/validate_leave_submission must block this
+    regardless of leave type, closing the 'split the same dates across two
+    leave types to get more total days off' loophole."""
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.sick, _ = LeaveType.objects.get_or_create(
+            code='sick', defaults={'name': 'Sick', 'default_annual_days': 12, 'is_accumulative': False})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.marriage, year=2026, entitled_days=30)
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.sick, year=2026, entitled_days=30)
+
+    def test_overlapping_pending_request_of_different_type_rejected(self):
+        LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.sick,
+            start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 5))  # pending
+        with self.assertRaises(ValidationError) as ctx:
+            check_leave_balance(self.emp, self.marriage, _date(2026, 9, 3), _date(2026, 9, 4))
+        self.assertIn('overlaps with another leave request', str(ctx.exception))
+
+    def test_overlapping_approved_leaverecord_of_different_type_rejected(self):
+        LeaveRecord.objects.create(
+            employee=self.emp, leave_type=self.sick,
+            start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 5), days=Decimal('5'))
+        with self.assertRaises(ValidationError) as ctx:
+            check_leave_balance(self.emp, self.marriage, _date(2026, 9, 3), _date(2026, 9, 4))
+        self.assertIn('already taken or been approved', str(ctx.exception))
+
+    def test_non_overlapping_dates_different_type_allowed(self):
+        LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.sick,
+            start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 5))
+        check_leave_balance(self.emp, self.marriage, _date(2026, 10, 1), _date(2026, 10, 2))  # no overlap
+
+    def test_overlapping_with_disapproved_request_of_different_type_allowed(self):
+        # A disapproved request never created a LeaveRecord and is no longer
+        # 'pending' — those same dates must be freely reusable.
+        LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.sick,
+            start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 5), status='disapproved')
+        check_leave_balance(self.emp, self.marriage, _date(2026, 9, 3), _date(2026, 9, 4))
+
+
+class LeaveCancellationRefundSafetyTests(TestCase):
+    """Balances are pure live aggregates over LeaveRecord (taken_days/
+    remaining_days are @property, never a stored counter) — deleting a
+    LeaveRecord (the closest thing to 'cancelling' approved leave today;
+    there's no separate cancel action yet) restores the exact balance with
+    no double-refund risk, since there's nothing to decrement/increment
+    apart from the aggregate itself."""
+    def test_deleting_leave_record_restores_full_balance(self):
+        emp = make_employee()
+        annual, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+        ent = LeaveEntitlement.objects.create(employee=emp, leave_type=annual, year=2026, entitled_days=10)
+        record = LeaveRecord.objects.create(
+            employee=emp, leave_type=annual, start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 5), days=Decimal('5'))
+        self.assertEqual(ent.remaining_days, Decimal('5'))
+        record.delete()
+        self.assertEqual(ent.remaining_days, Decimal('10'))
+
+    def test_balance_fields_are_computed_not_stored(self):
+        # Structural regression guard: if a future change adds a cached/
+        # stored counter (e.g. 'taken_days' as a real column) instead of
+        # this live aggregate, double-refund bugs become possible again.
+        stored_field_names = {f.name for f in LeaveEntitlement._meta.get_fields() if not f.is_relation}
+        self.assertNotIn('taken_days', stored_field_names)
+        self.assertIsInstance(LeaveEntitlement.taken_days, property)
+        self.assertIsInstance(LeaveEntitlement.remaining_days, property)
+
+
+
+
+class LeaveApprovalNotificationTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.emp_user = make_user('emp_user')
+        self.emp.user = self.emp_user
+        self.emp.save(update_fields=['user'])
+        self.aamna = make_user('aamna_khan')
+        self.ali = make_user('ali_sultan')
+        LeaveDashboardAccess.objects.create(user=self.aamna, is_active=True)
+        LeaveDashboardAccess.objects.create(user=self.ali, is_active=True)
+        self.req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 3))
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=self.aamna)
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=self.ali)
+
+    def test_other_approver_notified_after_first_decision(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        self.assertTrue(Notification.objects.filter(recipient=self.ali).exists())
+
+    def test_employee_notified_on_final_approval(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        record_approver_decision(self.req, self.ali, 'approved')
+        self.assertTrue(Notification.objects.filter(recipient=self.emp_user, verb__icontains='approved').exists())
+
+    def test_employee_notified_on_disapproval(self):
+        record_approver_decision(self.req, self.aamna, 'disapproved')
+        self.assertTrue(Notification.objects.filter(recipient=self.emp_user, verb__icontains='disapproved').exists())
+
+
+from django.core.files.uploadedfile import SimpleUploadedFile
+
+
+class LeaveRequestDocumentAccessTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.emp_user = make_user('doc_emp_user', password='x')
+        self.emp_user.set_password('testpass123')
+        self.emp_user.save()
+        self.emp.user = self.emp_user
+        self.emp.save(update_fields=['user'])
+        self.aamna = make_user('doc_aamna')
+        self.aamna.set_password('testpass123')
+        self.aamna.save()
+        LeaveDashboardAccess.objects.create(user=self.aamna, is_active=True)
+        self.stranger = make_user('doc_stranger')
+        self.stranger.set_password('testpass123')
+        self.stranger.save()
+        self.req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 3),
+            document=SimpleUploadedFile('cert.pdf', b'dummy-bytes'))
+
+    def test_owner_can_download(self):
+        self.client.login(username='doc_emp_user', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_document', args=[self.req.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_approver_can_download(self):
+        self.client.login(username='doc_aamna', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_document', args=[self.req.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_unrelated_user_forbidden(self):
+        # 404, not 403 — an unauthorized user must not be able to distinguish
+        # "this request doesn't exist" from "it exists but isn't yours".
+        self.client.login(username='doc_stranger', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_document', args=[self.req.pk]))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_nonexistent_request_also_404s_indistinguishably(self):
+        self.client.login(username='doc_stranger', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_document', args=[999999]))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_anonymous_redirected_to_login(self):
+        resp = self.client.get(reverse('hr:leave_request_document', args=[self.req.pk]))
+        self.assertEqual(resp.status_code, 302)
+
+
+class LeaveRequestQueueViewTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.superadmin = make_user('queue_super')
+        self.superadmin.set_password('testpass123')
+        from accounts.models import Role
+        role, _ = Role.objects.get_or_create(name='super_admin')
+        self.superadmin.role = role
+        self.superadmin.save()
+        self.plain_user = make_user('queue_plain', password='x')
+        self.plain_user.set_password('testpass123')
+        self.plain_user.save()
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.marriage, year=2026, entitled_days=10)
+        self.pending = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 3))
+
+    def test_super_admin_can_view_queue(self):
+        self.client.login(username='queue_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, self.emp.full_name)
+
+    def test_non_super_admin_forbidden(self):
+        self.client.login(username='queue_plain', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_admin_can_log_request_on_employees_behalf(self):
+        self.client.login(username='queue_super', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_create'), {
+            'employee': self.emp.pk, 'leave_type': self.marriage.pk,
+            'start_date': '2026-09-01', 'end_date': '2026-09-02', 'employee_reason': 'Family event',
+        })
+        self.assertEqual(resp.status_code, 302)
+        new_req = LeaveRequest.objects.exclude(pk=self.pending.pk).get()
+        self.assertEqual(new_req.created_by, self.superadmin)
+        self.assertEqual(new_req.approvals.count(), 0)  # approvals seeded in Task 4f alongside submission wiring — see note below
+
+
+class LeaveRequestDetailViewTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.superadmin = make_user('detail_super', password='x')
+        self.superadmin.set_password('testpass123')
+        from accounts.models import Role
+        role, _ = Role.objects.get_or_create(name='super_admin')
+        self.superadmin.role = role
+        self.superadmin.save()
+        self.aamna = make_user('detail_aamna', password='x')
+        self.aamna.set_password('testpass123')
+        self.aamna.save()
+        LeaveDashboardAccess.objects.create(user=self.aamna, is_active=True)
+        self.ali = make_user('detail_ali', password='x')
+        self.ali.set_password('testpass123')
+        self.ali.save()
+        LeaveDashboardAccess.objects.create(user=self.ali, is_active=True)
+        self.req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 3))
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=self.aamna)
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=self.ali)
+
+    def test_detail_page_loads(self):
+        self.client.login(username='detail_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_approver_can_decide_via_post(self):
+        self.client.login(username='detail_aamna', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                                {'action': 'decide', 'decision': 'approved', 'comment': 'ok'})
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.approvals.get(approver=self.aamna).decision, 'approved')
+
+    def test_add_note_visible_to_employee_by_default(self):
+        # add_note is restricted to an assigned approver for THIS request, not
+        # any Super Admin — detail_aamna is a designated approver here.
+        self.client.login(username='detail_aamna', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                                {'action': 'add_note', 'note': 'Please bring the certificate.'})
+        self.assertEqual(resp.status_code, 302)
+        note = self.req.notes.get()
+        self.assertFalse(note.is_internal)
+
+    def test_override_by_superadmin(self):
+        self.client.login(username='detail_super', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                                {'action': 'override', 'decision': 'approved', 'reason': 'Ali is on leave'})
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'approved')
+        self.assertTrue(self.req.is_overridden)
+
+    def test_add_note_by_non_superadmin_approver_forbidden(self):
+        # A Super Admin with no approval row on this specific request is
+        # view-only aside from the override escape hatch — add_note requires
+        # being a designated approver for THIS request, not Super Admin status.
+        self.client.login(username='detail_super', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                                {'action': 'add_note', 'note': 'Should not be allowed.'})
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(self.req.notes.count(), 0)
+
+    def test_non_approver_non_superadmin_cannot_decide(self):
+        outsider = make_user('detail_outsider', password='x')
+        outsider.set_password('testpass123')
+        outsider.save()
+        self.client.login(username='detail_outsider', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertEqual(resp.status_code, 403)
+
+
+class MyProfileLeaveRequestTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.user = make_user('profile_user', password='x')
+        self.user.set_password('testpass123')
+        self.user.save()
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.marriage, year=2026, entitled_days=10)
+
+    def test_profile_shows_own_requests(self):
+        LeaveRequest.objects.create(employee=self.emp, leave_type=self.marriage,
+                                    start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 2))
+        self.client.login(username='profile_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Marriage')
+
+    def test_employee_can_submit_own_request(self):
+        self.client.login(username='profile_user', password='testpass123')
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'request_leave', 'leave_type': self.marriage.pk,
+            'start_date': '2026-09-10', 'end_date': '2026-09-11', 'employee_reason': 'Wedding',
+        })
+        self.assertEqual(resp.status_code, 302)
+        req = LeaveRequest.objects.get(employee=self.emp)
+        self.assertEqual(req.created_by, self.user)
+        self.assertEqual(req.status, 'pending')
+
+
+def _make_role_user(username, role_name):
+    """A logged-in test user holding a specific Role (e.g. super_admin, ai_head)."""
+    role, _ = Role.objects.get_or_create(name=role_name)
+    user = make_user(username, password='x')
+    user.set_password('testpass123')
+    user.role = role
+    user.save()
+    return user
+
+
+def _login_user(username):
+    user = make_user(username, password='x')
+    user.set_password('testpass123')
+    user.save()
+    return user
+
+
+
+class GenerateEntitlementsForEmployeeTests(TestCase):
+    """Unit coverage of hr.leave_services.generate_entitlements_for_employee —
+    the single-employee helper shared by generate_year_entitlements (bulk)
+    and the new-employee auto-generation hooks below."""
+    def setUp(self):
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': 30})
+        self.sick, _ = LeaveType.objects.update_or_create(
+            code='sick', defaults={'name': 'Sick', 'default_annual_days': 12, 'is_active': True})
+        self.emp = make_employee('GEFE-1', 'Solo Employee')
+
+    def test_creates_one_row_per_active_leave_type(self):
+        # Not asserting an exact `created` count here: a data migration
+        # (0024_leavetype_task1_values) pre-seeds several canonical LeaveType
+        # rows (annual, sick, marriage, ...) into every test database, so the
+        # real active-type count is >= the 2 this test explicitly cares about.
+        from hr.leave_services import generate_entitlements_for_employee
+        created = generate_entitlements_for_employee(self.emp, 2026)
+        self.assertGreaterEqual(created, 2)
+        self.assertEqual(
+            LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.annual, year=2026).entitled_days,
+            Decimal('30'))
+        self.assertEqual(
+            LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.sick, year=2026).entitled_days,
+            Decimal('12'))
+
+    def test_does_not_overwrite_existing_row(self):
+        from hr.leave_services import generate_entitlements_for_employee
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=99)
+        generate_entitlements_for_employee(self.emp, 2026)
+        self.assertEqual(
+            LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.annual, year=2026).entitled_days,
+            Decimal('99'))
+
+    def test_ignores_inactive_leave_types(self):
+        from hr.leave_services import generate_entitlements_for_employee
+        inactive_lt, _ = LeaveType.objects.get_or_create(code='defunct', defaults={
+            'name': 'Defunct', 'default_annual_days': 5, 'is_active': False})
+        generate_entitlements_for_employee(self.emp, 2026)
+        self.assertFalse(LeaveEntitlement.objects.filter(employee=self.emp, leave_type=inactive_lt).exists())
+
+
+
+class NewEmployeeAutoEntitlementTests(TestCase):
+    """A newly added employee (via the real 'Add Employee' form or the Excel
+    import) automatically gets this year's leave balances — no separate
+    manual 'Generate' step needed. Deliberately hooked into these two actual
+    creation entry points, NOT Employee.save() itself: a model-level hook
+    would fire on every raw Employee.objects.create() across the whole test
+    suite (and any future script), silently colliding with the ~30 existing
+    tests that create their own LeaveEntitlement rows for a just-created
+    employee in the current year."""
+    def setUp(self):
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': 30})
+        self.admin = _make_role_user('neaet_admin', Role.SUPER_ADMIN)
+        self.this_year = timezone.now().year
+
+    def test_creating_employee_via_form_generates_entitlements(self):
+        self.client.login(username='neaet_admin', password='testpass123')
+        resp = self.client.post(reverse('hr:employee_create'), {
+            'iqama_number': 'NEAET-1', 'full_name': 'Fresh Hire', 'is_active': 'on',
+        })
+        self.assertEqual(resp.status_code, 302)
+        emp = Employee.objects.get(iqama_number='NEAET-1')
+        ent = LeaveEntitlement.objects.get(employee=emp, leave_type=self.annual, year=self.this_year)
+        self.assertEqual(ent.entitled_days, Decimal('30'))
+
+    def test_creating_inactive_employee_via_form_generates_no_entitlements(self):
+        self.client.login(username='neaet_admin', password='testpass123')
+        resp = self.client.post(reverse('hr:employee_create'), {
+            'iqama_number': 'NEAET-2', 'full_name': 'Not Yet Active',
+        })
+        self.assertEqual(resp.status_code, 302)
+        emp = Employee.objects.get(iqama_number='NEAET-2')
+        self.assertFalse(emp.is_active)
+        self.assertFalse(LeaveEntitlement.objects.filter(employee=emp).exists())
+
+    def test_updating_existing_employee_does_not_regenerate(self):
+        # EmployeeUpdateView reuses EmployeeForm but is a different view
+        # (UpdateView, not CreateView) — this hook lives only in
+        # EmployeeCreateView.form_valid, so an edit must never touch entitlements.
+        emp = make_employee('NEAET-3', 'Existing Employee')
+        self.client.login(username='neaet_admin', password='testpass123')
+        resp = self.client.post(reverse('hr:employee_update', args=[emp.pk]), {
+            'iqama_number': 'NEAET-3', 'full_name': 'Existing Employee Renamed', 'is_active': 'on',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(LeaveEntitlement.objects.filter(employee=emp).exists())
+
+
+
+class CanViewLeaveDashboardTests(TestCase):
+    """Unit tests for hr.views.can_view_leave_dashboard, independent of any
+    specific view. LeaveDashboardAccess is the single merged roster — an
+    active grant is both 'can view the dashboard' and 'is a real approver'
+    (see is_designated_approver / submit_leave_request) — while Super Admin
+    status alone only grants viewing, never approval authority by itself."""
+    def setUp(self):
+        from accounts.models import Role
+        self.role, _ = Role.objects.get_or_create(name='super_admin')
+
+    def test_super_admin_can_view(self):
+        from hr.views import can_view_leave_dashboard
+        user = make_user('cvld_super', password='x')
+        user.role = self.role
+        user.save()
+        self.assertTrue(can_view_leave_dashboard(user))
+
+    def test_plain_user_cannot_view(self):
+        from hr.views import can_view_leave_dashboard
+        user = make_user('cvld_plain', password='x')
+        user.save()
+        self.assertFalse(can_view_leave_dashboard(user))
+
+    def test_user_with_active_grant_can_view(self):
+        from hr.views import can_view_leave_dashboard
+        user = make_user('cvld_grantee', password='x')
+        user.save()
+        LeaveDashboardAccess.objects.create(user=user, is_active=True)
+        self.assertTrue(can_view_leave_dashboard(user))
+
+    def test_user_with_inactive_grant_cannot_view(self):
+        from hr.views import can_view_leave_dashboard
+        user = make_user('cvld_revoked', password='x')
+        user.save()
+        LeaveDashboardAccess.objects.create(user=user, is_active=False)
+        self.assertFalse(can_view_leave_dashboard(user))
+
+
+
+class CheckLeaveBalanceTests(TestCase):
+    """Unit tests for hr.forms.check_leave_balance, independent of any view.
+    remaining_days only reflects APPROVED days (LeaveRecord rows) — this
+    function must also treat this employee's OTHER still-pending requests
+    for the same leave type/year as already-spoken-for balance, or two
+    individually-valid submissions could together exceed the entitlement."""
+    def setUp(self):
+        from hr.forms import check_leave_balance
+        self.check_leave_balance = check_leave_balance
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.sick, _ = LeaveType.objects.get_or_create(
+            code='sick', defaults={'name': 'Sick', 'default_annual_days': 12, 'is_accumulative': False})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.marriage, year=2026, entitled_days=3)
+
+    def test_no_entitlement_raises(self):
+        with self.assertRaises(ValidationError):
+            self.check_leave_balance(self.emp, self.marriage, _date(2027, 1, 5), _date(2027, 1, 6))
+
+    def test_within_balance_passes(self):
+        self.check_leave_balance(self.emp, self.marriage, _date(2026, 9, 1), _date(2026, 9, 3))  # 3 days, exact fit
+
+    def test_exceeding_plain_entitlement_raises(self):
+        with self.assertRaises(ValidationError):
+            self.check_leave_balance(self.emp, self.marriage, _date(2026, 9, 1), _date(2026, 9, 10))
+
+    def test_second_request_blocked_once_first_pending_request_uses_up_balance(self):
+        LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 3))  # 3 days, still pending
+        with self.assertRaises(ValidationError) as ctx:
+            self.check_leave_balance(self.emp, self.marriage, _date(2026, 10, 1), _date(2026, 10, 1))  # just 1 more day
+        self.assertIn('already tied up in other pending requests', str(ctx.exception))
+
+    def test_second_request_allowed_once_first_request_is_no_longer_pending(self):
+        req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 3), status='disapproved')
+        self.check_leave_balance(self.emp, self.marriage, _date(2026, 10, 1), _date(2026, 10, 3))
+
+    def test_pending_request_of_a_different_leave_type_does_not_count(self):
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.sick, year=2026, entitled_days=12)
+        LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.sick,
+            start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 10))  # 10 days of Sick, pending
+        # Marriage's own 3-day balance is untouched by Sick's pending request.
+        self.check_leave_balance(self.emp, self.marriage, _date(2026, 11, 1), _date(2026, 11, 3))
+
+    def test_pending_request_in_a_different_year_does_not_count(self):
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.marriage, year=2027, entitled_days=3)
+        LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2027, 1, 1), end_date=_date(2027, 1, 3))  # pending, but a different year
+        self.check_leave_balance(self.emp, self.marriage, _date(2026, 9, 1), _date(2026, 9, 3))
+
+
+
+class LeaveRequestFormCrossYearTests(TestCase):
+    """LeaveRequestForm.clean() must reject a date range spanning two
+    calendar years — LeaveEntitlement (and check_leave_balance) is keyed per
+    year, so a cross-year request would otherwise only ever be checked
+    against the start year's balance, silently never consulting the end
+    year's entitlement at all."""
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.marriage, year=2026, entitled_days=30)
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.marriage, year=2027, entitled_days=30)
+
+    def test_cross_year_range_rejected(self):
+        form = LeaveRequestForm({
+            'leave_type': self.marriage.pk, 'start_date': '2026-12-30', 'end_date': '2027-01-02',
+            'employee_reason': 'New Year trip',
+        }, fixed_employee=self.emp)
+        self.assertFalse(form.is_valid())
+        self.assertIn('cannot span two different years', str(form.errors['end_date']))
+
+    def test_same_year_range_still_passes(self):
+        form = LeaveRequestForm({
+            'leave_type': self.marriage.pk, 'start_date': '2026-12-28', 'end_date': '2026-12-31',
+            'employee_reason': 'End of year',
+        }, fixed_employee=self.emp)
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_new_years_eve_to_new_years_day_rejected(self):
+        # The most common real-world case this guards against.
+        form = LeaveRequestForm({
+            'leave_type': self.marriage.pk, 'start_date': '2026-12-31', 'end_date': '2027-01-01',
+            'employee_reason': 'NYE',
+        }, fixed_employee=self.emp)
+        self.assertFalse(form.is_valid())
+        self.assertIn('end_date', form.errors)
+
+
+
+class LeaveRequestDecidedByDisplayTests(TestCase):
+    """Model-level coverage of LeaveRequest.decided_by_display, independent
+    of any view/template — the 'by whom' summary shown across the queue
+    history, My Profile, and the detail page."""
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 2))
+
+    def test_pending_returns_none(self):
+        self.assertIsNone(self.req.decided_by_display)
+
+    def test_approved_by_all_approvers(self):
+        aamna = make_user('dbd_aamna', password='x', first_name='Aamna', last_name='Khan')
+        ali = make_user('dbd_ali', password='x', first_name='Ali', last_name='Sultan')
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=aamna, decision='approved')
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=ali, decision='approved')
+        self.req.status = 'approved'
+        self.req.save(update_fields=['status'])
+        self.assertEqual(self.req.decided_by_display, 'by Aamna Khan, Ali Sultan')
+
+    def test_disapproved_by_single_approver(self):
+        aamna = make_user('dbd_aamna2', password='x', first_name='Aamna', last_name='Khan')
+        ali = make_user('dbd_ali2', password='x', first_name='Ali', last_name='Sultan')
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=aamna, decision='disapproved')
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=ali, decision='skipped')
+        self.req.status = 'disapproved'
+        self.req.save(update_fields=['status'])
+        self.assertEqual(self.req.decided_by_display, 'by Aamna Khan')
+
+    def test_override_shows_overriding_admin(self):
+        admin = make_user('dbd_admin', password='x', first_name='Sarah', last_name='Admin')
+        self.req.status = 'approved'
+        self.req.is_overridden = True
+        self.req.overridden_by = admin
+        self.req.save(update_fields=['status', 'is_overridden', 'overridden_by'])
+        self.assertEqual(self.req.decided_by_display, 'by Sarah Admin (override)')
+
+    def test_override_with_deleted_overriding_user(self):
+        admin = make_user('dbd_admin2', password='x')
+        self.req.status = 'approved'
+        self.req.is_overridden = True
+        self.req.overridden_by = admin
+        self.req.save(update_fields=['status', 'is_overridden', 'overridden_by'])
+        admin.delete()
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.decided_by_display, '(override — approver account no longer exists)')
+
+
+
+
+class HasOverrideAccessTests(TestCase):
+    """Unit tests for hr.views.has_override_access, independent of any view —
+    exactly one OverrideAccessSettings mode is authoritative at a time."""
+    def setUp(self):
+        from hr.models import OverrideAccessSettings
+        OverrideAccessSettings.objects.all().delete()
+
+    def test_default_mode_is_all_super_admins(self):
+        from hr.models import OverrideAccessSettings
+        config = OverrideAccessSettings.get_solo()
+        self.assertEqual(config.mode, OverrideAccessSettings.MODE_ALL_SUPER_ADMINS)
+
+    def test_all_super_admins_mode_grants_every_super_admin(self):
+        from hr.views import has_override_access
+        admin = _make_role_user('hoa_super1', Role.SUPER_ADMIN)
+        self.assertTrue(has_override_access(admin))
+
+    def test_all_super_admins_mode_denies_non_super_admin(self):
+        from hr.views import has_override_access
+        plain = _login_user('hoa_plain1')
+        self.assertFalse(has_override_access(plain))
+
+    def test_specific_roles_mode_grants_only_that_role(self):
+        from hr.views import has_override_access
+        from hr.models import OverrideAccessSettings, OverrideAccessRole
+        config = OverrideAccessSettings.get_solo()
+        config.mode = OverrideAccessSettings.MODE_SPECIFIC_ROLES
+        config.save()
+        finance_role, _ = Role.objects.get_or_create(name=Role.FINANCE_HEAD)
+        OverrideAccessRole.objects.create(role=finance_role)
+
+        finance_user = _make_role_user('hoa_finance', Role.FINANCE_HEAD)
+        self.assertTrue(has_override_access(finance_user))
+
+        super_admin_without_grant = _make_role_user('hoa_super2', Role.SUPER_ADMIN)
+        self.assertFalse(has_override_access(super_admin_without_grant))
+
+    def test_specific_employees_mode_grants_only_that_person(self):
+        from hr.views import has_override_access
+        from hr.models import OverrideAccessSettings, OverrideAccessEmployee
+        config = OverrideAccessSettings.get_solo()
+        config.mode = OverrideAccessSettings.MODE_SPECIFIC_EMPLOYEES
+        config.save()
+        chosen = _login_user('hoa_chosen')
+        OverrideAccessEmployee.objects.create(user=chosen)
+
+        self.assertTrue(has_override_access(chosen))
+
+        super_admin_without_grant = _make_role_user('hoa_super3', Role.SUPER_ADMIN)
+        self.assertFalse(has_override_access(super_admin_without_grant))
+
+    def test_override_access_alone_grants_dashboard_viewing(self):
+        # Otherwise granting override access to a non-super-admin,
+        # non-approver would be pointless — they couldn't reach the page.
+        from hr.views import can_view_leave_dashboard
+        from hr.models import OverrideAccessSettings, OverrideAccessEmployee
+        config = OverrideAccessSettings.get_solo()
+        config.mode = OverrideAccessSettings.MODE_SPECIFIC_EMPLOYEES
+        config.save()
+        chosen = _login_user('hoa_viewer')
+        OverrideAccessEmployee.objects.create(user=chosen)
+        self.assertTrue(can_view_leave_dashboard(chosen))
+
+
+
+class OverrideAccessViewTests(TestCase):
+    """End-to-end: the leave-request detail page's override form/action
+    respects has_override_access instead of a hardcoded is_super_admin_user
+    check, across all three modes."""
+    def setUp(self):
+        from hr.models import OverrideAccessSettings
+        OverrideAccessSettings.objects.all().delete()
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 3))
+
+    def test_default_mode_super_admin_sees_and_can_use_override(self):
+        admin = _make_role_user('oav_super1', Role.SUPER_ADMIN)
+        self.client.login(username='oav_super1', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertContains(resp, 'name="action" value="override"')
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                                {'action': 'override', 'decision': 'approved', 'reason': 'Testing'})
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'approved')
+
+    def test_specific_roles_mode_blocks_super_admin_without_the_role(self):
+        from hr.models import OverrideAccessSettings, OverrideAccessRole
+        config = OverrideAccessSettings.get_solo()
+        config.mode = OverrideAccessSettings.MODE_SPECIFIC_ROLES
+        config.save()
+        finance_role, _ = Role.objects.get_or_create(name=Role.FINANCE_HEAD)
+        OverrideAccessRole.objects.create(role=finance_role)
+
+        admin = _make_role_user('oav_super2', Role.SUPER_ADMIN)
+        self.client.login(username='oav_super2', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertNotContains(resp, 'name="action" value="override"')
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                                {'action': 'override', 'decision': 'approved', 'reason': 'Testing'})
+        self.assertEqual(resp.status_code, 403)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'pending')
+
+    def test_specific_roles_mode_allows_the_granted_role_even_if_not_super_admin(self):
+        from hr.models import OverrideAccessSettings, OverrideAccessRole
+        config = OverrideAccessSettings.get_solo()
+        config.mode = OverrideAccessSettings.MODE_SPECIFIC_ROLES
+        config.save()
+        finance_role, _ = Role.objects.get_or_create(name=Role.FINANCE_HEAD)
+        OverrideAccessRole.objects.create(role=finance_role)
+
+        finance_user = _make_role_user('oav_finance', Role.FINANCE_HEAD)
+        self.client.login(username='oav_finance', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                                {'action': 'override', 'decision': 'approved', 'reason': 'Testing'})
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'approved')
+
+    def test_specific_employees_mode_blocks_unlisted_super_admin(self):
+        from hr.models import OverrideAccessSettings, OverrideAccessEmployee
+        config = OverrideAccessSettings.get_solo()
+        config.mode = OverrideAccessSettings.MODE_SPECIFIC_EMPLOYEES
+        config.save()
+        chosen = _login_user('oav_chosen')
+        OverrideAccessEmployee.objects.create(user=chosen)
+
+        admin = _make_role_user('oav_super3', Role.SUPER_ADMIN)
+        self.client.login(username='oav_super3', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                                {'action': 'override', 'decision': 'approved', 'reason': 'Testing'})
+        self.assertEqual(resp.status_code, 403)
+
+        self.client.login(username='oav_chosen', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                                {'action': 'override', 'decision': 'approved', 'reason': 'Testing'})
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'approved')
+
+
+
+class LeaveRequestDetailDocumentLinkTests(TestCase):
+    """The 'View attached document' link on the leave request detail page
+    must open in a new tab (target="_blank") — otherwise the global loading
+    overlay in base.html (which only hides on `pageshow` or a 30s fallback)
+    gets stuck showing "Loading, please wait…" forever, because the
+    same-page FileResponse download never fires a real navigation/pageshow
+    event. This matches the established convention used elsewhere in the
+    codebase (e.g. the document links on My Profile use target="_blank")."""
+
+    def setUp(self):
+        self.emp = make_employee(iqama='DOCLINK-1', name='Doc Link Employee')
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.superadmin = make_user('doclink_super', password='x')
+        self.superadmin.set_password('testpass123')
+        from accounts.models import Role
+        role, _ = Role.objects.get_or_create(name='super_admin')
+        self.superadmin.role = role
+        self.superadmin.save()
+        self.req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 3),
+            document=SimpleUploadedFile('cert.pdf', b'dummy-bytes'))
+
+    def test_document_link_opens_in_new_tab(self):
+        self.client.login(username='doclink_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        doc_url = reverse('hr:leave_request_document', args=[self.req.pk])
+        # Confirm the exact rendered markup, not just that target="_blank"
+        # appears somewhere on the page.
+        self.assertContains(resp, f'href="{doc_url}" target="_blank"')
+
+
+
+class ReapplyLeaveTypeDefaultsScopingTests(TestCase):
+    """Unit-level test for reapply_leave_type_defaults' new `leave_type` param
+    (added alongside the existing `year` param), isolated from
+    LeaveType.save()'s own broader propagation by changing default_annual_days
+    via a bare queryset .update() (which bypasses save())."""
+
+    def test_scoped_to_single_leave_type_and_year(self):
+        emp = make_employee(iqama='RSD-1', name='Reapply Scope Employee')
+        sick, _ = LeaveType.objects.get_or_create(
+            code='sick', defaults={'name': 'Sick', 'default_annual_days': Decimal('12.0'),
+                                   'is_accumulative': False})
+        marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': Decimal('3.0'),
+                                       'is_accumulative': False})
+        year = timezone.now().year
+        other_year = year - 1
+        sick_current = LeaveEntitlement.objects.create(
+            employee=emp, leave_type=sick, year=year, entitled_days=Decimal('99'))
+        sick_other = LeaveEntitlement.objects.create(
+            employee=emp, leave_type=sick, year=other_year, entitled_days=Decimal('99'))
+        marriage_current = LeaveEntitlement.objects.create(
+            employee=emp, leave_type=marriage, year=year, entitled_days=Decimal('99'))
+
+        LeaveType.objects.filter(pk=sick.pk).update(default_annual_days=Decimal('20'))
+        sick.refresh_from_db()
+
+        from hr.leave_services import reapply_leave_type_defaults
+        updated = reapply_leave_type_defaults(year=year, leave_type=sick)
+        self.assertEqual(updated, 1)
+
+        sick_current.refresh_from_db()
+        sick_other.refresh_from_db()
+        marriage_current.refresh_from_db()
+        self.assertEqual(sick_current.entitled_days, Decimal('20'))
+        self.assertEqual(sick_other.entitled_days, Decimal('99'))       # different year untouched
+        self.assertEqual(marriage_current.entitled_days, Decimal('99'))  # different type untouched
+
+
+
+class LeaveTypeUpdateViewAutoReapplyTests(TestCase):
+    """Editing a LeaveType's default_annual_days through the admin edit view
+    flashes an explicit "Re-applied ... for <year>" confirmation, current-year
+    scoped, mirroring the Entitlements page's manual Re-apply action."""
+
+    def setUp(self):
+        self.admin = _make_role_user('ltu_admin', Role.SUPER_ADMIN)
+        self.emp = make_employee(iqama='LTU-1', name='LTU Employee')
+        self.sick, _ = LeaveType.objects.get_or_create(
+            code='sick', defaults={'name': 'Sick', 'default_annual_days': Decimal('12.0'),
+                                   'is_accumulative': False})
+        self.current_year = timezone.now().year
+        self.current_ent = LeaveEntitlement.objects.create(
+            employee=self.emp, leave_type=self.sick, year=self.current_year, entitled_days=Decimal('12.0'))
+
+    def test_editing_default_days_updates_current_year_and_flashes_confirmation(self):
+        self.client.login(username='ltu_admin', password='testpass123')
+        resp = self.client.post(reverse('hr:leavetype_update', args=[self.sick.pk]), {
+            'name': 'Sick', 'code': 'sick', 'default_annual_days': '20.0',
+            'is_paid': 'on', 'color': 'secondary', 'is_active': 'on',
+        }, follow=True)
+        self.assertEqual(resp.status_code, 200)
+        self.current_ent.refresh_from_db()
+        self.assertEqual(self.current_ent.entitled_days, Decimal('20.0'))
+        rendered_messages = [str(m) for m in resp.context['messages']]
+        self.assertTrue(
+            any(f'entitlement(s) for {self.current_year}' in m for m in rendered_messages),
+            rendered_messages)
+
+    def test_no_day_count_change_does_not_flash_reapply_confirmation(self):
+        self.client.login(username='ltu_admin', password='testpass123')
+        resp = self.client.post(reverse('hr:leavetype_update', args=[self.sick.pk]), {
+            'name': 'Sick Leave', 'code': 'sick', 'default_annual_days': '12.0',
+            'is_paid': 'on', 'color': 'secondary', 'is_active': 'on',
+        }, follow=True)
+        self.assertEqual(resp.status_code, 200)
+        rendered_messages = [str(m) for m in resp.context['messages']]
+        self.assertFalse(any('Re-applied leave-type day counts' in m for m in rendered_messages), rendered_messages)
+

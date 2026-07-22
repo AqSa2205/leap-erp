@@ -1,11 +1,15 @@
 from .employee import Employee, EmployeeDocument
 from .assets import Asset, AssetAssignment, Vehicle, VehicleDocument
-from .leave import LeaveType, LeaveEntitlement, LeaveRecord
+from .leave import (LeaveType, LeaveEntitlement, LeaveRecord,
+                    LeaveDashboardAccess, LeaveRequest, LeaveRequestApproval, LeaveRequestNote,
+                    OverrideAccessSettings, OverrideAccessRole, OverrideAccessEmployee)
 from .attendance import Holiday, AttendanceSettings, AttendanceRecord, WorkingDay, WFHRecord
 
 __all__ = [
     'Employee', 'EmployeeDocument',
     'Asset', 'AssetAssignment', 'Vehicle', 'VehicleDocument',
     'LeaveType', 'LeaveEntitlement', 'LeaveRecord',
+    'LeaveDashboardAccess', 'LeaveRequest', 'LeaveRequestApproval', 'LeaveRequestNote',
+    'OverrideAccessSettings', 'OverrideAccessRole', 'OverrideAccessEmployee',
     'Holiday', 'AttendanceSettings', 'AttendanceRecord', 'WorkingDay', 'WFHRecord',
 ]

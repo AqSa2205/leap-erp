@@ -30,7 +30,7 @@
                             <th>Paid</th>
                             <th>Color</th>
                             <th>Active</th>
-                            <th width="80">Actions</th>
+                            <th width="110">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -59,6 +59,9 @@
                             <td>
                                 <a href="{% url 'hr:leavetype_update' lt.pk %}" class="btn btn-sm btn-outline-secondary" title="Edit">
                                     <i class="bi bi-pencil"></i>
+                                </a>
+                                <a href="{% url 'hr:leavetype_delete' lt.pk %}" class="btn btn-sm btn-outline-danger" title="Delete">
+                                    <i class="bi bi-trash"></i>
                                 </a>
                             </td>
                         </tr>
