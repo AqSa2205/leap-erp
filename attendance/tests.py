@@ -174,6 +174,97 @@ class HRSyncTests(TestCase):
         self.assertIsNotNone(rec.check_in)
 
 
+class ExceptionAwareSyncTests(TestCase):
+    """attendance.services.sync_hr_attendance must not let a same-day Wi-Fi
+    heartbeat overwrite the 'present' (excused) status an approved
+    hr.AttendanceException already established — the automation gap fixed
+    alongside the arrived_late removal (see hr/attendance_exception_services.py
+    and hr/tests.py's exception-awareness tests for the derive_status side)."""
+
+    def setUp(self):
+        from datetime import timedelta
+        from accounts.models import User
+        self.emp = Employee.objects.create(iqama_number='ATT-EXC1', full_name='Exception Emp', is_active=True)
+        self.manager = Employee.objects.create(iqama_number='ATT-EXC-MGR', full_name='Exc Manager', is_active=True)
+        self.manager_user = User.objects.create_user('att_exc_mgr', password='pw')
+        self.manager.user = self.manager_user
+        self.manager.save(update_fields=['user'])
+        self.emp.main_manager = self.manager
+        self.emp.save(update_fields=['main_manager'])
+        self.creator = User.objects.create_user('att_exc_creator', password='pw')
+
+        # Derive both date and time from the same local "now" so a midnight
+        # rollover can never split them across two different days (same
+        # convention used by hr/tests.py's attendance-exception fixtures).
+        event_dt = timezone.localtime(timezone.now() - timedelta(minutes=30))
+        self.event_date = event_dt.date()
+        self.event_time = event_dt.time()
+        self.late_check_in = time(9, 0)  # after the 8:30 default expected_in_by
+
+    def _day(self, check_in_time):
+        from datetime import datetime as _datetime
+        naive = _datetime.combine(self.event_date, check_in_time)
+        aware = timezone.make_aware(naive) if timezone.is_naive(naive) else naive
+        return AttendanceDay.objects.create(employee=self.emp, date=self.event_date, first_seen=aware)
+
+    def _submit_and_decide(self, decision):
+        from hr.attendance_exception_services import submit_attendance_exception, decide_attendance_exception
+        exc = submit_attendance_exception(
+            employee=self.emp, event_date=self.event_date, event_start_time=self.event_time,
+            reason_category='site_visit', created_by=self.creator)
+        decide_attendance_exception(exc, self.manager_user, decision, note='test')
+        return exc
+
+    def test_late_checkin_with_approved_exception_marks_present(self):
+        from hr.models import AttendanceRecord
+        from attendance.services import sync_hr_attendance
+        exc = self._submit_and_decide('approved')
+        day = self._day(self.late_check_in)
+        sync_hr_attendance(day)
+        rec = AttendanceRecord.objects.get(employee=self.emp, date=self.event_date)
+        self.assertEqual(rec.status, 'present')
+        self.assertIn(f'#{exc.pk}', rec.note)
+        self.assertIn('Approved', rec.note)
+
+    def test_late_checkin_with_no_exception_still_marks_late(self):
+        from hr.models import AttendanceRecord
+        from attendance.services import sync_hr_attendance
+        day = self._day(self.late_check_in)
+        sync_hr_attendance(day)
+        rec = AttendanceRecord.objects.get(employee=self.emp, date=self.event_date)
+        self.assertEqual(rec.status, 'late')
+
+    def test_late_checkin_with_rejected_exception_still_marks_late(self):
+        from hr.models import AttendanceRecord
+        from attendance.services import sync_hr_attendance
+        self._submit_and_decide('rejected')
+        day = self._day(self.late_check_in)
+        sync_hr_attendance(day)
+        rec = AttendanceRecord.objects.get(employee=self.emp, date=self.event_date)
+        # The exception rejection already marked the day 'absent' via
+        # _apply_attendance_outcome; a real Wi-Fi check-in (source of truth
+        # for present/absent) still correctly upgrades it — 'absent' isn't a
+        # protected status, and only an *approved* exception excuses.
+        self.assertEqual(rec.status, 'late')
+
+    def test_approved_exception_decided_after_an_earlier_wifi_late_ping_still_ends_present(self):
+        # Order-independence: the Wi-Fi ping lands first (marks 'late'), the
+        # exception is approved afterwards (fixes it to 'present' via
+        # _apply_attendance_outcome) — a later same-day heartbeat must not
+        # regress it back to 'late'.
+        from hr.models import AttendanceRecord
+        from attendance.services import sync_hr_attendance
+        day = self._day(self.late_check_in)
+        sync_hr_attendance(day)
+        rec = AttendanceRecord.objects.get(employee=self.emp, date=self.event_date)
+        self.assertEqual(rec.status, 'late')
+
+        self._submit_and_decide('approved')
+        sync_hr_attendance(day)
+        rec.refresh_from_db()
+        self.assertEqual(rec.status, 'present')
+
+
 class RegistrationUITests(TestCase):
     def setUp(self):
         from accounts.models import Role, User

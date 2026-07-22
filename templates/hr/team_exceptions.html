@@ -1,0 +1,342 @@
+{% extends 'base.html' %}
+{% block title %}Team Attendance Exceptions{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Overdue-and-unactioned row (still 'pending', or already flipped to
+       'expired' by the cron sweep) — a light, easy-on-the-eyes tint rather
+       than Bootstrap's saturated .table-danger. */
+    .row-overdue { background-color: #fff5f5; }
+    .row-overdue:hover { background-color: #fde8e8; }
+    [data-theme="dark"] .row-overdue { background-color: #3a2323; }
+    [data-theme="dark"] .row-overdue:hover { background-color: #452828; }
+
+    /* Team Attendance Exceptions — per-tab accent colors.
+       Each of the three tabs (Direct / Secondary / All Organization) gets its
+       own distinct color when active, replacing Bootstrap's stock nav-tabs
+       blue so the tabs read as visually distinct destinations rather than
+       identical blue-on-active links. Colors draw from this project's own
+       brand palette (--leap-red from base.html) plus two new accents chosen
+       to be clearly distinguishable from red and from each other:
+         - Direct Reports (primary/default view)      -> brand red
+         - Secondary Reports ("secondary/backup" tone) -> teal
+         - the HR-only org-wide tab (admin scope)      -> slate navy
+       Selectors are written with extra class chaining (not just .active) so
+       they out-specificity Bootstrap's `.nav-tabs .nav-link.active` rule
+       regardless of stylesheet load order. */
+    .team-exc-tabs .nav-link {
+        font-weight: 500;
+        color: #495057;
+        border: 1px solid transparent;
+        transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+    }
+
+    /* Direct Reports — brand red */
+    .team-exc-tabs .nav-link.team-exc-tab-direct:hover:not(.active) {
+        color: var(--leap-red);
+        background-color: rgba(196, 30, 58, 0.08);
+        border-color: transparent;
+    }
+    .team-exc-tabs .nav-link.team-exc-tab-direct.active {
+        color: #fff;
+        background-color: var(--leap-red);
+        border-color: var(--leap-red);
+    }
+
+    /* Secondary Reports — teal (distinct secondary/backup accent) */
+    .team-exc-tabs .nav-link.team-exc-tab-secondary:hover:not(.active) {
+        color: #0f766e;
+        background-color: rgba(15, 118, 110, 0.08);
+        border-color: transparent;
+    }
+    .team-exc-tabs .nav-link.team-exc-tab-secondary.active {
+        color: #fff;
+        background-color: #0f766e;
+        border-color: #0f766e;
+    }
+
+    /* HR/Super-Admin-only org-wide tab — slate navy, signals broader/
+       administrative scope */
+    .team-exc-tabs .nav-link.team-exc-tab-all:hover:not(.active) {
+        color: #1e293b;
+        background-color: rgba(30, 41, 59, 0.08);
+        border-color: transparent;
+    }
+    .team-exc-tabs .nav-link.team-exc-tab-all.active {
+        color: #fff;
+        background-color: #1e293b;
+        border-color: #1e293b;
+    }
+
+    [data-theme="dark"] .team-exc-tabs { border-bottom-color: #333; }
+    [data-theme="dark"] .team-exc-tabs .nav-link { color: #ccc; }
+
+    [data-theme="dark"] .team-exc-tabs .nav-link.team-exc-tab-direct:hover:not(.active) {
+        color: #ef5350;
+        background-color: rgba(196, 30, 58, 0.15);
+    }
+    [data-theme="dark"] .team-exc-tabs .nav-link.team-exc-tab-direct.active {
+        color: #fff;
+        background-color: var(--leap-red);
+        border-color: var(--leap-red);
+    }
+
+    [data-theme="dark"] .team-exc-tabs .nav-link.team-exc-tab-secondary:hover:not(.active) {
+        color: #2dd4bf;
+        background-color: rgba(15, 118, 110, 0.2);
+    }
+    [data-theme="dark"] .team-exc-tabs .nav-link.team-exc-tab-secondary.active {
+        color: #fff;
+        background-color: #0f766e;
+        border-color: #0f766e;
+    }
+
+    [data-theme="dark"] .team-exc-tabs .nav-link.team-exc-tab-all:hover:not(.active) {
+        color: #94a3b8;
+        background-color: rgba(51, 65, 85, 0.3);
+    }
+    [data-theme="dark"] .team-exc-tabs .nav-link.team-exc-tab-all.active {
+        color: #fff;
+        /* Slightly lighter slate than the light-mode variant so the tab
+           still pops against the near-black dark-mode page background
+           instead of nearly disappearing into it. */
+        background-color: #334155;
+        border-color: #334155;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div>
+      <h1 class="h3 mb-1">Team Attendance Exceptions</h1>
+      <p class="text-muted mb-0">
+        {% if tab == 'all' %}
+          All attendance exceptions across the organization.
+        {% elif tab == 'secondary' %}
+          Employees you secondary-manage — only the Override control applies here.
+        {% else %}
+          Your direct reports only.
+        {% endif %}
+      </p>
+    </div>
+  </div>
+
+  <ul class="nav nav-tabs mb-4 team-exc-tabs">
+    <li class="nav-item">
+      <a class="nav-link team-exc-tab-direct {% if tab == 'direct' %}active{% endif %}" href="?tab=direct">Direct Reports</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link team-exc-tab-secondary {% if tab == 'secondary' %}active{% endif %}" href="?tab=secondary">Secondary Reports</a>
+    </li>
+    {% if show_all_tab %}
+    <li class="nav-item">
+      <a class="nav-link team-exc-tab-all {% if tab == 'all' %}active{% endif %}" href="?tab=all">All Organization Requests</a>
+    </li>
+    {% endif %}
+  </ul>
+
+  <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <h5 class="mb-0"><i class="bi bi-hourglass-split"></i> Pending
+        <span class="badge bg-warning text-dark ms-2">{{ pending_exceptions|length }}</span></h5>
+      <span class="small text-muted">Sorted by soonest decision deadline</span>
+    </div>
+    <div class="card-body p-0">
+      {% if pending_exceptions %}
+      <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Employee</th><th>Manager</th><th>Event</th><th>Reason</th><th>Time Left</th><th style="min-width:280px;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for exc in pending_exceptions %}
+          <tr class="{% if exc.is_overdue %}row-overdue{% endif %}">
+            <td>{{ exc.employee.full_name }}</td>
+            <td class="small text-muted">{{ exc.employee.main_manager.full_name|default:"—" }}</td>
+            <td class="small">{{ exc.event_date }} {{ exc.event_start_time|time:"H:i" }}</td>
+            <td class="small">
+              {{ exc.get_reason_category_display }}
+              {% if exc.status == 'expired' %}<span class="badge bg-secondary ms-1">Expired</span>{% endif %}
+              {% if exc.reason_category == 'other' and exc.custom_reason %}<div class="text-muted">{{ exc.custom_reason }}</div>{% endif %}
+              {% if exc.employee_comment %}<div class="text-muted fst-italic">"{{ exc.employee_comment }}"</div>{% endif %}
+            </td>
+            <td>
+              {% if exc.event_has_started %}
+              <span class="countdown fw-semibold"
+                    data-event-start="{{ exc.event_start|date:'c' }}"
+                    data-deadline="{{ exc.decision_deadline|date:'c' }}">
+                {{ exc.decision_deadline|date:'d M, H:i' }}
+              </span>
+              {% else %}
+              <span class="countdown text-muted"
+                    data-event-start="{{ exc.event_start|date:'c' }}"
+                    data-event-start-label="Starts {{ exc.event_start|date:'d M, H:i' }}"
+                    data-deadline="{{ exc.decision_deadline|date:'c' }}">
+                Starts {{ exc.event_start|date:'d M, H:i' }}
+              </span>
+              {% endif %}
+            </td>
+            <td>
+              {% if exc.can_decide %}
+              <form method="post" class="d-flex flex-wrap gap-1 align-items-start">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="decide">
+                <input type="hidden" name="exc_id" value="{{ exc.pk }}">
+                <input type="hidden" name="tab" value="{{ tab }}">
+                <textarea name="comment" class="form-control form-control-sm mb-1" rows="1" placeholder="Optional comment" style="min-width:160px;"></textarea>
+                <div class="d-flex gap-1">
+                  <button type="submit" name="decision" value="approved" class="btn btn-sm btn-outline-success">Approve</button>
+                  <button type="submit" name="decision" value="rejected" class="btn btn-sm btn-outline-danger">Reject</button>
+                </div>
+              </form>
+              {% endif %}
+              {% if exc.can_override %}
+              <button type="button" class="btn btn-sm btn-outline-warning mt-1" data-bs-toggle="collapse" data-bs-target="#override_{{ exc.pk }}">
+                Override
+              </button>
+              <div class="collapse mt-2" id="override_{{ exc.pk }}">
+                <form method="post" class="border rounded p-2">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="override">
+                  <input type="hidden" name="exc_id" value="{{ exc.pk }}">
+                  <input type="hidden" name="tab" value="{{ tab }}">
+                  <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Override reason — required" required></textarea>
+                  <div>
+                    <button type="submit" name="decision" value="approved" class="btn btn-sm btn-outline-success">Override — Approve</button>
+                    <button type="submit" name="decision" value="rejected" class="btn btn-sm btn-outline-danger">Override — Reject</button>
+                  </div>
+                </form>
+              </div>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% else %}
+      <p class="text-muted p-3 mb-0">No pending requests.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h5 class="mb-0"><i class="bi bi-clock-history"></i> History</h5></div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+      <table class="table table-sm mb-0">
+        <thead class="table-light"><tr><th>Employee</th><th>Manager</th><th>Event</th><th>Status</th><th>Decided At</th></tr></thead>
+        <tbody>
+          {% for exc in decided_exceptions %}
+          <tr>
+            <td>{{ exc.employee.full_name }}</td>
+            <td class="small text-muted">{{ exc.employee.main_manager.full_name|default:"—" }}</td>
+            <td class="small">{{ exc.event_date }} {{ exc.event_start_time|time:"H:i" }}</td>
+            <td>
+              {% if exc.status == 'approved' %}<span class="badge bg-success">Approved</span>
+              {% elif exc.status == 'rejected' %}<span class="badge bg-danger">Rejected</span>
+              {% elif exc.status == 'expired' %}<span class="badge bg-secondary">Expired</span>
+              {% else %}<span class="badge bg-warning text-dark">{{ exc.get_status_display }}</span>{% endif %}
+              {% if exc.is_overridden %}
+                <span class="badge bg-info text-dark ms-1">
+                  Overridden{% if exc.overridden_by %} by {{ exc.overridden_by.get_full_name|default:exc.overridden_by.username }}{% endif %}
+                </span>
+              {% endif %}
+              {% if exc.can_override %}
+              <button type="button" class="btn btn-sm btn-outline-warning ms-1" data-bs-toggle="collapse" data-bs-target="#override_{{ exc.pk }}">
+                Override
+              </button>
+              <div class="collapse mt-2" id="override_{{ exc.pk }}">
+                <form method="post" class="border rounded p-2">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="override">
+                  <input type="hidden" name="exc_id" value="{{ exc.pk }}">
+                  <input type="hidden" name="tab" value="{{ tab }}">
+                  <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Override reason — required" required></textarea>
+                  <div>
+                    <button type="submit" name="decision" value="approved" class="btn btn-sm btn-outline-success">Override — Approve</button>
+                    <button type="submit" name="decision" value="rejected" class="btn btn-sm btn-outline-danger">Override — Reject</button>
+                  </div>
+                </form>
+              </div>
+              {% endif %}
+            </td>
+            <td class="small text-muted">
+              {% if exc.decided_at %}{{ exc.decided_at|date:'d M Y, H:i' }}{% else %}—{% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5" class="text-center text-muted py-3">No decided requests yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+    var URGENT_THRESHOLD_MS = 4 * 60 * 60 * 1000; // 4 hours — matches spec's suggested urgency cutoff
+
+    function formatRemaining(ms) {
+        var overdue = ms < 0;
+        var abs = Math.abs(ms);
+        var totalMinutes = Math.floor(abs / 60000);
+        var hours = Math.floor(totalMinutes / 60);
+        var minutes = totalMinutes % 60;
+        var text = hours + 'h ' + minutes + 'm';
+        return overdue ? ('Overdue by ' + text) : (text + ' left');
+    }
+
+    function tick() {
+        var now = new Date().getTime();
+        document.querySelectorAll('.countdown[data-deadline]').forEach(function (el) {
+            var deadline = new Date(el.getAttribute('data-deadline')).getTime();
+            if (isNaN(deadline)) return;
+            var eventStartAttr = el.getAttribute('data-event-start');
+            var eventStart = eventStartAttr ? new Date(eventStartAttr).getTime() : NaN;
+
+            if (!isNaN(eventStart) && now < eventStart) {
+                // The event hasn't started yet. A request can legitimately be
+                // submitted up to 7 days early, so "time left until
+                // decision_deadline" here could read as up to ~8 days —
+                // misleading, since the real 24h decision window only opens
+                // at event start. Show a static, non-urgent "Starts <date>"
+                // instead of a ticking countdown.
+                el.textContent = el.getAttribute('data-event-start-label') || 'Not started yet';
+                el.classList.remove('text-danger');
+                el.classList.remove('text-warning');
+                el.classList.add('text-muted');
+                return;
+            }
+
+            el.classList.remove('text-muted');
+            var diff = deadline - now;
+            el.textContent = formatRemaining(diff);
+            if (diff < 0) {
+                el.classList.add('text-danger');
+                el.classList.remove('text-warning');
+            } else if (diff < URGENT_THRESHOLD_MS) {
+                el.classList.add('text-danger');
+                el.classList.remove('text-warning');
+            } else {
+                el.classList.remove('text-danger');
+                el.classList.remove('text-warning');
+            }
+        });
+    }
+
+    tick();
+    // 30s refresh: the display granularity is minutes, so a per-second tick
+    // would just churn the DOM for no visible benefit.
+    setInterval(tick, 30000);
+})();
+</script>
+{% endblock %}

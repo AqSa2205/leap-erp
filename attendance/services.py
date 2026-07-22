@@ -36,7 +36,7 @@ def sync_hr_attendance(day):
     Wi-Fi detection overrides a manual present/absent (Wi-Fi is authoritative for
     present/absent). Days marked leave / holiday / weekend / WFH are left alone.
     """
-    from hr.models import AttendanceRecord
+    from hr.models import AttendanceRecord, AttendanceException
     try:
         from hr.models import AttendanceSettings
         expected_in_by = AttendanceSettings.load().expected_in_by
@@ -46,6 +46,26 @@ def sync_hr_attendance(day):
     rec = AttendanceRecord.objects.filter(employee=day.employee, date=day.date).first()
     if rec is not None and rec.status in _PROTECTED_STATUSES:
         return  # leave / holiday / weekend / WFH — HR-set, keep it
+
+    # An approved attendance exception excuses the day — the employee was
+    # off-site with manager/HR sign-off, so a same-day Wi-Fi heartbeat must
+    # never turn that into 'late' (or 'absent'). Forced (rather than a bare
+    # skip-if-already-present short-circuit) so the correct end state holds
+    # regardless of whether the exception was decided before or after this
+    # heartbeat, and even if no AttendanceRecord exists yet.
+    approved_exc = (AttendanceException.objects
+                    .filter(employee=day.employee, event_date=day.date, status='approved')
+                    .order_by('-decided_at').first())
+    if approved_exc:
+        AttendanceRecord.objects.update_or_create(
+            employee=day.employee, date=day.date,
+            defaults={
+                'status': 'present',
+                'source': 'manual',
+                'note': f'Attendance exception #{approved_exc.pk} (Approved)',
+            },
+        )
+        return
 
     check_in = timezone.localtime(day.first_seen).time() if day.first_seen else None
     status = 'present'

@@ -16,13 +16,14 @@ from datetime import datetime, date, timedelta
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-from .models import Employee, Asset, AssetAssignment, Vehicle, VehicleDocument, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay, WFHRecord, LeaveRequest
+from .models import Employee, Asset, AssetAssignment, Vehicle, VehicleDocument, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay, WFHRecord, LeaveRequest, AttendanceException
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm, AssetIssueForm, AssetReturnForm,
     VehicleForm, VehicleFilterForm, EmployeeDocumentForm, VehicleDocumentForm,
     LeaveTypeForm, HolidayForm, WorkingDayForm, WFHRecordForm,
-    AttendanceSettingsForm, LeaveRequestForm,
+    AttendanceSettingsForm, LeaveRequestForm, AttendanceExceptionForm,
+    EmployeeHierarchyForm,
 )
 from .leave_services import generate_year_entitlements
 from .attendance_services import derive_status
@@ -83,6 +84,71 @@ def can_view_leave_dashboard(user):
     override authority would be pointless — they couldn't reach the page to
     use it."""
     return bool(user.is_super_admin_user or is_designated_approver(user) or has_override_access(user))
+
+
+def _is_head_manager_role(user):
+    """Any of the 'head of department' roles that get organization-wide
+    visibility into the attendance-exception queue even if they currently
+    have zero direct reports of their own (e.g. a newly-appointed head)."""
+    return bool(
+        user.is_admin_user or user.is_super_admin_user or user.is_ai_head_user
+        or user.is_finance_head_user or user.is_procurement_manager_user or user.is_proposal_head_user
+    )
+
+
+def can_view_team_exceptions(user):
+    """Access gate for the Team Exceptions page: actively assigned as a main
+    manager OR a secondary manager to at least one active employee, OR holds
+    one of the head-manager roles (checked via the confirmed is_*_user
+    boolean properties)."""
+    if _is_head_manager_role(user):
+        return True
+    emp = getattr(user, 'employee_profile', None)
+    if not emp:
+        return False
+    return bool(
+        emp.main_reports.filter(is_active=True).exists()
+        or emp.secondary_reports.filter(is_active=True).exists()
+    )
+
+
+def can_decide_attendance_exception(user, exc):
+    """True if user is the assigned main manager, OR user is HR (global
+    visibility/override), OR user has an employee_profile that is upstream of
+    exc.employee in the main-manager hierarchy (override path), OR user has an
+    employee_profile that is one of exc.employee's secondary_managers (checked
+    directly/flatly, not via the recursive is_manager_of walk — secondary-
+    manager grants are non-hierarchical).
+
+    NOTE: a secondary manager's True here must ONLY feed the OVERRIDE
+    eligibility gate, never the plain 'decide' action — that action's
+    authorization stays strictly exc.employee.main_manager.user_id ==
+    request.user.id (see TeamExceptionsView.post's 'decide' branch), because
+    secondary managers are, by definition, not main managers.
+
+    Deliberately checks the LIVE exc.employee.main_manager relationship, not
+    the exc.main_manager snapshot taken at submission time — if the employee's
+    main_manager is assigned/corrected via the Org Chart page after a request
+    was already submitted, the newly (or correctly) assigned manager must be
+    recognized immediately, not permanently stuck seeing only the Override
+    control for that pre-existing request. exc.main_manager itself is left
+    untouched as historical/audit metadata (who was originally supposed to
+    decide) — it's just no longer what authorization reads."""
+    if exc.employee.user_id and exc.employee.user_id == user.id:
+        # Self-approval guardrail: nobody — not even a Super Admin/HR with
+        # otherwise-blanket override rights — may decide or override their
+        # own attendance exception request.
+        return False
+    if exc.employee.main_manager and exc.employee.main_manager.user_id == user.id:
+        return True
+    if user.is_super_admin_user or user.is_admin_user:
+        return True
+    emp = getattr(user, 'employee_profile', None)
+    if not emp:
+        return False
+    if emp.is_manager_of(exc.employee):
+        return True
+    return exc.employee.secondary_managers.filter(pk=emp.pk).exists()
 
 
 @login_required
@@ -235,6 +301,29 @@ def my_profile(request):
         form = LeaveRequestForm(fixed_employee=emp) if emp else LeaveRequestForm()
     context['leave_request_form'] = form
 
+    is_attendance_exception_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'submit_attendance_exception')
+    if is_attendance_exception_post:
+        exception_form = AttendanceExceptionForm(request.POST)
+        if exception_form.is_valid():
+            from hr.attendance_exception_services import submit_attendance_exception
+            try:
+                submit_attendance_exception(
+                    employee=emp, event_date=exception_form.cleaned_data['event_date'],
+                    event_start_time=exception_form.cleaned_data['event_start_time'],
+                    reason_category=exception_form.cleaned_data['reason_category'],
+                    custom_reason=exception_form.cleaned_data['custom_reason'],
+                    employee_comment=exception_form.cleaned_data['employee_comment'],
+                    created_by=request.user,
+                )
+                messages.success(request, 'Attendance exception submitted and sent to your manager.')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            return redirect('hr:my_profile')
+    else:
+        exception_form = AttendanceExceptionForm()
+    context['attendance_exception_form'] = exception_form
+
     if emp:
         today = timezone.localtime(timezone.now()).date()
         # Assets in custody. The roster tracks holders two ways: proper
@@ -266,6 +355,8 @@ def my_profile(request):
             emp.leave_requests.select_related('leave_type', 'overridden_by')
             .prefetch_related('approvals__approver')
             .order_by('-created_at')[:10])
+        # This employee's own attendance exceptions, newest event first.
+        context['my_attendance_exceptions'] = emp.attendance_exceptions.order_by('-event_date')[:10]
         # Attendance summary for the current month.
         month_records = AttendanceRecord.objects.filter(
             employee=emp, date__year=today.year, date__month=today.month)
@@ -276,6 +367,13 @@ def my_profile(request):
         context['attendance_month'] = today
         context['recent_leaves'] = emp.leave_records.select_related(
             'leave_type').order_by('-start_date')[:5]
+        # Reporting Structure "expand" control: the further-down reporting
+        # chain (grandreports and beyond) that direct reports alone don't
+        # show. Excludes direct reports themselves so expanding never
+        # duplicates what's already listed above it.
+        direct_report_ids = [r.pk for r in emp.main_reports.all()]
+        context['downstream_reports'] = Employee.objects.filter(
+            pk__in=emp.get_downstream_employee_ids()).exclude(pk__in=direct_report_ids)
         # Vehicles. No hard FK, so match on driver_id == iqama (the reliable
         # key in the data) or driver_name == full name.
         veh_q = Q()
@@ -569,13 +667,17 @@ def employee_import(request):
                         'created_by': request.user,
                     }
 
-                    _, created = Employee.objects.update_or_create(
+                    imported_emp, created = Employee.objects.update_or_create(
                         iqama_number=iqama_str,
                         defaults=defaults,
                     )
 
                     if created:
                         imported_count += 1
+                        if imported_emp.is_active:
+                            from hr.leave_services import generate_entitlements_for_employee
+                            generate_entitlements_for_employee(
+                                imported_emp, timezone.now().year, actor=request.user)
                     else:
                         updated_count += 1
 
@@ -2306,3 +2408,403 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
                 messages.success(request, 'Note added.')
 
         return redirect('hr:leave_request_detail', pk=self.object.pk)
+
+
+class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
+    """Manager/HR queue for the attendance-exception workflow. Deliberately a
+    single self-contained page (list + decide/override actions together) —
+    the single-approver-plus-override model doesn't need a separate detail
+    page per request the way the multi-approver leave workflow does; managers
+    should be able to act on a pending row without leaving the queue."""
+    model = AttendanceException
+    template_name = 'hr/team_exceptions.html'
+    context_object_name = 'pending_exceptions'
+
+    def test_func(self):
+        return can_view_team_exceptions(self.request.user)
+
+    VALID_TABS = ('direct', 'secondary', 'all')
+
+    def _resolve_tab(self):
+        """?tab=direct|secondary|all, defaulting to 'direct' if absent or
+        invalid. The 'all' (All Organization Requests) tab is HR/Super-Admin
+        only — a non-HR user requesting it is silently downgraded to 'direct'
+        rather than erroring or leaking org-wide data."""
+        user = self.request.user
+        is_hr = bool(user.is_super_admin_user or user.is_admin_user)
+        requested = self.request.GET.get('tab')
+        if requested not in self.VALID_TABS:
+            return 'direct'
+        if requested == 'all' and not is_hr:
+            return 'direct'
+        return requested
+
+    def _tab_queryset(self, tab, user, emp):
+        """Base (not yet status-filtered) queryset of AttendanceExceptions
+        belonging to the given tab's employee set.
+
+        - 'all' (HR-only, enforced by _resolve_tab): every request in the
+          system, no exclusions — including the viewer's own (visibility
+          only; the self-approval guardrail still blocks the buttons on that
+          row via can_decide_attendance_exception / is_assigned_manager).
+        - 'direct'/'secondary': scoped to the viewer's own live
+          main_reports/secondary_reports, with the viewer's own request
+          entirely excluded (not just button-blocked) per the self-approval
+          visibility rule.
+        """
+        if tab == 'all':
+            return AttendanceException.objects.all()
+        if not emp:
+            # A head-manager-role user with no linked Employee record has
+            # nothing of their own to scope by — empty queue, not an error.
+            return AttendanceException.objects.none()
+        if tab == 'secondary':
+            return AttendanceException.objects.filter(
+                employee__secondary_managers=emp).exclude(employee__user=user)
+        # Default: direct reports only.
+        return AttendanceException.objects.filter(
+            employee__main_manager=emp).exclude(employee__user=user)
+
+    def get_queryset(self):
+        # Soonest-deadline-first: event_date/event_start_time order doubles as
+        # decision-deadline order (deadline = event_start + fixed 24h), and is
+        # simpler to reason about for managers than sorting by a derived value.
+        user = self.request.user
+        emp = getattr(user, 'employee_profile', None)
+        tab = self._resolve_tab()
+        # 'pending' AND 'expired' both belong in the active/actionable queue —
+        # an auto-expired-by-cron request was never actually decided by a
+        # human, so it must stay visible and actionable here, not silently
+        # vanish into history.
+        return (self._tab_queryset(tab, user, emp).filter(status__in=('pending', 'expired'))
+                .select_related('employee', 'employee__main_manager', 'main_manager')
+                .order_by('event_date', 'event_start_time'))
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+        emp = getattr(user, 'employee_profile', None)
+        tab = self._resolve_tab()
+        is_hr = bool(user.is_super_admin_user or user.is_admin_user)
+
+        pending = list(ctx['pending_exceptions'])
+        # History is now the natural complement of the widened active queue:
+        # only genuinely human-decided outcomes (approved/rejected) — expired
+        # requests stay in the active queue above until a human actually
+        # decides them.
+        decided = list(
+            self._tab_queryset(tab, user, emp).filter(status__in=('approved', 'rejected'))
+            .select_related('employee', 'employee__main_manager', 'main_manager', 'decided_by', 'overridden_by')
+            .order_by('-decided_at')[:50])
+
+        # Precompute per-row action visibility here (rather than re-deriving
+        # the hierarchy/HR logic in the template): 'can_decide' is the normal
+        # assigned-manager path; 'can_override' is offered to HR/upstream
+        # viewers, but suppressed when the normal decide control already
+        # covers the same person, to avoid showing two redundant controls on
+        # the same row.
+        now = timezone.now()
+        for exc in pending + decided:
+            # Self-approval guardrail: even if exc.employee.main_manager
+            # somehow points back at the requester themselves, the decide
+            # action must never be offered on one's own request.
+            #
+            # Checks the LIVE exc.employee.main_manager relationship, not the
+            # exc.main_manager snapshot taken at submission — otherwise a
+            # manager assigned/corrected via the Org Chart page after a
+            # request was already submitted would be stuck seeing only the
+            # Override control for that pre-existing request forever, even
+            # though can_decide_attendance_exception's hierarchy-override
+            # check already recognizes them live.
+            is_assigned_manager = bool(
+                exc.employee.main_manager and exc.employee.main_manager.user_id == user.id
+                and exc.employee.user_id != user.id)
+            # Widened alongside decide_attendance_exception's own allowed
+            # starting statuses: an auto-expired request must still be
+            # decidable normally by the real assigned manager, not forced
+            # through Override.
+            exc.can_decide = is_assigned_manager and exc.status in ('pending', 'expired')
+            exc.can_override = (
+                exc.status in ('pending', 'expired')
+                and can_decide_attendance_exception(user, exc)
+                and not exc.can_decide)
+            # Countdown display state (Task 3 fix): a request can legitimately
+            # be submitted up to 7 days before its event, so "time left until
+            # decision_deadline" can read as up to ~8 days while the event
+            # hasn't started yet — misleading, since the real 24h decision
+            # window only opens at event_start. Before the event starts, the
+            # template shows a static "Starts <date>" instead of a ticking
+            # countdown; only once the event has started does it show the
+            # real live countdown toward decision_deadline (at most 24h away).
+            exc.event_has_started = bool(exc.event_start and now >= exc.event_start)
+
+        ctx['pending_exceptions'] = pending
+        ctx['decided_exceptions'] = decided
+        ctx['tab'] = tab
+        ctx['is_hr_viewer'] = is_hr
+        # The "All Organization Requests" tab is only rendered at all for
+        # HR/Super-Admin — "Direct Reports"/"Secondary Reports" are always
+        # shown (even empty) for everyone who can reach this page.
+        ctx['show_all_tab'] = is_hr
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        from django.http import Http404
+        from hr.attendance_exception_services import decide_attendance_exception, override_attendance_exception
+        exc = AttendanceException.objects.filter(pk=request.POST.get('exc_id')).first()
+        action = request.POST.get('action')
+
+        if action == 'decide':
+            # Checks the LIVE exc.employee.main_manager relationship, not the
+            # exc.main_manager submission-time snapshot — see
+            # can_decide_attendance_exception's docstring for why.
+            authorized = (
+                exc is not None and exc.employee.main_manager and exc.employee.main_manager.user_id == request.user.id
+                and exc.employee.user_id != request.user.id)
+            if not authorized:
+                # Collapse "doesn't exist" and "exists but not yours" into one
+                # 404 — same pk-existence-oracle fix already applied to the
+                # leave workflow's document download view.
+                raise Http404('No such attendance exception.')
+            try:
+                decide_attendance_exception(
+                    exc, request.user, request.POST.get('decision'),
+                    # Field named 'comment', matching the leave-request
+                    # workflow's optional decision-comment convention
+                    # (templates/hr/leave_request_detail.html).
+                    note=request.POST.get('comment', ''))
+                messages.success(request, 'Decision recorded.')
+            except ValueError as e:
+                messages.error(request, str(e))
+
+        elif action == 'override':
+            authorized = exc is not None and can_decide_attendance_exception(request.user, exc)
+            if not authorized:
+                raise Http404('No such attendance exception.')
+            try:
+                override_attendance_exception(
+                    exc, request.user, request.POST.get('decision'),
+                    request.POST.get('reason', ''))
+                messages.success(request, 'Request finalized via override.')
+            except ValueError as e:
+                messages.error(request, str(e))
+
+        # Preserve whatever tab the manager was viewing when they acted.
+        tab = request.POST.get('tab', '')
+        url = reverse('hr:team_exceptions')
+        if tab:
+            url = f'{url}?tab={tab}'
+        return redirect(url)
+
+
+class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
+    """Super-Admin-only page: assign each employee's main_manager/secondary_managers,
+    and view the resulting hierarchy tree. Uses a per-row EmployeeHierarchyForm
+    (see hr/forms.py) rather than one giant multi-employee submit, so a mistake
+    on one row can never affect any other row's data."""
+    model = Employee
+    template_name = 'hr/org_chart.html'
+    context_object_name = 'employees'
+
+    def test_func(self):
+        return self.request.user.is_super_admin_user
+
+    VALID_TABS = ('hierarchy', 'access')
+
+    def _resolve_tab(self):
+        """?tab=hierarchy|access, defaulting to 'hierarchy' if absent or invalid.
+        Both tabs are already Super-Admin-only (test_func above gates the whole
+        page), so there's no per-tab downgrade like TeamExceptionsView's 'all'."""
+        requested = self.request.GET.get('tab')
+        return requested if requested in self.VALID_TABS else 'hierarchy'
+
+    def get_queryset(self):
+        qs = Employee.objects.filter(is_active=True).select_related('main_manager').order_by('full_name')
+        search = (self.request.GET.get('search') or '').strip()
+        if search:
+            qs = qs.filter(full_name__icontains=search)
+        return qs
+
+    def get_context_data(self, **kwargs):
+        from django.db.models import Q
+        from accounts.models import User, Role
+        from .models import LeaveDashboardAccess, OverrideAccessSettings, OverrideAccessRole, OverrideAccessEmployee
+        ctx = super().get_context_data(**kwargs)
+        ctx['search'] = self.request.GET.get('search', '')
+        ctx['tab'] = self._resolve_tab()
+
+        ctx['access_grants'] = (
+            LeaveDashboardAccess.objects.filter(is_active=True)
+            .select_related('user', 'granted_by').order_by('user__username'))
+
+        access_search = (self.request.GET.get('access_search') or '').strip()
+        ctx['access_search'] = access_search
+        access_results = None
+        if ctx['tab'] == 'access' and access_search:
+            granted_user_ids = set(
+                LeaveDashboardAccess.objects.filter(is_active=True).values_list('user_id', flat=True))
+            access_results = (
+                Employee.objects.filter(is_active=True, user__isnull=False)
+                .filter(
+                    Q(full_name__icontains=access_search)
+                    | Q(user__username__icontains=access_search)
+                    | Q(user__email__icontains=access_search))
+                .exclude(user_id__in=granted_user_ids)
+                .select_related('user').order_by('full_name')[:25])
+        ctx['access_results'] = access_results
+
+        # ── Override Access (who can use the leave-request override escape
+        # hatch) — lives inside this same tab since it's specifically about
+        # Leave Request access, not a general-purpose setting. ──
+        override_settings = OverrideAccessSettings.get_solo()
+        ctx['override_settings'] = override_settings
+        ctx['override_mode_choices'] = OverrideAccessSettings.MODE_CHOICES
+        ctx['current_super_admins'] = User.objects.filter(
+            role__name='super_admin', is_active=True).order_by('username')
+        ctx['override_roles'] = Role.objects.all().order_by('name')
+        ctx['override_role_ids'] = set(
+            OverrideAccessRole.objects.values_list('role_id', flat=True))
+        ctx['override_employees'] = (
+            OverrideAccessEmployee.objects.select_related('user', 'added_by').order_by('user__username'))
+
+        override_emp_search = (self.request.GET.get('override_emp_search') or '').strip()
+        ctx['override_emp_search'] = override_emp_search
+        override_emp_results = None
+        if ctx['tab'] == 'access' and override_emp_search:
+            granted_override_user_ids = set(
+                OverrideAccessEmployee.objects.values_list('user_id', flat=True))
+            override_emp_results = (
+                Employee.objects.filter(is_active=True, user__isnull=False)
+                .filter(
+                    Q(full_name__icontains=override_emp_search)
+                    | Q(user__username__icontains=override_emp_search)
+                    | Q(user__email__icontains=override_emp_search))
+                .exclude(user_id__in=granted_override_user_ids)
+                .select_related('user').order_by('full_name')[:25])
+        ctx['override_emp_results'] = override_emp_results
+
+        forms_by_employee = {}
+        for emp in ctx['employees']:
+            row_form = EmployeeHierarchyForm(
+                employee=emp,
+                initial={'main_manager': emp.main_manager_id,
+                        'secondary_managers': list(emp.secondary_managers.values_list('pk', flat=True))})
+            # Each row's widgets live outside their own <form> element (a
+            # <form> can't validly wrap <td>s that belong to a shared <tr>/
+            # <table> structure), so they're associated with their row's
+            # <form id="emp-form-{pk}"> purely via the HTML `form` attribute
+            # — standards-compliant, no JS required.
+            form_id = f'emp-form-{emp.pk}'
+            row_form.fields['main_manager'].widget.attrs['form'] = form_id
+            row_form.fields['secondary_managers'].widget.attrs['form'] = form_id
+            forms_by_employee[emp.pk] = row_form
+        ctx['forms_by_employee'] = forms_by_employee
+        # (employee, form) pairs in display order — simpler for the template
+        # to iterate than doing a dict lookup by pk per row.
+        ctx['employee_rows'] = [(emp, forms_by_employee[emp.pk]) for emp in ctx['employees']]
+        # Root nodes (no main_manager) for the hierarchy tree — deliberately
+        # independent of the search filter above, so the tree at the bottom
+        # of the page always shows the whole org, even while searching the
+        # assignment table above it. The template recursively walks
+        # main_reports.all() from each root via _org_chart_node.html.
+        ctx['root_employees'] = Employee.objects.filter(
+            is_active=True, main_manager__isnull=True).order_by('full_name')
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        from accounts.models import Role
+        from .models import LeaveDashboardAccess, OverrideAccessSettings, OverrideAccessRole, OverrideAccessEmployee
+        access_tab_url = f"{reverse('hr:org_chart')}?tab=access"
+
+        # Leave Dashboard Access tab actions — handled first and returned early,
+        # since they key off a user/employee distinct from the hierarchy actions
+        # below (which always require an `employee_id`).
+        grant_employee_id = request.POST.get('grant_dashboard_access')
+        if grant_employee_id:
+            grant_employee = get_object_or_404(Employee, pk=grant_employee_id)
+            if not grant_employee.user_id:
+                messages.error(request, f'{grant_employee.full_name} has no linked user account.')
+            else:
+                LeaveDashboardAccess.objects.update_or_create(
+                    user=grant_employee.user,
+                    defaults={'is_active': True, 'granted_by': request.user})
+                messages.success(
+                    request,
+                    f'Granted {grant_employee.full_name} access to the Leave Request dashboard '
+                    'and approval authority on new leave requests.')
+            return redirect(access_tab_url)
+
+        revoke_user_id = request.POST.get('revoke_dashboard_access')
+        if revoke_user_id:
+            grant = get_object_or_404(LeaveDashboardAccess, user_id=revoke_user_id, is_active=True)
+            display_name = grant.user.get_full_name() or grant.user.username
+            grant.delete()
+            messages.success(
+                request,
+                f'Revoked {display_name}\'s Leave Request dashboard access and approval authority.')
+            return redirect(access_tab_url)
+
+        # ── Override Access actions ──
+        override_mode = request.POST.get('set_override_mode')
+        if override_mode:
+            if override_mode not in dict(OverrideAccessSettings.MODE_CHOICES):
+                messages.error(request, 'Not a valid override access mode.')
+                return redirect(access_tab_url)
+            config = OverrideAccessSettings.get_solo()
+            config.mode = override_mode
+            config.updated_by = request.user
+            config.save(update_fields=['mode', 'updated_by', 'updated_at'])
+            messages.success(
+                request, f'Override access mode set to "{config.get_mode_display()}".')
+            return redirect(access_tab_url)
+
+        toggle_role_id = request.POST.get('toggle_override_role')
+        if toggle_role_id:
+            role = get_object_or_404(Role, pk=toggle_role_id)
+            existing = OverrideAccessRole.objects.filter(role=role).first()
+            if existing:
+                existing.delete()
+                messages.success(request, f'Removed override access for the {role.get_name_display()} role.')
+            else:
+                OverrideAccessRole.objects.create(role=role)
+                messages.success(request, f'Granted override access to the {role.get_name_display()} role.')
+            return redirect(access_tab_url)
+
+        grant_override_employee_id = request.POST.get('grant_override_employee')
+        if grant_override_employee_id:
+            grant_employee = get_object_or_404(Employee, pk=grant_override_employee_id)
+            if not grant_employee.user_id:
+                messages.error(request, f'{grant_employee.full_name} has no linked user account.')
+            else:
+                OverrideAccessEmployee.objects.update_or_create(
+                    user=grant_employee.user, defaults={'added_by': request.user})
+                messages.success(request, f'Granted {grant_employee.full_name} override access.')
+            return redirect(access_tab_url)
+
+        revoke_override_employee_id = request.POST.get('revoke_override_employee')
+        if revoke_override_employee_id:
+            grant = get_object_or_404(OverrideAccessEmployee, user_id=revoke_override_employee_id)
+            display_name = grant.user.get_full_name() or grant.user.username
+            grant.delete()
+            messages.success(request, f'Revoked {display_name}\'s override access.')
+            return redirect(access_tab_url)
+
+        employee = get_object_or_404(Employee, pk=request.POST.get('employee_id'))
+        # Every successful action redirects with a `#row-<pk>` fragment so
+        # page-load JS can flash/highlight the specific row that changed —
+        # there's no clean way to target a single row from a generic
+        # messages-framework flash after a full-page POST-redirect-GET, so
+        # this fragment + a transient CSS class is the row-level acknowledgment,
+        # on top of the always-visible persistent per-row indicators.
+        row_redirect_url = f"{reverse('hr:org_chart')}#row-{employee.pk}"
+
+        form = EmployeeHierarchyForm(request.POST, employee=employee)
+        if form.is_valid():
+            form.save()
+            messages.success(request, f'Updated hierarchy assignment for {employee.full_name}.')
+            return redirect(row_redirect_url)
+        else:
+            for field, errors in form.errors.items():
+                for e in errors:
+                    messages.error(request, f'{employee.full_name}: {e}')
+        return redirect('hr:org_chart')

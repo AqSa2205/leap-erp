@@ -79,6 +79,12 @@ urlpatterns = [
     path('wfh/create/', views.WFHRecordCreateView.as_view(), name='wfh_create'),
     path('wfh/<int:pk>/delete/', views.WFHRecordDeleteView.as_view(), name='wfh_delete'),
 
+    # Attendance Exceptions
+    path('attendance-exceptions/', views.TeamExceptionsView.as_view(), name='team_exceptions'),
+
+    # Org-Chart Management (Super Admin only)
+    path('org-chart/', views.OrgChartView.as_view(), name='org_chart'),
+
     # Attendance
     path('attendance/settings/', views.attendance_settings, name='attendance_settings'),
     path('attendance/regenerate/', views.attendance_regenerate, name='attendance_regenerate'),

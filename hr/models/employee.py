@@ -68,6 +68,34 @@ class Employee(models.Model):
         null=True, blank=True,
         related_name='created_employees',
     )
+    # Org-chart reporting line — per-employee, not per-role, so two people who
+    # both hold e.g. the "AI Head" role can each have their own manager
+    # assignment. Self-referential; SET_NULL so removing/deactivating a
+    # manager never cascades into deleting their reports.
+    #
+    # Split into two concepts to decouple system access roles from the real
+    # reporting hierarchy: main_manager is the single formal reporting line
+    # (drives the recursive hierarchy walks — get_downstream_employee_ids,
+    # is_manager_of); secondary_managers is a flat, non-hierarchical set of
+    # additional people who also get visibility/override rights over this
+    # employee's requests without being part of that formal chain.
+    main_manager = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='main_reports',
+        verbose_name='Main Manager',
+        help_text='This employee\'s primary/formal manager, for approval routing.',
+    )
+    secondary_managers = models.ManyToManyField(
+        'self',
+        blank=True,
+        symmetrical=False,
+        related_name='secondary_reports',
+        verbose_name='Secondary Managers',
+        help_text='Additional people who also have visibility/override rights over this '
+                  'employee\'s requests, without being part of the formal reporting line.',
+    )
 
     # Threshold (days) below which an upcoming expiry is considered "expiring soon".
     EXPIRY_WARN_DAYS = 30
@@ -85,6 +113,82 @@ class Employee(models.Model):
 
     def __str__(self):
         return self.full_name
+
+    def clean(self):
+        """Guards against main_manager assignments that would break the
+        formal reporting line: direct self-assignment, and indirect cycles
+        (assigning a main_manager who is themselves — however many hops
+        upstream — already a downstream report of self). Walks upward from
+        the *proposed* main_manager via repeated .main_manager hops (the
+        mirror image of get_downstream_employee_ids's downward walk, and
+        using the same depth-guard style as is_manager_of) — if self's own
+        pk is ever encountered in that upward walk, saving this assignment
+        would close a loop back to self, so it's rejected before saving.
+
+        The `self.pk is not None` guards are deliberate: a brand-new
+        (unsaved) employee can never already be part of an existing cycle,
+        since nothing can reference an unsaved row yet, so the check is only
+        meaningful once self has an identity to be found in someone else's
+        chain.
+
+        Deliberately out of scope here: secondary_managers self-assignment.
+        M2M relations require both sides already saved, so an unsaved
+        instance's M2M manager can't be queried inside clean() — Django's
+        full_clean() doesn't run m2m validation for exactly this reason.
+        That guard belongs in the (later, separate) Org-Chart management
+        view instead.
+        """
+        from django.core.exceptions import ValidationError
+        if self.main_manager_id is not None and self.pk is not None and self.main_manager_id == self.pk:
+            raise ValidationError({'main_manager': 'An employee cannot be their own manager.'})
+        if self.main_manager_id and self.pk is not None:
+            current = self.main_manager
+            for _ in range(50):
+                if current is None:
+                    break
+                if current.pk == self.pk:
+                    raise ValidationError({'main_manager':
+                        'This assignment would create a circular reporting chain '
+                        f'(a manager upstream of {self.main_manager.full_name} already reports, '
+                        'directly or indirectly, to this employee).'})
+                current = current.main_manager
+
+    def get_downstream_employee_ids(self, max_depth=10):
+        """This employee's full downstream reporting chain (direct reports,
+        their reports, etc.), as a flat list of employee ids. Depth-guarded
+        rather than a recursive DB query — no recursive-hierarchy precedent
+        exists elsewhere in this codebase, and a handful of manual hops is
+        simpler and safer than a CTE for an org chart this size."""
+        ids = []
+        frontier = [self.pk]
+        seen = {self.pk}
+        for _ in range(max_depth):
+            if not frontier:
+                break
+            reports = list(Employee.objects.filter(main_manager_id__in=frontier).values_list('pk', flat=True))
+            reports = [pk for pk in reports if pk not in seen]
+            if not reports:
+                break
+            ids.extend(reports)
+            seen.update(reports)
+            frontier = reports
+        return ids
+
+    def is_manager_of(self, other_employee, max_depth=10):
+        """True if self is anywhere in other_employee's manager chain (direct
+        manager, their manager's manager, etc.), up to max_depth hops. Mirror
+        image of get_downstream_employee_ids: that walks downward via
+        main_manager_id__in, this walks upward via .main_manager. False if
+        other_employee has no manager at all, or the chain is exhausted
+        without finding self."""
+        current = other_employee.main_manager
+        for _ in range(max_depth):
+            if current is None:
+                return False
+            if current.pk == self.pk:
+                return True
+            current = current.main_manager
+        return False
 
     @staticmethod
     def _days_until(target):

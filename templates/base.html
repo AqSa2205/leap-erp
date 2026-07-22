@@ -846,11 +846,42 @@
                     <i class="bi bi-person-workspace"></i> <span>My Work</span>
                 </a>
             </li>
+            {# Attendance Exception team queue: placed in the always-visible MAIN #}
+            {# section (not under Administration, which is admin/super-admin-only) #}
+            {# because a plain manager with direct reports — or a head-of-department #}
+            {# role user with none yet — needs to reach this without being an admin. #}
+            {# "My Profile" itself has no permission gate and must always be reachable, #}
+            {# so it only becomes a collapsible parent (nesting Team Exceptions, same #}
+            {# pattern as Leave/Assets below) for users who actually qualify for the #}
+            {# nested item; everyone else gets the old plain direct link. #}
+            {% if user.is_admin_user or user.is_super_admin_user or user.is_ai_head_user or user.is_finance_head_user or user.is_procurement_manager_user or user.is_proposal_head_user or user.employee_profile.main_reports.exists or user.employee_profile.secondary_reports.exists %}
+            <li class="nav-item">
+                <a class="nav-link d-flex justify-content-between align-items-center {% if request.resolver_match.url_name == 'my_profile' or 'team_exceptions' in request.resolver_match.url_name %}active{% endif %}" data-bs-toggle="collapse" href="#myProfileSubmenu" role="button" aria-expanded="{% if request.resolver_match.url_name == 'my_profile' or 'team_exceptions' in request.resolver_match.url_name %}true{% else %}false{% endif %}">
+                    <span><i class="bi bi-person-badge"></i> <span>My Profile</span></span>
+                    <i class="bi bi-chevron-down" style="font-size:0.7rem;"></i>
+                </a>
+                <div class="collapse {% if request.resolver_match.url_name == 'my_profile' or 'team_exceptions' in request.resolver_match.url_name %}show{% endif %}" id="myProfileSubmenu">
+                    <ul class="nav flex-column ms-3">
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'my_profile' %}active{% endif %}" href="{% url 'hr:my_profile' %}">
+                                <i class="bi bi-person-badge"></i> <span>My Profile</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if 'team_exceptions' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:team_exceptions' %}">
+                                <i class="bi bi-geo-alt"></i> <span>Team Exceptions</span>
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </li>
+            {% else %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'my_profile' %}active{% endif %}" href="{% url 'hr:my_profile' %}" data-title="My Profile">
                     <i class="bi bi-person-badge"></i> <span>My Profile</span>
                 </a>
             </li>
+            {% endif %}
             {% if user.is_ai_developer_user or user.is_ai_head_user %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'my_tasks' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:my_tasks' %}" data-title="My Tasks">
@@ -916,11 +947,13 @@
                                             <i class="bi bi-file-earmark-arrow-up"></i> <span>Client RFQ</span>
                                         </a>
                                     </li>
+                                    {% if user|can:'costing.nav' %}
                                     <li class="nav-item">
                                         <a class="nav-link py-1 {% if request.resolver_match.app_name == 'costing' and request.GET.view == 'bom' %}active{% endif %}" href="{% url 'costing:list' %}?view=bom">
                                             <i class="bi bi-list-check"></i> <span>BOM</span>
                                         </a>
                                     </li>
+                                    {% endif %}
                                     <li class="nav-item">
                                         <a class="nav-link py-1 {% if request.resolver_match.app_name == 'proposals' and 'pqd' not in request.resolver_match.url_name and request.resolver_match.url_name != 'dashboard' %}active{% endif %}" href="{% url 'proposals:list' %}">
                                             <i class="bi bi-file-earmark-richtext"></i> <span>Technical Proposal</span>
@@ -1167,6 +1200,11 @@
             <li class="nav-item">
               <a class="nav-link {% if request.resolver_match.url_name == 'storage_report' %}active{% endif %}" href="{% url 'dashboard:storage_report' %}" data-title="Storage">
                 <i class="bi bi-hdd-stack"></i> <span>Storage</span>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link {% if request.resolver_match.url_name == 'org_chart' %}active{% endif %}" href="{% url 'hr:org_chart' %}" data-title="Org Chart">
+                <i class="bi bi-diagram-3"></i> <span>Org Chart</span>
               </a>
             </li>
             {% endif %}
