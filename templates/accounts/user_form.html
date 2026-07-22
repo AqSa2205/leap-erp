@@ -28,6 +28,9 @@
                         <div class="form-text">{{ field.help_text }}</div>
                         {% endif %}
                     </div>
+                    {% if field.name == 'password1' %}
+                    {% include 'accounts/_password_strength_checklist.html' %}
+                    {% endif %}
                     {% endfor %}
 
                     <div class="d-flex gap-2">
