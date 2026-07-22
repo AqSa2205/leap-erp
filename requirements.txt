@@ -41,6 +41,10 @@ anthropic>=0.40.0
 # HTTP
 requests>=2.31.0
 
+# Microsoft Graph API email delivery (OAuth2 client-credentials via MSAL) —
+# bypasses the SMTP AUTH block imposed by Microsoft 365 Security Defaults.
+msal>=1.28.0
+
 # File storage — Cloudflare R2 (S3-compatible) for persistent uploads.
 # Activated when USE_R2=True env var is set; otherwise local filesystem is used.
 django-storages[s3]==1.14.4

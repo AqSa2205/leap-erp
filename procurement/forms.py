@@ -85,6 +85,8 @@ class PurchaseOrderItemForm(forms.ModelForm):
                 'placeholder': 'System',
                 'autocomplete': 'off',
             }),
+            'quantity': forms.NumberInput(attrs={'step': '0.01', 'min': '0'}),
+            'rate_per_unit': forms.NumberInput(attrs={'step': '0.01', 'min': '0'}),
             'po_value_usd': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'placeholder': 'USD/EUR'}),
             'advance_payment_sar': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'placeholder': 'Advance SAR'}),
             'scm': forms.TextInput(attrs={'placeholder': 'ST / ZH', 'maxlength': '10'}),
@@ -103,6 +105,30 @@ class PurchaseOrderItemForm(forms.ModelForm):
                 field.widget.attrs['class'] = 'form-control form-control-sm'
             else:
                 field.widget.attrs['class'] = 'form-control form-control-sm'
+
+    def clean_quantity(self):
+        value = self.cleaned_data.get('quantity')
+        if value is not None and value < 0:
+            raise forms.ValidationError('Quantity cannot be negative.')
+        return value
+
+    def clean_rate_per_unit(self):
+        value = self.cleaned_data.get('rate_per_unit')
+        if value is not None and value < 0:
+            raise forms.ValidationError('Rate/Unit cannot be negative.')
+        return value
+
+    def clean_po_value_usd(self):
+        value = self.cleaned_data.get('po_value_usd')
+        if value is not None and value < 0:
+            raise forms.ValidationError('PO Value (USD/EUR) cannot be negative.')
+        return value
+
+    def clean_advance_payment_sar(self):
+        value = self.cleaned_data.get('advance_payment_sar')
+        if value is not None and value < 0:
+            raise forms.ValidationError('Advance Payment (SAR) cannot be negative.')
+        return value
 
     def has_changed(self):
         """An unsaved row is only considered "real" if the user typed
