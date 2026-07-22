@@ -207,7 +207,7 @@ class Command(BaseCommand):
     def _seed_approval_workflow(self):
         from django.core.files.base import ContentFile
         from django.contrib.auth.hashers import make_password
-        from hr.models import LeaveApprover, LeaveRequest, LeaveRequestApproval, LeaveRequestNote
+        from hr.models import LeaveDashboardAccess, LeaveRequest, LeaveRequestApproval, LeaveRequestNote
 
         aamna, _ = User.objects.get_or_create(
             username='aamna.khan', defaults={
@@ -221,8 +221,10 @@ class Command(BaseCommand):
                 'role': Role.objects.filter(name='super_admin').first(), 'is_active': True,
                 'password': make_password('DemoPass123!'),
             })
-        LeaveApprover.objects.get_or_create(user=aamna)
-        LeaveApprover.objects.get_or_create(user=ali)
+        # LeaveApprover was merged into LeaveDashboardAccess — one roster grants
+        # both dashboard visibility and approval authority.
+        LeaveDashboardAccess.objects.get_or_create(user=aamna)
+        LeaveDashboardAccess.objects.get_or_create(user=ali)
         self.stdout.write(self.style.SUCCESS('Ensured Aamna Khan and Ali Sultan exist as designated leave approvers (login: aamna.khan / ali.sultan, password DemoPass123!).'))
 
         conditional_types = list(LeaveType.objects.filter(is_accumulative=False)[:3])
@@ -264,7 +266,7 @@ class Command(BaseCommand):
 
     # ─── Cleanup ───────────────────────────────────────────────────
     def _wipe(self):
-        from hr.models import LeaveRecord, LeaveRequest, LeaveRequestApproval, LeaveRequestNote, LeaveApprover
+        from hr.models import LeaveRecord, LeaveRequest, LeaveRequestApproval, LeaveRequestNote, LeaveDashboardAccess
         n, _ = Notification.objects.filter(verb__startswith=DEMO_TAG).delete()
         self.stdout.write(f'Deleted {n} demo notification row(s).')
         n, _ = SalesCallReport.objects.filter(company_name__startswith=DEMO_TAG).delete()
@@ -273,7 +275,7 @@ class Command(BaseCommand):
         self.stdout.write(f'Deleted {n} demo leave request note(s).')
         n, _ = LeaveRequest.objects.filter(employee_reason__startswith=DEMO_TAG).delete()
         self.stdout.write(f'Deleted {n} demo leave request(s).')
-        n, _ = LeaveApprover.objects.filter(user__username__in=['aamna.khan', 'ali.sultan']).delete()
+        n, _ = LeaveDashboardAccess.objects.filter(user__username__in=['aamna.khan', 'ali.sultan']).delete()
         self.stdout.write(f'Deleted {n} demo leave approver row(s).')
         n, _ = LeaveRecord.objects.filter(note=f'{DEMO_TAG}seed').delete()
         self.stdout.write(f'Deleted {n} demo leave record row(s).')
