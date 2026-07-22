@@ -2,7 +2,11 @@ databases:
   - name: leap-erp-db
     databaseName: leap_erp
     user: leap_erp_user
-    plan: free
+    # Paid tier — this is production data. The paid plan is what provides
+    # daily backups and point-in-time recovery (how the commercial pipeline
+    # was recovered after an accidental deletion). Do NOT drop this to free:
+    # the free tier has no backups/PITR and expires.
+    plan: basic_1gb
 
 services:
   - type: web

@@ -399,6 +399,57 @@ def _normalise_terms(text):
     return '\n'.join(line.rstrip() for line in (text or '').replace('\r\n', '\n').split('\n')).strip()
 
 
+# Leading manual enumeration: "1.", "2)", "3 -", "(4)", "a.", "iv)" etc.
+# Stripped before the PDF applies its own serial numbers, so a clause the user
+# typed with a number doesn't come out double-numbered ("1. 3. ...").
+import re as _re
+_ENUM_PREFIX_RE = _re.compile(r'^\s*\(?\s*(?:\d{1,3}|[a-zA-Z]|[ivxIVX]{1,4})\s*[\.\)\-:]\s+')
+
+
+def _strip_leading_enumeration(line):
+    """Remove a hand-typed number/letter prefix from a terms line, if present."""
+    stripped = _ENUM_PREFIX_RE.sub('', line, count=1).strip()
+    # Never blank the line out — if it was *only* a number, keep the original.
+    return stripped or line.strip()
+
+
+def _ordered_selected_term_ids(post):
+    """Return checked term ids in the order the user selected them.
+
+    The hidden `selected_terms_ordered` field (maintained by JS as the user
+    ticks boxes) carries the selection order; we intersect it with the boxes
+    actually checked so it can't go stale. If the hint is missing (JS off), we
+    fall back to the raw checkbox order. Order is preserved on save via
+    set(..., clear=True), which reinserts the through rows in this sequence.
+    """
+    checked = [x for x in post.getlist('selected_terms') if x.isdigit()]
+    checked_set = set(checked)
+    ordered, seen = [], set()
+    for x in (post.get('selected_terms_ordered', '') or '').split(','):
+        x = x.strip()
+        if x.isdigit() and x in checked_set and x not in seen:
+            ordered.append(x)
+            seen.add(x)
+    for x in checked:  # anything checked but not in the hint goes last
+        if x not in seen:
+            ordered.append(x)
+            seen.add(x)
+    return [int(x) for x in ordered]
+
+
+def _apply_po_terms(po, post):
+    """Set the PO's selected terms (membership) and remember their order.
+
+    Membership goes in the M2M; the selection order is stored in
+    ``terms_order`` because the M2M can't preserve order reliably. Both are
+    read back together by ``PurchaseOrder.resolved_terms()``.
+    """
+    ordered = _ordered_selected_term_ids(post)
+    po.selected_terms.set(ordered)
+    po.terms_order = ','.join(str(i) for i in ordered)
+    po.save(update_fields=['terms_order'])
+
+
 def _save_po_term_overrides(po, post_data, user=None):
     """Persist per-PO edits of the selected terms templates.
 
@@ -446,9 +497,11 @@ class POCreateView(ProcurementPermissionMixin, CreateView):
             posted_term_ids = [int(x) for x in self.request.POST.getlist('selected_terms') if x.isdigit()]
             context['terms_by_category'] = _po_terms_by_category(
                 posted_term_ids, posted=self.request.POST)
+            context['selected_terms_ordered'] = self.request.POST.get('selected_terms_ordered', '')
         else:
             context['item_formset'] = POItemFormSet(prefix='items')
             context['terms_by_category'] = _po_terms_by_category([])
+            context['selected_terms_ordered'] = ''
         context['title'] = 'Create Purchase Order'
         context['system_suggestions'] = PurchaseOrder.SYSTEM_SUGGESTIONS
         context['procurement_team'] = _procurement_team_users()
@@ -463,8 +516,7 @@ class POCreateView(ProcurementPermissionMixin, CreateView):
             self.object.save()
             item_formset.instance = self.object
             item_formset.save()
-            term_ids = [int(x) for x in self.request.POST.getlist('selected_terms') if x.isdigit()]
-            self.object.selected_terms.set(term_ids)
+            _apply_po_terms(self.object, self.request.POST)
             _save_po_term_overrides(self.object, self.request.POST, self.request.user)
             messages.success(self.request, f'Purchase Order {self.object.po_number} created successfully.')
             return redirect(self.get_success_url())
@@ -609,8 +661,7 @@ def quotation_review(request, pk):
             po.save()
             item_formset.instance = po
             item_formset.save()
-            term_ids = [int(x) for x in request.POST.getlist('selected_terms') if x.isdigit()]
-            po.selected_terms.set(term_ids)
+            _apply_po_terms(po, request.POST)
             _save_po_term_overrides(po, request.POST, request.user)
             qi.purchase_order = po
             qi.status = 'converted'
@@ -688,10 +739,15 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
             posted_term_ids = [int(x) for x in self.request.POST.getlist('selected_terms') if x.isdigit()]
             context['terms_by_category'] = _po_terms_by_category(
                 posted_term_ids, po=self.object, posted=self.request.POST)
+            context['selected_terms_ordered'] = self.request.POST.get('selected_terms_ordered', '')
         else:
             context['item_formset'] = POItemFormSet(instance=self.object, prefix='items')
             current_ids = list(self.object.selected_terms.values_list('pk', flat=True))
             context['terms_by_category'] = _po_terms_by_category(current_ids, po=self.object)
+            # Seed the hidden field with the stored selection order so an edit
+            # preserves it (resolved_terms() is already in selection order).
+            context['selected_terms_ordered'] = ','.join(
+                str(e['template'].pk) for e in self.object.resolved_terms())
         context['title'] = f'Edit PO: {self.object.po_number}'
         context['system_suggestions'] = PurchaseOrder.SYSTEM_SUGGESTIONS
         context['procurement_team'] = _procurement_team_users()
@@ -704,8 +760,7 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
             self.object = form.save()
             item_formset.instance = self.object
             item_formset.save()
-            term_ids = [int(x) for x in self.request.POST.getlist('selected_terms') if x.isdigit()]
-            self.object.selected_terms.set(term_ids)
+            _apply_po_terms(self.object, self.request.POST)
             _save_po_term_overrides(self.object, self.request.POST, self.request.user)
             messages.success(self.request, f'Purchase Order {self.object.po_number} updated successfully.')
             return redirect(self.get_success_url())
@@ -1288,7 +1343,7 @@ def po_export_pdf(request, pk, unpriced=False):
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
     from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
     from reportlab.pdfgen.canvas import Canvas
     from io import BytesIO
@@ -1582,7 +1637,8 @@ def po_export_pdf(request, pk, unpriced=False):
     legacy_tc = (po.terms_and_conditions or '').strip()
 
     if selected_terms or legacy_tc:
-        elements.append(Spacer(1, 6*mm))
+        # Terms & Conditions always begin on their own fresh page.
+        elements.append(PageBreak())
         elements.append(Paragraph(
             '<b>TERMS AND CONDITIONS</b>',
             ParagraphStyle('TCHead', parent=styles['Heading2'], fontSize=10, textColor=colors.HexColor('#C41E3A'))
@@ -1590,26 +1646,30 @@ def po_export_pdf(request, pk, unpriced=False):
         elements.append(Spacer(1, 2*mm))
 
         sub_hdr_style = ParagraphStyle('TCSubHdr', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8, leading=10, spaceAfter=1)
+        # Hanging indent so a clause that wraps aligns under its text, not its number.
+        tc_num_style = ParagraphStyle('TCNum', parent=tc_style, leftIndent=12, firstLineIndent=-12, spaceAfter=1)
 
-        terms_grouped = {}
-        for cat_value, _cat_label in _TermsTemplate.CATEGORY_CHOICES:
-            items_in_cat = [t for t in selected_terms if t.category == cat_value]
-            if items_in_cat:
-                terms_grouped[cat_value] = items_in_cat
-
-        for cat_value, _cat_label in _TermsTemplate.CATEGORY_CHOICES:
-            for tmpl in terms_grouped.get(cat_value, []):
-                elements.append(Paragraph(f'<b>{_xml_escape(tmpl.name)}</b>', sub_hdr_style))
-                _content = term_text.get(tmpl.pk, tmpl.content)
-                for line in [l.strip() for l in _content.splitlines() if l.strip()]:
-                    elements.append(Paragraph(_xml_escape(line), tc_style))
-                elements.append(Spacer(1, 1*mm))
+        # Serial numbers are applied automatically — users never type them.
+        # Terms print in the order the user selected them (selected_terms is
+        # already in selection order via resolved_terms()), numbered
+        # continuously 1..N. Any number typed by hand is stripped first so it
+        # doesn't come out double-numbered.
+        seq = 0
+        for tmpl in selected_terms:
+            elements.append(Paragraph(f'<b>{_xml_escape(tmpl.name)}</b>', sub_hdr_style))
+            _content = term_text.get(tmpl.pk, tmpl.content)
+            for line in [l.strip() for l in _content.splitlines() if l.strip()]:
+                seq += 1
+                clean = _strip_leading_enumeration(line)
+                elements.append(Paragraph(f'{seq}. {_xml_escape(clean)}', tc_num_style))
+            elements.append(Spacer(1, 1*mm))
 
         if legacy_tc:
-            for line in legacy_tc.split('\n'):
-                if line.strip():
-                    elements.append(Paragraph(_xml_escape(line.strip()), tc_style))
-                    elements.append(Spacer(1, 1*mm))
+            for line in [l.strip() for l in legacy_tc.split('\n') if l.strip()]:
+                seq += 1
+                clean = _strip_leading_enumeration(line)
+                elements.append(Paragraph(f'{seq}. {_xml_escape(clean)}', tc_num_style))
+            elements.append(Spacer(1, 1*mm))
 
     try:
         doc.build(elements, canvasmaker=NumberedCanvas)
