@@ -65,30 +65,25 @@
             <form method="post" novalidate>
                 {% csrf_token %}
 
-                {% if form.errors %}
+                {% if form.non_field_errors %}
                 <div class="alert alert-danger">
-                    <strong>Please correct the errors below.</strong>
-                    {{ form.errors }}
+                    {{ form.non_field_errors }}
+                </div>
+                {% elif form.errors %}
+                <div class="alert alert-danger">
+                    <strong>Please correct the highlighted fields below.</strong>
                 </div>
                 {% endif %}
 
-                {% comment %}Line-item (formset) errors — without this a single bad row (e.g. a missing Item Description) silently blocks the whole save and the page just reloads with no explanation.{% endcomment %}
-                {% if item_formset.non_form_errors or item_formset.errors %}
+                {% comment %}Formset-level errors (not tied to one row, e.g. non_form_errors) still need a banner. Per-row/per-field errors render inline in the item table itself, below.{% endcomment %}
+                {% if item_formset.non_form_errors %}
                 <div class="alert alert-danger">
-                    <strong><i class="bi bi-exclamation-triangle me-1"></i>The line items couldn't be saved — please fix these:</strong>
+                    <strong><i class="bi bi-exclamation-triangle me-1"></i>The line items couldn't be saved:</strong>
                     {{ item_formset.non_form_errors }}
-                    <ul class="mb-0 mt-1">
-                        {% for item_form in item_formset %}
-                            {% if item_form.errors %}
-                            <li>
-                                Row {{ forloop.counter }}{% if item_form.instance.description %} ({{ item_form.instance.description|truncatechars:30 }}){% endif %}:
-                                {% for field, errs in item_form.errors.items %}
-                                    {{ field }} — {{ errs|join:", " }}{% if not forloop.last %}; {% endif %}
-                                {% endfor %}
-                            </li>
-                            {% endif %}
-                        {% endfor %}
-                    </ul>
+                </div>
+                {% elif item_formset.errors %}
+                <div class="alert alert-danger">
+                    <strong><i class="bi bi-exclamation-triangle me-1"></i>Some line items need fixing — see the highlighted cells below.</strong>
                 </div>
                 {% endif %}
 
@@ -102,18 +97,22 @@
                             <div class="col-md-3 mb-3">
                                 <label class="form-label fw-bold">PO Date *</label>
                                 {{ form.po_date }}
+                                {% if form.po_date.errors %}<div class="invalid-feedback d-block">{{ form.po_date.errors.0 }}</div>{% endif %}
                             </div>
                             <div class="col-md-3 mb-3">
                                 <label class="form-label fw-bold">PO Number *</label>
                                 {{ form.po_number }}
+                                {% if form.po_number.errors %}<div class="invalid-feedback d-block">{{ form.po_number.errors.0 }}</div>{% endif %}
                             </div>
                             <div class="col-md-3 mb-3">
                                 <label class="form-label fw-bold">Cost Center</label>
                                 {{ form.cost_center }}
+                                {% if form.cost_center.errors %}<div class="invalid-feedback d-block">{{ form.cost_center.errors.0 }}</div>{% endif %}
                             </div>
                             <div class="col-md-3 mb-3">
                                 <label class="form-label fw-bold">Status</label>
                                 {{ form.status }}
+                                {% if form.status.errors %}<div class="invalid-feedback d-block">{{ form.status.errors.0 }}</div>{% endif %}
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label class="form-label fw-bold">PO Issued By *</label>
@@ -130,11 +129,13 @@
                                 </select>
                                 {% endif %}
                                 {{ form.po_issued_by }}
+                                {% if form.po_issued_by.errors %}<div class="invalid-feedback d-block">{{ form.po_issued_by.errors.0 }}</div>{% endif %}
                                 <small class="text-muted">Auto-filled with your name. Pick a teammate above to change, or edit directly.</small>
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label class="form-label fw-bold">Issuer Email</label>
                                 {{ form.issuer_email }}
+                                {% if form.issuer_email.errors %}<div class="invalid-feedback d-block">{{ form.issuer_email.errors.0 }}</div>{% endif %}
                             </div>
                         </div>
                     </div>
@@ -150,18 +151,22 @@
                             <div class="col-md-6 mb-3">
                                 <label class="form-label fw-bold">Vendor Name *</label>
                                 {{ form.vendor_name }}
+                                {% if form.vendor_name.errors %}<div class="invalid-feedback d-block">{{ form.vendor_name.errors.0 }}</div>{% endif %}
                             </div>
                             <div class="col-md-6 mb-3">
                                 <label class="form-label fw-bold">Contact Person</label>
                                 {{ form.vendor_contact_person }}
+                                {% if form.vendor_contact_person.errors %}<div class="invalid-feedback d-block">{{ form.vendor_contact_person.errors.0 }}</div>{% endif %}
                             </div>
                             <div class="col-md-6 mb-3">
                                 <label class="form-label fw-bold">Vendor Email</label>
                                 {{ form.vendor_contact_email }}
+                                {% if form.vendor_contact_email.errors %}<div class="invalid-feedback d-block">{{ form.vendor_contact_email.errors.0 }}</div>{% endif %}
                             </div>
                             <div class="col-md-6 mb-3">
                                 <label class="form-label fw-bold">Vendor Tel</label>
                                 {{ form.vendor_contact_tel }}
+                                {% if form.vendor_contact_tel.errors %}<div class="invalid-feedback d-block">{{ form.vendor_contact_tel.errors.0 }}</div>{% endif %}
                             </div>
                         </div>
                     </div>
@@ -177,26 +182,32 @@
                             <div class="col-md-6 mb-3">
                                 <label class="form-label fw-bold">Link to Project</label>
                                 {{ form.project }}
+                                {% if form.project.errors %}<div class="invalid-feedback d-block">{{ form.project.errors.0 }}</div>{% endif %}
                             </div>
                             <div class="col-md-6 mb-3">
                                 <label class="form-label fw-bold">Project Name</label>
                                 {{ form.project_name }}
+                                {% if form.project_name.errors %}<div class="invalid-feedback d-block">{{ form.project_name.errors.0 }}</div>{% endif %}
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label class="form-label fw-bold">End User</label>
                                 {{ form.end_user }}
+                                {% if form.end_user.errors %}<div class="invalid-feedback d-block">{{ form.end_user.errors.0 }}</div>{% endif %}
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label class="form-label fw-bold">MR / Item No.</label>
                                 {{ form.mr_item_number }}
+                                {% if form.mr_item_number.errors %}<div class="invalid-feedback d-block">{{ form.mr_item_number.errors.0 }}</div>{% endif %}
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label class="form-label fw-bold">Delivery Incoterms</label>
                                 {{ form.delivery_incoterms }}
+                                {% if form.delivery_incoterms.errors %}<div class="invalid-feedback d-block">{{ form.delivery_incoterms.errors.0 }}</div>{% endif %}
                             </div>
                             <div class="col-md-8 mb-3">
                                 <label class="form-label fw-bold">Delivery Location</label>
                                 {{ form.delivery_location }}
+                                {% if form.delivery_location.errors %}<div class="invalid-feedback d-block">{{ form.delivery_location.errors.0 }}</div>{% endif %}
                             </div>
                         </div>
                     </div>
@@ -216,16 +227,19 @@
                             <div class="col-md-4 mb-3">
                                 <label class="form-label fw-bold">Lead Time</label>
                                 {{ form.lead_time }}
+                                {% if form.lead_time.errors %}<div class="invalid-feedback d-block">{{ form.lead_time.errors.0 }}</div>{% endif %}
                                 <small class="text-muted">e.g. "4-6 weeks from PO &amp; payment"</small>
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label class="form-label fw-bold">Payment Terms (Summary)</label>
                                 {{ form.payment_terms_text }}
+                                {% if form.payment_terms_text.errors %}<div class="invalid-feedback d-block">{{ form.payment_terms_text.errors.0 }}</div>{% endif %}
                                 <small class="text-muted">Short. Long form goes in T&amp;C below.</small>
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label class="form-label fw-bold">Warranty</label>
                                 {{ form.warranty }}
+                                {% if form.warranty.errors %}<div class="invalid-feedback d-block">{{ form.warranty.errors.0 }}</div>{% endif %}
                                 <small class="text-muted">e.g. "Standard", "24 Months after delivery"</small>
                             </div>
                         </div>
@@ -242,14 +256,17 @@
                             <div class="col-md-3 mb-3">
                                 <label class="form-label fw-bold">Currency</label>
                                 {{ form.currency }}
+                                {% if form.currency.errors %}<div class="invalid-feedback d-block">{{ form.currency.errors.0 }}</div>{% endif %}
                             </div>
                             <div class="col-md-3 mb-3">
                                 <label class="form-label fw-bold">Discount %</label>
                                 {{ form.discount_rate }}
+                                {% if form.discount_rate.errors %}<div class="invalid-feedback d-block">{{ form.discount_rate.errors.0 }}</div>{% endif %}
                             </div>
                             <div class="col-md-3 mb-3">
                                 <label class="form-label fw-bold">VAT %</label>
                                 {{ form.vat_rate }}
+                                {% if form.vat_rate.errors %}<div class="invalid-feedback d-block">{{ form.vat_rate.errors.0 }}</div>{% endif %}
                             </div>
                         </div>
                     </div>
@@ -259,9 +276,6 @@
                 <div class="card mb-4">
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <h5 class="mb-0"><i class="bi bi-list-ol"></i> Line Items</h5>
-                        <button type="button" class="btn btn-sm btn-outline-danger add-item-btn" id="add-item">
-                            <i class="bi bi-plus-lg"></i> Add Item
-                        </button>
                     </div>
                     <div class="card-body p-0">
                         {{ item_formset.management_form }}
@@ -297,17 +311,17 @@
                                             {{ item_form.order.as_hidden }}
                                             {{ item_form.id }}
                                         </td>
-                                        <td>{{ item_form.system }}</td>
-                                        <td>{{ item_form.make_model }}</td>
-                                        <td>{{ item_form.description }}</td>
-                                        <td>{{ item_form.quantity }}</td>
-                                        <td>{{ item_form.uom }}</td>
-                                        <td>{{ item_form.rate_per_unit }}</td>
-                                        <td>{{ item_form.po_value_usd }}</td>
-                                        <td>{{ item_form.advance_payment_sar }}</td>
-                                        <td>{{ item_form.delivery_status }}</td>
-                                        <td>{{ item_form.scm }}</td>
-                                        <td>{{ item_form.remarks }}</td>
+                                        <td>{{ item_form.system }}{% if item_form.system.errors %}<div class="invalid-feedback d-block">{{ item_form.system.errors.0 }}</div>{% endif %}</td>
+                                        <td>{{ item_form.make_model }}{% if item_form.make_model.errors %}<div class="invalid-feedback d-block">{{ item_form.make_model.errors.0 }}</div>{% endif %}</td>
+                                        <td>{{ item_form.description }}{% if item_form.description.errors %}<div class="invalid-feedback d-block">{{ item_form.description.errors.0 }}</div>{% endif %}</td>
+                                        <td>{{ item_form.quantity }}{% if item_form.quantity.errors %}<div class="invalid-feedback d-block">{{ item_form.quantity.errors.0 }}</div>{% endif %}</td>
+                                        <td>{{ item_form.uom }}{% if item_form.uom.errors %}<div class="invalid-feedback d-block">{{ item_form.uom.errors.0 }}</div>{% endif %}</td>
+                                        <td>{{ item_form.rate_per_unit }}{% if item_form.rate_per_unit.errors %}<div class="invalid-feedback d-block">{{ item_form.rate_per_unit.errors.0 }}</div>{% endif %}</td>
+                                        <td>{{ item_form.po_value_usd }}{% if item_form.po_value_usd.errors %}<div class="invalid-feedback d-block">{{ item_form.po_value_usd.errors.0 }}</div>{% endif %}</td>
+                                        <td>{{ item_form.advance_payment_sar }}{% if item_form.advance_payment_sar.errors %}<div class="invalid-feedback d-block">{{ item_form.advance_payment_sar.errors.0 }}</div>{% endif %}</td>
+                                        <td>{{ item_form.delivery_status }}{% if item_form.delivery_status.errors %}<div class="invalid-feedback d-block">{{ item_form.delivery_status.errors.0 }}</div>{% endif %}</td>
+                                        <td>{{ item_form.scm }}{% if item_form.scm.errors %}<div class="invalid-feedback d-block">{{ item_form.scm.errors.0 }}</div>{% endif %}</td>
+                                        <td>{{ item_form.remarks }}{% if item_form.remarks.errors %}<div class="invalid-feedback d-block">{{ item_form.remarks.errors.0 }}</div>{% endif %}</td>
                                         <td class="text-center">
                                             {# DELETE checkbox always rendered (hidden) so the formset always sees a value. #}
                                             <span class="d-none">{{ item_form.DELETE }}</span>
@@ -444,6 +458,7 @@
                             Optional. Use this for one-off notes specific to this PO that aren't covered by the templates above.
                         </p>
                         {{ form.terms_and_conditions }}
+                        {% if form.terms_and_conditions.errors %}<div class="invalid-feedback d-block">{{ form.terms_and_conditions.errors.0 }}</div>{% endif %}
                     </div>
                 </div>
 
