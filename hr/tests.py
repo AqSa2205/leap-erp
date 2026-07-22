@@ -1,5 +1,5 @@
 from datetime import date
-from django.test import TestCase
+from django.test import TestCase, skipUnlessDBFeature
 from django.urls import reverse
 from hr.work_calendar import count_working_days, is_working_day
 from hr.forms import LeaveRequestForm
@@ -1974,6 +1974,12 @@ class SubmitLeaveRequestRaceConditionTests(TransactionTestCase):
         LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.marriage, year=2026, entitled_days=3)
         self.creator = make_user('race_creator')
 
+    # Relies on select_for_update() row-locking to serialize two concurrent
+    # submissions. SQLite has no row-level locking (has_select_for_update is
+    # False), so the lock is a no-op there and the test can't prove anything —
+    # it only runs against Postgres (production/CI). Skipping on SQLite keeps
+    # local `manage.py test` green without weakening the production check.
+    @skipUnlessDBFeature('has_select_for_update')
     def test_concurrent_submissions_cannot_together_exceed_balance(self):
         from django.db import connection
         results = []
