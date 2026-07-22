@@ -1,5 +1,6 @@
 from django import forms
-from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, VehicleDocument, LeaveType, Holiday, AttendanceSettings, WorkingDay, WFHRecord
+from django.core.exceptions import ValidationError
+from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, VehicleDocument, LeaveType, Holiday, AttendanceSettings, WorkingDay, WFHRecord, AttendanceException
 
 
 class EmployeeForm(forms.ModelForm):
@@ -492,3 +493,97 @@ class AttendanceSettingsForm(forms.Form):
     def initial_from(self, settings_obj):
         self.initial['weekend_days'] = [str(x) for x in sorted(settings_obj.weekend_day_set())]
         self.initial['expected_in_by'] = settings_obj.expected_in_by
+
+
+class EmployeeHierarchyForm(forms.Form):
+    """Assigns ONE employee's main_manager/secondary_managers at a time — a
+    per-row edit pattern (see OrgChartView), deliberately not a giant
+    multi-employee single-submit form."""
+    main_manager = forms.ModelChoiceField(
+        queryset=Employee.objects.filter(is_active=True), required=False,
+        widget=forms.Select(attrs={'class': 'form-select'}))
+    secondary_managers = forms.ModelMultipleChoiceField(
+        queryset=Employee.objects.filter(is_active=True), required=False,
+        widget=forms.SelectMultiple(attrs={'class': 'form-select', 'size': '5'}))
+
+    def __init__(self, *args, employee=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.employee = employee
+        # An employee cannot be their own manager — exclude themselves from
+        # both pickers. clean() on the Employee model can't validate the
+        # secondary_managers M2M (Django limitation — see Employee.clean()'s
+        # own docstring), so self-assignment prevention for BOTH fields
+        # happens here, at the form layer.
+        if employee is not None:
+            self.fields['main_manager'].queryset = self.fields['main_manager'].queryset.exclude(pk=employee.pk)
+            self.fields['secondary_managers'].queryset = self.fields['secondary_managers'].queryset.exclude(pk=employee.pk)
+
+    def clean_main_manager(self):
+        main_manager = self.cleaned_data.get('main_manager')
+        if self.employee and main_manager and main_manager.pk == self.employee.pk:
+            raise forms.ValidationError('An employee cannot be their own manager.')
+        return main_manager
+
+    def clean(self):
+        """Dry-runs Employee.clean()'s cycle-detection logic against a
+        throwaway, unsaved Employee instance (same pk, candidate
+        main_manager_id) instead of mutating/saving self.employee — so a
+        circular main_manager assignment surfaces here as an ordinary form
+        error, and self.employee is never touched unless the whole form is
+        valid. This is preferred over calling self.employee.full_clean() in
+        save(): full_clean() would also run Employee's per-field required-
+        ness validation (e.g. iqama_number) on a real, saved employee whose
+        other fields this form never touched and has no data for in
+        cleaned_data, which would raise unrelated, confusing errors having
+        nothing to do with the hierarchy assignment this form actually
+        makes. Calling plain .clean() (via this disposable candidate) runs
+        only the cycle-detection logic, which is exactly what needs
+        (re-)checking here.
+        """
+        cleaned = super().clean()
+        main_manager = cleaned.get('main_manager')
+        if self.employee is not None:
+            candidate = Employee(
+                pk=self.employee.pk,
+                main_manager_id=(main_manager.pk if main_manager else None))
+            try:
+                candidate.clean()
+            except ValidationError as e:
+                message_dict = getattr(e, 'message_dict', None)
+                if message_dict:
+                    for field, msgs in message_dict.items():
+                        target = field if field in self.fields else 'main_manager'
+                        for msg in msgs:
+                            self.add_error(target, msg)
+                else:
+                    for msg in e.messages:
+                        self.add_error('main_manager', msg)
+        return cleaned
+
+    def save(self):
+        """Applies main_manager and secondary_managers. Cycle-detection for
+        main_manager already ran (against a throwaway candidate) in clean()
+        above, so by the time save() is called the assignment is known-safe
+        — no need to re-validate against the real self.employee here."""
+        self.employee.main_manager = self.cleaned_data.get('main_manager')
+        self.employee.save(update_fields=['main_manager', 'updated_at'])
+        self.employee.secondary_managers.set(self.cleaned_data.get('secondary_managers') or [])
+
+
+class AttendanceExceptionForm(forms.Form):
+    """Self-service 'report an exception' form — no `employee` field, the view
+    supplies the employee (no admin log-on-behalf-of for this feature)."""
+    event_date = forms.DateField(widget=forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}))
+    event_start_time = forms.TimeField(widget=forms.TimeInput(attrs={'class': 'form-control', 'type': 'time'}))
+    reason_category = forms.ChoiceField(choices=AttendanceException.REASON_CHOICES,
+                                        widget=forms.Select(attrs={'class': 'form-select'}))
+    custom_reason = forms.CharField(required=False, widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 2}))
+    employee_comment = forms.CharField(
+        required=False, label='Additional comment (optional)',
+        widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 2}))
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get('reason_category') == 'other' and not (cleaned.get('custom_reason') or '').strip():
+            self.add_error('custom_reason', 'A custom reason is required when "Other" is selected.')
+        return cleaned

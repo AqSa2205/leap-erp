@@ -2,6 +2,7 @@ from datetime import date
 from django.test import TestCase
 from django.urls import reverse
 from hr.work_calendar import count_working_days, is_working_day
+from hr.forms import LeaveRequestForm
 from hr.models import LeaveType
 from hr.forms import LeaveRequestForm
 
@@ -203,6 +204,96 @@ class GeneratorTests(TestCase):
         return LeaveEntitlement.objects.get(employee=emp, leave_type=lt, year=2026).entitled_days
 
 
+class GenerateEntitlementsForEmployeeTests(TestCase):
+    """Unit coverage of hr.leave_services.generate_entitlements_for_employee —
+    the single-employee helper shared by generate_year_entitlements (bulk)
+    and the new-employee auto-generation hooks below."""
+    def setUp(self):
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': 30})
+        self.sick, _ = LeaveType.objects.update_or_create(
+            code='sick', defaults={'name': 'Sick', 'default_annual_days': 12, 'is_active': True})
+        self.emp = make_employee('GEFE-1', 'Solo Employee')
+
+    def test_creates_one_row_per_active_leave_type(self):
+        # Not asserting an exact `created` count here: a data migration
+        # (0024_leavetype_task1_values) pre-seeds several canonical LeaveType
+        # rows (annual, sick, marriage, ...) into every test database, so the
+        # real active-type count is >= the 2 this test explicitly cares about.
+        from hr.leave_services import generate_entitlements_for_employee
+        created = generate_entitlements_for_employee(self.emp, 2026)
+        self.assertGreaterEqual(created, 2)
+        self.assertEqual(
+            LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.annual, year=2026).entitled_days,
+            Decimal('30'))
+        self.assertEqual(
+            LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.sick, year=2026).entitled_days,
+            Decimal('12'))
+
+    def test_does_not_overwrite_existing_row(self):
+        from hr.leave_services import generate_entitlements_for_employee
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=99)
+        generate_entitlements_for_employee(self.emp, 2026)
+        self.assertEqual(
+            LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.annual, year=2026).entitled_days,
+            Decimal('99'))
+
+    def test_ignores_inactive_leave_types(self):
+        from hr.leave_services import generate_entitlements_for_employee
+        inactive_lt, _ = LeaveType.objects.get_or_create(code='defunct', defaults={
+            'name': 'Defunct', 'default_annual_days': 5, 'is_active': False})
+        generate_entitlements_for_employee(self.emp, 2026)
+        self.assertFalse(LeaveEntitlement.objects.filter(employee=self.emp, leave_type=inactive_lt).exists())
+
+
+class NewEmployeeAutoEntitlementTests(TestCase):
+    """A newly added employee (via the real 'Add Employee' form or the Excel
+    import) automatically gets this year's leave balances — no separate
+    manual 'Generate' step needed. Deliberately hooked into these two actual
+    creation entry points, NOT Employee.save() itself: a model-level hook
+    would fire on every raw Employee.objects.create() across the whole test
+    suite (and any future script), silently colliding with the ~30 existing
+    tests that create their own LeaveEntitlement rows for a just-created
+    employee in the current year."""
+    def setUp(self):
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': 30})
+        self.admin = _make_role_user('neaet_admin', Role.SUPER_ADMIN)
+        self.this_year = timezone.now().year
+
+    def test_creating_employee_via_form_generates_entitlements(self):
+        self.client.login(username='neaet_admin', password='testpass123')
+        resp = self.client.post(reverse('hr:employee_create'), {
+            'iqama_number': 'NEAET-1', 'full_name': 'Fresh Hire', 'is_active': 'on',
+        })
+        self.assertEqual(resp.status_code, 302)
+        emp = Employee.objects.get(iqama_number='NEAET-1')
+        ent = LeaveEntitlement.objects.get(employee=emp, leave_type=self.annual, year=self.this_year)
+        self.assertEqual(ent.entitled_days, Decimal('30'))
+
+    def test_creating_inactive_employee_via_form_generates_no_entitlements(self):
+        self.client.login(username='neaet_admin', password='testpass123')
+        resp = self.client.post(reverse('hr:employee_create'), {
+            'iqama_number': 'NEAET-2', 'full_name': 'Not Yet Active',
+        })
+        self.assertEqual(resp.status_code, 302)
+        emp = Employee.objects.get(iqama_number='NEAET-2')
+        self.assertFalse(emp.is_active)
+        self.assertFalse(LeaveEntitlement.objects.filter(employee=emp).exists())
+
+    def test_updating_existing_employee_does_not_regenerate(self):
+        # EmployeeUpdateView reuses EmployeeForm but is a different view
+        # (UpdateView, not CreateView) — this hook lives only in
+        # EmployeeCreateView.form_valid, so an edit must never touch entitlements.
+        emp = make_employee('NEAET-3', 'Existing Employee')
+        self.client.login(username='neaet_admin', password='testpass123')
+        resp = self.client.post(reverse('hr:employee_update', args=[emp.pk]), {
+            'iqama_number': 'NEAET-3', 'full_name': 'Existing Employee Renamed', 'is_active': 'on',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(LeaveEntitlement.objects.filter(employee=emp).exists())
+
+
 class LeaveAdminViewTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
@@ -214,6 +305,31 @@ class LeaveAdminViewTests(TestCase):
     def test_leavetype_list_ok(self):
         self.client.force_login(self.admin)
         self.assertEqual(self.client.get(reverse('hr:leavetype_list')).status_code, 200)
+
+    def test_leavetype_create_non_annual_is_not_accumulative(self):
+        # is_accumulative is a fixed business rule (only Annual is ever True) —
+        # it's no longer on LeaveTypeForm, so even posting it can't flip it.
+        # A newly created custom leave type must default to non-accumulative.
+        self.client.force_login(self.admin)
+        resp = self.client.post(reverse('hr:leavetype_create'), {
+            'name': 'Bereavement', 'code': 'bereavement', 'default_annual_days': '3.0',
+            'is_paid': 'on', 'color': 'secondary', 'is_active': 'on',
+            'is_accumulative': 'on',  # attempted (malicious/mistaken) override — must be ignored
+        })
+        self.assertRedirects(resp, reverse('hr:leavetype_list'))
+        lt = LeaveType.objects.get(code='bereavement')
+        self.assertFalse(lt.is_accumulative)
+
+    def test_leavetype_create_annual_code_is_accumulative(self):
+        self.client.force_login(self.admin)
+        LeaveType.objects.filter(code='annual').delete()
+        resp = self.client.post(reverse('hr:leavetype_create'), {
+            'name': 'Annual', 'code': 'annual', 'default_annual_days': '30.0',
+            'is_paid': 'on', 'color': 'primary', 'is_active': 'on',
+        })
+        self.assertRedirects(resp, reverse('hr:leavetype_list'))
+        lt = LeaveType.objects.get(code='annual')
+        self.assertTrue(lt.is_accumulative)
 
     def test_holiday_create(self):
         self.client.force_login(self.admin)
@@ -240,8 +356,39 @@ class LeaveRecordViewTests(TestCase):
         from accounts.models import Role, User
         role, _ = Role.objects.get_or_create(name=Role.ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+        # leave_record_create now unifies onto LeaveRequestCreateView, which is
+        # SuperAdminRequiredMixin (the approval-workflow queue's existing access
+        # level) — a plain Admin can no longer reach it, only Super Admin.
+        superadmin_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.superadmin = User.objects.create_user('supadm', password='x')
+        self.superadmin.role = superadmin_role
+        self.superadmin.save()
         self.emp = make_employee()
         self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+
+    def test_create_leave_autocomputes_days(self):
+        # Annual now requires approval like every other leave type (the
+        # "accumulative skips approval" bypass was removed) — this submission
+        # creates a pending LeaveRequest, not an immediate LeaveRecord;
+        # computed_days() is identical logic on both models.
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=30)
+        self.client.force_login(self.superadmin)
+        self.client.post(reverse('hr:leave_record_create'), {
+            'employee': self.emp.pk, 'leave_type': self.annual.pk,
+            'start_date': '2026-07-05', 'end_date': '2026-07-09', 'employee_reason': ''})
+        req = LeaveRequest.objects.get(employee=self.emp)
+        self.assertEqual(req.status, 'pending')
+        self.assertEqual(req.days, Decimal('5'))
+
+    def test_create_leave_counts_calendar_days_incl_weekend(self):
+        # Thu 2 Jul -> Mon 6 Jul = 5 calendar days (weekend counted), days blank.
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=30)
+        self.client.force_login(self.superadmin)
+        self.client.post(reverse('hr:leave_record_create'), {
+            'employee': self.emp.pk, 'leave_type': self.annual.pk,
+            'start_date': '2026-07-02', 'end_date': '2026-07-06', 'employee_reason': ''})
+        req = LeaveRequest.objects.get(employee=self.emp, start_date=_date(2026, 7, 2))
+        self.assertEqual(req.days, Decimal('5'))
 
     def test_summary_shows_balance(self):
         LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=30)
@@ -296,6 +443,67 @@ class AttendanceStatusTests(TestCase):
 
     def test_absent_when_no_checkin_on_workday(self):
         self.assertEqual(derive_status(self.emp, _date(2026, 7, 13), None)[0], 'absent')
+
+    # -- exception-awareness (approved attendance exception excuses the day) --
+
+    def _approve_exception_for_today(self, event_dt):
+        from hr.attendance_exception_services import submit_attendance_exception, decide_attendance_exception
+        manager = make_employee(iqama='ASTAT-MGR', name='Stat Manager')
+        manager_user = make_user('astat_mgr')
+        manager.user = manager_user
+        manager.save(update_fields=['user'])
+        self.emp.main_manager = manager
+        self.emp.save(update_fields=['main_manager'])
+        creator = make_user('astat_creator')
+        exc = submit_attendance_exception(
+            employee=self.emp, event_date=event_dt.date(), event_start_time=event_dt.time(),
+            reason_category='site_visit', created_by=creator)
+        decide_attendance_exception(exc, manager_user, 'approved')
+        return exc
+
+    def test_approved_exception_previews_as_present_instead_of_late(self):
+        from django.utils import timezone as _tz
+        settings_obj = AttendanceSettings.load()
+        settings_obj.weekend_days = ''  # isolate from real-calendar weekend interference
+        settings_obj.save(update_fields=['weekend_days'])
+        event_dt = _tz.localtime(_tz.now() - timedelta(minutes=30))
+        self._approve_exception_for_today(event_dt)
+
+        late_check_in = time(9, 0)  # after the 8:30 expected_in_by default
+        status, _ = derive_status(self.emp, event_dt.date(), late_check_in)
+        self.assertEqual(status, 'present')
+
+    def test_no_exception_late_check_in_is_unaffected(self):
+        settings_obj = AttendanceSettings.load()
+        settings_obj.weekend_days = ''
+        settings_obj.save(update_fields=['weekend_days'])
+        status, _ = derive_status(self.emp, _date(2026, 7, 13), time(9, 0))
+        self.assertEqual(status, 'late')
+
+    def test_rejected_exception_does_not_excuse_late(self):
+        from django.utils import timezone as _tz
+        from hr.attendance_exception_services import submit_attendance_exception, decide_attendance_exception
+        settings_obj = AttendanceSettings.load()
+        settings_obj.weekend_days = ''
+        settings_obj.save(update_fields=['weekend_days'])
+
+        manager = make_employee(iqama='ASTAT-MGR2', name='Stat Manager Two')
+        manager_user = make_user('astat_mgr2')
+        manager.user = manager_user
+        manager.save(update_fields=['user'])
+        self.emp.main_manager = manager
+        self.emp.save(update_fields=['main_manager'])
+        creator = make_user('astat_creator2')
+
+        event_dt = _tz.localtime(_tz.now() - timedelta(minutes=30))
+        exc = submit_attendance_exception(
+            employee=self.emp, event_date=event_dt.date(), event_start_time=event_dt.time(),
+            reason_category='site_visit', created_by=creator)
+        decide_attendance_exception(exc, manager_user, 'rejected', note='No evidence')
+
+        late_check_in = time(9, 0)
+        status, _ = derive_status(self.emp, event_dt.date(), late_check_in)
+        self.assertEqual(status, 'late')
 
 
 class AttendanceGridTests(TestCase):
@@ -393,6 +601,17 @@ class HardeningTests(TestCase):
         status, hours = derive_status(self.emp, _date(2026, 7, 13), self.time(22, 0), self.time(6, 0))
         self.assertIn(status, ('present', 'late'))  # late threshold now applies; either is non-absent
         self.assertIsNone(hours)  # negative span -> blank, not a corrupt negative total
+
+    def test_explicit_zero_days_preserved(self):
+        # NOTE: the unified LeaveRequestForm (hr/forms.py) has no 'days' field —
+        # every leave created through a view (legacy Add Leave, log-on-behalf-of,
+        # My Profile self-service) is always auto-computed now. The only way to
+        # set an explicit day count is directly on the model, so this is now a
+        # model-level test of LeaveRecord.save() rather than a view test.
+        rec = LeaveRecord(employee=self.emp, leave_type=self.annual,
+                          start_date=_date(2026, 7, 10), end_date=_date(2026, 7, 11), days=Decimal('0'))
+        rec.save()
+        self.assertEqual(rec.days, Decimal('0'))
 
     def test_bad_year_param_does_not_500(self):
         self.client.force_login(self.admin)
@@ -892,6 +1111,11 @@ class SickLeaveCertificateTests(TestCase):
         from accounts.models import Role, User
         role, _ = Role.objects.get_or_create(name=Role.ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+        # leave_record_create now unifies onto LeaveRequestCreateView (SuperAdminRequiredMixin).
+        superadmin_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.superadmin = User.objects.create_user('supadm2', password='x')
+        self.superadmin.role = superadmin_role
+        self.superadmin.save()
         self.emp = make_employee()
         self.sick, _ = LeaveType.objects.get_or_create(
             code='sick', defaults={'name': 'Sick', 'default_annual_days': 15})
@@ -927,6 +1151,64 @@ class SickLeaveCertificateTests(TestCase):
                         start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13), days=Decimal('1'))
         r.full_clean()  # annual doesn't require a certificate
 
+    def test_create_form_sick_now_routes_to_approval_queue(self):
+        # Data-compliance migration 0027 (a concurrent, unrelated fix) seeds
+        # Sick with is_accumulative=False, i.e. Sick is genuinely conditional —
+        # so under the unified dispatch (hr.leave_approval_services.submit_leave)
+        # it now correctly enters the dual-approval queue as a LeaveRequest
+        # rather than being recorded directly as a LeaveRecord. The old
+        # LeaveRecordForm-level "certificate required" ModelForm validation
+        # (which only ever applied to direct LeaveRecord creation) is therefore
+        # moot for Sick specifically — it no longer takes that code path at
+        # all. See the report for the residual, narrower concern: a *custom*
+        # leave type that is both is_accumulative=True and
+        # requires_medical_certificate=True would still bypass the guard,
+        # since LeaveRecord.objects.create() in submit_leave() never calls
+        # full_clean().
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.sick, year=2026, entitled_days=15)
+        self.client.force_login(self.superadmin)
+        resp = self.client.post(reverse('hr:leave_record_create'), {
+            'employee': self.emp.pk, 'leave_type': self.sick.pk,
+            'start_date': '2026-07-13', 'end_date': '2026-07-13', 'employee_reason': '',
+            'document': self._cert()})
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(LeaveRecord.objects.filter(employee=self.emp).exists())
+        req = LeaveRequest.objects.get(employee=self.emp, leave_type=self.sick)
+        self.assertEqual(req.status, 'pending')
+
+    def test_sick_leave_without_document_is_blocked(self):
+        # Task 1: mandatory document/certificate enforcement for any leave type
+        # flagged requires_medical_certificate (currently only Sick).
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.sick, year=2026, entitled_days=15)
+        self.client.force_login(self.superadmin)
+        resp = self.client.post(reverse('hr:leave_record_create'), {
+            'employee': self.emp.pk, 'leave_type': self.sick.pk,
+            'start_date': '2026-07-13', 'end_date': '2026-07-13', 'employee_reason': ''})
+        self.assertEqual(resp.status_code, 200)  # re-renders the form with an error, no redirect
+        self.assertContains(resp, 'A medical certificate/document is required')
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.emp, leave_type=self.sick).exists())
+
+    def test_model_clean_blocks_leave_request_sick_without_document(self):
+        req = LeaveRequest(employee=self.emp, leave_type=self.sick,
+                           start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13))
+        with self.assertRaises(ValidationError):
+            req.full_clean()
+
+    def test_create_form_sick_document_attaches_to_the_leave_request(self):
+        # The unified form's 'document' upload maps onto LeaveRequest.document
+        # (already an existing field on the approval-workflow model) when the
+        # leave type is conditional — this is how a certificate would actually
+        # reach an approver under the new architecture.
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.sick, year=2026, entitled_days=15)
+        self.client.force_login(self.superadmin)
+        resp = self.client.post(reverse('hr:leave_record_create'), {
+            'employee': self.emp.pk, 'leave_type': self.sick.pk,
+            'start_date': '2026-07-13', 'end_date': '2026-07-13', 'employee_reason': '',
+            'document': self._cert()})
+        self.assertEqual(resp.status_code, 302)
+        req = LeaveRequest.objects.get(employee=self.emp, leave_type=self.sick)
+        self.assertTrue(req.document)
+
     def test_grid_mark_leave_blocks_certificate_type(self):
         import json as _json
         self.client.force_login(self.admin)
@@ -943,6 +1225,9 @@ class SickLeaveCertificateTests(TestCase):
         for r in LeaveRecord.objects.exclude(medical_certificate=''):
             if r.medical_certificate:
                 r.medical_certificate.delete(save=False)
+        for req in LeaveRequest.objects.exclude(document=''):
+            if req.document:
+                req.document.delete(save=False)
 
 
 class LeaveTypeDaySyncTests(TestCase):
@@ -1360,6 +1645,25 @@ class LeaveApprovalServiceTests(TestCase):
         self.assertEqual(self.req.leave_record.employee, self.emp)
         self.assertEqual(self.req.leave_record.days, Decimal('3'))
 
+    def test_balance_untouched_while_pending_deducted_only_on_full_approval(self):
+        ent = LeaveEntitlement.objects.create(
+            employee=self.emp, leave_type=self.marriage, year=2026, entitled_days=Decimal('3'))
+        self.assertEqual(ent.remaining_days, Decimal('3'))
+
+        record_approver_decision(self.req, self.aamna, 'approved')
+        self.assertEqual(ent.remaining_days, Decimal('3'))  # one approver down, still pending — untouched
+
+        record_approver_decision(self.req, self.ali, 'approved')
+        self.assertEqual(ent.remaining_days, Decimal('0'))  # fully approved — LeaveRecord now exists, deducted
+
+    def test_disapproved_request_never_deducts_balance(self):
+        ent = LeaveEntitlement.objects.create(
+            employee=self.emp, leave_type=self.marriage, year=2026, entitled_days=Decimal('3'))
+        record_approver_decision(self.req, self.aamna, 'disapproved', comment='No.')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'disapproved')
+        self.assertEqual(ent.remaining_days, Decimal('3'))
+
     def test_one_disapproval_is_decisive(self):
         record_approver_decision(self.req, self.aamna, 'approved')
         record_approver_decision(self.req, self.ali, 'disapproved', comment='Not enough notice')
@@ -1368,10 +1672,85 @@ class LeaveApprovalServiceTests(TestCase):
         self.assertTrue(self.req.salary_deduction_applicable)
         self.assertIsNone(self.req.leave_record)
 
+    def test_fail_fast_disapproval_skips_other_pending_approvals(self):
+        record_approver_decision(self.req, self.aamna, 'disapproved', comment='Not enough notice')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'disapproved')
+        ali_approval = self.req.approvals.get(approver=self.ali)
+        self.assertEqual(ali_approval.decision, 'skipped')
+
+    def test_late_decision_after_fail_fast_disapproval_rejected(self):
+        record_approver_decision(self.req, self.aamna, 'disapproved', comment='Not enough notice')
+        with self.assertRaises(ValueError):
+            record_approver_decision(self.req, self.ali, 'approved')
+
     def test_non_approver_cannot_decide(self):
         stranger = make_user('someone_else')
         with self.assertRaises(ValueError):
             record_approver_decision(self.req, stranger, 'approved')
+
+    def test_finalize_failure_rolls_back_the_whole_decision_not_just_finalize(self):
+        # If _finalize blows up (e.g. a transient DB error creating the
+        # LeaveRecord), the approver's own decision — recorded just before
+        # _finalize runs, in the same call — must roll back with it. Without
+        # this, the request gets stuck: one approval permanently shows
+        # 'approved' while the request itself never leaves 'pending' and no
+        # retry can ever re-decide that approval (record_approver_decision
+        # requires decision == 'pending').
+        from unittest.mock import patch
+        record_approver_decision(self.req, self.aamna, 'approved')
+        with patch('hr.leave_approval_services.LeaveRecord.objects.create',
+                   side_effect=RuntimeError('simulated DB failure')):
+            with self.assertRaises(RuntimeError):
+                record_approver_decision(self.req, self.ali, 'approved')
+
+        self.req.refresh_from_db()
+        ali_approval = self.req.approvals.get(approver=self.ali)
+        self.assertEqual(self.req.status, 'pending')
+        self.assertEqual(ali_approval.decision, 'pending')
+        self.assertIsNone(self.req.leave_record)
+
+        # Retry after the transient failure clears must succeed cleanly.
+        record_approver_decision(self.req, self.ali, 'approved')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'approved')
+        self.assertIsNotNone(self.req.leave_record)
+
+    def test_edit_decision_within_window_updates_and_finalizes(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        edit_approver_decision(self.req, self.aamna, 'disapproved', edit_note='Misclicked, meant to disapprove.')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'disapproved')
+        aamna_approval = self.req.approvals.get(approver=self.aamna)
+        self.assertEqual(aamna_approval.decision, 'disapproved')
+        note = self.req.notes.get()
+        self.assertIn('Misclicked, meant to disapprove.', note.note)
+        self.assertEqual(note.author, self.aamna)
+
+    def test_edit_decision_requires_note(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        with self.assertRaises(ValueError):
+            edit_approver_decision(self.req, self.aamna, 'disapproved', edit_note='')
+
+    def test_edit_decision_rejected_after_24_hour_window(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        approval = self.req.approvals.get(approver=self.aamna)
+        approval.decided_at = timezone.now() - timedelta(hours=25)
+        approval.save(update_fields=['decided_at'])
+        with self.assertRaises(ValueError):
+            edit_approver_decision(self.req, self.aamna, 'disapproved', edit_note='Too late now.')
+
+    def test_edit_decision_rejected_once_request_finalized(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        record_approver_decision(self.req, self.ali, 'approved')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'approved')
+        with self.assertRaises(ValueError):
+            edit_approver_decision(self.req, self.aamna, 'disapproved', edit_note='Changed my mind.')
+
+    def test_edit_decision_rejected_without_prior_decision(self):
+        with self.assertRaises(ValueError):
+            edit_approver_decision(self.req, self.aamna, 'approved', edit_note='No prior decision exists.')
 
     def test_override_approve_finalizes_and_skips_remaining(self):
         superadmin = make_user('super1')
@@ -1786,6 +2165,44 @@ class LeaveRequestDocumentAccessTests(TestCase):
         self.assertEqual(resp.status_code, 302)
 
 
+class CanViewLeaveDashboardTests(TestCase):
+    """Unit tests for hr.views.can_view_leave_dashboard, independent of any
+    specific view. LeaveDashboardAccess is the single merged roster — an
+    active grant is both 'can view the dashboard' and 'is a real approver'
+    (see is_designated_approver / submit_leave_request) — while Super Admin
+    status alone only grants viewing, never approval authority by itself."""
+    def setUp(self):
+        from accounts.models import Role
+        self.role, _ = Role.objects.get_or_create(name='super_admin')
+
+    def test_super_admin_can_view(self):
+        from hr.views import can_view_leave_dashboard
+        user = make_user('cvld_super', password='x')
+        user.role = self.role
+        user.save()
+        self.assertTrue(can_view_leave_dashboard(user))
+
+    def test_plain_user_cannot_view(self):
+        from hr.views import can_view_leave_dashboard
+        user = make_user('cvld_plain', password='x')
+        user.save()
+        self.assertFalse(can_view_leave_dashboard(user))
+
+    def test_user_with_active_grant_can_view(self):
+        from hr.views import can_view_leave_dashboard
+        user = make_user('cvld_grantee', password='x')
+        user.save()
+        LeaveDashboardAccess.objects.create(user=user, is_active=True)
+        self.assertTrue(can_view_leave_dashboard(user))
+
+    def test_user_with_inactive_grant_cannot_view(self):
+        from hr.views import can_view_leave_dashboard
+        user = make_user('cvld_revoked', password='x')
+        user.save()
+        LeaveDashboardAccess.objects.create(user=user, is_active=False)
+        self.assertFalse(can_view_leave_dashboard(user))
+
+
 class LeaveRequestQueueViewTests(TestCase):
     def setUp(self):
         self.emp = make_employee()
@@ -1817,6 +2234,11 @@ class LeaveRequestQueueViewTests(TestCase):
         self.assertEqual(resp.status_code, 403)
 
     def test_admin_can_log_request_on_employees_behalf(self):
+        # entitled_days (set in setUp) must cover BOTH self.pending (setUp's
+        # own 3-day Marriage request, still pending) AND this test's own
+        # 2-day request — check_leave_balance now counts other pending
+        # requests as already-spoken-for balance, so 3 alone would leave 0
+        # available.
         self.client.login(username='queue_super', password='testpass123')
         resp = self.client.post(reverse('hr:leave_request_create'), {
             'employee': self.emp.pk, 'leave_type': self.marriage.pk,
@@ -1826,6 +2248,78 @@ class LeaveRequestQueueViewTests(TestCase):
         new_req = LeaveRequest.objects.exclude(pk=self.pending.pk).get()
         self.assertEqual(new_req.created_by, self.superadmin)
         self.assertEqual(new_req.approvals.count(), 0)  # approvals seeded in Task 4f alongside submission wiring — see note below
+
+    def test_race_condition_valueerror_from_submit_re_renders_form_with_error(self):
+        from unittest.mock import patch
+        self.client.login(username='queue_super', password='testpass123')
+        with patch('hr.leave_approval_services.submit_leave_request',
+                   side_effect=ValueError('Someone else just took that balance.')):
+            resp = self.client.post(reverse('hr:leave_request_create'), {
+                'employee': self.emp.pk, 'leave_type': self.marriage.pk,
+                'start_date': '2026-09-01', 'end_date': '2026-09-02', 'employee_reason': 'Family event',
+            })
+        self.assertEqual(resp.status_code, 200)  # re-rendered, not redirected
+        self.assertContains(resp, 'Someone else just took that balance.')
+        self.assertFalse(LeaveRequest.objects.exclude(pk=self.pending.pk).exists())
+
+    def test_designated_approver_can_view_queue(self):
+        approver = make_user('queue_approver', password='x')
+        approver.set_password('testpass123')
+        approver.save()
+        LeaveDashboardAccess.objects.create(user=approver, is_active=True)
+        self.client.login(username='queue_approver', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_sort_by_vacation_date(self):
+        later_vacation_earlier_submission = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 7, 1), end_date=_date(2026, 7, 2))
+        self.client.login(username='queue_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'), {'sort': 'vacation_date'})
+        ids_in_order = [r.pk for r in resp.context['pending_requests']]
+        self.assertEqual(ids_in_order, [later_vacation_earlier_submission.pk, self.pending.pk])
+
+    def test_default_sort_is_submission_date(self):
+        LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 7, 1), end_date=_date(2026, 7, 2))
+        self.client.login(username='queue_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        ids_in_order = [r.pk for r in resp.context['pending_requests']]
+        self.assertEqual(ids_in_order[0], self.pending.pk)  # oldest submission still first
+
+    def test_user_granted_leave_dashboard_access_can_view_queue(self):
+        # Not a Super Admin — the only thing granting this user visibility
+        # is an active LeaveDashboardAccess row.
+        grantee = make_user('queue_grantee', password='x')
+        grantee.set_password('testpass123')
+        grantee.save()
+        LeaveDashboardAccess.objects.create(user=grantee, is_active=True, granted_by=self.superadmin)
+        self.client.login(username='queue_grantee', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_history_shows_who_decided(self):
+        aamna = make_user('queue_history_aamna', password='x', first_name='Aamna', last_name='Khan')
+        LeaveDashboardAccess.objects.create(user=aamna, is_active=True)
+        LeaveRequestApproval.objects.create(leave_request=self.pending, approver=aamna, decision='approved')
+        self.pending.status = 'approved'
+        self.pending.decided_at = timezone.now()
+        self.pending.save(update_fields=['status', 'decided_at'])
+        self.client.login(username='queue_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertContains(resp, 'by Aamna Khan')
+
+    def test_inactive_leave_dashboard_access_does_not_grant_view(self):
+        from hr.models import LeaveDashboardAccess
+        grantee = make_user('queue_revoked', password='x')
+        grantee.set_password('testpass123')
+        grantee.save()
+        LeaveDashboardAccess.objects.create(user=grantee, is_active=False, granted_by=self.superadmin)
+        self.client.login(username='queue_revoked', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertEqual(resp.status_code, 403)
 
 
 class LeaveRequestDetailViewTests(TestCase):
@@ -1885,6 +2379,38 @@ class LeaveRequestDetailViewTests(TestCase):
         self.assertEqual(self.req.status, 'approved')
         self.assertTrue(self.req.is_overridden)
 
+    def test_detail_page_shows_who_decided(self):
+        self.aamna.first_name, self.aamna.last_name = 'Aamna', 'Khan'
+        self.aamna.save()
+        self.ali.first_name, self.ali.last_name = 'Ali', 'Sultan'
+        self.ali.save()
+        self.client.login(username='detail_aamna', password='testpass123')
+        self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                         {'action': 'decide', 'decision': 'approved', 'comment': 'ok'})
+        self.client.login(username='detail_ali', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                                {'action': 'decide', 'decision': 'approved', 'comment': 'ok'}, follow=True)
+        self.assertContains(resp, 'by Aamna Khan, Ali Sultan')
+
+    def test_page_renders_when_overriding_user_was_deleted(self):
+        # Regression: overridden_by is on_delete=SET_NULL, so a historical
+        # request can have is_overridden=True but overridden_by=None once
+        # the overriding account is deleted. The template dereferenced
+        # overridden_by.username as a *filter argument* (default:...), which
+        # Django does not null-guard — this crashed with
+        # VariableDoesNotExist for any such row.
+        self.client.login(username='detail_super', password='testpass123')
+        self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]),
+                         {'action': 'override', 'decision': 'approved', 'reason': 'Ali is on leave'})
+        self.superadmin.delete()
+        self.req.refresh_from_db()
+        self.assertTrue(self.req.is_overridden)
+        self.assertIsNone(self.req.overridden_by_id)
+        self.client.login(username='detail_aamna', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Overridden')
+
     def test_add_note_by_non_superadmin_approver_forbidden(self):
         # A Super Admin with no approval row on this specific request is
         # view-only aside from the override escape hatch — add_note requires
@@ -1895,6 +2421,16 @@ class LeaveRequestDetailViewTests(TestCase):
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(self.req.notes.count(), 0)
 
+    def test_non_assigned_superadmin_does_not_see_add_note_form(self):
+        self.client.login(username='detail_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertNotContains(resp, 'name="note"')
+
+    def test_assigned_approver_sees_add_note_form(self):
+        self.client.login(username='detail_aamna', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertContains(resp, 'name="note"')
+
     def test_non_approver_non_superadmin_cannot_decide(self):
         outsider = make_user('detail_outsider', password='x')
         outsider.set_password('testpass123')
@@ -1903,186 +2439,15 @@ class LeaveRequestDetailViewTests(TestCase):
         resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
         self.assertEqual(resp.status_code, 403)
 
-
-class MyProfileLeaveRequestTests(TestCase):
-    def setUp(self):
-        self.emp = make_employee()
-        self.marriage, _ = LeaveType.objects.get_or_create(
-            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
-        self.user = make_user('profile_user', password='x')
-        self.user.set_password('testpass123')
-        self.user.save()
-        self.emp.user = self.user
-        self.emp.save(update_fields=['user'])
-        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.marriage, year=2026, entitled_days=10)
-
-    def test_profile_shows_own_requests(self):
-        LeaveRequest.objects.create(employee=self.emp, leave_type=self.marriage,
-                                    start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 2))
-        self.client.login(username='profile_user', password='testpass123')
-        resp = self.client.get(reverse('hr:my_profile'))
+    def test_user_granted_leave_dashboard_access_can_view_detail(self):
+        from hr.models import LeaveDashboardAccess
+        grantee = make_user('detail_grantee', password='x')
+        grantee.set_password('testpass123')
+        grantee.save()
+        LeaveDashboardAccess.objects.create(user=grantee, is_active=True, granted_by=self.superadmin)
+        self.client.login(username='detail_grantee', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, 'Marriage')
-
-    def test_employee_can_submit_own_request(self):
-        self.client.login(username='profile_user', password='testpass123')
-        resp = self.client.post(reverse('hr:my_profile'), {
-            'action': 'request_leave', 'leave_type': self.marriage.pk,
-            'start_date': '2026-09-10', 'end_date': '2026-09-11', 'employee_reason': 'Wedding',
-        })
-        self.assertEqual(resp.status_code, 302)
-        req = LeaveRequest.objects.get(employee=self.emp)
-        self.assertEqual(req.created_by, self.user)
-        self.assertEqual(req.status, 'pending')
-
-
-def _make_role_user(username, role_name):
-    """A logged-in test user holding a specific Role (e.g. super_admin, ai_head)."""
-    role, _ = Role.objects.get_or_create(name=role_name)
-    user = make_user(username, password='x')
-    user.set_password('testpass123')
-    user.role = role
-    user.save()
-    return user
-
-
-def _login_user(username):
-    user = make_user(username, password='x')
-    user.set_password('testpass123')
-    user.save()
-    return user
-
-
-
-class GenerateEntitlementsForEmployeeTests(TestCase):
-    """Unit coverage of hr.leave_services.generate_entitlements_for_employee —
-    the single-employee helper shared by generate_year_entitlements (bulk)
-    and the new-employee auto-generation hooks below."""
-    def setUp(self):
-        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={
-            'name': 'Annual', 'default_annual_days': 30})
-        self.sick, _ = LeaveType.objects.update_or_create(
-            code='sick', defaults={'name': 'Sick', 'default_annual_days': 12, 'is_active': True})
-        self.emp = make_employee('GEFE-1', 'Solo Employee')
-
-    def test_creates_one_row_per_active_leave_type(self):
-        # Not asserting an exact `created` count here: a data migration
-        # (0024_leavetype_task1_values) pre-seeds several canonical LeaveType
-        # rows (annual, sick, marriage, ...) into every test database, so the
-        # real active-type count is >= the 2 this test explicitly cares about.
-        from hr.leave_services import generate_entitlements_for_employee
-        created = generate_entitlements_for_employee(self.emp, 2026)
-        self.assertGreaterEqual(created, 2)
-        self.assertEqual(
-            LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.annual, year=2026).entitled_days,
-            Decimal('30'))
-        self.assertEqual(
-            LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.sick, year=2026).entitled_days,
-            Decimal('12'))
-
-    def test_does_not_overwrite_existing_row(self):
-        from hr.leave_services import generate_entitlements_for_employee
-        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=99)
-        generate_entitlements_for_employee(self.emp, 2026)
-        self.assertEqual(
-            LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.annual, year=2026).entitled_days,
-            Decimal('99'))
-
-    def test_ignores_inactive_leave_types(self):
-        from hr.leave_services import generate_entitlements_for_employee
-        inactive_lt, _ = LeaveType.objects.get_or_create(code='defunct', defaults={
-            'name': 'Defunct', 'default_annual_days': 5, 'is_active': False})
-        generate_entitlements_for_employee(self.emp, 2026)
-        self.assertFalse(LeaveEntitlement.objects.filter(employee=self.emp, leave_type=inactive_lt).exists())
-
-
-
-class NewEmployeeAutoEntitlementTests(TestCase):
-    """A newly added employee (via the real 'Add Employee' form or the Excel
-    import) automatically gets this year's leave balances — no separate
-    manual 'Generate' step needed. Deliberately hooked into these two actual
-    creation entry points, NOT Employee.save() itself: a model-level hook
-    would fire on every raw Employee.objects.create() across the whole test
-    suite (and any future script), silently colliding with the ~30 existing
-    tests that create their own LeaveEntitlement rows for a just-created
-    employee in the current year."""
-    def setUp(self):
-        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={
-            'name': 'Annual', 'default_annual_days': 30})
-        self.admin = _make_role_user('neaet_admin', Role.SUPER_ADMIN)
-        self.this_year = timezone.now().year
-
-    def test_creating_employee_via_form_generates_entitlements(self):
-        self.client.login(username='neaet_admin', password='testpass123')
-        resp = self.client.post(reverse('hr:employee_create'), {
-            'iqama_number': 'NEAET-1', 'full_name': 'Fresh Hire', 'is_active': 'on',
-        })
-        self.assertEqual(resp.status_code, 302)
-        emp = Employee.objects.get(iqama_number='NEAET-1')
-        ent = LeaveEntitlement.objects.get(employee=emp, leave_type=self.annual, year=self.this_year)
-        self.assertEqual(ent.entitled_days, Decimal('30'))
-
-    def test_creating_inactive_employee_via_form_generates_no_entitlements(self):
-        self.client.login(username='neaet_admin', password='testpass123')
-        resp = self.client.post(reverse('hr:employee_create'), {
-            'iqama_number': 'NEAET-2', 'full_name': 'Not Yet Active',
-        })
-        self.assertEqual(resp.status_code, 302)
-        emp = Employee.objects.get(iqama_number='NEAET-2')
-        self.assertFalse(emp.is_active)
-        self.assertFalse(LeaveEntitlement.objects.filter(employee=emp).exists())
-
-    def test_updating_existing_employee_does_not_regenerate(self):
-        # EmployeeUpdateView reuses EmployeeForm but is a different view
-        # (UpdateView, not CreateView) — this hook lives only in
-        # EmployeeCreateView.form_valid, so an edit must never touch entitlements.
-        emp = make_employee('NEAET-3', 'Existing Employee')
-        self.client.login(username='neaet_admin', password='testpass123')
-        resp = self.client.post(reverse('hr:employee_update', args=[emp.pk]), {
-            'iqama_number': 'NEAET-3', 'full_name': 'Existing Employee Renamed', 'is_active': 'on',
-        })
-        self.assertEqual(resp.status_code, 302)
-        self.assertFalse(LeaveEntitlement.objects.filter(employee=emp).exists())
-
-
-
-class CanViewLeaveDashboardTests(TestCase):
-    """Unit tests for hr.views.can_view_leave_dashboard, independent of any
-    specific view. LeaveDashboardAccess is the single merged roster — an
-    active grant is both 'can view the dashboard' and 'is a real approver'
-    (see is_designated_approver / submit_leave_request) — while Super Admin
-    status alone only grants viewing, never approval authority by itself."""
-    def setUp(self):
-        from accounts.models import Role
-        self.role, _ = Role.objects.get_or_create(name='super_admin')
-
-    def test_super_admin_can_view(self):
-        from hr.views import can_view_leave_dashboard
-        user = make_user('cvld_super', password='x')
-        user.role = self.role
-        user.save()
-        self.assertTrue(can_view_leave_dashboard(user))
-
-    def test_plain_user_cannot_view(self):
-        from hr.views import can_view_leave_dashboard
-        user = make_user('cvld_plain', password='x')
-        user.save()
-        self.assertFalse(can_view_leave_dashboard(user))
-
-    def test_user_with_active_grant_can_view(self):
-        from hr.views import can_view_leave_dashboard
-        user = make_user('cvld_grantee', password='x')
-        user.save()
-        LeaveDashboardAccess.objects.create(user=user, is_active=True)
-        self.assertTrue(can_view_leave_dashboard(user))
-
-    def test_user_with_inactive_grant_cannot_view(self):
-        from hr.views import can_view_leave_dashboard
-        user = make_user('cvld_revoked', password='x')
-        user.save()
-        LeaveDashboardAccess.objects.create(user=user, is_active=False)
-        self.assertFalse(can_view_leave_dashboard(user))
-
 
 
 class CheckLeaveBalanceTests(TestCase):
@@ -2142,7 +2507,6 @@ class CheckLeaveBalanceTests(TestCase):
         self.check_leave_balance(self.emp, self.marriage, _date(2026, 9, 1), _date(2026, 9, 3))
 
 
-
 class LeaveRequestFormCrossYearTests(TestCase):
     """LeaveRequestForm.clean() must reject a date range spanning two
     calendar years — LeaveEntitlement (and check_leave_balance) is keyed per
@@ -2179,6 +2543,153 @@ class LeaveRequestFormCrossYearTests(TestCase):
         }, fixed_employee=self.emp)
         self.assertFalse(form.is_valid())
         self.assertIn('end_date', form.errors)
+
+
+class MyProfileLeaveRequestTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee()
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.annual, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+        self.user = make_user('profile_user', password='x')
+        self.user.set_password('testpass123')
+        self.user.save()
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        # The balance guardrail (check_leave_balance in hr/forms.py) now blocks any
+        # submission without a matching LeaveEntitlement row — set up sufficient
+        # balance so "can submit" tests exercise the real success path, not a
+        # validation bypass.
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.marriage, year=2026, entitled_days=3)
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.annual, year=2026, entitled_days=30)
+
+    def test_profile_shows_own_requests(self):
+        LeaveRequest.objects.create(employee=self.emp, leave_type=self.marriage,
+                                    start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 2))
+        self.client.login(username='profile_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Marriage')
+
+    def test_employee_can_submit_own_request(self):
+        self.client.login(username='profile_user', password='testpass123')
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'request_leave', 'leave_type': self.marriage.pk,
+            'start_date': '2026-09-10', 'end_date': '2026-09-11', 'employee_reason': 'Wedding',
+        })
+        self.assertEqual(resp.status_code, 302)
+        req = LeaveRequest.objects.get(employee=self.emp)
+        self.assertEqual(req.created_by, self.user)
+        self.assertEqual(req.status, 'pending')
+
+    def test_request_exceeding_balance_is_rejected_with_visible_error(self):
+        # Marriage entitlement is 3 days (setUp); this request spans 10 days.
+        self.client.login(username='profile_user', password='testpass123')
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'request_leave', 'leave_type': self.marriage.pk,
+            'start_date': '2026-09-01', 'end_date': '2026-09-10', 'employee_reason': 'Too long',
+        })
+        self.assertEqual(resp.status_code, 200)  # re-renders the form, no redirect
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.emp).exists())
+        self.assertContains(resp, 'only 3')  # the remaining-balance error message
+        # Regression: the error lives inside a Bootstrap-collapsed panel that
+        # defaults to hidden — without the 'show' class, the error is present
+        # in the HTML but invisible to the user.
+        self.assertContains(resp, '<div class="collapse mb-3 show" id="requestLeaveForm">')
+
+    def test_request_without_entitlement_setup_is_rejected_with_visible_error(self):
+        self.client.login(username='profile_user', password='testpass123')
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'request_leave', 'leave_type': self.marriage.pk,
+            'start_date': '2027-01-05', 'end_date': '2027-01-06', 'employee_reason': 'No entitlement for 2027',
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.emp).exists())
+        self.assertContains(resp, 'No leave entitlement has been set up')
+        self.assertContains(resp, '<div class="collapse mb-3 show" id="requestLeaveForm">')
+
+    def test_end_date_before_start_date_is_rejected_with_visible_error(self):
+        self.client.login(username='profile_user', password='testpass123')
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'request_leave', 'leave_type': self.marriage.pk,
+            'start_date': '2026-09-10', 'end_date': '2026-09-05', 'employee_reason': 'Backwards range',
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.emp).exists())
+        self.assertContains(resp, 'End date cannot be before start date')
+
+    def test_collapse_panel_stays_closed_on_normal_page_load(self):
+        self.client.login(username='profile_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, '<div class="collapse mb-3" id="requestLeaveForm">')
+
+    def test_race_condition_valueerror_from_submit_shows_error_and_expands_panel(self):
+        # Simulates submit_leave_request's locked, authoritative re-check
+        # catching something the form's own (unlocked) pre-check missed —
+        # e.g. a genuinely concurrent submission. The form itself validated
+        # fine, so form.errors is empty; the panel must still expand via the
+        # dedicated leave_request_submit_failed flag, and the message
+        # framework banner must carry the actual error.
+        from unittest.mock import patch
+        self.client.login(username='profile_user', password='testpass123')
+        with patch('hr.leave_approval_services.submit_leave_request',
+                   side_effect=ValueError('Someone else just took that balance.')):
+            resp = self.client.post(reverse('hr:my_profile'), {
+                'action': 'request_leave', 'leave_type': self.marriage.pk,
+                'start_date': '2026-09-10', 'end_date': '2026-09-11', 'employee_reason': 'Wedding',
+            })
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Someone else just took that balance.')
+        self.assertContains(resp, '<div class="collapse mb-3 show" id="requestLeaveForm">')
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.emp).exists())
+
+    def test_profile_shows_who_decided_approved_request(self):
+        req = LeaveRequest.objects.create(employee=self.emp, leave_type=self.marriage,
+                                          start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 2))
+        approver = make_user('profile_approver', password='x', first_name='Sarah', last_name='A')
+        LeaveDashboardAccess.objects.create(user=approver, is_active=True)
+        LeaveRequestApproval.objects.create(leave_request=req, approver=approver)
+        from hr.leave_approval_services import record_approver_decision
+        record_approver_decision(req, approver, 'approved')
+        self.client.login(username='profile_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'by Sarah A')
+
+    def test_employee_self_service_annual_leave_now_requires_approval(self):
+        # Annual used to be recorded immediately with no approval step (the
+        # "accumulative types skip approval" rule) — that bypass was removed:
+        # every leave type, Annual included, now goes into the same pending
+        # queue and needs Approve/Disapprove, exactly like Sick/Marriage/etc.
+        # is_accumulative still controls the summary-total aggregation on this
+        # same page (unchanged), just no longer bypasses approval.
+        self.client.login(username='profile_user', password='testpass123')
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'request_leave', 'leave_type': self.annual.pk,
+            'start_date': '2026-09-10', 'end_date': '2026-09-11', 'employee_reason': 'Vacation',
+        })
+        self.assertEqual(resp.status_code, 302)
+        req = LeaveRequest.objects.get(employee=self.emp, leave_type=self.annual)
+        self.assertEqual(req.status, 'pending')
+        self.assertFalse(LeaveRecord.objects.filter(employee=self.emp, leave_type=self.annual).exists())
+
+    def test_annual_leave_balance_deducted_only_once_approved(self):
+        approver = make_user('profile_annual_approver', password='x')
+        LeaveDashboardAccess.objects.create(user=approver, is_active=True)
+        self.client.login(username='profile_user', password='testpass123')
+        self.client.post(reverse('hr:my_profile'), {
+            'action': 'request_leave', 'leave_type': self.annual.pk,
+            'start_date': '2026-09-10', 'end_date': '2026-09-11', 'employee_reason': 'Vacation',
+        })
+        req = LeaveRequest.objects.get(employee=self.emp, leave_type=self.annual)
+        self.assertFalse(LeaveRecord.objects.filter(employee=self.emp, leave_type=self.annual).exists())
+
+        from hr.leave_approval_services import record_approver_decision
+        record_approver_decision(req, approver, 'approved')
+        req.refresh_from_db()
+        self.assertEqual(req.status, 'approved')
+        rec = LeaveRecord.objects.get(employee=self.emp, leave_type=self.annual)
+        self.assertEqual(rec.days, Decimal('2'))
 
 
 
@@ -2234,6 +2745,1368 @@ class LeaveRequestDecidedByDisplayTests(TestCase):
         self.assertEqual(self.req.decided_by_display, '(override — approver account no longer exists)')
 
 
+from datetime import datetime as _datetime, time as _time
+from django.utils import timezone as _timezone
+from hr.models import AttendanceException
+
+
+class EmployeeDownstreamChainTests(TestCase):
+    def setUp(self):
+        self.head = make_employee(iqama='CHAIN-HEAD', name='Head')
+        self.mid = make_employee(iqama='CHAIN-MID', name='Mid')
+        self.mid.main_manager = self.head
+        self.mid.save()
+        self.leaf1 = make_employee(iqama='CHAIN-LEAF1', name='Leaf1')
+        self.leaf1.main_manager = self.mid
+        self.leaf1.save()
+        self.leaf2 = make_employee(iqama='CHAIN-LEAF2', name='Leaf2')
+        self.leaf2.main_manager = self.mid
+        self.leaf2.save()
+
+    def test_main_reports_only(self):
+        self.assertEqual(set(e.pk for e in self.head.main_reports.all()), {self.mid.pk})
+
+    def test_full_downstream_chain(self):
+        ids = self.head.get_downstream_employee_ids()
+        self.assertEqual(set(ids), {self.mid.pk, self.leaf1.pk, self.leaf2.pk})
+
+    def test_leaf_has_no_downstream(self):
+        self.assertEqual(self.leaf1.get_downstream_employee_ids(), [])
+
+    def test_manager_deletion_does_not_cascade_to_reports(self):
+        head_pk = self.head.pk
+        self.head.delete()
+        self.mid.refresh_from_db()
+        self.assertIsNone(self.mid.main_manager_id)
+        self.assertFalse(Employee.objects.filter(pk=head_pk).exists())
+
+
+class AttendanceExceptionModelTests(TestCase):
+    def setUp(self):
+        self.manager_emp = make_employee(iqama='AE-MGR', name='Manager Person')
+        self.emp = make_employee(iqama='AE-EMP', name='Field Employee')
+        self.emp.main_manager = self.manager_emp
+        self.emp.save()
+
+    def _make(self, **overrides):
+        defaults = dict(
+            employee=self.emp, event_date=date(2026, 8, 10), event_start_time=_time(9, 0),
+            reason_category='site_visit', main_manager=self.manager_emp,
+        )
+        defaults.update(overrides)
+        return AttendanceException(**defaults)
+
+    def test_other_category_requires_custom_reason(self):
+        exc = self._make(reason_category='other', custom_reason='')
+        with self.assertRaises(ValidationError):
+            exc.full_clean()
+
+    def test_other_category_with_custom_reason_is_valid(self):
+        exc = self._make(reason_category='other', custom_reason='Client emergency call')
+        exc.full_clean()  # should not raise
+
+    def test_event_start_combines_date_and_time(self):
+        exc = self._make()
+        expected = _timezone.make_aware(_datetime(2026, 8, 10, 9, 0))
+        self.assertEqual(exc.event_start, expected)
+
+    def test_decision_window_boundaries(self):
+        exc = self._make()
+        exc.save()
+        self.assertEqual(exc.decision_window_opens_at, exc.event_start - timedelta(days=7))
+        self.assertEqual(exc.decision_deadline, exc.event_start + timedelta(hours=24))
+
+    def test_is_within_decision_window_true_just_before_event(self):
+        exc = self._make()
+        exc.save()
+        now = exc.event_start - timedelta(days=1)
+        self.assertTrue(exc.is_within_decision_window(now=now))
+
+    def test_is_within_decision_window_false_too_early(self):
+        exc = self._make()
+        exc.save()
+        now = exc.event_start - timedelta(days=8)
+        self.assertFalse(exc.is_within_decision_window(now=now))
+
+    def test_is_overdue_after_24h(self):
+        exc = self._make()
+        exc.save()
+        now = exc.event_start + timedelta(hours=25)
+        self.assertTrue(exc.is_overdue(now=now))
+        self.assertFalse(exc.is_overdue(now=exc.event_start + timedelta(hours=23)))
+
+    def test_time_left_seconds_counts_down(self):
+        exc = self._make()
+        exc.save()
+        now = exc.event_start + timedelta(hours=23)
+        self.assertAlmostEqual(exc.time_left_seconds(now=now), 3600, delta=1)
+
+
+from hr.attendance_exception_services import (
+    submit_attendance_exception, decide_attendance_exception,
+    override_attendance_exception, expire_overdue_exceptions,
+)
+
+
+class AttendanceExceptionServiceTests(TestCase):
+    def setUp(self):
+        self.manager_emp = make_employee(iqama='AEX-MGR', name='Manager Person')
+        self.manager_user = make_user('aex_manager')
+        self.manager_emp.user = self.manager_user
+        self.manager_emp.save(update_fields=['user'])
+
+        self.emp = make_employee(iqama='AEX-EMP', name='Field Employee')
+        self.emp.main_manager = self.manager_emp
+        self.emp.save(update_fields=['main_manager'])
+        self.emp_user = make_user('aex_employee')
+        self.emp.user = self.emp_user
+        self.emp.save(update_fields=['user'])
+
+        self.creator = make_user('aex_creator')
+
+        self.today = _timezone.now().date()
+        self.in_window_time = _time(0, 1)
+
+    def _submit(self, **overrides):
+        defaults = dict(
+            employee=self.emp, event_date=self.today, event_start_time=self.in_window_time,
+            reason_category='site_visit', created_by=self.creator,
+        )
+        defaults.update(overrides)
+        return submit_attendance_exception(**defaults)
+
+    # -- submit --
+
+    def test_submit_snapshots_manager_and_notifies(self):
+        exc = self._submit()
+        self.assertEqual(exc.main_manager_id, self.manager_emp.pk)
+        self.assertEqual(exc.status, 'pending')
+        self.assertTrue(Notification.objects.filter(recipient=self.manager_user).exists())
+
+    def test_submit_with_no_manager_creates_no_notification(self):
+        lone = make_employee(iqama='AEX-LONE', name='Lone Wolf')
+        before = Notification.objects.count()
+        exc = submit_attendance_exception(
+            employee=lone, event_date=self.today, event_start_time=self.in_window_time,
+            reason_category='site_visit', created_by=self.creator,
+        )
+        self.assertIsNone(exc.main_manager)
+        self.assertEqual(Notification.objects.count(), before)
+
+    def test_duplicate_submission_for_same_event_rejected(self):
+        # A double-click or resubmit of the exact same event must not create
+        # a second pending row for the manager's queue.
+        self._submit()
+        with self.assertRaises(ValueError):
+            self._submit()
+        self.assertEqual(
+            AttendanceException.objects.filter(
+                employee=self.emp, event_date=self.today, event_start_time=self.in_window_time).count(),
+            1)
+
+    def test_resubmission_allowed_after_earlier_one_decided(self):
+        first = self._submit()
+        decide_attendance_exception(first, self.manager_user, 'rejected', note='Wrong info')
+        # Same employee/date/time, but the earlier one is no longer pending —
+        # a fresh submission for that same slot must be allowed through.
+        second = self._submit()
+        self.assertNotEqual(first.pk, second.pk)
+
+    def test_different_event_time_not_blocked(self):
+        self._submit()
+        other = self._submit(event_start_time=_time(0, 2))
+        self.assertIsNotNone(other.pk)
+
+    # -- decide --
+
+    def test_decide_approved_marks_present(self):
+        # Simplified outcome mapping: approved always upserts 'present'
+        # (excused) — late-vs-not is now derived automatically from real
+        # check-in time by the Wi-Fi/manual attendance-status derivation
+        # layer, not by a manual 'arrived late' flag on the decision itself.
+        exc = self._submit()
+        decide_attendance_exception(exc, self.manager_user, 'approved')
+        exc.refresh_from_db()
+        self.assertEqual(exc.status, 'approved')
+        record = AttendanceRecord.objects.get(employee=self.emp, date=self.today)
+        self.assertEqual(record.status, 'present')
+
+    def test_decide_rejected_marks_absent(self):
+        exc = self._submit()
+        decide_attendance_exception(exc, self.manager_user, 'rejected', note='No evidence')
+        record = AttendanceRecord.objects.get(employee=self.emp, date=self.today)
+        self.assertEqual(record.status, 'absent')
+
+    def test_decide_notifies_employee(self):
+        exc = self._submit()
+        decide_attendance_exception(exc, self.manager_user, 'approved')
+        self.assertTrue(
+            Notification.objects.filter(recipient=self.emp_user, verb__icontains='approved').exists())
+
+    def test_decide_wrong_manager_rejected(self):
+        exc = self._submit()
+        stranger = make_user('aex_stranger')
+        with self.assertRaises(ValueError):
+            decide_attendance_exception(exc, stranger, 'approved')
+
+    def test_decide_before_window_opens_now_allowed(self):
+        # Task 1: the is_within_decision_window() timing check was removed
+        # entirely from decide_attendance_exception — a manager may now
+        # decide even before the 7-days-early decision window would have
+        # opened. Only the status-window ({'pending', 'expired'}) and
+        # assigned-manager checks remain.
+        exc = self._submit(event_date=self.today + timedelta(days=10))
+        decide_attendance_exception(exc, self.manager_user, 'approved')
+        exc.refresh_from_db()
+        self.assertEqual(exc.status, 'approved')
+
+    def test_decide_after_24h_deadline_still_allowed_as_normal_decision(self):
+        # Task 1: a late decision (past decision_deadline) must be allowed to
+        # proceed as a normal decide — not blocked, not forced through the
+        # override path — and must still correctly derive the day's
+        # AttendanceRecord outcome.
+        exc = self._submit(event_date=self.today - timedelta(days=5))
+        decide_attendance_exception(exc, self.manager_user, 'rejected', note='Reviewed late')
+        exc.refresh_from_db()
+        self.assertEqual(exc.status, 'rejected')
+        self.assertFalse(exc.is_overridden)
+        record = AttendanceRecord.objects.get(employee=self.emp, date=exc.event_date)
+        self.assertEqual(record.status, 'absent')
+
+    def test_decide_auto_expired_request_still_decidable_by_real_manager(self):
+        # Task 1: decide_attendance_exception's allowed starting statuses
+        # widen from strictly {'pending'} to {'pending', 'expired'} — mirrors
+        # override_attendance_exception's existing allowance — so a request
+        # the cron sweep already auto-expired can still be decided normally
+        # (not via override) by the real assigned manager.
+        exc = self._submit(event_date=self.today - timedelta(days=5))
+        exc.status = 'expired'
+        exc.save(update_fields=['status'])
+        decide_attendance_exception(exc, self.manager_user, 'approved')
+        exc.refresh_from_db()
+        self.assertEqual(exc.status, 'approved')
+        self.assertFalse(exc.is_overridden)
+        record = AttendanceRecord.objects.get(employee=self.emp, date=exc.event_date)
+        self.assertEqual(record.status, 'present')
+
+    def test_decide_already_decided_rejected(self):
+        exc = self._submit()
+        decide_attendance_exception(exc, self.manager_user, 'approved')
+        with self.assertRaises(ValueError):
+            decide_attendance_exception(exc, self.manager_user, 'rejected')
+
+    def test_decide_race_guard_second_stale_call_rejected(self):
+        exc = self._submit()
+        stale1 = AttendanceException.objects.get(pk=exc.pk)
+        stale2 = AttendanceException.objects.get(pk=exc.pk)
+        decide_attendance_exception(stale1, self.manager_user, 'approved')
+        with self.assertRaises(ValueError):
+            decide_attendance_exception(stale2, self.manager_user, 'rejected')
+
+    def test_decide_own_request_rejected_even_for_the_assigned_manager(self):
+        # Guardrail applies even in the (pathological) case where the
+        # employee is somehow their own assigned main_manager — the
+        # self-approval check runs before the main_manager check.
+        exc = self._submit()
+        with self.assertRaises(ValueError):
+            decide_attendance_exception(exc, self.emp_user, 'approved')
+        exc.refresh_from_db()
+        self.assertEqual(exc.status, 'pending')
+
+    # -- override --
+
+    def test_override_pending_success(self):
+        exc = self._submit()
+        hr_user = make_user('aex_hr')
+        override_attendance_exception(exc, hr_user, 'approved', reason='Confirmed via site log')
+        exc.refresh_from_db()
+        self.assertEqual(exc.status, 'approved')
+        self.assertTrue(exc.is_overridden)
+        self.assertEqual(exc.overridden_by, hr_user)
+
+    def test_override_expired_success(self):
+        exc = self._submit(event_date=self.today - timedelta(days=5))
+        exc.status = 'expired'
+        exc.save(update_fields=['status'])
+        hr_user = make_user('aex_hr2')
+        override_attendance_exception(exc, hr_user, 'rejected', reason='No evidence provided')
+        exc.refresh_from_db()
+        self.assertEqual(exc.status, 'rejected')
+        record = AttendanceRecord.objects.get(employee=self.emp, date=exc.event_date)
+        self.assertEqual(record.status, 'absent')
+
+    def test_override_blank_reason_rejected(self):
+        exc = self._submit()
+        hr_user = make_user('aex_hr3')
+        with self.assertRaises(ValueError):
+            override_attendance_exception(exc, hr_user, 'approved', reason='   ')
+
+    def test_override_already_decided_rejected(self):
+        exc = self._submit()
+        decide_attendance_exception(exc, self.manager_user, 'approved')
+        hr_user = make_user('aex_hr4')
+        with self.assertRaises(ValueError):
+            override_attendance_exception(exc, hr_user, 'rejected', reason='Changing my mind')
+
+    def test_override_own_request_rejected_even_as_super_admin(self):
+        # Self-approval guardrail applies at the service layer regardless of
+        # the overriding user's role — a Super Admin who is also the
+        # request's own employee still cannot override their own request.
+        exc = self._submit()
+        with self.assertRaises(ValueError):
+            override_attendance_exception(exc, self.emp_user, 'approved', reason='Self-confirmed')
+        exc.refresh_from_db()
+        self.assertEqual(exc.status, 'pending')
+
+    # -- expire --
+
+    def test_expire_overdue_pending(self):
+        exc = self._submit(event_date=self.today - timedelta(days=5))
+        count = expire_overdue_exceptions()
+        exc.refresh_from_db()
+        self.assertEqual(count, 1)
+        self.assertEqual(exc.status, 'expired')
+        record = AttendanceRecord.objects.get(employee=self.emp, date=exc.event_date)
+        self.assertEqual(record.status, 'absent')
+        self.assertTrue(
+            Notification.objects.filter(recipient=self.emp_user, verb__icontains='expired').exists())
+        self.assertTrue(
+            Notification.objects.filter(recipient=self.manager_user, verb__icontains='expired').exists())
+
+    def test_expire_does_not_touch_in_window_pending(self):
+        exc = self._submit()
+        count = expire_overdue_exceptions()
+        exc.refresh_from_db()
+        self.assertEqual(count, 0)
+        self.assertEqual(exc.status, 'pending')
+
+    def test_expire_does_not_touch_already_decided(self):
+        exc = self._submit(event_date=self.today - timedelta(days=5))
+        hr_user = make_user('aex_hr5')
+        override_attendance_exception(exc, hr_user, 'approved', reason='Manually confirmed')
+        count = expire_overdue_exceptions()
+        exc.refresh_from_db()
+        self.assertEqual(count, 0)
+        self.assertEqual(exc.status, 'approved')
+
+
+# ─── Attendance Exception Workflow: start reminders + cron command ────────
+
+from django.core.management import call_command
+from hr.attendance_exception_services import send_pending_start_reminders
+
+
+class SendPendingStartRemindersTests(TestCase):
+    def setUp(self):
+        self.manager_emp = make_employee(iqama='AEXR-MGR', name='Manager Person')
+        self.manager_user = make_user('aexr_manager')
+        self.manager_emp.user = self.manager_user
+        self.manager_emp.save(update_fields=['user'])
+
+        self.emp = make_employee(iqama='AEXR-EMP', name='Field Employee')
+        self.emp.main_manager = self.manager_emp
+        self.emp.save(update_fields=['main_manager'])
+        self.emp_user = make_user('aexr_employee')
+        self.emp.user = self.emp_user
+        self.emp.save(update_fields=['user'])
+
+        self.creator = make_user('aexr_creator')
+
+    def _submit(self, started_ago=None, started_in=None, **overrides):
+        # Derive both date and time from the same local datetime so a
+        # midnight rollover can never split them across two different days.
+        if started_ago is not None:
+            dt = _timezone.localtime(_timezone.now() - started_ago)
+        else:
+            dt = _timezone.localtime(_timezone.now() + started_in)
+        defaults = dict(
+            employee=self.emp, event_date=dt.date(), event_start_time=dt.time(),
+            reason_category='site_visit', created_by=self.creator,
+        )
+        defaults.update(overrides)
+        return submit_attendance_exception(**defaults)
+
+    def test_reminds_manager_once_event_has_started(self):
+        exc = self._submit(started_ago=timedelta(hours=1))
+        count = send_pending_start_reminders()
+        exc.refresh_from_db()
+        self.assertEqual(count, 1)
+        self.assertIsNotNone(exc.reminder_sent_at)
+        self.assertTrue(
+            Notification.objects.filter(recipient=self.manager_user, verb__icontains='started').exists())
+
+    def test_does_not_remind_for_future_event(self):
+        exc = self._submit(started_in=timedelta(days=5))
+        count = send_pending_start_reminders()
+        exc.refresh_from_db()
+        self.assertEqual(count, 0)
+        self.assertIsNone(exc.reminder_sent_at)
+
+    def test_idempotent_across_repeated_calls(self):
+        self._submit(started_ago=timedelta(hours=1))
+        first = send_pending_start_reminders()
+        second = send_pending_start_reminders()
+        self.assertEqual(first, 1)
+        self.assertEqual(second, 0)
+        self.assertEqual(
+            Notification.objects.filter(recipient=self.manager_user, verb__icontains='started').count(), 1)
+
+    def test_no_linked_manager_login_still_marks_sent_without_notifying(self):
+        lone_manager = make_employee(iqama='AEXR-LONEMGR', name='Loneless Manager')
+        self.emp.main_manager = lone_manager
+        self.emp.save(update_fields=['main_manager'])
+        exc = self._submit(started_ago=timedelta(hours=1))
+        before = Notification.objects.count()
+        count = send_pending_start_reminders()
+        exc.refresh_from_db()
+        self.assertEqual(count, 1)
+        self.assertIsNotNone(exc.reminder_sent_at)
+        self.assertEqual(Notification.objects.count(), before)
+
+    def test_does_not_touch_already_decided_or_expired(self):
+        exc = self._submit(started_ago=timedelta(hours=1))
+        decide_attendance_exception(exc, self.manager_user, 'approved')
+        count = send_pending_start_reminders()
+        exc.refresh_from_db()
+        self.assertEqual(count, 0)
+        self.assertIsNone(exc.reminder_sent_at)
+
+
+class ProcessAttendanceExceptionsCommandTests(TestCase):
+    def setUp(self):
+        self.manager_emp = make_employee(iqama='AEXC-MGR', name='Manager Person')
+        self.manager_user = make_user('aexc_manager')
+        self.manager_emp.user = self.manager_user
+        self.manager_emp.save(update_fields=['user'])
+
+        self.emp = make_employee(iqama='AEXC-EMP', name='Field Employee')
+        self.emp.main_manager = self.manager_emp
+        self.emp.save(update_fields=['main_manager'])
+        self.emp_user = make_user('aexc_employee')
+        self.emp.user = self.emp_user
+        self.emp.save(update_fields=['user'])
+
+        self.creator = make_user('aexc_creator')
+
+    def _submit(self, event_date, event_start_time, **overrides):
+        defaults = dict(
+            employee=self.emp, event_date=event_date, event_start_time=event_start_time,
+            reason_category='site_visit', created_by=self.creator,
+        )
+        defaults.update(overrides)
+        return submit_attendance_exception(**defaults)
+
+    def test_command_sends_reminders_and_expires_overdue(self):
+        recent = _timezone.localtime(_timezone.now() - timedelta(hours=1))
+        reminder_due = self._submit(recent.date(), recent.time())
+
+        stale = _timezone.localtime(_timezone.now() - timedelta(days=5))
+        overdue = self._submit(stale.date(), stale.time(), employee=self.emp)
+
+        call_command('process_attendance_exceptions')
+
+        reminder_due.refresh_from_db()
+        overdue.refresh_from_db()
+
+        self.assertIsNotNone(reminder_due.reminder_sent_at)
+        self.assertTrue(
+            Notification.objects.filter(recipient=self.manager_user, verb__icontains='started').exists())
+
+        self.assertEqual(overdue.status, 'expired')
+        record = AttendanceRecord.objects.get(employee=self.emp, date=overdue.event_date)
+        self.assertEqual(record.status, 'absent')
+
+
+class EmployeeIsManagerOfTests(TestCase):
+    def setUp(self):
+        self.head = make_employee(iqama='IMO-HEAD', name='Head')
+        self.mid = make_employee(iqama='IMO-MID', name='Mid')
+        self.mid.main_manager = self.head
+        self.mid.save()
+        self.leaf = make_employee(iqama='IMO-LEAF', name='Leaf')
+        self.leaf.main_manager = self.mid
+        self.leaf.save()
+        self.outsider = make_employee(iqama='IMO-OUT', name='Outsider')
+
+    def test_direct_manager(self):
+        self.assertTrue(self.mid.is_manager_of(self.leaf))
+
+    def test_upstream_manager(self):
+        self.assertTrue(self.head.is_manager_of(self.leaf))
+
+    def test_not_a_manager(self):
+        self.assertFalse(self.outsider.is_manager_of(self.leaf))
+
+    def test_no_manager_at_all_returns_false(self):
+        self.assertFalse(self.outsider.is_manager_of(self.head))
+
+    def test_max_depth_exhausted_returns_false(self):
+        self.assertFalse(self.head.is_manager_of(self.leaf, max_depth=0))
+
+
+class EmployeeCleanCycleDetectionTests(TestCase):
+    """Employee.clean()'s guardrail against main_manager assignments that
+    would break the formal reporting line — direct self-assignment and
+    indirect (multi-hop) cycles."""
+
+    def test_direct_self_assignment_raises(self):
+        emp = make_employee(iqama='CYC-SELF', name='Self Referencer')
+        emp.main_manager = emp
+        with self.assertRaises(ValidationError):
+            emp.full_clean()
+
+    def test_three_node_cycle_raises(self):
+        a = make_employee(iqama='CYC-A', name='A')
+        b = make_employee(iqama='CYC-B', name='B')
+        c = make_employee(iqama='CYC-C', name='C')
+        b.main_manager = a
+        b.save()
+        c.main_manager = b
+        c.save()
+        # Closing the loop: A -> C -> B -> A.
+        a.main_manager = c
+        with self.assertRaises(ValidationError):
+            a.full_clean()
+
+    def test_valid_non_circular_chain_does_not_raise(self):
+        head = make_employee(iqama='CYC-HEAD', name='Head')
+        mid = make_employee(iqama='CYC-MID', name='Mid')
+        mid.main_manager = head
+        mid.save()
+        leaf = make_employee(iqama='CYC-LEAF', name='Leaf')
+        leaf.main_manager = mid
+        leaf.full_clean()  # should not raise
+
+
+# ─── Attendance Exception Workflow: forms, views, templates ──────────────
+
+from accounts.models import Role
+from django.contrib.messages import get_messages
+from hr.attendance_exception_services import submit_attendance_exception as _submit_aex
+
+
+def _make_role_user(username, role_name):
+    """A logged-in test user holding a specific Role (e.g. super_admin, ai_head)."""
+    role, _ = Role.objects.get_or_create(name=role_name)
+    user = make_user(username, password='x')
+    user.set_password('testpass123')
+    user.role = role
+    user.save()
+    return user
+
+
+def _login_user(username):
+    user = make_user(username, password='x')
+    user.set_password('testpass123')
+    user.save()
+    return user
+
+
+class MyProfileAttendanceExceptionTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee(iqama='MPAX-1', name='Field Worker')
+        self.user = _login_user('mpax_user')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+
+    def test_employee_can_submit_own_exception(self):
+        self.client.login(username='mpax_user', password='testpass123')
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'submit_attendance_exception',
+            'event_date': '2026-07-20', 'event_start_time': '09:30',
+            'reason_category': 'site_visit', 'custom_reason': '',
+        })
+        self.assertEqual(resp.status_code, 302)
+        exc = AttendanceException.objects.get(employee=self.emp)
+        self.assertEqual(exc.status, 'pending')
+        self.assertEqual(exc.created_by, self.user)
+
+    def test_submitted_exception_appears_in_profile_context(self):
+        _submit_aex(employee=self.emp, event_date=_date(2026, 7, 20), event_start_time=_time(9, 30),
+                    reason_category='site_visit', created_by=self.user)
+        self.client.login(username='mpax_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(resp.context['my_attendance_exceptions'][0].employee_id, [self.emp.pk])
+
+    def test_other_requires_custom_reason(self):
+        self.client.login(username='mpax_user', password='testpass123')
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'submit_attendance_exception',
+            'event_date': '2026-07-20', 'event_start_time': '09:30',
+            'reason_category': 'other', 'custom_reason': '',
+        })
+        self.assertEqual(resp.status_code, 200)  # form invalid, re-rendered
+        self.assertFalse(AttendanceException.objects.filter(employee=self.emp).exists())
+
+    def test_duplicate_submission_shows_error_not_500(self):
+        self.client.login(username='mpax_user', password='testpass123')
+        post_data = {
+            'action': 'submit_attendance_exception',
+            'event_date': '2026-07-20', 'event_start_time': '09:30',
+            'reason_category': 'site_visit', 'custom_reason': '',
+        }
+        self.client.post(reverse('hr:my_profile'), post_data)
+        resp = self.client.post(reverse('hr:my_profile'), post_data, follow=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(AttendanceException.objects.filter(employee=self.emp).count(), 1)
+
+
+class TeamExceptionsAccessTests(TestCase):
+    def setUp(self):
+        self.top = make_employee(iqama='TEX-TOP', name='Top Manager')
+        self.top_user = _login_user('tex_top')
+        self.top.user = self.top_user
+        self.top.save(update_fields=['user'])
+
+        self.mid = make_employee(iqama='TEX-MID', name='Mid Manager')
+        self.mid.main_manager = self.top
+        self.mid.save(update_fields=['main_manager'])
+        self.mid_user = _login_user('tex_mid')
+        self.mid.user = self.mid_user
+        self.mid.save(update_fields=['user'])
+
+        self.direct_report = make_employee(iqama='TEX-DIRECT', name='Direct Report')
+        self.direct_report.main_manager = self.mid
+        self.direct_report.save(update_fields=['main_manager'])
+
+        self.grandchild = make_employee(iqama='TEX-GRANDCHILD', name='Grandchild')
+        self.grandchild.main_manager = self.direct_report
+        self.grandchild.save(update_fields=['main_manager'])
+
+        self.exc_direct = _submit_aex(
+            employee=self.direct_report, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.top_user)
+        self.exc_grandchild = _submit_aex(
+            employee=self.grandchild, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.top_user)
+
+        self.plain_emp = make_employee(iqama='TEX-PLAIN', name='Plain Employee')
+        self.plain_user = _login_user('tex_plain')
+        self.plain_emp.user = self.plain_user
+        self.plain_emp.save(update_fields=['user'])
+
+        self.hr_user = _make_role_user('tex_hr', Role.SUPER_ADMIN)
+        self.ai_head_user = _make_role_user('tex_ai_head', Role.AI_HEAD)
+
+    def test_plain_employee_forbidden(self):
+        self.client.login(username='tex_plain', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_manager_with_main_reports_can_view(self):
+        self.client.login(username='tex_mid', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_head_role_user_can_view_with_zero_reports(self):
+        self.client.login(username='tex_ai_head', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_hr_sees_all_requests_on_all_organization_tab(self):
+        # Task 2: HR's global visibility now lives on the dedicated
+        # "All Organization Requests" tab (?tab=all), not the default view.
+        self.client.login(username='tex_hr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'all'})
+        self.assertEqual(resp.status_code, 200)
+        ids = {e.pk for e in resp.context['pending_exceptions']}
+        self.assertEqual(ids, {self.exc_direct.pk, self.exc_grandchild.pk})
+
+    def test_hr_default_tab_is_direct_and_empty_without_own_employee_profile(self):
+        # HR/Super-Admin test users have no linked Employee profile, so their
+        # default "Direct Reports" tab is empty — global visibility requires
+        # explicitly switching to "All Organization Requests".
+        self.client.login(username='tex_hr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context['tab'], 'direct')
+        ids = {e.pk for e in resp.context['pending_exceptions']}
+        self.assertEqual(ids, set())
+
+    def test_non_hr_requesting_all_tab_silently_falls_back_to_direct(self):
+        # A non-HR user somehow requesting ?tab=all must not error and must
+        # not leak org-wide data — it silently resolves to the same 'direct'
+        # tab/data they'd get with no ?tab param at all.
+        self.client.login(username='tex_mid', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'all'})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context['tab'], 'direct')
+        ids = {e.pk for e in resp.context['pending_exceptions']}
+        self.assertEqual(ids, {self.exc_direct.pk})
+        self.assertNotIn(self.exc_grandchild.pk, ids)
+
+    def test_mid_manager_sees_only_main_reports_by_default(self):
+        self.client.login(username='tex_mid', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        ids = {e.pk for e in resp.context['pending_exceptions']}
+        self.assertEqual(ids, {self.exc_direct.pk})
+
+    def test_secondary_tab_does_not_include_recursive_grandchild(self):
+        # Task 2 fix: the recursive downstream-hierarchy chain concept is
+        # removed from this page entirely. The "Secondary Reports" tab is
+        # scoped strictly to employee__secondary_managers — it does NOT pull
+        # in grandchildren via the main-manager chain. self.grandchild's
+        # main_manager is self.direct_report (not self.mid), and grandchild
+        # has no secondary_managers relationship to mid, so it must stay
+        # excluded from mid's "Secondary Reports" tab.
+        self.client.login(username='tex_mid', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'secondary'})
+        ids = {e.pk for e in resp.context['pending_exceptions']}
+        self.assertEqual(ids, set())
+
+    def test_page_renders_with_an_expired_request_in_history(self):
+        # Regression test: expired requests have decided_by=None (nobody
+        # decided — it just timed out), and the history table's template
+        # used to crash rendering that row with VariableDoesNotExist
+        # ("Failed lookup for key [username] in None") — a filter *argument*
+        # referencing a dotted lookup on None isn't silently swallowed the
+        # way a plain {{ var }} output is. Fixed by guarding with {% if %}.
+        from hr.attendance_exception_services import expire_overdue_exceptions
+        overdue = _submit_aex(
+            employee=self.direct_report, event_date=_date(2026, 6, 1), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.top_user)
+        overdue.event_date = date(2020, 1, 1)
+        overdue.save(update_fields=['event_date'])
+        expire_overdue_exceptions()
+        self.client.login(username='tex_mid', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Expired')
+
+
+class TeamExceptionsDecideOverrideTests(TestCase):
+    def setUp(self):
+        self.top = make_employee(iqama='TEXD-TOP', name='Top Manager')
+        self.top_user = _login_user('texd_top')
+        self.top.user = self.top_user
+        self.top.save(update_fields=['user'])
+
+        self.mid = make_employee(iqama='TEXD-MID', name='Mid Manager')
+        self.mid.main_manager = self.top
+        self.mid.save(update_fields=['main_manager'])
+        self.mid_user = _login_user('texd_mid')
+        self.mid.user = self.mid_user
+        self.mid.save(update_fields=['user'])
+
+        # A manager unrelated to the direct_report/grandchild chain — has its own
+        # direct report so it legitimately passes the page-level access gate,
+        # letting the 'not the assigned manager for *this* request' check in
+        # post() (rather than the view's test_func) be what actually denies it.
+        self.other_manager = make_employee(iqama='TEXD-OTHER', name='Other Manager')
+        self.other_manager_user = _login_user('texd_other')
+        self.other_manager.user = self.other_manager_user
+        self.other_manager.save(update_fields=['user'])
+        self.other_manager_report = make_employee(iqama='TEXD-OTHERREPORT', name='Other Manager Report')
+        self.other_manager_report.main_manager = self.other_manager
+        self.other_manager_report.save(update_fields=['main_manager'])
+
+        self.direct_report = make_employee(iqama='TEXD-DIRECT', name='Direct Report')
+        self.direct_report.main_manager = self.mid
+        self.direct_report.save(update_fields=['main_manager'])
+
+        self.grandchild = make_employee(iqama='TEXD-GRANDCHILD', name='Grandchild')
+        self.grandchild.main_manager = self.direct_report
+        self.grandchild.save(update_fields=['main_manager'])
+
+        self.hr_user = _make_role_user('texd_hr', Role.SUPER_ADMIN)
+
+        # Derive both date and time from the same local datetime so a
+        # midnight rollover can never split them across two different days.
+        event_start_dt = _timezone.localtime(_timezone.now() - timedelta(hours=1))
+        self.in_window_date = event_start_dt.date()
+        self.in_window_time = event_start_dt.time()
+
+        self.exc_direct = _submit_aex(
+            employee=self.direct_report, event_date=self.in_window_date, event_start_time=self.in_window_time,
+            reason_category='site_visit', created_by=self.top_user)
+        self.exc_grandchild = _submit_aex(
+            employee=self.grandchild, event_date=self.in_window_date, event_start_time=self.in_window_time,
+            reason_category='site_visit', created_by=self.top_user)
+
+    def _post(self, username, data):
+        self.client.login(username=username, password='testpass123')
+        return self.client.post(reverse('hr:team_exceptions'), data)
+
+    def test_assigned_manager_can_decide(self):
+        resp = self._post('texd_mid', {'action': 'decide', 'exc_id': self.exc_direct.pk, 'decision': 'approved'})
+        self.assertEqual(resp.status_code, 302)
+        self.exc_direct.refresh_from_db()
+        self.assertEqual(self.exc_direct.status, 'approved')
+
+    def test_non_assigned_manager_cannot_decide(self):
+        # 404, not 403: collapsing "not yours" and "doesn't exist" into one
+        # response closes the pk-existence oracle (same fix already applied
+        # to the leave workflow's document download view).
+        resp = self._post('texd_other', {'action': 'decide', 'exc_id': self.exc_direct.pk, 'decision': 'approved'})
+        self.assertEqual(resp.status_code, 404)
+        self.exc_direct.refresh_from_db()
+        self.assertEqual(self.exc_direct.status, 'pending')
+
+    def test_decide_nonexistent_request_also_404s(self):
+        resp = self._post('texd_other', {'action': 'decide', 'exc_id': 999999, 'decision': 'approved'})
+        self.assertEqual(resp.status_code, 404)
+
+    def test_hr_can_override_pending_with_reason(self):
+        resp = self._post('texd_hr', {
+            'action': 'override', 'exc_id': self.exc_direct.pk, 'decision': 'approved', 'reason': 'Confirmed by HR'})
+        self.assertEqual(resp.status_code, 302)
+        self.exc_direct.refresh_from_db()
+        self.assertEqual(self.exc_direct.status, 'approved')
+        self.assertTrue(self.exc_direct.is_overridden)
+
+    def test_hr_can_override_expired_with_reason(self):
+        self.exc_direct.status = 'expired'
+        self.exc_direct.save(update_fields=['status'])
+        resp = self._post('texd_hr', {
+            'action': 'override', 'exc_id': self.exc_direct.pk, 'decision': 'rejected', 'reason': 'No evidence'})
+        self.assertEqual(resp.status_code, 302)
+        self.exc_direct.refresh_from_db()
+        self.assertEqual(self.exc_direct.status, 'rejected')
+
+    def test_override_without_reason_rejected(self):
+        resp = self._post('texd_hr', {
+            'action': 'override', 'exc_id': self.exc_direct.pk, 'decision': 'approved', 'reason': ''})
+        self.assertEqual(resp.status_code, 302)
+        messages_list = list(get_messages(resp.wsgi_request))
+        self.assertTrue(any('reason' in str(m).lower() for m in messages_list))
+        self.exc_direct.refresh_from_db()
+        self.assertEqual(self.exc_direct.status, 'pending')
+
+    def test_upstream_non_direct_manager_can_override(self):
+        # top is not exc_grandchild's assigned manager (that's direct_report),
+        # but top is upstream of grandchild in the hierarchy.
+        resp = self._post('texd_top', {
+            'action': 'override', 'exc_id': self.exc_grandchild.pk, 'decision': 'approved',
+            'reason': 'Confirmed via upstream hierarchy'})
+        self.assertEqual(resp.status_code, 302)
+        self.exc_grandchild.refresh_from_db()
+        self.assertEqual(self.exc_grandchild.status, 'approved')
+        self.assertTrue(self.exc_grandchild.is_overridden)
+
+    def test_overriding_already_decided_request_rejected(self):
+        self._post('texd_mid', {'action': 'decide', 'exc_id': self.exc_direct.pk, 'decision': 'approved'})
+        self.exc_direct.refresh_from_db()
+        self.assertEqual(self.exc_direct.status, 'approved')
+        resp = self._post('texd_hr', {
+            'action': 'override', 'exc_id': self.exc_direct.pk, 'decision': 'rejected', 'reason': 'Changed my mind'})
+        self.assertEqual(resp.status_code, 302)
+        self.exc_direct.refresh_from_db()
+        self.assertEqual(self.exc_direct.status, 'approved')  # unchanged
+
+
+class SelfApprovalGuardrailTests(TestCase):
+    """A Super Admin who is also the request's own employee must never be
+    able to decide or override their own attendance exception request —
+    confirmed gap fix, enforced at both can_decide_attendance_exception
+    (view-layer gate) and decide_/override_attendance_exception
+    (service-layer, defense in depth)."""
+
+    def setUp(self):
+        self.hr_user = _make_role_user('selfapp_hr', Role.SUPER_ADMIN)
+        self.hr_emp = make_employee(iqama='SELFAPP-HR', name='Super Admin Employee')
+        self.hr_emp.user = self.hr_user
+        self.hr_emp.save(update_fields=['user'])
+
+        self.exc = _submit_aex(
+            employee=self.hr_emp, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.hr_user)
+
+    def test_can_decide_attendance_exception_false_for_own_request(self):
+        from hr.views import can_decide_attendance_exception
+        self.assertFalse(can_decide_attendance_exception(self.hr_user, self.exc))
+
+    def test_team_exceptions_page_shows_no_action_buttons_for_own_row(self):
+        # Task 2: HR's own request is only visible at all on the
+        # "All Organization Requests" tab — visible there, but still
+        # unactionable (self-approval guardrail).
+        self.client.login(username='selfapp_hr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'all'})
+        self.assertEqual(resp.status_code, 200)
+        row = next(e for e in resp.context['pending_exceptions'] if e.pk == self.exc.pk)
+        self.assertFalse(row.can_decide)
+        self.assertFalse(row.can_override)
+
+    def test_post_decide_own_request_blocked(self):
+        self.client.login(username='selfapp_hr', password='testpass123')
+        resp = self.client.post(reverse('hr:team_exceptions'),
+                                {'action': 'decide', 'exc_id': self.exc.pk, 'decision': 'approved'})
+        self.assertEqual(resp.status_code, 404)
+        self.exc.refresh_from_db()
+        self.assertEqual(self.exc.status, 'pending')
+
+    def test_post_override_own_request_blocked(self):
+        self.client.login(username='selfapp_hr', password='testpass123')
+        resp = self.client.post(reverse('hr:team_exceptions'), {
+            'action': 'override', 'exc_id': self.exc.pk, 'decision': 'approved', 'reason': 'Self-confirmed'})
+        self.assertEqual(resp.status_code, 404)
+        self.exc.refresh_from_db()
+        self.assertEqual(self.exc.status, 'pending')
+
+
+class TeamExceptionsSidebarLinkTests(TestCase):
+    def setUp(self):
+        self.manager_emp = make_employee(iqama='SBAR-MGR', name='Sidebar Manager')
+        self.manager_user = _login_user('sbar_mgr')
+        self.manager_emp.user = self.manager_user
+        self.manager_emp.save(update_fields=['user'])
+        self.report_emp = make_employee(iqama='SBAR-REPORT', name='Sidebar Report')
+        self.report_emp.main_manager = self.manager_emp
+        self.report_emp.save(update_fields=['main_manager'])
+
+        self.ai_head_user = _make_role_user('sbar_ai_head', Role.AI_HEAD)
+
+        self.plain_emp = make_employee(iqama='SBAR-PLAIN', name='Sidebar Plain')
+        self.plain_user = _login_user('sbar_plain')
+        self.plain_emp.user = self.plain_user
+        self.plain_emp.save(update_fields=['user'])
+
+    def test_link_renders_for_manager_with_reports(self):
+        self.client.login(username='sbar_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'Team Exceptions')
+
+    def test_link_renders_for_head_role_user(self):
+        self.client.login(username='sbar_ai_head', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'Team Exceptions')
+
+    def test_link_does_not_render_for_plain_employee(self):
+        self.client.login(username='sbar_plain', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, 'Team Exceptions')
+
+    def test_team_exceptions_nested_under_collapsible_my_profile_submenu(self):
+        """For a qualifying user, 'Team Exceptions' must render inside the
+        new 'My Profile' collapsible submenu (id="myProfileSubmenu"), not as
+        its own top-level sidebar item."""
+        self.client.login(username='sbar_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        content = resp.content.decode()
+        self.assertIn('id="myProfileSubmenu"', content)
+        submenu_start = content.index('id="myProfileSubmenu"')
+        team_exceptions_pos = content.index('Team Exceptions')
+        # The nested link must appear after the submenu container opens.
+        self.assertGreater(team_exceptions_pos, submenu_start)
+
+    def test_my_profile_link_still_reachable_for_non_qualifying_user(self):
+        """'My Profile' has no permission gate and must remain visible/
+        clickable for a user who doesn't qualify for Team Exceptions —
+        no collapsible submenu should be rendered for them at all."""
+        self.client.login(username='sbar_plain', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'My Profile')
+        self.assertContains(resp, reverse('hr:my_profile'))
+        self.assertNotContains(resp, 'id="myProfileSubmenu"')
+
+
+class SecondaryManagerTeamExceptionsTests(TestCase):
+    """Secondary managers get visibility/override rights over an employee's
+    attendance exceptions without being part of the formal (main_manager)
+    reporting line. Per the explicit business rule, a secondary manager's
+    decision must always be recorded as an override, never as a plain
+    'decide' — they are, by definition, not the assigned main manager."""
+
+    def setUp(self):
+        # Deliberately no main_manager at all on self.employee, and
+        # self.secondary has zero main_reports of its own — isolates that
+        # every permission granted below flows purely from the
+        # secondary_managers relationship, not from the hierarchy or HR.
+        self.employee = make_employee(iqama='SECM-EMP', name='Secondary-Managed Employee')
+        self.secondary = make_employee(iqama='SECM-SEC', name='Secondary Manager')
+        self.secondary_user = _login_user('secm_secondary')
+        self.secondary.user = self.secondary_user
+        self.secondary.save(update_fields=['user'])
+        self.employee.secondary_managers.add(self.secondary)
+
+        self.creator = make_user('secm_creator')
+        self.exc = _submit_aex(
+            employee=self.employee, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+
+    def test_can_view_team_exceptions_true_for_secondary_manager_with_zero_main_reports(self):
+        from hr.views import can_view_team_exceptions
+        self.assertTrue(can_view_team_exceptions(self.secondary_user))
+
+    def test_secondary_manager_sees_pending_request_with_override_not_decide(self):
+        # Task 2: secondary-managed employees' requests live on their own
+        # dedicated "Secondary Reports" tab (?tab=secondary), not the default
+        # "Direct Reports" tab.
+        self.client.login(username='secm_secondary', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'secondary'})
+        self.assertEqual(resp.status_code, 200)
+        pending = resp.context['pending_exceptions']
+        ids = {e.pk for e in pending}
+        self.assertIn(self.exc.pk, ids)
+        row = next(e for e in pending if e.pk == self.exc.pk)
+        self.assertTrue(row.can_override)
+        self.assertFalse(row.can_decide)
+
+    def test_secondary_manager_default_direct_tab_does_not_show_request(self):
+        # Default "Direct Reports" tab must NOT include secondary-managed
+        # employees' requests — that's the whole point of the dedicated
+        # "Secondary Reports" tab.
+        self.client.login(username='secm_secondary', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertEqual(resp.status_code, 200)
+        ids = {e.pk for e in resp.context['pending_exceptions']}
+        self.assertNotIn(self.exc.pk, ids)
+
+    def test_secondary_manager_cannot_use_plain_decide_action(self):
+        self.client.login(username='secm_secondary', password='testpass123')
+        resp = self.client.post(reverse('hr:team_exceptions'), {
+            'action': 'decide', 'exc_id': self.exc.pk, 'decision': 'approved'})
+        # 404, not 403: same pk-existence-oracle-safe pattern as the
+        # non-assigned-manager case — a secondary manager is never the
+        # assigned main_manager, so the plain decide branch must reject them.
+        self.assertEqual(resp.status_code, 404)
+        self.exc.refresh_from_db()
+        self.assertEqual(self.exc.status, 'pending')
+
+    def test_secondary_manager_can_override_pending_request(self):
+        self.client.login(username='secm_secondary', password='testpass123')
+        resp = self.client.post(reverse('hr:team_exceptions'), {
+            'action': 'override', 'exc_id': self.exc.pk, 'decision': 'approved',
+            'reason': 'Confirmed as secondary manager'})
+        self.assertEqual(resp.status_code, 302)
+        self.exc.refresh_from_db()
+        self.assertEqual(self.exc.status, 'approved')
+        self.assertTrue(self.exc.is_overridden)
+        self.assertEqual(self.exc.overridden_by, self.secondary_user)
+
+
+# ─── Org-Chart Management: form + view + template ────────────────────────
+
+
+class OrgChartViewTests(TestCase):
+    def setUp(self):
+        self.super_admin = _make_role_user('org_super', Role.SUPER_ADMIN)
+        self.plain_admin = _make_role_user('org_admin', Role.ADMIN)
+        self.plain_user = _login_user('org_plain')
+
+        self.alice = make_employee(iqama='ORG-ALICE', name='Alice')
+        self.bob = make_employee(iqama='ORG-BOB', name='Bob')
+        self.carol = make_employee(iqama='ORG-CAROL', name='Carol')
+        self.dave = make_employee(iqama='ORG-DAVE', name='Dave')
+
+    # ── access gate ──
+    def test_super_admin_can_view(self):
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_plain_admin_forbidden(self):
+        self.client.login(username='org_admin', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_plain_employee_forbidden(self):
+        self.client.login(username='org_plain', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_anonymous_redirected_to_login(self):
+        resp = self.client.get(reverse('hr:org_chart'))
+        self.assertEqual(resp.status_code, 302)
+
+    # ── persisting assignments ──
+    def test_assign_main_manager_persists(self):
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.post(reverse('hr:org_chart'), {
+            'employee_id': self.bob.pk, 'main_manager': self.alice.pk, 'secondary_managers': [],
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.bob.refresh_from_db()
+        self.assertEqual(self.bob.main_manager_id, self.alice.pk)
+
+    def test_clearing_main_manager_persists(self):
+        self.bob.main_manager = self.alice
+        self.bob.save(update_fields=['main_manager'])
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.post(reverse('hr:org_chart'), {
+            'employee_id': self.bob.pk, 'main_manager': '', 'secondary_managers': [],
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.bob.refresh_from_db()
+        self.assertIsNone(self.bob.main_manager_id)
+
+    def test_assign_secondary_managers_persists_multiple(self):
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.post(reverse('hr:org_chart'), {
+            'employee_id': self.dave.pk, 'main_manager': '',
+            'secondary_managers': [self.alice.pk, self.bob.pk],
+        })
+        self.assertEqual(resp.status_code, 302)
+        ids = set(self.dave.secondary_managers.values_list('pk', flat=True))
+        self.assertEqual(ids, {self.alice.pk, self.bob.pk})
+
+    # ── self-assignment rejection ──
+    def test_self_main_manager_rejected_no_change_persisted(self):
+        # Self is excluded from the main_manager dropdown's queryset (see
+        # EmployeeHierarchyForm.__init__), so a crafted POST selecting self
+        # hits Django's standard "not one of the available choices" queryset
+        # validation before clean_main_manager's custom message ever runs
+        # (clean_main_manager's own message is exercised directly in
+        # EmployeeHierarchyFormTests, bypassing the view's queryset). Either
+        # way, the important behavior asserted here is: a clear per-field
+        # error, no 500, and no persisted change.
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.post(reverse('hr:org_chart'), {
+            'employee_id': self.alice.pk, 'main_manager': self.alice.pk, 'secondary_managers': [],
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.alice.refresh_from_db()
+        self.assertIsNone(self.alice.main_manager_id)
+        found = list(get_messages(resp.wsgi_request))
+        self.assertTrue(any(self.alice.full_name in str(m) for m in found))
+
+    # ── circular chain rejection ──
+    def test_circular_chain_rejected_no_500_no_change_persisted(self):
+        # A(alice) has no manager; bob -> alice; carol -> bob.
+        self.bob.main_manager = self.alice
+        self.bob.save(update_fields=['main_manager'])
+        self.carol.main_manager = self.bob
+        self.carol.save(update_fields=['main_manager'])
+        self.client.login(username='org_super', password='testpass123')
+        # Attempt to close the loop: alice -> carol (alice -> carol -> bob -> alice).
+        resp = self.client.post(reverse('hr:org_chart'), {
+            'employee_id': self.alice.pk, 'main_manager': self.carol.pk, 'secondary_managers': [],
+        })
+        self.assertEqual(resp.status_code, 302)  # no 500 — redirects normally
+        self.alice.refresh_from_db()
+        self.assertIsNone(self.alice.main_manager_id)
+        found = list(get_messages(resp.wsgi_request))
+        self.assertTrue(any('circular' in str(m).lower() for m in found))
+
+    def test_direct_two_node_circular_chain_rejected(self):
+        self.bob.main_manager = self.alice
+        self.bob.save(update_fields=['main_manager'])
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.post(reverse('hr:org_chart'), {
+            'employee_id': self.alice.pk, 'main_manager': self.bob.pk, 'secondary_managers': [],
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.alice.refresh_from_db()
+        self.assertIsNone(self.alice.main_manager_id)
+
+    # ── hierarchy tree rendering ──
+    def test_tree_renders_employee_with_no_reports(self):
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, self.alice.full_name)
+
+    def test_tree_renders_multiple_direct_reports(self):
+        self.bob.main_manager = self.alice
+        self.bob.save(update_fields=['main_manager'])
+        self.carol.main_manager = self.alice
+        self.carol.save(update_fields=['main_manager'])
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, self.alice.full_name)
+        self.assertContains(resp, self.bob.full_name)
+        self.assertContains(resp, self.carol.full_name)
+
+    def test_tree_renders_multi_level_chain(self):
+        self.bob.main_manager = self.alice
+        self.bob.save(update_fields=['main_manager'])
+        self.carol.main_manager = self.bob
+        self.carol.save(update_fields=['main_manager'])
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, self.alice.full_name)
+        self.assertContains(resp, self.bob.full_name)
+        self.assertContains(resp, self.carol.full_name)
+
+    # ── UI regression: multi-line {# #} comments never leak into rendered HTML ──
+    def test_no_raw_template_comment_delimiters_in_rendered_page(self):
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'))
+        content = resp.content.decode()
+        self.assertNotIn('{#', content)
+        self.assertNotIn('#}', content)
+
+    def test_secondary_manager_search_filter_input_renders(self):
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'))
+        self.assertContains(resp, 'sm-filter')
+        self.assertContains(resp, 'Search employees...')
+
+    def test_main_manager_search_filter_input_renders(self):
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'))
+        self.assertContains(resp, 'mm-filter')
+        self.assertContains(resp, 'Search managers...')
+
+    # ── secondary-manager circle-selection UI ──
+    def test_circle_dropdown_and_hidden_select_render(self):
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'))
+        self.assertContains(resp, 'sm-circle-wrap')
+        self.assertContains(resp, 'sm-circle-list')
+        self.assertContains(resp, 'sm-select-wrap')
+
+    def test_current_secondary_managers_summary_shown_when_assigned(self):
+        self.dave.secondary_managers.set([self.alice, self.bob])
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'))
+        self.assertContains(resp, 'sm-current-summary')
+        self.assertContains(resp, self.alice.full_name)
+        self.assertContains(resp, self.bob.full_name)
+
+    def test_current_secondary_managers_summary_shows_none_assigned(self):
+        # None of alice/bob/carol/dave has any secondary managers in setUp.
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'))
+        self.assertContains(resp, 'No secondary managers assigned')
+
+    def test_saving_a_reduced_secondary_manager_set_removes_the_dropped_one(self):
+        # The circle UI toggles options in the same hidden multi-select the
+        # main per-row Save form already submits — removing a secondary
+        # manager is just saving a smaller set through that one mechanism,
+        # replacing the old separate instant-remove action.
+        self.dave.secondary_managers.set([self.alice, self.bob, self.carol])
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.post(reverse('hr:org_chart'), {
+            'employee_id': self.dave.pk, 'main_manager': '',
+            'secondary_managers': [self.bob.pk, self.carol.pk],
+        })
+        self.assertEqual(resp.status_code, 302)
+        ids = set(self.dave.secondary_managers.values_list('pk', flat=True))
+        self.assertEqual(ids, {self.bob.pk, self.carol.pk})
+
+    # ── per-row assignment checkmark indicator ──
+    # The indicator <i> is now always rendered (fixed-width slot, so the
+    # adjacent "x" clear button never shifts position row-to-row per the
+    # "buttons must not move based on checked state" fix) — only its
+    # containing slot's is-assigned class (driving CSS visibility) toggles.
+    def test_main_manager_indicator_present_when_set(self):
+        self.bob.main_manager = self.alice
+        self.bob.save(update_fields=['main_manager'])
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'))
+        self.assertContains(resp, 'main-manager-indicator-slot is-assigned')
+
+    def test_main_manager_indicator_absent_when_none(self):
+        # None of alice/bob/carol/dave has a main_manager in setUp.
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'))
+        self.assertContains(resp, 'main-manager-indicator')  # slot always renders
+        self.assertNotContains(resp, 'main-manager-indicator-slot is-assigned')
+
+    # ── hierarchy tree export scaffolding (PNG/PDF) ──
+    def test_export_buttons_and_scripts_render(self):
+        # html2canvas was dropped entirely — it couldn't reliably render the
+        # CSS table/table-cell tree layout (glitched output, missing names).
+        # The tree is now drawn from scratch on a <canvas> from DOM-derived
+        # data, so only jsPDF remains as an external export dependency.
+        self.client.login(username='org_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'))
+        self.assertContains(resp, 'Export as PNG')
+        self.assertContains(resp, 'Export as PDF')
+        self.assertNotContains(resp, 'html2canvas')
+        self.assertContains(resp, 'jspdf')
+        self.assertContains(resp, 'renderTreeCanvas')
+
+
+class OrgChartAccessTabTests(TestCase):
+    """The 'Leave Dashboard Access' tab: still Super-Admin-only (same page
+    gate as the Reporting Hierarchy tab), search-and-grant, and revoke."""
+    def setUp(self):
+        from hr.models import LeaveDashboardAccess
+        self.LeaveDashboardAccess = LeaveDashboardAccess
+        self.super_admin = _make_role_user('access_super', Role.SUPER_ADMIN)
+        self.plain_admin = _make_role_user('access_admin', Role.ADMIN)
+
+        self.eve_user = make_user('access_eve', password='x')
+        self.eve_user.set_password('testpass123')
+        self.eve_user.save()
+        self.eve = make_employee(iqama='ACC-EVE', name='Eve Grantee')
+        self.eve.user = self.eve_user
+        self.eve.save(update_fields=['user'])
+
+        self.frank_user = make_user('access_frank', password='x')
+        self.frank_user.set_password('testpass123')
+        self.frank_user.save()
+        self.frank = make_employee(iqama='ACC-FRANK', name='Frank Nogrant')
+        self.frank.user = self.frank_user
+        self.frank.save(update_fields=['user'])
+
+    # ── tab-level access gate (mirrors the whole-page gate) ──
+    def test_plain_admin_forbidden_on_access_tab(self):
+        self.client.login(username='access_admin', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access'})
+        self.assertEqual(resp.status_code, 403)
+
+    def test_super_admin_sees_access_tab(self):
+        self.client.login(username='access_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access'})
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Leave Dashboard Access')
+
+    def test_invalid_tab_defaults_to_hierarchy(self):
+        self.client.login(username='access_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'bogus'})
+        self.assertEqual(resp.context['tab'], 'hierarchy')
+
+    # ── search ──
+    def test_search_finds_employee_without_existing_access(self):
+        self.client.login(username='access_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access', 'access_search': 'Eve'})
+        self.assertContains(resp, 'Eve Grantee')
+
+    def test_search_excludes_employee_who_already_has_access(self):
+        self.LeaveDashboardAccess.objects.create(user=self.eve_user, is_active=True, granted_by=self.super_admin)
+        self.client.login(username='access_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access', 'access_search': 'Eve'})
+        self.assertNotContains(resp, 'value="{}"'.format(self.eve.pk))
+
+    # ── grant ──
+    def test_grant_creates_active_access_row(self):
+        self.client.login(username='access_super', password='testpass123')
+        resp = self.client.post(reverse('hr:org_chart') + '?tab=access',
+                                {'grant_dashboard_access': self.eve.pk})
+        self.assertEqual(resp.status_code, 302)
+        grant = self.LeaveDashboardAccess.objects.get(user=self.eve_user)
+        self.assertTrue(grant.is_active)
+        self.assertEqual(grant.granted_by, self.super_admin)
+
+    def test_granted_user_can_then_view_leave_dashboard(self):
+        from hr.views import can_view_leave_dashboard
+        self.client.login(username='access_super', password='testpass123')
+        self.client.post(reverse('hr:org_chart') + '?tab=access',
+                         {'grant_dashboard_access': self.eve.pk})
+        self.assertTrue(can_view_leave_dashboard(self.eve_user))
+        self.assertFalse(can_view_leave_dashboard(self.frank_user))
+
+    def test_plain_admin_cannot_grant(self):
+        self.client.login(username='access_admin', password='testpass123')
+        resp = self.client.post(reverse('hr:org_chart') + '?tab=access',
+                                {'grant_dashboard_access': self.eve.pk})
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(self.LeaveDashboardAccess.objects.filter(user=self.eve_user).exists())
+
+    # ── revoke ──
+    def test_revoke_removes_access_row(self):
+        self.LeaveDashboardAccess.objects.create(user=self.eve_user, is_active=True, granted_by=self.super_admin)
+        self.client.login(username='access_super', password='testpass123')
+        resp = self.client.post(reverse('hr:org_chart') + '?tab=access',
+                                {'revoke_dashboard_access': self.eve_user.pk})
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(self.LeaveDashboardAccess.objects.filter(user=self.eve_user).exists())
+
+    def test_current_access_list_shows_grantee_and_granter(self):
+        # LeaveDashboardAccess.user is a User, not an Employee — the current-
+        # access list renders the User's identity (username, since neither
+        # test user has a first/last name set), not the linked Employee's
+        # full_name.
+        self.LeaveDashboardAccess.objects.create(user=self.eve_user, is_active=True, granted_by=self.super_admin)
+        self.client.login(username='access_super', password='testpass123')
+        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access'})
+        self.assertContains(resp, self.eve_user.username)
+        self.assertContains(resp, self.super_admin.username)
 
 
 class HasOverrideAccessTests(TestCase):
@@ -2382,6 +4255,135 @@ class OverrideAccessViewTests(TestCase):
         self.assertEqual(self.req.status, 'approved')
 
 
+class OrgChartOverrideAccessTabTests(TestCase):
+    """The Override Access management section inside the Leave Dashboard
+    Access tab: mode switching, role toggles, employee grant/revoke, and the
+    at-a-glance 'currently granted to' summary."""
+    def setUp(self):
+        from hr.models import OverrideAccessSettings
+        OverrideAccessSettings.objects.all().delete()
+        self.super_admin = _make_role_user('ooa_super', Role.SUPER_ADMIN)
+        self.client.login(username='ooa_super', password='testpass123')
+
+    def test_default_mode_shows_all_super_admins_summary(self):
+        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access'})
+        self.assertContains(resp, 'All Super Admins')
+        self.assertContains(resp, 'ooa_super')  # listed as a current super admin
+
+    def test_set_mode_to_specific_roles(self):
+        from hr.models import OverrideAccessSettings
+        resp = self.client.post(reverse('hr:org_chart') + '?tab=access',
+                                {'set_override_mode': 'specific_roles'})
+        self.assertEqual(resp.status_code, 302)
+        config = OverrideAccessSettings.get_solo()
+        self.assertEqual(config.mode, 'specific_roles')
+        self.assertEqual(config.updated_by, self.super_admin)
+
+    def test_invalid_mode_rejected(self):
+        from hr.models import OverrideAccessSettings
+        resp = self.client.post(reverse('hr:org_chart') + '?tab=access',
+                                {'set_override_mode': 'bogus_mode'})
+        self.assertEqual(resp.status_code, 302)
+        config = OverrideAccessSettings.get_solo()
+        self.assertEqual(config.mode, OverrideAccessSettings.MODE_ALL_SUPER_ADMINS)
+
+    def test_toggle_role_grants_then_removes(self):
+        from hr.models import OverrideAccessSettings, OverrideAccessRole
+        OverrideAccessSettings.get_solo()
+        finance_role, _ = Role.objects.get_or_create(name=Role.FINANCE_HEAD)
+
+        self.client.post(reverse('hr:org_chart') + '?tab=access',
+                         {'toggle_override_role': finance_role.pk})
+        self.assertTrue(OverrideAccessRole.objects.filter(role=finance_role).exists())
+
+        self.client.post(reverse('hr:org_chart') + '?tab=access',
+                         {'toggle_override_role': finance_role.pk})
+        self.assertFalse(OverrideAccessRole.objects.filter(role=finance_role).exists())
+
+    def test_specific_roles_mode_renders_role_toggle_buttons(self):
+        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access'})
+        self.assertNotContains(resp, 'toggle_override_role')  # only shown in specific_roles mode
+        self.client.post(reverse('hr:org_chart') + '?tab=access', {'set_override_mode': 'specific_roles'})
+        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access'})
+        self.assertContains(resp, 'toggle_override_role')
+        self.assertContains(resp, 'Finance Head')
+
+    def test_grant_and_revoke_override_employee(self):
+        from hr.models import OverrideAccessSettings, OverrideAccessEmployee
+        config = OverrideAccessSettings.get_solo()
+        config.mode = OverrideAccessSettings.MODE_SPECIFIC_EMPLOYEES
+        config.save()
+
+        target_user = make_user('ooa_target', password='x')
+        target_emp = make_employee(iqama='OOA-TARGET', name='Target Person')
+        target_emp.user = target_user
+        target_emp.save(update_fields=['user'])
+
+        resp = self.client.post(reverse('hr:org_chart') + '?tab=access',
+                                {'grant_override_employee': target_emp.pk})
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(OverrideAccessEmployee.objects.filter(user=target_user).exists())
+
+        resp = self.client.post(reverse('hr:org_chart') + '?tab=access',
+                                {'revoke_override_employee': target_user.pk})
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(OverrideAccessEmployee.objects.filter(user=target_user).exists())
+
+    def test_empty_specific_roles_summary_warns_no_one_can_override(self):
+        self.client.post(reverse('hr:org_chart') + '?tab=access', {'set_override_mode': 'specific_roles'})
+        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access'})
+        self.assertContains(resp, 'no roles selected yet')
+
+    def test_plain_admin_cannot_change_override_mode(self):
+        plain_admin = _make_role_user('ooa_plainadmin', Role.ADMIN)
+        self.client.login(username='ooa_plainadmin', password='testpass123')
+        resp = self.client.post(reverse('hr:org_chart') + '?tab=access',
+                                {'set_override_mode': 'specific_roles'})
+        self.assertEqual(resp.status_code, 403)
+
+
+class EmployeeHierarchyFormTests(TestCase):
+    """Form-level coverage of the cycle-detection dry run and self-assignment
+    guards, independent of the view/HTTP layer."""
+
+    def setUp(self):
+        from hr.forms import EmployeeHierarchyForm
+        self.EmployeeHierarchyForm = EmployeeHierarchyForm
+        self.alice = make_employee(iqama='EHF-ALICE', name='Alice')
+        self.bob = make_employee(iqama='EHF-BOB', name='Bob')
+
+    def test_valid_assignment_is_valid_and_saves(self):
+        form = self.EmployeeHierarchyForm(
+            {'main_manager': self.alice.pk, 'secondary_managers': []},
+            employee=self.bob)
+        self.assertTrue(form.is_valid())
+        form.save()
+        self.bob.refresh_from_db()
+        self.assertEqual(self.bob.main_manager_id, self.alice.pk)
+
+    def test_self_as_main_manager_is_invalid(self):
+        form = self.EmployeeHierarchyForm(
+            {'main_manager': self.alice.pk, 'secondary_managers': []},
+            employee=self.alice)
+        self.assertFalse(form.is_valid())
+        self.assertIn('main_manager', form.errors)
+
+    def test_self_in_secondary_managers_excluded_from_queryset(self):
+        form = self.EmployeeHierarchyForm(employee=self.alice)
+        self.assertNotIn(self.alice, form.fields['secondary_managers'].queryset)
+        self.assertNotIn(self.alice, form.fields['main_manager'].queryset)
+
+    def test_circular_chain_is_invalid_and_does_not_raise(self):
+        self.bob.main_manager = self.alice
+        self.bob.save(update_fields=['main_manager'])
+        form = self.EmployeeHierarchyForm(
+            {'main_manager': self.bob.pk, 'secondary_managers': []},
+            employee=self.alice)
+        self.assertFalse(form.is_valid())
+        self.assertIn('main_manager', form.errors)
+        self.alice.refresh_from_db()
+        self.assertIsNone(self.alice.main_manager_id)
+
 
 class LeaveRequestDetailDocumentLinkTests(TestCase):
     """The 'View attached document' link on the leave request detail page
@@ -2416,6 +4418,49 @@ class LeaveRequestDetailDocumentLinkTests(TestCase):
         self.assertContains(resp, f'href="{doc_url}" target="_blank"')
 
 
+class MyProfileHierarchyTests(TestCase):
+    """'My Reporting Structure' card on My Profile: main manager, secondary
+    managers, direct reports, secondary reports. Must render gracefully
+    (no VariableDoesNotExist / template crash) when main_manager is None —
+    the same class of bug previously found and fixed on Team Exceptions."""
+
+    def setUp(self):
+        self.manager = make_employee(iqama='HIER-MGR', name='Hierarchy Manager')
+        self.report = make_employee(iqama='HIER-REPORT', name='Hierarchy Report')
+        self.lone = make_employee(iqama='HIER-LONE', name='Hierarchy Lone')
+
+    def test_shows_main_manager_name(self):
+        self.report.main_manager = self.manager
+        self.report.save(update_fields=['main_manager'])
+        user = _login_user('hier_report_user')
+        self.report.user = user
+        self.report.save(update_fields=['user'])
+        self.client.login(username='hier_report_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Hierarchy Manager')
+
+    def test_shows_direct_reports(self):
+        self.report.main_manager = self.manager
+        self.report.save(update_fields=['main_manager'])
+        user = _login_user('hier_manager_user')
+        self.manager.user = user
+        self.manager.save(update_fields=['user'])
+        self.client.login(username='hier_manager_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Hierarchy Report')
+
+    def test_no_manager_and_no_reports_renders_gracefully(self):
+        """main_manager is None and there are zero reports — this must not
+        raise a template error and must render the empty-state copy."""
+        user = _login_user('hier_lone_user')
+        self.lone.user = user
+        self.lone.save(update_fields=['user'])
+        self.client.login(username='hier_lone_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Not assigned')
 
 class ReapplyLeaveTypeDefaultsScopingTests(TestCase):
     """Unit-level test for reapply_leave_type_defaults' new `leave_type` param
@@ -2495,3 +4540,617 @@ class LeaveTypeUpdateViewAutoReapplyTests(TestCase):
         rendered_messages = [str(m) for m in resp.context['messages']]
         self.assertFalse(any('Re-applied leave-type day counts' in m for m in rendered_messages), rendered_messages)
 
+
+# ─── Team Attendance Exceptions — scope / countdown / manager-routing fixes ──
+
+
+class TeamExceptionsScopeDirectVsSecondaryTests(TestCase):
+    """Task 2 fix: the old ?scope=direct|downstream query-param scheme is
+    replaced entirely by a three-tab structure (?tab=direct|secondary|all).
+    The default "Direct Reports" tab shows ONLY employee__main_manager
+    matches; secondary-managed employees live on their own dedicated
+    "Secondary Reports" tab — there's no combined/expanded view anymore, per
+    the explicit business rule that secondary-manager visibility exists to
+    ease things along when the main manager is unavailable, not to clutter
+    the everyday view."""
+
+    def setUp(self):
+        self.manager = make_employee(iqama='SCOPE-MGR', name='Scope Manager')
+        self.manager_user = _login_user('scope_mgr')
+        self.manager.user = self.manager_user
+        self.manager.save(update_fields=['user'])
+
+        self.direct_report = make_employee(iqama='SCOPE-DIRECT', name='Scope Direct Report')
+        self.direct_report.main_manager = self.manager
+        self.direct_report.save(update_fields=['main_manager'])
+
+        # Separately secondary-managed — no main_manager relationship to
+        # self.manager at all.
+        self.secondary_employee = make_employee(iqama='SCOPE-SECONDARY', name='Scope Secondary Employee')
+        self.secondary_employee.secondary_managers.add(self.manager)
+
+        self.creator = make_user('scope_creator')
+        self.exc_direct = _submit_aex(
+            employee=self.direct_report, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+        self.exc_secondary = _submit_aex(
+            employee=self.secondary_employee, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+
+    def test_default_direct_tab_shows_only_direct_report(self):
+        self.client.login(username='scope_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertEqual(resp.context['tab'], 'direct')
+        ids = {e.pk for e in resp.context['pending_exceptions']}
+        self.assertEqual(ids, {self.exc_direct.pk})
+
+    def test_secondary_tab_shows_only_secondary_managed_employee(self):
+        self.client.login(username='scope_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'secondary'})
+        ids = {e.pk for e in resp.context['pending_exceptions']}
+        self.assertEqual(ids, {self.exc_secondary.pk})
+
+    def test_ui_copy_no_longer_mentions_downstream_chain(self):
+        self.client.login(username='scope_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'secondary'})
+        content = resp.content.decode()
+        self.assertNotIn('downstream chain', content.lower())
+        self.assertNotIn('downstream reporting chain', content.lower())
+
+    def test_secondary_and_all_org_tabs_still_render_labels_when_relevant(self):
+        # Per the explicit rename ask: exact tab labels, and the
+        # non-default tabs must be clickable/visible even when they'd
+        # currently render zero rows for a *different* user (not exercised
+        # here directly, but the labels themselves must always be present
+        # for any qualifying viewer).
+        self.client.login(username='scope_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        content = resp.content.decode()
+        self.assertIn('Direct Reports', content)
+        self.assertIn('Secondary Reports', content)
+        self.assertNotIn('All Organization Requests', content)  # non-HR: hidden entirely
+
+
+class TeamExceptionsThreeTabHRTests(TestCase):
+    """Task 2: an HR/Super-Admin viewer who ALSO has their own Employee
+    profile with both a direct report and a secondary-managed employee sees:
+    only the direct report's request on "Direct Reports"; only the
+    secondary-managed employee's request on "Secondary Reports"; and BOTH
+    plus everyone else's requests on "All Organization Requests"."""
+
+    def setUp(self):
+        self.hr_user = _make_role_user('tex3_hr', Role.SUPER_ADMIN)
+        self.hr_emp = make_employee(iqama='TEX3-HR', name='HR Manager Employee')
+        self.hr_emp.user = self.hr_user
+        self.hr_emp.save(update_fields=['user'])
+
+        self.direct_report = make_employee(iqama='TEX3-DIRECT', name='Tex3 Direct Report')
+        self.direct_report.main_manager = self.hr_emp
+        self.direct_report.save(update_fields=['main_manager'])
+
+        self.secondary_employee = make_employee(iqama='TEX3-SECONDARY', name='Tex3 Secondary Employee')
+        self.secondary_employee.secondary_managers.add(self.hr_emp)
+
+        # An unrelated third employee, visible only via the org-wide tab.
+        self.other_employee = make_employee(iqama='TEX3-OTHER', name='Tex3 Unrelated Employee')
+
+        self.creator = make_user('tex3_creator')
+        self.exc_direct = _submit_aex(
+            employee=self.direct_report, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+        self.exc_secondary = _submit_aex(
+            employee=self.secondary_employee, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+        self.exc_other = _submit_aex(
+            employee=self.other_employee, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+
+    def test_hr_direct_tab_shows_only_direct_report(self):
+        self.client.login(username='tex3_hr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        ids = {e.pk for e in resp.context['pending_exceptions']}
+        self.assertEqual(ids, {self.exc_direct.pk})
+
+    def test_hr_secondary_tab_shows_only_secondary_managed_employee(self):
+        self.client.login(username='tex3_hr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'secondary'})
+        ids = {e.pk for e in resp.context['pending_exceptions']}
+        self.assertEqual(ids, {self.exc_secondary.pk})
+
+    def test_hr_all_org_tab_shows_everything(self):
+        self.client.login(username='tex3_hr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'all'})
+        ids = {e.pk for e in resp.context['pending_exceptions']}
+        self.assertEqual(ids, {self.exc_direct.pk, self.exc_secondary.pk, self.exc_other.pk})
+
+
+class TeamExceptionsTabStylingTests(TestCase):
+    """CSS-only restyle of the tab nav (Direct Reports / Secondary Reports /
+    All Organization Requests): each tab now gets its own distinct accent
+    color instead of Bootstrap's default active-tab blue. This is markup/CSS
+    class presence only — it must not touch the {% if %} visibility gating
+    for the HR-only "All Organization Requests" tab, which stays covered by
+    TeamExceptionsAccessTests / TeamExceptionsThreeTabHRTests unmodified."""
+
+    def setUp(self):
+        self.mid = make_employee(iqama='TEXSTYLE-MID', name='Style Mid Manager')
+        self.mid_user = _login_user('texstyle_mid')
+        self.mid.user = self.mid_user
+        self.mid.save(update_fields=['user'])
+
+        self.direct_report = make_employee(iqama='TEXSTYLE-DIRECT', name='Style Direct Report')
+        self.direct_report.main_manager = self.mid
+        self.direct_report.save(update_fields=['main_manager'])
+
+        self.hr_user = _make_role_user('texstyle_hr', Role.SUPER_ADMIN)
+
+    def test_page_renders_successfully_with_new_tab_styling(self):
+        self.client.login(username='texstyle_mid', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'team-exc-tabs')
+
+    def test_each_tab_has_its_own_distinct_css_class(self):
+        # Log in as a qualifying HR/Super-Admin user so all three tabs
+        # (including the HR-only "All Organization Requests") render.
+        self.client.login(username='texstyle_hr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertContains(resp, 'team-exc-tab-direct')
+        self.assertContains(resp, 'team-exc-tab-secondary')
+        self.assertContains(resp, 'team-exc-tab-all')
+
+    def test_non_hr_user_still_does_not_see_all_organization_tab(self):
+        # Confirms the restyle didn't loosen the existing {% if show_all_tab %}
+        # visibility gate — a plain manager (no HR/Super-Admin role) must
+        # still not see the "All Organization Requests" tab link or label.
+        # Note: the `.team-exc-tab-all` *selector* is always present in the
+        # <style> block regardless of tab visibility (it's just CSS), so
+        # that alone isn't a meaningful signal here — we instead assert the
+        # actual tab anchor (its href and visible label) is absent.
+        self.client.login(username='texstyle_mid', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertContains(resp, 'team-exc-tab-direct')
+        self.assertContains(resp, 'team-exc-tab-secondary')
+        self.assertNotContains(resp, 'href="?tab=all"')
+        self.assertNotContains(resp, 'All Organization Requests')
+
+
+class TeamExceptionsSelfApprovalVisibilityTests(TestCase):
+    """Task 2 self-approval VISIBILITY rule: a user's own pending request
+    must be entirely excluded (not just button-blocked) from "Direct
+    Reports"/"Secondary Reports", even for a Super Admin who would otherwise
+    structurally qualify as their own manager. It DOES appear (visible, but
+    unactionable) on "All Organization Requests" for HR."""
+
+    def setUp(self):
+        self.hr_user = _make_role_user('selfvis_hr', Role.SUPER_ADMIN)
+        self.hr_emp = make_employee(iqama='SELFVIS-HR', name='Self Visibility HR Employee')
+        self.hr_emp.user = self.hr_user
+        self.hr_emp.save(update_fields=['user'])
+        # Pathological but structurally possible: the HR employee is their
+        # own main_manager AND their own secondary_manager.
+        self.hr_emp.main_manager = self.hr_emp
+        self.hr_emp.secondary_managers.add(self.hr_emp)
+        self.hr_emp.save(update_fields=['main_manager'])
+
+        self.creator = make_user('selfvis_creator')
+        self.exc = _submit_aex(
+            employee=self.hr_emp, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+
+    def test_own_request_excluded_from_direct_tab(self):
+        self.client.login(username='selfvis_hr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        ids = {e.pk for e in resp.context['pending_exceptions']}
+        self.assertNotIn(self.exc.pk, ids)
+
+    def test_own_request_excluded_from_secondary_tab(self):
+        self.client.login(username='selfvis_hr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'secondary'})
+        ids = {e.pk for e in resp.context['pending_exceptions']}
+        self.assertNotIn(self.exc.pk, ids)
+
+    def test_own_request_visible_but_unactionable_on_all_org_tab(self):
+        self.client.login(username='selfvis_hr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'all'})
+        pending = resp.context['pending_exceptions']
+        ids = {e.pk for e in pending}
+        self.assertIn(self.exc.pk, ids)
+        row = next(e for e in pending if e.pk == self.exc.pk)
+        self.assertFalse(row.can_decide)
+        self.assertFalse(row.can_override)
+
+
+class TeamExceptionsCountdownEventAwareTests(TestCase):
+    """Task 3 fix: the countdown must be anchored to event_start, not the
+    up-to-7-days-early submission moment. Before the event starts, the page
+    must show a static 'Starts <date>' — never a ticking countdown (which
+    would otherwise misleadingly read as lasting up to ~8 days, since
+    decision_deadline = event_start + 24h and submission can precede
+    event_start by up to 7 days). At/after event start, the real live
+    countdown toward decision_deadline (by definition at most 24h away)
+    renders exactly as before."""
+
+    def setUp(self):
+        self.manager = make_employee(iqama='CD-MGR', name='Countdown Manager')
+        self.manager_user = _login_user('cd_mgr')
+        self.manager.user = self.manager_user
+        self.manager.save(update_fields=['user'])
+        self.report = make_employee(iqama='CD-REPORT', name='Countdown Report')
+        self.report.main_manager = self.manager
+        self.report.save(update_fields=['main_manager'])
+        self.creator = make_user('cd_creator')
+
+    def test_future_event_shows_static_starts_text_not_live_countdown(self):
+        from django.template.defaultfilters import date as _django_date
+        future_dt = _timezone.localtime(_timezone.now() + timedelta(days=3))
+        exc = _submit_aex(
+            employee=self.report, event_date=future_dt.date(), event_start_time=future_dt.time(),
+            reason_category='site_visit', created_by=self.creator)
+        self.client.login(username='cd_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertEqual(resp.status_code, 200)
+        row = next(e for e in resp.context['pending_exceptions'] if e.pk == exc.pk)
+        self.assertFalse(row.event_has_started)
+        content = resp.content.decode()
+        self.assertIn(f"Starts {_django_date(exc.event_start, 'd M, H:i')}", content)
+
+    def test_started_event_shows_live_countdown(self):
+        from django.template.defaultfilters import date as _django_date
+        started_dt = _timezone.localtime(_timezone.now() - timedelta(hours=1))
+        exc = _submit_aex(
+            employee=self.report, event_date=started_dt.date(), event_start_time=started_dt.time(),
+            reason_category='site_visit', created_by=self.creator)
+        self.client.login(username='cd_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertEqual(resp.status_code, 200)
+        row = next(e for e in resp.context['pending_exceptions'] if e.pk == exc.pk)
+        self.assertTrue(row.event_has_started)
+        content = resp.content.decode()
+        self.assertIn(_django_date(exc.decision_deadline, 'd M, H:i'), content)
+        self.assertNotIn(f"Starts {_django_date(exc.event_start, 'd M, H:i')}", content)
+
+
+class ManagerAssignedAfterSubmissionShowsDecideNotOverrideTests(TestCase):
+    """Regression test for Task 5: reproduces the exact reported bug. An
+    employee's attendance exception is submitted with NO main_manager
+    assigned yet (so exc.main_manager, the submission-time snapshot, is
+    None). The Org Chart is then used to assign the employee's main_manager
+    AFTER the request already exists (a very plausible sequence — testing
+    hierarchy changes, or correcting a mistake, with pre-existing pending
+    requests already in flight). The now-correctly-assigned manager must see
+    the normal Approve/Reject controls for that pre-existing request — not
+    stuck seeing only Override, which is what a stale exc.main_manager-based
+    check used to force permanently."""
+
+    def setUp(self):
+        self.employee = make_employee(iqama='SNAP-EMP', name='Snapshot Employee')
+        self.creator = make_user('snap_creator')
+        self.exc = _submit_aex(
+            employee=self.employee, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+        self.assertIsNone(self.exc.main_manager_id)  # sanity: no snapshot at submission
+
+        self.manager = make_employee(iqama='SNAP-MGR', name='Snapshot Manager')
+        self.manager_user = _login_user('snap_mgr')
+        self.manager.user = self.manager_user
+        self.manager.save(update_fields=['user'])
+
+        # Simulate the post-submission Org Chart fix.
+        self.employee.main_manager = self.manager
+        self.employee.save(update_fields=['main_manager'])
+
+    def test_page_shows_approve_reject_not_override_for_live_manager(self):
+        self.client.login(username='snap_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertEqual(resp.status_code, 200)
+        row = next(e for e in resp.context['pending_exceptions'] if e.pk == self.exc.pk)
+        self.assertTrue(row.can_decide)
+        self.assertFalse(row.can_override)
+        self.assertContains(resp, 'Approve')
+        self.assertContains(resp, 'Reject')
+
+    def test_manager_can_decide_via_post(self):
+        self.client.login(username='snap_mgr', password='testpass123')
+        resp = self.client.post(reverse('hr:team_exceptions'), {
+            'action': 'decide', 'exc_id': self.exc.pk, 'decision': 'approved'})
+        self.assertEqual(resp.status_code, 302)
+        self.exc.refresh_from_db()
+        self.assertEqual(self.exc.status, 'approved')
+
+    def test_can_decide_attendance_exception_true_via_live_relationship(self):
+        from hr.views import can_decide_attendance_exception
+        self.assertTrue(can_decide_attendance_exception(self.manager_user, self.exc))
+
+    def test_manager_column_shows_live_manager_not_stale_snapshot(self):
+        self.client.login(username='snap_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertContains(resp, 'Snapshot Manager')
+
+
+# ─── My Profile: Reporting Structure redesign (expand toggle + card order) ──
+#
+# The "My Reporting Structure" card used to only ever show direct reports,
+# with no way to see further down the chain, and lived in the middle of the
+# page. It now (a) shows direct reports unconditionally plus a "+N more"
+# expand control for the further downstream chain (Employee.
+# get_downstream_employee_ids(), minus direct reports so nothing is
+# duplicated), sourced from a new context['downstream_reports'] computed in
+# my_profile() only `if emp:`; and (b) always renders as the very last card
+# on the page, after the conditionally-rendered My Vehicles card.
+
+class MyProfileDownstreamReportsTests(TestCase):
+    """The expand control should only appear when there's a downstream chain
+    beyond the direct reports already listed, and the grandchild must appear
+    only inside that expand section — never duplicated in the direct-reports
+    list."""
+
+    def setUp(self):
+        self.root = make_employee(iqama='DSR-ROOT', name='Root Manager')
+        self.direct = make_employee(iqama='DSR-DIRECT', name='Direct Report')
+        self.direct.main_manager = self.root
+        self.direct.save(update_fields=['main_manager'])
+        self.root_user = _login_user('dsr_root_user')
+        self.root.user = self.root_user
+        self.root.save(update_fields=['user'])
+        self.client.login(username='dsr_root_user', password='testpass123')
+
+    def test_shows_expand_control_with_downstream_chain(self):
+        grandchild = make_employee(iqama='DSR-GRANDCHILD', name='Grandchild Report')
+        grandchild.main_manager = self.direct
+        grandchild.save(update_fields=['main_manager'])
+
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(resp.status_code, 200)
+        content = resp.content.decode()
+
+        self.assertIn('Direct Report', content)
+        self.assertIn('Grandchild Report', content)
+        self.assertIn('more further down your reporting chain', content)
+
+        # The grandchild is what expanding adds — not a re-list of direct
+        # reports, and not duplicated in the direct-reports queryset.
+        self.assertEqual(list(resp.context['downstream_reports']), [grandchild])
+        direct_report_names = [e.full_name for e in resp.context['employee'].main_reports.all()]
+        self.assertEqual(direct_report_names, ['Direct Report'])
+
+    def test_no_expand_control_when_no_further_downstream_chain(self):
+        # self.direct exists (a direct report) but has no reports of its own
+        # — downstream_reports should end up empty after excluding direct
+        # reports, so no "+N more" clutter should render.
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(resp.status_code, 200)
+        content = resp.content.decode()
+
+        self.assertIn('Direct Report', content)
+        self.assertNotIn('more further down your reporting chain', content)
+        self.assertEqual(list(resp.context['downstream_reports']), [])
+
+
+class MyProfileCardOrderingTests(TestCase):
+    """'My Reporting Structure' must be the very last card on the page —
+    after Attendance Exceptions, and after My Vehicles whenever that
+    conditional card renders — not merely swapped with a neighbor."""
+
+    def setUp(self):
+        self.emp = make_employee(iqama='ORD-1', name='Order Employee')
+        self.user = _login_user('ord_user')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        self.client.login(username='ord_user', password='testpass123')
+
+    def test_reporting_structure_renders_after_vehicles_when_vehicle_present(self):
+        Vehicle.objects.create(plate_number='ORD-9999', driver_id=self.emp.iqama_number)
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(resp.status_code, 200)
+        content = resp.content.decode()
+        self.assertIn('My Vehicles', content)
+        self.assertIn('My Reporting Structure', content)
+        self.assertGreater(content.index('My Reporting Structure'), content.index('My Vehicles'))
+        self.assertGreater(content.index('My Reporting Structure'), content.index('Attendance Exceptions'))
+
+    def test_reporting_structure_is_last_section_without_vehicle(self):
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(resp.status_code, 200)
+        content = resp.content.decode()
+        self.assertNotIn('My Vehicles', content)
+        self.assertGreater(content.index('My Reporting Structure'), content.index('Attendance Exceptions'))
+
+
+class MyProfileOverriddenExceptionAttributionTests(TestCase):
+    """The Attendance Exceptions status column must attribute an override to
+    the actual overriding user, matching team_exceptions.html's existing
+    'Overridden by {name}' pattern — not a bare 'Overridden' badge."""
+
+    def setUp(self):
+        self.manager_emp = make_employee(iqama='OVR-MGR', name='Override Manager')
+        self.emp = make_employee(iqama='OVR-EMP', name='Override Employee')
+        self.emp.main_manager = self.manager_emp
+        self.emp.save(update_fields=['main_manager'])
+        self.user = _login_user('ovr_emp_user')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+
+    def test_overridden_exception_shows_overriding_user_name(self):
+        exc = _submit_aex(
+            employee=self.emp, event_date=_date(2026, 7, 20), event_start_time=_time(9, 30),
+            reason_category='site_visit', custom_reason='', employee_comment='', created_by=self.user)
+        hr_user = make_user('ovr_hr_user', first_name='Helen', last_name='Ross')
+        override_attendance_exception(exc, hr_user, 'approved', reason='Confirmed via site log')
+
+        self.client.login(username='ovr_emp_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Overridden by Helen Ross')
+        self.assertNotContains(resp, '>Overridden<')
+
+
+class MyProfileNoManagerNoReportsRegressionTests(TestCase):
+    """Regression coverage for the bug class already fixed once on this page:
+    an employee with neither a main_manager nor any reports (direct or
+    downstream) must render without a VariableDoesNotExist-style crash."""
+
+    def test_no_manager_no_reports_no_downstream_renders_without_error(self):
+        lone = make_employee(iqama='LONE-2', name='Truly Lone Employee')
+        user = _login_user('truly_lone_user')
+        lone.user = user
+        lone.save(update_fields=['user'])
+        self.client.login(username='truly_lone_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(list(resp.context['downstream_reports']), [])
+        self.assertContains(resp, 'Not assigned')
+
+
+# ─── Team Attendance Exceptions — History table redesign (Task 1) + optional
+#     decide-comment (Task 4) ────────────────────────────────────────────────
+
+
+class TeamExceptionsHistoryTableTests(TestCase):
+    """Task 1: the History table drops "Decided By" (redundant with the
+    "Overridden by {name}" badge) in favor of a "Decided At" timestamp
+    column, and active-queue rows past their decision_deadline get a light
+    overdue visual treatment."""
+
+    def setUp(self):
+        self.manager = make_employee(iqama='HIST-MGR', name='History Manager')
+        self.manager_user = _login_user('hist_mgr')
+        self.manager.user = self.manager_user
+        self.manager.save(update_fields=['user'])
+        self.report = make_employee(iqama='HIST-REPORT', name='History Report')
+        self.report.main_manager = self.manager
+        self.report.save(update_fields=['main_manager'])
+        self.creator = make_user('hist_creator')
+
+    def test_history_table_shows_decided_at_not_decided_by(self):
+        exc = _submit_aex(
+            employee=self.report, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+        decide_attendance_exception(exc, self.manager_user, 'approved')
+        exc.refresh_from_db()
+        self.client.login(username='hist_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        content = resp.content.decode()
+        self.assertNotIn('Decided By', content)
+        from django.template.defaultfilters import date as _django_date
+        # The template's |date filter localizes aware datetimes to the
+        # current timezone (Asia/Riyadh) before formatting; a raw call to
+        # the filter function does not, so decided_at must be localized
+        # here too or the two strings differ by the UTC offset.
+        self.assertIn(_django_date(_timezone.localtime(exc.decided_at), 'd M Y, H:i'), content)
+
+    def test_overdue_row_has_overdue_css_class(self):
+        # Overdue-and-unactioned: still 'pending', past decision_deadline.
+        stale_dt = _timezone.localtime(_timezone.now() - timedelta(days=2))
+        exc = _submit_aex(
+            employee=self.report, event_date=stale_dt.date(), event_start_time=stale_dt.time(),
+            reason_category='site_visit', created_by=self.creator)
+        self.assertTrue(exc.is_overdue())
+        self.client.login(username='hist_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        content = resp.content.decode()
+        self.assertIn('row-overdue', content)
+
+    def test_expired_overdue_row_also_gets_overdue_css_class(self):
+        # Same overdue treatment applies whether the row's status is still
+        # 'pending' or has already flipped to 'expired' via the cron sweep —
+        # both are "overdue and unactioned".
+        from hr.attendance_exception_services import expire_overdue_exceptions
+        stale_dt = _timezone.localtime(_timezone.now() - timedelta(days=2))
+        exc = _submit_aex(
+            employee=self.report, event_date=stale_dt.date(), event_start_time=stale_dt.time(),
+            reason_category='site_visit', created_by=self.creator)
+        expire_overdue_exceptions()
+        exc.refresh_from_db()
+        self.assertEqual(exc.status, 'expired')
+        self.client.login(username='hist_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        content = resp.content.decode()
+        self.assertIn('row-overdue', content)
+
+    def test_not_yet_overdue_row_has_no_overdue_css_class(self):
+        # Recent-and-relative, not a hardcoded date: a fixed calendar date
+        # eventually becomes "in the past" as real time moves on, which
+        # would flip is_overdue() to True and make this test fail for a
+        # reason that has nothing to do with the code under test.
+        recent_dt = _timezone.localtime(_timezone.now() - timedelta(hours=2))
+        exc = _submit_aex(
+            employee=self.report, event_date=recent_dt.date(), event_start_time=recent_dt.time(),
+            reason_category='site_visit', created_by=self.creator)
+        self.assertFalse(exc.is_overdue())
+        self.client.login(username='hist_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        content = resp.content.decode()
+        # The CSS rule for .row-overdue is always present in <head> — check
+        # the class isn't actually APPLIED to a row (class="row-overdue"),
+        # not just that the string appears anywhere on the page.
+        self.assertNotIn('class="row-overdue"', content)
+
+    def test_page_renders_when_an_overridden_rows_overriding_user_was_deleted(self):
+        # Regression: overridden_by is on_delete=SET_NULL, so a historical
+        # row can have is_overridden=True but overridden_by=None once the
+        # overriding account is deleted. The template used to dereference
+        # overridden_by.username as a *filter argument* (default:...), which
+        # Django does not silently null-guard the way plain {{ var }} output
+        # is — this crashed with VariableDoesNotExist for any tab showing
+        # such a row (e.g. Ali/Sarah0's "All Organization Requests" tab).
+        overrider = make_user('temp_overrider')
+        exc = _submit_aex(
+            employee=self.report, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+        override_attendance_exception(exc, overrider, 'approved', reason='Covering for the main manager.')
+        overrider.delete()
+        exc.refresh_from_db()
+        self.assertTrue(exc.is_overridden)
+        self.assertIsNone(exc.overridden_by_id)
+        self.client.login(username='hist_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Overridden')
+
+
+class TeamExceptionsDecideCommentTests(TestCase):
+    """Task 4: the plain Approve/Reject decide form gets an optional
+    'comment' textarea (matching the leave-request workflow's naming
+    convention — templates/hr/leave_request_detail.html), threaded through
+    to decide_attendance_exception(..., note=<value>) and persisted on
+    AttendanceException.decision_note."""
+
+    def setUp(self):
+        self.manager = make_employee(iqama='CMT-MGR', name='Comment Manager')
+        self.manager_user = _login_user('cmt_mgr')
+        self.manager.user = self.manager_user
+        self.manager.save(update_fields=['user'])
+        self.report = make_employee(iqama='CMT-REPORT', name='Comment Report')
+        self.report.main_manager = self.manager
+        self.report.save(update_fields=['main_manager'])
+        self.creator = make_user('cmt_creator')
+        self.exc = _submit_aex(
+            employee=self.report, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+
+    def test_decide_form_renders_optional_comment_textarea(self):
+        self.client.login(username='cmt_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertContains(resp, 'name="comment"')
+
+    def test_decide_form_comment_persists_to_decision_note(self):
+        self.client.login(username='cmt_mgr', password='testpass123')
+        resp = self.client.post(reverse('hr:team_exceptions'), {
+            'action': 'decide', 'exc_id': self.exc.pk, 'decision': 'approved',
+            'comment': 'Confirmed via phone call',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.exc.refresh_from_db()
+        self.assertEqual(self.exc.status, 'approved')
+        self.assertEqual(self.exc.decision_note, 'Confirmed via phone call')
+
+    def test_decide_form_without_comment_still_works(self):
+        self.client.login(username='cmt_mgr', password='testpass123')
+        resp = self.client.post(reverse('hr:team_exceptions'), {
+            'action': 'decide', 'exc_id': self.exc.pk, 'decision': 'approved',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.exc.refresh_from_db()
+        self.assertEqual(self.exc.status, 'approved')
+        self.assertEqual(self.exc.decision_note, '')

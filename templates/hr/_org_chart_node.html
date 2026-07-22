@@ -1,0 +1,23 @@
+<li>
+    <div class="org-node">
+        <div class="org-node-name">{{ employee.full_name }}</div>
+        {% if employee.designation %}<div class="org-node-title">{{ employee.designation }}</div>{% endif %}
+        {% with secondaries=employee.secondary_managers.all %}
+        {% if secondaries %}
+        <div class="org-node-secondary" title="Secondary managers">
+            <i class="bi bi-people"></i>
+            {% for sm in secondaries %}{{ sm.full_name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+    </div>
+    {% with reports=employee.main_reports.all %}
+    {% if reports %}
+    <ul>
+        {% for report in reports %}
+            {% include 'hr/_org_chart_node.html' with employee=report %}
+        {% endfor %}
+    </ul>
+    {% endif %}
+    {% endwith %}
+</li>

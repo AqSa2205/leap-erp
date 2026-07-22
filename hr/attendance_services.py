@@ -20,9 +20,11 @@ def _hours_between(check_in, check_out):
 def derive_status(employee, d, check_in, check_out=None):
     """Return (status, hours_worked).
 
-    Precedence: leave > holiday > weekend(unless WorkingDay) > wfh > late/present > absent.
+    Precedence: leave > holiday > weekend(unless WorkingDay) > wfh >
+    approved attendance exception > late/present > absent.
     """
-    from hr.models import LeaveRecord, Holiday, AttendanceSettings, WorkingDay, WFHRecord
+    from hr.models import (LeaveRecord, Holiday, AttendanceSettings, WorkingDay, WFHRecord,
+                            AttendanceException)
     if LeaveRecord.objects.filter(employee=employee, start_date__lte=d, end_date__gte=d).exists():
         return 'leave', None
     if Holiday.objects.filter(date=d, is_active=True).exists():
@@ -33,6 +35,13 @@ def derive_status(employee, d, check_in, check_out=None):
         return 'weekend', None
     if WFHRecord.objects.filter(employee=employee, start_date__lte=d, end_date__gte=d).exists():
         return 'wfh', _hours_between(check_in, check_out)
+    # An approved attendance exception excuses the day regardless of actual
+    # check-in time — the employee was off-site with manager/HR sign-off, so
+    # the day previews as 'present' rather than 'late'. employee/d are
+    # already the exact keys the exception was decided against, so no extra
+    # parameter needs to be threaded through this function's signature.
+    if AttendanceException.objects.filter(employee=employee, event_date=d, status='approved').exists():
+        return 'present', _hours_between(check_in, check_out)
     if check_in:
         if check_in > settings.expected_in_by:
             return 'late', _hours_between(check_in, check_out)

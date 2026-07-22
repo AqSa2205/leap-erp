@@ -4,6 +4,7 @@ from .leave import (LeaveType, LeaveEntitlement, LeaveRecord,
                     LeaveDashboardAccess, LeaveRequest, LeaveRequestApproval, LeaveRequestNote,
                     OverrideAccessSettings, OverrideAccessRole, OverrideAccessEmployee)
 from .attendance import Holiday, AttendanceSettings, AttendanceRecord, WorkingDay, WFHRecord
+from .attendance_exception import AttendanceException
 
 __all__ = [
     'Employee', 'EmployeeDocument',
@@ -12,4 +13,5 @@ __all__ = [
     'LeaveDashboardAccess', 'LeaveRequest', 'LeaveRequestApproval', 'LeaveRequestNote',
     'OverrideAccessSettings', 'OverrideAccessRole', 'OverrideAccessEmployee',
     'Holiday', 'AttendanceSettings', 'AttendanceRecord', 'WorkingDay', 'WFHRecord',
+    'AttendanceException',
 ]
