@@ -9,6 +9,20 @@
         <a href="{% url 'hr:leave_request_list' %}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Back to Queue</a>
       </div>
 
+      {% if is_own_request and leave_request.status == 'pending' %}
+      <div class="alert alert-info d-flex align-items-start gap-2">
+        <i class="bi bi-info-circle-fill mt-1"></i>
+        <div>
+          This is your own leave request — you cannot approve, disapprove, or override it, even if you're normally
+          an approver or hold override access. It's waiting on
+          {% with waiting=leave_request.pending_approvers %}
+            {% if waiting %}{% for a in waiting %}{{ a.get_full_name|default:a.username }}{% if not forloop.last %}, {% endif %}{% endfor %}
+            {% else %}a Super Admin to override, since no other eligible approver is assigned{% endif %}
+          {% endwith %}.
+        </div>
+      </div>
+      {% endif %}
+
       <div class="card mb-4">
         <div class="card-body">
           <p class="mb-1"><strong>Dates:</strong> {{ leave_request.start_date }} – {{ leave_request.end_date }} ({{ leave_request.days }} days)</p>
@@ -18,8 +32,11 @@
             {% elif leave_request.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
             {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
             {% if leave_request.is_overridden %}
-              <span class="badge bg-info text-dark">Overridden by {{ leave_request.overridden_by.get_full_name|default:leave_request.overridden_by.username }}</span>
+              <span class="badge bg-info text-dark">
+                Overridden{% if leave_request.overridden_by %} by {{ leave_request.overridden_by.get_full_name|default:leave_request.overridden_by.username }}{% endif %}
+              </span>
             {% endif %}
+            {% if leave_request.decided_by_display %}<div class="small text-muted mt-1">{{ leave_request.decided_by_display }}</div>{% endif %}
           </p>
           {% if leave_request.status == 'disapproved' and leave_request.salary_deduction_applicable %}
           <p class="text-danger mb-1"><i class="bi bi-exclamation-triangle"></i> Disapproved — Salary Deduction Applicable
@@ -28,7 +45,7 @@
           {% endif %}
           {% if leave_request.document %}
           <p class="mb-0"><strong>Document:</strong>
-            <a href="{% url 'hr:leave_request_document' leave_request.pk %}"><i class="bi bi-paperclip"></i> View attached document</a>
+            <a href="{% url 'hr:leave_request_document' leave_request.pk %}" target="_blank"><i class="bi bi-paperclip"></i> View attached document</a>
           </p>
           {% endif %}
         </div>
@@ -54,18 +71,54 @@
           <form method="post" class="border-top pt-3 mt-3">
             {% csrf_token %}
             <input type="hidden" name="action" value="decide">
+            <div class="mb-2">
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="decision" value="approved" id="decision_approved" required>
+                <label class="form-check-label text-success" for="decision_approved">Approve</label>
+              </div>
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="decision" value="disapproved" id="decision_disapproved">
+                <label class="form-check-label text-danger" for="decision_disapproved">Disapprove</label>
+              </div>
+              <div class="form-text">Pick a decision, then confirm — you can change your selection before submitting.</div>
+            </div>
             <div class="mb-2"><textarea name="comment" class="form-control" rows="2" placeholder="Optional comment"></textarea></div>
-            <button type="submit" name="decision" value="approved" class="btn btn-success btn-sm">Approve</button>
-            <button type="submit" name="decision" value="disapproved" class="btn btn-danger btn-sm">Disapprove</button>
+            <button type="submit" class="btn btn-primary btn-sm">Submit Decision</button>
+          </form>
+          {% elif can_edit_decision %}
+          <form method="post" class="border-top pt-3 mt-3">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="decide">
+            <p class="small text-muted mb-2">
+              You decided <strong>{{ my_approval.get_decision_display }}</strong> on {{ my_approval.decided_at }}.
+              You can change this within 24 hours of your original decision.
+            </p>
+            <div class="mb-2">
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="decision" value="approved" id="edit_decision_approved"
+                       {% if my_approval.decision == 'approved' %}checked{% endif %} required>
+                <label class="form-check-label text-success" for="edit_decision_approved">Approve</label>
+              </div>
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="decision" value="disapproved" id="edit_decision_disapproved"
+                       {% if my_approval.decision == 'disapproved' %}checked{% endif %}>
+                <label class="form-check-label text-danger" for="edit_decision_disapproved">Disapprove</label>
+              </div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small">Note explaining the change (required)</label>
+              <textarea name="edit_note" class="form-control" rows="2" placeholder="Why are you changing your decision?" required></textarea>
+            </div>
+            <button type="submit" class="btn btn-outline-primary btn-sm">Update Decision</button>
           </form>
           {% endif %}
 
-          {% if request.user.is_super_admin_user and leave_request.status == 'pending' %}
+          {% if can_override and leave_request.status == 'pending' %}
           <form method="post" class="border-top pt-3 mt-3">
             {% csrf_token %}
             <input type="hidden" name="action" value="override">
             <div class="mb-2">
-              <label class="form-label small">Superadmin override (use only if an approver is unavailable)</label>
+              <label class="form-label small">Override (use only if an approver is unavailable)</label>
               <textarea name="reason" class="form-control" rows="2" placeholder="Reason — required" required></textarea>
             </div>
             <button type="submit" name="decision" value="approved" class="btn btn-outline-success btn-sm">Override — Approve</button>
@@ -80,7 +133,7 @@
         <div class="card-body">
           {% for n in visible_notes %}
           <div class="mb-2 {% if n.is_internal %}bg-light p-2 rounded{% endif %}">
-            <strong>{{ n.author.get_full_name|default:n.author.username }}</strong>
+            <strong>{% if n.author %}{{ n.author.get_full_name|default:n.author.username }}{% else %}—{% endif %}</strong>
             {% if n.is_internal %}<span class="badge bg-secondary">Internal</span>{% endif %}
             <div class="small text-muted">{{ n.created_at }}</div>
             <div>{{ n.note }}</div>
@@ -89,7 +142,7 @@
           <p class="text-muted mb-0">No notes yet.</p>
           {% endfor %}
 
-          {% if request.user.is_super_admin_user %}
+          {% if my_approval %}
           <form method="post" class="border-top pt-3 mt-3">
             {% csrf_token %}
             <input type="hidden" name="action" value="add_note">

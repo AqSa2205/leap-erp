@@ -9,8 +9,17 @@
   </div>
 
   <div class="card mb-4">
-    <div class="card-header"><h5 class="mb-0"><i class="bi bi-hourglass-split"></i> Pending
-      <span class="badge bg-warning text-dark ms-2">{{ pending_requests|length }}</span></h5></div>
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <h5 class="mb-0"><i class="bi bi-hourglass-split"></i> Pending
+        <span class="badge bg-warning text-dark ms-2">{{ pending_requests|length }}</span></h5>
+      <form method="get" class="d-flex align-items-center gap-2 mb-0">
+        <label class="small text-muted mb-0">Sort by</label>
+        <select name="sort" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
+          <option value="submitted" {% if current_sort == 'submitted' %}selected{% endif %}>Submission date (oldest first)</option>
+          <option value="vacation_date" {% if current_sort == 'vacation_date' %}selected{% endif %}>Vacation date</option>
+        </select>
+      </form>
+    </div>
     <div class="card-body p-0">
       {% if pending_requests %}
       <table class="table table-hover align-middle mb-0">
@@ -24,7 +33,10 @@
             <td>{{ r.start_date }} – {{ r.end_date }}</td>
             <td>{{ r.days }}</td>
             <td class="text-muted small">
-              {% for a in r.pending_approvers %}{{ a.get_full_name|default:a.username }}{% if not forloop.last %}, {% endif %}{% endfor %}
+              {% with waiting=r.pending_approvers %}
+                {% if waiting %}{% for a in waiting %}{{ a.get_full_name|default:a.username }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                {% else %}<span class="text-danger">No eligible approver — requires override</span>{% endif %}
+              {% endwith %}
             </td>
             <td><a href="{{ detail_url }}" class="btn btn-sm btn-outline-primary">Review</a></td>
           </tr>
@@ -54,6 +66,7 @@
               {% elif r.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
               {% else %}<span class="badge bg-secondary">{{ r.get_status_display }}</span>{% endif %}
               {% if r.is_overridden %}<span class="badge bg-info text-dark ms-1">Overridden</span>{% endif %}
+              {% if r.decided_by_display %}<div class="small text-muted">{{ r.decided_by_display }}</div>{% endif %}
             </td>
             <td><a href="{{ detail_url }}" class="btn btn-sm btn-outline-secondary">View</a></td>
           </tr>

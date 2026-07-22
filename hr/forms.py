@@ -1,5 +1,5 @@
 from django import forms
-from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, VehicleDocument, LeaveType, Holiday, LeaveRecord, AttendanceSettings, WorkingDay, WFHRecord, LeaveRequest
+from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, VehicleDocument, LeaveType, Holiday, AttendanceSettings, WorkingDay, WFHRecord
 
 
 class EmployeeForm(forms.ModelForm):
@@ -397,21 +397,6 @@ class WorkingDayForm(forms.ModelForm):
         }
 
 
-class LeaveRecordForm(forms.ModelForm):
-    class Meta:
-        model = LeaveRecord
-        fields = ['employee', 'leave_type', 'start_date', 'end_date', 'days', 'note', 'medical_certificate']
-        widgets = {
-            'employee': forms.Select(attrs={'class': 'form-select'}),
-            'leave_type': forms.Select(attrs={'class': 'form-select'}),
-            'start_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
-            'end_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
-            'days': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.5', 'placeholder': 'Auto if blank'}),
-            'note': forms.TextInput(attrs={'class': 'form-control'}),
-            'medical_certificate': forms.ClearableFileInput(attrs={'class': 'form-control'}),
-        }
-
-
 class WFHRecordForm(forms.ModelForm):
     class Meta:
         model = WFHRecord
@@ -424,22 +409,72 @@ class WFHRecordForm(forms.ModelForm):
         }
 
 
-class LeaveRequestForm(forms.ModelForm):
-    class Meta:
-        model = LeaveRequest
-        fields = ['employee', 'leave_type', 'start_date', 'end_date', 'employee_reason', 'document']
-        widgets = {
-            'employee': forms.Select(attrs={'class': 'form-select'}),
-            'leave_type': forms.Select(attrs={'class': 'form-select'}),
-            'start_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
-            'end_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
-            'employee_reason': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
-            'document': forms.ClearableFileInput(attrs={'class': 'form-control'}),
-        }
+def check_leave_balance(employee, leave_type, start_date, end_date):
+    """Form-level fast-fail check: block a leave submission that would
+    exceed the employee's remaining balance, or overlaps another leave they
+    already have. Shared by every leave-creation entry point (admin
+    log-on-behalf-of, legacy Add Leave, My Profile self-service) since they
+    all now go through LeaveRequestForm.
 
-    def __init__(self, *args, **kwargs):
+    This is a UX convenience only — it runs unlocked, so a genuinely
+    concurrent submission can still slip past it. The AUTHORITATIVE,
+    race-safe check is hr.leave_services.validate_leave_submission(...,
+    lock=True), which hr.leave_approval_services.submit_leave_request runs
+    again (this time under a row lock) immediately before actually creating
+    the LeaveRequest — this function just gives the form a chance to fail
+    fast with a friendly message before that point."""
+    from .leave_services import validate_leave_submission
+    try:
+        validate_leave_submission(employee, leave_type, start_date, end_date, lock=False)
+    except ValueError as exc:
+        raise forms.ValidationError(str(exc))
+
+
+class LeaveRequestForm(forms.Form):
+    employee = forms.ModelChoiceField(
+        queryset=Employee.objects.filter(is_active=True),
+        widget=forms.Select(attrs={'class': 'form-select'}))
+    leave_type = forms.ModelChoiceField(
+        queryset=LeaveType.objects.filter(is_active=True),
+        widget=forms.Select(attrs={'class': 'form-select'}))
+    start_date = forms.DateField(widget=forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}))
+    end_date = forms.DateField(widget=forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}))
+    employee_reason = forms.CharField(
+        required=False, widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 3}))
+    document = forms.FileField(required=False, widget=forms.ClearableFileInput(attrs={'class': 'form-control'}))
+
+    def __init__(self, *args, fixed_employee=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['leave_type'].queryset = LeaveType.objects.filter(is_accumulative=False, is_active=True)
+        self.fixed_employee = fixed_employee
+        if fixed_employee is not None:
+            del self.fields['employee']
+
+    def clean(self):
+        cleaned = super().clean()
+        employee = self.fixed_employee or cleaned.get('employee')
+        leave_type = cleaned.get('leave_type')
+        start_date = cleaned.get('start_date')
+        end_date = cleaned.get('end_date')
+        document = cleaned.get('document')
+        if start_date and end_date and end_date < start_date:
+            self.add_error('end_date', 'End date cannot be before start date.')
+        elif start_date and end_date and start_date.year != end_date.year:
+            # LeaveEntitlement (and therefore check_leave_balance) is keyed
+            # per calendar year — a request spanning two years can't be
+            # validated or deducted against two different years' balances at
+            # once. Silently checking only the start year's balance would
+            # leave the end year's entitlement never consulted at all (a
+            # real gap this closes), so require splitting at the boundary.
+            self.add_error('end_date',
+                'A single leave request cannot span two different years. '
+                'Please submit this as two separate requests split at the year boundary.')
+        elif employee and leave_type and start_date and end_date:
+            if leave_type.requires_medical_certificate and not document:
+                self.add_error('document',
+                    f'A medical certificate/document is required for {leave_type.name} leave.')
+            else:
+                check_leave_balance(employee, leave_type, start_date, end_date)
+        return cleaned
 
 
 WEEKDAY_CHOICES = [(0, 'Mon'), (1, 'Tue'), (2, 'Wed'), (3, 'Thu'), (4, 'Fri'), (5, 'Sat'), (6, 'Sun')]

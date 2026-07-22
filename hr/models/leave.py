@@ -13,8 +13,8 @@ class LeaveType(models.Model):
         help_text='If set, a medical certificate must be attached when recording this leave (e.g. Sick).')
     is_accumulative = models.BooleanField(
         default=True,
-        help_text='Standard accrued allowances (Annual, Sick) count toward the top-level '
-                   'entitlement totals. Conditional/incidental leaves (Marriage, Death of '
+        help_text='The standard accrued allowance (Annual) counts toward the top-level '
+                   'entitlement totals. Conditional/incidental leaves (Sick, Marriage, Death of '
                    'Family Member, Umrah, New Born, etc.) should have this unchecked so they '
                    "don't inflate the summary total — they still show in the per-type breakdown.")
     is_active = models.BooleanField(default=True)
@@ -113,18 +113,83 @@ class LeaveRecord(models.Model):
         super().save(*args, **kwargs)
 
 
-class LeaveApprover(models.Model):
-    """A user with authority to approve/reject conditional leave requests.
-    Approval authority is a DB fact (this table), never a hardcoded username."""
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='leave_approver_profile')
+class LeaveDashboardAccess(models.Model):
+    """A user granted visibility into the master Leave Request dashboard
+    (the FIFO queue + detail pages) AND approval authority over conditional
+    leave requests — a single merged roster (this table used to be split
+    into a separate LeaveApprover model, but "who can see the dashboard" and
+    "who approves requests" turned out to always be the same people in
+    practice, so they were combined). Super Admins can always view
+    regardless of this table, but being a Super Admin does NOT by itself
+    grant approval authority — only an active row here does. Override
+    authority (a separate, narrower escape hatch) is governed independently
+    by OverrideAccessSettings below. A DB fact, never a hardcoded username."""
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='leave_dashboard_access')
     is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    granted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    granted_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ['user__username']
 
     def __str__(self):
-        return f"{self.user.get_full_name() or self.user.username} (leave approver)"
+        return f"{self.user.get_full_name() or self.user.username} (leave dashboard access)"
+
+
+class OverrideAccessSettings(models.Model):
+    """Singleton (always pk=1) controlling who can use the Super Admin
+    'override' escape hatch on leave requests (force-approve/disapprove when
+    the real approver is unavailable). Exactly one mode is authoritative at
+    a time — switching modes does not clear the other modes' saved
+    selections, so toggling back and forth doesn't lose data, but only the
+    active mode's grants actually affect who can override (see
+    hr.views.has_override_access)."""
+    MODE_ALL_SUPER_ADMINS = 'all_super_admins'
+    MODE_SPECIFIC_ROLES = 'specific_roles'
+    MODE_SPECIFIC_EMPLOYEES = 'specific_employees'
+    MODE_CHOICES = [
+        (MODE_ALL_SUPER_ADMINS, 'All Super Admins'),
+        (MODE_SPECIFIC_ROLES, 'Specific Roles'),
+        (MODE_SPECIFIC_EMPLOYEES, 'Specific Employees'),
+    ]
+    mode = models.CharField(max_length=20, choices=MODE_CHOICES, default=MODE_ALL_SUPER_ADMINS)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+
+    def __str__(self):
+        return f"Override Access Settings ({self.get_mode_display()})"
+
+    @classmethod
+    def get_solo(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class OverrideAccessRole(models.Model):
+    """A role granted override access — only actually confers it while
+    OverrideAccessSettings.mode == 'specific_roles'."""
+    role = models.OneToOneField('accounts.Role', on_delete=models.CASCADE, related_name='override_access_grant')
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['role__name']
+
+    def __str__(self):
+        return f"{self.role} (override access)"
+
+
+class OverrideAccessEmployee(models.Model):
+    """A specific user granted override access — only actually confers it
+    while OverrideAccessSettings.mode == 'specific_employees'."""
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='override_access_grant')
+    added_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['user__username']
+
+    def __str__(self):
+        return f"{self.user.get_full_name() or self.user.username} (override access)"
 
 
 class LeaveRequest(models.Model):
@@ -169,8 +234,9 @@ class LeaveRequest(models.Model):
         from django.core.exceptions import ValidationError
         if self.start_date and self.end_date and self.end_date < self.start_date:
             raise ValidationError({'end_date': 'End date cannot be before start date.'})
-        if self.leave_type_id and self.leave_type.is_accumulative:
-            raise ValidationError({'leave_type': 'The approval workflow is only for conditional leave types.'})
+        if self.leave_type_id and self.leave_type.requires_medical_certificate and not self.document:
+            raise ValidationError({'document':
+                                   'A medical certificate/document is required for this leave type.'})
 
     def computed_days(self):
         from decimal import Decimal
@@ -187,6 +253,33 @@ class LeaveRequest(models.Model):
         """Users whose decision is still outstanding (used for the employee-facing
         'Pending — waiting on X' message)."""
         return [a.approver for a in self.approvals.filter(decision='pending')]
+
+    @property
+    def decided_by_display(self):
+        """Human-readable 'by X' summary for a finalized request — None
+        while still pending, and None if there's no actor info to add.
+        Deliberately does NOT repeat the Approved/Disapproved verb: every
+        caller already renders a status badge right next to this, so
+        including the verb here reads as 'Disapproved / Disapproved by X'.
+        Covers both the normal dual-approval path (joins every approver
+        whose decision matches the final status — for 'approved' this is
+        always every approver, since _reconcile only finalizes as approved
+        once all have approved) and the Super Admin override path
+        (is_overridden/overridden_by)."""
+        if self.status not in ('approved', 'disapproved'):
+            return None
+        if self.is_overridden:
+            if self.overridden_by_id:
+                name = self.overridden_by.get_full_name() or self.overridden_by.username
+                return f'by {name} (override)'
+            return '(override — approver account no longer exists)'
+        actors = [
+            a.approver.get_full_name() or a.approver.username
+            for a in self.approvals.all() if a.decision == self.status
+        ]
+        if actors:
+            return f'by {", ".join(actors)}'
+        return None
 
 
 class LeaveRequestApproval(models.Model):

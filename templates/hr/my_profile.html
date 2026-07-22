@@ -97,20 +97,36 @@
               </button>
             </div>
 
-            <div class="collapse mb-3" id="requestLeaveForm">
+            <div class="collapse mb-3{% if leave_request_form.errors or leave_request_submit_failed %} show{% endif %}" id="requestLeaveForm">
               <form method="post" enctype="multipart/form-data" class="border rounded p-3">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="request_leave">
+                {% if leave_request_form.non_field_errors %}
+                <div class="alert alert-danger py-2 small">{{ leave_request_form.non_field_errors }}</div>
+                {% endif %}
                 <div class="row">
                   <div class="col-md-6 mb-2">
                     <label class="form-label small">Leave Type</label>
                     {{ leave_request_form.leave_type }}
+                    {% if leave_request_form.leave_type.errors %}<div class="small text-danger">{{ leave_request_form.leave_type.errors|join:", " }}</div>{% endif %}
                   </div>
-                  <div class="col-md-3 mb-2"><label class="form-label small">Start</label>{{ leave_request_form.start_date }}</div>
-                  <div class="col-md-3 mb-2"><label class="form-label small">End</label>{{ leave_request_form.end_date }}</div>
+                  <div class="col-md-3 mb-2">
+                    <label class="form-label small">Start</label>{{ leave_request_form.start_date }}
+                    {% if leave_request_form.start_date.errors %}<div class="small text-danger">{{ leave_request_form.start_date.errors|join:", " }}</div>{% endif %}
+                  </div>
+                  <div class="col-md-3 mb-2">
+                    <label class="form-label small">End</label>{{ leave_request_form.end_date }}
+                    {% if leave_request_form.end_date.errors %}<div class="small text-danger">{{ leave_request_form.end_date.errors|join:", " }}</div>{% endif %}
+                  </div>
                 </div>
-                <div class="mb-2"><label class="form-label small">Reason</label>{{ leave_request_form.employee_reason }}</div>
-                <div class="mb-2"><label class="form-label small">Document (optional)</label>{{ leave_request_form.document }}</div>
+                <div class="mb-2">
+                  <label class="form-label small">Reason</label>{{ leave_request_form.employee_reason }}
+                  {% if leave_request_form.employee_reason.errors %}<div class="small text-danger">{{ leave_request_form.employee_reason.errors|join:", " }}</div>{% endif %}
+                </div>
+                <div class="mb-2">
+                  <label class="form-label small">Document (optional)</label>{{ leave_request_form.document }}
+                  {% if leave_request_form.document.errors %}<div class="small text-danger">{{ leave_request_form.document.errors|join:", " }}</div>{% endif %}
+                </div>
                 <button type="submit" class="btn btn-sm btn-primary">Submit Request</button>
               </form>
             </div>
@@ -124,15 +140,19 @@
                   <td>{{ r.leave_type.name }}</td>
                   <td>{{ r.start_date }} – {{ r.end_date }}</td>
                   <td>
-                    {% if r.status == 'approved' %}<span class="badge bg-success">Approved</span>
+                    {% if r.status == 'approved' %}
+                      <span class="badge bg-success">Approved</span>
+                      {% if r.decided_by_display %}<div class="small text-muted">{{ r.decided_by_display }}</div>{% endif %}
                     {% elif r.status == 'disapproved' %}
                       <span class="badge bg-danger">Disapproved</span>
+                      {% if r.decided_by_display %}<div class="small text-muted">{{ r.decided_by_display }}</div>{% endif %}
                       {% if r.salary_deduction_applicable %}<div class="small text-danger">Salary deduction applicable</div>{% endif %}
                     {% else %}
                       <span class="badge bg-warning text-dark">Pending</span>
                       <div class="small text-muted">
                         {% with waiting=r.pending_approvers %}
-                          {% if waiting %}Waiting on {% for a in waiting %}{{ a.get_full_name|default:a.username }}{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}
+                          {% if waiting %}Waiting on {% for a in waiting %}{{ a.get_full_name|default:a.username }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                          {% else %}Waiting on a Super Admin to review (no other eligible approver is assigned){% endif %}
                         {% endwith %}
                       </div>
                     {% endif %}

@@ -4,9 +4,10 @@ from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_POST
 from django.contrib import messages
-from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
+from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView, FormView
 from django.urls import reverse_lazy, reverse
 from django.db.models import Q, Count, Sum
+from django.db.models import ProtectedError
 from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from django.db import transaction
@@ -20,7 +21,7 @@ from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm, AssetIssueForm, AssetReturnForm,
     VehicleForm, VehicleFilterForm, EmployeeDocumentForm, VehicleDocumentForm,
-    LeaveTypeForm, HolidayForm, WorkingDayForm, LeaveRecordForm, WFHRecordForm,
+    LeaveTypeForm, HolidayForm, WorkingDayForm, WFHRecordForm,
     AttendanceSettingsForm, LeaveRequestForm,
 )
 from .leave_services import generate_year_entitlements
@@ -41,11 +42,47 @@ class SuperAdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
 
 
 def is_designated_approver(user):
-    """True if `user` currently holds active approval authority for conditional
-    leave requests. This — not a username check — is what makes Aamna Khan and
-    Ali Sultan (or whoever holds these rows) able to actually approve/reject."""
-    from .models import LeaveApprover
-    return LeaveApprover.objects.filter(user=user, is_active=True).exists()
+    """True if `user` currently holds active approval authority for leave
+    requests — an active LeaveDashboardAccess grant (managed on the Org
+    Chart page's 'Leave Dashboard Access' tab). This — not a username check
+    — is what makes Aamna Khan and Ali Sultan (or whoever holds these rows)
+    able to actually approve/reject. Note this is NOT the same as being a
+    Super Admin: Super Admin status alone grants viewing, never approval
+    authority by itself (see can_view_leave_dashboard) — and, since override
+    access became configurable, not necessarily override authority either
+    (see has_override_access)."""
+    from .models import LeaveDashboardAccess
+    return LeaveDashboardAccess.objects.filter(user=user, is_active=True).exists()
+
+
+def has_override_access(user):
+    """Access gate for the Super Admin 'override' escape hatch on leave
+    requests (force-approve/disapprove when the real approver is
+    unavailable) — configured via OverrideAccessSettings, managed from the
+    Org Chart page's 'Leave Dashboard Access' tab. Exactly one mode is
+    authoritative: by default (MODE_ALL_SUPER_ADMINS) every Super Admin has
+    it, matching the original hardcoded behavior; narrowed to
+    MODE_SPECIFIC_ROLES or MODE_SPECIFIC_EMPLOYEES, only that hand-picked
+    set does — Super Admin status alone no longer suffices once narrowed."""
+    from .models import OverrideAccessSettings, OverrideAccessRole, OverrideAccessEmployee
+    config = OverrideAccessSettings.get_solo()
+    if config.mode == OverrideAccessSettings.MODE_SPECIFIC_ROLES:
+        return bool(user.role_id and OverrideAccessRole.objects.filter(role_id=user.role_id).exists())
+    if config.mode == OverrideAccessSettings.MODE_SPECIFIC_EMPLOYEES:
+        return OverrideAccessEmployee.objects.filter(user=user).exists()
+    return user.is_super_admin_user
+
+
+def can_view_leave_dashboard(user):
+    """Access gate for the master Leave Request dashboard (the FIFO queue +
+    detail pages). Super Admins always see it; anyone with an active
+    LeaveDashboardAccess grant also sees it, AND that same grant is what
+    makes them a real approver on new leave requests (see
+    submit_leave_request); anyone with override access (see
+    has_override_access) must be able to see it too, or granting them
+    override authority would be pointless — they couldn't reach the page to
+    use it."""
+    return bool(user.is_super_admin_user or is_designated_approver(user) or has_override_access(user))
 
 
 @login_required
@@ -168,28 +205,34 @@ def my_profile(request):
     from django.utils import timezone
     from .models import AttendanceRecord, Asset, Vehicle
     from .forms import LeaveRequestForm
-    from .leave_approval_services import submit_leave_request
 
     emp = getattr(request.user, 'employee_profile', None)
     context = {'employee': emp}
 
     is_leave_request_post = (
         emp and request.method == 'POST' and request.POST.get('action') == 'request_leave')
-    form = LeaveRequestForm(request.POST, request.FILES) if is_leave_request_post else LeaveRequestForm()
-    # Self-service: drop the 'employee' field before validation — it's implied to be
-    # the logged-in employee, never a field the employee gets to pick for themselves.
-    if 'employee' in form.fields:
-        del form.fields['employee']
     if is_leave_request_post:
+        form = LeaveRequestForm(request.POST, request.FILES, fixed_employee=emp)
         if form.is_valid():
-            submit_leave_request(
-                employee=emp, leave_type=form.cleaned_data['leave_type'],
-                start_date=form.cleaned_data['start_date'], end_date=form.cleaned_data['end_date'],
-                employee_reason=form.cleaned_data['employee_reason'], document=form.cleaned_data['document'],
-                created_by=request.user,
-            )
-            messages.success(request, 'Leave request submitted and sent for approval.')
-            return redirect('hr:my_profile')
+            from hr.leave_approval_services import submit_leave_request
+            try:
+                submit_leave_request(
+                    employee=emp, leave_type=form.cleaned_data['leave_type'],
+                    start_date=form.cleaned_data['start_date'], end_date=form.cleaned_data['end_date'],
+                    employee_reason=form.cleaned_data['employee_reason'], document=form.cleaned_data['document'],
+                    created_by=request.user,
+                )
+                messages.success(request, 'Leave request submitted and sent for approval.')
+                return redirect('hr:my_profile')
+            except ValueError as exc:
+                # The form already passed its own (unlocked) balance/overlap
+                # check — reaching here means submit_leave_request's locked,
+                # authoritative re-check caught something that changed in the
+                # meantime (most likely a genuinely concurrent submission).
+                messages.error(request, str(exc))
+                context['leave_request_submit_failed'] = True
+    else:
+        form = LeaveRequestForm(fixed_employee=emp) if emp else LeaveRequestForm()
     context['leave_request_form'] = form
 
     if emp:
@@ -219,7 +262,10 @@ def my_profile(request):
         context['leave_total_entitled'] = sum((e.entitled_days for e in accumulative), Decimal('0'))
         context['leave_total_remaining'] = sum((e.remaining_days for e in accumulative), Decimal('0'))
         # This employee's own leave requests (pending/approved/disapproved), newest first.
-        context['leave_requests'] = emp.leave_requests.select_related('leave_type').order_by('-created_at')[:10]
+        context['leave_requests'] = (
+            emp.leave_requests.select_related('leave_type', 'overridden_by')
+            .prefetch_related('approvals__approver')
+            .order_by('-created_at')[:10])
         # Attendance summary for the current month.
         month_records = AttendanceRecord.objects.filter(
             employee=emp, date__year=today.year, date__month=today.month)
@@ -323,8 +369,15 @@ class EmployeeCreateView(AdminRequiredMixin, CreateView):
 
     def form_valid(self, form):
         form.instance.created_by = self.request.user
+        response = super().form_valid(form)
+        # Auto-generate this year's leave balances for every newly added
+        # employee — the same rows an admin would otherwise have to create
+        # by hand via the Entitlements page's "Generate" action.
+        if self.object.is_active:
+            from hr.leave_services import generate_entitlements_for_employee
+            generate_entitlements_for_employee(self.object, timezone.now().year, actor=self.request.user)
         messages.success(self.request, 'Employee created successfully.')
-        return super().form_valid(form)
+        return response
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -1578,6 +1631,12 @@ class LeaveTypeCreateView(AdminRequiredMixin, CreateView):
     success_url = reverse_lazy('hr:leavetype_list')
 
     def form_valid(self, form):
+        # is_accumulative is a fixed business rule (only Annual is ever True),
+        # not an admin-editable toggle — it's no longer on this form, so set
+        # the sensible default explicitly here rather than relying on the
+        # model field's default=True (which would wrongly mark every new
+        # custom leave type as accumulative).
+        form.instance.is_accumulative = (form.instance.code == 'annual')
         messages.success(self.request, 'Leave type created successfully.')
         return super().form_valid(form)
 
@@ -1595,14 +1654,57 @@ class LeaveTypeUpdateView(AdminRequiredMixin, UpdateView):
     success_url = reverse_lazy('hr:leavetype_list')
 
     def form_valid(self, form):
+        # Snapshot the pre-save day count so we know, after saving, whether it
+        # actually changed (LeaveType.save() already propagates a changed
+        # default_annual_days to every existing entitlement of this type, for
+        # every year — this is deliberate, tested behavior, see
+        # LeaveTypeDaySyncTests). Here we additionally keep the *current* year
+        # explicitly, visibly in sync via the same service the manual "Re-apply"
+        # button on the Entitlements page uses, so an admin editing a leave
+        # type gets the same confirmation without a separate manual click —
+        # historical years are intentionally left to the model-level sync
+        # above, not retroactively rewritten by this extra step.
+        old_days = None
+        if self.object and self.object.pk:
+            old_days = (LeaveType.objects.filter(pk=self.object.pk)
+                        .values_list('default_annual_days', flat=True).first())
+        response = super().form_valid(form)
         messages.success(self.request, 'Leave type updated successfully.')
-        return super().form_valid(form)
+        if old_days is not None and old_days != self.object.default_annual_days:
+            from hr.leave_services import reapply_leave_type_defaults
+            current_year = timezone.now().year
+            updated = reapply_leave_type_defaults(year=current_year, leave_type=self.object)
+            messages.success(
+                self.request,
+                f'Re-applied leave-type day counts to {updated} entitlement(s) for {current_year}.')
+        return response
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['title'] = 'Edit Leave Type'
         context['button_text'] = 'Save Changes'
         return context
+
+
+class LeaveTypeDeleteView(AdminRequiredMixin, DeleteView):
+    model = LeaveType
+    template_name = 'hr/leavetype_confirm_delete.html'
+    success_url = reverse_lazy('hr:leavetype_list')
+
+    def form_valid(self, form):
+        # LeaveEntitlement/LeaveRecord both use on_delete=PROTECT against
+        # LeaveType, so a type with any employee history can't be deleted —
+        # catch that instead of letting it 500.
+        try:
+            response = super().form_valid(form)
+        except ProtectedError:
+            messages.error(
+                self.request,
+                f'"{self.object.name}" can\'t be deleted — it\'s already used in an '
+                'employee\'s entitlement or leave history. Set it to Inactive instead.')
+            return redirect('hr:leavetype_list')
+        messages.success(self.request, 'Leave type deleted successfully.')
+        return response
 
 
 # ─── Holiday CRUD ─────────────────────────────────────────────
@@ -1692,29 +1794,6 @@ class WorkingDayDeleteView(AdminRequiredMixin, DeleteView):
 # ─── Leave Records, Summary & Entitlement Generation ─────────────────────────
 
 
-class LeaveRecordCreateView(AdminRequiredMixin, CreateView):
-    model = LeaveRecord
-    form_class = LeaveRecordForm
-    template_name = 'hr/leaverecord_form.html'
-
-    def form_valid(self, form):
-        form.instance.created_by = self.request.user
-        if form.cleaned_data.get('days') is None:
-            form.instance.days = None  # let the model auto-compute working days
-            # (an explicit 0 is preserved — only a blank field auto-computes)
-        messages.success(self.request, 'Leave recorded.')
-        return super().form_valid(form)
-
-    def get_success_url(self):
-        return reverse_lazy('hr:leave_summary', kwargs={'pk': self.object.employee_id})
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        ctx['title'] = 'Record Leave'
-        ctx['button_text'] = 'Save Leave'
-        return ctx
-
-
 class LeaveRecordDeleteView(AdminRequiredMixin, DeleteView):
     model = LeaveRecord
     template_name = 'hr/leaverecord_confirm_delete.html'
@@ -1730,33 +1809,67 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
     context_object_name = 'pending_requests'
     paginate_by = None  # pending list is expected to stay small; history is paginated separately below
 
+    def test_func(self):
+        # Broader than SuperAdminRequiredMixin's plain super-admin check: a designated
+        # approver needs to see the queue of requests awaiting their decision, not just
+        # reach individual detail pages via a notification link. Mirrors the same
+        # widening already applied to LeaveRequestDetailView. can_view_leave_dashboard
+        # also grants access to anyone with an active LeaveDashboardAccess record,
+        # managed by Super Admins from the Org Chart page's access tab.
+        return can_view_leave_dashboard(self.request.user)
+
     def get_queryset(self):
-        return LeaveRequest.objects.filter(status='pending').select_related('employee', 'leave_type').order_by('created_at')
+        qs = LeaveRequest.objects.filter(status='pending').select_related('employee', 'leave_type')
+        if self.request.GET.get('sort') == 'vacation_date':
+            return qs.order_by('start_date')
+        return qs.order_by('created_at')
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx['decided_requests'] = (
             LeaveRequest.objects.exclude(status='pending')
-            .select_related('employee', 'leave_type').order_by('-decided_at')[:50])
+            .select_related('employee', 'leave_type', 'overridden_by')
+            .prefetch_related('approvals__approver')
+            .order_by('-decided_at')[:50])
+        ctx['current_sort'] = self.request.GET.get('sort') or 'submitted'
         return ctx
 
 
-class LeaveRequestCreateView(SuperAdminRequiredMixin, CreateView):
-    model = LeaveRequest
+class LeaveRequestCreateView(AdminRequiredMixin, FormView):
+    # AdminRequiredMixin (Admin or Super Admin), not SuperAdminRequiredMixin: this view
+    # now also serves the legacy "Add Leave" buttons (Entitlements -> Leave Summary /
+    # Attendance Matrix), which were always plain-Admin-accessible. Narrowing that to
+    # Super Admin only would be an unintended access regression from unifying the two
+    # routes onto one view. A plain Admin can still only *submit* a conditional-leave
+    # request here — approving it in the queue remains Super-Admin/designated-approver-only.
     form_class = LeaveRequestForm
     template_name = 'hr/leave_request_form.html'
-    success_url = reverse_lazy('hr:leave_request_list')
+
+    def get_initial(self):
+        initial = super().get_initial()
+        employee_id = self.request.GET.get('employee')
+        if employee_id:
+            initial['employee'] = employee_id
+        return initial
 
     def form_valid(self, form):
         from hr.leave_approval_services import submit_leave_request
-        leave_request = submit_leave_request(
-            employee=form.cleaned_data['employee'], leave_type=form.cleaned_data['leave_type'],
-            start_date=form.cleaned_data['start_date'], end_date=form.cleaned_data['end_date'],
-            employee_reason=form.cleaned_data['employee_reason'], document=form.cleaned_data['document'],
-            created_by=self.request.user,
-        )
+        try:
+            submit_leave_request(
+                employee=form.cleaned_data['employee'], leave_type=form.cleaned_data['leave_type'],
+                start_date=form.cleaned_data['start_date'], end_date=form.cleaned_data['end_date'],
+                employee_reason=form.cleaned_data['employee_reason'], document=form.cleaned_data['document'],
+                created_by=self.request.user,
+            )
+        except ValueError as exc:
+            # The form already passed its own (unlocked) balance/overlap
+            # check — reaching here means submit_leave_request's locked,
+            # authoritative re-check caught something that changed in the
+            # meantime (most likely a genuinely concurrent submission).
+            form.add_error(None, str(exc))
+            return self.form_invalid(form)
         messages.success(self.request, 'Leave request logged and sent for approval.')
-        return redirect(self.success_url)
+        return redirect('hr:leave_request_list')
 
 
 class EmployeeLeaveSummaryView(AdminRequiredMixin, DetailView):
@@ -1820,9 +1933,13 @@ def entitlement_year(request):
         remaining = e.entitled_days - taken
         g['rows'].append({'leave_type': e.leave_type, 'entitled': e.entitled_days,
                           'taken': taken, 'remaining': remaining})
-        g['total_entitled'] += e.entitled_days
-        g['total_taken'] += taken
-        g['total_remaining'] += remaining
+        # Only standard accrued leave (Annual) counts toward the top-level totals.
+        # Conditional/incidental leave (Sick, Marriage, Death of Family Member, Umrah,
+        # New Born) is shown in the per-type breakdown above but excluded from the summary.
+        if e.leave_type.is_accumulative:
+            g['total_entitled'] += e.entitled_days
+            g['total_taken'] += taken
+            g['total_remaining'] += remaining
 
     return render(request, 'hr/entitlement_year.html',
                   {'year': year, 'groups': list(groups.values()),
@@ -2117,18 +2234,33 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
         # approver must also be able to open the detail page and record their decision.
         # Whether they're the *specific* pending approver for *this* request is enforced
         # per-action in post() (see the 'decide' branch) — this is just page access.
-        return self.request.user.is_super_admin_user or is_designated_approver(self.request.user)
+        # can_view_leave_dashboard also grants access to anyone with an active
+        # LeaveDashboardAccess record, managed from the Org Chart page's access tab.
+        return can_view_leave_dashboard(self.request.user)
 
     def get_context_data(self, **kwargs):
+        from hr.leave_approval_services import DECISION_EDIT_WINDOW
         ctx = super().get_context_data(**kwargs)
+        # A user must never be able to act on their own leave request —
+        # decide, edit a decision, add a note, or override — regardless of
+        # what other authority (approver, override access) they hold.
+        ctx['is_own_request'] = bool(
+            self.object.employee.user_id and self.object.employee.user_id == self.request.user.id)
         ctx['is_approver'] = is_designated_approver(self.request.user)
-        ctx['my_approval'] = self.object.approvals.filter(approver=self.request.user).first()
+        ctx['can_override'] = has_override_access(self.request.user) and not ctx['is_own_request']
+        my_approval = self.object.approvals.filter(approver=self.request.user).first()
+        ctx['my_approval'] = my_approval if not ctx['is_own_request'] else None
         ctx['visible_notes'] = self.object.notes.filter(is_internal=False) if not self.request.user.is_super_admin_user \
             else self.object.notes.all()
+        ctx['can_edit_decision'] = bool(
+            my_approval and my_approval.decision in ('approved', 'disapproved')
+            and self.object.status == 'pending'
+            and my_approval.decided_at is not None
+            and timezone.now() - my_approval.decided_at <= DECISION_EDIT_WINDOW)
         return ctx
 
     def post(self, request, *args, **kwargs):
-        from hr.leave_approval_services import record_approver_decision, override_finalize
+        from hr.leave_approval_services import record_approver_decision, edit_approver_decision, override_finalize
         self.object = self.get_object()
         action = request.POST.get('action')
 
@@ -2137,15 +2269,20 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
             if not approval:
                 return HttpResponse('You are not a designated approver for this request.', status=403)
             try:
-                record_approver_decision(self.object, request.user, request.POST.get('decision'),
-                                         comment=request.POST.get('comment', ''))
-                messages.success(request, 'Your decision has been recorded.')
+                if approval.decision == 'pending':
+                    record_approver_decision(self.object, request.user, request.POST.get('decision'),
+                                             comment=request.POST.get('comment', ''))
+                    messages.success(request, 'Your decision has been recorded.')
+                else:
+                    edit_approver_decision(self.object, request.user, request.POST.get('decision'),
+                                           edit_note=request.POST.get('edit_note', ''))
+                    messages.success(request, 'Your decision has been updated.')
             except ValueError as exc:
                 messages.error(request, str(exc))
 
         elif action == 'override':
-            if not request.user.is_super_admin_user:
-                return HttpResponse('Super admin required.', status=403)
+            if not has_override_access(request.user):
+                return HttpResponse('You do not have override access for this request.', status=403)
             try:
                 override_finalize(self.object, request.user, request.POST.get('decision'),
                                   request.POST.get('reason', ''))
@@ -2154,8 +2291,11 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
                 messages.error(request, str(exc))
 
         elif action == 'add_note':
-            if not request.user.is_super_admin_user:
-                return HttpResponse('Super admin required.', status=403)
+            # Restricted to the assigned approver(s) for THIS request, not any
+            # Super Admin — a Super Admin with no approval row here is
+            # view-only aside from the override escape hatch above.
+            if not self.object.approvals.filter(approver=request.user).exists():
+                return HttpResponse('You are not a designated approver for this request.', status=403)
             from .models import LeaveRequestNote
             note_text = request.POST.get('note', '').strip()
             if note_text:

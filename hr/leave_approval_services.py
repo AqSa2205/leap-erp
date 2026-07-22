@@ -1,21 +1,35 @@
-"""Finalization logic for the conditional-leave dual-approval workflow.
+"""Finalization logic for the dual-approval leave workflow — every leave
+type, including Annual, routes through this queue; there is no
+approval-bypass path.
 
 Two entry points:
-- record_approver_decision: a designated LeaveApprover records their own decision.
+- record_approver_decision: a user with an active LeaveDashboardAccess grant
+  records their own decision.
 - override_finalize: any super admin force-finalizes a stuck request (deadlock breaker).
 
 Both funnel through _finalize, which is the single place that creates the
 balance-deducting LeaveRecord or sets the salary-deduction flag.
 """
+from datetime import timedelta
+
+from django.db import transaction
 from django.utils import timezone
 
 from hr.models import LeaveRecord
 from notifications.services import notify_users
 
+DECISION_EDIT_WINDOW = timedelta(hours=24)
+
 
 def record_approver_decision(leave_request, approver_user, decision, comment=''):
     if decision not in ('approved', 'disapproved'):
         raise ValueError(f"decision must be 'approved' or 'disapproved', got {decision!r}")
+    if leave_request.employee.user_id and leave_request.employee.user_id == approver_user.id:
+        # Defense in depth: submit_leave_request already excludes the
+        # requester from the approver roster for every NEW request, but this
+        # blocks any legacy/edge-case row where a self-approval slipped
+        # through — a user must never be able to decide their own request.
+        raise ValueError('You cannot approve or disapprove your own leave request.')
     try:
         approval = leave_request.approvals.get(approver=approver_user)
     except leave_request.approvals.model.DoesNotExist:
@@ -23,12 +37,19 @@ def record_approver_decision(leave_request, approver_user, decision, comment='')
     if approval.decision != 'pending':
         raise ValueError(f"{approver_user} has already decided ({approval.decision}).")
 
-    approval.decision = decision
-    approval.comment = comment
-    approval.decided_at = timezone.now()
-    approval.save(update_fields=['decision', 'comment', 'decided_at'])
+    # Recording the decision and reconciling/finalizing must succeed or fail
+    # together — otherwise a transient failure inside _finalize (e.g. the
+    # LeaveRecord write) leaves this approval permanently stuck showing
+    # 'approved'/'disapproved' while the request itself never leaves
+    # 'pending', and record_approver_decision can never be called again for
+    # it (it requires decision == 'pending').
+    with transaction.atomic():
+        approval.decision = decision
+        approval.comment = comment
+        approval.decided_at = timezone.now()
+        approval.save(update_fields=['decision', 'comment', 'decided_at'])
 
-    _reconcile(leave_request)
+        _reconcile(leave_request)
     leave_request.refresh_from_db()
     if leave_request.status == 'pending':
         remaining = leave_request.pending_approvers()
@@ -43,16 +64,62 @@ def record_approver_decision(leave_request, approver_user, decision, comment='')
     return leave_request
 
 
+def edit_approver_decision(leave_request, approver_user, new_decision, edit_note):
+    """Let an approver change their own already-recorded decision within the
+    24-hour edit window, while the request is still pending (see _finalize —
+    once finalized, decisions lock; there's no reversal of a created
+    LeaveRecord or a salary-deduction flag). Requires a note explaining why,
+    which is recorded as a visible LeaveRequestNote."""
+    from hr.models import LeaveRequestNote
+
+    if new_decision not in ('approved', 'disapproved'):
+        raise ValueError(f"decision must be 'approved' or 'disapproved', got {new_decision!r}")
+    if not edit_note or not edit_note.strip():
+        raise ValueError('Changing a decision requires a note explaining why.')
+    if leave_request.employee.user_id and leave_request.employee.user_id == approver_user.id:
+        raise ValueError('You cannot edit a decision on your own leave request.')
+    leave_request.refresh_from_db()
+    if leave_request.status != 'pending':
+        raise ValueError('This request has already been finalized; the decision can no longer be edited.')
+    try:
+        approval = leave_request.approvals.get(approver=approver_user)
+    except leave_request.approvals.model.DoesNotExist:
+        raise ValueError(f"{approver_user} is not a designated approver for this request.")
+    if approval.decision not in ('approved', 'disapproved'):
+        raise ValueError('No prior decision to edit.')
+    if approval.decided_at is None or timezone.now() - approval.decided_at > DECISION_EDIT_WINDOW:
+        raise ValueError('The 24-hour edit window for this decision has passed.')
+
+    old_decision = approval.decision
+    if old_decision == new_decision:
+        raise ValueError('That is already your recorded decision.')
+
+    # Same all-or-nothing reasoning as record_approver_decision: the edited
+    # decision, its note, and finalization must roll back together on failure.
+    with transaction.atomic():
+        approval.decision = new_decision
+        approval.decided_at = timezone.now()
+        approval.save(update_fields=['decision', 'decided_at'])
+
+        LeaveRequestNote.objects.create(
+            leave_request=leave_request, author=approver_user,
+            note=f'Changed decision from {old_decision} to {new_decision}: {edit_note.strip()}',
+        )
+        _reconcile(leave_request)
+    return leave_request
+
+
 def override_finalize(leave_request, superadmin_user, decision, reason):
     if decision not in ('approved', 'disapproved'):
         raise ValueError(f"decision must be 'approved' or 'disapproved', got {decision!r}")
     if not reason or not reason.strip():
         raise ValueError('An override requires a written reason.')
+    if leave_request.employee.user_id and leave_request.employee.user_id == superadmin_user.id:
+        raise ValueError('You cannot override your own leave request.')
     leave_request.refresh_from_db()
     if leave_request.status != 'pending':
         raise ValueError(f"Request is already {leave_request.status}; nothing to override.")
 
-    leave_request.approvals.filter(decision='pending').update(decision='skipped', decided_at=timezone.now())
     leave_request.is_overridden = True
     leave_request.overridden_by = superadmin_user
     leave_request.override_reason = reason
@@ -72,24 +139,32 @@ def _reconcile(leave_request):
 
 
 def _finalize(leave_request, status):
-    leave_request.status = status
-    leave_request.decided_at = timezone.now()
-    if status == 'approved':
-        record = LeaveRecord.objects.create(
-            employee=leave_request.employee,
-            leave_type=leave_request.leave_type,
-            start_date=leave_request.start_date,
-            end_date=leave_request.end_date,
-            days=leave_request.days,
-            note=f'Approved via leave request #{leave_request.pk}',
-        )
-        leave_request.leave_record = record
-    elif status == 'disapproved':
-        leave_request.salary_deduction_applicable = True
-    leave_request.save(update_fields=[
-        'status', 'decided_at', 'leave_record', 'salary_deduction_applicable',
-        'is_overridden', 'overridden_by', 'override_reason',
-    ])
+    from hr.models import LeaveRequest  # local import avoids any circularity, matches this file's existing style
+
+    with transaction.atomic():
+        current = LeaveRequest.objects.select_for_update().get(pk=leave_request.pk)
+        if current.status != 'pending':
+            return  # already finalized by a concurrent decision/override — no-op
+
+        leave_request.approvals.filter(decision='pending').update(decision='skipped', decided_at=timezone.now())
+        leave_request.status = status
+        leave_request.decided_at = timezone.now()
+        if status == 'approved':
+            record = LeaveRecord.objects.create(
+                employee=leave_request.employee,
+                leave_type=leave_request.leave_type,
+                start_date=leave_request.start_date,
+                end_date=leave_request.end_date,
+                days=leave_request.days,
+                note=f'Approved via leave request #{leave_request.pk}',
+            )
+            leave_request.leave_record = record
+        elif status == 'disapproved':
+            leave_request.salary_deduction_applicable = True
+        leave_request.save(update_fields=[
+            'status', 'decided_at', 'leave_record', 'salary_deduction_applicable',
+            'is_overridden', 'overridden_by', 'override_reason',
+        ])
     if leave_request.employee.user_id:
         verb = 'approved' if status == 'approved' else 'disapproved'
         notify_users(
@@ -100,17 +175,44 @@ def _finalize(leave_request, status):
 
 
 def submit_leave_request(*, employee, leave_type, start_date, end_date, employee_reason='', document=None, created_by):
-    """Create a LeaveRequest and snapshot the currently-active LeaveApprover
-    roster onto it as LeaveRequestApproval rows. Used by both the employee
-    self-service form and the admin's 'log on behalf of' form so the two
-    submission paths can never drift out of sync."""
-    from hr.models import LeaveApprover, LeaveRequest, LeaveRequestApproval
-    leave_request = LeaveRequest.objects.create(
-        employee=employee, leave_type=leave_type, start_date=start_date, end_date=end_date,
-        employee_reason=employee_reason, document=document, created_by=created_by,
-    )
-    for approver in LeaveApprover.objects.filter(is_active=True):
-        LeaveRequestApproval.objects.create(leave_request=leave_request, approver=approver.user)
+    """Create a LeaveRequest and snapshot the currently-active
+    LeaveDashboardAccess roster onto it as LeaveRequestApproval rows — the
+    single entry point for ALL leave creation (admin-logged, legacy
+    'Add Leave', or self-service), including Annual, which used to skip
+    approval entirely (that bypass was removed: every leave type now needs
+    Approve/Disapprove). Used by both the employee self-service form and the
+    admin's 'log on behalf of' form so the two submission paths can never
+    drift out of sync.
+
+    Re-validates balance/overlap under a row lock (see
+    hr.leave_services.validate_leave_submission) immediately before
+    creating the row — LeaveRequestForm already ran the same check
+    unlocked for fast UX feedback, but only this locked, in-transaction
+    check is race-safe against two genuinely concurrent submissions for the
+    same employee/leave_type/year. Raises ValueError if it fails here (a
+    rare case in normal use — it means something changed between the form's
+    check and this call, e.g. a concurrent submission).
+
+    The employee's own login (if they have one) is always excluded from the
+    approver roster for their own request — an approver submitting leave
+    for themselves must never end up as one of their own approvers; the
+    remaining co-approver(s) take on approval authority for this request
+    automatically, with no extra configuration needed."""
+    from hr.leave_services import validate_leave_submission
+    from hr.models import LeaveDashboardAccess, LeaveRequest, LeaveRequestApproval
+
+    with transaction.atomic():
+        validate_leave_submission(employee, leave_type, start_date, end_date, lock=True)
+        leave_request = LeaveRequest.objects.create(
+            employee=employee, leave_type=leave_type, start_date=start_date, end_date=end_date,
+            employee_reason=employee_reason, document=document, created_by=created_by,
+        )
+        approvers = LeaveDashboardAccess.objects.filter(is_active=True)
+        if employee.user_id:
+            approvers = approvers.exclude(user_id=employee.user_id)
+        for grant in approvers:
+            LeaveRequestApproval.objects.create(leave_request=leave_request, approver=grant.user)
+
     if employee.user_id:
         from notifications.services import notify_users
         notify_users(
