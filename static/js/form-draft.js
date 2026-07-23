@@ -6,7 +6,7 @@ function getCookie(name) {
 
 function initFormDraft(formEl, formKey, objectId) {
   let timer;
-  const csrftoken = getCookie('csrftoken');
+  let submitted = false;
 
   function collect() {
     const data = {};
@@ -29,7 +29,7 @@ function initFormDraft(formEl, formKey, objectId) {
   function saveDraft() {
     fetch('/drafts/save/', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrftoken},
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken')},
       body: JSON.stringify({form_key: formKey, object_id: objectId, data: collect()})
     });
   }
@@ -39,11 +39,17 @@ function initFormDraft(formEl, formKey, objectId) {
     timer = setTimeout(saveDraft, 1500);
   });
 
+  formEl.addEventListener('submit', function () {
+    submitted = true;
+    clearTimeout(timer);
+  });
+
   window.addEventListener('pagehide', function () {
+    if (submitted) return;
+    const payload = { form_key: formKey, object_id: objectId, data: collect() };
     navigator.sendBeacon(
-      '/drafts/save/',
-      new Blob([JSON.stringify({form_key: formKey, object_id: objectId, data: collect()})],
-                {type: 'application/json'})
+      '/drafts/save/?csrf=' + encodeURIComponent(getCookie('csrftoken')),
+      new Blob([JSON.stringify(payload)], {type: 'application/json'})
     );
   });
 }

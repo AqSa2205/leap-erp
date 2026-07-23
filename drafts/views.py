@@ -5,16 +5,24 @@ from django.views.decorators.http import require_POST
 from django.shortcuts import get_object_or_404
 from django.utils.module_loading import import_string
 from django.urls import reverse
+import hmac
+from django.middleware.csrf import get_token
+from django.views.decorators.csrf import csrf_exempt
 
 from .models import FormDraft
 from .registry import FORM_REGISTRY
 
 MAX_PAYLOAD_CHARS = 50000
 
-
 @login_required
 @require_POST
+@csrf_exempt
 def save_draft(request):
+    submitted_token = request.headers.get('X-CSRFToken') or request.GET.get('csrf', '')
+    expected_token = request.COOKIES.get('csrftoken', '')  
+    if not hmac.compare_digest(submitted_token, expected_token):
+        return JsonResponse({'error': 'invalid csrf token'}, status=403)
+
     try:
         body = json.loads(request.body.decode('utf-8'))
     except (ValueError, UnicodeDecodeError):
@@ -44,7 +52,6 @@ def save_draft(request):
         defaults={'data': cleaned},
     )
     return JsonResponse({'ok': True})
-
 
 @login_required
 def check_drafts(request):
