@@ -399,20 +399,6 @@ def _normalise_terms(text):
     return '\n'.join(line.rstrip() for line in (text or '').replace('\r\n', '\n').split('\n')).strip()
 
 
-# Leading manual enumeration: "1.", "2)", "3 -", "(4)", "a.", "iv)" etc.
-# Stripped before the PDF applies its own serial numbers, so a clause the user
-# typed with a number doesn't come out double-numbered ("1. 3. ...").
-import re as _re
-_ENUM_PREFIX_RE = _re.compile(r'^\s*\(?\s*(?:\d{1,3}|[a-zA-Z]|[ivxIVX]{1,4})\s*[\.\)\-:]\s+')
-
-
-def _strip_leading_enumeration(line):
-    """Remove a hand-typed number/letter prefix from a terms line, if present."""
-    stripped = _ENUM_PREFIX_RE.sub('', line, count=1).strip()
-    # Never blank the line out — if it was *only* a number, keep the original.
-    return stripped or line.strip()
-
-
 def _ordered_selected_term_ids(post):
     """Return checked term ids in the order the user selected them.
 
@@ -1646,29 +1632,22 @@ def po_export_pdf(request, pk, unpriced=False):
         elements.append(Spacer(1, 2*mm))
 
         sub_hdr_style = ParagraphStyle('TCSubHdr', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8, leading=10, spaceAfter=1)
-        # Hanging indent so a clause that wraps aligns under its text, not its number.
-        tc_num_style = ParagraphStyle('TCNum', parent=tc_style, leftIndent=12, firstLineIndent=-12, spaceAfter=1)
 
-        # Serial numbers are applied automatically — users never type them.
-        # Terms print in the order the user selected them (selected_terms is
-        # already in selection order via resolved_terms()), numbered
-        # continuously 1..N. Any number typed by hand is stripped first so it
-        # doesn't come out double-numbered.
-        seq = 0
+        # Content-based: each line is printed exactly as the user typed it — no
+        # auto numbering. Terms still appear in the order the user selected them
+        # (selected_terms is already in selection order via resolved_terms()),
+        # so whatever numbering/lettering the user includes in the text is what
+        # shows in the PDF.
         for tmpl in selected_terms:
             elements.append(Paragraph(f'<b>{_xml_escape(tmpl.name)}</b>', sub_hdr_style))
             _content = term_text.get(tmpl.pk, tmpl.content)
             for line in [l.strip() for l in _content.splitlines() if l.strip()]:
-                seq += 1
-                clean = _strip_leading_enumeration(line)
-                elements.append(Paragraph(f'{seq}. {_xml_escape(clean)}', tc_num_style))
+                elements.append(Paragraph(_xml_escape(line), tc_style))
             elements.append(Spacer(1, 1*mm))
 
         if legacy_tc:
             for line in [l.strip() for l in legacy_tc.split('\n') if l.strip()]:
-                seq += 1
-                clean = _strip_leading_enumeration(line)
-                elements.append(Paragraph(f'{seq}. {_xml_escape(clean)}', tc_num_style))
+                elements.append(Paragraph(_xml_escape(line), tc_style))
             elements.append(Spacer(1, 1*mm))
 
     try:
