@@ -874,8 +874,20 @@ class CostingCreateView(_ProjectAutofillContextMixin, LoginRequiredMixin, Create
         kwargs = super().get_form_kwargs()
         kwargs['user'] = self.request.user
         return kwargs
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        from drafts.models import FormDraft
+        context['draft'] = FormDraft.objects.filter(
+            user=self.request.user, form_key='costing_create', object_id=None
+        ).first()
+        return context
 
     def form_valid(self, form):
+        from drafts.models import FormDraft
+        FormDraft.objects.filter(
+            user=self.request.user, form_key='costing_create', object_id=None
+        ).delete()
         form.instance.created_by = self.request.user
         messages.success(self.request, 'Costing sheet created successfully.')
         response = super().form_valid(form)

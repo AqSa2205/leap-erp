@@ -46,9 +46,22 @@ class ProjectPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
             or getattr(user, 'is_sales_rep_user', False)
             or getattr(user, 'is_proposal_team_user', False)
         )
+
+#CODE EDIT
         if region_scoped:
+            if user.region_id is None:
+                if not getattr(self.request,'_no_region_warning_shown',False):
+                    messages.warning(
+                        self.request,"Your account has no region assigned. You can only view projects you own."
+                    )
+                    self.request._no_region_warning_shown = True
+                return queryset.none()
             return queryset.filter(region=user.region)
         return queryset.filter(owner=user)
+     
+
+    
+
 
 
 class ProjectListView(CapabilityRequiredMixin, ProjectPermissionMixin, ListView):
@@ -394,6 +407,15 @@ def _lna_form_context(obj):
         'lna_preview_number': number,
     }
 
+@login_required
+def next_lna_reference_preview(request):
+    """Tiny JSON endpoint: returns the current next-free LNA number,
+    calculated fresh at the moment it's called. Used by the draft-resume
+    button so it never shows a stale number, without needing a page reload."""
+    from django.http import JsonResponse
+    from .models import next_lna_reference_number
+    return JsonResponse({'number': next_lna_reference_number()})
+
 
 PRICED_WORKFLOW_STAGES = {
     'costing_in_progress', 'finalized', 'finance_review', 'finance_approved',
@@ -548,9 +570,18 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
         context = super().get_context_data(**kwargs)
         context['exchange_rates_json'] = _exchange_rates_json()
         context.update(_lna_form_context(getattr(self, 'object', None)))
+        from drafts.models import FormDraft
+        context['draft'] = FormDraft.objects.filter(
+            user=self.request.user, form_key='project_create', object_id=None
+        ).first()
         return context
 
     def form_valid(self, form):
+        from drafts.models import FormDraft
+        FormDraft.objects.filter(
+            user=self.request.user, form_key='project_create', object_id=None
+        ).delete()
+
         form.instance.created_by = self.request.user
         if not form.instance.owner:
             form.instance.owner = self.request.user

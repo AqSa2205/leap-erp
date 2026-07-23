@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load static %}
 {% load crispy_forms_tags %}
 
 {% block title %}{{ title }}{% endblock %}
@@ -21,9 +22,20 @@
             <!-- Form Card -->
             <div class="card">
                 <div class="card-body">
-                    <form method="post" novalidate>
+                    <form method="post" novalidate id="salesCallCreateForm">
                         {% csrf_token %}
-
+{% if not object %}
+{% if draft %}
+<div class="alert alert-info d-flex justify-content-between align-items-center">
+    <span>You have an unfinished entry from {{ draft.updated_at|timesince }} ago.</span>
+    <span>
+        <button type="button" class="btn btn-sm btn-primary" id="resumeDraftBtn">Resume</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="discardDraftBtn" data-id="{{ draft.pk }}">Discard</button>
+    </span>
+</div>
+{{ draft.data|json_script:"draftData" }}
+{% endif %}
+{% endif %}
                         <!-- Call Information -->
                         <h5 class="border-bottom pb-2 mb-3">
                             <i class="bi bi-telephone"></i> Call Information
@@ -182,4 +194,41 @@
         </div>
     </div>
 </div>
+{% if not object %}
+<script src="{% static 'js/form-draft.js' %}"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var formEl = document.getElementById('salesCallCreateForm');
+    initFormDraft(formEl, 'sales_call_create', null);
+
+    var resumedSnapshot = null;
+
+    var resumeBtn = document.getElementById('resumeDraftBtn');
+    if (resumeBtn) {
+        resumeBtn.addEventListener('click', function () {
+            var data = JSON.parse(document.getElementById('draftData').textContent);
+            resumedSnapshot = data;
+            applyDraftData(formEl, data);
+        });
+    }
+
+    var discardBtn = document.getElementById('discardDraftBtn');
+    if (discardBtn) {
+        discardBtn.addEventListener('click', function () {
+            fetch('/drafts/' + discardBtn.dataset.id + '/discard/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': getCookie('csrftoken')}
+           }).then(function () {
+                if (resumedSnapshot) {
+                    clearUnchangedDraftFields(formEl, resumedSnapshot);
+                    resumedSnapshot = null;
+                }
+                var banner = discardBtn.closest('.alert');
+                if (banner) banner.remove();
+            });
+        });
+    }
+});
+</script>
+{% endif %}
 {% endblock %}
