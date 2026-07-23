@@ -635,13 +635,14 @@ class POTermsPdfNumberingTests(TestCase):
         PurchaseOrderItem.objects.create(
             purchase_order=self.po, serial_number=1, description='Widget',
             quantity=1, uom='Nos', rate_per_unit=10, order=0)
-        # Two templates in one category, each with hand-typed numbers.
+        # Two templates whose content includes the user's own numbering — the
+        # PDF must reproduce it verbatim and add none of its own.
         self.t1 = TermsTemplate.objects.create(
             name='Payment', category='terms_and_conditions', usage='procurement',
             content='1. Payment 30 days\n2. Prices in SAR')
         self.t2 = TermsTemplate.objects.create(
             name='Warranty', category='terms_and_conditions', usage='procurement',
-            content='1. Warranty 24 months')
+            content='(a) Warranty 24 months\nUnnumbered clause here')
         self.po.selected_terms.add(self.t1, self.t2)
         from django.utils import timezone
         for s in self.po.required_stages:
@@ -656,16 +657,18 @@ class POTermsPdfNumberingTests(TestCase):
         reader = PdfReader(io.BytesIO(r.content))
         return [(p.extract_text() or '') for p in reader.pages]
 
-    def test_terms_are_auto_numbered_and_manual_numbers_stripped(self):
+    def test_terms_print_content_verbatim_with_no_auto_numbering(self):
         pages = self._pdf_pages()
         text = '\n'.join(pages)
-        # Sequence runs across templates within the category: 1,2 then 3.
+        # The user's own text/numbering is preserved exactly...
         self.assertIn('1. Payment 30 days', text)
         self.assertIn('2. Prices in SAR', text)
-        self.assertIn('3. Warranty 24 months', text)
-        # The user's hand-typed "1." on the warranty line must be gone.
-        self.assertNotIn('1. Warranty 24 months', text)
-        self.assertNotIn('1. 1.', text)
+        self.assertIn('(a) Warranty 24 months', text)
+        self.assertIn('Unnumbered clause here', text)
+        # ...and the app adds no numbering of its own: the unnumbered clause
+        # is not given a "3." (or any) prefix.
+        self.assertNotIn('3. Unnumbered clause here', text)
+        self.assertNotIn('4. Unnumbered clause here', text)
 
     def test_terms_start_on_their_own_page(self):
         pages = self._pdf_pages()
