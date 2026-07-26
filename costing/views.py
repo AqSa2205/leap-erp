@@ -1234,8 +1234,13 @@ class SectionDeleteView(_SheetChildPermissionMixin, DeleteView):
         return reverse('costing:detail', kwargs={'pk': self.object.costing_sheet.pk})
 
     def form_valid(self, form):
-        messages.success(self.request, 'Section deleted successfully.')
-        return super().form_valid(form)
+        sheet = self.object.costing_sheet
+        response = super().form_valid(form)  # deletes the section, then redirects
+        # Re-sequence the sheet so a middle-category delete doesn't leave a gap.
+        _renumber_sections(sheet)
+        _resequence_section_order(sheet, list(sheet.sections.all().order_by('order', 'section_number')))
+        messages.success(self.request, 'Section deleted and category numbers updated.')
+        return response
 
 
 # ─── Line Item CRUD ───────────────────────────────────────────
@@ -2105,6 +2110,50 @@ def _renumber_section(section):
         if new_num != num:
             CostingLineItem.objects.filter(pk=item.pk).update(item_number=new_num)
             item.item_number = new_num
+
+
+def _renumber_sections(sheet):
+    """Close gaps in a sheet's section numbers after a delete, mirroring
+    _renumber_section above but one level up: only purely-numeric section
+    numbers are treated as sequence slots and compacted to 1, 2, 3, ...;
+    blank/named divider sections (e.g. an import-batch heading) are left
+    untouched and don't consume a slot. Deleting a section therefore
+    re-sequences the rest automatically, the same way deleting a line item
+    already re-sequences its siblings.
+
+    A section's number is also the prefix baked into every one of its line
+    items' item_number (e.g. "3.1"), so when a section's number changes we
+    rewrite that prefix on its items too — otherwise the item numbers would
+    silently point at the wrong (or no-longer-existent) section number.
+    """
+    sections = list(sheet.sections.all().order_by('order', 'section_number'))
+    counter = 0
+    for section in sections:
+        old_num = (section.section_number or '').strip()
+        if not old_num.isdigit():
+            continue  # blank/named divider — leave as-is, don't count as a slot
+        counter += 1
+        new_num = str(counter)
+        if new_num == old_num:
+            continue
+        CostingSection.objects.filter(pk=section.pk).update(section_number=new_num)
+        section.section_number = new_num
+        old_prefix = f'{old_num}.'
+        new_prefix = f'{new_num}.'
+        for item in section.line_items.all():
+            if item.item_number.startswith(old_prefix):
+                CostingLineItem.objects.filter(pk=item.pk).update(
+                    item_number=new_prefix + item.item_number[len(old_prefix):])
+
+
+def _resequence_section_order(sheet, ordered_sections):
+    """Rewrite only the ``order`` field to a clean 0..N sequence — invisible
+    to the user (section_number is the displayed value), mirroring
+    _resequence_order's role for line items."""
+    for idx, section in enumerate(ordered_sections):
+        if section.order != idx:
+            CostingSection.objects.filter(pk=section.pk).update(order=idx)
+            section.order = idx
 
 
 @login_required
