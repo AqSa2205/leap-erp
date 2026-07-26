@@ -94,4 +94,11 @@ for code, name, rate in rates:
         print(f'Exists: {code} = {obj.rate_to_usd}')
 "
 
+echo "=== Resyncing Postgres PK sequences (after loaddata / PITR) ==="
+# loaddata above inserts rows with explicit PKs without advancing Postgres'
+# per-table sequences; a PITR restore does the same. Left unfixed, the next
+# ORM create() reuses an existing id and every create page 500s on a
+# duplicate-key error. This resync must run AFTER all loaddata steps.
+python manage.py resync_sequences
+
 echo "=== Build complete ==="
