@@ -1,0 +1,95 @@
+{% extends 'base.html' %}
+{% block title %}My Timesheet{% endblock %}
+{% block page_title %}My Timesheet{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1"><i class="bi bi-clock-history"></i> My Timesheet</h1>
+            <p class="text-muted mb-0">Log your daily hours here instead of the Excel sheet.</p>
+        </div>
+        {% if employee %}
+       <a href="{% url 'timesheets:export' %}" target="_blank" class="btn btn-outline-primary">
+            <i class="bi bi-file-earmark-excel"></i> Export as Excel
+        </a>
+        {% endif %}
+    </div>
+
+    {% if employee %}
+    <div class="card mb-4">
+        <div class="card-header bg-white"><strong>Add entry</strong></div>
+        <div class="card-body">
+            <form method="post">
+                {% csrf_token %}
+                <div class="row">
+                    <div class="col-md-3 mb-3">
+                        <label class="form-label">Date</label>
+                        {{ form.date }}
+                        {% if form.date.errors %}<div class="text-danger small mt-1">{{ form.date.errors.0 }}</div>{% endif %}
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <label class="form-label">Activity code</label>
+                        {{ form.activity_code }}
+                        {% if form.activity_code.errors %}<div class="text-danger small mt-1">{{ form.activity_code.errors.0 }}</div>{% endif %}
+                    </div>
+                    <div class="col-md-2 mb-3">
+                        <label class="form-label">Hours</label>
+                        {{ form.hours }}
+                        {% if form.hours.errors %}<div class="text-danger small mt-1">{{ form.hours.errors.0 }}</div>{% endif %}
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label">Task description</label>
+                        {{ form.task_description }}
+                        {% if form.task_description.errors %}<div class="text-danger small mt-1">{{ form.task_description.errors.0 }}</div>{% endif %}
+                    </div>
+                </div>
+                {% if form.non_field_errors %}
+                <div class="alert alert-danger">{% for e in form.non_field_errors %}<p class="mb-0">{{ e }}</p>{% endfor %}</div>
+                {% endif %}
+                <button type="submit" class="btn btn-primary"><i class="bi bi-plus-lg"></i> Add entry</button>
+            </form>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="card">
+        <div class="card-header bg-white"><strong>Your entries</strong></div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0 align-middle">
+                    <thead class="table-light">
+                        <tr><th>Date</th><th>Task</th><th>Activity code</th><th>Hours</th><th>Status</th><th>Actions</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in entries %}
+                        <tr>
+                            <td>{{ entry.date }}</td>
+                            <td>{{ entry.task_description }}</td>
+                            <td>{{ entry.activity_code.code }}</td>
+                            <td>{{ entry.hours }}</td>
+                            <td>
+                                {% if entry.status == 'draft' %}<span class="badge bg-secondary">Draft</span>
+                                {% elif entry.status == 'submitted' %}<span class="badge bg-success">Submitted</span>{% endif %}
+                            </td>
+                            <td>
+                                {% if entry.status == 'draft' %}
+                                <a href="{% url 'timesheets:entry_edit' entry.pk %}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-pencil"></i></a>
+                                <form method="post" action="{% url 'timesheets:entry_delete' entry.pk %}" class="d-inline" onsubmit="return confirm('Delete this entry?');">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                                </form>
+                                {% else %}
+                                <span class="text-muted small">Locked</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="6" class="text-center text-muted py-4">No entries yet.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

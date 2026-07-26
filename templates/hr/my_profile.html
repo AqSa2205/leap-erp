@@ -2,7 +2,12 @@
 {% block title %}My Profile{% endblock %}
 {% block content %}
 <div class="container-fluid py-3">
-  <h4 class="mb-3"><i class="bi bi-person-badge me-2"></i>My Profile</h4>
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="mb-0"><i class="bi bi-person-badge me-2"></i>My Profile</h4>
+    <a href="{% url 'timesheets:my_timesheet' %}" class="btn btn-sm btn-outline-primary">
+        <i class="bi bi-clock-history"></i> My Timesheet
+    </a>
+</div>
 
   {% if not employee %}
     <div class="alert alert-info">

@@ -978,6 +978,13 @@
                 </a>
             </li>
             {% endif %}
+            {% if user|can:'timesheets.nav' %}
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'my_timesheet' and request.resolver_match.app_name == 'timesheets' %}active{% endif %}" href="{% url 'timesheets:my_timesheet' %}" data-title="My Timesheet">
+                    <i class="bi bi-clock-history"></i> <span>My Timesheet</span>
+                </a>
+            </li>
+            {% endif %}
             {% if user|can:'dashboard.nav' %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'index' and request.resolver_match.app_name == 'dashboard' %}active{% endif %}" href="{% url 'dashboard:index' %}" data-title="Dashboard">

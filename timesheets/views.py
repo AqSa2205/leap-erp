@@ -1,0 +1,236 @@
+from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from django.shortcuts import render, redirect, get_object_or_404
+from django.views.decorators.http import require_POST
+from decimal import Decimal
+from accounts.permissions import require_capability
+from .models import TimesheetEntry
+from .forms import TimesheetEntryForm
+import calendar
+from datetime import date as date_cls
+
+import openpyxl
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from django.http import HttpResponse
+
+
+def _get_employee_or_none(request):
+    """Same lookup my_profile uses in hr/views.py — an authenticated user
+    isn't guaranteed to be linked to an Employee record yet."""
+    return getattr(request.user, 'employee_profile', None)
+
+
+@login_required
+@require_capability('timesheets.access')
+def my_timesheet(request):
+    """Self-service page: list the employee's own entries + a form to add
+    a new one. Mirrors hr.views.my_profile's GET-display / POST-create
+    shape for a single-purpose form."""
+    emp = _get_employee_or_none(request)
+    if emp is None:
+        messages.error(request, 'Your account is not linked to an employee record yet. Contact HR.')
+        return render(request, 'timesheets/my_timesheet.html', {'employee': None, 'entries': [], 'form': None})
+
+    if request.method == 'POST':
+        form = TimesheetEntryForm(request.POST)
+        if form.is_valid():
+            entry = form.save(commit=False)
+            entry.employee = emp
+            entry.save()
+            messages.success(request, 'Entry added.')
+            return redirect('timesheets:my_timesheet')
+        else:
+            messages.error(request, 'Please fix the errors below.')
+    else:
+        form = TimesheetEntryForm()
+
+    entries = TimesheetEntry.objects.filter(employee=emp).select_related('activity_code')
+
+    return render(request, 'timesheets/my_timesheet.html', {
+        'employee': emp,
+        'entries': entries,
+        'form': form,
+    })
+
+
+@login_required
+@require_capability('timesheets.access')
+def timesheet_entry_edit(request, pk):
+    """Edit one of the employee's own entries. Ownership is checked before
+    anything else — same 'don't distinguish 404 vs 403' spirit as
+    leave_request_document_download: we just 404 if it isn't theirs."""
+    emp = _get_employee_or_none(request)
+    entry = get_object_or_404(TimesheetEntry, pk=pk, employee=emp)
+
+    if entry.status != TimesheetEntry.STATUS_DRAFT:
+        messages.error(request, 'This entry has been submitted and can no longer be edited.')
+        return redirect('timesheets:my_timesheet')
+
+    if request.method == 'POST':
+        form = TimesheetEntryForm(request.POST, instance=entry)
+        if form.is_valid():
+            form.save()
+            messages.success(request, 'Entry updated.')
+            return redirect('timesheets:my_timesheet')
+        else:
+            messages.error(request, 'Please fix the errors below.')
+    else:
+        form = TimesheetEntryForm(instance=entry)
+
+    return render(request, 'timesheets/entry_edit.html', {'form': form, 'entry': entry})
+
+
+@login_required
+@require_capability('timesheets.access')
+@require_POST
+def timesheet_entry_delete(request, pk):
+    """Delete one of the employee's own draft entries. POST-only, like the
+    other delete views in this codebase (e.g. employee_document_delete)."""
+    emp = _get_employee_or_none(request)
+    entry = get_object_or_404(TimesheetEntry, pk=pk, employee=emp)
+
+    if entry.status != TimesheetEntry.STATUS_DRAFT:
+        messages.error(request, 'This entry has been submitted and can no longer be deleted.')
+        return redirect('timesheets:my_timesheet')
+
+    entry.delete()
+    messages.success(request, 'Entry deleted.')
+    return redirect('timesheets:my_timesheet')
+
+def _ordinal(n):
+    """1 -> '1st', 2 -> '2nd', 3 -> '3rd', 4 -> '4th', etc."""
+    if 11 <= (n % 100) <= 13:
+        suffix = 'th'
+    else:
+        suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+    return f'{n}{suffix}'
+
+
+@login_required
+@require_capability('timesheets.access')
+def timesheet_export(request):
+    """Export the logged-in employee's own month as an .xlsx matching the
+    original HR template exactly (styling copied from the real template:
+    Century Gothic title, C00000 header fill, thin borders, dd/mmm/yyyy
+    dates, yellow-highlighted Fri/Sat rows). One row per calendar day —
+    filled from a TimesheetEntry if one exists that day, blank otherwise."""
+    emp = _get_employee_or_none(request)
+    if emp is None:
+        messages.error(request, 'Your account is not linked to an employee record yet. Contact HR.')
+        return redirect('timesheets:my_timesheet')
+
+    today = date_cls.today()
+    year = int(request.GET.get('year', today.year))
+    month = int(request.GET.get('month', today.month))
+    days_in_month = calendar.monthrange(year, month)[1]
+
+    from collections import defaultdict
+    entries_by_day = defaultdict(list)
+    for e in TimesheetEntry.objects.filter(employee=emp, date__year=year, date__month=month).order_by('id'):
+        entries_by_day[e.date.day].append(e)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Time_Sheet'
+
+    # ─── Styles, copied from the real HR template ───
+    title_font = Font(name='Century Gothic', bold=True, size=22)
+    label_font = Font(name='Trebuchet MS', size=10)
+    header_font = Font(name='Trebuchet MS', size=10, color='FFFFFF')
+    header_fill = PatternFill(start_color='C00000', end_color='C00000', fill_type='solid')
+    header_alignment = Alignment(horizontal='center', vertical='bottom', wrap_text=True)
+    center_alignment = Alignment(horizontal='center', vertical='bottom')
+    weekend_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
+    thin = Side(style='thin')
+    thin_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    # ─── Title block ───
+    ws.merge_cells('D2:G2')
+    ws['D2'] = 'MONTHLY  TIMESHEET'
+    ws['D2'].font = title_font
+    ws['D2'].alignment = Alignment(horizontal='center', vertical='center')
+
+    ws['C4'] = 'Employee:'
+    ws['C4'].font = label_font
+    ws['D4'] = emp.full_name
+    ws['D4'].font = label_font
+    ws['H4'] = 'Signature:____________________________'
+    ws['H4'].font = label_font
+
+    ws['C5'] = 'Designation'
+    ws['C5'].font = label_font
+    ws['D5'] = emp.designation or ''
+    ws['D5'].font = label_font
+
+    ws['C7'] = 'Supervisor Name :'
+    ws['C7'].font = label_font
+    ws['D7'] = emp.main_manager.full_name if emp.main_manager else ''
+    ws['D7'].font = label_font
+    ws['H7'] = 'Signature:____________________________'
+    ws['H7'].font = label_font
+
+    month_name = calendar.month_name[month]
+    ws['C9'] = 'Month of'
+    ws['C9'].font = label_font
+    ws['D9'] = f'{_ordinal(1)} {month_name} {year} to {_ordinal(days_in_month)} {month_name} {year}'
+    ws['D9'].font = label_font
+
+    # ─── Table header (row 11) ───
+    headers = ['Sr.No', 'Activity_Description', 'Date', 'Type', 'Hours ', 'Activity_code']
+    for col, text in enumerate(headers, start=2):  # starts at column B
+        cell = ws.cell(row=11, column=col, value=text)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+        cell.border = thin_border
+
+    # ─── One row per calendar day ───
+    for day in range(1, days_in_month + 1):
+        row = 11 + day
+        the_date = date_cls(year, month, day)
+        day_entries = entries_by_day.get(day, [])
+        is_weekend = the_date.weekday() in (4, 5)  # Friday=4, Saturday=5
+
+        # Multiple entries on the same day are combined into this one row.
+        # Descriptions and codes are joined in the SAME order (both come from
+        # the same day_entries list), so position N in one lines up with
+        # position N in the other — e.g. "Site visit; Office work" pairs with
+        # "COS_0005, COS_0009" meaning entry 1 -> COS_0005, entry 2 -> COS_0009.
+        combined_description = '; '.join(e.task_description for e in day_entries) or None
+        combined_hours = sum((e.hours for e in day_entries), Decimal('0')) if day_entries else None
+        combined_codes = ', '.join(e.activity_code.code for e in day_entries) or None
+
+        values = {
+            2: day,
+            3: combined_description,
+            4: the_date,
+            5: 'Normal' if day_entries else None,
+            6: combined_hours,
+            7: combined_codes,
+        }
+        for col, value in values.items():
+                cell = ws.cell(row=row, column=col, value=value)
+                cell.border = thin_border
+                # Description (col 3) and Activity_code (col 7) can hold multiple
+                # combined entries now, so they need wrap_text on — otherwise long
+                # combined text overflows into neighboring cells instead of
+                # wrapping inside its own column, which is what looked jumbled.
+                if col in (3, 7):
+                    cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+                else:
+                    cell.alignment = center_alignment
+                if col == 4:
+                    cell.number_format = 'dd/mmm/yyyy'
+                if is_weekend:
+                    cell.fill = weekend_fill
+    # ─── Column widths, matching the template ───
+    widths = {'A': 10, 'B': 10, 'C': 60, 'D': 34, 'E': 10, 'G': 16, 'H': 41}
+    for col_letter, width in widths.items():
+        ws.column_dimensions[col_letter].width = width
+
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    filename = f'{emp.full_name.replace(" ", "_")}_Timesheet_{month_name}_{year}.xlsx'
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    wb.save(response)
+    return response

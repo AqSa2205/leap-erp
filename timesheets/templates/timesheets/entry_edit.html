@@ -1,0 +1,55 @@
+{% extends 'base.html' %}
+{% block title %}Edit Entry — My Timesheet{% endblock %}
+{% block page_title %}Edit Entry{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-7">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">Edit Entry</h1>
+                    <p class="text-muted mb-0">Update this timesheet entry.</p>
+                </div>
+                <a href="{% url 'timesheets:my_timesheet' %}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> My Timesheet</a>
+            </div>
+
+            <div class="card">
+                <div class="card-body">
+                    <form method="post">
+                        {% csrf_token %}
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Date</label>
+                                {{ form.date }}
+                                {% if form.date.errors %}<div class="text-danger small mt-1">{{ form.date.errors.0 }}</div>{% endif %}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Activity code</label>
+                                {{ form.activity_code }}
+                                {% if form.activity_code.errors %}<div class="text-danger small mt-1">{{ form.activity_code.errors.0 }}</div>{% endif %}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Hours</label>
+                                {{ form.hours }}
+                                {% if form.hours.errors %}<div class="text-danger small mt-1">{{ form.hours.errors.0 }}</div>{% endif %}
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Task description</label>
+                            {{ form.task_description }}
+                            {% if form.task_description.errors %}<div class="text-danger small mt-1">{{ form.task_description.errors.0 }}</div>{% endif %}
+                        </div>
+                        {% if form.non_field_errors %}
+                        <div class="alert alert-danger">{% for e in form.non_field_errors %}<p class="mb-0">{{ e }}</p>{% endfor %}</div>
+                        {% endif %}
+                        <div class="d-flex justify-content-end gap-2 border-top pt-3">
+                            <a href="{% url 'timesheets:my_timesheet' %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> Save changes</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
