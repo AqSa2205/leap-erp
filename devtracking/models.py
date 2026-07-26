@@ -34,11 +34,12 @@ class DevTask(models.Model):
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
     priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default='medium')
-    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default='assigned')
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default='unassigned')
     estimated_hours = models.DecimalField(max_digits=6, decimal_places=1, null=True, blank=True)
     due_date = models.DateField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
+    assigned_at = models.DateTimeField(null=True, blank=True)
     github_url = models.URLField(blank=True)
     gh_state = models.CharField(max_length=10, blank=True)
     gh_commits = models.PositiveIntegerField(null=True, blank=True)
@@ -51,10 +52,21 @@ class DevTask(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f'{self.title} → {self.developer or "unassigned"}'
+        return f'{self.title} -> {self.developer or "unassigned"}'
+
+    def save(self, *args, **kwargs):
+        if self.developer_id and self.status not in ('in_progress', 'blocked', 'done'):
+            self.status = 'assigned'
+            if self.assigned_at is None:
+                self.assigned_at = timezone.now()
+        elif not self.developer_id and self.status == 'assigned':
+            self.status = 'unassigned'
+            self.assigned_at = None
+        super().save(*args, **kwargs)
 
     @property
     def is_unassigned(self):
+
         return self.developer_id is None
 
     def assign_to(self, developer, by=None):

@@ -1,6 +1,19 @@
 from django.db import models
 from django.conf import settings
 from decimal import Decimal
+import datetime
+from django.core.exceptions import ValidationError
+from django.core.validators import MinLengthValidator
+
+
+def validate_not_numeric_only(value):
+    """Reject values that are only digits (e.g., '12345') - a company
+    name must contain at least one non-numeric character."""
+    if value and value.strip().isdigit():
+        raise ValidationError(
+            "Company name cannot be numbers only. Please enter a valid "
+            "company name (e.g., 'Acme Ltd', 'Acme Company')."
+        )
 
 
 class PurchaseOrder(models.Model):
@@ -515,17 +528,20 @@ class DeliveryNote(models.Model):
     """Delivery Note for goods dispatched to clients/sites."""
 
     # Sold To
-    sold_to_company = models.CharField(max_length=255, verbose_name="Sold To (Company)")
+    sold_to_company = models.CharField(
+    max_length=255,
+    verbose_name="Sold To (Company)",
+    validators=[validate_not_numeric_only],)
     sold_to_address = models.TextField(blank=True, verbose_name="Sold To (Address)")
 
     # Delivery
-    delivery_address = models.TextField(blank=True, verbose_name="Delivery Address")
+    delivery_address = models.TextField(blank=True, verbose_name="Delivery Address", validators=[MinLengthValidator(10)])
 
     # Contact
     attention = models.CharField(max_length=255, blank=True, verbose_name="Attention")
     mobile = models.CharField(max_length=100, blank=True, verbose_name="Mobile")
     email = models.EmailField(blank=True, verbose_name="Email")
-    date = models.DateField(verbose_name="Date")
+    date = models.DateField(verbose_name="Date", default=datetime.date.today)
 
     # Project / PO
     project_title = models.CharField(max_length=500, blank=True, verbose_name="Project Title")
