@@ -39,11 +39,11 @@
                 <table class="table table-hover mb-0">
                     <thead class="leap-thead">
                         <tr>
-                            <th>DN Number</th>
-                            <th>Sold To</th>
+                            <th><a href="?sort=dn_number&dir={% if current_sort == 'dn_number' and current_dir == 'asc' %}desc{% else %}asc{% endif %}" class="text-decoration-none text-dark">DN Number {% if current_sort == 'dn_number' %}{% if current_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</a></th>
+                            <th><a href="?sort=sold_to_company&dir={% if current_sort == 'sold_to_company' and current_dir == 'asc' %}desc{% else %}asc{% endif %}" class="text-decoration-none text-dark">Sold To {% if current_sort == 'sold_to_company' %}{% if current_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</a></th>
                             <th>Project</th>
                             <th>LEAP PO</th>
-                            <th>Date</th>
+                            <th><a href="?sort=date&dir={% if current_sort == 'date' and current_dir == 'asc' %}desc{% else %}asc{% endif %}" class="text-decoration-none text-dark">Date {% if current_sort == 'date' %}{% if current_dir == 'asc' %}&#9650;{% else %}&#9660;{% endif %}{% endif %}</a></th>
                             <th>Items</th>
                             <th>Created By</th>
                             <th width="160">Actions</th>
@@ -62,7 +62,7 @@
                             <td>{{ dn.leap_po_number|default:"-" }}</td>
                             <td>{{ dn.date|date:"d M Y" }}</td>
                             <td>{{ dn.items.count }}</td>
-                            <td>{{ dn.created_by.get_full_name|default:dn.created_by.username }}</td>
+                            <td>{% if dn.created_by %}{{ dn.created_by.get_full_name|default:dn.created_by.username }}{% else %}<span class="text-muted">-</span>{% endif %}</td>
                             <td>
                                 <div class="btn-group btn-group-sm">
                                     <a href="{% url 'procurement:dn_detail' dn.pk %}" class="btn btn-outline-danger" title="View"><i class="bi bi-eye"></i></a>

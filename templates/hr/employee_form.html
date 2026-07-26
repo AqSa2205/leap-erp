@@ -45,6 +45,9 @@
                             <div class="col-md-4 mb-3">
                                 <label class="form-label">Nationality</label>
                                 {{ form.nationality }}
+                                {% if form.nationality.errors %}
+                                <div class="invalid-feedback d-block">{{ form.nationality.errors.0 }}</div>
+                                {% endif %}
                             </div>
                         </div>
                         <div class="row mb-4">
@@ -63,6 +66,9 @@
                             <div class="col-md-3 mb-3">
                                 <label class="form-label">Mobile Number</label>
                                 {{ form.mobile_number }}
+                                {% if form.mobile_number.errors %}
+                                <div class="invalid-feedback d-block">{{ form.mobile_number.errors.0 }}</div>
+                                {% endif %}
                             </div>
                         </div>
 
@@ -111,10 +117,16 @@
                             <div class="col-md-4 mb-3">
                                 <label class="form-label">Designation</label>
                                 {{ form.designation }}
+                                {% if form.designation.errors %}
+                                <div class="invalid-feedback d-block">{{ form.designation.errors.0 }}</div>
+                                {% endif %}
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label class="form-label">Qualification</label>
                                 {{ form.qualification }}
+                                {% if form.qualification.errors %}
+                                <div class="invalid-feedback d-block">{{ form.qualification.errors.0 }}</div>
+                                {% endif %}
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label class="form-label">Joining Date</label>
@@ -125,6 +137,9 @@
                             <div class="col-md-4 mb-3">
                                 <label class="form-label">Deployment</label>
                                 {{ form.deployment }}
+                                {% if form.deployment.errors %}
+                                <div class="invalid-feedback d-block">{{ form.deployment.errors.0 }}</div>
+                                {% endif %}
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label class="form-label">Office / Site</label>

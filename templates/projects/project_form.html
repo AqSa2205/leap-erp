@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load static %}
 
 {% block title %}{% if object %}Edit{% else %}Create{% endif %} Pipeline Entry - Leap Networks ERP{% endblock %}
 {% block page_title %}{% if object %}Edit{% else %}Create{% endif %} Pipeline Entry{% endblock %}
@@ -12,8 +13,18 @@
         </h5>
     </div>
     <div class="card-body">
-        <form method="post">
+        <form method="post" id="pipelineForm">
             {% csrf_token %}
+            {% if draft %}
+<div class="alert alert-info d-flex justify-content-between align-items-center">
+    <span>You have an unfinished entry from {{ draft.updated_at|timesince }} ago.</span>
+    <span>
+        <button type="button" class="btn btn-sm btn-primary" id="resumeDraftBtn">Resume</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="discardDraftBtn" data-id="{{ draft.pk }}">Discard</button>
+    </span>
+</div>
+{{ draft.data|json_script:"draftData" }}
+{% endif %}
 
             <!-- Basic Information -->
             <h6 class="text-muted mb-3 border-bottom pb-2">Basic Information</h6>
@@ -349,5 +360,61 @@
     recalcFromUsd();
     recalcFromLocal();
 })();
+</script>
+<script src="{% static 'js/form-draft.js' %}"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var formEl = document.getElementById('pipelineForm');
+    initFormDraft(formEl, 'project_create', null);
+
+    var resumedSnapshot = null;
+
+   var resumeBtn = document.getElementById('resumeDraftBtn');
+    if (resumeBtn) {
+        resumeBtn.addEventListener('click', function () {
+            var data = JSON.parse(document.getElementById('draftData').textContent);
+            var skip = ['proposal_reference'];
+
+            resumedSnapshot = {};
+            Object.keys(data).forEach(function (key) {
+                if (skip.indexOf(key) === -1) resumedSnapshot[key] = data[key];
+            });
+
+            applyDraftData(formEl, data, skip);
+
+            // Ask the server for the TRUE current next-free number, right now,
+            // rather than trusting whatever number was on the page when it
+            // first loaded (which may be long stale by the time Resume is clicked).
+            fetch('{% url "projects:next_reference_preview" %}')
+                .then(function (r) { return r.json(); })
+                .then(function (res) {
+                    var refField = document.getElementById('id_proposal_reference');
+                    if (refField) refField.value = 'LNA ' + res.number;
+
+                    var nameField = document.getElementById('id_project_name');
+                    if (nameField) nameField.dispatchEvent(new Event('input', { bubbles: true }));
+                    var regionField = document.getElementById('id_region');
+                    if (regionField) regionField.dispatchEvent(new Event('change', { bubbles: true }));
+                });
+        });
+    }
+
+var discardBtn = document.getElementById('discardDraftBtn');
+if (discardBtn) {
+    discardBtn.addEventListener('click', function () {
+        fetch('/drafts/' + discardBtn.dataset.id + '/discard/', {
+            method: 'POST',
+            headers: {'X-CSRFToken': getCookie('csrftoken')}
+     }).then(function () {
+                if (resumedSnapshot) {
+                    clearUnchangedDraftFields(formEl, resumedSnapshot);
+                    resumedSnapshot = null;
+                }
+                var banner = discardBtn.closest('.alert');
+                if (banner) banner.remove();
+            });
+    });
+}
+});
 </script>
 {% endblock %}

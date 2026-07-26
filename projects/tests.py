@@ -6,6 +6,54 @@ from django.urls import reverse
 from accounts.models import Role, User
 from projects.models import Region, ProjectStatus, Project
 from costing.models import CostingSheet, most_advanced_stage, pipeline_stage_badge
+from django.test import TestCase, Client
+from django.urls import reverse
+from accounts.models import User, Role
+from projects.models import Project, Region, ProjectStatus
+
+
+class ProjectRegionFilterTests(TestCase):
+    """BUG-001: users with no region assigned must not see other regions'
+    projects, and should get a clear warning instead of a silent empty list."""
+
+    def setUp(self):
+        self.client = Client()
+        self.region_lna = Region.objects.create(code='LNA', name='Leap Arabia', is_active=True)
+        self.status = ProjectStatus.objects.create(name='Open', category='open', is_active=True)
+
+        from accounts.models import Role
+        from accounts.permissions import seed_default_permissions
+        sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        seed_default_permissions()
+
+        self.user_no_region = User.objects.create_user(
+            username='noregion', password='testpass123', region=None, role=sales_role,
+        )
+        self.user_lna = User.objects.create_user(
+            username='lnauser', password='testpass123', region=self.region_lna, role=sales_role,
+        )
+
+        self.project = Project.objects.create(
+            project_name='Test Project', proposal_reference='LNA 9999',
+            region=self.region_lna, status=self.status,
+        )
+
+    def test_user_with_no_region_sees_empty_list_with_warning(self):
+        self.client.login(username='noregion', password='testpass123')
+        response = self.client.get(reverse('projects:list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context['projects']), 0)
+        messages = list(response.context['messages'])
+        self.assertTrue(
+            any('no region assigned' in str(m).lower() for m in messages),
+            'Expected a warning message about missing region assignment.'
+        )
+
+    def test_user_with_region_sees_matching_projects(self):
+        self.client.login(username='lnauser', password='testpass123')
+        response = self.client.get(reverse('projects:list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(self.project, response.context['projects'])
 
 
 class PipelineStageHelperTests(TestCase):

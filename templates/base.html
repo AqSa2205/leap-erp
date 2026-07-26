@@ -55,12 +55,14 @@
         .sidebar.collapsed .brand-logo-icon {
             display: block;
         }
-        .sidebar.collapsed .nav-link span,
-        .sidebar.collapsed .nav-section {
-            opacity: 0;
-            visibility: hidden;
-            width: 0;
-        }
+        .sidebar.collapsed .nav-link span {
+         opacity: 0;
+         visibility: hidden;
+         width: 0;
+     }
+       .sidebar.collapsed .nav-section {
+        display: none;
+    }
         /* When the whole sidebar is collapsed (icon-only mode), force all section item lists
            to be visible and ignore the per-section collapsed state so users can still navigate. */
         .sidebar.collapsed .nav-section-items.collapsed { display: flex !important; }
@@ -69,9 +71,18 @@
             justify-content: center;
         }
         .sidebar.collapsed .nav-link i {
-            margin-right: 0;
-            font-size: 1.25rem;
+         margin-right: 0;
+         font-size: 1.25rem;
         }
+        .sidebar.collapsed .d-flex.align-items-stretch > a.nav-link[data-bs-toggle="collapse"] {
+         display: none;
+         }
+        .sidebar.collapsed .d-flex.align-items-stretch > a.nav-link.flex-grow-1 {
+        flex-grow: 0;
+         }
+       .sidebar.collapsed .nav-link.d-flex.justify-content-between > .bi-chevron-down {
+        display: none;
+         }
         .sidebar.collapsed .brand-section {
             padding: 1rem 0.5rem;
             text-align: center;
@@ -793,11 +804,67 @@
             font-weight: 600;
             font-size: 0.82rem;
         }
-        [data-theme="dark"] .leap-thead th {
+    [data-theme="dark"] .leap-thead th {
             background-color: #3a2429 !important;
             color: #d0d0d0 !important;
             border-bottom: 1px solid #5a2e36 !important;
         }
+
+        .gsearch-trigger {
+            display: inline-flex; align-items: center; gap: 0.5rem;
+            background: #f1f3f5; border: 1px solid #e3e6ea; color: #495057;
+            padding: 0.35rem 0.7rem; border-radius: 8px;
+            font-size: 0.875rem; cursor: pointer; transition: all 0.15s;
+        }
+        .gsearch-trigger:hover { background: #e9ecef; border-color: #ced4da; }
+        .gsearch-trigger-label { color: #868e96; }
+        .gsearch-kbd {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.7rem; background: #fff; border: 1px solid #dee2e6;
+            border-radius: 4px; padding: 1px 5px; color: #868e96;
+        }
+        [data-theme="dark"] .gsearch-trigger { background: #2d2d2d; border-color: #404040; color: #e0e0e0; }
+        [data-theme="dark"] .gsearch-trigger:hover { background: #3a3a3a; }
+        [data-theme="dark"] .gsearch-kbd { background: #1a1a1a; border-color: #404040; color: #868e96; }
+
+        .gsearch-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+            display: none; align-items: flex-start; justify-content: center;
+            z-index: 2000; padding-top: 10vh;
+        }
+        .gsearch-overlay.show { display: flex; }
+        .gsearch-modal {
+            width: 640px; max-width: 92vw; max-height: 70vh;
+            background: #fff; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+            display: flex; flex-direction: column; overflow: hidden;
+        }
+        [data-theme="dark"] .gsearch-modal { background: #1e1e1e; color: #e0e0e0; }
+        .gsearch-input-wrap { display: flex; align-items: center; gap: 0.6rem; padding: 0.9rem 1.1rem; border-bottom: 1px solid #eee; }
+        [data-theme="dark"] .gsearch-input-wrap { border-color: #333; }
+        .gsearch-input-icon { color: #868e96; font-size: 1.1rem; }
+        .gsearch-input { flex: 1; border: none; outline: none; background: transparent; font-size: 1rem; color: inherit; }
+        .gsearch-esc { font-family: ui-monospace, monospace; font-size: 0.72rem; color: #868e96; border: 1px solid #dee2e6; border-radius: 4px; padding: 1px 6px; }
+        [data-theme="dark"] .gsearch-esc { border-color: #404040; }
+        .gsearch-results { flex: 1; overflow-y: auto; padding: 0.5rem; }
+        .gsearch-hint { padding: 1rem; color: #868e96; font-size: 0.875rem; text-align: center; }
+        .gsearch-hint i { color: #ffc107; margin-right: 0.3rem; }
+        .gsearch-group-label {
+            font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px;
+            color: #868e96; padding: 0.6rem 0.8rem 0.25rem; font-weight: 600;
+        }
+        .gsearch-hit {
+            display: flex; align-items: center; gap: 0.7rem;
+            padding: 0.55rem 0.8rem; border-radius: 8px;
+            cursor: pointer; text-decoration: none; color: inherit;
+        }
+        .gsearch-hit:hover, .gsearch-hit.active { background: #f1f3f5; }
+        [data-theme="dark"] .gsearch-hit:hover, [data-theme="dark"] .gsearch-hit.active { background: #2a2a2a; }
+        .gsearch-hit-icon { width: 32px; height: 32px; border-radius: 6px; background: #f8f9fa; display: flex; align-items: center; justify-content: center; color: #C41E3A; flex-shrink: 0; }
+        [data-theme="dark"] .gsearch-hit-icon { background: #2a2a2a; }
+        .gsearch-hit-body { flex: 1; min-width: 0; }
+        .gsearch-hit-title { font-weight: 600; font-size: 0.92rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gsearch-hit-subtitle { font-size: 0.78rem; color: #868e96; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gsearch-empty { padding: 2rem 1rem; text-align: center; color: #868e96; }
     </style>
     {% block extra_css %}{% endblock %}
 </head>
@@ -1740,64 +1807,8 @@
                 </div>
             </div>
         </div>
+   
     </div>
-    <style>
-        .gsearch-trigger {
-            display: inline-flex; align-items: center; gap: 0.5rem;
-            background: #f1f3f5; border: 1px solid #e3e6ea; color: #495057;
-            padding: 0.35rem 0.7rem; border-radius: 8px;
-            font-size: 0.875rem; cursor: pointer; transition: all 0.15s;
-        }
-        .gsearch-trigger:hover { background: #e9ecef; border-color: #ced4da; }
-        .gsearch-trigger-label { color: #868e96; }
-        .gsearch-kbd {
-            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-            font-size: 0.7rem; background: #fff; border: 1px solid #dee2e6;
-            border-radius: 4px; padding: 1px 5px; color: #868e96;
-        }
-        [data-theme="dark"] .gsearch-trigger { background: #2d2d2d; border-color: #404040; color: #e0e0e0; }
-        [data-theme="dark"] .gsearch-trigger:hover { background: #3a3a3a; }
-        [data-theme="dark"] .gsearch-kbd { background: #1a1a1a; border-color: #404040; color: #868e96; }
-
-        .gsearch-overlay {
-            position: fixed; inset: 0; background: rgba(0,0,0,0.45);
-            display: none; align-items: flex-start; justify-content: center;
-            z-index: 2000; padding-top: 10vh;
-        }
-        .gsearch-overlay.show { display: flex; }
-        .gsearch-modal {
-            width: 640px; max-width: 92vw; max-height: 70vh;
-            background: #fff; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.25);
-            display: flex; flex-direction: column; overflow: hidden;
-        }
-        [data-theme="dark"] .gsearch-modal { background: #1e1e1e; color: #e0e0e0; }
-        .gsearch-input-wrap { display: flex; align-items: center; gap: 0.6rem; padding: 0.9rem 1.1rem; border-bottom: 1px solid #eee; }
-        [data-theme="dark"] .gsearch-input-wrap { border-color: #333; }
-        .gsearch-input-icon { color: #868e96; font-size: 1.1rem; }
-        .gsearch-input { flex: 1; border: none; outline: none; background: transparent; font-size: 1rem; color: inherit; }
-        .gsearch-esc { font-family: ui-monospace, monospace; font-size: 0.72rem; color: #868e96; border: 1px solid #dee2e6; border-radius: 4px; padding: 1px 6px; }
-        [data-theme="dark"] .gsearch-esc { border-color: #404040; }
-        .gsearch-results { flex: 1; overflow-y: auto; padding: 0.5rem; }
-        .gsearch-hint { padding: 1rem; color: #868e96; font-size: 0.875rem; text-align: center; }
-        .gsearch-hint i { color: #ffc107; margin-right: 0.3rem; }
-        .gsearch-group-label {
-            font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px;
-            color: #868e96; padding: 0.6rem 0.8rem 0.25rem; font-weight: 600;
-        }
-        .gsearch-hit {
-            display: flex; align-items: center; gap: 0.7rem;
-            padding: 0.55rem 0.8rem; border-radius: 8px;
-            cursor: pointer; text-decoration: none; color: inherit;
-        }
-        .gsearch-hit:hover, .gsearch-hit.active { background: #f1f3f5; }
-        [data-theme="dark"] .gsearch-hit:hover, [data-theme="dark"] .gsearch-hit.active { background: #2a2a2a; }
-        .gsearch-hit-icon { width: 32px; height: 32px; border-radius: 6px; background: #f8f9fa; display: flex; align-items: center; justify-content: center; color: #C41E3A; flex-shrink: 0; }
-        [data-theme="dark"] .gsearch-hit-icon { background: #2a2a2a; }
-        .gsearch-hit-body { flex: 1; min-width: 0; }
-        .gsearch-hit-title { font-weight: 600; font-size: 0.92rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .gsearch-hit-subtitle { font-size: 0.78rem; color: #868e96; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .gsearch-empty { padding: 2rem 1rem; text-align: center; color: #868e96; }
-    </style>
     <script>
     (function () {
         var overlay = document.getElementById('gsearchOverlay');
@@ -1953,6 +1964,8 @@
             clearTimeout(fallback);
             fallback = setTimeout(hide, 5000);
         }, true);
+
+      
     })();
     </script>
 </body>

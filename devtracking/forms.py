@@ -26,6 +26,15 @@ class DevTaskForm(forms.ModelForm):
         self.fields['stack'].required = False
         self.fields['stack'].queryset = TaskStack.objects.all()
 
+    def clean_title(self):
+        title = self.cleaned_data.get('title', '')
+        qs = DevTask.objects.filter(title__iexact=title)
+        if self.instance.pk:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise forms.ValidationError('A task with this title already exists.')
+        return title
+
 
 class BulkTaskForm(forms.Form):
     """Create a whole list of backlog tasks at once — one title per line."""

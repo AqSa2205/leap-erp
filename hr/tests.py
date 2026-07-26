@@ -6,6 +6,77 @@ from hr.forms import LeaveRequestForm
 from hr.models import LeaveType
 from hr.forms import LeaveRequestForm
 
+from django.test import TestCase
+from hr.forms import EmployeeForm, AssetForm
+
+
+class EmployeeFormValidationTests(TestCase):
+    """BUG-004: free-text fields must reject symbol-only garbage while
+    still accepting legitimate Latin and Arabic names/titles."""
+
+    def _base_valid_data(self, **overrides):
+        data = {
+            'full_name': 'John Smith',
+            'nationality': 'British',
+            'designation': 'Site Engineer',
+            'qualification': 'BSc Mechanical Engineering',
+            'deployment': 'Riyadh Site',
+            'department': 'Operations',
+            'mobile_number': '+966501234567',
+            'iqama_number': '1234567890',
+            # add any other required fields your EmployeeForm needs
+        }
+        data.update(overrides)
+        return data
+
+    def test_symbol_only_full_name_is_rejected(self):
+        form = EmployeeForm(data=self._base_valid_data(full_name='!@#$%^&*()'))
+        self.assertFalse(form.is_valid())
+        self.assertIn('full_name', form.errors)
+
+    def test_valid_latin_full_name_is_accepted(self):
+        form = EmployeeForm(data=self._base_valid_data(full_name="O'Connor-Smith"))
+        # Only check this field's own validation, not the whole form
+        form.is_valid()
+        self.assertNotIn('full_name', form.errors)
+
+    def test_valid_arabic_full_name_is_accepted(self):
+        form = EmployeeForm(data=self._base_valid_data(full_name='محمد أحمد'))
+        form.is_valid()
+        self.assertNotIn('full_name', form.errors)
+
+    def test_symbol_only_mobile_number_is_rejected(self):
+        form = EmployeeForm(data=self._base_valid_data(mobile_number='!@#$%^&*()'))
+        self.assertFalse(form.is_valid())
+        self.assertIn('mobile_number', form.errors)
+
+    def test_symbol_only_designation_is_rejected(self):
+        form = EmployeeForm(data=self._base_valid_data(designation='!@#$%^&*()'))
+        self.assertFalse(form.is_valid())
+        self.assertIn('designation', form.errors)
+
+
+class AssetFormValidationTests(TestCase):
+    """Same validation pattern applied to AssetForm's free-text fields."""
+
+    def _base_valid_data(self, **overrides):
+        data = {
+            'serial_number': 'SN-2026-001',
+            # add remaining required AssetForm fields here
+        }
+        data.update(overrides)
+        return data
+
+    def test_symbol_only_serial_number_is_rejected(self):
+        form = AssetForm(data=self._base_valid_data(serial_number='!@#$%^&*()'))
+        self.assertFalse(form.is_valid())
+        self.assertIn('serial_number', form.errors)
+
+    def test_valid_alphanumeric_serial_number_is_accepted(self):
+        form = AssetForm(data=self._base_valid_data(serial_number='ABC-123-XYZ'))
+        form.is_valid()
+        self.assertNotIn('serial_number', form.errors)
+
 
 class WorkCalendarTests(TestCase):
     WEEKENDS = {4, 5}  # Fri, Sat (Mon=0..Sun=6)

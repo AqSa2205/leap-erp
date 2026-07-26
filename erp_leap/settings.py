@@ -84,6 +84,7 @@ INSTALLED_APPS = [
     # Local apps
     "accounts",
     "projects",
+    "drafts",
     "dashboard",
     "reports",
     "contacts",
