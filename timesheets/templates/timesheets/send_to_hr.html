@@ -14,13 +14,12 @@
     </div>
 
     <div class="alert alert-info">
-        <strong>How this works:</strong> clicking "Open in Outlook" below will open your email
-        app with the recipient and subject already filled in. You'll still need to manually
-        attach the exported Excel file (use the Export button on My Timesheet) before hitting
-        Send yourself. Once you've actually sent it, come back here and click
-        "I've sent this" to let HR know.
+    <strong>How this works:</strong> clicking "Open in Outlook" below will open your email
+    app with the recipient and subject already filled in. You'll still need to manually
+    attach the exported Excel file (use the Export button on My Timesheet) before hitting
+    Send yourself. Once you've actually sent it, come back here and click
+    "I've sent this" to let HR know.
     </div>
-
     <div class="card mb-4">
         <div class="card-header bg-white"><strong>Preview</strong></div>
         <div class="card-body p-0">
@@ -45,7 +44,8 @@
     </div>
 
     <div class="d-flex gap-2">
-        <a href="{{ mailto_url }}" class="btn btn-primary">
+        <a href="{{ mailto_url }}" class="btn btn-primary"
+             onclick="return confirm('This only works if you have a desktop email app (like Outlook) installed and set as default.\n\nIf nothing happens after this, email HR directly at {{ hr_email }} instead.\n\nContinue?');">
             <i class="bi bi-envelope"></i> Open in Outlook
         </a>
         <a href="{% url 'timesheets:export' %}?year={{ ts_request.year }}&month={{ ts_request.month }}"

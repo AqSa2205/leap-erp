@@ -1,8 +1,9 @@
 from django.db import transaction
 from django.utils import timezone
-
+from .models import TimesheetRequest, TimesheetRequestAck
 from .models import TimesheetEntry, TimesheetMonth
-
+from accounts.models import User, RolePermission
+from notifications.services import notify_users
 
 def submit_month(*, employee, year, month, submitted_by):
     """Lock an employee's timesheet for one calendar month.
@@ -63,9 +64,8 @@ def reopen_month(*, employee, year, month, reopened_by):
 
     return tsm
 
-from accounts.models import User, RolePermission
-from notifications.services import notify_users
-from .models import TimesheetRequest
+
+
 
 
 def _users_with_capability(codename):
@@ -80,11 +80,16 @@ def _users_with_capability(codename):
 def request_timesheets(*, year, month, requested_by):
     """HR asks everyone for their timesheet for a given month. Creates the
     request record and notifies every user who actually has timesheets
-    access (not just every user in the system — e.g. AI-team roles don't
-    have timesheets.access at all, per accounts/permissions.py, so they
-    shouldn't get pinged for something they can't even open)."""
-    req = TimesheetRequest.objects.create(
-        year=year, month=month, requested_by=requested_by)
+    access. Re-using an existing request for the same month instead of
+    creating a duplicate — otherwise every re-submit fragments the
+    'have I sent this' tracking across multiple rows for the same month
+    (an employee who acked the first one still shows as Pending against
+    the second)."""
+    req, created = TimesheetRequest.objects.get_or_create(
+        year=year, month=month,
+        defaults={'requested_by': requested_by},
+    )
+
     recipients = _users_with_capability('timesheets.access')
     notify_users(
         recipients,
@@ -122,6 +127,12 @@ def remind_employee(*, ts_request, employee, reminded_by):
     """HR nudges one specific employee who hasn't sent theirs yet."""
     if employee.user is None:
         raise ValueError('This employee has no linked login to notify.')
+
+    already_acked = TimesheetRequestAck.objects.filter(
+        request=ts_request, employee=employee).exists()
+    if already_acked:
+        raise ValueError(f'{employee.full_name} has already sent this timesheet.')
+
     notify_users(
         [employee.user],
         verb='reminded you to send your timesheet',
