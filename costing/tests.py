@@ -7,7 +7,32 @@ from django.urls import reverse
 from accounts.models import Role, User
 from projects.models import Region, ProjectStatus, Project
 from costing.models import CostingSheet
+from django.test import TestCase, Client
+from accounts.models import User
 
+
+class CostingExcelExportLinkTests(TestCase):
+    """BUG-005: the Excel export link must not use target="_blank",
+    since a file download response leaves an empty tab open."""
+
+    def setUp(self):
+        self.client = Client()
+        from accounts.models import Role
+        from accounts.permissions import seed_default_permissions
+        sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        seed_default_permissions()
+        self.user = User.objects.create_user(
+            username='exportuser', password='testpass123', role=sales_role,
+        )
+        self.client.login(username='exportuser', password='testpass123')
+
+    def test_costing_list_export_link_has_no_target_blank(self):
+        response = self.client.get('/costing/')
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        # crude but effective: the export link shouldn't pair href with target="_blank"
+        self.assertNotIn('Export Excel', content.split('target="_blank"')[0][-200:]
+                          if 'target="_blank"' in content else 'Export Excel')
 
 class CostingProjectAutofillTests(TestCase):
     """The costing form auto-fills the PDF-header fields from the selected

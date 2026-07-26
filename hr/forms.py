@@ -3,6 +3,62 @@ from django.core.exceptions import ValidationError
 from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, VehicleDocument, LeaveType, Holiday, AttendanceSettings, WorkingDay, WFHRecord, AttendanceException
 
 
+
+
+
+
+import re
+from django.core.exceptions import ValidationError
+
+NAME_RE = re.compile(
+    r"^[A-Za-z\u00C0-\u017F"      # Latin + accented Latin
+    r"\u0600-\u06FF"                # Arabic
+    r"\u0750-\u077F"                # Arabic Supplement
+    r"\u08A0-\u08FF"                # Arabic Extended-A
+    r"\uFB50-\uFDFF"                # Arabic Presentation Forms-A
+    r"\uFE70-\uFEFF"                # Arabic Presentation Forms-B
+    r"\s'\-]+$"
+)
+TITLE_RE = re.compile(
+    r"^[A-Za-z0-9"
+    r"\u0600-\u06FF"
+    r"\u0750-\u077F"
+    r"\u08A0-\u08FF"
+    r"\uFB50-\uFDFF"
+    r"\uFE70-\uFEFF"
+    r"\s.,&/\-]+$"
+)
+CODE_RE = re.compile(r"^[A-Za-z0-9\-/]+$")
+PHONE_RE = re.compile(r"^\+?[\d\s\-()]{7,20}$")
+
+
+def validate_name_field(value, field_label):
+    value = (value or '').strip()
+    if value and not NAME_RE.match(value):
+        raise ValidationError(f'{field_label} should only contain letters, spaces, hyphens, and apostrophes.')
+    return value
+
+
+def validate_title_field(value, field_label):
+    value = (value or '').strip()
+    if value and not TITLE_RE.match(value):
+        raise ValidationError(f'{field_label} contains invalid characters.')
+    return value
+
+
+def validate_code_field(value, field_label):
+    value = (value or '').strip()
+    if value and not CODE_RE.match(value):
+        raise ValidationError(f'{field_label} should only contain letters, numbers, and hyphens.')
+    return value
+
+
+def validate_phone_field(value, field_label='Phone number'):
+    value = (value or '').strip()
+    if value and not PHONE_RE.match(value):
+        raise ValidationError(f'{field_label} is not a valid phone number.')
+    return value
+
 class EmployeeForm(forms.ModelForm):
     class Meta:
         model = Employee
@@ -40,7 +96,7 @@ class EmployeeForm(forms.ModelForm):
             'mobile_number': forms.TextInput(attrs={'class': 'form-control'}),
             'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
         }
-
+    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         from django.utils import timezone
@@ -52,11 +108,31 @@ class EmployeeForm(forms.ModelForm):
             'portal). Leave blank if none.')
         self.fields['user'].queryset = User.objects.filter(
             is_active=True).order_by('username')
-        # Inactive-from: optional, and the date picker can't go past today.
         self.fields['inactive_from'].required = False
         self.fields['inactive_from'].label = 'Inactive From'
         self.fields['inactive_from'].widget.attrs['max'] = (
             timezone.localdate().isoformat())
+
+    def clean_full_name(self):
+        return validate_name_field(self.cleaned_data.get('full_name'), 'Full name')
+
+    def clean_nationality(self):
+        return validate_name_field(self.cleaned_data.get('nationality'), 'Nationality')
+
+    def clean_designation(self):
+        return validate_title_field(self.cleaned_data.get('designation'), 'Designation')
+
+    def clean_qualification(self):
+        return validate_title_field(self.cleaned_data.get('qualification'), 'Qualification')
+
+    def clean_deployment(self):
+        return validate_title_field(self.cleaned_data.get('deployment'), 'Deployment')
+
+    def clean_iqama_number(self):
+        return validate_code_field(self.cleaned_data.get('iqama_number'), 'Iqama number')
+
+    def clean_mobile_number(self):
+        return validate_phone_field(self.cleaned_data.get('mobile_number'), 'Mobile number')
 
     def clean(self):
         from django.utils import timezone
@@ -70,17 +146,15 @@ class EmployeeForm(forms.ModelForm):
             if issued and expires and expires < issued:
                 self.add_error(expiry, f'{label} expiry date cannot be before its issue date.')
 
-        # Inactive-from is only meaningful when the employee is inactive.
         today = timezone.localdate()
         inactive_from = cleaned.get('inactive_from')
         if cleaned.get('is_active'):
-            cleaned['inactive_from'] = None          # active -> no inactive date
+            cleaned['inactive_from'] = None
         else:
             if not inactive_from:
-                cleaned['inactive_from'] = today      # default to today
+                cleaned['inactive_from'] = today
             elif inactive_from > today:
-                self.add_error('inactive_from',
-                               'Inactive-from date cannot be in the future.')
+                self.add_error('inactive_from', 'Inactive-from date cannot be in the future.')
         return cleaned
 
 
@@ -170,7 +244,22 @@ class AssetForm(forms.ModelForm):
         self.fields['decommissioned_on'].required = False
         self.fields['decommission_reason'].required = False
         self.fields['decommissioned_on'].widget.attrs['max'] = timezone.localdate().isoformat()
+    
+    def clean_employee_name(self):
+        return validate_name_field(self.cleaned_data.get('employee_name'), 'Employee name')
 
+    def clean_department(self):
+        return validate_title_field(self.cleaned_data.get('department'), 'Department')
+
+    def clean_designation(self):
+        return validate_title_field(self.cleaned_data.get('designation'), 'Designation')
+
+    def clean_serial_number(self):
+        return validate_code_field(self.cleaned_data.get('serial_number'), 'Serial number')
+
+    def clean_invoice_number(self):
+        return validate_code_field(self.cleaned_data.get('invoice_number'), 'Invoice number')
+    
     def clean(self):
         from django.utils import timezone
         cleaned = super().clean()
