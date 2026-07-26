@@ -62,3 +62,72 @@ def reopen_month(*, employee, year, month, reopened_by):
         tsm.save(update_fields=['reopened_at', 'reopened_by'])
 
     return tsm
+
+from accounts.models import User, RolePermission
+from notifications.services import notify_users
+from .models import TimesheetRequest
+
+
+def _users_with_capability(codename):
+    """All active users whose role currently grants `codename`=True.
+    Mirrors how has_capability checks it, but as a bulk queryset instead of
+    per-user, so we don't run one query per employee when notifying everyone."""
+    role_ids = RolePermission.objects.filter(
+        codename=codename, allowed=True).values_list('role_id', flat=True)
+    return User.objects.filter(role_id__in=role_ids, is_active=True)
+
+
+def request_timesheets(*, year, month, requested_by):
+    """HR asks everyone for their timesheet for a given month. Creates the
+    request record and notifies every user who actually has timesheets
+    access (not just every user in the system — e.g. AI-team roles don't
+    have timesheets.access at all, per accounts/permissions.py, so they
+    shouldn't get pinged for something they can't even open)."""
+    req = TimesheetRequest.objects.create(
+        year=year, month=month, requested_by=requested_by)
+    recipients = _users_with_capability('timesheets.access')
+    notify_users(
+        recipients,
+        verb='requested your timesheet',
+        actor=requested_by,
+        target=req,
+        target_url='/timesheets/',
+        description=f'HR has requested your timesheet for {month}/{year}.',
+        send_email=False,
+    )
+    return req
+
+def employees_for_request(ts_request):
+    """Every employee who was actually eligible to receive this request
+    (i.e. their linked user has timesheets.access), split into sent/pending.
+    Returns a list of dicts: {'employee': ..., 'acked': True/False, 'ack': ...}."""
+    from hr.models import Employee
+    eligible_users = _users_with_capability('timesheets.access')
+    employees = Employee.objects.filter(user__in=eligible_users).select_related('user')
+
+    acked_map = {
+        ack.employee_id: ack
+        for ack in ts_request.acks.select_related('employee')
+    }
+
+    rows = []
+    for emp in employees:
+        ack = acked_map.get(emp.pk)
+        rows.append({'employee': emp, 'acked': ack is not None, 'ack': ack})
+    rows.sort(key=lambda r: (r['acked'], r['employee'].full_name))
+    return rows
+
+
+def remind_employee(*, ts_request, employee, reminded_by):
+    """HR nudges one specific employee who hasn't sent theirs yet."""
+    if employee.user is None:
+        raise ValueError('This employee has no linked login to notify.')
+    notify_users(
+        [employee.user],
+        verb='reminded you to send your timesheet',
+        actor=reminded_by,
+        target=ts_request,
+        target_url='/timesheets/',
+        description=f'Reminder: please send your timesheet for {ts_request.month}/{ts_request.year}.',
+        send_email=False,
+    )

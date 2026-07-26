@@ -3,15 +3,21 @@ from django.contrib.auth.decorators import login_required
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.http import require_POST
 from decimal import Decimal
+from collections import defaultdict
 from accounts.permissions import require_capability
 from .models import TimesheetEntry
 from .forms import TimesheetEntryForm
 import calendar
 from datetime import date as date_cls
-
+from .services import employees_for_request, remind_employee
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from django.http import HttpResponse
+from datetime import date as date_cls
+from django.utils import timezone
+from .models import TimesheetRequest, TimesheetRequestAck, HRSettings
+from .services import request_timesheets
+from urllib.parse import quote
 
 
 def _get_employee_or_none(request):
@@ -45,13 +51,14 @@ def my_timesheet(request):
         form = TimesheetEntryForm()
 
     entries = TimesheetEntry.objects.filter(employee=emp).select_related('activity_code')
+    pending_request = _pending_request_for(emp)
 
     return render(request, 'timesheets/my_timesheet.html', {
         'employee': emp,
         'entries': entries,
         'form': form,
+        'pending_request': pending_request,
     })
-
 
 @login_required
 @require_capability('timesheets.access')
@@ -124,7 +131,7 @@ def timesheet_export(request):
     month = int(request.GET.get('month', today.month))
     days_in_month = calendar.monthrange(year, month)[1]
 
-    from collections import defaultdict
+    
     entries_by_day = defaultdict(list)
     for e in TimesheetEntry.objects.filter(employee=emp, date__year=year, date__month=month).order_by('id'):
         entries_by_day[e.date.day].append(e)
@@ -234,3 +241,136 @@ def timesheet_export(request):
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)
     return response
+@login_required
+@require_capability('timesheets.review')
+def hr_request_timesheets(request):
+    """HR clicks a button to ask everyone for a given month's timesheet.
+    Defaults to the current month, but HR can pick an earlier one (e.g. if
+    they forgot to request last month)."""
+    today = date_cls.today()
+    if request.method == 'POST':
+        year = int(request.POST.get('year', today.year))
+        month = int(request.POST.get('month', today.month))
+        request_timesheets(year=year, month=month, requested_by=request.user)
+        messages.success(request, f'Timesheet request sent for {month}/{year}.')
+        return redirect('timesheets:hr_request')
+    recent_requests = TimesheetRequest.objects.all()[:10]
+    return render(request, 'timesheets/hr_request.html', {
+        'today': today,
+        'recent_requests': recent_requests,
+    })
+
+def _build_month_rows(emp, year, month):
+    """Shared by both the Excel export and the HR preview page, so the two
+    never quietly drift apart into showing different numbers for the same
+    month."""
+    days_in_month = calendar.monthrange(year, month)[1]
+    entries_by_day = defaultdict(list)
+    for e in TimesheetEntry.objects.filter(
+            employee=emp, date__year=year, date__month=month).order_by('id'):
+        entries_by_day[e.date.day].append(e)
+
+    rows = []
+    for day in range(1, days_in_month + 1):
+        the_date = date_cls(year, month, day)
+        day_entries = entries_by_day.get(day, [])
+        rows.append({
+            'day': day,
+            'date': the_date,
+            'description': '; '.join(e.task_description for e in day_entries),
+            'hours': sum((e.hours for e in day_entries), Decimal('0')) if day_entries else None,
+            'codes': ', '.join(e.activity_code.code for e in day_entries),
+            'is_weekend': the_date.weekday() in (4, 5),
+        })
+    return rows
+
+
+def _pending_request_for(emp):
+    """The most recent TimesheetRequest this employee hasn't acknowledged
+    yet, or None if they're all caught up."""
+    acked_request_ids = TimesheetRequestAck.objects.filter(
+        employee=emp).values_list('request_id', flat=True)
+    return TimesheetRequest.objects.exclude(pk__in=acked_request_ids).first()
+
+
+@login_required
+@require_capability('timesheets.access')
+def send_to_hr(request, request_id):
+    """Preview page: shows the month's data, a mailto: link pre-filled to
+    HR's fixed address (never typed by the employee), and a button to
+    confirm they've sent it. Ownership-scoped: only usable for a request
+    that's actually still pending for THIS employee."""
+    emp = _get_employee_or_none(request)
+    if emp is None:
+        messages.error(request, 'Your account is not linked to an employee record yet. Contact HR.')
+        return redirect('timesheets:my_timesheet')
+
+    ts_request = get_object_or_404(TimesheetRequest, pk=request_id)
+    already_acked = TimesheetRequestAck.objects.filter(
+        request=ts_request, employee=emp).exists()
+    if already_acked:
+        messages.info(request, 'You already confirmed sending this one.')
+        return redirect('timesheets:my_timesheet')
+
+    year, month = ts_request.year, ts_request.month
+    rows = _build_month_rows(emp, year, month)
+    month_name = calendar.month_name[month]
+
+    hr_email = HRSettings.load().hr_email
+    subject = f'Timesheet - {emp.full_name} - {month_name} {year}'
+    body = (
+        f'Hi,\n\nPlease find attached my timesheet for {month_name} {year}.\n'
+        f'(Remember to attach the exported Excel file before sending.)\n\n'
+        f'Regards,\n{emp.full_name}'
+    )
+    mailto_url = f'mailto:{hr_email}?subject={quote(subject)}&body={quote(body)}'
+
+    return render(request, 'timesheets/send_to_hr.html', {
+        'employee': emp,
+        'ts_request': ts_request,
+        'rows': rows,
+        'month_name': month_name,
+        'mailto_url': mailto_url,
+        'hr_email': hr_email,
+    })
+
+
+@login_required
+@require_capability('timesheets.access')
+@require_POST
+def acknowledge_send(request, request_id):
+    """Employee confirms they've sent their timesheet via their own Outlook.
+    Self-reported, as discussed — the server can't verify the email was
+    actually sent, only that the employee clicked this."""
+    emp = _get_employee_or_none(request)
+    ts_request = get_object_or_404(TimesheetRequest, pk=request_id)
+    TimesheetRequestAck.objects.get_or_create(request=ts_request, employee=emp)
+    messages.success(request, 'Thanks — marked as sent to HR.')
+    return redirect('timesheets:my_timesheet')
+
+@login_required
+@require_capability('timesheets.review')
+def hr_request_detail(request, request_id):
+    """HR's view of one specific request: who's sent it, who hasn't, with a
+    Remind button per pending employee."""
+    ts_request = get_object_or_404(TimesheetRequest, pk=request_id)
+
+    if request.method == 'POST':
+        emp_pk = request.POST.get('employee_id')
+        from hr.models import Employee
+        employee = get_object_or_404(Employee, pk=emp_pk)
+        try:
+            remind_employee(ts_request=ts_request, employee=employee, reminded_by=request.user)
+            messages.success(request, f'Reminder sent to {employee.full_name}.')
+        except ValueError as e:
+            messages.error(request, str(e))
+        return redirect('timesheets:hr_request_detail', request_id=ts_request.pk)
+
+    rows = employees_for_request(ts_request)
+    sent_count = sum(1 for r in rows if r['acked'])
+    return render(request, 'timesheets/hr_request_detail.html', {
+        'ts_request': ts_request,
+        'rows': rows,
+        'sent_count': sent_count,
+        'total_count': len(rows),
+    })

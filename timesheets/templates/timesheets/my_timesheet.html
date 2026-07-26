@@ -14,6 +14,18 @@
         </a>
         {% endif %}
     </div>
+    
+    {% if pending_request %}
+    <div class="alert alert-warning d-flex justify-content-between align-items-center">
+        <div>
+            <strong><i class="bi bi-bell"></i> HR has requested your timesheet</strong>
+            for {{ pending_request.month }}/{{ pending_request.year }}.
+        </div>
+        <a href="{% url 'timesheets:send_to_hr' pending_request.pk %}" class="btn btn-warning btn-sm">
+            Send to HR
+        </a>
+    </div>
+    {% endif %}
 
     {% if employee %}
     <div class="card mb-4">

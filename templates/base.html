@@ -1342,11 +1342,13 @@
                     <i class="bi bi-speedometer2"></i> <span>HR Dashboard</span>
                 </a>
             </li>
+            {% if user|can:'timesheets.review' %}
             <li class="nav-item">
-                <a class="nav-link {% if 'employee' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:employee_list' %}" data-title="Employees">
-                    <i class="bi bi-people-fill"></i> <span>Employees</span>
+                <a class="nav-link {% if request.resolver_match.url_name == 'hr_request' %}active{% endif %}" href="{% url 'timesheets:hr_request' %}" data-title="Request Timesheets">
+                    <i class="bi bi-envelope-paper"></i> <span>Request Timesheets</span>
                 </a>
             </li>
+            {% endif %}
             <li class="nav-item">
                 <a class="nav-link d-flex justify-content-between align-items-center" data-bs-toggle="collapse" href="#assetsSubmenu" role="button" aria-expanded="{% if 'asset' in request.resolver_match.url_name or 'vehicle' in request.resolver_match.url_name %}true{% else %}false{% endif %}">
                     <span><i class="bi bi-laptop"></i> <span>Assets</span></span>

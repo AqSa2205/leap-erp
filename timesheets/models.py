@@ -79,3 +79,48 @@ class TimesheetMonth(models.Model):
         if self.reopened_at and self.reopened_at > self.submitted_at:
             return False
         return True
+
+class HRSettings(models.Model):
+        """Singleton: the one fixed HR email every employee sends their
+        timesheet to. Set once by HR/admin — never typed by employees, so a
+        typo or misdirection can't send payroll data to the wrong inbox."""
+        hr_email = models.EmailField()
+
+        def __str__(self):
+            return self.hr_email
+
+        @classmethod
+        def load(cls):
+            obj, _ = cls.objects.get_or_create(pk=1)
+            return obj
+
+
+class TimesheetRequest(models.Model):
+        """One row = HR asked everyone for their timesheet for a given month."""
+        year = models.PositiveSmallIntegerField()
+        month = models.PositiveSmallIntegerField()
+        requested_by = models.ForeignKey(
+            settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='+')
+        requested_at = models.DateTimeField(auto_now_add=True)
+
+        class Meta:
+            ordering = ['-year', '-month']
+
+        def __str__(self):
+            return f"Timesheet request {self.month}/{self.year}"
+
+
+class TimesheetRequestAck(models.Model):
+        """Tracks which employee confirmed they sent their timesheet for a given
+        request. Self-reported — Option B (opening the employee's own Outlook)
+        means the server has no way to verify the email was actually sent, only
+        that the employee clicked 'I've sent this'."""
+        request = models.ForeignKey(TimesheetRequest, on_delete=models.CASCADE, related_name='acks')
+        employee = models.ForeignKey('hr.Employee', on_delete=models.CASCADE, related_name='timesheet_acks')
+        acknowledged_at = models.DateTimeField(auto_now_add=True)
+
+        class Meta:
+            unique_together = ('request', 'employee')
+
+        def __str__(self):
+            return f"{self.employee} ack'd {self.request}"
