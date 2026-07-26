@@ -47,21 +47,20 @@ class ProjectPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
             or getattr(user, 'is_proposal_team_user', False)
         )
 
-#CODE EDIT
         if region_scoped:
+            # A region-scoped user with no region assigned would otherwise fall
+            # through to seeing everything, so return nothing and tell them why
+            # (once per request, not once per queryset evaluation).
             if user.region_id is None:
-                if not getattr(self.request,'_no_region_warning_shown',False):
+                if not getattr(self.request, '_no_region_warning_shown', False):
                     messages.warning(
-                        self.request,"Your account has no region assigned. You can only view projects you own."
+                        self.request,
+                        'Your account has no region assigned. You can only view projects you own.'
                     )
                     self.request._no_region_warning_shown = True
                 return queryset.none()
             return queryset.filter(region=user.region)
         return queryset.filter(owner=user)
-     
-
-    
-
 
 
 class ProjectListView(CapabilityRequiredMixin, ProjectPermissionMixin, ListView):

@@ -47,10 +47,14 @@ function initFormDraft(formEl, formKey, objectId) {
   window.addEventListener('pagehide', function () {
     if (submitted) return;
     const payload = { form_key: formKey, object_id: objectId, data: collect() };
-    navigator.sendBeacon(
-      '/drafts/save/?csrf=' + encodeURIComponent(getCookie('csrftoken')),
-      new Blob([JSON.stringify(payload)], {type: 'application/json'})
-    );
+    // sendBeacon cannot set request headers, so the CSRF token travels as a
+    // form field instead — Django's CSRF middleware reads csrfmiddlewaretoken
+    // from POST data natively. (Never put the token in the query string: it
+    // would leak via Referer headers, browser history and server logs.)
+    const fd = new FormData();
+    fd.append('csrfmiddlewaretoken', getCookie('csrftoken'));
+    fd.append('payload', JSON.stringify(payload));
+    navigator.sendBeacon('/drafts/save/', fd);
   });
 }
 

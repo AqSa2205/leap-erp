@@ -5,27 +5,36 @@ from django.views.decorators.http import require_POST
 from django.shortcuts import get_object_or_404
 from django.utils.module_loading import import_string
 from django.urls import reverse
-import hmac
-from django.middleware.csrf import get_token
-from django.views.decorators.csrf import csrf_exempt
 
 from .models import FormDraft
 from .registry import FORM_REGISTRY
 
 MAX_PAYLOAD_CHARS = 50000
 
+
+def _read_payload(request):
+    """Parse the draft payload from either transport the client uses.
+
+    The debounced autosave sends JSON with an X-CSRFToken header. The
+    page-unload save uses navigator.sendBeacon(), which cannot set headers,
+    so it posts form data carrying `csrfmiddlewaretoken` plus a `payload`
+    field. Django's CSRF middleware validates both natively — the header for
+    the first, the form field for the second — so this view needs no CSRF
+    handling of its own.
+    """
+    if request.content_type == 'application/json':
+        return json.loads(request.body.decode('utf-8'))
+    return json.loads(request.POST.get('payload') or '')
+
+
 @login_required
 @require_POST
-@csrf_exempt
 def save_draft(request):
-    submitted_token = request.headers.get('X-CSRFToken') or request.GET.get('csrf', '')
-    expected_token = request.COOKIES.get('csrftoken', '')  
-    if not hmac.compare_digest(submitted_token, expected_token):
-        return JsonResponse({'error': 'invalid csrf token'}, status=403)
-
     try:
-        body = json.loads(request.body.decode('utf-8'))
+        body = _read_payload(request)
     except (ValueError, UnicodeDecodeError):
+        return JsonResponse({'error': 'bad request'}, status=400)
+    if not isinstance(body, dict):
         return JsonResponse({'error': 'bad request'}, status=400)
 
     form_key = body.get('form_key')
