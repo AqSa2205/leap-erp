@@ -30,6 +30,11 @@
 
             <form method="post" novalidate>
                 {% csrf_token %}
+                {% if object.pk %}
+                <div class="alert alert-light border small mb-3">
+                    <i class="bi bi-clock-history"></i> Last modified: {{ object.updated_at|date:"M d, Y g:i A" }}
+                </div>
+                {% endif %}
                 {% if form.errors %}<div class="alert alert-danger"><strong>Please correct the errors below.</strong>{{ form.errors }}</div>{% endif %}
 
                 <div class="row">

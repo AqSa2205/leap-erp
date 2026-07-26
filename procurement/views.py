@@ -2549,11 +2549,20 @@ class DNListView(CapabilityRequiredMixin, DNPermissionMixin, ListView):
                 Q(project_title__icontains=search) |
                 Q(leap_po_number__icontains=search)
             )
+        sort = self.request.GET.get('sort', 'date')
+        direction = self.request.GET.get('dir', 'desc')
+        allowed_sorts = ['date', 'dn_number', 'sold_to_company', 'created_at']
+        if sort not in allowed_sorts:
+            sort = 'date'
+        order_field = sort if direction == 'asc' else f'-{sort}'
+        queryset = queryset.order_by(order_field)
         return queryset
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['total_count'] = self.get_queryset().count()
+        context['current_sort'] = self.request.GET.get('sort', 'date')
+        context['current_dir'] = self.request.GET.get('dir', 'desc')
         return context
 
 

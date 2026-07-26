@@ -78,21 +78,22 @@ def people(request):
     users = attributable_users()
 
     selected = None
-    raw_id = request.GET.get('user')
-    if raw_id:
-        for u in users:
-            if str(u.pk) == str(raw_id):
-                selected = u
-                break
+    raw_ids = request.GET.getlist('user')
+    people_data = []
+    for u in users:
+        if str(u.pk) in raw_ids:
+            people_data.append({
+                'user': u,
+                'scorecard': build_person_scorecard(period, u),
+            })
 
-    scorecard = build_person_scorecard(period, selected) if selected else None
     context = {
         'period': period,
         'period_label': label_for(period),
         'period_options': period_options(),
         'users': users,
-        'selected': selected,
-        'scorecard': scorecard,
+        'selected_ids': raw_ids,
+        'people_data': people_data,
     }
     return render(request, 'kpis/people.html', context)
 

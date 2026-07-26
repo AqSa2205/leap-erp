@@ -186,6 +186,7 @@ class DeliveryNoteForm(forms.ModelForm):
             'date': forms.DateInput(attrs={'type': 'date'}),
             'sold_to_address': forms.Textarea(attrs={'rows': 2}),
             'delivery_address': forms.Textarea(attrs={'rows': 2}),
+            'project_title': forms.TextInput(attrs={'autocomplete': 'off'}),
         }
 
     def __init__(self, *args, **kwargs):
@@ -198,7 +199,6 @@ class DeliveryNoteForm(forms.ModelForm):
                 field.widget.attrs['class'] = 'form-control'
             else:
                 field.widget.attrs['class'] = 'form-control'
-
         self.fields['project'].required = False
         self.fields['purchase_order'].required = False
         self.fields['project'].queryset = Project.objects.select_related('region').all()
@@ -209,6 +209,22 @@ class DeliveryNoteForm(forms.ModelForm):
                 region=self.user.region
             ).select_related('region')
 
+    def clean_sold_to_company(self):
+        value = self.cleaned_data.get('sold_to_company', '')
+        if value and value.strip().isdigit():
+            raise forms.ValidationError(
+                "Company name cannot be numbers only. Please enter a valid "
+                "company name (e.g., 'Leap Ltd', 'Leap Company')."
+            )
+        return value
+
+    def clean_delivery_address(self):
+        value = self.cleaned_data.get('delivery_address', '')
+        if value and len(value.strip()) < 10:
+            raise forms.ValidationError(
+                "Delivery address must be at least 10 characters."
+            )
+        return value
 
 class DeliveryNoteItemForm(forms.ModelForm):
     class Meta:
