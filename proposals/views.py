@@ -6,12 +6,13 @@ from django.contrib import messages
 from django.http import JsonResponse
 from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required
+from django.db import transaction
 from django.db.models import Q, Max
 
 from .models import (
     TechnicalProposal, ProposalBoilerplate,
     PrequalificationDocument, PQDAttachment,
-    ProposalSection, SectionHeading,
+    ProposalSection, SectionHeading, EngineeringDocument,
 )
 from .forms import (
     ProposalMetadataForm, ProposalContentForm, EngineeringDocumentFormSet,
@@ -78,22 +79,27 @@ def proposals_dashboard(request):
     })
 
 
+def visible_proposals(user):
+    """Proposals a given user is allowed to see — the single source of truth
+    for read scoping (shared by the list/detail mixin and the duplicate view)."""
+    queryset = TechnicalProposal.objects.select_related('project', 'created_by').all()
+    if user.is_super_admin_user:
+        return queryset
+    elif (user.is_admin_user or user.is_manager_user
+          or getattr(user, 'is_proposal_team_user', False)):
+        # Proposal team (head + reps) see every proposal in their region —
+        # they own the technical-proposal workflow.
+        return queryset.filter(
+            Q(created_by=user) |
+            Q(project__region=user.region)
+        )
+    else:
+        return queryset.filter(created_by=user)
+
+
 class ProposalPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
-        queryset = TechnicalProposal.objects.select_related('project', 'created_by').all()
-        user = self.request.user
-        if user.is_super_admin_user:
-            return queryset
-        elif (user.is_admin_user or user.is_manager_user
-              or getattr(user, 'is_proposal_team_user', False)):
-            # Proposal team (head + reps) see every proposal in their region —
-            # they own the technical-proposal workflow.
-            return queryset.filter(
-                Q(created_by=user) |
-                Q(project__region=user.region)
-            )
-        else:
-            return queryset.filter(created_by=user)
+        return visible_proposals(self.request.user)
 
 
 # ─── Proposal CRUD ───────────────────────────────────────────
@@ -202,6 +208,63 @@ class ProposalDeleteView(ProposalPermissionMixin, DeleteView):
     def form_valid(self, form):
         messages.success(self.request, 'Proposal deleted.')
         return super().form_valid(form)
+
+
+# ─── Duplicate ────────────────────────────────────────────────
+
+def _unique_proposal_reference(base):
+    """A copy needs its own unique reference. Suffix the source's with -COPY
+    (then -COPY-2, -COPY-3, …), keeping within the 50-char column limit."""
+    field_max = TechnicalProposal._meta.get_field('proposal_reference').max_length
+    candidate = f'{base}-COPY'[:field_max]
+    if not TechnicalProposal.objects.filter(proposal_reference=candidate).exists():
+        return candidate
+    i = 2
+    while True:
+        suffix = f'-COPY-{i}'
+        candidate = f'{base[:field_max - len(suffix)]}{suffix}'
+        if not TechnicalProposal.objects.filter(proposal_reference=candidate).exists():
+            return candidate
+        i += 1
+
+
+@login_required
+@require_POST
+def duplicate_proposal(request, pk):
+    """Clone an existing proposal — metadata, section content and engineering
+    documents — into a fresh draft the user can adapt for another project.
+    Lands on the metadata editor so they can set the new reference/project."""
+    source = get_object_or_404(visible_proposals(request.user), pk=pk)
+
+    with transaction.atomic():
+        clone = TechnicalProposal.objects.get(pk=source.pk)
+        clone.pk = None
+        clone._state.adding = True
+        clone.title = f'{source.title} (Copy)'
+        clone.proposal_reference = _unique_proposal_reference(source.proposal_reference)
+        clone.status = 'draft'
+        clone.project = None  # a copy is for a different project — user re-links it
+        clone.created_by = request.user
+        clone.save()  # created_at/updated_at repopulate via auto_now(_add)
+
+        ProposalSection.objects.bulk_create([
+            ProposalSection(
+                proposal=clone, heading=s.heading,
+                content=s.content, order=s.order)
+            for s in source.sections.all()
+        ])
+        EngineeringDocument.objects.bulk_create([
+            EngineeringDocument(
+                proposal=clone, doc_type=d.doc_type, doc_number=d.doc_number,
+                doc_title=d.doc_title, order=d.order)
+            for d in source.engineering_documents.all()
+        ])
+
+    messages.success(
+        request,
+        f'Duplicated “{source.title}”. Update the reference, project and '
+        'client details below, then edit the content.')
+    return redirect('proposals:edit', pk=clone.pk)
 
 
 # ─── Tabbed Content Editor ────────────────────────────────────

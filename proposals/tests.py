@@ -219,6 +219,102 @@ class ProposalTeamVisibilityTests(TestCase):
         self.assertEqual(titles, {'InRegion'})
 
 
+class DuplicateProposalTests(TestCase):
+    """Duplicating a proposal makes an independent editable draft (metadata +
+    sections + engineering docs) for reuse on another project."""
+
+    def setUp(self):
+        from proposals.models import EngineeringDocument
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user(
+            username='boss', email='boss@x.com', password='pw', role=self.sa_role)
+        self.client.force_login(self.user)
+
+        from projects.models import Region, ProjectStatus, Project
+        self.region = Region.objects.create(name='RegA', code='RGA')
+        self.status = ProjectStatus.objects.create(name='Open', category='open')
+        self.project = Project.objects.create(
+            project_name='PA', region=self.region, status=self.status,
+            proposal_reference='RA-1')
+
+        self.source = TechnicalProposal.objects.create(
+            title='Highway CCTV', proposal_reference='TP-DUP', client_name='ACME',
+            project_description='Original desc', region_entity='LNKSA',
+            revision_date=date(2026, 1, 1), prepared_by_initials='AJ',
+            executive_summary='<p>Summary body.</p>', status='final',
+            project=self.project, created_by=self.user)
+        ProposalSection.objects.create(
+            proposal=self.source, heading='Scope', content='<p>Scope.</p>', order=1)
+        ProposalSection.objects.create(
+            proposal=self.source, heading='Pricing', content='<p>Price.</p>', order=2)
+        EngineeringDocument.objects.create(
+            proposal=self.source, doc_type='Drawing', doc_number='D-01',
+            doc_title='Layout', order=1)
+
+    def _url(self, proposal=None):
+        return reverse('proposals:duplicate',
+                       kwargs={'pk': (proposal or self.source).pk})
+
+    def test_duplicate_creates_new_proposal_with_copied_content(self):
+        resp = self.client.post(self._url())
+        self.assertEqual(TechnicalProposal.objects.count(), 2)
+        clone = TechnicalProposal.objects.exclude(pk=self.source.pk).get()
+        # redirected to the metadata editor of the new copy
+        self.assertRedirects(resp, reverse('proposals:edit', kwargs={'pk': clone.pk}))
+        # metadata carried over
+        self.assertEqual(clone.client_name, 'ACME')
+        self.assertEqual(clone.project_description, 'Original desc')
+        self.assertEqual(clone.region_entity, 'LNKSA')
+        self.assertEqual(clone.executive_summary, '<p>Summary body.</p>')
+        # sections + engineering docs copied faithfully
+        self.assertEqual(
+            list(clone.sections.values_list('heading', 'content', 'order')),
+            [('Scope', '<p>Scope.</p>', 1), ('Pricing', '<p>Price.</p>', 2)])
+        self.assertEqual(clone.engineering_documents.count(), 1)
+        # source untouched
+        self.source.refresh_from_db()
+        self.assertEqual(self.source.sections.count(), 2)
+
+    def test_duplicate_resets_reference_title_status_project_and_owner(self):
+        other = User.objects.create_user('other', password='pw', role=self.sa_role)
+        self.client.force_login(other)
+        self.client.post(self._url())
+        clone = TechnicalProposal.objects.exclude(pk=self.source.pk).get()
+        self.assertEqual(clone.title, 'Highway CCTV (Copy)')
+        self.assertEqual(clone.proposal_reference, 'TP-DUP-COPY')
+        self.assertEqual(clone.status, 'draft')
+        self.assertIsNone(clone.project)         # detached for a new project
+        self.assertEqual(clone.created_by, other)  # owned by whoever duplicated
+
+    def test_reference_stays_unique_across_repeated_duplication(self):
+        self.client.post(self._url())
+        self.client.post(self._url())
+        refs = list(TechnicalProposal.objects.values_list('proposal_reference', flat=True))
+        self.assertEqual(len(refs), len(set(refs)))  # all unique
+        self.assertIn('TP-DUP-COPY', refs)
+        self.assertIn('TP-DUP-COPY-2', refs)
+
+    def test_get_is_not_allowed(self):
+        resp = self.client.get(self._url())
+        self.assertEqual(resp.status_code, 405)
+        self.assertEqual(TechnicalProposal.objects.count(), 1)
+
+    def test_cannot_duplicate_a_proposal_you_cannot_see(self):
+        from projects.models import Region, ProjectStatus, Project
+        r2 = Region.objects.create(name='RegB', code='RGB')
+        author = User.objects.create_user('author2', password='x')
+        hidden = TechnicalProposal.objects.create(
+            title='Hidden', proposal_reference='TP-HID', client_name='C',
+            revision_date=date(2026, 1, 1), prepared_by_initials='A',
+            created_by=author)
+        rep_role, _ = Role.objects.get_or_create(name=Role.PROPOSAL_REP)
+        rep = User.objects.create_user('prep2', password='x', role=rep_role, region=r2)
+        self.client.force_login(rep)
+        resp = self.client.post(self._url(hidden))
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(TechnicalProposal.objects.count(), 2)  # nothing cloned
+
+
 class PrequalificationTests(TestCase):
     """Prequalification v2: a library of PDFs, selected and merged into one PDF."""
 

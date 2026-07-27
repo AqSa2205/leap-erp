@@ -97,6 +97,12 @@
                             <a href="{% url 'proposals:edit' proposal.pk %}" class="btn btn-sm btn-outline-secondary" title="Edit">
                                 <i class="bi bi-pencil"></i>
                             </a>
+                            <form method="post" action="{% url 'proposals:duplicate' proposal.pk %}" class="d-inline">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-sm btn-outline-secondary" title="Duplicate for another project">
+                                    <i class="bi bi-files"></i>
+                                </button>
+                            </form>
                         </td>
                     </tr>
                     {% empty %}
