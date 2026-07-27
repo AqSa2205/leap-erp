@@ -9,7 +9,7 @@
             <p class="text-muted mb-0">Log your daily hours here instead of the Excel sheet.</p>
         </div>
         {% if employee %}
-       <a href="{% url 'timesheets:export' %}" target="_blank" class="btn btn-outline-primary">
+       <a href="{% url 'timesheets:export' %}" target="_blank" rel="noopener" class="btn btn-outline-primary">
             <i class="bi bi-file-earmark-excel"></i> Export as Excel
         </a>
         {% endif %}
