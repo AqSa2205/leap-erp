@@ -127,8 +127,12 @@ def timesheet_export(request):
         return redirect('timesheets:my_timesheet')
 
     today = date_cls.today()
-    year = int(request.GET.get('year', today.year))
-    month = int(request.GET.get('month', today.month))
+    try:
+        year = int(request.GET.get('year', today.year))
+        month = int(request.GET.get('month', today.month))
+    except (ValueError, TypeError):
+        messages.error(request, 'Invalid year or month.')
+        return redirect('timesheets:my_timesheet')
     days_in_month = calendar.monthrange(year, month)[1]
 
     
@@ -249,8 +253,12 @@ def hr_request_timesheets(request):
     they forgot to request last month)."""
     today = date_cls.today()
     if request.method == 'POST':
-        year = int(request.POST.get('year', today.year))
-        month = int(request.POST.get('month', today.month))
+        try:
+            year = int(request.POST.get('year', today.year))
+            month = int(request.POST.get('month', today.month))
+        except (ValueError, TypeError):
+            messages.error(request, 'Invalid year or month.')
+            return redirect('timesheets:hr_request')
         request_timesheets(year=year, month=month, requested_by=request.user)
         messages.success(request, f'Timesheet request sent for {month}/{year}.')
         return redirect('timesheets:hr_request')
