@@ -16,9 +16,8 @@ from django.http import HttpResponse
 from datetime import date as date_cls
 from django.utils import timezone
 from .models import TimesheetRequest, TimesheetRequestAck, HRSettings
-from .services import request_timesheets
 from urllib.parse import quote
-
+from .services import request_timesheets, delete_request
 
 def _get_employee_or_none(request):
     """Same lookup my_profile uses in hr/views.py — an authenticated user
@@ -382,3 +381,17 @@ def hr_request_detail(request, request_id):
         'sent_count': sent_count,
         'total_count': len(rows),
     })
+
+
+@login_required
+@require_capability('timesheets.review')
+@require_POST
+def hr_request_delete(request, request_id):
+    """Permanently remove a timesheet request — e.g. HR picked the wrong
+    month by mistake. Does not recreate anything; HR starts a fresh
+    request separately via the normal 'Request Timesheets' form if needed."""
+    ts_request = get_object_or_404(TimesheetRequest, pk=request_id)
+    year, month = ts_request.year, ts_request.month
+    delete_request(ts_request)
+    messages.success(request, f'Timesheet request for {month}/{year} deleted.')
+    return redirect('timesheets:hr_request')

@@ -4,6 +4,8 @@ from .models import TimesheetRequest, TimesheetRequestAck
 from .models import TimesheetEntry, TimesheetMonth
 from accounts.models import User, RolePermission
 from notifications.services import notify_users
+from django.contrib.contenttypes.models import ContentType
+from notifications.models import Notification
 
 def submit_month(*, employee, year, month, submitted_by):
     """Lock an employee's timesheet for one calendar month.
@@ -79,18 +81,23 @@ def _users_with_capability(codename):
 
 def request_timesheets(*, year, month, requested_by):
     """HR asks everyone for their timesheet for a given month. Creates the
-    request record and notifies every user who actually has timesheets
-    access. Re-using an existing request for the same month instead of
-    creating a duplicate — otherwise every re-submit fragments the
-    'have I sent this' tracking across multiple rows for the same month
-    (an employee who acked the first one still shows as Pending against
-    the second)."""
+    request record and notifies every eligible user who HASN'T already
+    acknowledged sending theirs -- re-requesting is meant to nudge
+    stragglers, not re-notify people who already responded. Re-using an
+    existing request for the same month instead of creating a duplicate
+    -- otherwise every re-submit fragments the 'have I sent this'
+    tracking across multiple rows for the same month (an employee who
+    acked the first one still shows as Pending against the second)."""
     req, created = TimesheetRequest.objects.get_or_create(
         year=year, month=month,
         defaults={'requested_by': requested_by},
     )
 
-    recipients = _users_with_capability('timesheets.access')
+    acked_employee_ids = TimesheetRequestAck.objects.filter(
+        request=req).values_list('employee_id', flat=True)
+    recipients = _users_with_capability('timesheets.access').exclude(
+        employee_profile__id__in=acked_employee_ids)
+
     notify_users(
         recipients,
         verb='requested your timesheet',
@@ -142,3 +149,15 @@ def remind_employee(*, ts_request, employee, reminded_by):
         description=f'Reminder: please send your timesheet for {ts_request.month}/{ts_request.year}.',
         send_email=False,
     )
+
+def delete_request(ts_request):
+    """HR-initiated full removal of a timesheet request — e.g. wrong month
+    picked by mistake. Cascades to delete its TimesheetRequestAck rows
+    (via the FK's on_delete=CASCADE) and also cleans up the notifications
+    that were sent about it, so nobody's left with a notification pointing
+    at a request that no longer exists."""
+    content_type = ContentType.objects.get_for_model(TimesheetRequest)
+    Notification.objects.filter(
+        target_content_type=content_type, target_object_id=ts_request.pk
+    ).delete()
+    ts_request.delete()
