@@ -16,6 +16,7 @@ urlpatterns = [
     path('<int:pk>/edit/', views.ProposalUpdateView.as_view(), name='edit'),
     path('<int:pk>/content/', views.ProposalEditContentView.as_view(), name='content'),
     path('<int:pk>/add-section/', views.add_proposal_section, name='add_section'),
+    path('<int:pk>/duplicate/', views.duplicate_proposal, name='duplicate'),
     path('<int:pk>/delete/', views.ProposalDeleteView.as_view(), name='delete'),
     path('<int:pk>/export-docx/', login_required(views.proposal_export_docx), name='export_docx'),
     path('<int:pk>/save-section/', views.ajax_save_section, name='save_section'),
