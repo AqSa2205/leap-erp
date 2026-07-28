@@ -803,3 +803,59 @@ class UserCreationFormPasswordValidatorTests(TestCase):
         form.is_valid()
         self.assertNotIn('password1', form.errors)
         self.assertNotIn('password2', form.errors)
+
+
+class UserRegionFilterExportTests(TestCase):
+    """Region filter on the user list + PDF export of the filtered users."""
+
+    def setUp(self):
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.rep_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        self.admin = User.objects.create_user('sa', password='x', role=self.sa_role)
+        self.lna = Region.objects.create(name='Leap Networks Arabia', code='LNA')
+        self.uk = Region.objects.create(name='Leap Networks UK', code='UK')
+        self.lna_user = User.objects.create_user(
+            'aisha', password='x', email='aisha@leap.sa', role=self.rep_role, region=self.lna)
+        self.uk_user = User.objects.create_user(
+            'george', password='x', email='george@leap.uk', role=self.rep_role, region=self.uk)
+        self.client.force_login(self.admin)
+
+    def test_list_filters_by_region(self):
+        resp = self.client.get(reverse('accounts:user_list') + '?region=LNA')
+        usernames = {u.username for u in resp.context['users']}
+        self.assertIn('aisha', usernames)
+        self.assertNotIn('george', usernames)   # UK user excluded
+        # region dropdown is populated and remembers the selection
+        self.assertEqual(resp.context['selected_region'], 'LNA')
+        self.assertIn(self.lna, list(resp.context['regions']))
+
+    def test_export_pdf_of_region_has_users_email_and_role(self):
+        import io
+        from pypdf import PdfReader
+        resp = self.client.get(reverse('accounts:user_export_pdf') + '?region=LNA')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+        self.assertIn('users_lna.pdf', resp['Content-Disposition'])
+        raw = ''.join(p.extract_text() or '' for p in PdfReader(io.BytesIO(resp.content)).pages)
+        text = ' '.join(raw.split())  # normalise wrapping/newlines
+        # LNA user present with email + role; UK user absent
+        self.assertIn('aisha@leap.sa', text)
+        self.assertIn(str(self.rep_role), text)
+        self.assertNotIn('george@leap.uk', text)
+
+    def test_export_all_regions_includes_breakdown(self):
+        import io
+        from pypdf import PdfReader
+        resp = self.client.get(reverse('accounts:user_export_pdf'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('users_all.pdf', resp['Content-Disposition'])
+        text = ''.join(p.extract_text() or '' for p in PdfReader(io.BytesIO(resp.content)).pages)
+        self.assertIn('aisha@leap.sa', text)
+        self.assertIn('george@leap.uk', text)
+        self.assertIn('By region', text)   # per-region count summary
+
+    def test_export_requires_super_admin(self):
+        rep = User.objects.create_user('rep', password='x', role=self.rep_role, region=self.uk)
+        self.client.force_login(rep)
+        resp = self.client.get(reverse('accounts:user_export_pdf') + '?region=LNA')
+        self.assertEqual(resp.status_code, 302)   # redirected away, no PDF

@@ -11,6 +11,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.contrib.auth.password_validation import validate_password
 from django.views.decorators.http import require_POST
 from django.db import transaction
+from django.db.models import Q
 
 from .models import User, Role, RolePermission, PasswordResetRequest, PermissionChangeLog
 from accounts.permissions import capabilities_by_module, capability_codenames
@@ -21,7 +22,7 @@ from .forms import (
 from .decorators import admin_required
 from django.core.mail import send_mail
 from django.conf import settings
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 import logging
 import secrets
 
@@ -67,6 +68,21 @@ class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
         return self.request.user.is_super_admin_user
 
 
+def filter_users(request):
+    """Users matching the list page's search + region filters. Shared by the
+    list view and the PDF export so both always agree on what's shown."""
+    queryset = User.objects.select_related('role', 'region').all()
+    search = request.GET.get('search')
+    if search:
+        queryset = queryset.filter(
+            Q(username__icontains=search) | Q(email__icontains=search) |
+            Q(first_name__icontains=search) | Q(last_name__icontains=search))
+    region = request.GET.get('region')
+    if region:
+        queryset = queryset.filter(region__code=region)
+    return queryset
+
+
 class UserListView(AdminRequiredMixin, ListView):
     """List all users (admin only)"""
     model = User
@@ -75,19 +91,88 @@ class UserListView(AdminRequiredMixin, ListView):
     paginate_by = 20
 
     def get_queryset(self):
-        queryset = User.objects.select_related('role', 'region').all()
-        search = self.request.GET.get('search')
-        if search:
-            queryset = queryset.filter(
-                username__icontains=search
-            ) | queryset.filter(
-                email__icontains=search
-            ) | queryset.filter(
-                first_name__icontains=search
-            ) | queryset.filter(
-                last_name__icontains=search
-            )
-        return queryset
+        return filter_users(self.request)
+
+    def get_context_data(self, **kwargs):
+        from projects.models import Region
+        ctx = super().get_context_data(**kwargs)
+        ctx['regions'] = Region.objects.filter(is_active=True).order_by('name')
+        ctx['selected_region'] = self.request.GET.get('region', '')
+        return ctx
+
+
+@login_required
+def user_export_pdf(request):
+    """Export the (optionally region-filtered) user list to PDF — username,
+    full name, email, role and region, with a per-region count. Super admin only."""
+    if not request.user.is_super_admin_user:
+        messages.error(request, 'Admin access required.')
+        return redirect('accounts:user_list')
+
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from django.utils import timezone
+    from collections import Counter
+    from projects.models import Region
+    import io
+
+    users = list(filter_users(request).order_by('region__name', 'username'))
+
+    region_code = request.GET.get('region') or ''
+    region_obj = Region.objects.filter(code=region_code).first() if region_code else None
+    scope = str(region_obj) if region_obj else 'All Regions'
+
+    # Per-region counts — answers "how many users from each region".
+    counts = Counter((u.region.code if u.region else '-') for u in users)
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm,
+                            topMargin=16 * mm, bottomMargin=16 * mm)
+    styles = getSampleStyleSheet()
+    cell = ParagraphStyle('cell', fontSize=8, leading=10)
+    head = ParagraphStyle('head', fontSize=8, leading=10, textColor=colors.white, fontName='Helvetica-Bold')
+
+    elements = [Paragraph(f'User Register - {scope}', styles['Title'])]
+    summary = f'Total users: {len(users)}'
+    if not region_obj:
+        breakdown = ', '.join(f'{code}: {n}' for code, n in sorted(counts.items()))
+        if breakdown:
+            summary += f'  |  By region - {breakdown}'
+    elements.append(Paragraph(summary, styles['Normal']))
+    elements.append(Paragraph(f'Generated {timezone.localtime():%d %b %Y %H:%M}', styles['Normal']))
+    elements.append(Spacer(1, 10))
+
+    data = [[Paragraph(h, head) for h in ['#', 'Username', 'Full Name', 'Email', 'Role', 'Region']]]
+    for i, u in enumerate(users, 1):
+        data.append([
+            Paragraph(str(i), cell),
+            Paragraph(u.username, cell),
+            Paragraph(u.get_full_name() or '-', cell),
+            Paragraph(u.email or '-', cell),
+            Paragraph(str(u.role) if u.role else 'Not assigned', cell),
+            Paragraph(u.region.code if u.region else '-', cell),
+        ])
+
+    table = Table(data, repeatRows=1, colWidths=[22, 78, 100, 140, 100, 50])
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F4E79')),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F5F5F5')]),
+    ]))
+    elements.append(table)
+    if not users:
+        elements.append(Paragraph('No users match this filter.', styles['Normal']))
+    doc.build(elements)
+
+    buffer.seek(0)
+    slug = (region_obj.code if region_obj else 'all').lower()
+    response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="users_{slug}.pdf"'
+    return response
 
 
 class _RoleAccessContextMixin:
