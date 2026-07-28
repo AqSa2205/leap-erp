@@ -27,7 +27,7 @@ from .forms import (
 )
 from .leave_services import generate_year_entitlements
 from .attendance_services import derive_status
-from .attendance_matrix import period_range, build_matrix, display_status_no_record
+from .attendance_matrix import period_range, build_matrix, display_status_no_record, cell_time_lines
 
 
 class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
@@ -2265,13 +2265,18 @@ def attendance_matrix_export_excel(request):
         ws.cell(row=row, column=1, value=r['employee'].full_name).border = thin_border
         for col, cell_data in enumerate(r['cells'], 2):
             label = status_labels.get(cell_data['status'], cell_data['status'])
-            c = ws.cell(row=row, column=col, value=label)
+            # Stack the check-in (and check-out) time beneath the status letter,
+            # e.g. "P" over "09:12-17:30". Non-present days keep just the letter.
+            times = cell_time_lines(cell_data)
+            value = label if not times else f'{label}\n{"-".join(times)}'
+            c = ws.cell(row=row, column=col, value=value)
             c.border = thin_border
-            c.alignment = Alignment(horizontal='center')
+            c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
     ws.column_dimensions['A'].width = 25
     for col in range(2, len(days) + 2):
-        ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 6
+        # Wide enough for "09:12-17:30" so the time line doesn't clip.
+        ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 12
 
     response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     filename = f'attendance_register_{start.strftime("%B_%Y").lower()}.xlsx'
@@ -2284,7 +2289,7 @@ def attendance_matrix_export_excel(request):
 def attendance_matrix_export_pdf(request):
     from reportlab.lib.pagesizes import landscape, A4
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
-    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib import colors
     import io
 
@@ -2308,23 +2313,40 @@ def attendance_matrix_export_pdf(request):
     status_labels = {'': '-', 'leave': 'L', 'holiday': 'H', 'weekend': 'WE', 'wfh': 'WFH', 'present': 'P', 'absent': 'A'}
 
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4))
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4),
+                            leftMargin=18, rightMargin=18, topMargin=24, bottomMargin=18)
     styles = getSampleStyleSheet()
+    # Small styles so the status letter + stacked times fit a narrow day column.
+    name_style = ParagraphStyle('emp', fontSize=6, leading=7)
+    cell_style = ParagraphStyle('cell', fontSize=5, leading=6, alignment=1)  # 1 = centre
     elements = [Paragraph(f'Attendance Matrix ({location.title()}) - {start.strftime("%d-%b-%Y")} to {end.strftime("%d-%b-%Y")}', styles['Title'])]
 
     header = ['Employee'] + [d.strftime('%d-%b') for d in days]
     data = [header]
     for r in rows:
-        row_data = [r['employee'].full_name] + [status_labels.get(c['status'], c['status']) for c in r['cells']]
+        row_data = [Paragraph(r['employee'].full_name, name_style)]
+        for c in r['cells']:
+            label = status_labels.get(c['status'], c['status'])
+            times = cell_time_lines(c)
+            # Stack the status letter over the check-in/out times, each on its
+            # own line, so a full month still fits the page width.
+            row_data.append(Paragraph('<br/>'.join([label] + times), cell_style) if times else label)
         data.append(row_data)
 
-    table = Table(data, repeatRows=1)
+    # Fixed column widths: a fair share of the usable width per day column.
+    usable = landscape(A4)[0] - 36  # page width minus left+right margins
+    emp_w = 90
+    day_w = (usable - emp_w) / max(len(days), 1)
+    col_widths = [emp_w] + [day_w] * len(days)
+
+    table = Table(data, repeatRows=1, colWidths=col_widths)
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F4E79')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONTSIZE', (0, 0), (-1, -1), 6),
+        ('FONTSIZE', (0, 0), (-1, 0), 6),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+        ('ALIGN', (1, 0), (-1, 0), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
     ]))
     elements.append(table)
     doc.build(elements)
