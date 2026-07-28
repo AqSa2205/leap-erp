@@ -38,6 +38,10 @@
             <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ today|date:'Y-m-d' }}&location={{ location }}">Today</a>
             <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ next_anchor|date:'Y-m-d' }}&location={{ location }}">Next &rsaquo;</a>
         </div>
+        <div class="btn-group ms-2">
+            <a class="btn btn-sm btn-outline-success" href="{% url 'hr:attendance_matrix_export_excel' %}?period={{ period }}&date={{ anchor|date:'Y-m-d' }}&location={{ location }}"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+            <a class="btn btn-sm btn-outline-danger" href="{% url 'hr:attendance_matrix_export_pdf' %}?period={{ period }}&date={{ anchor|date:'Y-m-d' }}&location={{ location }}" target="_blank"><i class="bi bi-file-earmark-pdf"></i> PDF</a>
+        </div>
         <div class="ms-auto d-flex align-items-center gap-2">
             <label for="leaveType" class="small text-muted mb-0">Mark-leave type</label>
             <select id="leaveType" class="form-select form-select-sm" style="width:auto;">

@@ -2215,6 +2215,127 @@ def attendance_matrix(request):
 
 
 @login_required
+@login_required
+def attendance_matrix_export_excel(request):
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:hr_dashboard')
+
+    period = request.GET.get('period') if request.GET.get('period') in ('week', 'month') else 'month'
+    anchor = _parse_date(request.GET.get('date'))
+    start, end = period_range(period, anchor)
+    location = request.GET.get('location') or 'office'
+    emp_qs = Employee.objects.filter(is_active=True)
+    if location == 'site':
+        emp_qs = emp_qs.filter(work_location='site')
+    else:
+        location = 'office'
+        emp_qs = emp_qs.exclude(work_location='site')
+    employees = list(emp_qs.order_by('full_name'))
+    days, rows = build_matrix(employees, start, end)
+
+    status_labels = {'': '-', 'leave': 'L', 'holiday': 'H', 'weekend': 'WE', 'wfh': 'WFH', 'present': 'P', 'absent': 'A'}
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'ATTENDANCE MATRIX'
+
+    header_font = Font(bold=True, color='FFFFFF', size=10)
+    header_fill = PatternFill(start_color='1F4E79', end_color='1F4E79', fill_type='solid')
+    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+
+    ws.cell(row=1, column=1, value=f'Attendance Matrix ({location.title()}) - {start.strftime("%d-%b-%Y")} to {end.strftime("%d-%b-%Y")}').font = Font(bold=True, size=13)
+
+    header_row = 3
+    ws.cell(row=header_row, column=1, value='Employee').font = header_font
+    ws.cell(row=header_row, column=1).fill = header_fill
+    ws.cell(row=header_row, column=1).border = thin_border
+    for col, day in enumerate(days, 2):
+        cell = ws.cell(row=header_row, column=col, value=day.strftime('%d-%b'))
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.border = thin_border
+        cell.alignment = Alignment(horizontal='center')
+
+    row = header_row
+    for r in rows:
+        row += 1
+        ws.cell(row=row, column=1, value=r['employee'].full_name).border = thin_border
+        for col, cell_data in enumerate(r['cells'], 2):
+            label = status_labels.get(cell_data['status'], cell_data['status'])
+            c = ws.cell(row=row, column=col, value=label)
+            c.border = thin_border
+            c.alignment = Alignment(horizontal='center')
+
+    ws.column_dimensions['A'].width = 25
+    for col in range(2, len(days) + 2):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 6
+
+    response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    filename = f'attendance_register_{start.strftime("%B_%Y").lower()}.xlsx'
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    wb.save(response)
+    return response
+
+
+@login_required
+def attendance_matrix_export_pdf(request):
+    from reportlab.lib.pagesizes import landscape, A4
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib import colors
+    import io
+
+    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+        messages.error(request, 'Admin access required.')
+        return redirect('hr:hr_dashboard')
+
+    period = request.GET.get('period') if request.GET.get('period') in ('week', 'month') else 'month'
+    anchor = _parse_date(request.GET.get('date'))
+    start, end = period_range(period, anchor)
+    location = request.GET.get('location') or 'office'
+    emp_qs = Employee.objects.filter(is_active=True)
+    if location == 'site':
+        emp_qs = emp_qs.filter(work_location='site')
+    else:
+        location = 'office'
+        emp_qs = emp_qs.exclude(work_location='site')
+    employees = list(emp_qs.order_by('full_name'))
+    days, rows = build_matrix(employees, start, end)
+
+    status_labels = {'': '-', 'leave': 'L', 'holiday': 'H', 'weekend': 'WE', 'wfh': 'WFH', 'present': 'P', 'absent': 'A'}
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4))
+    styles = getSampleStyleSheet()
+    elements = [Paragraph(f'Attendance Matrix ({location.title()}) - {start.strftime("%d-%b-%Y")} to {end.strftime("%d-%b-%Y")}', styles['Title'])]
+
+    header = ['Employee'] + [d.strftime('%d-%b') for d in days]
+    data = [header]
+    for r in rows:
+        row_data = [r['employee'].full_name] + [status_labels.get(c['status'], c['status']) for c in r['cells']]
+        data.append(row_data)
+
+    table = Table(data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F4E79')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTSIZE', (0, 0), (-1, -1), 6),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+    ]))
+    elements.append(table)
+    doc.build(elements)
+
+    buffer.seek(0)
+    filename = f'attendance_register_{start.strftime("%B_%Y").lower()}.pdf'
+    response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response
+
+
 @require_POST
 def attendance_mark_leave(request):
     if not (request.user.is_super_admin_user or request.user.is_admin_user):
