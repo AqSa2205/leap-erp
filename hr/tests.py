@@ -808,6 +808,51 @@ class MatrixViewTests(TestCase):
         self.assertEqual(resp.status_code, 302)  # admin-gate redirect to hr_dashboard
 
 
+class MatrixExportTimesTests(TestCase):
+    """The register exports show each present day's check-in/out time stacked
+    beneath the status letter (e.g. 'P' over '09:12-17:30')."""
+
+    def setUp(self):
+        from accounts.models import Role, User
+        from datetime import time
+        self.time = time
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
+        self.emp = make_employee(name='Zara Tester')
+        AttendanceRecord.objects.create(
+            employee=self.emp, date=_date(2026, 7, 13), status='present',
+            check_in=time(9, 12), check_out=time(17, 30), hours_worked=Decimal('8'))
+        self.client.force_login(self.admin)
+
+    def test_excel_cell_stacks_status_over_times(self):
+        import io
+        import openpyxl as _op
+        resp = self.client.get(reverse('hr:attendance_matrix_export_excel') + '?period=month&date=2026-07-15')
+        self.assertEqual(resp.status_code, 200)
+        ws = _op.load_workbook(io.BytesIO(resp.content)).active
+        cells = [str(c.value) for r in ws.iter_rows() for c in r if c.value is not None]
+        target = [v for v in cells if '09:12-17:30' in v]
+        self.assertTrue(target, 'check-in/out time missing from Excel export')
+        self.assertEqual(target[0], 'P\n09:12-17:30')  # status letter over the times
+
+    def test_pdf_export_builds_with_times(self):
+        resp = self.client.get(reverse('hr:attendance_matrix_export_pdf') + '?period=month&date=2026-07-15')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+        self.assertGreater(len(resp.content), 500)  # a real PDF was produced
+
+    def test_cell_time_lines_present_and_blank(self):
+        from hr.attendance_matrix import build_matrix, cell_time_lines
+        _, rows = build_matrix([self.emp], _date(2026, 7, 13), _date(2026, 7, 13))
+        cell = rows[0]['cells'][0]
+        self.assertEqual(cell['check_in'], self.time(9, 12))
+        self.assertEqual(cell['check_out'], self.time(17, 30))
+        self.assertEqual(cell_time_lines(cell), ['09:12', '17:30'])
+        # A blank working day (Thu 2026-07-16, no record) carries no times.
+        _, blank_rows = build_matrix([self.emp], _date(2026, 7, 16), _date(2026, 7, 16))
+        self.assertEqual(cell_time_lines(blank_rows[0]['cells'][0]), [])
+
+
 class MarkLeaveTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
