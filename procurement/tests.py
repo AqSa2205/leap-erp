@@ -110,6 +110,41 @@ class POApproveStageTests(TestCase):
         self.assertIsNone(self.po.scm_approved_at)
 
 
+class POPdfFooterTests(TestCase):
+    """The PO PDF footer shows the company (left), PO number (centre) and page
+    number (right) on every page — on both the priced and unpriced exports."""
+
+    def setUp(self):
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('boss', password='pw', role=self.sa_role)
+        self.client.force_login(self.user)
+        self.po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-FOOT-1', vendor_name='ACME',
+            po_issued_by='Tester', cost_center='projects', created_by=self.user)
+
+    def _pdf_text(self, url_name='procurement:po_export_pdf'):
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            from PyPDF2 import PdfReader
+        r = self.client.get(reverse(url_name, kwargs={'pk': self.po.pk}))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r['Content-Type'], 'application/pdf')
+        return '\n'.join((p.extract_text() or '') for p in PdfReader(io.BytesIO(r.content)).pages)
+
+    def test_footer_has_company_po_number_and_page(self):
+        text = self._pdf_text()
+        self.assertIn('Leap Networks Arabia', text)   # footer-only marker (left)
+        self.assertIn('Page 1 of', text)              # page label (right)
+        # PO number appears in the header AND the footer centre -> at least twice.
+        self.assertGreaterEqual(text.count('PO-FOOT-1'), 2)
+
+    def test_unpriced_pdf_also_has_footer(self):
+        text = self._pdf_text('procurement:po_export_pdf_unpriced')
+        self.assertIn('Leap Networks Arabia', text)
+        self.assertIn('Page 1 of', text)
+
+
 class POEditFormSetTests(TestCase):
     """Editing a PO must persist line-item changes even when an existing row
     has a blank description — previously one such row silently blocked the

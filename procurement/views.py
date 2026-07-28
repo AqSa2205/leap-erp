@@ -116,10 +116,15 @@ def _safe_filename(name, prefix='', suffix='', extension=''):
     return f'{base}{extension}'
 
 
-def _make_numbered_canvas(draft=False):
+def _make_numbered_canvas(draft=False, footer_left=None, footer_center=None):
     """Return a two-pass Canvas subclass that draws "Page X of Y" at the
     bottom of every page. Used by procurement PDF exports for consistent
     pagination across PO / DN / Inventory / Summary outputs.
+
+    By default the page label is centred. When ``footer_left`` and/or
+    ``footer_center`` are given (e.g. the PO export passes the company name
+    and PO number), a three-part footer is drawn instead — ``footer_left``
+    left-aligned, ``footer_center`` centred, and the page label right-aligned.
 
     When ``draft=True`` a large diagonal "DRAFT" watermark is layered on
     every page so an unapproved export cannot be mistaken for a final,
@@ -158,10 +163,16 @@ def _make_numbered_canvas(draft=False):
                         self.restoreState()
                     self.setFont('Helvetica', 8)
                     self.setFillColor(colors.HexColor('#6c757d'))
-                    self.drawCentredString(
-                        page_w / 2, 8 * mm,
-                        f'Page {self._pageNumber} of {page_count}',
-                    )
+                    page_label = f'Page {self._pageNumber} of {page_count}'
+                    if footer_left is not None or footer_center is not None:
+                        # 3-part footer: company (left) · reference (center) · page (right)
+                        if footer_left:
+                            self.drawString(15 * mm, 8 * mm, footer_left)
+                        if footer_center:
+                            self.drawCentredString(page_w / 2, 8 * mm, footer_center)
+                        self.drawRightString(page_w - 15 * mm, 8 * mm, page_label)
+                    else:
+                        self.drawCentredString(page_w / 2, 8 * mm, page_label)
                 except Exception:
                     pass
                 super().showPage()
@@ -1339,7 +1350,11 @@ def po_export_pdf(request, pk, unpriced=False):
     items = po.items.all()
     is_draft = not po.is_released
 
-    NumberedCanvas = _make_numbered_canvas(draft=is_draft)
+    NumberedCanvas = _make_numbered_canvas(
+        draft=is_draft,
+        footer_left='Leap Networks Arabia',
+        footer_center=str(po.po_number or ''),
+    )
 
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
