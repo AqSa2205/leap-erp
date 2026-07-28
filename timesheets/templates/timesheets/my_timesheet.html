@@ -26,6 +26,12 @@
         </a>
     </div>
     {% endif %}
+    {% if employee %}
+    <div class="alert alert-info">
+        <i class="bi bi-info-circle me-1"></i>
+        The code <strong>COS_0009</strong> is used as default when a task auto-starts or auto-ends. Please edit the Activity code on that entry if the work was actually something else (e.g. onsite work).
+    </div>
+    {% endif %}
 
     {% if employee %}
     <div class="card mb-4">
@@ -36,7 +42,15 @@
                 <div class="row">
                     <div class="col-md-3 mb-3">
                         <label class="form-label">Date</label>
-                        {{ form.date }}
+                        <div class="input-group">
+                            <button type="button" class="btn btn-outline-secondary" id="date-prev">
+                                <i class="bi bi-chevron-left"></i>
+                            </button>
+                            {{ form.date }}
+                            <button type="button" class="btn btn-outline-secondary" id="date-next">
+                                <i class="bi bi-chevron-right"></i>
+                            </button>
+                        </div>
                         {% if form.date.errors %}<div class="text-danger small mt-1">{{ form.date.errors.0 }}</div>{% endif %}
                     </div>
                     <div class="col-md-3 mb-3">
@@ -104,4 +118,23 @@
         </div>
     </div>
 </div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var dateInput = document.querySelector('input[name="date"]');
+    if (!dateInput) return;
+
+    function shiftDate(days) {
+        if (!dateInput.value) return;
+        var d = new Date(dateInput.value + 'T00:00:00');
+        d.setDate(d.getDate() + days);
+        var yyyy = d.getFullYear();
+        var mm = String(d.getMonth() + 1).padStart(2, '0');
+        var dd = String(d.getDate()).padStart(2, '0');
+        dateInput.value = yyyy + '-' + mm + '-' + dd;
+    }
+
+    document.getElementById('date-prev').addEventListener('click', function () { shiftDate(-1); });
+    document.getElementById('date-next').addEventListener('click', function () { shiftDate(1); });
+});
+</script>
 {% endblock %}

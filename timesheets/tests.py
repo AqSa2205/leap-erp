@@ -129,6 +129,40 @@ class TimesheetEntryOwnershipTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertTrue(TimesheetEntry.objects.filter(pk=self.entry_a.pk).exists())
 
+    def test_entry_delete_via_get_not_allowed(self):
+        self.client.login(username='emp_a', password='testpass123')
+        resp = self.client.get(reverse('timesheets:entry_delete', args=[self.entry_a.pk]))
+        self.assertEqual(resp.status_code, 405)
+
+    def test_edit_cannot_reassign_employee_via_post(self):
+        other_user, other_emp = _make_user_with_employee('editreassign')
+        self.client.login(username='emp_a', password='testpass123')
+        self.client.post(
+            reverse('timesheets:entry_edit', args=[self.entry_a.pk]), {
+                'date': '2026-07-10', 'activity_code': self.code.pk,
+                'task_description': 'Still mine', 'hours': '5',
+                'employee': other_emp.pk,
+            })
+        self.entry_a.refresh_from_db()
+        self.assertEqual(self.entry_a.employee, self.emp_a)  # unchanged, not other_emp
+
+
+class TimesheetOpenToAllUsersTests(TestCase):
+    """Confirms the deliberate design change: My Timesheet has no
+    capability gate anymore, just login — any authenticated user with a
+    linked Employee record can reach it, regardless of role."""
+
+    def test_user_with_no_role_permissions_seeded_can_still_open_my_timesheet(self):
+        """Deliberately skip seed_default_permissions() here — if
+        my_timesheet ever regains a capability check, this test starts
+        failing immediately instead of passing by accident."""
+        role, _ = Role.objects.get_or_create(name=Role.DEVELOPER)
+        user = User.objects.create_user(username='noaccess', password='testpass123', role=role)
+        Employee.objects.create(full_name='No Access', iqama_number='IQ-NOACCESS', user=user)
+        client = Client()
+        client.login(username='noaccess', password='testpass123')
+        resp = client.get(reverse('timesheets:my_timesheet'))
+        self.assertEqual(resp.status_code, 200)
 
 class TimesheetEntryValidationTests(TestCase):
     """Server-side validation — must hold even if someone bypasses the
@@ -151,11 +185,24 @@ class TimesheetEntryValidationTests(TestCase):
         data.update(overrides)
         return self.client.post(reverse('timesheets:my_timesheet'), data)
 
-    def test_future_date_rejected(self):
+    def test_future_date_now_accepted(self):
+        """Regression lock-in: clean_date() was removed from
+        TimesheetEntryForm, so future dates are now intentionally allowed
+        (per the product decision to let employees log future entries).
+        This replaces the old test_future_date_rejected, which would
+        silently pass on a false assumption if left in place."""
         future = (date.today() + timedelta(days=5)).isoformat()
         resp = self._post(date=future)
-        self.assertEqual(resp.status_code, 200)  # re-rendered with error, not redirected
-        self.assertEqual(TimesheetEntry.objects.count(), 0)
+        self.assertEqual(resp.status_code, 302)  # redirected on success, not re-rendered
+        self.assertTrue(TimesheetEntry.objects.filter(date=future).exists())
+
+    def test_far_future_date_still_accepted(self):
+        """Confirms there's no hidden upper bound either (e.g. no
+        'within N days' cap left over from an earlier version)."""
+        far_future = (date.today() + timedelta(days=400)).isoformat()
+        resp = self._post(date=far_future)
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(TimesheetEntry.objects.filter(date=far_future).exists())
 
     def test_zero_hours_rejected(self):
         resp = self._post(hours='0')
@@ -499,8 +546,9 @@ class SendToHRTests(TestCase):
 
 
 class NotificationTargetingTests(TestCase):
-    """request_timesheets must notify exactly the right audience: everyone
-    with timesheets.access, minus the actor. remind_employee must reach
+    """request_timesheets notifies every active user regardless of role
+    (per _all_active_users()'s own docstring: timesheets is intentionally
+    open to everyone), minus the actor. remind_employee must still reach
     only the one targeted employee, not broadcast to everyone."""
 
     def setUp(self):
@@ -521,11 +569,17 @@ class NotificationTargetingTests(TestCase):
         self.assertIn('notifb', notified)
         self.assertNotIn('notifhr', notified)  # actor excluded
 
-    def test_request_does_not_notify_users_without_timesheets_access(self):
+    def test_request_notifies_users_regardless_of_role(self):
+        """Regression lock-in: request_timesheets was switched from
+        _users_with_capability('timesheets.access') to _all_active_users()
+        specifically so developers (who don't have timesheets.access)
+        still get notified. This replaces the old test that asserted the
+        opposite — leaving it as-is would have made the suite pass while
+        actually proving the wrong thing."""
         request_timesheets(year=2026, month=7, requested_by=self.hr_user)
         notified = set(Notification.objects.filter(
             verb='requested your timesheet').values_list('recipient__username', flat=True))
-        self.assertNotIn('notifai', notified)  # developer role has no timesheets.access
+        self.assertIn('notifai', notified)  # developer role — now correctly included
 
     def test_reminder_reaches_only_the_targeted_employee(self):
         ts_request = request_timesheets(year=2026, month=7, requested_by=self.hr_user)
@@ -687,6 +741,27 @@ class MalformedQueryParamTests(TestCase):
         # confirm nothing bad got created despite the malformed input
         self.assertEqual(TimesheetRequest.objects.filter(month=7).count(), 0)
 
+    def test_export_with_month_13_does_not_500(self):
+        self.client.login(username='malformeduser', password='testpass123')
+        resp = self.client.get(reverse('timesheets:export') + '?year=2026&month=13')
+        self.assertNotEqual(resp.status_code, 500)
+
+class HRRequestYearDefaultingTests(TestCase):
+    """The template no longer submits a 'year' field — the view must keep
+    defaulting to the current year server-side when it's absent, not
+    error or silently use year=0/None."""
+
+    def setUp(self):
+        self.hr_user, _ = _make_user_with_employee('yrdefault', role_name=Role.ADMIN)
+        seed_default_permissions()
+
+    def test_posting_without_year_field_defaults_to_current_year(self):
+        client = Client()
+        client.login(username='yrdefault', password='testpass123')
+        client.post(reverse('timesheets:hr_request'), {'month': '7'})  # no 'year' key at all
+        current_year = date.today().year
+        self.assertTrue(TimesheetRequest.objects.filter(year=current_year, month=7).exists())
+
 
 class AdditionalCSRFEnforcementTests(TestCase):
     """A second CSRF check on a different destructive endpoint, since
@@ -793,6 +868,40 @@ class TimesheetEntryFormDirectTests(TestCase):
         form = TimesheetEntryForm(self._data(activity_code=''))
         self.assertFalse(form.is_valid())
 
+class TimesheetEntryFormDefaultsTests(TestCase):
+    """Locks in the two default-value changes: hours defaults to 10, date
+    defaults to today — and confirms editing an existing entry does NOT
+    silently overwrite its real values with these defaults."""
+
+    def setUp(self):
+        self.code, _ = ActivityCode.objects.get_or_create(
+            code='COS_0009', defaults={'label': 'Office', 'is_active': True})
+
+    def test_new_form_defaults_hours_to_10(self):
+        form = TimesheetEntryForm()
+        self.assertEqual(form.fields['hours'].initial, 10)
+
+    def test_new_form_defaults_date_to_today(self):
+        form = TimesheetEntryForm()
+        self.assertEqual(form.fields['date'].initial, date.today())
+
+    def test_editing_existing_entry_does_not_overwrite_its_real_date_or_hours(self):
+        """The guard in forms.py's __init__ (`if not self.instance.pk`)
+        exists specifically so editing an old entry doesn't silently
+        reset its date to today or its hours to 10."""
+        user, emp = _make_user_with_employee('defaultsedit')
+        entry = TimesheetEntry.objects.create(
+            employee=emp, date=date(2026, 1, 5), task_description='Old entry',
+            activity_code=self.code, hours=Decimal('3'))
+        form = TimesheetEntryForm(instance=entry)
+        # initial should be unset (None) here, not forced to today/10 —
+        # Django's ModelForm already pulls the real values from the
+        # instance itself when initial is left alone.
+        self.assertIsNone(form.fields['date'].initial)
+        self.assertIsNone(form.fields['hours'].initial)
+        self.assertEqual(form['date'].value(), entry.date)
+        self.assertEqual(form['hours'].value(), entry.hours)
+
 
 class ExportBusinessLogicTests(TestCase):
     """The export's actual computed values, not just 'does it download' —
@@ -876,6 +985,18 @@ class ExportBusinessLogicTests(TestCase):
         wb = openpyxl.load_workbook(BytesIO(resp.content))
         ws = wb.active
         self.assertEqual(ws.cell(row=11 + 5, column=7).value, 'COS_0001')
+
+    def test_export_query_count_does_not_scale_with_entry_count(self):
+        """N+1 guard for the export loop — without select_related('activity_code')
+        this scales linearly with entry count instead of staying flat."""
+        for day in range(1, 11):
+            TimesheetEntry.objects.create(
+                employee=self.emp, date=date(2026, 7, day),
+                task_description=f'task {day}', activity_code=self.code1, hours=Decimal('4'))
+        with self.assertNumQueries(4):  # confirmed real baseline after adding
+                                          # select_related('activity_code') — the
+                                          # point is this staying FLAT as entries grow
+            self.client.get(reverse('timesheets:export') + '?year=2026&month=7')
 
 
 class SendToHRNoEmployeeLinkTests(TestCase):
@@ -1067,3 +1188,76 @@ class HRSettingsAdminSingletonTests(TestCase):
         self.client.login(username='adminhr', password='testpass123')
         resp = self.client.get('/admin/timesheets/hrsettings/add/')
         self.assertEqual(resp.status_code, 200)
+
+
+
+class HRRequestDeleteTests(TestCase):
+    """hr_request_delete: covers the full checklist from the guide — happy
+    path, the denied case, CSRF, and that delete_request's cascade cleanup
+    (acks + notifications) actually happens, not just the request row."""
+
+    def setUp(self):
+        self.hr_user, self.hr_emp = _make_user_with_employee('delhr', role_name=Role.ADMIN)
+        self.plain_user, self.plain_emp = _make_user_with_employee('delplain')
+        seed_default_permissions()
+        self.ts_request = request_timesheets(year=2026, month=7, requested_by=self.hr_user)
+
+    def test_hr_can_delete_a_request(self):
+        client = Client()
+        client.login(username='delhr', password='testpass123')
+        resp = client.post(reverse('timesheets:hr_request_delete', args=[self.ts_request.pk]))
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(TimesheetRequest.objects.filter(pk=self.ts_request.pk).exists())
+
+    def test_deleting_a_request_also_deletes_its_acks(self):
+        TimesheetRequestAck.objects.create(request=self.ts_request, employee=self.plain_emp)
+        client = Client()
+        client.login(username='delhr', password='testpass123')
+        client.post(reverse('timesheets:hr_request_delete', args=[self.ts_request.pk]))
+        self.assertFalse(TimesheetRequestAck.objects.filter(
+            request_id=self.ts_request.pk).exists())
+
+    def test_deleting_a_request_also_deletes_its_notifications(self):
+        """delete_request explicitly cleans up notifications pointing at
+        the request, on top of the CASCADE on acks — so nobody's left
+        with a notification linking to something that no longer exists."""
+        self.assertTrue(Notification.objects.filter(
+            verb='requested your timesheet').exists())  # sanity: request_timesheets sent one
+        client = Client()
+        client.login(username='delhr', password='testpass123')
+        client.post(reverse('timesheets:hr_request_delete', args=[self.ts_request.pk]))
+        self.assertFalse(Notification.objects.filter(
+            verb='requested your timesheet').exists())
+
+    def test_plain_employee_cannot_delete_a_request(self):
+        client = Client()
+        client.login(username='delplain', password='testpass123')
+        resp = client.post(reverse('timesheets:hr_request_delete', args=[self.ts_request.pk]))
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(TimesheetRequest.objects.filter(pk=self.ts_request.pk).exists())
+
+    def test_delete_requires_post_not_get(self):
+        client = Client()
+        client.login(username='delhr', password='testpass123')
+        resp = client.get(reverse('timesheets:hr_request_delete', args=[self.ts_request.pk]))
+        self.assertEqual(resp.status_code, 405)  # @require_POST
+
+    def test_delete_nonexistent_request_404s(self):
+        client = Client()
+        client.login(username='delhr', password='testpass123')
+        resp = client.post(reverse('timesheets:hr_request_delete', args=[99999]))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_delete_without_csrf_token_rejected(self):
+        client = Client(enforce_csrf_checks=True)
+        client.login(username='delhr', password='testpass123')
+        resp = client.post(reverse('timesheets:hr_request_delete', args=[self.ts_request.pk]))
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(TimesheetRequest.objects.filter(pk=self.ts_request.pk).exists())
+
+    def test_anonymous_redirected_from_delete(self):
+        client = Client()
+        resp = client.post(reverse('timesheets:hr_request_delete', args=[self.ts_request.pk]))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/login', resp.url)
+

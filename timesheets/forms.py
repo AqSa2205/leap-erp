@@ -5,6 +5,9 @@ from django import forms
 from .models import ActivityCode, TimesheetEntry
 
 
+
+
+
 class TimesheetEntryForm(forms.ModelForm):
     """Employee-facing form to log one day's work. The `employee` field is
     never exposed here — it's set server-side from request.user in the view,
@@ -26,12 +29,12 @@ class TimesheetEntryForm(forms.ModelForm):
         # Only show active codes — a code someone deactivated shouldn't be
         # pickable for new entries, even though old entries keep referencing it.
         self.fields['activity_code'].queryset = ActivityCode.objects.filter(is_active=True)
-
-    def clean_date(self):
-        entry_date = self.cleaned_data['date']
-        if entry_date > date.today():
-            raise forms.ValidationError('You cannot log work for a future date.')
-        return entry_date
+        # Defaults for a brand-new entry only -- editing an existing entry
+        # (self.instance.pk is set) must keep showing that entry's real
+        # date/hours, not silently overwrite them with these defaults.
+        if not self.instance.pk:
+            self.fields['date'].initial = date.today()
+            self.fields['hours'].initial = 10
 
     def clean_hours(self):
         hours = self.cleaned_data['hours']

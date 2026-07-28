@@ -26,7 +26,6 @@ def _get_employee_or_none(request):
 
 
 @login_required
-@require_capability('timesheets.access')
 def my_timesheet(request):
     """Self-service page: list the employee's own entries + a form to add
     a new one. Mirrors hr.views.my_profile's GET-display / POST-create
@@ -60,7 +59,6 @@ def my_timesheet(request):
     })
 
 @login_required
-@require_capability('timesheets.access')
 def timesheet_entry_edit(request, pk):
     """Edit one of the employee's own entries. Ownership is checked before
     anything else — same 'don't distinguish 404 vs 403' spirit as
@@ -87,7 +85,6 @@ def timesheet_entry_edit(request, pk):
 
 
 @login_required
-@require_capability('timesheets.access')
 @require_POST
 def timesheet_entry_delete(request, pk):
     """Delete one of the employee's own draft entries. POST-only, like the
@@ -113,7 +110,6 @@ def _ordinal(n):
 
 
 @login_required
-@require_capability('timesheets.access')
 def timesheet_export(request):
     """Export the logged-in employee's own month as an .xlsx matching the
     original HR template exactly (styling copied from the real template:
@@ -129,14 +125,18 @@ def timesheet_export(request):
     try:
         year = int(request.GET.get('year', today.year))
         month = int(request.GET.get('month', today.month))
+        if not (1 <= month <= 12):
+            raise ValueError('Month out of range')
+        days_in_month = calendar.monthrange(year, month)[1]
     except (ValueError, TypeError):
         messages.error(request, 'Invalid year or month.')
         return redirect('timesheets:my_timesheet')
-    days_in_month = calendar.monthrange(year, month)[1]
 
     
     entries_by_day = defaultdict(list)
-    for e in TimesheetEntry.objects.filter(employee=emp, date__year=year, date__month=month).order_by('id'):
+    for e in TimesheetEntry.objects.filter(
+            employee=emp, date__year=year, date__month=month
+        ).select_related('activity_code').order_by('id'):
         entries_by_day[e.date.day].append(e)
 
     wb = openpyxl.Workbook()
@@ -208,7 +208,14 @@ def timesheet_export(request):
         # "COS_0005, COS_0009" meaning entry 1 -> COS_0005, entry 2 -> COS_0009.
         combined_description = '; '.join(e.task_description for e in day_entries) or None
         combined_hours = sum((e.hours for e in day_entries), Decimal('0')) if day_entries else None
-        combined_codes = ', '.join(e.activity_code.code for e in day_entries) or None
+        # Same activity code used more than once in a day should only show
+        # once in the export — dedupe while keeping the order codes first
+        # appeared in (a plain set() would lose that order).
+        seen_codes = []
+        for e in day_entries:
+            if e.activity_code.code not in seen_codes:
+                seen_codes.append(e.activity_code.code)
+        combined_codes = ', '.join(seen_codes) or None
 
         values = {
             2: day,
@@ -264,6 +271,7 @@ def hr_request_timesheets(request):
     recent_requests = TimesheetRequest.objects.all()[:10]
     return render(request, 'timesheets/hr_request.html', {
         'today': today,
+        'month_name': calendar.month_name[today.month],
         'recent_requests': recent_requests,
     })
 
@@ -274,7 +282,8 @@ def _build_month_rows(emp, year, month):
     days_in_month = calendar.monthrange(year, month)[1]
     entries_by_day = defaultdict(list)
     for e in TimesheetEntry.objects.filter(
-            employee=emp, date__year=year, date__month=month).order_by('id'):
+            employee=emp, date__year=year, date__month=month
+        ).select_related('activity_code').order_by('id'):
         entries_by_day[e.date.day].append(e)
 
     rows = []
@@ -301,7 +310,6 @@ def _pending_request_for(emp):
 
 
 @login_required
-@require_capability('timesheets.access')
 def send_to_hr(request, request_id):
     """Preview page: shows the month's data, a mailto: link pre-filled to
     HR's fixed address (never typed by the employee), and a button to
@@ -343,7 +351,6 @@ def send_to_hr(request, request_id):
 
 
 @login_required
-@require_capability('timesheets.access')
 @require_POST
 def acknowledge_send(request, request_id):
     """Employee confirms they've sent their timesheet via their own Outlook.

@@ -79,6 +79,14 @@ def _users_with_capability(codename):
     return User.objects.filter(role_id__in=role_ids, is_active=True)
 
 
+def _all_active_users():
+    """Every active user, with no role/capability filtering -- timesheets
+    is intentionally open to everyone regardless of role, so this replaces
+    the earlier capability-gated lookup for both notifying people and
+    listing who's eligible on HR's request detail page."""
+    return User.objects.filter(is_active=True)
+
+
 def request_timesheets(*, year, month, requested_by):
     """HR asks everyone for their timesheet for a given month. Creates the
     request record and notifies every eligible user who HASN'T already
@@ -95,7 +103,7 @@ def request_timesheets(*, year, month, requested_by):
 
     acked_employee_ids = TimesheetRequestAck.objects.filter(
         request=req).values_list('employee_id', flat=True)
-    recipients = _users_with_capability('timesheets.access').exclude(
+    recipients = _all_active_users().exclude(
         employee_profile__id__in=acked_employee_ids)
 
     notify_users(
@@ -114,7 +122,7 @@ def employees_for_request(ts_request):
     (i.e. their linked user has timesheets.access), split into sent/pending.
     Returns a list of dicts: {'employee': ..., 'acked': True/False, 'ack': ...}."""
     from hr.models import Employee
-    eligible_users = _users_with_capability('timesheets.access')
+    eligible_users = _all_active_users()
     employees = Employee.objects.filter(user__in=eligible_users).select_related('user')
 
     acked_map = {
