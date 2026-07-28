@@ -39,6 +39,18 @@ def display_status_no_record(d, employee=None):
     return ''
 
 
+def cell_time_lines(cell):
+    """The check-in/out times of a matrix cell as short 'HH:MM' strings, in order,
+    for display beneath the status letter. Empty list when the cell has no
+    recorded times (leave/holiday/weekend/blank days)."""
+    lines = []
+    if cell.get('check_in'):
+        lines.append(cell['check_in'].strftime('%H:%M'))
+    if cell.get('check_out'):
+        lines.append(cell['check_out'].strftime('%H:%M'))
+    return lines
+
+
 def build_matrix(employees, start, end, with_weekend_dates=False):
     """Return (days, rows) or (days, rows, weekend_dates) when with_weekend_dates=True.
     `days` is the list of dates; `rows` is
@@ -54,10 +66,11 @@ def build_matrix(employees, start, end, with_weekend_dates=False):
 
     emp_ids = [e.pk for e in employees]
 
-    rec_status = {
-        (r.employee_id, r.date): r.status
-        for r in AttendanceRecord.objects.filter(employee_id__in=emp_ids, date__range=(start, end))
-    }
+    rec_status = {}
+    rec_times = {}  # (emp_id, date) -> (check_in, check_out); only for stored records
+    for r in AttendanceRecord.objects.filter(employee_id__in=emp_ids, date__range=(start, end)):
+        rec_status[(r.employee_id, r.date)] = r.status
+        rec_times[(r.employee_id, r.date)] = (r.check_in, r.check_out)
 
     # (emp_id, date) -> leave_record pk if that record is single-day (removable), else None
     leave_cell = {}
@@ -104,10 +117,12 @@ def build_matrix(employees, start, end, with_weekend_dates=False):
                 status = 'wfh'
             else:
                 status = ''
+            check_in, check_out = rec_times.get(key, (None, None))
             cells.append({
                 'date': day, 'status': status,
                 'leave_record_id': leave_pk,
                 'locked': status in ('weekend', 'holiday'),
+                'check_in': check_in, 'check_out': check_out,
             })
         rows.append({'employee': emp, 'cells': cells})
     if with_weekend_dates:
