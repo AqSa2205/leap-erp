@@ -132,16 +132,35 @@ class POPdfFooterTests(TestCase):
         self.assertEqual(r['Content-Type'], 'application/pdf')
         return '\n'.join((p.extract_text() or '') for p in PdfReader(io.BytesIO(r.content)).pages)
 
-    def test_footer_has_company_po_number_and_page(self):
-        text = self._pdf_text()
-        self.assertIn('Leap Networks Arabia', text)   # footer-only marker (left)
-        self.assertIn('Page 1 of', text)              # page label (right)
+    def test_footer_has_company_mr_po_number_and_page(self):
+        text = ' '.join(self._pdf_text().split())   # normalise wrapping
+        self.assertIn('Leap Networks Arabia', text)          # company (left, line 1)
+        self.assertIn('Material Requisition R00', text)      # MR + default revision (left, line 2)
+        self.assertIn('Page 1 of', text)                     # page label (right)
         # PO number appears in the header AND the footer centre -> at least twice.
         self.assertGreaterEqual(text.count('PO-FOOT-1'), 2)
 
+    def test_footer_reflects_edited_revision(self):
+        self.po.mr_revision = 'R02'
+        self.po.save(update_fields=['mr_revision'])
+        text = ' '.join(self._pdf_text().split())
+        self.assertIn('Material Requisition R02', text)
+        self.assertNotIn('Material Requisition R00', text)
+
+    def test_revision_is_editable_on_the_form(self):
+        from procurement.forms import PurchaseOrderForm
+        self.assertIn('mr_revision', PurchaseOrderForm().fields)
+
+    def test_revision_defaults_to_r00(self):
+        fresh = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 2), po_number='PO-FOOT-2', vendor_name='X',
+            po_issued_by='T', cost_center='projects', created_by=self.user)
+        self.assertEqual(fresh.mr_revision, 'R00')
+
     def test_unpriced_pdf_also_has_footer(self):
-        text = self._pdf_text('procurement:po_export_pdf_unpriced')
+        text = ' '.join(self._pdf_text('procurement:po_export_pdf_unpriced').split())
         self.assertIn('Leap Networks Arabia', text)
+        self.assertIn('Material Requisition R00', text)
         self.assertIn('Page 1 of', text)
 
 

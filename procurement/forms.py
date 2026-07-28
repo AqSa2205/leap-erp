@@ -16,7 +16,7 @@ class PurchaseOrderForm(forms.ModelForm):
             'po_date', 'po_number', 'cost_center', 'status',
             'vendor_name', 'vendor_contact_person', 'vendor_contact_email', 'vendor_contact_tel',
             'po_issued_by', 'issuer_email',
-            'project', 'project_name', 'end_user', 'mr_item_number',
+            'project', 'project_name', 'end_user', 'mr_item_number', 'mr_revision',
             'delivery_incoterms', 'delivery_location',
             'lead_time', 'payment_terms_text', 'warranty',
             'currency', 'discount_rate', 'vat_rate',
