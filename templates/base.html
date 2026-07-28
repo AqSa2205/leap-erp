@@ -972,24 +972,24 @@
             </li>
             {% endif %}
             {% if user.is_ai_developer_user or user.is_ai_head_user %}
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'my_tasks' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:my_tasks' %}" data-title="My Tasks">
-                    <i class="bi bi-list-check"></i> <span>My Tasks</span>
-                </a>
-            </li>
-            <li class="nav-item">
-           <a class="nav-link {% if request.resolver_match.url_name == 'my_timesheet' and request.resolver_match.app_name == 'timesheets' %}active{% endif %}" href="{% url 'timesheets:my_timesheet' %}" data-title="My Timesheet">
-           <i class="bi bi-clock-history"></i> <span>My Timesheet</span>
-            </a>
-           </li>
-            {% if user|can:'dashboard.nav' %}
-            <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.url_name == 'index' and request.resolver_match.app_name == 'dashboard' %}active{% endif %}" href="{% url 'dashboard:index' %}" data-title="Dashboard">
-                    <i class="bi bi-speedometer2"></i> <span>Dashboard</span>
-                </a>
-            </li>
-            {% endif %}
-            {% endif %}
+<li class="nav-item">
+    <a class="nav-link {% if request.resolver_match.url_name == 'my_tasks' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:my_tasks' %}" data-title="My Tasks">
+        <i class="bi bi-list-check"></i> <span>My Tasks</span>
+    </a>
+</li>
+{% if user|can:'dashboard.nav' %}
+<li class="nav-item">
+    <a class="nav-link {% if request.resolver_match.url_name == 'index' and request.resolver_match.app_name == 'dashboard' %}active{% endif %}" href="{% url 'dashboard:index' %}" data-title="Dashboard">
+        <i class="bi bi-speedometer2"></i> <span>Dashboard</span>
+    </a>
+</li>
+{% endif %}
+{% endif %}
+<li class="nav-item">
+   <a class="nav-link {% if request.resolver_match.url_name == 'my_timesheet' and request.resolver_match.app_name == 'timesheets' %}active{% endif %}" href="{% url 'timesheets:my_timesheet' %}" data-title="My Timesheet">
+   <i class="bi bi-clock-history"></i> <span>My Timesheet</span>
+    </a>
+   </li>
             {% if user|can:'pipeline.nav' %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'projects' and 'document' not in request.resolver_match.url_name and request.resolver_match.url_name != 'recycle_bin' %}active{% endif %}" href="{% url 'projects:list' %}" data-title="Commercial Pipeline">

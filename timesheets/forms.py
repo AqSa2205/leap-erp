@@ -5,9 +5,6 @@ from django import forms
 from .models import ActivityCode, TimesheetEntry
 
 
-
-
-
 class TimesheetEntryForm(forms.ModelForm):
     """Employee-facing form to log one day's work. The `employee` field is
     never exposed here — it's set server-side from request.user in the view,
