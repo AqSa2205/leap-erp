@@ -39,6 +39,13 @@
                             {% endif %}
                         </div>
 
+                        <div class="mb-3">
+                            <label class="form-label">Category *</label>
+                            {{ form.category }}
+                            {% if form.category.errors %}
+                            <div class="invalid-feedback d-block">{{ form.category.errors.0 }}</div>
+                            {% endif %}
+                        </div>
                         <div class="mb-4">
                             <div class="form-check">
                                 {{ form.is_active }}

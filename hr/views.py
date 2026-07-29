@@ -512,28 +512,6 @@ class EmployeeDeleteView(AdminRequiredMixin, DeleteView):
 
 
 @login_required
-@require_POST
-def employee_bulk_work_location(request):
-    """TEMPORARY: bulk-set the Office/Site (work_location) for many employees at
-    once from the list page. Remove this view (and its URL + list-page controls)
-    once the initial back-fill is done."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
-        messages.error(request, 'Admin access required.')
-        return redirect('hr:employee_list')
-    value = request.POST.get('work_location', '')
-    if value not in dict(Employee.WORK_LOCATION_CHOICES):
-        messages.error(request, 'Pick Office or Site.')
-        return redirect('hr:employee_list')
-    ids = [int(x) for x in request.POST.getlist('employee_ids') if x.isdigit()]
-    if not ids:
-        messages.error(request, 'Select at least one employee.')
-        return redirect('hr:employee_list')
-    updated = Employee.objects.filter(id__in=ids).update(work_location=value)
-    messages.success(request, f'Set {updated} employee(s) to {dict(Employee.WORK_LOCATION_CHOICES)[value]}.')
-    return redirect(request.META.get('HTTP_REFERER') or 'hr:employee_list')
-
-
-@login_required
 def employee_import(request):
     if not (request.user.is_super_admin_user or request.user.is_admin_user):
         messages.error(request, 'You do not have permission to import employees.')
@@ -2237,6 +2215,48 @@ def attendance_matrix_export_excel(request):
     days, rows = build_matrix(employees, start, end)
 
     status_labels = {'': '-', 'leave': 'L', 'holiday': 'H', 'weekend': 'WE', 'wfh': 'WFH', 'present': 'P', 'absent': 'A'}
+    from hr.models import LeaveRecord, Holiday
+    leave_type_map = {}
+    for lr in LeaveRecord.objects.filter(employee_id__in=[e.pk for e in employees], start_date__lte=end, end_date__gte=start).select_related('leave_type'):
+        dd = max(lr.start_date, start)
+        last = min(lr.end_date, end)
+        while dd <= last:
+            leave_type_map[(lr.employee_id, dd)] = lr.leave_type.code
+            dd += timedelta(days=1)
+    holiday_category_map = {h.date: h.category for h in Holiday.objects.filter(date__range=(start, end))}
+
+    COLOR_PRESENT = 'FFFFF0'
+    COLOR_ABSENT = 'C00000'
+    COLOR_LATE = 'F4B183'
+    COLOR_WEEKEND = 'D9D2E9'
+    COLOR_ANNUAL_LEAVE = 'FCE4D6'
+    COLOR_NATIONAL = '00B050'
+    COLOR_EID = 'FFFF00'
+    COLOR_OTHER = 'F2F2F2'
+
+    def fill_for(cell_data, emp_id):
+        status = cell_data['status']
+        if status == 'present' or status == '':
+            return COLOR_PRESENT
+        if status == 'absent':
+            return COLOR_ABSENT
+        if status == 'late':
+            return COLOR_LATE
+        if status == 'weekend':
+            return COLOR_WEEKEND
+        if status == 'leave':
+            code = leave_type_map.get((emp_id, cell_data['date']))
+            if code == 'annual':
+                return COLOR_ANNUAL_LEAVE
+            return COLOR_OTHER
+        if status == 'holiday':
+            cat = holiday_category_map.get(cell_data['date'], 'other')
+            if cat == 'saudi_national_day':
+                return COLOR_NATIONAL
+            if cat == 'eid':
+                return COLOR_EID
+            return COLOR_OTHER
+        return COLOR_OTHER
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -2272,6 +2292,7 @@ def attendance_matrix_export_excel(request):
             c = ws.cell(row=row, column=col, value=value)
             c.border = thin_border
             c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            c.fill = PatternFill(start_color=fill_for(cell_data, r['employee'].pk), end_color=fill_for(cell_data, r['employee'].pk), fill_type='solid')
 
     ws.column_dimensions['A'].width = 25
     for col in range(2, len(days) + 2):
@@ -2311,6 +2332,48 @@ def attendance_matrix_export_pdf(request):
     days, rows = build_matrix(employees, start, end)
 
     status_labels = {'': '-', 'leave': 'L', 'holiday': 'H', 'weekend': 'WE', 'wfh': 'WFH', 'present': 'P', 'absent': 'A'}
+    from hr.models import LeaveRecord, Holiday
+    leave_type_map = {}
+    for lr in LeaveRecord.objects.filter(employee_id__in=[e.pk for e in employees], start_date__lte=end, end_date__gte=start).select_related('leave_type'):
+        dd = max(lr.start_date, start)
+        last = min(lr.end_date, end)
+        while dd <= last:
+            leave_type_map[(lr.employee_id, dd)] = lr.leave_type.code
+            dd += timedelta(days=1)
+    holiday_category_map = {h.date: h.category for h in Holiday.objects.filter(date__range=(start, end))}
+
+    COLOR_PRESENT = colors.HexColor('#FFFFF0')
+    COLOR_ABSENT = colors.HexColor('#C00000')
+    COLOR_LATE = colors.HexColor('#F4B183')
+    COLOR_WEEKEND = colors.HexColor('#D9D2E9')
+    COLOR_ANNUAL_LEAVE = colors.HexColor('#FCE4D6')
+    COLOR_NATIONAL = colors.HexColor('#00B050')
+    COLOR_EID = colors.HexColor('#FFFF00')
+    COLOR_OTHER = colors.HexColor('#F2F2F2')
+
+    def pdf_fill_for(cell_data, emp_id):
+        status = cell_data['status']
+        if status == 'present' or status == '':
+            return COLOR_PRESENT
+        if status == 'absent':
+            return COLOR_ABSENT
+        if status == 'late':
+            return COLOR_LATE
+        if status == 'weekend':
+            return COLOR_WEEKEND
+        if status == 'leave':
+            code = leave_type_map.get((emp_id, cell_data['date']))
+            if code == 'annual':
+                return COLOR_ANNUAL_LEAVE
+            return COLOR_OTHER
+        if status == 'holiday':
+            cat = holiday_category_map.get(cell_data['date'], 'other')
+            if cat == 'saudi_national_day':
+                return COLOR_NATIONAL
+            if cat == 'eid':
+                return COLOR_EID
+            return COLOR_OTHER
+        return COLOR_OTHER
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4),
@@ -2323,14 +2386,16 @@ def attendance_matrix_export_pdf(request):
 
     header = ['Employee'] + [d.strftime('%d-%b') for d in days]
     data = [header]
-    for r in rows:
+    bg_commands = []
+    for row_idx, r in enumerate(rows, 1):
         row_data = [Paragraph(r['employee'].full_name, name_style)]
-        for c in r['cells']:
+        for col_idx, c in enumerate(r['cells'], 1):
             label = status_labels.get(c['status'], c['status'])
             times = cell_time_lines(c)
             # Stack the status letter over the check-in/out times, each on its
             # own line, so a full month still fits the page width.
             row_data.append(Paragraph('<br/>'.join([label] + times), cell_style) if times else label)
+            bg_commands.append(('BACKGROUND', (col_idx, row_idx), (col_idx, row_idx), pdf_fill_for(c, r['employee'].pk)))
         data.append(row_data)
 
     # Fixed column widths: a fair share of the usable width per day column.
@@ -2347,7 +2412,7 @@ def attendance_matrix_export_pdf(request):
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
         ('ALIGN', (1, 0), (-1, 0), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-    ]))
+    ] + bg_commands))
     elements.append(table)
     doc.build(elements)
 
