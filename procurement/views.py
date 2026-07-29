@@ -1427,7 +1427,7 @@ def po_export_pdf(request, pk, unpriced=False):
                                    fontName='Helvetica-Bold', leading=13, textColor=colors.black)
     sub_style = ParagraphStyle('CompanySub', parent=styles['Normal'], fontSize=8,
                                leading=11, textColor=colors.HexColor('#333333'))
-    header_title_style = ParagraphStyle('HdrTitle', parent=styles['Normal'], fontSize=18,
+    header_title_style = ParagraphStyle('HdrTitle', parent=styles['Normal'], fontSize=14,
                                         alignment=TA_CENTER, fontName='Helvetica-Bold', textColor=colors.black)
 
     # Left: company name (EN + AR) + address + website, stacked.
@@ -1458,7 +1458,7 @@ def po_export_pdf(request, pk, unpriced=False):
     logo_path = find_static('images/leap_logo.jpg')
     if logo_path:
         from reportlab.platypus import Image
-        right_cell = Image(logo_path, width=45*mm, height=13.5*mm, hAlign='RIGHT')
+        right_cell = Image(logo_path, width=38*mm, height=11.4*mm, hAlign='RIGHT')
     else:
         right_cell = Paragraph('', normal_style)
 

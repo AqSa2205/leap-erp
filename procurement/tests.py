@@ -193,11 +193,11 @@ class POPdfHeaderTests(TestCase):
         self.assertIn('www.leap-arabia.com', text)
         self.assertIn('Purchase Order', text)
 
-    def test_export_succeeds_even_without_arabic_font(self):
-        # The Arabic font isn't committed, so it's absent in the test env — the
-        # export must still render (Arabic line simply skipped), never 500.
+    def test_arabic_font_is_available_and_export_succeeds(self):
+        # The Amiri font ships in static/fonts/, so it registers and the Arabic
+        # company name renders; the export returns a valid PDF.
         from procurement.views import _arabic_font
-        self.assertIsNone(_arabic_font())          # confirms font truly absent here
+        self.assertEqual(_arabic_font(), 'ArabicHeader')
         r = self.client.get(reverse('procurement:po_export_pdf', kwargs={'pk': self.po.pk}))
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r['Content-Type'], 'application/pdf')
