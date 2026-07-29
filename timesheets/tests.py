@@ -493,6 +493,8 @@ class SendToHRTests(TestCase):
 
     def setUp(self):
         self.client = Client()
+        self.code, _ = ActivityCode.objects.get_or_create(
+            code='COS_0009', defaults={'label': 'Office', 'is_active': True})
         self.hr_user, _ = _make_user_with_employee('sendhr', role_name=Role.ADMIN)
         HRSettings.objects.get_or_create(pk=1, defaults={'hr_email': 'hr@leap-arabia.com'})
         self.user_a, self.emp_a = _make_user_with_employee('senda', full_name='Send A')
@@ -544,6 +546,22 @@ class SendToHRTests(TestCase):
         self.assertFalse(TimesheetRequestAck.objects.filter(
             request=self.ts_request, employee=self.emp_a).exists())
 
+    def test_acknowledging_locks_that_months_entries(self):
+        """The actual gap fix: acknowledging now really locks entries,
+        not just creates an Ack row."""
+        TimesheetEntry.objects.create(
+            employee=self.emp_a, date=date(2026, 7, 5),
+            task_description='work', activity_code=self.code, hours=Decimal('10'))
+        self.client.login(username='senda', password='testpass123')
+        self.client.post(reverse('timesheets:acknowledge_send', args=[self.ts_request.pk]))
+        entry = TimesheetEntry.objects.get(employee=self.emp_a, date=date(2026, 7, 5))
+        self.assertEqual(entry.status, TimesheetEntry.STATUS_SUBMITTED)
+
+    def test_double_acknowledge_does_not_crash_on_already_locked_month(self):
+        self.client.login(username='senda', password='testpass123')
+        self.client.post(reverse('timesheets:acknowledge_send', args=[self.ts_request.pk]))
+        resp = self.client.post(reverse('timesheets:acknowledge_send', args=[self.ts_request.pk]))
+        self.assertEqual(resp.status_code, 302)  # still succeeds, no 500
 
 class NotificationTargetingTests(TestCase):
     """request_timesheets notifies every active user regardless of role
@@ -794,9 +812,14 @@ class NonexistentRequestIdTests(TestCase):
         seed_default_permissions()
         self.client.login(username='nonexistuser', password='testpass123')
 
-    def test_send_to_hr_with_bad_id_404s(self):
+    def test_send_to_hr_with_bad_id_redirects_with_message(self):
+        """Changed from a hard 404: a missing request_id (never existed,
+        or HR deleted it after the employee already saw the banner) now
+        redirects back to My Timesheet with a friendly message instead of
+        Django's default error page."""
         resp = self.client.get(reverse('timesheets:send_to_hr', args=[99999]))
-        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.status_code, 302)
+        self.assertRedirects(resp, reverse('timesheets:my_timesheet'))
 
     def test_acknowledge_send_with_bad_id_404s(self):
         resp = self.client.post(reverse('timesheets:acknowledge_send', args=[99999]))
@@ -918,7 +941,12 @@ class ExportBusinessLogicTests(TestCase):
         seed_default_permissions()
         self.client.login(username='exportlogic', password='testpass123')
 
-    def test_combined_row_sums_hours_and_joins_both_descriptions_and_codes(self):
+    def test_combined_row_joins_descriptions_and_codes_with_flat_hours(self):
+        """Regression lock-in: hours used to be summed (3+5=8) — this
+        replaces that old assertion, since combined_hours is now a flat
+        Decimal('10') whenever the day has any entries at all, tested
+        fully in FlatOfficeHoursTests. Descriptions and codes still join
+        exactly as before; only the hours behavior changed."""
         import openpyxl
         from io import BytesIO
         TimesheetEntry.objects.create(
@@ -934,7 +962,7 @@ class ExportBusinessLogicTests(TestCase):
         row = 11 + 10  # header at row 11, day 10 -> row 21
 
         self.assertEqual(ws.cell(row=row, column=3).value, 'Morning task; Afternoon task')
-        self.assertEqual(ws.cell(row=row, column=6).value, Decimal('8'))
+        self.assertEqual(ws.cell(row=row, column=6).value, Decimal('10'))
         self.assertEqual(ws.cell(row=row, column=7).value, 'COS_0001, COS_0002')
 
     def test_day_with_no_entries_exports_blank_row(self):
@@ -1260,4 +1288,112 @@ class HRRequestDeleteTests(TestCase):
         resp = client.post(reverse('timesheets:hr_request_delete', args=[self.ts_request.pk]))
         self.assertEqual(resp.status_code, 302)
         self.assertIn('/login', resp.url)
+
+
+
+class FlatOfficeHoursTests(TestCase):
+    """Regression lock-in: both the export and the Send-to-HR preview show
+    a flat 10 hours per day with any entries, regardless of how many
+    entries or their individual hours values -- summing was replaced on
+    purpose since every entry already defaults to 10."""
+
+    def setUp(self):
+        self.client = Client()
+        self.code, _ = ActivityCode.objects.get_or_create(
+            code='COS_0009', defaults={'label': 'Office', 'is_active': True})
+        self.user, self.emp = _make_user_with_employee('flathours')
+        seed_default_permissions()
+
+    def test_export_shows_flat_10_regardless_of_entry_count(self):
+        import openpyxl
+        from io import BytesIO
+        TimesheetEntry.objects.create(
+            employee=self.emp, date=date(2026, 7, 3),
+            task_description='a', activity_code=self.code, hours=Decimal('2'))
+        TimesheetEntry.objects.create(
+            employee=self.emp, date=date(2026, 7, 3),
+            task_description='b', activity_code=self.code, hours=Decimal('6'))
+        TimesheetEntry.objects.create(
+            employee=self.emp, date=date(2026, 7, 3),
+            task_description='c', activity_code=self.code, hours=Decimal('9'))
+        self.client.login(username='flathours', password='testpass123')
+        resp = self.client.get(reverse('timesheets:export') + '?year=2026&month=7')
+        wb = openpyxl.load_workbook(BytesIO(resp.content))
+        ws = wb.active
+        self.assertEqual(ws.cell(row=11 + 3, column=6).value, Decimal('10'))
+
+    def test_send_to_hr_preview_shows_flat_10_matching_export(self):
+        hr_user, _ = _make_user_with_employee('flathourshr', role_name=Role.ADMIN)
+        ts_request = request_timesheets(year=2026, month=7, requested_by=hr_user)
+        TimesheetEntry.objects.create(
+            employee=self.emp, date=date(2026, 7, 3),
+            task_description='a', activity_code=self.code, hours=Decimal('2'))
+        TimesheetEntry.objects.create(
+            employee=self.emp, date=date(2026, 7, 3),
+            task_description='b', activity_code=self.code, hours=Decimal('6'))
+        self.client.login(username='flathours', password='testpass123')
+        resp = self.client.get(reverse('timesheets:send_to_hr', args=[ts_request.pk]))
+        self.assertContains(resp, '<td>10</td>')  # matches Decimal('10') rendered plain, no decimals
+
+
+class AutogenBannerTests(TestCase):
+    """The banner must key off the actual auto-generated task description
+    text, not the activity code -- someone manually picking COS_0009 for
+    unrelated work must never see it, only people with a real
+    'Started task:' / 'Ended task:' entry."""
+
+    def setUp(self):
+        self.client = Client()
+        self.code, _ = ActivityCode.objects.get_or_create(
+            code='COS_0009', defaults={'label': 'Office', 'is_active': True})
+        self.user, self.emp = _make_user_with_employee('bannertest')
+        seed_default_permissions()
+        self.client.login(username='bannertest', password='testpass123')
+
+    def test_banner_hidden_when_cos_0009_used_manually(self):
+        TimesheetEntry.objects.create(
+            employee=self.emp, date=date(2026, 7, 1),
+            task_description='Discussed client proposals',  # manually typed, unrelated
+            activity_code=self.code, hours=Decimal('10'))
+        resp = self.client.get(reverse('timesheets:my_timesheet'))
+        self.assertNotContains(resp, 'is used as default when a task auto-starts')
+
+    def test_banner_shown_for_autogenerated_started_entry(self):
+        TimesheetEntry.objects.create(
+            employee=self.emp, date=date(2026, 7, 1),
+            task_description='Started task: Fix login bug',
+            activity_code=self.code, hours=Decimal('10'))
+        resp = self.client.get(reverse('timesheets:my_timesheet'))
+        self.assertContains(resp, 'is used as default when a task auto-starts')
+
+    def test_banner_shown_for_autogenerated_ended_entry(self):
+        TimesheetEntry.objects.create(
+            employee=self.emp, date=date(2026, 7, 1),
+            task_description='Ended task: Fix login bug',
+            activity_code=self.code, hours=Decimal('10'))
+        resp = self.client.get(reverse('timesheets:my_timesheet'))
+        self.assertContains(resp, 'is used as default when a task auto-starts')
+
+
+class ReRequestExcludesAckedTests(TestCase):
+    """The recipient filter in request_timesheets must actually exclude
+    people who already acked -- re-requesting is meant to nudge
+    stragglers only, not re-notify everyone including those done."""
+
+    def setUp(self):
+        self.hr_user, _ = _make_user_with_employee('rerequesthr', role_name=Role.ADMIN)
+        self.user, self.emp = _make_user_with_employee('alreadyacked')
+        seed_default_permissions()
+
+    def test_already_acked_employee_not_renotified_on_rerequest(self):
+        req = request_timesheets(year=2026, month=7, requested_by=self.hr_user)
+        TimesheetRequestAck.objects.create(request=req, employee=self.emp)
+        Notification.objects.all().delete()
+        request_timesheets(year=2026, month=7, requested_by=self.hr_user)
+        notified = set(Notification.objects.filter(
+            verb='requested your timesheet').values_list('recipient__username', flat=True))
+        self.assertNotIn('alreadyacked', notified)
+
+
+
 

@@ -26,7 +26,7 @@
         </a>
     </div>
     {% endif %}
-    {% if employee %}
+    {% if show_autogen_banner %}
     <div class="alert alert-info">
         <i class="bi bi-info-circle me-1"></i>
         The code <strong>COS_0009</strong> is used as default when a task auto-starts or auto-ends. Please edit the Activity code on that entry if the work was actually something else (e.g. onsite work).
@@ -87,28 +87,70 @@
                         <tr><th>Date</th><th>Task</th><th>Activity code</th><th>Hours</th><th>Status</th><th>Actions</th></tr>
                     </thead>
                     <tbody>
-                        {% for entry in entries %}
-                        <tr>
-                            <td>{{ entry.date }}</td>
-                            <td>{{ entry.task_description }}</td>
-                            <td>{{ entry.activity_code.code }}</td>
-                            <td>{{ entry.hours }}</td>
+                        {% for group in grouped_entries %}
+                        <tr class="group-summary-row" {% if group.is_multi %}style="cursor:pointer;" data-target="group-detail-{{ forloop.counter }}"{% endif %}>
+                            <td>{{ group.date }}</td>
                             <td>
-                                {% if entry.status == 'draft' %}<span class="badge bg-secondary">Draft</span>
-                                {% elif entry.status == 'submitted' %}<span class="badge bg-success">Submitted</span>{% endif %}
+                                {% if group.is_multi %}<i class="bi bi-chevron-right me-1 group-chevron"></i>{% endif %}
+                                {{ group.combined_description }}
+                            </td>
+                            <td>{{ group.combined_codes }}</td>
+                            <td>{{ group.combined_hours }}</td>
+                            <td>
+                                {% if group.locked %}<span class="badge bg-success">Submitted</span>
+                                {% else %}<span class="badge bg-secondary">Draft</span>{% endif %}
                             </td>
                             <td>
-                                {% if entry.status == 'draft' %}
-                                <a href="{% url 'timesheets:entry_edit' entry.pk %}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-pencil"></i></a>
-                                <form method="post" action="{% url 'timesheets:entry_delete' entry.pk %}" class="d-inline" onsubmit="return confirm('Delete this entry?');">
-                                    {% csrf_token %}
-                                    <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
-                                </form>
+                                {% if not group.is_multi %}
+                                    {% with entry=group.entries.0 %}
+                                    {% if entry.status == 'draft' %}
+                                    <a href="{% url 'timesheets:entry_edit' entry.pk %}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-pencil"></i></a>
+                                    <form method="post" action="{% url 'timesheets:entry_delete' entry.pk %}" class="d-inline" onsubmit="return confirm('Delete this entry?');">
+                                        {% csrf_token %}
+                                        <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                                    </form>
+                                    {% else %}
+                                    <span class="text-muted small">Locked</span>
+                                    {% endif %}
+                                    {% endwith %}
                                 {% else %}
-                                <span class="text-muted small">Locked</span>
+                                <span class="text-muted small">Click row to expand</span>
                                 {% endif %}
                             </td>
                         </tr>
+                        {% if group.is_multi %}
+                        <tr class="group-detail-row d-none" id="group-detail-{{ forloop.counter }}">
+                            <td></td>
+                            <td colspan="5" class="p-0">
+                                <table class="table table-sm mb-0">
+                                    <tbody>
+                                    {% for entry in group.entries %}
+                                    <tr>
+                                        <td style="width:55%">{{ entry.task_description }}</td>
+                                        <td style="width:15%">{{ entry.activity_code.code }}</td>
+                                        <td style="width:10%">{{ entry.hours }}</td>
+                                        <td style="width:10%">
+                                            {% if entry.status == 'draft' %}<span class="badge bg-secondary">Draft</span>
+                                            {% else %}<span class="badge bg-success">Submitted</span>{% endif %}
+                                        </td>
+                                        <td style="width:10%">
+                                            {% if entry.status == 'draft' %}
+                                            <a href="{% url 'timesheets:entry_edit' entry.pk %}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-pencil"></i></a>
+                                            <form method="post" action="{% url 'timesheets:entry_delete' entry.pk %}" class="d-inline" onsubmit="return confirm('Delete this entry?');">
+                                                {% csrf_token %}
+                                                <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                                            </form>
+                                            {% else %}
+                                            <span class="text-muted small">Locked</span>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                    </tbody>
+                                </table>
+                            </td>
+                        </tr>
+                        {% endif %}
                         {% empty %}
                         <tr><td colspan="6" class="text-center text-muted py-4">No entries yet.</td></tr>
                         {% endfor %}
@@ -135,6 +177,21 @@ document.addEventListener('DOMContentLoaded', function () {
 
     document.getElementById('date-prev').addEventListener('click', function () { shiftDate(-1); });
     document.getElementById('date-next').addEventListener('click', function () { shiftDate(1); });
+});
+
+document.addEventListener('click', function (e) {
+    var row = e.target.closest('.group-summary-row');
+    if (!row) return;
+    var targetId = row.getAttribute('data-target');
+    if (!targetId) return;  // single-entry rows have no target, nothing to toggle
+    var detail = document.getElementById(targetId);
+    if (!detail) return;
+    detail.classList.toggle('d-none');
+    var chevron = row.querySelector('.group-chevron');
+    if (chevron) {
+        chevron.classList.toggle('bi-chevron-right');
+        chevron.classList.toggle('bi-chevron-down');
+    }
 });
 </script>
 {% endblock %}

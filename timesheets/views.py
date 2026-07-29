@@ -17,12 +17,54 @@ from datetime import date as date_cls
 from django.utils import timezone
 from .models import TimesheetRequest, TimesheetRequestAck, HRSettings
 from urllib.parse import quote
-from .services import request_timesheets, delete_request
+from .services import request_timesheets, delete_request, submit_month
 
 def _get_employee_or_none(request):
     """Same lookup my_profile uses in hr/views.py — an authenticated user
     isn't guaranteed to be linked to an Employee record yet."""
     return getattr(request.user, 'employee_profile', None)
+
+
+def _group_entries_by_date(entries):
+    """Group entries (already newest-first per the model's Meta.ordering)
+    by calendar date, so several same-day rows — e.g. auto-start/auto-end
+    tasks — collapse into a single summary row that expands to show each
+    individual entry with its own Edit/Delete."""
+    groups = {}
+    for e in entries:
+        groups.setdefault(e.date, []).append(e)
+
+    result = []
+    for entry_date, day_entries in groups.items():
+        # Same "one row per unique activity code" rule as the HR preview —
+        # a task that auto-starts and auto-ends the same day can leave
+        # several COS_0009 rows; only count each code's hours once so the
+        # total can never silently exceed a real workday.
+        unique_by_code = {}
+        order = []
+        for e in day_entries:
+            code = e.activity_code.code
+            if code not in unique_by_code:
+                unique_by_code[code] = e
+                order.append(code)
+
+        is_multi = len(day_entries) > 1
+        if is_multi:
+            combined_description = ' '.join(
+                f'{i}) {e.task_description}' for i, e in enumerate(day_entries, start=1))
+        else:
+            combined_description = day_entries[0].task_description  # unchanged, no prefix
+
+        result.append({
+            'date': entry_date,
+            'entries': day_entries,
+            'is_multi': is_multi,
+            'combined_description': combined_description,
+            'combined_codes': ', '.join(order),
+            'combined_hours': sum((unique_by_code[c].hours for c in order), Decimal('0')),
+            'locked': any(e.status == TimesheetEntry.STATUS_SUBMITTED for e in day_entries),
+        })
+    return result
 
 
 @login_required
@@ -49,14 +91,27 @@ def my_timesheet(request):
         form = TimesheetEntryForm()
 
     entries = TimesheetEntry.objects.filter(employee=emp).select_related('activity_code')
+    grouped_entries = _group_entries_by_date(entries)
+    # Only nag about the COS_0009 default when the employee actually has an
+    # entry the auto-start/auto-end signal created -- checking the activity
+    # code alone was wrong, since a person can manually pick COS_0009 for
+    # unrelated work and get shown a banner that has nothing to do with them.
+    show_autogen_banner = entries.filter(
+        task_description__startswith='Started task: '
+    ).exists() or entries.filter(
+        task_description__startswith='Ended task: '
+    ).exists()
     pending_request = _pending_request_for(emp)
 
     return render(request, 'timesheets/my_timesheet.html', {
         'employee': emp,
         'entries': entries,
+        'grouped_entries': grouped_entries,
+        'show_autogen_banner': show_autogen_banner,
         'form': form,
         'pending_request': pending_request,
     })
+
 
 @login_required
 def timesheet_entry_edit(request, pk):
@@ -207,7 +262,11 @@ def timesheet_export(request):
         # position N in the other — e.g. "Site visit; Office work" pairs with
         # "COS_0005, COS_0009" meaning entry 1 -> COS_0005, entry 2 -> COS_0009.
         combined_description = '; '.join(e.task_description for e in day_entries) or None
-        combined_hours = sum((e.hours for e in day_entries), Decimal('0')) if day_entries else None
+        # Office hours are a flat 10/day regardless of how many entries or
+        # activity codes exist for that date -- summing individual entries
+        # (e.g. auto-start + auto-end + a manual one) doesn't reflect real
+        # hours worked, since every entry defaults to 10 already.
+        combined_hours = Decimal('10') if day_entries else None
         # Same activity code used more than once in a day should only show
         # once in the export — dedupe while keeping the order codes first
         # appeared in (a plain set() would lose that order).
@@ -290,12 +349,33 @@ def _build_month_rows(emp, year, month):
     for day in range(1, days_in_month + 1):
         the_date = date_cls(year, month, day)
         day_entries = entries_by_day.get(day, [])
+
+        # A task that auto-starts and auto-ends within the same day can
+        # leave more than one TimesheetEntry with the SAME activity code
+        # (default COS_0009) for that day. Treat those as one task instead
+        # of stacking them: keep only the first entry seen per unique code,
+        # so hours don't get summed past the standard workday (e.g. three
+        # 10-hour auto entries would otherwise show as 30). A genuinely
+        # different code — e.g. real onsite work entered separately — still
+        # shows on its own and still adds its own hours, same as before.
+        unique_by_code = {}
+        order = []
+        for e in day_entries:
+            code = e.activity_code.code
+            if code not in unique_by_code:
+                unique_by_code[code] = e
+                order.append(code)
+
         rows.append({
             'day': day,
             'date': the_date,
-            'description': '; '.join(e.task_description for e in day_entries),
-            'hours': sum((e.hours for e in day_entries), Decimal('0')) if day_entries else None,
-            'codes': ', '.join(e.activity_code.code for e in day_entries),
+            'description': '; '.join(unique_by_code[c].task_description for c in order),
+            # Flat 10/day office hours, matching the Excel export -- keeps
+            # the HR preview and the actual downloaded file showing the
+            # same number for the same day, rather than one summing
+            # individual entries and the other not.
+            'hours': Decimal('10') if order else None,
+            'codes': ', '.join(order),
             'is_weekend': the_date.weekday() in (4, 5),
         })
     return rows
@@ -320,7 +400,16 @@ def send_to_hr(request, request_id):
         messages.error(request, 'Your account is not linked to an employee record yet. Contact HR.')
         return redirect('timesheets:my_timesheet')
 
-    ts_request = get_object_or_404(TimesheetRequest, pk=request_id)
+    # A missing request_id — either it never existed, or HR deleted it
+    # after the employee already saw the "Send to HR" banner — redirects
+    # back with a friendly message instead of Django's default 404 page,
+    # so a stale banner link never dead-ends the employee.
+    try:
+        ts_request = TimesheetRequest.objects.get(pk=request_id)
+    except TimesheetRequest.DoesNotExist:
+        messages.info(request, 'HR deleted this request.')
+        return redirect('timesheets:my_timesheet')
+
     already_acked = TimesheetRequestAck.objects.filter(
         request=ts_request, employee=emp).exists()
     if already_acked:
@@ -354,11 +443,31 @@ def send_to_hr(request, request_id):
 @require_POST
 def acknowledge_send(request, request_id):
     """Employee confirms they've sent their timesheet via their own Outlook.
-    Self-reported, as discussed — the server can't verify the email was
-    actually sent, only that the employee clicked this."""
+    The SEND itself is still self-reported — the server can't verify the
+    email actually went out — but confirming now also calls submit_month(),
+    which genuinely locks that month's entries, closing the gap where
+    entries stayed editable after being marked as sent."""
     emp = _get_employee_or_none(request)
+    if emp is None:
+        messages.error(request, 'Your account is not linked to an employee record yet. Contact HR.')
+        return redirect('timesheets:my_timesheet')
+
     ts_request = get_object_or_404(TimesheetRequest, pk=request_id)
     TimesheetRequestAck.objects.get_or_create(request=ts_request, employee=emp)
+
+    try:
+        submit_month(
+            employee=emp, year=ts_request.year, month=ts_request.month,
+            submitted_by=request.user)
+    except ValueError:
+        # Nothing to lock (no entries that month) or already locked —
+        # either way, the acknowledgment itself still succeeds. We
+        # deliberately don't guard this behind "only on first ack" — that
+        # way, if HR reopens the month later and the employee re-sends and
+        # re-clicks "I've sent this," it correctly re-locks the entries
+        # too, instead of silently staying unlocked forever.
+        pass
+
     messages.success(request, 'Thanks — marked as sent to HR.')
     return redirect('timesheets:my_timesheet')
 

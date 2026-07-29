@@ -43,22 +43,22 @@
         </div>
     </div>
 
-    <div class="d-flex gap-2">
-        <a href="{{ mailto_url }}" class="btn btn-primary"
-             onclick="return confirm('This only works if you have a desktop email app (like Outlook) installed and set as default.\n\nIf nothing happens after this, email HR directly at {{ hr_email }} instead.\n\nContinue?');">
-            <i class="bi bi-envelope"></i> Open in Outlook
-        </a>
-        <a href="{% url 'timesheets:export' %}?year={{ ts_request.year }}&month={{ ts_request.month }}"
-           target="_blank" class="btn btn-outline-primary">
-            <i class="bi bi-file-earmark-excel"></i> Download Excel to attach
-        </a>
-        <form method="post" action="{% url 'timesheets:acknowledge_send' ts_request.pk %}"
-              onsubmit="return confirm('Confirm you have sent this to HR ({{ hr_email }})?');">
-            {% csrf_token %}
-            <button type="submit" class="btn btn-success">
-                <i class="bi bi-check-lg"></i> I've sent this
-            </button>
-        </form>
-    </div>
+   <div class="d-flex gap-2">
+    <a href="{{ mailto_url }}" class="btn btn-primary"
+         onclick="return confirm('This only works if you have a desktop email app (like Outlook) installed and set as default.\n\nIf nothing happens after this, email HR directly {{ hr_email }} instead.\n\nContinue?');">
+        <i class="bi bi-envelope"></i> Open in Outlook
+    </a>
+    <a href="{% url 'timesheets:export' %}?year={{ ts_request.year }}&month={{ ts_request.month }}"
+       target="_blank" class="btn btn-outline-primary">
+        <i class="bi bi-file-earmark-excel"></i> Download Excel to attach
+    </a>
+    <form method="post" action="{% url 'timesheets:acknowledge_send' ts_request.pk %}"
+          onsubmit="return confirm('Confirm you have sent this to HR ({{ hr_email }})?');">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-success">
+            <i class="bi bi-check-lg"></i> I've sent this
+        </button>
+    </form>
+</div>
 </div>
 {% endblock %}

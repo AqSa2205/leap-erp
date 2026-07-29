@@ -971,10 +971,16 @@
                 </a>
             </li>
             {% endif %}
-            {% if user.is_ai_developer_user or user.is_ai_head_user %}
+{% if user.is_ai_developer_user or user.is_ai_head_user %}
 <li class="nav-item">
     <a class="nav-link {% if request.resolver_match.url_name == 'my_tasks' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:my_tasks' %}" data-title="My Tasks">
         <i class="bi bi-list-check"></i> <span>My Tasks</span>
+    </a>
+</li>
+{% endif %}
+<li class="nav-item">
+   <a class="nav-link {% if request.resolver_match.url_name == 'my_timesheet' and request.resolver_match.app_name == 'timesheets' %}active{% endif %}" href="{% url 'timesheets:my_timesheet' %}" data-title="My Timesheet">
+   <i class="bi bi-clock-history"></i> <span>My Timesheet</span>
     </a>
 </li>
 {% if user|can:'dashboard.nav' %}
@@ -984,12 +990,6 @@
     </a>
 </li>
 {% endif %}
-{% endif %}
-<li class="nav-item">
-   <a class="nav-link {% if request.resolver_match.url_name == 'my_timesheet' and request.resolver_match.app_name == 'timesheets' %}active{% endif %}" href="{% url 'timesheets:my_timesheet' %}" data-title="My Timesheet">
-   <i class="bi bi-clock-history"></i> <span>My Timesheet</span>
-    </a>
-   </li>
             {% if user|can:'pipeline.nav' %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'projects' and 'document' not in request.resolver_match.url_name and request.resolver_match.url_name != 'recycle_bin' %}active{% endif %}" href="{% url 'projects:list' %}" data-title="Commercial Pipeline">
@@ -2005,10 +2005,29 @@
         // Expose so any page can trigger it manually: LeapLoading.show('...')
         window.LeapLoading = { show: show, hide: hide };
 
+        // A mailto: link never actually navigates away — no beforeunload,
+        // no pageshow — so without this, the overlay would only clear via
+        // the 30s fallback. Show a short "Opening…" message instead and
+        // tell beforeunload to skip its own overlay for the next moment,
+        // since we already know this click won't leave the page.
+       var mailtoPending = false;
+        document.addEventListener('click', function (e) {
+            var a = e.target.closest('a[href^="mailto:"]');
+            if (!a) return;
+            mailtoPending = true;
+            show(a.dataset.loadingText || 'Opening your email app…');
+            clearTimeout(fallback);
+            fallback = setTimeout(hide, 3000);
+        }, true);
+
         // Real navigation (same-tab link click or form submit that loads a new
         // page) fires beforeunload — but a file DOWNLOAD or a target="_blank"
         // link does NOT, so the overlay never hangs on those.
         window.addEventListener('beforeunload', function () {
+            if (mailtoPending) {
+                mailtoPending = false; // consumed once, regardless of how long the confirm() dialog was open
+                return;
+            }
             show('Loading, please wait…');
             // Safety net: clear if the navigation is somehow cancelled.
             clearTimeout(fallback);
