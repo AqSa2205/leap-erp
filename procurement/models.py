@@ -101,6 +101,9 @@ class PurchaseOrder(models.Model):
     project_name = models.CharField(max_length=500, blank=True, verbose_name="Project Name")
     end_user = models.CharField(max_length=255, blank=True, verbose_name="End User")
     mr_item_number = models.CharField(max_length=255, blank=True, verbose_name="MR / Item No.")
+    mr_revision = models.CharField(
+        max_length=10, default='R00', blank=True, verbose_name="MR Revision",
+        help_text="Material Requisition revision shown in the PO PDF footer, e.g. R00.")
 
     # Delivery Information
     delivery_incoterms = models.CharField(

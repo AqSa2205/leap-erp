@@ -200,6 +200,12 @@
                                 {% if form.mr_item_number.errors %}<div class="invalid-feedback d-block">{{ form.mr_item_number.errors.0 }}</div>{% endif %}
                             </div>
                             <div class="col-md-4 mb-3">
+                                <label class="form-label fw-bold">MR Revision</label>
+                                {{ form.mr_revision }}
+                                <div class="form-text">Shown in the PO PDF footer, e.g. R00.</div>
+                                {% if form.mr_revision.errors %}<div class="invalid-feedback d-block">{{ form.mr_revision.errors.0 }}</div>{% endif %}
+                            </div>
+                            <div class="col-md-4 mb-3">
                                 <label class="form-label fw-bold">Delivery Incoterms</label>
                                 {{ form.delivery_incoterms }}
                                 {% if form.delivery_incoterms.errors %}<div class="invalid-feedback d-block">{{ form.delivery_incoterms.errors.0 }}</div>{% endif %}

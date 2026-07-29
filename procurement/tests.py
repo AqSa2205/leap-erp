@@ -110,6 +110,106 @@ class POApproveStageTests(TestCase):
         self.assertIsNone(self.po.scm_approved_at)
 
 
+class POPdfFooterTests(TestCase):
+    """The PO PDF footer shows the company (left), PO number (centre) and page
+    number (right) on every page — on both the priced and unpriced exports."""
+
+    def setUp(self):
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('boss', password='pw', role=self.sa_role)
+        self.client.force_login(self.user)
+        self.po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-FOOT-1', vendor_name='ACME',
+            po_issued_by='Tester', cost_center='projects', created_by=self.user)
+
+    def _pdf_text(self, url_name='procurement:po_export_pdf'):
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            from PyPDF2 import PdfReader
+        r = self.client.get(reverse(url_name, kwargs={'pk': self.po.pk}))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r['Content-Type'], 'application/pdf')
+        return '\n'.join((p.extract_text() or '') for p in PdfReader(io.BytesIO(r.content)).pages)
+
+    def test_footer_has_company_mr_po_number_and_page(self):
+        text = ' '.join(self._pdf_text().split())   # normalise wrapping
+        self.assertIn('Leap Networks Arabia', text)          # company (left, line 1)
+        self.assertIn('Material Requisition R00', text)      # MR + default revision (left, line 2)
+        self.assertIn('Page 1 of', text)                     # page label (right)
+        # PO number appears in the header AND the footer centre -> at least twice.
+        self.assertGreaterEqual(text.count('PO-FOOT-1'), 2)
+
+    def test_footer_reflects_edited_revision(self):
+        self.po.mr_revision = 'R02'
+        self.po.save(update_fields=['mr_revision'])
+        text = ' '.join(self._pdf_text().split())
+        self.assertIn('Material Requisition R02', text)
+        self.assertNotIn('Material Requisition R00', text)
+
+    def test_revision_is_editable_on_the_form(self):
+        from procurement.forms import PurchaseOrderForm
+        self.assertIn('mr_revision', PurchaseOrderForm().fields)
+
+    def test_revision_defaults_to_r00(self):
+        fresh = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 2), po_number='PO-FOOT-2', vendor_name='X',
+            po_issued_by='T', cost_center='projects', created_by=self.user)
+        self.assertEqual(fresh.mr_revision, 'R00')
+
+    def test_unpriced_pdf_also_has_footer(self):
+        text = ' '.join(self._pdf_text('procurement:po_export_pdf_unpriced').split())
+        self.assertIn('Leap Networks Arabia', text)
+        self.assertIn('Material Requisition R00', text)
+        self.assertIn('Page 1 of', text)
+
+
+class POPdfHeaderTests(TestCase):
+    """The PO PDF header shows the company block (left), 'Purchase Order'
+    (centre) and the logo (right). The Arabic company name renders when the
+    Arabic font is present; when it isn't, the export still succeeds."""
+
+    def setUp(self):
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('boss', password='pw', role=self.sa_role)
+        self.client.force_login(self.user)
+        self.po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-HDR-1', vendor_name='ACME',
+            po_issued_by='Tester', cost_center='projects', created_by=self.user)
+
+    def _text(self):
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            from PyPDF2 import PdfReader
+        r = self.client.get(reverse('procurement:po_export_pdf', kwargs={'pk': self.po.pk}))
+        self.assertEqual(r.status_code, 200)
+        return '\n'.join((p.extract_text() or '') for p in PdfReader(io.BytesIO(r.content)).pages)
+
+    def test_header_has_company_block_and_centre_title(self):
+        text = self._text()
+        self.assertIn('Leap Networks Arabia', text)
+        self.assertIn('Al-Khobar, Saudi Arabia', text)
+        self.assertIn('www.leap-arabia.com', text)
+        self.assertIn('Purchase Order', text)
+
+    def test_arabic_font_is_available_and_export_succeeds(self):
+        # The Amiri font ships in static/fonts/, so it registers and the Arabic
+        # company name renders; the export returns a valid PDF.
+        from procurement.views import _arabic_font
+        self.assertEqual(_arabic_font(), 'ArabicHeader')
+        r = self.client.get(reverse('procurement:po_export_pdf', kwargs={'pk': self.po.pk}))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r['Content-Type'], 'application/pdf')
+
+    def test_shape_arabic_transforms_text(self):
+        from procurement.views import _shape_arabic
+        raw = 'شركة لييب نتوركس أرابيا'
+        shaped = _shape_arabic(raw)
+        self.assertEqual(len(shaped), len(raw))   # same characters, reordered/reshaped
+        self.assertNotEqual(shaped, raw)          # bidi + reshape actually changed it
+
+
 class POEditFormSetTests(TestCase):
     """Editing a PO must persist line-item changes even when an existing row
     has a blank description — previously one such row silently blocked the
