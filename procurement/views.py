@@ -116,10 +116,18 @@ def _safe_filename(name, prefix='', suffix='', extension=''):
     return f'{base}{extension}'
 
 
-def _make_numbered_canvas(draft=False):
+def _make_numbered_canvas(draft=False, footer_left=None, footer_left2=None, footer_center=None):
     """Return a two-pass Canvas subclass that draws "Page X of Y" at the
     bottom of every page. Used by procurement PDF exports for consistent
     pagination across PO / DN / Inventory / Summary outputs.
+
+    By default the page label is centred. When ``footer_left`` and/or
+    ``footer_center`` are given (e.g. the PO export passes the company name
+    and PO number), a three-part footer is drawn instead — ``footer_left``
+    left-aligned, ``footer_center`` centred, and the page label right-aligned.
+    ``footer_left2`` adds a second line beneath ``footer_left`` (e.g. the
+    Material Requisition + revision), with the centre/right text vertically
+    centred against the two-line left block.
 
     When ``draft=True`` a large diagonal "DRAFT" watermark is layered on
     every page so an unapproved export cannot be mistaken for a final,
@@ -158,16 +166,65 @@ def _make_numbered_canvas(draft=False):
                         self.restoreState()
                     self.setFont('Helvetica', 8)
                     self.setFillColor(colors.HexColor('#6c757d'))
-                    self.drawCentredString(
-                        page_w / 2, 8 * mm,
-                        f'Page {self._pageNumber} of {page_count}',
-                    )
+                    page_label = f'Page {self._pageNumber} of {page_count}'
+                    if footer_left is not None or footer_left2 is not None or footer_center is not None:
+                        # 3-part footer: company (left) · reference (center) · page (right).
+                        # footer_left2 stacks a second line under the company name.
+                        left_x, right_x = 15 * mm, page_w - 15 * mm
+                        if footer_left2:
+                            if footer_left:
+                                self.drawString(left_x, 10 * mm, footer_left)
+                            self.drawString(left_x, 6 * mm, footer_left2)
+                        elif footer_left:
+                            self.drawString(left_x, 8 * mm, footer_left)
+                        mid_y = 8 * mm  # vertically centred against the (up to) two left lines
+                        if footer_center:
+                            self.drawCentredString(page_w / 2, mid_y, footer_center)
+                        self.drawRightString(right_x, mid_y, page_label)
+                    else:
+                        self.drawCentredString(page_w / 2, 8 * mm, page_label)
                 except Exception:
                     pass
                 super().showPage()
             super().save()
 
     return NumberedCanvas
+
+
+def _arabic_font():
+    """Register (once) and return the Arabic-capable font name for PDF headers,
+    or None if the TTF isn't present. The font lives at
+    ``static/fonts/Amiri-Regular.ttf`` (OFL) — committed separately so it ships
+    to production. Returning None lets callers fall back to the English-only
+    header instead of crashing."""
+    try:
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        from django.contrib.staticfiles.finders import find as find_static
+        if 'ArabicHeader' in pdfmetrics.getRegisteredFontNames():
+            return 'ArabicHeader'
+        path = find_static('fonts/Amiri-Regular.ttf')
+        if not path:
+            return None
+        pdfmetrics.registerFont(TTFont('ArabicHeader', path))
+        return 'ArabicHeader'
+    except Exception:
+        return None
+
+
+def _shape_arabic(text):
+    """Reshape Arabic to its joined presentation forms and apply the bidi
+    algorithm, so it renders correctly (right-to-left, connected) in reportlab,
+    which does neither on its own. Falls back to the raw text on any error."""
+    try:
+        import arabic_reshaper
+        try:
+            from bidi import get_display
+        except ImportError:  # older python-bidi
+            from bidi.algorithm import get_display
+        return get_display(arabic_reshaper.reshape(text))
+    except Exception:
+        return text
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1339,7 +1396,12 @@ def po_export_pdf(request, pk, unpriced=False):
     items = po.items.all()
     is_draft = not po.is_released
 
-    NumberedCanvas = _make_numbered_canvas(draft=is_draft)
+    NumberedCanvas = _make_numbered_canvas(
+        draft=is_draft,
+        footer_left='Leap Networks Arabia',
+        footer_left2=('Material Requisition ' + (po.mr_revision or '')).strip(),
+        footer_center=str(po.po_number or ''),
+    )
 
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
@@ -1360,26 +1422,54 @@ def po_export_pdf(request, pk, unpriced=False):
     center_style = ParagraphStyle('Center', parent=styles['Normal'], fontSize=8, alignment=TA_CENTER)
     small_center = ParagraphStyle('SmallCenter', parent=styles['Normal'], fontSize=7, alignment=TA_CENTER)
 
-    # ── Logo + Title ──
+    # ── Header: company (left) · title (centre) · logo (right) ──
+    company_style = ParagraphStyle('Company', parent=styles['Normal'], fontSize=11,
+                                   fontName='Helvetica-Bold', leading=13, textColor=colors.black)
+    sub_style = ParagraphStyle('CompanySub', parent=styles['Normal'], fontSize=8,
+                               leading=11, textColor=colors.HexColor('#333333'))
+    header_title_style = ParagraphStyle('HdrTitle', parent=styles['Normal'], fontSize=14,
+                                        alignment=TA_CENTER, fontName='Helvetica-Bold', textColor=colors.black)
+
+    # Left: company name (EN + AR) + address + website, stacked.
+    left_cell = [Paragraph('Leap Networks Arabia', company_style)]
+    ar_font = _arabic_font()
+    if ar_font:
+        ar_style = ParagraphStyle('CompanyAr', parent=styles['Normal'], fontSize=12,
+                                  fontName=ar_font, leading=16, textColor=colors.black)
+        left_cell.append(Paragraph(_shape_arabic('شركة لييب نتوركس أرابيا'), ar_style))
+    left_cell.append(Paragraph('Al-Khobar, Saudi Arabia', sub_style))
+    left_cell.append(Paragraph('www.leap-arabia.com', sub_style))
+
+    # Centre: "Purchase Order" underlined in black, with any draft/unpriced note beneath.
+    center_cell = [Paragraph('<u>Purchase Order</u>', header_title_style)]
+    note = ''
     if is_draft:
         pending = po.current_stage['label'] if po.current_stage else 'approval'
-        title_html = (
-            'PURCHASE ORDER '
-            f'<font size="9" color="#C41E3A">— DRAFT (awaiting {pending})</font>'
-        )
-    else:
-        title_html = 'PURCHASE ORDER'
+        note = f'DRAFT (awaiting {pending})'
     if unpriced:
-        title_html += ' <font size="9" color="#6C757D">— UNPRICED</font>'
+        note = (note + ' · ' if note else '') + 'UNPRICED'
+    if note:
+        note_style = ParagraphStyle('HdrNote', parent=styles['Normal'], fontSize=8,
+                                    alignment=TA_CENTER, textColor=colors.HexColor('#C41E3A'))
+        center_cell.append(Spacer(1, 1.5*mm))
+        center_cell.append(Paragraph(note, note_style))
+
+    # Right: logo.
     logo_path = find_static('images/leap_logo.jpg')
     if logo_path:
         from reportlab.platypus import Image
-        logo = Image(logo_path, width=50*mm, height=15*mm)
-        title_table = Table([[logo, Paragraph(title_html, title_style)]], colWidths=[55*mm, 120*mm])
-        title_table.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
-        elements.append(title_table)
+        right_cell = Image(logo_path, width=38*mm, height=11.4*mm, hAlign='RIGHT')
     else:
-        elements.append(Paragraph(title_html, title_style))
+        right_cell = Paragraph('', normal_style)
+
+    header_table = Table([[left_cell, center_cell, right_cell]], colWidths=[70*mm, 60*mm, 50*mm])
+    header_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN', (2, 0), (2, 0), 'RIGHT'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    elements.append(header_table)
     elements.append(Spacer(1, 4*mm))
 
     # ── Header Info ──
