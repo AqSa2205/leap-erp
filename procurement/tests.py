@@ -164,6 +164,52 @@ class POPdfFooterTests(TestCase):
         self.assertIn('Page 1 of', text)
 
 
+class POPdfHeaderTests(TestCase):
+    """The PO PDF header shows the company block (left), 'Purchase Order'
+    (centre) and the logo (right). The Arabic company name renders when the
+    Arabic font is present; when it isn't, the export still succeeds."""
+
+    def setUp(self):
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('boss', password='pw', role=self.sa_role)
+        self.client.force_login(self.user)
+        self.po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-HDR-1', vendor_name='ACME',
+            po_issued_by='Tester', cost_center='projects', created_by=self.user)
+
+    def _text(self):
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            from PyPDF2 import PdfReader
+        r = self.client.get(reverse('procurement:po_export_pdf', kwargs={'pk': self.po.pk}))
+        self.assertEqual(r.status_code, 200)
+        return '\n'.join((p.extract_text() or '') for p in PdfReader(io.BytesIO(r.content)).pages)
+
+    def test_header_has_company_block_and_centre_title(self):
+        text = self._text()
+        self.assertIn('Leap Networks Arabia', text)
+        self.assertIn('Al-Khobar, Saudi Arabia', text)
+        self.assertIn('www.leap-arabia.com', text)
+        self.assertIn('Purchase Order', text)
+
+    def test_export_succeeds_even_without_arabic_font(self):
+        # The Arabic font isn't committed, so it's absent in the test env — the
+        # export must still render (Arabic line simply skipped), never 500.
+        from procurement.views import _arabic_font
+        self.assertIsNone(_arabic_font())          # confirms font truly absent here
+        r = self.client.get(reverse('procurement:po_export_pdf', kwargs={'pk': self.po.pk}))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r['Content-Type'], 'application/pdf')
+
+    def test_shape_arabic_transforms_text(self):
+        from procurement.views import _shape_arabic
+        raw = 'شركة لييب نتوركس أرابيا'
+        shaped = _shape_arabic(raw)
+        self.assertEqual(len(shaped), len(raw))   # same characters, reordered/reshaped
+        self.assertNotEqual(shaped, raw)          # bidi + reshape actually changed it
+
+
 class POEditFormSetTests(TestCase):
     """Editing a PO must persist line-item changes even when an existing row
     has a blank description — previously one such row silently blocked the
