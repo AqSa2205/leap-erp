@@ -468,10 +468,11 @@ class LeaveTypeForm(forms.ModelForm):
 class HolidayForm(forms.ModelForm):
     class Meta:
         model = Holiday
-        fields = ['date', 'name', 'is_active']
+        fields = ['date', 'name', 'category', 'is_active']
         widgets = {
             'date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
             'name': forms.TextInput(attrs={'class': 'form-control'}),
+            'category': forms.Select(attrs={'class': 'form-select'}),
             'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
         }
 

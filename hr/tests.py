@@ -405,7 +405,7 @@ class LeaveAdminViewTests(TestCase):
     def test_holiday_create(self):
         self.client.force_login(self.admin)
         resp = self.client.post(reverse('hr:holiday_create'),
-                                {'date': '2026-07-17', 'name': 'Eid', 'is_active': 'on'})
+                                {'date': '2026-07-17', 'name': 'Eid', 'category': 'eid', 'is_active': 'on'})
         self.assertRedirects(resp, reverse('hr:holiday_list'))
         self.assertEqual(Holiday.objects.filter(name='Eid').count(), 1)
 
@@ -5276,3 +5276,69 @@ class TeamExceptionsDecideCommentTests(TestCase):
         self.exc.refresh_from_db()
         self.assertEqual(self.exc.status, 'approved')
         self.assertEqual(self.exc.decision_note, '')
+
+
+class AttendanceExportColorTests(TestCase):
+    # The register exports fill each cell with a color matching its status -
+    # Annual Leave, Saudi National Day, and Eid holidays each get their own
+    # distinct fill color in the Excel export.
+
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.admin = User.objects.create_user('adm2', password='x'); self.admin.role = role; self.admin.save()
+        self.emp = make_employee(iqama='E2', name='Leave Tester')
+        self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+        LeaveRecord.objects.create(
+            employee=self.emp, leave_type=self.annual,
+            start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13))
+        Holiday.objects.create(date=_date(2026, 7, 14), name='Saudi National Day', category='saudi_national_day')
+        Holiday.objects.create(date=_date(2026, 7, 15), name='Eid al-Fitr', category='eid')
+        self.client.force_login(self.admin)
+
+    def test_annual_leave_cell_has_correct_fill_color(self):
+        import io
+        import openpyxl as _op
+        resp = self.client.get(reverse('hr:attendance_matrix_export_excel') + '?period=month&date=2026-07-15')
+        self.assertEqual(resp.status_code, 200)
+        ws = _op.load_workbook(io.BytesIO(resp.content)).active
+        header = [c.value for c in ws[3]]
+        col_13 = header.index('13-Jul') + 1
+        target_row = None
+        for row in ws.iter_rows(min_row=4):
+            if row[0].value == 'Leave Tester':
+                target_row = row
+                break
+        self.assertIsNotNone(target_row, 'Employee row not found in export')
+        fill = target_row[col_13 - 1].fill.start_color.rgb
+        self.assertEqual(fill[-6:].upper(), 'FCE4D6', 'Annual Leave cell is not the expected peach color')
+
+    def test_saudi_national_day_cell_has_correct_fill_color(self):
+        import io
+        import openpyxl as _op
+        resp = self.client.get(reverse('hr:attendance_matrix_export_excel') + '?period=month&date=2026-07-15')
+        ws = _op.load_workbook(io.BytesIO(resp.content)).active
+        header = [c.value for c in ws[3]]
+        col_14 = header.index('14-Jul') + 1
+        target_row = None
+        for row in ws.iter_rows(min_row=4):
+            if row[0].value == 'Leave Tester':
+                target_row = row
+                break
+        fill = target_row[col_14 - 1].fill.start_color.rgb
+        self.assertEqual(fill[-6:].upper(), '00B050', 'Saudi National Day cell is not the expected green color')
+
+    def test_eid_holiday_cell_has_correct_fill_color(self):
+        import io
+        import openpyxl as _op
+        resp = self.client.get(reverse('hr:attendance_matrix_export_excel') + '?period=month&date=2026-07-15')
+        ws = _op.load_workbook(io.BytesIO(resp.content)).active
+        header = [c.value for c in ws[3]]
+        col_15 = header.index('15-Jul') + 1
+        target_row = None
+        for row in ws.iter_rows(min_row=4):
+            if row[0].value == 'Leave Tester':
+                target_row = row
+                break
+        fill = target_row[col_15 - 1].fill.start_color.rgb
+        self.assertEqual(fill[-6:].upper(), 'FFFF00', 'Eid holiday cell is not the expected yellow color')
