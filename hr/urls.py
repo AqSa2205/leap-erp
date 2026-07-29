@@ -7,8 +7,6 @@ urlpatterns = [
     path('', views.hr_dashboard, name='hr_dashboard'),
     path('my-profile/', views.my_profile, name='my_profile'),
     path('employees/', views.EmployeeListView.as_view(), name='employee_list'),
-    # TEMPORARY bulk Office/Site back-fill — remove with the view + list controls.
-    path('employees/bulk-work-location/', views.employee_bulk_work_location, name='employee_bulk_work_location'),
     path('create/', views.EmployeeCreateView.as_view(), name='employee_create'),
     path('import/', views.employee_import, name='employee_import'),
     path('export/', views.employee_export, name='employee_export'),
