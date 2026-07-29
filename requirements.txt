@@ -48,3 +48,8 @@ msal>=1.28.0
 # File storage — Cloudflare R2 (S3-compatible) for persistent uploads.
 # Activated when USE_R2=True env var is set; otherwise local filesystem is used.
 django-storages[s3]==1.14.4
+
+# Arabic text in PDF headers (PO export) — reshape to joined presentation
+# forms + apply the bidi algorithm so reportlab renders Arabic correctly.
+arabic-reshaper==3.0.1
+python-bidi==0.6.11
