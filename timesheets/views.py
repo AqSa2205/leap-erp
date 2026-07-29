@@ -17,7 +17,7 @@ from datetime import date as date_cls
 from django.utils import timezone
 from .models import TimesheetRequest, TimesheetRequestAck, HRSettings
 from urllib.parse import quote
-from .services import request_timesheets, delete_request, submit_month
+from .services import request_timesheets, delete_request, submit_month, reopen_month
 
 def _get_employee_or_none(request):
     """Same lookup my_profile uses in hr/views.py — an authenticated user
@@ -504,10 +504,27 @@ def hr_request_detail(request, request_id):
 @require_POST
 def hr_request_delete(request, request_id):
     """Permanently remove a timesheet request — e.g. HR picked the wrong
-    month by mistake. Does not recreate anything; HR starts a fresh
-    request separately via the normal 'Request Timesheets' form if needed."""
+    month by mistake. Also reopens (un-submits) any employee's entries
+    that were locked as a result of acknowledging THIS request, so
+    deleting the request doesn't leave entries stuck as 'Submitted' with
+    no request left to explain why."""
     ts_request = get_object_or_404(TimesheetRequest, pk=request_id)
     year, month = ts_request.year, ts_request.month
+
+    # Capture who acknowledged BEFORE deleting — delete_request cascades
+    # and removes these Ack rows along with the request itself.
+    acked_employees = [
+        ack.employee for ack in
+        TimesheetRequestAck.objects.filter(request=ts_request).select_related('employee')
+    ]
+    for emp in acked_employees:
+        try:
+            reopen_month(employee=emp, year=year, month=month, reopened_by=request.user)
+        except ValueError:
+            # Already not submitted for some reason — nothing to reopen
+            # for this employee; the delete should still proceed.
+            pass
+
     delete_request(ts_request)
     messages.success(request, f'Timesheet request for {month}/{year} deleted.')
     return redirect('timesheets:hr_request')
