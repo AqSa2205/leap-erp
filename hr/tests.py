@@ -5294,6 +5294,7 @@ class AttendanceExportColorTests(TestCase):
             start_date=_date(2026, 7, 13), end_date=_date(2026, 7, 13))
         Holiday.objects.create(date=_date(2026, 7, 14), name='Saudi National Day', category='saudi_national_day')
         Holiday.objects.create(date=_date(2026, 7, 15), name='Eid al-Fitr', category='eid')
+        AttendanceRecord.objects.create(employee=self.emp, date=_date(2026, 7, 16), status='present')
         self.client.force_login(self.admin)
 
     def test_annual_leave_cell_has_correct_fill_color(self):
@@ -5342,3 +5343,18 @@ class AttendanceExportColorTests(TestCase):
                 break
         fill = target_row[col_15 - 1].fill.start_color.rgb
         self.assertEqual(fill[-6:].upper(), 'FFFF00', 'Eid holiday cell is not the expected yellow color')
+
+    def test_present_cell_has_correct_fill_color(self):
+        import io
+        import openpyxl as _op
+        resp = self.client.get(reverse('hr:attendance_matrix_export_excel') + '?period=month&date=2026-07-15')
+        ws = _op.load_workbook(io.BytesIO(resp.content)).active
+        header = [c.value for c in ws[3]]
+        col_16 = header.index('16-Jul') + 1
+        target_row = None
+        for row in ws.iter_rows(min_row=4):
+            if row[0].value == 'Leave Tester':
+                target_row = row
+                break
+        fill = target_row[col_16 - 1].fill.start_color.rgb
+        self.assertEqual(fill[-6:].upper(), 'C6E0B4', 'Present cell is not the expected green color')
