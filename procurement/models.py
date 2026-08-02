@@ -53,6 +53,7 @@ class PurchaseOrder(models.Model):
         ('USD', 'USD — US Dollar'),
         ('EUR', 'EUR — Euro'),
         ('AED', 'AED — UAE Dirham'),
+        ('GBP', 'GBP — British Pound'),
     ]
     # Fractional unit name per currency, for the "amount in words" line.
     CURRENCY_FRACTIONS = {
@@ -60,6 +61,7 @@ class PurchaseOrder(models.Model):
         'USD': ('Cent', 'Cents'),
         'EUR': ('Cent', 'Cents'),
         'AED': ('Fils', 'Fils'),
+        'GBP': ('Penny', 'Pence'),
     }
 
     # Suggested values for the `system` datalist on the PO form.
