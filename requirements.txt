@@ -4,7 +4,10 @@ gunicorn==21.2.0
 whitenoise==6.6.0
 
 # Database
-psycopg2-binary==2.9.9
+# NOTE: the Postgres driver (psycopg2-binary) lives in requirements-prod.txt, not
+# here. It has no prebuilt wheel for every Python version and otherwise tries to
+# compile from source (needs pg_config), which breaks local installs. Local dev
+# uses SQLite and never needs it. Production installs via requirements-prod.txt.
 dj-database-url==2.1.0
 
 # Forms and Filtering
