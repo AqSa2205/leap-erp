@@ -8,6 +8,9 @@ from hr.forms import LeaveRequestForm
 
 from django.test import TestCase
 from hr.forms import EmployeeForm, AssetForm
+from unittest.mock import patch
+from django.core import mail
+from django.test import TestCase, override_settings
 
 
 class EmployeeFormValidationTests(TestCase):
@@ -5342,3 +5345,98 @@ class AttendanceExportColorTests(TestCase):
                 break
         fill = target_row[col_15 - 1].fill.start_color.rgb
         self.assertEqual(fill[-6:].upper(), 'FFFF00', 'Eid holiday cell is not the expected yellow color')
+
+
+
+
+class SendLeaveDecisionEmailTests(TestCase):
+    """Coverage for _send_leave_decision_email — the function that emails an
+    employee once their leave request has been approved/disapproved.
+    Uses Django's locmem email backend (mail.outbox) so no real network call
+    or Graph credentials are needed to run these."""
+
+    def setUp(self):
+        self.emp = make_employee(iqama='EML-1', name='Email Test Employee')
+        self.emp_user = make_user('email_test_user', email='employee@leap-arabia.com')
+        self.emp.user = self.emp_user
+        self.emp.save(update_fields=['user'])
+        self.annual, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+        self.req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.annual,
+            start_date=_date(2026, 9, 1), end_date=_date(2026, 9, 3))
+
+    def _call(self, status):
+        # Adjust this import path to wherever _send_leave_decision_email
+        # actually lives in your project.
+            
+        from hr.leave_approval_services import _send_leave_decision_email
+        _send_leave_decision_email(self.req, status)
+
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+    def test_approved_email_sent_to_employee_with_correct_subject_and_body(self):
+        self._call('approved')
+        self.assertEqual(len(mail.outbox), 1)
+        sent = mail.outbox[0]
+        self.assertEqual(sent.to, ['employee@leap-arabia.com'])
+        self.assertEqual(sent.subject, 'Your leave request has been approved')
+        self.assertIn(self.emp.full_name, sent.body)
+        self.assertIn('Annual', sent.body)
+        self.assertIn(str(self.req.start_date), sent.body)
+        self.assertIn(str(self.req.end_date), sent.body)
+        self.assertIn('has been approved', sent.body)
+        self.assertNotIn('disapproved due to', sent.body)  # no rejection block on approval
+
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+    def test_disapproved_email_includes_rejection_comment(self):
+        approver = make_user('email_test_approver')
+        LeaveRequestApproval.objects.create(
+            leave_request=self.req, approver=approver,
+            decision='disapproved', comment='Insufficient notice given')
+        self._call('disapproved')
+        self.assertEqual(len(mail.outbox), 1)
+        sent = mail.outbox[0]
+        self.assertEqual(sent.subject, 'Your leave request has been disapproved')
+        self.assertIn('disapproved due to: Insufficient notice given', sent.body)
+
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+    def test_disapproved_email_with_no_comment_omits_reason_block(self):
+        # disapproved but the approval row has no comment / doesn't exist —
+        # the "due to:" line must not appear at all.
+        self._call('disapproved')
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertNotIn('disapproved due to', mail.outbox[0].body)
+
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+    def test_disapproved_email_ignores_blank_comment_rows(self):
+        # exclude(comment='') in the function — an approval row with an
+        # empty-string comment must be skipped, not shown as a blank reason.
+        approver = make_user('email_test_approver2')
+        LeaveRequestApproval.objects.create(
+            leave_request=self.req, approver=approver, decision='disapproved', comment='')
+        self._call('disapproved')
+        self.assertNotIn('disapproved due to', mail.outbox[0].body)
+
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+    def test_no_email_sent_when_employee_has_no_email_address(self):
+        self.emp_user.email = ''
+        self.emp_user.save(update_fields=['email'])
+        self._call('approved')
+        self.assertEqual(len(mail.outbox), 0)
+
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+    def test_send_mail_exception_is_caught_not_raised(self):
+        # A Graph/SMTP failure must not bubble up and break the approval
+        # flow that calls this function — it should be swallowed and logged.
+        with patch('hr.leave_approval_services.send_mail', side_effect=Exception('Simulated send failure')):
+            try:
+                self._call('approved')
+            except Exception:
+                self.fail('_send_leave_decision_email must not propagate send errors')
+
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+    def test_email_sent_to_correct_recipient_only(self):
+        other_user = make_user('email_bystander', email='bystander@leap-arabia.com')
+        self._call('approved')
+        self.assertEqual(mail.outbox[0].to, ['employee@leap-arabia.com'])
+        self.assertNotIn('bystander@leap-arabia.com', mail.outbox[0].to)

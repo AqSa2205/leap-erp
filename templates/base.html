@@ -949,6 +949,15 @@
                 </a>
             </li>
             {% endif %}
+            
+            {% if not user.is_admin_user and not user.is_super_admin_user and user.leave_dashboard_access.is_active %}
+            <li class="nav-item">
+                <a class="nav-link {% if 'leave_request' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:leave_request_list' %}" data-title="Leave Requests">
+                    <i class="bi bi-inboxes"></i> <span>Leave Requests</span>
+                </a>
+            </li>
+            {% endif %}
+
             {% if user.is_ai_developer_user or user.is_ai_head_user %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'my_tasks' and request.resolver_match.app_name == 'devtracking' %}active{% endif %}" href="{% url 'devtracking:my_tasks' %}" data-title="My Tasks">

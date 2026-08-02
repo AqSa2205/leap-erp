@@ -12,6 +12,7 @@ balance-deducting LeaveRecord or sets the salary-deduction flag.
 """
 from datetime import timedelta
 
+from django.core.mail import send_mail
 from django.db import transaction
 from django.utils import timezone
 
@@ -172,6 +173,35 @@ def _finalize(leave_request, status):
             verb=f'Your {leave_request.leave_type.name} leave request was {verb}',
             description=leave_request.override_reason if leave_request.is_overridden else '',
         )
+
+        _send_leave_decision_email(leave_request, status)
+     
+
+
+def _send_leave_decision_email(leave_request, status):
+    to_email = leave_request.employee.user.email
+    if not to_email:
+        print("Sorry there was no email address found for the employee.")
+        return
+
+    message=(
+        f"Hello {leave_request.employee.full_name},\n\n"
+        f"Your leave request for {leave_request.leave_type.name} from "
+        f"{leave_request.start_date} to {leave_request.end_date} has been {status}.\n\n"
+    )
+
+    if status == 'disapproved':
+        rejection= leave_request.approvals.filter(decision='disapproved').exclude(comment='').first()
+        if rejection:
+            message += f"It has been disapproved due to: {rejection.comment}\n\n"
+
+    message += "Best regards,\nHR Team"
+    subject = f"Your leave request has been {status}"  
+
+    try:
+        send_mail(subject, message, None, [to_email])
+    except Exception as e:
+        print(f"Error sending email to {to_email}: {e}")
 
 
 def submit_leave_request(*, employee, leave_type, start_date, end_date, employee_reason='', document=None, created_by):
