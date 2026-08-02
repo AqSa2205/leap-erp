@@ -49,7 +49,14 @@
     <!-- Attendance (this month) + Leave -->
     <div class="col-lg-6">
       <div class="card h-100">
-        <div class="card-header fw-semibold"><i class="bi bi-clock-history me-1"></i> Attendance — {{ attendance_month|date:"F Y" }}</div>
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <span class="fw-semibold"><i class="bi bi-clock-history me-1"></i> Attendance - {{ attendance_month|date:"F Y" }}</span>
+          <div class="d-flex gap-1">
+            <a href="?date={{ attendance_prev_month|date:'Y-m-d' }}" class="btn btn-sm btn-outline-secondary">&lsaquo; Prev</a>
+            <a href="?date={{ attendance_next_month|date:'Y-m-d' }}" class="btn btn-sm btn-outline-secondary">Next &rsaquo;</a>
+            <a href="{% url 'hr:my_attendance_export_pdf' %}?date={{ attendance_month|date:'Y-m-d' }}" target="_blank" class="btn btn-sm btn-outline-danger"><i class="bi bi-file-earmark-pdf"></i> PDF</a>
+          </div>
+        </div>
         <div class="card-body">
           {% if attendance_summary %}
           <div class="d-flex flex-wrap gap-2 mb-3">
@@ -61,6 +68,33 @@
           <p class="text-muted small mb-3">No attendance recorded this month.</p>
           {% endif %}
 
+
+          {% if daily_attendance %}
+          <div class="table-responsive mb-3" style="max-height: 250px; overflow-y: auto;">
+            <table class="table table-sm table-bordered mb-0">
+              <thead class="table-light sticky-top">
+                <tr><th>Date</th><th>Status</th></tr>
+              </thead>
+              <tbody>
+                {% for day in daily_attendance %}
+                <tr>
+                  <td>{{ day.date|date:"D, d M" }}</td>
+                  <td>
+                    {% if day.status == 'present' %}<span class="badge" style="background-color:#C6E0B4; color:#000;">Present</span>
+                    {% elif day.status == 'absent' %}<span class="badge" style="background-color:#F4B6C2; color:#000;">Absent</span>
+                    {% elif day.status == 'wfh' %}<span class="badge" style="background-color:#BDD7EE; color:#000;">WFH</span>
+                    {% elif day.status == 'leave' %}<span class="badge bg-secondary">Leave</span>
+                    {% elif day.status == 'holiday' %}<span class="badge bg-success">Holiday</span>
+                    {% elif day.status == 'weekend' %}<span class="badge bg-light text-dark border">Weekend</span>
+                    {% elif day.status == 'late' %}<span class="badge bg-warning text-dark">Late</span>
+                    {% else %}<span class="text-muted">-</span>{% endif %}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% endif %}
           <div class="fw-semibold small mb-2"><i class="bi bi-calendar2-check me-1"></i> Leave Balance ({{ attendance_month|date:"Y" }})</div>
           {% if entitlements %}
           <p class="text-muted small mb-2">
