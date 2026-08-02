@@ -357,6 +357,15 @@ class POCurrencyTests(TestCase):
         self.assertIn('Cents', _amount_in_words(Decimal('10.50'), 'USD'))
         self.assertIn('Cents', _amount_in_words(Decimal('10.50'), 'EUR'))
         self.assertIn('Fils', _amount_in_words(Decimal('10.50'), 'AED'))
+        self.assertIn('Pence', _amount_in_words(Decimal('10.50'), 'GBP'))
+        self.assertIn('Penny', _amount_in_words(Decimal('10.01'), 'GBP'))  # singular
+        self.assertIn('GBP', _amount_in_words(Decimal('10.00'), 'GBP'))
+
+    def test_gbp_is_a_currency_choice(self):
+        from procurement.models import PurchaseOrder
+        codes = dict(PurchaseOrder.CURRENCY_CHOICES)
+        self.assertIn('GBP', codes)
+        self.assertEqual(codes['GBP'], 'GBP — British Pound')
 
     def test_excel_headers_show_currency(self):
         from procurement.models import PurchaseOrderItem
@@ -416,6 +425,13 @@ class QuotationImportTests(TestCase):
         self.assertEqual(len(out['line_items']), 1)
         self.assertEqual(out['line_items'][0]['uom'], 'Nos')   # default
         self.assertEqual(out['line_items'][0]['unit_price'], 2.5)
+
+    def test_normalize_maps_gbp_currency(self):
+        from procurement.quotation_extract import _normalize
+        for raw in ('GBP', '£', 'POUND', 'Sterling'):
+            out = _normalize({'currency': raw, 'line_items': [
+                {'description': 'A', 'quantity': '1', 'unit_price': '1', 'uom': ''}]})
+            self.assertEqual(out['currency'], 'GBP', raw)
 
     def _upload(self):
         from unittest import mock
