@@ -2,7 +2,9 @@
 set -o errexit
 
 echo "=== Installing dependencies ==="
-pip install -r requirements.txt
+# Prod file: base requirements + psycopg2-binary (the Postgres driver, kept out
+# of requirements.txt so local SQLite installs don't try to compile it).
+pip install -r requirements-prod.txt
 
 echo "=== Checking DATABASE_URL ==="
 if [ -z "$DATABASE_URL" ]; then
