@@ -158,23 +158,32 @@
 <div class="container-fluid">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
+            {% if can_manage_org %}
             <h1 class="h3 mb-1">Org-Chart Management</h1>
             <p class="text-muted mb-0">Assign each employee's main manager and secondary managers, review the resulting hierarchy, and manage who can view the Leave Request dashboard.</p>
+            {% else %}
+            <h1 class="h3 mb-1">Org Chart</h1>
+            <p class="text-muted mb-0">Your team's reporting hierarchy.</p>
+            {% endif %}
         </div>
     </div>
 
+    {% if can_manage_org %}
     <ul class="nav nav-tabs mb-4 org-chart-tabs">
         <li class="nav-item">
             <a class="nav-link org-chart-tab-hierarchy {% if tab == 'hierarchy' %}active{% endif %}" href="?tab=hierarchy{% if search %}&search={{ search }}{% endif %}">
                 <i class="bi bi-diagram-3"></i> Reporting Hierarchy
             </a>
         </li>
+        {% if can_config_access %}
         <li class="nav-item">
             <a class="nav-link org-chart-tab-access {% if tab == 'access' %}active{% endif %}" href="?tab=access">
                 <i class="bi bi-person-check"></i> Leave Dashboard Access
             </a>
         </li>
+        {% endif %}
     </ul>
+    {% endif %}
 
     {% if tab == 'access' %}
     <div class="row g-4">
@@ -386,6 +395,7 @@
     </div>
     {% else %}
 
+    {% if can_manage_org %}
     <div class="card mb-4">
         <div class="card-body">
             <form method="get" class="row g-3">
@@ -507,6 +517,7 @@
             </div>
         </div>
     </div>
+    {% endif %}
 
     <div class="card">
         <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">

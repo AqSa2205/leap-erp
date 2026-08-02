@@ -173,6 +173,17 @@ DEFAULT_MODULE_ACCESS = {
     'ai_intern':          set(),
     'ai_engineer':        set(),
     'ai_junior_engineer': set(),
+    # ── HR/administration authorization roles ──
+    # PM / Site Manager / Document Controller: a Dashboard landing page plus the
+    # Department KPIs module (scoped to their own team inside the KPI views).
+    # Their other features (attendance/leave/assets/exceptions/org chart) are
+    # role-gated in the HR app, not capability-gated, so they need no module here.
+    'project_manager':     {'dashboard', 'kpis'},
+    'site_manager':        {'dashboard', 'kpis'},
+    'document_controller': {'dashboard', 'kpis'},
+    # ERP Admin: a Dashboard landing page; the Administration section it manages
+    # is role-gated (is_erp_admin_user), not capability-gated.
+    'erp_admin':           {'dashboard'},
 }
 
 # Per-codename baseline for ENFORCED granular caps that are not plain
@@ -188,6 +199,14 @@ DEFAULT_CODENAME_GRANTS = {
     'ai_intern':          {'devtracking.mywork'},
     'ai_engineer':        {'devtracking.mywork'},
     'ai_junior_engineer': {'devtracking.mywork'},
+    # Team-scoped HR roles get the per-person KPI scorecards + activity review
+    # for their own reports (kpis.activity). They deliberately do NOT get
+    # kpis.manage — entering department KPI targets/values is a company-level
+    # admin action, not a team-scoped one. The KPI views restrict per-person
+    # data to their reports (see kpis/views.py).
+    'project_manager':     {'kpis.activity'},
+    'site_manager':        {'kpis.activity'},
+    'document_controller': {'kpis.activity'},
 }
 
 
