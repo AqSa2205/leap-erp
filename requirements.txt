@@ -4,10 +4,14 @@ gunicorn==21.2.0
 whitenoise==6.6.0
 
 # Database
-# NOTE: the Postgres driver (psycopg2-binary) lives in requirements-prod.txt, not
-# here. It has no prebuilt wheel for every Python version and otherwise tries to
-# compile from source (needs pg_config), which breaks local installs. Local dev
-# uses SQLite and never needs it. Production installs via requirements-prod.txt.
+# Postgres driver, Linux-only. Production (Render) runs Linux and installs it
+# from a manylinux wheel. It is skipped on Windows/macOS because pip would try
+# to compile psycopg2 from source there (no wheel for newer Pythons -> needs
+# pg_config) and break hires' local installs. Local dev uses SQLite, so it is
+# never needed off Linux. The marker keeps a SINGLE requirements.txt correct for
+# both environments (previously split into requirements-prod.txt, which broke
+# prod because Render installs from requirements.txt directly).
+psycopg2-binary==2.9.9 ; sys_platform == 'linux'
 dj-database-url==2.1.0
 
 # Forms and Filtering
