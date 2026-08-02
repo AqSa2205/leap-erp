@@ -25,8 +25,9 @@ QUOTATION_TOOL = {
             'project_name': {'type': 'string'},
             'currency': {
                 'type': 'string',
-                'enum': ['SAR', 'USD', 'EUR', 'AED'],
-                'description': 'Currency of the prices. Map SR/Riyal->SAR, $/Dollar->USD, Dirham->AED.',
+                'enum': ['SAR', 'USD', 'EUR', 'AED', 'GBP'],
+                'description': 'Currency of the prices. Map SR/Riyal->SAR, $/Dollar->USD, '
+                               'Dirham->AED, £/Pound/Sterling->GBP.',
             },
             'vat_rate': {'type': 'number', 'description': 'VAT percentage as a number, e.g. 15 for 15%. 0 if none.'},
             'notes': {'type': 'string', 'description': 'Any important terms/validity/delivery notes, brief.'},
@@ -63,6 +64,7 @@ _CURRENCY_MAP = {
     'USD': 'USD', '$': 'USD', 'DOLLAR': 'USD',
     'EUR': 'EUR', '€': 'EUR', 'EURO': 'EUR',
     'AED': 'AED', 'DIRHAM': 'AED',
+    'GBP': 'GBP', '£': 'GBP', 'POUND': 'GBP', 'STERLING': 'GBP',
 }
 
 
