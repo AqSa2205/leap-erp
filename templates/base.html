@@ -1245,7 +1245,37 @@
         {% endif %}
 
         {# ─── ADMINISTRATION (includes Contacts/Database) ─── #}
-        {% if user.is_super_admin_user or user.is_admin_user %}
+        {# Team-scoped HR roles (Project Manager / Site Manager / Document Controller): #}
+        {# a slim section of their own team-scoped features. Team Exceptions appears in #}
+        {# the My Profile submenu above (gated by having reports); Department KPIs appears #}
+        {# via its own capability nav below. #}
+        {% if user.is_team_scoped_hr_user %}
+        <div class="nav-section" data-section="myteam"><span>My Team</span><i class="bi bi-chevron-down section-chevron"></i></div>
+        <ul class="nav flex-column nav-section-items" data-section-items="myteam">
+            <li class="nav-item">
+                <a class="nav-link {% if 'attendance' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:attendance_matrix' %}" data-title="Attendance">
+                    <i class="bi bi-clock-history"></i> <span>Attendance</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if 'asset' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:asset_list' %}" data-title="Team Assets">
+                    <i class="bi bi-laptop"></i> <span>Team Assets</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'leave_record_create' %}active{% endif %}" href="{% url 'hr:leave_record_create' %}" data-title="Add Leave">
+                    <i class="bi bi-calendar2-plus"></i> <span>Add Leave</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'org_chart' %}active{% endif %}" href="{% url 'hr:org_chart' %}" data-title="Org Chart">
+                    <i class="bi bi-diagram-3"></i> <span>Org Chart</span>
+                </a>
+            </li>
+        </ul>
+        {% endif %}
+
+        {% if user.is_super_admin_user or user.is_admin_user or user.is_erp_admin_user %}
         <div class="nav-section" data-section="administration"><span>Administration</span><i class="bi bi-chevron-down section-chevron"></i></div>
         <ul class="nav flex-column nav-section-items" data-section-items="administration">
             {% if user.is_super_admin_user %}
@@ -1269,6 +1299,9 @@
                 <i class="bi bi-hdd-stack"></i> <span>Storage</span>
               </a>
             </li>
+            {% endif %}
+            {# Org Chart: Super Admin (full management) + ERP Admin (hierarchy). #}
+            {% if user.is_super_admin_user or user.is_erp_admin_user %}
             <li class="nav-item">
               <a class="nav-link {% if request.resolver_match.url_name == 'org_chart' %}active{% endif %}" href="{% url 'hr:org_chart' %}" data-title="Org Chart">
                 <i class="bi bi-diagram-3"></i> <span>Org Chart</span>
@@ -1379,11 +1412,13 @@
                     </ul>
                 </div>
             </li>
+            {% if user.is_super_admin_user or user.is_admin_user %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'manpower' %}active{% endif %}" href="{% url 'manpower:sheet_list' %}" data-title="Manpower Costing">
                     <i class="bi bi-person-lines-fill"></i> <span>Manpower Costing</span>
                 </a>
             </li>
+            {% endif %}
             {% if user.is_super_admin_user or user.is_admin_user %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'company' %}active{% endif %}" href="{% url 'company:document_list' %}" data-title="Company Documents">
