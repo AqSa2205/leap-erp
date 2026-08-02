@@ -1,0 +1,11 @@
+# Production-only requirements (used by build.sh on Render).
+#
+# Installs everything in the base requirements plus the Postgres driver, which
+# is deliberately kept out of requirements.txt: psycopg2-binary has no prebuilt
+# wheel for every Python version and otherwise compiles from source (needs
+# pg_config), breaking local `pip install -r requirements.txt` on hires'
+# machines. Local dev runs on SQLite and never needs it.
+-r requirements.txt
+
+# PostgreSQL driver (production database on Render).
+psycopg2-binary==2.9.9
