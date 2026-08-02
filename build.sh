@@ -2,9 +2,10 @@
 set -o errexit
 
 echo "=== Installing dependencies ==="
-# Prod file: base requirements + psycopg2-binary (the Postgres driver, kept out
-# of requirements.txt so local SQLite installs don't try to compile it).
-pip install -r requirements-prod.txt
+# requirements.txt is self-correct across environments: psycopg2-binary carries
+# a `sys_platform == 'linux'` marker, so it installs here (Render/Linux) and is
+# skipped on hires' Windows machines.
+pip install -r requirements.txt
 
 echo "=== Checking DATABASE_URL ==="
 if [ -z "$DATABASE_URL" ]; then

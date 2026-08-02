@@ -1,11 +1,7 @@
-# Production-only requirements (used by build.sh on Render).
+# Deprecated shim. Everything now lives in requirements.txt, which is correct
+# for every environment (psycopg2-binary carries a `sys_platform == 'linux'`
+# marker, so it installs on Render/Linux and is skipped on Windows/macOS).
 #
-# Installs everything in the base requirements plus the Postgres driver, which
-# is deliberately kept out of requirements.txt: psycopg2-binary has no prebuilt
-# wheel for every Python version and otherwise compiles from source (needs
-# pg_config), breaking local `pip install -r requirements.txt` on hires'
-# machines. Local dev runs on SQLite and never needs it.
+# This file is kept only so any build config still referencing it keeps working;
+# it simply re-includes the single source of truth. Prefer `-r requirements.txt`.
 -r requirements.txt
-
-# PostgreSQL driver (production database on Render).
-psycopg2-binary==2.9.9
