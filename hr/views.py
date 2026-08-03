@@ -2290,19 +2290,21 @@ def attendance_matrix_export_excel(request):
             dd += timedelta(days=1)
     holiday_category_map = {h.date: h.category for h in Holiday.objects.filter(date__range=(start, end))}
 
-    COLOR_PRESENT = 'FFFFF0'
+    COLOR_PRESENT = 'C6E0B4'
     COLOR_ABSENT = 'C00000'
     COLOR_LATE = 'F4B183'
     COLOR_WEEKEND = 'D9D2E9'
     COLOR_ANNUAL_LEAVE = 'FCE4D6'
     COLOR_NATIONAL = '00B050'
     COLOR_EID = 'FFFF00'
-    COLOR_OTHER = 'F2F2F2'
+    COLOR_OTHER = 'BDD7EE'  # light blue - shared fallback for WFH, non-Annual leave types, and ungrouped holidays
 
     def fill_for(cell_data, emp_id):
         status = cell_data['status']
-        if status == 'present' or status == '':
+        if status == 'present':
             return COLOR_PRESENT
+        if status == '':
+            return None
         if status == 'absent':
             return COLOR_ABSENT
         if status == 'late':
@@ -2321,6 +2323,12 @@ def attendance_matrix_export_excel(request):
             if cat == 'eid':
                 return COLOR_EID
             return COLOR_OTHER
+        # AUTHOR'S NOTE: 'wfh' status currently falls through to COLOR_OTHER below,
+        # same as Sick/Marriage/other leave types and ungrouped holidays.
+        # To give WFH its own distinct color in the future: add
+        # if status == 'wfh': return COLOR_WFH here (above this comment),
+        # define a new COLOR_WFH constant near the other COLOR_ constants above,
+        # and add a matching test to AttendanceExportColorTests in hr/tests.py.
         return COLOR_OTHER
 
     wb = openpyxl.Workbook()
@@ -2357,7 +2365,9 @@ def attendance_matrix_export_excel(request):
             c = ws.cell(row=row, column=col, value=value)
             c.border = thin_border
             c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-            c.fill = PatternFill(start_color=fill_for(cell_data, r['employee'].pk), end_color=fill_for(cell_data, r['employee'].pk), fill_type='solid')
+            color_value = fill_for(cell_data, r['employee'].pk)
+            if color_value is not None:
+                c.fill = PatternFill(start_color=color_value, end_color=color_value, fill_type='solid')
 
     ws.column_dimensions['A'].width = 25
     for col in range(2, len(days) + 2):
@@ -2408,19 +2418,21 @@ def attendance_matrix_export_pdf(request):
             dd += timedelta(days=1)
     holiday_category_map = {h.date: h.category for h in Holiday.objects.filter(date__range=(start, end))}
 
-    COLOR_PRESENT = colors.HexColor('#FFFFF0')
+    COLOR_PRESENT = colors.HexColor('#C6E0B4')
     COLOR_ABSENT = colors.HexColor('#C00000')
     COLOR_LATE = colors.HexColor('#F4B183')
     COLOR_WEEKEND = colors.HexColor('#D9D2E9')
     COLOR_ANNUAL_LEAVE = colors.HexColor('#FCE4D6')
     COLOR_NATIONAL = colors.HexColor('#00B050')
     COLOR_EID = colors.HexColor('#FFFF00')
-    COLOR_OTHER = colors.HexColor('#F2F2F2')
+    COLOR_OTHER = colors.HexColor('#BDD7EE')  # light blue - shared fallback for WFH, non-Annual leave types, and ungrouped holidays
 
     def pdf_fill_for(cell_data, emp_id):
         status = cell_data['status']
-        if status == 'present' or status == '':
+        if status == 'present':
             return COLOR_PRESENT
+        if status == '':
+            return None
         if status == 'absent':
             return COLOR_ABSENT
         if status == 'late':
@@ -2439,8 +2451,13 @@ def attendance_matrix_export_pdf(request):
             if cat == 'eid':
                 return COLOR_EID
             return COLOR_OTHER
+        # AUTHOR'S NOTE: 'wfh' status currently falls through to COLOR_OTHER below,
+        # same as Sick/Marriage/other leave types and ungrouped holidays.
+        # To give WFH its own distinct color in the future: add
+        # if status == 'wfh': return COLOR_WFH here (above this comment),
+        # define a new COLOR_WFH constant near the other COLOR_ constants above,
+        # and add a matching test to AttendanceExportColorTests in hr/tests.py.
         return COLOR_OTHER
-
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4),
                             leftMargin=18, rightMargin=18, topMargin=24, bottomMargin=18)
@@ -2461,7 +2478,12 @@ def attendance_matrix_export_pdf(request):
             # Stack the status letter over the check-in/out times, each on its
             # own line, so a full month still fits the page width.
             row_data.append(Paragraph('<br/>'.join([label] + times), cell_style) if times else label)
-            bg_commands.append(('BACKGROUND', (col_idx, row_idx), (col_idx, row_idx), pdf_fill_for(c, r['employee'].pk)))
+            # Only emit a BACKGROUND for cells that actually have a fill colour;
+            # blank/unrecorded days return None (no fill). Emitting a None colour
+            # here would crash reportlab at render (setFillColor(None)).
+            color_value = pdf_fill_for(c, r['employee'].pk)
+            if color_value is not None:
+                bg_commands.append(('BACKGROUND', (col_idx, row_idx), (col_idx, row_idx), color_value))
         data.append(row_data)
 
     # Fixed column widths: a fair share of the usable width per day column.
