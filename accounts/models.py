@@ -21,6 +21,15 @@ class Role(models.Model):
     AI_INTERN = 'ai_intern'
     AI_ENGINEER = 'ai_engineer'
     AI_JUNIOR_ENGINEER = 'ai_junior_engineer'
+    # HR/administration authorization roles. PROJECT_MANAGER, SITE_MANAGER and
+    # DOCUMENT_CONTROLLER are team-scoped (they see only their own org-chart
+    # reports); ERP_ADMIN gets the whole Administration section, company-wide,
+    # minus the super-admin-only tools (user mgmt, permission matrix, password
+    # reset, storage). See hr/scoping.py for how the scope is resolved.
+    PROJECT_MANAGER = 'project_manager'
+    SITE_MANAGER = 'site_manager'
+    ERP_ADMIN = 'erp_admin'
+    DOCUMENT_CONTROLLER = 'document_controller'
 
     ROLE_CHOICES = [
         (SUPER_ADMIN, 'Super Administrator'),
@@ -39,6 +48,10 @@ class Role(models.Model):
         (AI_INTERN, 'AI Intern'),
         (AI_ENGINEER, 'AI Engineer'),
         (AI_JUNIOR_ENGINEER, 'Junior AI Engineer'),
+        (PROJECT_MANAGER, 'Project Manager'),
+        (SITE_MANAGER, 'Site Manager'),
+        (ERP_ADMIN, 'ERP Admin'),
+        (DOCUMENT_CONTROLLER, 'Document Controller'),
     ]
 
     name = models.CharField(max_length=20, choices=ROLE_CHOICES, unique=True)
@@ -102,6 +115,22 @@ class Role(models.Model):
     @property
     def is_ai_head(self):
         return self.name == self.AI_HEAD
+
+    @property
+    def is_project_manager(self):
+        return self.name == self.PROJECT_MANAGER
+
+    @property
+    def is_site_manager(self):
+        return self.name == self.SITE_MANAGER
+
+    @property
+    def is_erp_admin(self):
+        return self.name == self.ERP_ADMIN
+
+    @property
+    def is_document_controller(self):
+        return self.name == self.DOCUMENT_CONTROLLER
 
 
 # Roles whose users are tracked as "developers" in the devtracking module
@@ -217,6 +246,35 @@ class User(AbstractUser):
     def is_ai_team_user(self):
         """The whole AI department — head + developers/engineers/interns."""
         return self.is_ai_head_user or self.is_ai_developer_user
+
+    @property
+    def is_project_manager_user(self):
+        return bool(self.role and self.role.is_project_manager)
+
+    @property
+    def is_site_manager_user(self):
+        return bool(self.role and self.role.is_site_manager)
+
+    @property
+    def is_erp_admin_user(self):
+        return bool(self.role and self.role.is_erp_admin)
+
+    @property
+    def is_document_controller_user(self):
+        return bool(self.role and self.role.is_document_controller)
+
+    @property
+    def is_team_scoped_hr_user(self):
+        """The team-scoped HR roles — Project Manager, Site Manager, and
+        Document Controller. These get the HR feature set (attendance, leave,
+        assets, team exceptions, org chart, KPIs) restricted to their own
+        org-chart reports (see hr/scoping.py). Distinct from ERP Admin, which
+        gets the same features but company-wide."""
+        return (
+            self.is_project_manager_user
+            or self.is_site_manager_user
+            or self.is_document_controller_user
+        )
 
     @property
     def is_sales_team_user(self):

@@ -11,6 +11,7 @@
             <h1 class="h3 mb-1">Assets</h1>
             <p class="text-muted mb-0">IT asset tracking and management</p>
         </div>
+        {% if can_manage_assets %}
         <div>
             <a href="{% url 'hr:asset_export' %}?{{ request.GET.urlencode }}" class="btn btn-outline-secondary me-2">
                 <i class="bi bi-download"></i> Export
@@ -22,6 +23,7 @@
                 <i class="bi bi-plus-lg"></i> Add Asset
             </a>
         </div>
+        {% endif %}
     </div>
 
     <!-- Stat Cards -->
@@ -193,6 +195,7 @@
                                     <a href="{% url 'hr:asset_detail' asset.pk %}" class="btn btn-sm btn-outline-primary" title="View">
                                         <i class="bi bi-eye"></i>
                                     </a>
+                                    {% if can_manage_assets %}
                                     <a href="{% url 'hr:asset_update' asset.pk %}" class="btn btn-sm btn-outline-secondary" title="Edit">
                                         <i class="bi bi-pencil"></i>
                                     </a>
@@ -211,6 +214,7 @@
                                     <a href="{% url 'hr:asset_delete' asset.pk %}" class="btn btn-sm btn-outline-danger" title="Delete">
                                         <i class="bi bi-trash"></i>
                                     </a>
+                                    {% endif %}
                                 </div>
                             </td>
                         </tr>
@@ -219,12 +223,14 @@
                             <td colspan="10" class="text-center py-5">
                                 <i class="bi bi-laptop display-4 text-muted"></i>
                                 <p class="text-muted mt-3">No assets found.</p>
+                                {% if can_manage_assets %}
                                 <a href="{% url 'hr:asset_create' %}" class="btn btn-primary me-2">
                                     <i class="bi bi-plus-lg"></i> Add Asset
                                 </a>
                                 <a href="{% url 'hr:asset_import' %}" class="btn btn-outline-primary">
                                     <i class="bi bi-upload"></i> Import from Excel
                                 </a>
+                                {% endif %}
                             </td>
                         </tr>
                         {% endfor %}
