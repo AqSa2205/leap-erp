@@ -1,0 +1,151 @@
+{# engineer_calendar/templates/engineer_calendar/calendar_grid.html #}
+{% extends "base.html" %}
+{% load static %}
+
+{% block extra_css %}
+<style>
+  .cal-table { font-size: 0.8rem; border-collapse: collapse; }
+  .cal-table th, .cal-table td { border: 1px solid #ccc; text-align: center; vertical-align: middle; padding: 2px 4px; }
+  .cal-table td.day-cell { min-width: 60px; position: relative; }
+
+  .src-leave     { background-color: #cfe2ff; }  /* light blue */
+  .src-holiday   { background-color: #e2d9f3; }  /* light purple */
+  .src-weekend   { background-color: #fff3cd; }  /* yellow — matches the real template */
+  .src-wfh       { background-color: #d1e7dd; }  /* light green */
+  .src-timesheet { background-color: #ffffff; }
+  .src-manual    { background-color: #e9ecef; }  /* light gray — HR typed this by hand */
+  .src-blank     { background-color: #ffffff; }
+
+  .needs-review { border: 2px solid #dc3545 !important; }
+  .needs-review::after {
+    content: "⚠";
+    position: absolute;
+    top: -2px;
+    right: 1px;
+    font-size: 0.65rem;
+    color: #dc3545;
+  }
+
+  .emp-meta-row td { font-size: 0.7rem; color: #555; background-color: #f8f9fa; }
+  .emp-spacer-row td { border: none; padding: 3px 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4>{{ month_name }} {{ year }} — Engineer Calendar</h4>
+  <div>
+    <form method="post" action="{% url 'engineer_calendar:generate_draft' %}" class="d-inline">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-primary btn-sm">Generate Draft</button>
+    </form>
+    <a href="{% url 'engineer_calendar:export_excel' %}" class="btn btn-outline-success btn-sm">
+  <i class="bi bi-file-earmark-excel"></i> Export to Excel
+     </a>
+  </div>
+</div>
+
+<div class="table-responsive">
+<table class="cal-table">
+  <thead>
+    <tr>
+      <th>S.No</th>
+      <th>Employee Name</th>
+      <th>Department</th>
+      {% for day in day_numbers %}<th>{{ day }}</th>{% endfor %}
+      <th>Remarks</th>
+    </tr>
+    <tr>
+      <th colspan="3"></th>
+      {% for letter in weekday_letters %}<th>{{ letter }}</th>{% endfor %}
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ forloop.counter }}</td>
+      <td class="text-start">{{ row.employee.full_name }}</td>
+      <td class="text-start">{{ row.employee.designation }}</td>
+      {% for cell in row.day_cells %}
+        <td class="day-cell {{ cell.css_class }} {% if cell.needs_review %}needs-review{% endif %} editable-cell"
+            data-employee-id="{{ row.employee.id }}"
+            data-date="{{ cell.date }}">
+          <span class="cell-text">{{ cell.text }}</span>
+        </td>
+      {% endfor %}
+      <td>{# per-employee monthly remark — not built yet, see note #}</td>
+    </tr>
+    <tr class="emp-meta-row">
+      <td colspan="3">{# employment type / DOJ — not built yet, see note #}</td>
+      <td colspan="{{ day_numbers|length }}"></td>
+      <td></td>
+    </tr>
+    <tr class="emp-spacer-row"><td colspan="{{ day_numbers|length|add:4 }}"></td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}
+
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const tbody = document.querySelector('.cal-table tbody');
+
+  tbody.addEventListener('click', function (e) {
+    const td = e.target.closest('td.editable-cell');
+    if (!td || td.querySelector('input')) return;
+
+    const currentText = td.querySelector('.cell-text').textContent.trim();
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'form-control form-control-sm';
+    input.value = currentText;
+
+    td.innerHTML = '';
+    td.appendChild(input);
+    input.focus();
+
+    input.addEventListener('blur', function () {
+      saveCell(td, td.dataset.employeeId, td.dataset.date, input.value.trim(), currentText);
+    });
+    input.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') input.blur();
+      if (ev.key === 'Escape') renderCell(td, currentText);
+    });
+  });
+
+  function saveCell(td, employeeId, dateStr, text, fallbackText) {
+    fetch("{% url 'engineer_calendar:save_cell' %}", {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+      body: JSON.stringify({ employee_id: employeeId, date: dateStr, text: text }),
+    })
+      .then(function (resp) { if (!resp.ok) throw new Error(); return resp.json(); })
+      .then(function (data) {
+        td.className = 'day-cell ' + data.css_class + ' editable-cell';
+        renderCell(td, data.text);
+      })
+      .catch(function () {
+        renderCell(td, fallbackText);
+        alert('Could not save this cell — please try again.');
+      });
+  }
+
+  function renderCell(td, text) {
+    const span = document.createElement('span');
+    span.className = 'cell-text';
+    span.textContent = text;
+    td.innerHTML = '';
+    td.appendChild(span);
+  }
+
+  function getCookie(name) {
+    const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return match ? match.pop() : '';
+  }
+});
+</script>
+{% endblock %}

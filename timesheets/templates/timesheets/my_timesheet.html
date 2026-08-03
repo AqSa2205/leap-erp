@@ -53,10 +53,26 @@
                         </div>
                         {% if form.date.errors %}<div class="text-danger small mt-1">{{ form.date.errors.0 }}</div>{% endif %}
                     </div>
-                    <div class="col-md-3 mb-3">
-                        <label class="form-label">Activity code</label>
-                        {{ form.activity_code }}
-                        {% if form.activity_code.errors %}<div class="text-danger small mt-1">{{ form.activity_code.errors.0 }}</div>{% endif %}
+                    <div class="col-md-5 mb-3">
+                        <label class="form-label d-block">Type</label>
+                        <div class="btn-group mb-2" role="group">
+                            <input type="radio" class="btn-check" name="entry_type" id="entry_type_activity"
+                                   value="activity" {% if form.entry_type.value != 'project' %}checked{% endif %}>
+                            <label class="btn btn-outline-primary btn-sm" for="entry_type_activity">Internal Activity</label>
+
+                            <input type="radio" class="btn-check" name="entry_type" id="entry_type_project"
+                                   value="project" {% if form.entry_type.value == 'project' %}checked{% endif %}>
+                            <label class="btn btn-outline-primary btn-sm" for="entry_type_project">Client Project</label>
+                        </div>
+
+                        <div id="activity-code-field" class="{% if form.entry_type.value == 'project' %}d-none{% endif %}">
+                            {{ form.activity_code }}
+                            {% if form.activity_code.errors %}<div class="text-danger small mt-1">{{ form.activity_code.errors.0 }}</div>{% endif %}
+                        </div>
+                        <div id="project-field" class="{% if form.entry_type.value != 'project' %}d-none{% endif %}">
+                            {{ form.project }}
+                            {% if form.project.errors %}<div class="text-danger small mt-1">{{ form.project.errors.0 }}</div>{% endif %}
+                        </div>
                     </div>
                     <div class="col-md-2 mb-3">
                         <label class="form-label">Hours</label>
@@ -127,7 +143,7 @@
                                     {% for entry in group.entries %}
                                     <tr>
                                         <td style="width:55%">{{ entry.task_description }}</td>
-                                        <td style="width:15%">{{ entry.activity_code.code }}</td>
+                                        <td style="width:15%">{% if entry.project %}{{ entry.project.proposal_reference }}{% else %}{{ entry.activity_code.code }}{% endif %}</td>
                                         <td style="width:10%">{{ entry.hours }}</td>
                                         <td style="width:10%">
                                             {% if entry.status == 'draft' %}<span class="badge bg-secondary">Draft</span>
@@ -192,6 +208,30 @@ document.addEventListener('click', function (e) {
         chevron.classList.toggle('bi-chevron-right');
         chevron.classList.toggle('bi-chevron-down');
     }
+});
+</script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    function wireEntryTypeToggle(root) {
+        var activityRadio = root.querySelector('#entry_type_activity, [id^="entry_type_activity"]');
+        var projectRadio = root.querySelector('#entry_type_project, [id^="entry_type_project"]');
+        var activityField = root.querySelector('#activity-code-field, [id^="activity-code-field"]');
+        var projectField = root.querySelector('#project-field, [id^="project-field"]');
+        if (!activityRadio || !projectRadio || !activityField || !projectField) return;
+
+        function sync() {
+            if (projectRadio.checked) {
+                activityField.classList.add('d-none');
+                projectField.classList.remove('d-none');
+            } else {
+                projectField.classList.add('d-none');
+                activityField.classList.remove('d-none');
+            }
+        }
+        activityRadio.addEventListener('change', sync);
+        projectRadio.addEventListener('change', sync);
+    }
+    wireEntryTypeToggle(document);
 });
 </script>
 {% endblock %}

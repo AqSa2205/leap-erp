@@ -18,6 +18,16 @@ from django.utils import timezone
 from .models import TimesheetRequest, TimesheetRequestAck, HRSettings
 from urllib.parse import quote
 from .services import request_timesheets, delete_request, submit_month, reopen_month
+from engineer_calendar.services import generate_draft
+
+
+
+def _entry_label(entry):
+    """Short code/reference used to dedupe and display an entry — the
+    project's proposal reference for project-based entries, the activity
+    code otherwise. Centralised here so the HR preview, the Excel export,
+    and the my-timesheet grouping all agree on what to show."""
+    return entry.project.proposal_reference if entry.project_id else entry.activity_code.code
 
 def _get_employee_or_none(request):
     """Same lookup my_profile uses in hr/views.py — an authenticated user
@@ -43,7 +53,7 @@ def _group_entries_by_date(entries):
         unique_by_code = {}
         order = []
         for e in day_entries:
-            code = e.activity_code.code
+            code = _entry_label(e)
             if code not in unique_by_code:
                 unique_by_code[code] = e
                 order.append(code)
@@ -90,7 +100,7 @@ def my_timesheet(request):
     else:
         form = TimesheetEntryForm()
 
-    entries = TimesheetEntry.objects.filter(employee=emp).select_related('activity_code')
+    entries = TimesheetEntry.objects.filter(employee=emp).select_related('activity_code','project')
     grouped_entries = _group_entries_by_date(entries)
     # Only nag about the COS_0009 default when the employee actually has an
     # entry the auto-start/auto-end signal created -- checking the activity
@@ -191,7 +201,7 @@ def timesheet_export(request):
     entries_by_day = defaultdict(list)
     for e in TimesheetEntry.objects.filter(
             employee=emp, date__year=year, date__month=month
-        ).select_related('activity_code').order_by('id'):
+        ).select_related('activity_code','project').order_by('id'):
         entries_by_day[e.date.day].append(e)
 
     wb = openpyxl.Workbook()
@@ -272,8 +282,9 @@ def timesheet_export(request):
         # appeared in (a plain set() would lose that order).
         seen_codes = []
         for e in day_entries:
-            if e.activity_code.code not in seen_codes:
-                seen_codes.append(e.activity_code.code)
+            label=_entry_label(e)
+            if label not in seen_codes:
+                seen_codes.append(label)
         combined_codes = ', '.join(seen_codes) or None
 
         values = {
@@ -342,7 +353,7 @@ def _build_month_rows(emp, year, month):
     entries_by_day = defaultdict(list)
     for e in TimesheetEntry.objects.filter(
             employee=emp, date__year=year, date__month=month
-        ).select_related('activity_code').order_by('id'):
+        ).select_related('activity_code','project').order_by('id'):
         entries_by_day[e.date.day].append(e)
 
     rows = []
@@ -361,7 +372,7 @@ def _build_month_rows(emp, year, month):
         unique_by_code = {}
         order = []
         for e in day_entries:
-            code = e.activity_code.code
+            code = _entry_label(e)
             if code not in unique_by_code:
                 unique_by_code[code] = e
                 order.append(code)
@@ -442,11 +453,6 @@ def send_to_hr(request, request_id):
 @login_required
 @require_POST
 def acknowledge_send(request, request_id):
-    """Employee confirms they've sent their timesheet via their own Outlook.
-    The SEND itself is still self-reported — the server can't verify the
-    email actually went out — but confirming now also calls submit_month(),
-    which genuinely locks that month's entries, closing the gap where
-    entries stayed editable after being marked as sent."""
     emp = _get_employee_or_none(request)
     if emp is None:
         messages.error(request, 'Your account is not linked to an employee record yet. Contact HR.')
@@ -455,17 +461,13 @@ def acknowledge_send(request, request_id):
     ts_request = get_object_or_404(TimesheetRequest, pk=request_id)
     TimesheetRequestAck.objects.get_or_create(request=ts_request, employee=emp)
 
+    generate_draft([emp], year=ts_request.year, month=ts_request.month)  # ← new line: fills this employee's row into the calendar
+
     try:
         submit_month(
             employee=emp, year=ts_request.year, month=ts_request.month,
             submitted_by=request.user)
     except ValueError:
-        # Nothing to lock (no entries that month) or already locked —
-        # either way, the acknowledgment itself still succeeds. We
-        # deliberately don't guard this behind "only on first ack" — that
-        # way, if HR reopens the month later and the employee re-sends and
-        # re-clicks "I've sent this," it correctly re-locks the entries
-        # too, instead of silently staying unlocked forever.
         pass
 
     messages.success(request, 'Thanks — marked as sent to HR.')

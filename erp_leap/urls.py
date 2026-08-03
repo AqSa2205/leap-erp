@@ -24,6 +24,7 @@ urlpatterns = [
     path('procurement/', include('procurement.urls')),
     path('devtracking/', include('devtracking.urls')),
     path('timesheets/', include('timesheets.urls')),
+    path('engineer-calendar/', include('engineer_calendar.urls')),
     path('kpis/', include('kpis.urls')),
     path('company/', include('company.urls')),
     path('finance/', include('finance.urls')),

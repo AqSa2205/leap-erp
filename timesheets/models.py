@@ -1,5 +1,8 @@
 from django.conf import settings
 from django.db import models
+from django.core.exceptions import ValidationError
+
+
 
 
 class ActivityCode(models.Model):
@@ -17,7 +20,7 @@ class ActivityCode(models.Model):
 
 
 class TimesheetEntry(models.Model):
-    """One row = one day's work log for one employee."""
+    """One row = one day's work log for one employee.It can be either an internal wor item (acitivity code) or a real client project. However it cn never be both or neither."""
     STATUS_DRAFT = 'draft'
     STATUS_SUBMITTED = 'submitted'
     STATUS_CHOICES = [
@@ -30,7 +33,13 @@ class TimesheetEntry(models.Model):
     date = models.DateField()
     task_description = models.TextField()
     activity_code = models.ForeignKey(
-        ActivityCode, on_delete=models.PROTECT, related_name='entries')
+        ActivityCode, on_delete=models.PROTECT, related_name='entries',
+        null=True, blank=True,
+        help_text='Internal work item (e.g., Head office). Use this OR project, not both.')
+    project=models.ForeignKey(
+        'projects.Project', on_delete=models.PROTECT, related_name='timesheet_entries',
+         null=True, blank=True,
+         help_text="If this entry is for a client project, select the project here. If it's for an internal activity code, leave this blank.")
     hours = models.DecimalField(max_digits=4, decimal_places=2)
     status = models.CharField(
         max_length=10, choices=STATUS_CHOICES, default=STATUS_DRAFT)
@@ -43,6 +52,10 @@ class TimesheetEntry(models.Model):
 
     def __str__(self):
         return f"{self.employee} - {self.date} ({self.hours}h)"
+
+    def clean(self):
+         if bool(self.activity_code_id) == bool(self.project_id):
+            raise ValidationError("TimesheetEntry must have either an activity code or a project, but not both or neither.")
 
 
 class TimesheetMonth(models.Model):

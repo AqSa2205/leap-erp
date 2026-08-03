@@ -23,10 +23,26 @@
                                 {{ form.date }}
                                 {% if form.date.errors %}<div class="text-danger small mt-1">{{ form.date.errors.0 }}</div>{% endif %}
                             </div>
-                            <div class="col-md-4 mb-3">
-                                <label class="form-label">Activity code</label>
-                                {{ form.activity_code }}
-                                {% if form.activity_code.errors %}<div class="text-danger small mt-1">{{ form.activity_code.errors.0 }}</div>{% endif %}
+                            <div class="col-md-8 mb-3">
+                                <label class="form-label d-block">Type</label>
+                                <div class="btn-group mb-2" role="group">
+                                    <input type="radio" class="btn-check" name="entry_type" id="entry_type_activity"
+                                           value="activity" {% if form.entry_type.value != 'project' %}checked{% endif %}>
+                                    <label class="btn btn-outline-primary btn-sm" for="entry_type_activity">Internal Activity</label>
+
+                                    <input type="radio" class="btn-check" name="entry_type" id="entry_type_project"
+                                           value="project" {% if form.entry_type.value == 'project' %}checked{% endif %}>
+                                    <label class="btn btn-outline-primary btn-sm" for="entry_type_project">Client Project</label>
+                                </div>
+
+                                <div id="activity-code-field" class="{% if form.entry_type.value == 'project' %}d-none{% endif %}">
+                                    {{ form.activity_code }}
+                                    {% if form.activity_code.errors %}<div class="text-danger small mt-1">{{ form.activity_code.errors.0 }}</div>{% endif %}
+                                </div>
+                                <div id="project-field" class="{% if form.entry_type.value != 'project' %}d-none{% endif %}">
+                                    {{ form.project }}
+                                    {% if form.project.errors %}<div class="text-danger small mt-1">{{ form.project.errors.0 }}</div>{% endif %}
+                                </div>
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label class="form-label">Hours</label>
@@ -52,4 +68,25 @@
         </div>
     </div>
 </div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var activityRadio = document.getElementById('entry_type_activity');
+    var projectRadio = document.getElementById('entry_type_project');
+    var activityField = document.getElementById('activity-code-field');
+    var projectField = document.getElementById('project-field');
+    if (!activityRadio || !projectRadio) return;
+
+    function sync() {
+        if (projectRadio.checked) {
+            activityField.classList.add('d-none');
+            projectField.classList.remove('d-none');
+        } else {
+            projectField.classList.add('d-none');
+            activityField.classList.remove('d-none');
+        }
+    }
+    activityRadio.addEventListener('change', sync);
+    projectRadio.addEventListener('change', sync);
+});
+</script>
 {% endblock %}

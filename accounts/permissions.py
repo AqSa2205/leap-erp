@@ -65,7 +65,9 @@ CAPABILITIES = [
 
     *_module('timesheets', 'Timesheets'),
     Capability('timesheets.review', 'Timesheets', 'review',
-               'Review & reopen employee timesheets (HR)', enforced=True, order=2),           
+               'Review & reopen employee timesheets (HR)', enforced=True, order=2),       
+
+    *_module('engineer_calendar', 'Engineer Calendar'),    
 ]
 
 
@@ -155,8 +157,8 @@ DEFAULT_MODULE_ACCESS = {
     # Department KPIs: restricted to super_admin only (the whole KPI section —
     # dashboard, by-person, and data entry). Super admin can widen later from
     # the permission grid if management wants dept heads to see it.
-    'super_admin':     _OPEN_TO_ALL | {'settings', 'devtracking', 'kpis'},
-    'admin':           _OPEN_TO_ALL | {'devtracking'},
+    'super_admin':     _OPEN_TO_ALL | {'settings', 'devtracking', 'kpis','engineer_calendar'},
+    'admin':           _OPEN_TO_ALL | {'devtracking','engineer_calendar'},
     'manager':         set(_OPEN_TO_ALL),
     'sales_rep':       set(_OPEN_TO_ALL),
     'procurement_mgr': set(_OPEN_TO_ALL),
