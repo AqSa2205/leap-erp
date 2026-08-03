@@ -2216,7 +2216,6 @@ def attendance_matrix_export_excel(request):
 
     status_labels = {'': '-', 'leave': 'L', 'holiday': 'H', 'weekend': 'WE', 'wfh': 'WFH', 'present': 'P', 'absent': 'A'}
     from hr.models import LeaveRecord, Holiday
-    from hr.models import LeaveRecord, Holiday  # FUTURE: import WFHRecord here too if giving WFH its own color (see AUTHOR'S NOTE below)
     leave_type_map = {}
     for lr in LeaveRecord.objects.filter(employee_id__in=[e.pk for e in employees], start_date__lte=end, end_date__gte=start).select_related('leave_type'):
         dd = max(lr.start_date, start)
@@ -2344,7 +2343,6 @@ def attendance_matrix_export_pdf(request):
 
     status_labels = {'': '-', 'leave': 'L', 'holiday': 'H', 'weekend': 'WE', 'wfh': 'WFH', 'present': 'P', 'absent': 'A'}
     from hr.models import LeaveRecord, Holiday
-    from hr.models import LeaveRecord, Holiday  # FUTURE: import WFHRecord here too if giving WFH its own color (see AUTHOR'S NOTE below)
     leave_type_map = {}
     for lr in LeaveRecord.objects.filter(employee_id__in=[e.pk for e in employees], start_date__lte=end, end_date__gte=start).select_related('leave_type'):
         dd = max(lr.start_date, start)
@@ -2414,7 +2412,9 @@ def attendance_matrix_export_pdf(request):
             # Stack the status letter over the check-in/out times, each on its
             # own line, so a full month still fits the page width.
             row_data.append(Paragraph('<br/>'.join([label] + times), cell_style) if times else label)
-            bg_commands.append(('BACKGROUND', (col_idx, row_idx), (col_idx, row_idx), pdf_fill_for(c, r['employee'].pk)))
+            # Only emit a BACKGROUND for cells that actually have a fill colour;
+            # blank/unrecorded days return None (no fill). Emitting a None colour
+            # here would crash reportlab at render (setFillColor(None)).
             color_value = pdf_fill_for(c, r['employee'].pk)
             if color_value is not None:
                 bg_commands.append(('BACKGROUND', (col_idx, row_idx), (col_idx, row_idx), color_value))
