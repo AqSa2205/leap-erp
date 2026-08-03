@@ -201,8 +201,14 @@ class SeedTests(TestCase):
 
     # The AI team is deliberately siloed to Dev Tracking (+ ungated My Work /
     # notifications), so it is exempt from the match-today open-module baseline.
+    # Siloed from the operational modules (costing/pipeline/procurement/po/dn):
+    # the AI team, plus the HR/administration authorization roles, which are
+    # scoped to HR features (attendance/leave/assets/etc.), not the commercial
+    # workflow. They get only dashboard (+ kpis for the team-scoped ones).
     SILOED_ROLES = {Role.DEVELOPER, Role.AI_HEAD, Role.AI_INTERN,
-                    Role.AI_ENGINEER, Role.AI_JUNIOR_ENGINEER}
+                    Role.AI_ENGINEER, Role.AI_JUNIOR_ENGINEER,
+                    Role.PROJECT_MANAGER, Role.SITE_MANAGER, Role.ERP_ADMIN,
+                    Role.DOCUMENT_CONTROLLER}
 
     def test_match_today_all_open_modules_on_for_every_role(self):
         # Zero-regression baseline: every currently-open module is ON for every

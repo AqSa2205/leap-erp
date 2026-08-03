@@ -28,11 +28,13 @@ from .forms import (
 from .leave_services import generate_year_entitlements
 from .attendance_services import derive_status
 from .attendance_matrix import period_range, build_matrix, display_status_no_record, cell_time_lines
+from .scoping import scoped_employee_ids, scope_employee_queryset, scope_asset_queryset, can_manage_hr_scoped
 
 
 class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
     def test_func(self):
-        return self.request.user.is_super_admin_user or self.request.user.is_admin_user
+        u = self.request.user
+        return u.is_super_admin_user or u.is_admin_user or u.is_erp_admin_user
 
 
 class SuperAdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
@@ -40,6 +42,20 @@ class SuperAdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
     Used for the conditional-leave approval queue per the access-control spec."""
     def test_func(self):
         return self.request.user.is_super_admin_user
+
+
+class HRScopedAccessMixin(LoginRequiredMixin, UserPassesTestMixin):
+    """Access gate for the shared HR feature set (attendance, leave, assets,
+    team exceptions, org chart). Passes for the company-wide admin tiers
+    (super_admin / admin / erp_admin) AND the team-scoped roles (project_manager
+    / site_manager / document_controller).
+
+    Views using this mixin MUST scope their own employee querysets through
+    ``scope_employee_queryset(self.request.user, qs)`` — this only opens the
+    door; it does not restrict WHICH rows are shown. For a scoped role with no
+    reports, the queryset comes back empty and they simply see nothing."""
+    def test_func(self):
+        return can_manage_hr_scoped(self.request.user)
 
 
 def is_designated_approver(user):
@@ -91,7 +107,7 @@ def _is_head_manager_role(user):
     visibility into the attendance-exception queue even if they currently
     have zero direct reports of their own (e.g. a newly-appointed head)."""
     return bool(
-        user.is_admin_user or user.is_super_admin_user or user.is_ai_head_user
+        user.is_admin_user or user.is_super_admin_user or user.is_erp_admin_user or user.is_ai_head_user
         or user.is_finance_head_user or user.is_procurement_manager_user or user.is_proposal_head_user
     )
 
@@ -139,9 +155,14 @@ def can_decide_attendance_exception(user, exc):
         # otherwise-blanket override rights — may decide or override their
         # own attendance exception request.
         return False
+    if user.is_document_controller_user:
+        # Document Controllers get the full (subtree-scoped) HR feature set but
+        # NO approval authority anywhere — so they can never decide or override
+        # an exception, even for an employee they'd otherwise manage.
+        return False
     if exc.employee.main_manager and exc.employee.main_manager.user_id == user.id:
         return True
-    if user.is_super_admin_user or user.is_admin_user:
+    if user.is_super_admin_user or user.is_admin_user or user.is_erp_admin_user:
         return True
     emp = getattr(user, 'employee_profile', None)
     if not emp:
@@ -154,7 +175,7 @@ def can_decide_attendance_exception(user, exc):
 @login_required
 def hr_dashboard(request):
     """Comprehensive HR Admin Dashboard with employees, assets, vehicles, and assignments."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('dashboard:index')
 
@@ -513,7 +534,7 @@ class EmployeeDeleteView(AdminRequiredMixin, DeleteView):
 
 @login_required
 def employee_import(request):
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'You do not have permission to import employees.')
         return redirect('hr:employee_list')
 
@@ -681,7 +702,7 @@ def employee_import(request):
 
 @login_required
 def employee_export(request):
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'You do not have permission to export employees.')
         return redirect('hr:employee_list')
 
@@ -779,14 +800,19 @@ def employee_export(request):
 # ─── Asset Views ─────────────────────────────────────────────────────────────
 
 
-class AssetListView(AdminRequiredMixin, ListView):
+class AssetListView(HRScopedAccessMixin, ListView):
     model = Asset
     template_name = 'hr/asset_list.html'
     context_object_name = 'assets'
     paginate_by = 25
 
+    def _scoped_base(self):
+        # Team-scoped roles see only assets currently held by their reports
+        # (read-only); admin tiers see the whole inventory.
+        return scope_asset_queryset(self.request.user, Asset.objects.all())
+
     def get_queryset(self):
-        queryset = Asset.objects.all()
+        queryset = self._scoped_base()
 
         search = self.request.GET.get('search', '')
         asset_type = self.request.GET.get('asset_type', '')
@@ -819,13 +845,16 @@ class AssetListView(AdminRequiredMixin, ListView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['filter_form'] = AssetFilterForm(self.request.GET)
-        context['total_count'] = Asset.objects.count()
-        context['in_stock_count'] = Asset.objects.filter(in_stock=True).count()
-        context['assigned_count'] = Asset.objects.filter(in_stock=False).count()
-        context['total_value'] = Asset.objects.aggregate(total=Sum('price'))['total'] or 0
+        # Stat cards reflect the viewer's scope (all inventory for admin tiers;
+        # only the team's held assets for scoped roles).
+        base = self._scoped_base()
+        context['total_count'] = base.count()
+        context['in_stock_count'] = base.filter(in_stock=True).count()
+        context['assigned_count'] = base.filter(in_stock=False).count()
+        context['total_value'] = base.aggregate(total=Sum('price'))['total'] or 0
 
         # Counts by asset type (top types)
-        type_counts = Asset.objects.exclude(asset_type='').values('asset_type').annotate(
+        type_counts = base.exclude(asset_type='').values('asset_type').annotate(
             count=Count('id')
         ).order_by('-count')[:5]
         context['type_counts'] = type_counts
@@ -845,13 +874,25 @@ class AssetListView(AdminRequiredMixin, ListView):
         context['conflict_serials'] = {s.lower() for s in conflict_serials}
         context['conflict_count'] = len(context['conflict_serials'])
 
+        # Inventory operations (add/edit/issue/import/export/decommission) are
+        # admin-only; team-scoped roles get a read-only view of their team's
+        # assets. Drives which action buttons render.
+        u = self.request.user
+        context['can_manage_assets'] = bool(
+            u.is_super_admin_user or u.is_admin_user or u.is_erp_admin_user)
+
         return context
 
 
-class AssetDetailView(AdminRequiredMixin, DetailView):
+class AssetDetailView(HRScopedAccessMixin, DetailView):
     model = Asset
     template_name = 'hr/asset_detail.html'
     context_object_name = 'asset'
+
+    def get_queryset(self):
+        # Team-scoped roles can only open an asset their team currently holds
+        # (out-of-scope 404s); admin tiers see everything.
+        return scope_asset_queryset(self.request.user, super().get_queryset())
 
 
 def _asset_employees_context():
@@ -918,7 +959,7 @@ class AssetDeleteView(AdminRequiredMixin, DeleteView):
 def asset_decommission(request, pk):
     """Mark an asset as out of service (dead / no longer usable). It can never
     be in stock once decommissioned."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:asset_list')
     from django.utils import timezone
@@ -940,7 +981,7 @@ def asset_decommission(request, pk):
 @require_POST
 def asset_restore(request, pk):
     """Restore a decommissioned asset back into service."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:asset_list')
     asset = get_object_or_404(Asset, pk=pk)
@@ -1065,7 +1106,7 @@ class AssetReturnView(AdminRequiredMixin, UpdateView):
 
 @login_required
 def asset_import(request):
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'You do not have permission to import assets.')
         return redirect('hr:asset_list')
 
@@ -1229,7 +1270,7 @@ def asset_import(request):
 
 @login_required
 def asset_export(request):
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'You do not have permission to export assets.')
         return redirect('hr:asset_list')
 
@@ -1364,7 +1405,7 @@ def leave_request_document_download(request, pk):
 @login_required
 def employee_document_upload(request, pk):
     """Upload a document for an employee."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:employee_list')
 
@@ -1387,7 +1428,7 @@ def employee_document_upload(request, pk):
 @login_required
 def employee_document_delete(request, pk):
     """Delete an employee document."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:employee_list')
 
@@ -1472,7 +1513,7 @@ class VehicleDetailView(AdminRequiredMixin, DetailView):
 @login_required
 def vehicle_document_upload(request, pk):
     """Upload a document for a vehicle."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:vehicle_list')
 
@@ -1495,7 +1536,7 @@ def vehicle_document_upload(request, pk):
 def vehicle_document_edit(request, pk):
     """Edit a vehicle document's details, optionally replacing the file.
     Replacing the file reclaims the old one via the central pre_save signal."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:vehicle_list')
 
@@ -1516,7 +1557,7 @@ def vehicle_document_edit(request, pk):
 @login_required
 def vehicle_document_delete(request, pk):
     """Delete a vehicle document (its file is reclaimed by the cleanup signal)."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:vehicle_list')
 
@@ -1558,7 +1599,7 @@ class VehicleDeleteView(AdminRequiredMixin, DeleteView):
 @login_required
 def vehicle_import(request):
     """Import vehicles from MOI Excel export."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:vehicle_list')
 
@@ -1644,7 +1685,7 @@ def vehicle_import(request):
 @login_required
 def vehicle_export(request):
     """Export vehicles to Excel."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:vehicle_list')
 
@@ -1915,15 +1956,25 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
         return ctx
 
 
-class LeaveRequestCreateView(AdminRequiredMixin, FormView):
-    # AdminRequiredMixin (Admin or Super Admin), not SuperAdminRequiredMixin: this view
-    # now also serves the legacy "Add Leave" buttons (Entitlements -> Leave Summary /
-    # Attendance Matrix), which were always plain-Admin-accessible. Narrowing that to
-    # Super Admin only would be an unintended access regression from unifying the two
-    # routes onto one view. A plain Admin can still only *submit* a conditional-leave
-    # request here — approving it in the queue remains Super-Admin/designated-approver-only.
+class LeaveRequestCreateView(HRScopedAccessMixin, FormView):
+    # HRScopedAccessMixin: Admin/Super Admin/ERP Admin (all employees) plus the
+    # team-scoped roles (their own reports only — enforced by scoping the
+    # employee dropdown in get_form). This view serves the "Add Leave" buttons
+    # (Entitlements -> Leave Summary / Attendance Matrix). A submitter can only
+    # *log* a request here — approving it in the queue stays with designated
+    # approvers.
     form_class = LeaveRequestForm
     template_name = 'hr/leave_request_form.html'
+
+    def get_form(self, form_class=None):
+        form = super().get_form(form_class)
+        # Restrict the employee dropdown to the submitter's team. A scoped role
+        # thus cannot log leave for anyone outside their reports (an out-of-team
+        # pk would also fail ModelChoiceField validation).
+        ids = scoped_employee_ids(self.request.user)
+        if ids is not None and 'employee' in form.fields:
+            form.fields['employee'].queryset = form.fields['employee'].queryset.filter(pk__in=ids)
+        return form
 
     def get_initial(self):
         initial = super().get_initial()
@@ -1952,10 +2003,14 @@ class LeaveRequestCreateView(AdminRequiredMixin, FormView):
         return redirect('hr:leave_request_list')
 
 
-class EmployeeLeaveSummaryView(AdminRequiredMixin, DetailView):
+class EmployeeLeaveSummaryView(HRScopedAccessMixin, DetailView):
     model = Employee
     template_name = 'hr/leave_summary.html'
     context_object_name = 'employee'
+
+    def get_queryset(self):
+        # Team-scoped roles can only open a leave summary for their own reports.
+        return scope_employee_queryset(self.request.user, super().get_queryset())
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -1970,7 +2025,7 @@ class EmployeeLeaveSummaryView(AdminRequiredMixin, DetailView):
 
 @login_required
 def entitlement_year(request):
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:hr_dashboard')
     year = _int_or(request.GET.get('year'), timezone.now().year)
@@ -2026,10 +2081,15 @@ def entitlement_year(request):
                    'entitlement_count': entitlements.count()})
 
 
-class AttendanceHistoryView(AdminRequiredMixin, DetailView):
+class AttendanceHistoryView(HRScopedAccessMixin, DetailView):
     model = Employee
     template_name = 'hr/attendance_history.html'
     context_object_name = 'employee'
+
+    def get_queryset(self):
+        # Team-scoped roles can only open history for their own reports (an
+        # out-of-team employee 404s); admin tiers see everyone.
+        return scope_employee_queryset(self.request.user, super().get_queryset())
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -2071,7 +2131,7 @@ def _int_or(value, default, lo=None, hi=None):
 
 @login_required
 def attendance_grid(request):
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not can_manage_hr_scoped(request.user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:hr_dashboard')
 
@@ -2079,7 +2139,10 @@ def attendance_grid(request):
     # Office / Site segregation. 'office' tab = office + unassigned (so nobody is
     # hidden until back-filled); 'site' tab = site only.
     location = (request.GET.get('location') or request.POST.get('location') or 'office')
-    emp_qs = Employee.objects.filter(is_active=True)
+    # Team-scoped roles (PM / Site Manager / Doc Controller) only see their own
+    # reports; admin tiers see everyone. POST below iterates `employees`, so this
+    # also blocks a scoped role from writing attendance outside their team.
+    emp_qs = scope_employee_queryset(request.user, Employee.objects.filter(is_active=True))
     if location == 'site':
         emp_qs = emp_qs.filter(work_location='site')
     else:
@@ -2127,7 +2190,7 @@ def attendance_grid(request):
 
 @login_required
 def attendance_settings(request):
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:hr_dashboard')
     obj = AttendanceSettings.load()
@@ -2149,7 +2212,7 @@ def attendance_settings(request):
 @require_POST
 def attendance_regenerate(request):
     """Re-derive stored status for all records on a given date (after leave/holiday edits)."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:hr_dashboard')
     day = _parse_date(request.POST.get('date'))
@@ -2164,7 +2227,7 @@ def attendance_regenerate(request):
 
 @login_required
 def attendance_matrix(request):
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not can_manage_hr_scoped(request.user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:hr_dashboard')
     period = request.GET.get('period') if request.GET.get('period') in ('week', 'month') else 'month'
@@ -2172,7 +2235,8 @@ def attendance_matrix(request):
     start, end = period_range(period, anchor)
     # Office / Site segregation (office tab = office + unassigned).
     location = request.GET.get('location') or 'office'
-    emp_qs = Employee.objects.filter(is_active=True)
+    # Team-scoped roles see only their own reports; admin tiers see everyone.
+    emp_qs = scope_employee_queryset(request.user, Employee.objects.filter(is_active=True))
     if location == 'site':
         emp_qs = emp_qs.filter(work_location='site')
     else:
@@ -2197,7 +2261,7 @@ def attendance_matrix(request):
 def attendance_matrix_export_excel(request):
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not can_manage_hr_scoped(request.user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:hr_dashboard')
 
@@ -2205,7 +2269,8 @@ def attendance_matrix_export_excel(request):
     anchor = _parse_date(request.GET.get('date'))
     start, end = period_range(period, anchor)
     location = request.GET.get('location') or 'office'
-    emp_qs = Employee.objects.filter(is_active=True)
+    # Team-scoped roles export only their own reports; admin tiers export all.
+    emp_qs = scope_employee_queryset(request.user, Employee.objects.filter(is_active=True))
     if location == 'site':
         emp_qs = emp_qs.filter(work_location='site')
     else:
@@ -2314,7 +2379,7 @@ def attendance_matrix_export_pdf(request):
     from reportlab.lib import colors
     import io
 
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not can_manage_hr_scoped(request.user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:hr_dashboard')
 
@@ -2322,7 +2387,8 @@ def attendance_matrix_export_pdf(request):
     anchor = _parse_date(request.GET.get('date'))
     start, end = period_range(period, anchor)
     location = request.GET.get('location') or 'office'
-    emp_qs = Employee.objects.filter(is_active=True)
+    # Team-scoped roles export only their own reports; admin tiers export all.
+    emp_qs = scope_employee_queryset(request.user, Employee.objects.filter(is_active=True))
     if location == 'site':
         emp_qs = emp_qs.filter(work_location='site')
     else:
@@ -2425,7 +2491,7 @@ def attendance_matrix_export_pdf(request):
 
 @require_POST
 def attendance_mark_leave(request):
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not can_manage_hr_scoped(request.user):
         raise PermissionDenied
     try:
         payload = json.loads(request.body or '{}')
@@ -2439,6 +2505,11 @@ def attendance_mark_leave(request):
     leave_type = LeaveType.objects.filter(pk=lt_id, is_active=True).first()
     if employee is None or leave_type is None:
         return JsonResponse({'error': 'Unknown employee or leave type'}, status=400)
+
+    # Team-scoped roles may only mark leave for their own reports.
+    scope = scoped_employee_ids(request.user)
+    if scope is not None and employee.pk not in scope:
+        return JsonResponse({'error': 'Employee is not in your team.'}, status=403)
 
     # Certificate-required leave (e.g. Sick) can't be granted from the one-click
     # grid action — there's nowhere to attach the file. Send them to Add Leave.
@@ -2469,7 +2540,7 @@ def attendance_mark_leave(request):
 @login_required
 @require_POST
 def attendance_unmark_leave(request):
-    if not (request.user.is_super_admin_user or request.user.is_admin_user):
+    if not can_manage_hr_scoped(request.user):
         raise PermissionDenied
     try:
         lr_id = int(json.loads(request.body or '{}')['leave_record_id'])
@@ -2479,6 +2550,10 @@ def attendance_unmark_leave(request):
     lr = LeaveRecord.objects.filter(pk=lr_id).first()
     if lr is None:
         return JsonResponse({'error': 'Not found'}, status=404)
+    # Team-scoped roles may only unmark leave for their own reports.
+    scope = scoped_employee_ids(request.user)
+    if scope is not None and lr.employee_id not in scope:
+        return JsonResponse({'error': 'Employee is not in your team.'}, status=403)
     if lr.start_date != lr.end_date:
         return JsonResponse({'error': 'Part of a multi-day leave — edit from the leave summary.'}, status=400)
 
@@ -2639,7 +2714,7 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         only — a non-HR user requesting it is silently downgraded to 'direct'
         rather than erroring or leaking org-wide data."""
         user = self.request.user
-        is_hr = bool(user.is_super_admin_user or user.is_admin_user)
+        is_hr = bool(user.is_super_admin_user or user.is_admin_user or user.is_erp_admin_user)
         requested = self.request.GET.get('tab')
         if requested not in self.VALID_TABS:
             return 'direct'
@@ -2693,7 +2768,7 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         user = self.request.user
         emp = getattr(user, 'employee_profile', None)
         tab = self._resolve_tab()
-        is_hr = bool(user.is_super_admin_user or user.is_admin_user)
+        is_hr = bool(user.is_super_admin_user or user.is_admin_user or user.is_erp_admin_user)
 
         pending = list(ctx['pending_exceptions'])
         # History is now the natural complement of the widened active queue:
@@ -2815,19 +2890,40 @@ class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
     context_object_name = 'employees'
 
     def test_func(self):
+        u = self.request.user
+        # Super Admin + ERP Admin get the management page; team-scoped roles get
+        # a read-only tree of their own subtree (enforced by _can_manage below +
+        # scoping in get_queryset/get_context_data and blocked in post()).
+        return bool(u.is_super_admin_user or u.is_erp_admin_user or u.is_team_scoped_hr_user)
+
+    def _can_manage(self):
+        """Who may edit the hierarchy (assignment table + save). Company-wide
+        admin tiers only — team-scoped roles get a read-only view."""
+        u = self.request.user
+        return bool(u.is_super_admin_user or u.is_erp_admin_user)
+
+    def _can_config_access(self):
+        """Who may open/change the Leave Dashboard Access tab (a permission-
+        granting surface). Super Admin only — deliberately NOT ERP Admin."""
         return self.request.user.is_super_admin_user
 
     VALID_TABS = ('hierarchy', 'access')
 
     def _resolve_tab(self):
-        """?tab=hierarchy|access, defaulting to 'hierarchy' if absent or invalid.
-        Both tabs are already Super-Admin-only (test_func above gates the whole
-        page), so there's no per-tab downgrade like TeamExceptionsView's 'all'."""
+        """?tab=hierarchy|access, defaulting to 'hierarchy'. The 'access' tab is
+        a permission-granting surface, so a user without config-access rights is
+        silently downgraded to 'hierarchy' (mirrors TeamExceptionsView's 'all')."""
         requested = self.request.GET.get('tab')
-        return requested if requested in self.VALID_TABS else 'hierarchy'
+        if requested not in self.VALID_TABS:
+            return 'hierarchy'
+        if requested == 'access' and not self._can_config_access():
+            return 'hierarchy'
+        return requested
 
     def get_queryset(self):
         qs = Employee.objects.filter(is_active=True).select_related('main_manager').order_by('full_name')
+        # Team-scoped roles only ever see their own reports in the table.
+        qs = scope_employee_queryset(self.request.user, qs)
         search = (self.request.GET.get('search') or '').strip()
         if search:
             qs = qs.filter(full_name__icontains=search)
@@ -2915,14 +3011,37 @@ class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         # of the page always shows the whole org, even while searching the
         # assignment table above it. The template recursively walks
         # main_reports.all() from each root via _org_chart_node.html.
-        ctx['root_employees'] = Employee.objects.filter(
-            is_active=True, main_manager__isnull=True).order_by('full_name')
+        if self._can_manage():
+            ctx['root_employees'] = Employee.objects.filter(
+                is_active=True, main_manager__isnull=True).order_by('full_name')
+        else:
+            # Team-scoped role: root the tree at themselves, so it shows only
+            # their own subtree instead of every company-wide root node.
+            emp = getattr(self.request.user, 'employee_profile', None)
+            ctx['root_employees'] = (
+                Employee.objects.filter(pk=emp.pk, is_active=True) if emp
+                else Employee.objects.none())
+        ctx['can_manage_org'] = self._can_manage()
+        ctx['can_config_access'] = self._can_config_access()
         return ctx
 
     def post(self, request, *args, **kwargs):
         from accounts.models import Role
         from .models import LeaveDashboardAccess, OverrideAccessSettings, OverrideAccessRole, OverrideAccessEmployee
         access_tab_url = f"{reverse('hr:org_chart')}?tab=access"
+
+        # Team-scoped roles have a read-only org chart — no mutations at all.
+        if not self._can_manage():
+            raise PermissionDenied
+        # The Leave Dashboard Access / Override actions are a permission-granting
+        # surface: Super Admin only, even for ERP Admin (who can still edit the
+        # hierarchy below). Any of these POST keys implies an access-tab action.
+        _access_keys = (
+            'grant_dashboard_access', 'revoke_dashboard_access', 'set_override_mode',
+            'toggle_override_role', 'grant_override_employee', 'revoke_override_employee',
+        )
+        if any(request.POST.get(k) for k in _access_keys) and not self._can_config_access():
+            raise PermissionDenied
 
         # Leave Dashboard Access tab actions — handled first and returned early,
         # since they key off a user/employee distinct from the hierarchy actions

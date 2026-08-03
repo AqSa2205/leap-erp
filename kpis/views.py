@@ -40,6 +40,21 @@ def _parse_decimal(raw):
         return None
 
 
+def _scoped_user_ids(user):
+    """Set of user-account ids a team-scoped role may see in the per-person KPI
+    views (their reports' linked login accounts), or ``None`` = unrestricted
+    (admin tiers). Bridges the HR org-chart scope onto user accounts, since KPI
+    scorecards/activity key off the *user* who owns records, not the Employee."""
+    from hr.scoping import scoped_employee_ids
+    emp_ids = scoped_employee_ids(user)
+    if emp_ids is None:
+        return None
+    from hr.models import Employee
+    return set(
+        Employee.objects.filter(pk__in=emp_ids, user__isnull=False)
+        .values_list('user_id', flat=True))
+
+
 def _resolve_region(request):
     """(region_instance_or_None, all_regions_queryset). Reads ?region=<code>;
     blank / 'all' / unknown -> None (all regions blended)."""
@@ -76,6 +91,12 @@ def people(request):
     computed from records they own/created."""
     period = _resolve_period(request)
     users = attributable_users()
+
+    # Team-scoped roles (Project/Site Manager, Document Controller) only see
+    # their own reports here; admin tiers see everyone.
+    team_ids = _scoped_user_ids(request.user)
+    if team_ids is not None:
+        users = [u for u in users if u.pk in team_ids]
 
     selected = None
     raw_ids = request.GET.getlist('user')
@@ -190,6 +211,11 @@ def activity_overview(request):
 def activity_detail(request, user_id):
     period = _resolve_activity_period(request)
     user = get_object_or_404(get_user_model(), pk=user_id)
+    # Team-scoped roles can only open activity for one of their own reports.
+    team_ids = _scoped_user_ids(request.user)
+    if team_ids is not None and user.pk not in team_ids:
+        from django.core.exceptions import PermissionDenied
+        raise PermissionDenied
     data = build_user_activity(period, user)
     return render(request, 'kpis/activity_detail.html', {
         'data': data,
