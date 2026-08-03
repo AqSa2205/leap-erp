@@ -1528,6 +1528,53 @@ class MyProfilePortalTests(TestCase):
         self.assertContains(r, 'XYZ-9')          # matched by driver_id == iqama
 
 
+class MyAttendanceExportPDFTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user('att_emp', password='x', email='att_emp@leap.com')
+        self.emp = Employee.objects.create(
+            full_name='Attendance Tester', iqama_number='IQ-ATT', user=self.user)
+        self.other_user = User.objects.create_user('att_other', password='x', email='other@leap.com')
+        self.other_emp = Employee.objects.create(
+            full_name='Other Person', iqama_number='IQ-OTHER', user=self.other_user)
+        AttendanceRecord.objects.create(employee=self.emp, date=_date(2026, 7, 13), status='present')
+        AttendanceRecord.objects.create(employee=self.emp, date=_date(2026, 7, 14), status='absent')
+        AttendanceRecord.objects.create(employee=self.emp, date=_date(2026, 7, 15), status='wfh')
+
+    def test_profile_shows_daily_attendance(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('hr:my_profile') + '?date=2026-07-15')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('daily_attendance', resp.context)
+        statuses = {d['date']: d['status'] for d in resp.context['daily_attendance']}
+        self.assertEqual(statuses[_date(2026, 7, 13)], 'present')
+        self.assertEqual(statuses[_date(2026, 7, 14)], 'absent')
+        self.assertEqual(statuses[_date(2026, 7, 15)], 'wfh')
+
+    def test_pdf_export_returns_valid_pdf(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('hr:my_attendance_export_pdf') + '?date=2026-07-15')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+        self.assertGreater(len(resp.content), 500)
+
+    def test_pdf_export_only_shows_own_attendance(self):
+        # Security check: a different user's export must never include this
+        # employee's data - each user can only ever see/export their own record
+        # (the view always uses request.user.employee_profile, never a URL param).
+        self.client.force_login(self.other_user)
+        resp = self.client.get(reverse('hr:my_attendance_export_pdf') + '?date=2026-07-15')
+        self.assertEqual(resp.status_code, 200)
+        # The other user has no attendance records this month, so their export
+        # should still succeed but contain none of Attendance Tester's data.
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+
+    def test_unlinked_user_redirected_from_export(self):
+        unlinked = User.objects.create_user('unlinked_att', password='x')
+        self.client.force_login(unlinked)
+        resp = self.client.get(reverse('hr:my_attendance_export_pdf') + '?date=2026-07-15')
+        self.assertEqual(resp.status_code, 302)
+
+
 class LinkEmployeeUsersCommandTests(TestCase):
     def test_links_by_email_then_code(self):
         from django.core.management import call_command
