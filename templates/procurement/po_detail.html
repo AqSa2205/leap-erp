@@ -666,8 +666,12 @@
     function openSignModal(btn, opts) {
         approveUrl = btn.dataset.url;
         approveStage = btn.dataset.stage;
-        const card = btn.closest('[data-stage]');
-        const stageLabel = card ? (card.querySelector('.fw-bold') || {}).textContent : '';
+        // The button itself carries data-stage, so search from its PARENT to
+        // land on the stage card (not the button). Stay null-safe throughout —
+        // a missing label must fall back to the generic title, never throw.
+        const card = (btn.parentElement || btn).closest('[data-stage]');
+        const labelEl = card ? card.querySelector('.fw-bold') : null;
+        const stageLabel = (labelEl ? labelEl.textContent : '') || '';
         signTitleEl.textContent = (opts.titlePrefix + (stageLabel.trim() || opts.fallbackTitle)).trim();
         currentSubmitLabel = opts.submitLabel;
         signSubmitBtn.disabled = false;
