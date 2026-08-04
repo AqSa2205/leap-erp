@@ -75,10 +75,10 @@
     .sm-circle-empty { font-size: .8rem; color: var(--leap-grey, #6c757d); padding: .35rem .5rem; }
     [data-theme="dark"] .sm-circle-option:hover { background: rgba(196, 30, 58, .18); }
 
-    /* Hybrid org chart: the root + the first three fan-out levels lay out
-       HORIZONTALLY (classic top-down tree, via ul.org-h); from the fourth level
+    /* Hybrid org chart: the root + the first four fan-out levels lay out
+       HORIZONTALLY (classic top-down tree, via ul.org-h); from the fifth level
        down, a manager's reports list VERTICALLY indented (ul.org-v). The node
-       partial tags each children <ul> with org-h (parent depth < 3) or org-v. */
+       partial tags each children <ul> with org-h (parent depth < 4) or org-v. */
     .org-tree, .org-tree ul, .org-tree li { margin: 0; padding: 0; list-style: none; }
     .org-tree { --tree-line: #c9ccd1; text-align: center; overflow-x: auto; padding: .5rem 0 1rem; }
 
@@ -795,13 +795,13 @@ document.addEventListener('click', function (e) {
     }
 
     // Hybrid layout. The top H_LEVELS fan-outs are horizontal (a classic
-    // top-down tree: CEO -> VPs -> Managers -> Team Leads), and each node at
-    // depth H_LEVELS roots a VERTICAL indented list of its deeper descendants.
-    // `dims` is
+    // top-down tree: CEO -> VPs -> Managers -> Team Leads -> Supervisors), and
+    // each node at depth H_LEVELS roots a VERTICAL indented list of its deeper
+    // descendants. `dims` is
     // unit-agnostic (px for canvas, pt for PDF). Assigns every node
     // {depth, x (box left), y (box top)}; returns null if empty, else
     // {roots, width, height} — the total footprint, no outer padding.
-    var H_LEVELS = 3;   // depth < H_LEVELS => children laid out horizontally
+    var H_LEVELS = 4;   // depth < H_LEVELS => children laid out horizontally
 
     function computeForestLayout(dims) {
         var roots = readTreeFromDom();
