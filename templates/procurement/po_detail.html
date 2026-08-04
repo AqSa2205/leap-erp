@@ -129,13 +129,19 @@
                                     </li>
                                 </ul>
                             </div>
-
+                            {% if po.is_released and po.vendor_contact_email %}
+                            <form method="post" action="{% url 'procurement:po_resend_email' po.pk %}" class="d-inline">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-outline-light" title="Re-send the PO PDF to the vendor">
+                                    <i class="bi bi-envelope me-1"></i>Resend Email
+                                </button>
+                            </form>
+                            {% endif %}
                             <a href="{% url 'procurement:dn_create_from_po' po.pk %}" class="btn btn-outline-light"><i class="bi bi-truck me-1"></i>Delivery Note</a>
                             <a href="{% url 'procurement:po_update' po.pk %}" class="btn btn-light text-danger fw-semibold"><i class="bi bi-pencil me-1"></i>Edit</a>
                             <a href="{% url 'procurement:po_delete' po.pk %}" class="btn btn-outline-light text-danger border-danger" title="Delete this PO"><i class="bi bi-trash"></i></a>
                         </div>
                     </div>
-
                     <!-- Quick Stats -->
                     <div class="row mt-4 g-3">
                         <div class="col-auto">
@@ -265,6 +271,13 @@
                     <div class="card info-card h-100">
                         <div class="card-header"><h6 class="mb-0"><i class="bi bi-building me-2 text-danger"></i>Vendor</h6></div>
                         <div class="card-body">
+                            {% if not po.vendor_contact_email %}
+                            <div class="alert alert-warning py-2 px-3 mb-3 small">
+                                <i class="bi bi-exclamation-triangle-fill me-1"></i>
+                                No vendor email on file — this PO cannot be emailed automatically.
+                                <a href="{% url 'procurement:po_update' po.pk %}">Add one</a>.
+                            </div>
+                            {% endif %}
                             <p class="fw-bold mb-2" style="font-size:1.05rem;">{{ po.vendor_name }}</p>
                             {% if po.vendor_contact_person %}
                             <div class="mb-2"><span class="info-label">Contact</span><div class="info-value">{{ po.vendor_contact_person }}</div></div>

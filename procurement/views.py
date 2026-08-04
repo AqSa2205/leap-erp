@@ -25,6 +25,8 @@ from .forms import (
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Sum, F
 from django.utils import timezone
+from django.core.mail import EmailMessage
+import logging
 from django.utils.text import slugify
 import openpyxl
 from datetime import datetime, timedelta
@@ -1116,6 +1118,18 @@ def po_approve_stage(request, pk, stage):
                 f'{stage}_approved_at', f'{stage}_approved_by', sig_field, 'updated_at',
             ])
 
+        # This stage may have been the last one required — po.is_released
+        # is derived live from the approval timestamps just saved above, so
+        # if it's True here, this signature is exactly what completed the
+        # chain. A fully released PO can never be signed again (blocked by
+        # the sequencing check earlier in this view), so this can only
+        # fire once per PO.
+        email_attempted = False
+        email_sent = False
+        if po.is_released:
+            email_attempted = True
+            email_sent = _send_po_vendor_email(po)
+
         new_cur = po.current_stage
         return JsonResponse({
             'ok': True,
@@ -1124,6 +1138,8 @@ def po_approve_stage(request, pk, stage):
             'next_stage': new_cur['key'] if new_cur else None,
             'next_stage_label': new_cur['label'] if new_cur else None,
             'approved_by': (request.user.get_full_name() or request.user.username),
+            'email_attempted': email_attempted,
+            'email_sent': email_sent,
         })
     except Exception as e:
         import logging
@@ -1374,9 +1390,12 @@ def po_export_excel(request, pk):
 
 # ─── PDF Export ───────────────────────────────────────────────
 
-@login_required
-def po_export_pdf(request, pk, unpriced=False):
-    """Export a Purchase Order to PDF matching the original format.
+# Builds the actual PDF and hands back raw bytes — no HTTP/request involved.
+# This is the shared logic the download button (po_export_pdf, below) and
+# the vendor-email feature both call, so there's only one place that
+# generates the PDF.
+def _generate_po_pdf_bytes(po, unpriced=False):
+    """Builds the PO PDF and returns raw bytes.
 
     When ``unpriced`` is True, all commercial figures are omitted — the
     Rate/Unit and Total columns, the totals block, and the amount-in-words
@@ -1392,7 +1411,6 @@ def po_export_pdf(request, pk, unpriced=False):
     from io import BytesIO
     from django.contrib.staticfiles.finders import find as find_static
 
-    po = get_object_or_404(_visible_pos_for(request.user), pk=pk)
     items = po.items.all()
     is_draft = not po.is_released
 
@@ -1753,8 +1771,89 @@ def po_export_pdf(request, pk, unpriced=False):
         doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
         doc.build(elements)
     buf.seek(0)
+    return buf.getvalue()
 
-    response = HttpResponse(buf.read(), content_type='application/pdf')
+
+def _send_po_vendor_email(po, resend=False):
+    """DEMO (Idea 1, Outlook integration proposal): emails the PO PDF to the
+    vendor once status changes to Issued, or via the Resend button. Reuses
+    the existing Microsoft Graph email backend — no new send mechanism,
+    just a new trigger point.
+
+    Best-effort: a send failure here must never block or undo the status
+    change that already saved to the database."""
+    if not po.vendor_contact_email:
+        return False  # caller shows the "not emailed" warning banner
+
+    # Everything that can fail — building the PDF, building the email,
+    # and sending it — now lives inside one try/except. Previously PDF
+    # generation sat outside the try block, so a PDF-building error (e.g.
+    # a corrupt signature image) would raise all the way up through the
+    # approval view and turn a *successful* approval into a 500 error
+    # in the browser. This function must only ever report True/False —
+    # never let an email problem look like an approval failure.
+    try:
+        pdf_bytes = _generate_po_pdf_bytes(po, unpriced=False)
+        filename = _safe_filename(po.po_number, prefix='PO', extension='pdf')
+
+        subject = f"Purchase Order {po.po_number}"
+        body = (
+            f"Dear {po.vendor_contact_person or po.vendor_name},\n\n"
+            f"Please find attached Purchase Order {po.po_number}.\n\n"
+            f"Regards,\nLeap Networks Procurement"
+        )
+        email = EmailMessage(subject, body, None, [po.vendor_contact_email])
+        email.attach(filename, pdf_bytes, 'application/pdf')
+        email.send()
+    except Exception:
+        logging.getLogger(__name__).exception(
+            'Failed to email PO #%s to vendor', po.pk)
+        return False
+    verb = 'Resent' if resend else 'Emailed'
+    timestamp = timezone.now()
+    po.vendor_email_log += f"{verb} to {po.vendor_contact_email} on {timestamp:%Y-%m-%d %H:%M}\n"
+    po.vendor_emailed_at = timestamp
+    po.save(update_fields=['vendor_email_log', 'vendor_emailed_at'])
+    return True
+
+
+@login_required
+@require_POST
+def po_resend_email(request, pk):
+    """Manually re-send the PO PDF to the vendor — same email function the
+    auto-send-on-release uses, just triggered by a button instead of an
+    approval event. Only makes sense once the PO is released (there's no
+    final PDF to attach before that)."""
+    po = get_object_or_404(_visible_pos_for(request.user), pk=pk)
+
+    if not po.is_released:
+        messages.error(request, 'This PO must be fully approved before it can be emailed.')
+        return redirect('procurement:po_detail', pk=pk)
+
+    if not po.vendor_contact_email:
+        messages.error(request, 'No vendor email on file for this PO — add one on the Edit page first.')
+        return redirect('procurement:po_detail', pk=pk)
+
+    ok = _send_po_vendor_email(po, resend=True)
+    if ok:
+        messages.success(request, f'PO emailed to {po.vendor_contact_email}.')
+    else:
+        messages.error(request, 'Could not send the email — check the server logs for details.')
+    return redirect('procurement:po_detail', pk=pk)
+
+
+
+# The download view — fetches the PO with the normal permission check,
+# builds the PDF using the shared helper above, and returns it as a file
+# response. Behaves exactly like before the refactor; only the PDF-building
+# itself moved into _generate_po_pdf_bytes.
+@login_required
+def po_export_pdf(request, pk, unpriced=False):
+    po = get_object_or_404(_visible_pos_for(request.user), pk=pk)
+    is_draft = not po.is_released
+    pdf_bytes = _generate_po_pdf_bytes(po, unpriced=unpriced)
+
+    response = HttpResponse(pdf_bytes, content_type='application/pdf')
     prefix = 'PO_DRAFT' if is_draft else 'PO'
     if unpriced:
         prefix += '_UNPRICED'

@@ -88,6 +88,14 @@ class PurchaseOrder(models.Model):
     vendor_name = models.CharField(max_length=255, verbose_name="Vendor")
     vendor_contact_person = models.CharField(max_length=255, blank=True, verbose_name="Contact Person")
     vendor_contact_email = models.EmailField(blank=True, verbose_name="Vendor Contact Email")
+    vendor_email_log= models.TextField(
+        blank=True,
+        help_text='Timestamped recprd of when the PO was emailed to the vendor (auto-appended, not user-edited).',
+    )
+    vendor_emailed_at=models.DateTimeField(
+        null=True, blank=True,
+        help_text='When the PO document was last successfully emailed to the vendor.',
+    )                            
     vendor_contact_tel = models.CharField(max_length=100, blank=True, verbose_name="Contact Tel")
 
     # Issuer Information

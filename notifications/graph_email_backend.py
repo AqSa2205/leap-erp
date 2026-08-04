@@ -116,7 +116,43 @@ class MicrosoftGraphEmailBackend(BaseEmailBackend):
             graph_message['bccRecipients'] = [
                 {'emailAddress': {'address': _address_only(addr)}} for addr in message.bcc]
 
+        # If this email has a file attached (e.g. a PO PDF), convert it into
+        # the format Microsoft Graph expects and add it to the message.
+        # If there's no attachment, this does nothing — existing plain-text
+        # emails are unaffected.
+        attachments = _build_attachments(message)
+        if attachments:
+            graph_message['attachments'] = attachments
+
         return {'message': graph_message, 'saveToSentItems': 'false'}
+
+# Converts a normal Django email attachment (filename + file bytes + type)
+# into the JSON format Microsoft Graph's sendMail API expects. Graph wants
+# the file's contents encoded as base64 text, embedded directly in the
+# message payload — this function does that conversion.
+
+def _build_attachments(message):
+    """Converts Django EmailMessage.attachments into Graph API fileAttachment
+    dicts. Supports the (filename, content, mimetype) tuple form used by
+    EmailMessage.attach() — the only form this codebase currently needs."""
+    import base64
+
+    graph_attachments = []
+    for attachment in getattr(message, 'attachments', []):
+        if not isinstance(attachment, tuple):
+            # MIMEBase attachments aren't used anywhere in this app yet;
+            # skip rather than guess at their structure.
+            continue
+        filename, content, mimetype = attachment
+        if isinstance(content, str):
+            content = content.encode('utf-8')
+        graph_attachments.append({
+            '@odata.type': '#microsoft.graph.fileAttachment',
+            'name': filename,
+            'contentType': mimetype or 'application/octet-stream',
+            'contentBytes': base64.b64encode(content).decode('ascii'),
+        })
+    return graph_attachments
 
 
 def _address_only(formatted_address):
