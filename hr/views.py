@@ -393,11 +393,23 @@ def my_profile(request):
         context['attendance_summary'] = summary
         context['attendance_month'] = month_start
         # Day-by-day list for the full month view + PDF export.
+        from hr.models import AttendanceSettings, WorkingDay
+        weekend_days = AttendanceSettings.load().weekend_day_set()
+        working_days = set(WorkingDay.objects.filter(
+            is_active=True, date__range=(month_start, month_end)).values_list('date', flat=True))
         daily_attendance = []
         d = month_start
         while d <= month_end:
             rec = records_by_date.get(d)
-            daily_attendance.append({'date': d, 'status': rec.status if rec else '', 'record': rec})
+            is_weekend = d.weekday() in weekend_days and d not in working_days
+            daily_attendance.append({
+                'date': d,
+                'status': rec.status if rec else '',
+                'record': rec,
+                'is_weekend': is_weekend,
+                'check_in': rec.check_in if rec else None,
+                'check_out': rec.check_out if rec else None,
+            })
             d += timedelta(days=1)
         context['daily_attendance'] = daily_attendance
         context['attendance_prev_month'] = (month_start - timedelta(days=1)).replace(day=1)
@@ -444,18 +456,25 @@ def my_attendance_export_pdf(request):
     month_records = AttendanceRecord.objects.filter(
         employee=emp, date__gte=month_start, date__lte=month_end)
     records_by_date = {r.date: r for r in month_records}
+    from hr.models import AttendanceSettings, WorkingDay
+    weekend_days = AttendanceSettings.load().weekend_day_set()
+    working_days = set(WorkingDay.objects.filter(
+        is_active=True, date__range=(month_start, month_end)).values_list('date', flat=True))
 
     COLOR_PRESENT = colors.HexColor('#C6E0B4')
     COLOR_ABSENT = colors.HexColor('#F4B6C2')
     COLOR_WFH = colors.HexColor('#BDD7EE')
+    COLOR_WEEKEND = colors.HexColor('#D9D2E9')
 
-    def color_for(status):
+    def color_for(status, is_weekend):
         if status == 'present':
             return COLOR_PRESENT
         if status == 'absent':
             return COLOR_ABSENT
         if status == 'wfh':
             return COLOR_WFH
+        if is_weekend:
+            return COLOR_WEEKEND
         return None
 
     buffer = io.BytesIO()
@@ -463,21 +482,25 @@ def my_attendance_export_pdf(request):
     styles = getSampleStyleSheet()
     elements = [Paragraph(f'{emp.full_name} - Attendance ({month_start.strftime("%B %Y")})', styles['Title'])]
 
-    data = [['Date', 'Day', 'Status']]
+    data = [['Date', 'Day', 'Status', 'Check In', 'Check Out']]
     bg_commands = []
     d = month_start
     row_idx = 1
     while d <= month_end:
         rec = records_by_date.get(d)
         status = rec.status if rec else ''
-        data.append([d.strftime('%d %b %Y'), d.strftime('%A'), status.title() if status else '-'])
-        color = color_for(status)
+        is_weekend = d.weekday() in weekend_days and d not in working_days
+        label = status.title() if status else ('Weekend' if is_weekend else '-')
+        check_in = rec.check_in.strftime('%H:%M') if rec and rec.check_in else ''
+        check_out = rec.check_out.strftime('%H:%M') if rec and rec.check_out else ''
+        data.append([d.strftime('%d %b %Y'), d.strftime('%A'), label, check_in, check_out])
+        color = color_for(status, is_weekend)
         if color is not None:
             bg_commands.append(('BACKGROUND', (0, row_idx), (-1, row_idx), color))
         row_idx += 1
         d += timedelta(days=1)
 
-    table = Table(data, colWidths=[120, 120, 150], repeatRows=1)
+    table = Table(data, colWidths=[100, 90, 90, 70, 70], repeatRows=1)
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F4E79')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
