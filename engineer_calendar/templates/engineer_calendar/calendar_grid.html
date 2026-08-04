@@ -4,6 +4,18 @@
 
 {% block extra_css %}
 <style>
+
+  .day-cell { position: relative; }
+  .cell-editor {
+    position: absolute;
+    top: 0; left: 0;
+    width: 220px;
+    min-height: 70px;
+    z-index: 10;
+    resize: both;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+
   .cal-table { font-size: 0.8rem; border-collapse: collapse; }
   .cal-table th, .cal-table td { border: 1px solid #ccc; text-align: center; vertical-align: middle; padding: 2px 4px; }
   .cal-table td.day-cell { min-width: 60px; position: relative; }
@@ -39,6 +51,9 @@
       {% csrf_token %}
       <button type="submit" class="btn btn-primary btn-sm">Generate Draft</button>
     </form>
+    <button type="button" class="btn btn-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#fillRangeModal">
+      <i class="bi bi-calendar-range"></i> Fill Date Range
+    </button>
     <a href="{% url 'engineer_calendar:export_excel' %}" class="btn btn-outline-success btn-sm">
   <i class="bi bi-file-earmark-excel"></i> Export to Excel
      </a>
@@ -86,6 +101,46 @@
   </tbody>
 </table>
 </div>
+
+<div class="modal fade" id="fillRangeModal" tabindex="-1" aria-labelledby="fillRangeModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="fillRangeModalLabel">Fill Date Range</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-2">
+          <label class="form-label" for="fillRangeEmployee">Employee</label>
+          <select class="form-select form-select-sm" id="fillRangeEmployee">
+            {% for row in rows %}
+            <option value="{{ row.employee.id }}">{{ row.employee.full_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="row mb-2">
+          <div class="col">
+            <label class="form-label" for="fillRangeStart">Start date</label>
+            <input type="date" class="form-control form-control-sm" id="fillRangeStart">
+          </div>
+          <div class="col">
+            <label class="form-label" for="fillRangeEnd">End date</label>
+            <input type="date" class="form-control form-control-sm" id="fillRangeEnd">
+          </div>
+        </div>
+        <div class="mb-2">
+          <label class="form-label" for="fillRangeText">Text</label>
+          <textarea class="form-control form-control-sm" id="fillRangeText" rows="3"></textarea>
+        </div>
+        <div id="fillRangeError" class="text-danger small" style="display:none;"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary btn-sm" id="fillRangeSubmit">Apply</button>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 
@@ -99,10 +154,10 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!td || td.querySelector('input')) return;
 
     const currentText = td.querySelector('.cell-text').textContent.trim();
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'form-control form-control-sm';
+    const input = document.createElement('textarea');
+    input.className = 'form-control form-control-sm cell-editor';
     input.value = currentText;
+    input.rows = 3;
 
     td.innerHTML = '';
     td.appendChild(input);
@@ -146,6 +201,61 @@ document.addEventListener('DOMContentLoaded', function () {
     const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
     return match ? match.pop() : '';
   }
+
+  const fillRangeYear = {{ year }};
+  const fillRangeMonth = {{ month }};
+  const fillRangeModalEl = document.getElementById('fillRangeModal');
+  const fillRangeErrorEl = document.getElementById('fillRangeError');
+  const bsFillRangeModal = fillRangeModalEl ? new bootstrap.Modal(fillRangeModalEl) : null;
+
+  document.getElementById('fillRangeSubmit').addEventListener('click', function () {
+    fillRangeErrorEl.style.display = 'none';
+
+    const employeeId = document.getElementById('fillRangeEmployee').value;
+    const startDate = document.getElementById('fillRangeStart').value;
+    const endDate = document.getElementById('fillRangeEnd').value;
+    const text = document.getElementById('fillRangeText').value.trim();
+
+    if (!startDate || !endDate) {
+      fillRangeErrorEl.textContent = 'Please pick both a start and end date.';
+      fillRangeErrorEl.style.display = 'block';
+      return;
+    }
+
+    fetch("{% url 'engineer_calendar:fill_range' %}", {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+      body: JSON.stringify({ employee_id: employeeId, start_date: startDate, end_date: endDate, text: text }),
+    })
+      .then(function (resp) { return resp.json().then(function (data) { return { ok: resp.ok, data: data }; }); })
+      .then(function (result) {
+        if (!result.ok) {
+          fillRangeErrorEl.textContent = result.data.error || 'Could not apply this range — please try again.';
+          fillRangeErrorEl.style.display = 'block';
+          return;
+        }
+        result.data.updated_days.forEach(function (day) {
+          const mm = String(fillRangeMonth).padStart(2, '0');
+          const dd = String(day).padStart(2, '0');
+          const dateStr = fillRangeYear + '-' + mm + '-' + dd;
+          const td = document.querySelector(
+            'td.editable-cell[data-employee-id="' + employeeId + '"][data-date="' + dateStr + '"]'
+          );
+          if (td) {
+            td.className = 'day-cell ' + result.data.css_class + ' editable-cell';
+            renderCell(td, result.data.text);
+          }
+        });
+        if (bsFillRangeModal) bsFillRangeModal.hide();
+        document.getElementById('fillRangeStart').value = '';
+        document.getElementById('fillRangeEnd').value = '';
+        document.getElementById('fillRangeText').value = '';
+      })
+      .catch(function () {
+        fillRangeErrorEl.textContent = 'Could not apply this range — please try again.';
+        fillRangeErrorEl.style.display = 'block';
+      });
+  });
 });
 </script>
 {% endblock %}
