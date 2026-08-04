@@ -239,6 +239,14 @@
                                 <div><i class="bi bi-clock me-1"></i>{{ stage.approved_at|date:"d M Y, H:i" }}</div>
                                 <div class="text-muted"><i class="bi bi-person me-1"></i>{{ stage.approved_by|default:"—" }}</div>
                             </div>
+                            {% if stage.key in editable_signature_stages %}
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-secondary w-100 mt-2 edit-sig-btn"
+                                    data-stage="{{ stage.key }}"
+                                    data-url="{% url 'procurement:po_edit_signature' po.pk stage.key %}">
+                                <i class="bi bi-pencil me-1"></i>Edit signature
+                            </button>
+                            {% endif %}
                             {% elif stage.is_current %}
                             {% if stage.key in approvable_stages %}
                             <button type="button"
@@ -600,6 +608,7 @@
     let signModal = null;
     let approveUrl = '';
     let approveStage = '';
+    let currentSubmitLabel = 'Approve & Sign';
     let canvasCtx = null;
     let drawing = false;
     let canvasHasInk = false;
@@ -652,21 +661,35 @@
         reader.readAsDataURL(f);
     });
 
+    // Shared opener for the sign pad — used by both the initial Approve action
+    // and the later Edit-signature action (same modal, different endpoint/label).
+    function openSignModal(btn, opts) {
+        approveUrl = btn.dataset.url;
+        approveStage = btn.dataset.stage;
+        const card = btn.closest('[data-stage]');
+        const stageLabel = card ? (card.querySelector('.fw-bold') || {}).textContent : '';
+        signTitleEl.textContent = (opts.titlePrefix + (stageLabel.trim() || opts.fallbackTitle)).trim();
+        currentSubmitLabel = opts.submitLabel;
+        signSubmitBtn.disabled = false;
+        signSubmitBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>' + opts.submitLabel;
+        signErrorBox.classList.add('d-none');
+        signFileInput.value = '';
+        signFilePreview.classList.add('d-none');
+        signFilePreview.src = '';
+        // Show modal first so the canvas has correct dimensions.
+        signModal = new bootstrap.Modal(signModalEl);
+        signModalEl.addEventListener('shown.bs.modal', setupCanvas, { once: true });
+        signModal.show();
+    }
+
     document.querySelectorAll('.approve-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
-            approveUrl = this.dataset.url;
-            approveStage = this.dataset.stage;
-            const card = this.closest('[data-stage]');
-            const stageLabel = card ? (card.querySelector('.fw-bold') || {}).textContent : 'Approve';
-            signTitleEl.textContent = (stageLabel || 'Approve').trim();
-            signErrorBox.classList.add('d-none');
-            signFileInput.value = '';
-            signFilePreview.classList.add('d-none');
-            signFilePreview.src = '';
-            // Show modal first so canvas has correct dimensions.
-            signModal = new bootstrap.Modal(signModalEl);
-            signModalEl.addEventListener('shown.bs.modal', setupCanvas, { once: true });
-            signModal.show();
+            openSignModal(btn, { titlePrefix: '', fallbackTitle: 'Approve', submitLabel: 'Approve & Sign' });
+        });
+    });
+    document.querySelectorAll('.edit-sig-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            openSignModal(btn, { titlePrefix: 'Edit signature — ', fallbackTitle: 'Edit signature', submitLabel: 'Update signature' });
         });
     });
 
@@ -716,7 +739,7 @@
                 signErrorBox.textContent = msg;
                 signErrorBox.classList.remove('d-none');
                 signSubmitBtn.disabled = false;
-                signSubmitBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Approve & Sign';
+                signSubmitBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>' + currentSubmitLabel;
                 return;
             }
             window.location.reload();
@@ -726,7 +749,7 @@
             signErrorBox.classList.remove('d-none');
             console.error(err);
             signSubmitBtn.disabled = false;
-            signSubmitBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Approve & Sign';
+            signSubmitBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>' + currentSubmitLabel;
         });
     });
 

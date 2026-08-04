@@ -26,6 +26,7 @@ urlpatterns = [
     path('po/<int:pk>/export-pdf-unpriced/', views.po_export_pdf_unpriced, name='po_export_pdf_unpriced'),
     path('po/<int:pk>/toggle-term/', views.ajax_po_toggle_term, name='po_toggle_term'),
     path('po/<int:pk>/approve/<str:stage>/', views.po_approve_stage, name='po_approve_stage'),
+    path('po/<int:pk>/signature/<str:stage>/edit/', views.po_edit_signature, name='po_edit_signature'),
 
     # Procurement Summary (Internal / External)
     path('summary/internal/', views.internal_summary, name='summary_internal'),
