@@ -229,12 +229,14 @@ class OrgChartScopeTests(TestCase):
         self.assertEqual(resp.status_code, 403)
 
     def test_hierarchy_tree_uses_hybrid_layout_classes(self):
-        # CEO -> VP -> Manager -> Employee: the top two fan-outs render
-        # horizontally (org-h), the third level renders vertically (org-v).
+        # CEO -> VP -> Manager -> Team Lead -> Employee: the top THREE fan-outs
+        # render horizontally (org-h); the fourth level down renders vertically
+        # indented (org-v).
         ceo = _emp('CEO', 'Chief Exec')
         vp = _emp('VP', 'Veep', manager=ceo)
         mgr = _emp('MG', 'Middle Mgr', manager=vp)
-        _emp('EMP', 'Line Employee', manager=mgr)
+        lead = _emp('TL', 'Team Lead', manager=mgr)
+        _emp('EMP', 'Line Employee', manager=lead)
         sa, _ = Role.objects.get_or_create(name='super_admin')
         su = User.objects.create_user('sa', password='x'); su.role = sa; su.save()
         self.client.force_login(su)
