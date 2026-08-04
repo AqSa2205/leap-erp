@@ -14,7 +14,7 @@
     {% with reports=employee.main_reports.all %}
     {% if reports %}
     {% comment %}Children above the vertical threshold lay out horizontally (org-h); at/below it, vertically (org-v). depth defaults to 0 at the root include in org_chart.html.{% endcomment %}
-    <ul class="{% if depth < 2 %}org-h{% else %}org-v{% endif %}">
+    <ul class="{% if depth < 3 %}org-h{% else %}org-v{% endif %}">
         {% for report in reports %}
             {% include 'hr/_org_chart_node.html' with employee=report depth=depth|add:1 %}
         {% endfor %}
