@@ -228,6 +228,25 @@ class OrgChartScopeTests(TestCase):
                                 data={'employee_id': self.report.pk})
         self.assertEqual(resp.status_code, 403)
 
+    def test_hierarchy_tree_uses_hybrid_layout_classes(self):
+        # CEO -> VP -> Manager -> Employee: the top two fan-outs render
+        # horizontally (org-h), the third level renders vertically (org-v).
+        ceo = _emp('CEO', 'Chief Exec')
+        vp = _emp('VP', 'Veep', manager=ceo)
+        mgr = _emp('MG', 'Middle Mgr', manager=vp)
+        _emp('EMP', 'Line Employee', manager=mgr)
+        sa, _ = Role.objects.get_or_create(name='super_admin')
+        su = User.objects.create_user('sa', password='x'); su.role = sa; su.save()
+        self.client.force_login(su)
+        body = self.client.get(reverse('hr:org_chart')).content.decode()
+        # Assert the real rendered class attributes (not just the substring —
+        # otherwise a stray comment mentioning org-h/org-v could pass this).
+        self.assertIn('class="org-h"', body)   # CEO->VP, VP->Manager (horizontal)
+        self.assertIn('class="org-v"', body)   # Manager->Employee (vertical)
+        self.assertIn('Line Employee', body)
+        # The template-comment guidance must NOT leak into the page as text.
+        self.assertNotIn('vertical threshold', body)
+
     def test_erp_admin_can_manage_but_not_config_access(self):
         u = _user('erp', 'erp_admin')
         self.client.force_login(u)
