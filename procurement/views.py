@@ -755,6 +755,12 @@ class PODetailView(ProcurementPermissionMixin, DetailView):
             key for key, _, _ in po.APPROVAL_STAGES
             if po.can_user_approve_stage(self.request.user, key)
         }
+        # Stages whose signature this viewer may edit (original signer or super
+        # admin), used to show the per-stage "Edit signature" control.
+        context['editable_signature_stages'] = {
+            key for key, _, _ in po.APPROVAL_STAGES
+            if po.can_user_edit_signature(self.request.user, key)
+        }
         return context
 
 
@@ -1028,24 +1034,14 @@ def bom_procurement_tracker(request, sheet_pk):
     })
 
 
-@login_required
-@require_POST
-def po_approve_stage(request, pk, stage):
-    """Sign one approval stage on a PO and stamp the timestamp + approver.
-
-    Strict sequencing: only the *current* pending stage can be signed.
-    Once signed a stage is locked — no un-approve. If the freshly signed
-    stage was the last required one, the PO is now released and exports
-    unlock automatically.
-
-    Region- and role-scoped via _visible_pos_for() — guessing PKs across
-    regions returns 404. Stage role gate is enforced separately. The
-    read-check-write window runs inside an atomic block holding a row-level
-    lock so concurrent Approve clicks can't race past each other.
-    """
-    # First read the signature payload out of the request *before* the
-    # transaction opens — Pillow validation on potentially-malicious
-    # bytes shouldn't run inside a row-locked block.
+def _read_and_validate_signature(request):
+    """Pull a signature (uploaded file or drawn data-URL) from the request and
+    re-encode it through Pillow so we never persist arbitrary user-supplied
+    bytes (defends against Pillow-decoder CVEs / polyglot uploads). Returns
+    ``(clean_png_bytes, None)`` on success or ``(None, JsonResponse)`` on any
+    problem. Shared by the approve + edit-signature endpoints. Runs before any
+    row-locked transaction opens — Pillow validation on potentially-malicious
+    bytes shouldn't run inside a locked block."""
     raw = None
     if 'signature_file' in request.FILES:
         raw = request.FILES['signature_file'].read()
@@ -1055,18 +1051,37 @@ def po_approve_stage(request, pk, stage):
         try:
             raw = base64.b64decode(b64)
         except Exception:
-            return JsonResponse({'error': 'Could not decode the drawn signature.'}, status=400)
+            return None, JsonResponse({'error': 'Could not decode the drawn signature.'}, status=400)
     if raw is None:
-        return JsonResponse({
+        return None, JsonResponse({
             'error': 'Signature required — upload an image or draw on the pad.',
         }, status=400)
-
-    # Re-encode through Pillow so we never persist arbitrary user-supplied
-    # bytes — defends against Pillow-decoder CVEs and polyglot uploads.
     try:
-        clean = _validate_signature_image(raw)
+        return _validate_signature_image(raw), None
     except ValueError as e:
-        return JsonResponse({'error': str(e)}, status=400)
+        return None, JsonResponse({'error': str(e)}, status=400)
+
+
+@login_required
+@require_POST
+def po_approve_stage(request, pk, stage):
+    """Sign one approval stage on a PO and stamp the timestamp + approver.
+
+    Strict sequencing: only the *current* pending stage can be signed.
+    Once signed a stage is locked — no un-approve (but the original signer or a
+    super admin can later correct the signature image via po_edit_signature,
+    which leaves the approver + timestamp untouched). If the freshly signed
+    stage was the last required one, the PO is now released and exports
+    unlock automatically.
+
+    Region- and role-scoped via _visible_pos_for() — guessing PKs across
+    regions returns 404. Stage role gate is enforced separately. The
+    read-check-write window runs inside an atomic block holding a row-level
+    lock so concurrent Approve clicks can't race past each other.
+    """
+    clean, err = _read_and_validate_signature(request)
+    if err is not None:
+        return err
 
     sig_field = f'{stage}_signature'
     from django.core.files.base import ContentFile
@@ -1131,6 +1146,64 @@ def po_approve_stage(request, pk, stage):
             'PO %s stage %s approval failed', pk, stage)
         return JsonResponse({
             'error': f'Approval failed: {type(e).__name__}: {e}',
+        }, status=500)
+
+
+@login_required
+@require_POST
+def po_edit_signature(request, pk, stage):
+    """Replace an ALREADY-signed stage's signature image, leaving the recorded
+    approver and timestamp untouched. Only the original signer or a super admin
+    may do this (see PurchaseOrder.can_user_edit_signature). Region/role-scoped
+    like po_approve_stage; sequencing is irrelevant here since the stage is
+    already signed."""
+    if stage not in ('scm', 'pm', 'coo', 'ceo'):
+        return JsonResponse({'error': 'Unknown approval stage.'}, status=400)
+
+    clean, err = _read_and_validate_signature(request)
+    if err is not None:
+        return err
+
+    sig_field = f'{stage}_signature'
+    from django.core.files.base import ContentFile
+
+    try:
+        with transaction.atomic():
+            try:
+                po = PurchaseOrder.objects.select_for_update().get(pk=pk)
+            except PurchaseOrder.DoesNotExist:
+                return JsonResponse({'error': 'PO not found or not in your scope.'}, status=404)
+
+            if not _visible_pos_for(request.user).filter(pk=pk).exists():
+                return JsonResponse({'error': 'PO not found or not in your scope.'}, status=404)
+
+            if getattr(po, f'{stage}_approved_at') is None:
+                return JsonResponse({'error': 'This stage has not been signed yet — nothing to edit.'}, status=400)
+
+            if not po.can_user_edit_signature(request.user, stage):
+                return JsonResponse({
+                    'error': 'Only the original signer or a super admin can edit this signature.',
+                }, status=403)
+
+            # Swap the image ONLY — approver + timestamp are deliberately left as-is.
+            getattr(po, sig_field).save(
+                f'po{po.pk}_{stage}_sig.png',
+                ContentFile(clean),
+                save=False,
+            )
+            po.save(update_fields=[sig_field, 'updated_at'])
+
+        return JsonResponse({
+            'ok': True,
+            'stage': stage,
+            'signature_url': getattr(po, sig_field).url,
+        })
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception(
+            'PO %s stage %s signature edit failed', pk, stage)
+        return JsonResponse({
+            'error': f'Edit failed: {type(e).__name__}: {e}',
         }, status=500)
 
 

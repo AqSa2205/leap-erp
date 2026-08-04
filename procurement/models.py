@@ -358,6 +358,20 @@ class PurchaseOrder(models.Model):
         # CEO stays super-admin-only.
         return False
 
+    def can_user_edit_signature(self, user, stage_key):
+        """Who may REPLACE an already-signed stage's signature image. The
+        approver + timestamp are deliberately left untouched — this only
+        corrects the visual, not who/when approved. Allowed for the original
+        signer (fixing their own) or a super admin (override). Returns False if
+        the stage has not been signed yet (nothing to edit)."""
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(self, f'{stage_key}_approved_at') is None:
+            return False
+        if user.is_super_admin_user:
+            return True
+        return getattr(self, f'{stage_key}_approved_by_id') == user.id
+
 
 class PurchaseOrderItem(models.Model):
     """Individual line item in a Purchase Order."""
