@@ -75,35 +75,54 @@
     .sm-circle-empty { font-size: .8rem; color: var(--leap-grey, #6c757d); padding: .35rem .5rem; }
     [data-theme="dark"] .sm-circle-option:hover { background: rgba(196, 30, 58, .18); }
 
-    /* Vertical indented org chart (nested ul/li + connector lines). Each level
-       indents to the right; siblings stack top-to-bottom. Replaces the old
-       horizontal table-cell tree so a manager with many reports reads as a
-       vertical list instead of a very wide row. */
+    /* Hybrid org chart: the root + the first two fan-out levels lay out
+       HORIZONTALLY (classic top-down tree, via ul.org-h); from the third level
+       down, a manager's reports list VERTICALLY indented (ul.org-v). The node
+       partial tags each children <ul> with org-h (parent depth < 2) or org-v. */
     .org-tree, .org-tree ul, .org-tree li { margin: 0; padding: 0; list-style: none; }
-    .org-tree { --tree-line: #c9ccd1; text-align: left; overflow-x: auto; padding: .5rem 0 1rem; }
-    .org-tree li { position: relative; padding-top: .35rem; }
-    /* Nested lists (a manager's reports) indent right of their manager. */
-    .org-tree li ul { margin-left: 1.5rem; }
-    /* Every report row carries the connector: a vertical line up to its
-       siblings/manager (::before) and a horizontal elbow to its own box
-       (::after). Only rows inside a nested ul (i.e. that have a manager) get
-       them — the root node has none. */
-    .org-tree li li { padding-left: 1.4rem; }
-    .org-tree li li::before {
+    .org-tree { --tree-line: #c9ccd1; text-align: center; overflow-x: auto; padding: .5rem 0 1rem; }
+
+    /* ── Horizontal tiers ── */
+    .org-tree > ul, .org-tree ul.org-h { display: table; margin: 0 auto; position: relative; }
+    .org-tree > ul > li, .org-tree ul.org-h > li {
+        display: table-cell; vertical-align: top; text-align: center; padding: 0 .6rem; position: relative;
+    }
+    .org-tree ul.org-h { padding-top: 2rem; }
+    .org-tree ul.org-h > li { padding-top: 2rem; }
+    .org-tree ul.org-h > li::before, .org-tree ul.org-h > li::after {
+        content: ''; position: absolute; top: 0; right: 50%;
+        border-top: 2px solid var(--tree-line); width: 50%; height: 2rem;
+    }
+    .org-tree ul.org-h > li::after { right: auto; left: 50%; border-left: 2px solid var(--tree-line); }
+    .org-tree ul.org-h > li:only-child::before, .org-tree ul.org-h > li:only-child::after { display: none; }
+    .org-tree ul.org-h > li:first-child::before, .org-tree ul.org-h > li:last-child::after { border: 0 none; }
+    .org-tree ul.org-h > li:last-child::before { border-right: 2px solid var(--tree-line); border-radius: 0 6px 0 0; }
+    .org-tree ul.org-h > li:first-child::after { border-radius: 6px 0 0 0; }
+    .org-tree ul.org-h::before {
+        content: ''; position: absolute; top: 0; left: 50%; width: 0; height: 2rem;
+        border-left: 2px solid var(--tree-line);
+    }
+    /* A cell that hosts a vertical sub-list left-aligns, so its box and the
+       list beneath it line up on the left instead of being centred. */
+    .org-tree ul.org-h > li:has(> ul.org-v) { text-align: left; }
+
+    /* ── Vertical indented sub-lists (3rd level and deeper) ── */
+    .org-tree ul.org-v { text-align: left; margin-left: 1.1rem; padding-top: .35rem; }
+    .org-tree ul.org-v li { position: relative; display: block; padding: .3rem 0 0 1.4rem; }
+    .org-tree ul.org-v li::before {
         content: ''; position: absolute; left: 0; top: 0;
         border-left: 2px solid var(--tree-line); height: 100%;
     }
-    .org-tree li li::after {
+    .org-tree ul.org-v li::after {
         content: ''; position: absolute; left: 0; top: 1.25rem;
         border-top: 2px solid var(--tree-line); width: 1.4rem;
     }
-    /* Last child: stop the vertical line at its own elbow (don't overshoot). */
-    .org-tree li li:last-child::before { height: 1.25rem; }
+    .org-tree ul.org-v li:last-child::before { height: 1.25rem; }
 
     .org-node {
         display: inline-block; text-align: left; background: #fff;
         border: 2px solid var(--leap-red, #C41E3A); border-radius: .5rem;
-        padding: .4rem .8rem; min-width: 160px; max-width: 340px;
+        padding: .4rem .8rem; min-width: 150px; max-width: 300px;
         box-shadow: 0 1px 3px rgba(0,0,0,.08);
     }
     .org-node-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -539,7 +558,7 @@
             <div class="org-tree">
                 <ul>
                     {% for root in root_employees %}
-                        {% include 'hr/_org_chart_node.html' with employee=root %}
+                        {% include 'hr/_org_chart_node.html' with employee=root depth=0 %}
                     {% endfor %}
                 </ul>
             </div>
@@ -775,36 +794,80 @@ document.addEventListener('click', function (e) {
         return Array.prototype.map.call(container.children, readNode);
     }
 
-    // `dims` is unit-agnostic — callers pass pixels (canvas/PNG) or points
-    // (PDF) and get back positions in that same unit.
-    // Indented-vertical layout: each node gets its own row (pre-order DFS), so
-    // depth drives the horizontal indent and row order drives the vertical
-    // position. A manager with many reports reads as a vertical list, not a
-    // very wide horizontal row. Assigns each node {depth, x (box left), y (box
-    // top)}. Returns null if the tree is empty, otherwise {roots, width,
-    // height} — the total footprint in `dims`' unit, with no outer padding.
+    // Hybrid layout. The top H_LEVELS fan-outs are horizontal (a classic
+    // top-down tree: CEO -> VPs -> Managers), and each node at depth H_LEVELS
+    // roots a VERTICAL indented list of its deeper descendants. `dims` is
+    // unit-agnostic (px for canvas, pt for PDF). Assigns every node
+    // {depth, x (box left), y (box top)}; returns null if empty, else
+    // {roots, width, height} — the total footprint, no outer padding.
+    var H_LEVELS = 2;   // depth < H_LEVELS => children laid out horizontally
+
     function computeForestLayout(dims) {
         var roots = readTreeFromDom();
         if (!roots.length) return null;
-        var state = { row: 0, maxDepth: 0 };
-        function place(node, depth) {
-            node.depth = depth;
-            node.x = depth * dims.indent;
-            node.y = state.row * dims.rowHeight;
-            state.row += 1;
-            if (depth > state.maxDepth) state.maxDepth = depth;
-            node.children.forEach(function (child) { place(child, depth + 1); });
+
+        // Deepest indent a depth-H_LEVELS node's vertical descendants reach.
+        function vMaxRel(node, rel) {
+            var max = rel;
+            node.children.forEach(function (c) { max = Math.max(max, vMaxRel(c, rel + 1)); });
+            return max;
         }
-        roots.forEach(function (root) { place(root, 0); });
-        return {
-            roots: roots,
-            width: state.maxDepth * dims.indent + dims.nodeWidth,
-            height: state.row * dims.rowHeight,
-        };
+        // Horizontal subtree width for depths 0..H_LEVELS. A depth-H_LEVELS node's
+        // footprint is its box plus the indent span of its vertical list.
+        function hWidth(node, depth) {
+            if (depth === H_LEVELS) {
+                node._w = dims.nodeWidth + vMaxRel(node, 0) * dims.indent;
+                return node._w;
+            }
+            if (!node.children.length) { node._w = dims.nodeWidth; return node._w; }
+            var cw = 0;
+            node.children.forEach(function (c, i) { if (i) cw += dims.hGap; cw += hWidth(c, depth + 1); });
+            node._w = Math.max(dims.nodeWidth, cw);
+            return node._w;
+        }
+        // Assign box top-left. Horizontal tiers stack by depth*tierH; a
+        // depth-H_LEVELS node's descendants hang vertically beneath it.
+        function assign(node, depth, leftEdge) {
+            node.depth = depth;
+            node.y = depth * dims.tierH;
+            if (depth < H_LEVELS && node.children.length) {
+                var cw = node.children.reduce(function (s, c) { return s + c._w; }, 0)
+                    + dims.hGap * (node.children.length - 1);
+                var cursor = leftEdge + (node._w - cw) / 2;
+                node.children.forEach(function (c) { assign(c, depth + 1, cursor); cursor += c._w + dims.hGap; });
+                node.x = leftEdge + (node._w - dims.nodeWidth) / 2;
+            } else if (depth === H_LEVELS) {
+                node.x = leftEdge;   // box at the left of its vertical footprint
+                var vy = node.y + dims.boxHeight + dims.vGap;
+                (function placeVertical(n, rel) {
+                    n.children.forEach(function (c) {
+                        c.depth = n.depth + 1;
+                        c.x = node.x + rel * dims.indent;
+                        c.y = vy;
+                        vy += dims.rowH;
+                        placeVertical(c, rel + 1);
+                    });
+                })(node, 1);
+            } else {
+                node.x = leftEdge + (node._w - dims.nodeWidth) / 2;
+            }
+        }
+
+        var cursor = 0;
+        roots.forEach(function (r) { hWidth(r, 0); assign(r, 0, cursor); cursor += r._w + dims.hGap; });
+        var W = 0, H = 0;
+        (function collect(ns) {
+            ns.forEach(function (n) {
+                if (n.x + dims.nodeWidth > W) W = n.x + dims.nodeWidth;
+                if (n.y + dims.boxHeight > H) H = n.y + dims.boxHeight;
+                collect(n.children);
+            });
+        })(roots);
+        return { roots: roots, width: W, height: H };
     }
 
     // ── PNG (raster canvas) ──
-    var CANVAS_DIMS = { nodeWidth: 300, boxHeight: 46, rowHeight: 56, indent: 34, connX: 14 };
+    var CANVAS_DIMS = { nodeWidth: 240, boxHeight: 44, tierH: 96, rowH: 50, hGap: 28, indent: 28, vGap: 10, connX: 14 };
     var CANVAS_PADDING = 40;
 
     function roundRectPath(ctx, x, y, w, h, r) {
@@ -831,24 +894,38 @@ document.addEventListener('click', function (e) {
 
     function drawConnectorsCanvas(ctx, node) {
         if (!node.children.length) return;
-        // Vertical trunk down the left of the children column, plus a short
-        // horizontal elbow from the trunk to each child's box.
-        var connX = node.x + CANVAS_DIMS.connX;
-        var last = node.children[node.children.length - 1];
+        var D = CANVAS_DIMS;
         ctx.strokeStyle = '#c9ccd1';
         ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(connX, node.y + CANVAS_DIMS.boxHeight);
-        ctx.lineTo(connX, last.y + CANVAS_DIMS.boxHeight / 2);
-        ctx.stroke();
-        node.children.forEach(function (child) {
-            var midY = child.y + CANVAS_DIMS.boxHeight / 2;
+        if (node.depth < H_LEVELS) {
+            // Horizontal: drop to a bus line, across the children, down to each.
+            var pcx = node.x + D.nodeWidth / 2;
+            var busY = node.y + D.boxHeight + (D.tierH - D.boxHeight) / 2;
+            ctx.beginPath(); ctx.moveTo(pcx, node.y + D.boxHeight); ctx.lineTo(pcx, busY); ctx.stroke();
+            if (node.children.length > 1) {
+                var firstCx = node.children[0].x + D.nodeWidth / 2;
+                var lastCx = node.children[node.children.length - 1].x + D.nodeWidth / 2;
+                ctx.beginPath(); ctx.moveTo(firstCx, busY); ctx.lineTo(lastCx, busY); ctx.stroke();
+            }
+            node.children.forEach(function (child) {
+                var ccx = child.x + D.nodeWidth / 2;
+                ctx.beginPath(); ctx.moveTo(ccx, busY); ctx.lineTo(ccx, child.y); ctx.stroke();
+                drawConnectorsCanvas(ctx, child);
+            });
+        } else {
+            // Vertical: trunk down the left, short elbow stub to each child.
+            var connX = node.x + D.connX;
+            var last = node.children[node.children.length - 1];
             ctx.beginPath();
-            ctx.moveTo(connX, midY);
-            ctx.lineTo(child.x, midY);
+            ctx.moveTo(connX, node.y + D.boxHeight);
+            ctx.lineTo(connX, last.y + D.boxHeight / 2);
             ctx.stroke();
-            drawConnectorsCanvas(ctx, child);
-        });
+            node.children.forEach(function (child) {
+                var midY = child.y + D.boxHeight / 2;
+                ctx.beginPath(); ctx.moveTo(connX, midY); ctx.lineTo(child.x, midY); ctx.stroke();
+                drawConnectorsCanvas(ctx, child);
+            });
+        }
     }
 
     function drawNodeCanvas(ctx, node) {
@@ -911,9 +988,9 @@ document.addEventListener('click', function (e) {
 
     // ── PDF (vector — real jsPDF shapes/text, no embedded bitmap) ──
     var PDF_DIMS = {
-        nodeWidth: 200, boxHeight: 26, rowHeight: 32, indent: 22, connX: 9,
+        nodeWidth: 150, boxHeight: 26, tierH: 58, rowH: 32, hGap: 18, indent: 18, vGap: 6, connX: 9,
         radius: 4, textPad: 7, lineWidth: 1,
-        nameFontSize: 9.5, smallFontSize: 7.5, nameOnlyY: 17, nameY: 11, titleY: 21,
+        nameFontSize: 9, smallFontSize: 7, nameOnlyY: 16, nameY: 11, titleY: 20,
     };
 
     function truncatePdf(pdf, text, maxWidth) {
@@ -930,16 +1007,34 @@ document.addEventListener('click', function (e) {
 
     function drawConnectorsPdf(pdf, node, dims, offsetX, offsetY) {
         if (!node.children.length) return;
-        var connX = offsetX + node.x + dims.connX;
-        var last = node.children[node.children.length - 1];
         pdf.setDrawColor(201, 204, 209);
         pdf.setLineWidth(Math.max(0.4, dims.lineWidth));
-        pdf.line(connX, offsetY + node.y + dims.boxHeight, connX, offsetY + last.y + dims.boxHeight / 2);
-        node.children.forEach(function (child) {
-            var midY = offsetY + child.y + dims.boxHeight / 2;
-            pdf.line(connX, midY, offsetX + child.x, midY);
-            drawConnectorsPdf(pdf, child, dims, offsetX, offsetY);
-        });
+        if (node.depth < H_LEVELS) {
+            // Horizontal: drop to a bus line, across the children, down to each.
+            var pcx = offsetX + node.x + dims.nodeWidth / 2;
+            var busY = offsetY + node.y + dims.boxHeight + (dims.tierH - dims.boxHeight) / 2;
+            pdf.line(pcx, offsetY + node.y + dims.boxHeight, pcx, busY);
+            if (node.children.length > 1) {
+                var firstCx = offsetX + node.children[0].x + dims.nodeWidth / 2;
+                var lastCx = offsetX + node.children[node.children.length - 1].x + dims.nodeWidth / 2;
+                pdf.line(firstCx, busY, lastCx, busY);
+            }
+            node.children.forEach(function (child) {
+                var ccx = offsetX + child.x + dims.nodeWidth / 2;
+                pdf.line(ccx, busY, ccx, offsetY + child.y);
+                drawConnectorsPdf(pdf, child, dims, offsetX, offsetY);
+            });
+        } else {
+            // Vertical: trunk down the left, short elbow stub to each child.
+            var connX = offsetX + node.x + dims.connX;
+            var last = node.children[node.children.length - 1];
+            pdf.line(connX, offsetY + node.y + dims.boxHeight, connX, offsetY + last.y + dims.boxHeight / 2);
+            node.children.forEach(function (child) {
+                var midY = offsetY + child.y + dims.boxHeight / 2;
+                pdf.line(connX, midY, offsetX + child.x, midY);
+                drawConnectorsPdf(pdf, child, dims, offsetX, offsetY);
+            });
+        }
     }
 
     function drawNodePdf(pdf, node, dims, offsetX, offsetY) {
@@ -1006,9 +1101,10 @@ document.addEventListener('click', function (e) {
             // still lossless at any PDF viewer zoom level.
             var scaledDims = {
                 nodeWidth: PDF_DIMS.nodeWidth * scale, boxHeight: PDF_DIMS.boxHeight * scale,
-                rowHeight: PDF_DIMS.rowHeight * scale, indent: PDF_DIMS.indent * scale,
-                connX: PDF_DIMS.connX * scale, radius: PDF_DIMS.radius * scale,
-                textPad: PDF_DIMS.textPad * scale, lineWidth: scale,
+                tierH: PDF_DIMS.tierH * scale, rowH: PDF_DIMS.rowH * scale,
+                hGap: PDF_DIMS.hGap * scale, vGap: PDF_DIMS.vGap * scale,
+                indent: PDF_DIMS.indent * scale, connX: PDF_DIMS.connX * scale,
+                radius: PDF_DIMS.radius * scale, textPad: PDF_DIMS.textPad * scale, lineWidth: scale,
                 nameFontSize: PDF_DIMS.nameFontSize * scale, smallFontSize: PDF_DIMS.smallFontSize * scale,
                 nameOnlyY: PDF_DIMS.nameOnlyY * scale, nameY: PDF_DIMS.nameY * scale, titleY: PDF_DIMS.titleY * scale,
             };
