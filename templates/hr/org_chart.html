@@ -75,32 +75,35 @@
     .sm-circle-empty { font-size: .8rem; color: var(--leap-grey, #6c757d); padding: .35rem .5rem; }
     [data-theme="dark"] .sm-circle-option:hover { background: rgba(196, 30, 58, .18); }
 
-    /* CSS-only branching org chart (nested ul/li + pseudo-element connectors) */
+    /* Vertical indented org chart (nested ul/li + connector lines). Each level
+       indents to the right; siblings stack top-to-bottom. Replaces the old
+       horizontal table-cell tree so a manager with many reports reads as a
+       vertical list instead of a very wide row. */
     .org-tree, .org-tree ul, .org-tree li { margin: 0; padding: 0; list-style: none; }
-    .org-tree { --tree-line: #c9ccd1; text-align: center; overflow-x: auto; padding: .5rem 0 1rem; }
-    .org-tree > ul, .org-tree ul ul { display: table; margin: 0 auto; position: relative; }
-    .org-tree ul ul { padding-top: 2rem; }
-    .org-tree li { display: table-cell; vertical-align: top; text-align: center; padding: 0 .75rem; position: relative; }
-    .org-tree ul ul > li { padding-top: 2rem; }
-    .org-tree ul ul > li::before, .org-tree ul ul > li::after {
-        content: ''; position: absolute; top: 0; right: 50%;
-        border-top: 2px solid var(--tree-line); width: 50%; height: 2rem;
+    .org-tree { --tree-line: #c9ccd1; text-align: left; overflow-x: auto; padding: .5rem 0 1rem; }
+    .org-tree li { position: relative; padding-top: .35rem; }
+    /* Nested lists (a manager's reports) indent right of their manager. */
+    .org-tree li ul { margin-left: 1.5rem; }
+    /* Every report row carries the connector: a vertical line up to its
+       siblings/manager (::before) and a horizontal elbow to its own box
+       (::after). Only rows inside a nested ul (i.e. that have a manager) get
+       them — the root node has none. */
+    .org-tree li li { padding-left: 1.4rem; }
+    .org-tree li li::before {
+        content: ''; position: absolute; left: 0; top: 0;
+        border-left: 2px solid var(--tree-line); height: 100%;
     }
-    .org-tree ul ul > li::after { right: auto; left: 50%; border-left: 2px solid var(--tree-line); }
-    .org-tree ul ul > li:only-child::before, .org-tree ul ul > li:only-child::after { display: none; }
-    .org-tree ul ul > li:only-child { padding-top: 0; }
-    .org-tree ul ul > li:first-child::before, .org-tree ul ul > li:last-child::after { border: 0 none; }
-    .org-tree ul ul > li:last-child::before { border-right: 2px solid var(--tree-line); border-radius: 0 6px 0 0; }
-    .org-tree ul ul > li:first-child::after { border-radius: 6px 0 0 0; }
-    .org-tree ul ul::before {
-        content: ''; position: absolute; top: 0; left: 50%; width: 0; height: 2rem;
-        border-left: 2px solid var(--tree-line);
+    .org-tree li li::after {
+        content: ''; position: absolute; left: 0; top: 1.25rem;
+        border-top: 2px solid var(--tree-line); width: 1.4rem;
     }
+    /* Last child: stop the vertical line at its own elbow (don't overshoot). */
+    .org-tree li li:last-child::before { height: 1.25rem; }
 
     .org-node {
         display: inline-block; text-align: left; background: #fff;
         border: 2px solid var(--leap-red, #C41E3A); border-radius: .5rem;
-        padding: .5rem .9rem; min-width: 150px; max-width: 220px;
+        padding: .4rem .8rem; min-width: 160px; max-width: 340px;
         box-shadow: 0 1px 3px rgba(0,0,0,.08);
     }
     .org-node-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -772,68 +775,47 @@ document.addEventListener('click', function (e) {
         return Array.prototype.map.call(container.children, readNode);
     }
 
-    // Assigns {width, x, y} to every node (and its descendants) in place.
-    // width is the horizontal footprint this node's whole subtree needs;
-    // x/y are the CENTER of the node's own box. `dims` (nodeWidth, nodeHeight,
-    // hGap, vGap) is unit-agnostic — callers pass pixels (canvas/PNG) or
-    // points (PDF) and get back positions in that same unit.
-    function layout(node, depth, dims) {
-        node.y = depth * (dims.nodeHeight + dims.vGap);
-        if (!node.children.length) {
-            node.width = dims.nodeWidth;
-            return node.width;
-        }
-        var childrenWidth = 0;
-        node.children.forEach(function (child, i) {
-            if (i > 0) childrenWidth += dims.hGap;
-            childrenWidth += layout(child, depth + 1, dims);
-        });
-        node.width = Math.max(dims.nodeWidth, childrenWidth);
-        return node.width;
-    }
-
-    function assignX(node, leftEdge, dims) {
-        if (!node.children.length) {
-            node.x = leftEdge + node.width / 2;
-            return;
-        }
-        var childrenWidth = node.children.reduce(function (sum, c) { return sum + c.width; }, 0)
-            + dims.hGap * (node.children.length - 1);
-        var cursor = leftEdge + (node.width - childrenWidth) / 2;
-        node.children.forEach(function (child) {
-            assignX(child, cursor, dims);
-            cursor += child.width + dims.hGap;
-        });
-        node.x = leftEdge + node.width / 2;
-    }
-
-    function maxDepthOf(node) {
-        if (!node.children.length) return 0;
-        return 1 + Math.max.apply(null, node.children.map(maxDepthOf));
-    }
-
-    // Reads the DOM once and lays the whole forest out (one or more root
-    // trees, left to right) under the given `dims`. Returns null if the tree
-    // is empty, otherwise {roots, width, height} — width/height are the
-    // total footprint in `dims`' unit, with no outer padding.
+    // `dims` is unit-agnostic — callers pass pixels (canvas/PNG) or points
+    // (PDF) and get back positions in that same unit.
+    // Indented-vertical layout: each node gets its own row (pre-order DFS), so
+    // depth drives the horizontal indent and row order drives the vertical
+    // position. A manager with many reports reads as a vertical list, not a
+    // very wide horizontal row. Assigns each node {depth, x (box left), y (box
+    // top)}. Returns null if the tree is empty, otherwise {roots, width,
+    // height} — the total footprint in `dims`' unit, with no outer padding.
     function computeForestLayout(dims) {
         var roots = readTreeFromDom();
         if (!roots.length) return null;
-        var totalWidth = 0, maxDepth = 0;
-        roots.forEach(function (root) {
-            var w = layout(root, 0, dims);
-            assignX(root, totalWidth, dims);
-            totalWidth += w + dims.hGap;
-            maxDepth = Math.max(maxDepth, maxDepthOf(root));
-        });
-        totalWidth -= dims.hGap; // no trailing gap after the last root
-        var totalHeight = (maxDepth + 1) * dims.nodeHeight + maxDepth * dims.vGap;
-        return { roots: roots, width: totalWidth, height: totalHeight };
+        var state = { row: 0, maxDepth: 0 };
+        function place(node, depth) {
+            node.depth = depth;
+            node.x = depth * dims.indent;
+            node.y = state.row * dims.rowHeight;
+            state.row += 1;
+            if (depth > state.maxDepth) state.maxDepth = depth;
+            node.children.forEach(function (child) { place(child, depth + 1); });
+        }
+        roots.forEach(function (root) { place(root, 0); });
+        return {
+            roots: roots,
+            width: state.maxDepth * dims.indent + dims.nodeWidth,
+            height: state.row * dims.rowHeight,
+        };
     }
 
     // ── PNG (raster canvas) ──
-    var CANVAS_DIMS = { nodeWidth: 200, nodeHeight: 92, hGap: 28, vGap: 56 };
+    var CANVAS_DIMS = { nodeWidth: 300, boxHeight: 46, rowHeight: 56, indent: 34, connX: 14 };
     var CANVAS_PADDING = 40;
+
+    function roundRectPath(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r);
+        ctx.closePath();
+    }
 
     function truncateCanvas(ctx, text, maxWidth) {
         if (ctx.measureText(text).width <= maxWidth) return text;
@@ -849,62 +831,46 @@ document.addEventListener('click', function (e) {
 
     function drawConnectorsCanvas(ctx, node) {
         if (!node.children.length) return;
-        var midY = node.y + CANVAS_DIMS.nodeHeight + CANVAS_DIMS.vGap / 2;
+        // Vertical trunk down the left of the children column, plus a short
+        // horizontal elbow from the trunk to each child's box.
+        var connX = node.x + CANVAS_DIMS.connX;
+        var last = node.children[node.children.length - 1];
         ctx.strokeStyle = '#c9ccd1';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.moveTo(node.x, node.y + CANVAS_DIMS.nodeHeight);
-        ctx.lineTo(node.x, midY);
+        ctx.moveTo(connX, node.y + CANVAS_DIMS.boxHeight);
+        ctx.lineTo(connX, last.y + CANVAS_DIMS.boxHeight / 2);
         ctx.stroke();
-        if (node.children.length > 1) {
-            var first = node.children[0], last = node.children[node.children.length - 1];
-            ctx.beginPath();
-            ctx.moveTo(first.x, midY);
-            ctx.lineTo(last.x, midY);
-            ctx.stroke();
-        }
         node.children.forEach(function (child) {
+            var midY = child.y + CANVAS_DIMS.boxHeight / 2;
             ctx.beginPath();
-            ctx.moveTo(child.x, midY);
-            ctx.lineTo(child.x, child.y);
+            ctx.moveTo(connX, midY);
+            ctx.lineTo(child.x, midY);
             ctx.stroke();
             drawConnectorsCanvas(ctx, child);
         });
     }
 
     function drawNodeCanvas(ctx, node) {
-        var x = node.x - CANVAS_DIMS.nodeWidth / 2, y = node.y;
-        var r = 8;
+        var x = node.x, y = node.y, w = CANVAS_DIMS.nodeWidth, h = CANVAS_DIMS.boxHeight;
         ctx.fillStyle = '#ffffff';
         ctx.strokeStyle = '#C41E3A';
         ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(x + r, y);
-        ctx.arcTo(x + CANVAS_DIMS.nodeWidth, y, x + CANVAS_DIMS.nodeWidth, y + CANVAS_DIMS.nodeHeight, r);
-        ctx.arcTo(x + CANVAS_DIMS.nodeWidth, y + CANVAS_DIMS.nodeHeight, x, y + CANVAS_DIMS.nodeHeight, r);
-        ctx.arcTo(x, y + CANVAS_DIMS.nodeHeight, x, y, r);
-        ctx.arcTo(x, y, x + CANVAS_DIMS.nodeWidth, y, r);
-        ctx.closePath();
+        roundRectPath(ctx, x, y, w, h, 6);
         ctx.fill();
         ctx.stroke();
 
-        var textX = x + 14, maxTextWidth = CANVAS_DIMS.nodeWidth - 28;
+        var textX = x + 12, maxTextWidth = w - 24;
         ctx.textBaseline = 'alphabetic';
         ctx.fillStyle = '#1a1a1a';
-        ctx.font = '600 15px Arial, sans-serif';
-        ctx.fillText(truncateCanvas(ctx, node.name || '(unnamed)', maxTextWidth), textX, y + 26);
-
-        var lineY = y + 44;
+        ctx.font = '600 14px Arial, sans-serif';
+        // Name centred vertically when alone; raised to make room for a title line.
+        ctx.fillText(truncateCanvas(ctx, node.name || '(unnamed)', maxTextWidth),
+                     textX, y + (node.title ? 19 : 28));
         if (node.title) {
             ctx.fillStyle = '#6c757d';
-            ctx.font = '12px Arial, sans-serif';
-            ctx.fillText(truncateCanvas(ctx, node.title, maxTextWidth), textX, lineY);
-            lineY += 16;
-        }
-        if (node.secondary) {
-            ctx.fillStyle = '#6c757d';
             ctx.font = '11px Arial, sans-serif';
-            ctx.fillText(truncateCanvas(ctx, node.secondary, maxTextWidth), textX, lineY);
+            ctx.fillText(truncateCanvas(ctx, node.title, maxTextWidth), textX, y + 36);
         }
         node.children.forEach(function (child) { drawNodeCanvas(ctx, child); });
     }
@@ -944,7 +910,11 @@ document.addEventListener('click', function (e) {
     }
 
     // ── PDF (vector — real jsPDF shapes/text, no embedded bitmap) ──
-    var PDF_DIMS = { nodeWidth: 130, nodeHeight: 56, hGap: 18, vGap: 34 };
+    var PDF_DIMS = {
+        nodeWidth: 200, boxHeight: 26, rowHeight: 32, indent: 22, connX: 9,
+        radius: 4, textPad: 7, lineWidth: 1,
+        nameFontSize: 9.5, smallFontSize: 7.5, nameOnlyY: 17, nameY: 11, titleY: 21,
+    };
 
     function truncatePdf(pdf, text, maxWidth) {
         if (pdf.getTextWidth(text) <= maxWidth) return text;
@@ -960,45 +930,36 @@ document.addEventListener('click', function (e) {
 
     function drawConnectorsPdf(pdf, node, dims, offsetX, offsetY) {
         if (!node.children.length) return;
-        var midY = offsetY + node.y + dims.nodeHeight + dims.vGap / 2;
+        var connX = offsetX + node.x + dims.connX;
+        var last = node.children[node.children.length - 1];
         pdf.setDrawColor(201, 204, 209);
         pdf.setLineWidth(Math.max(0.4, dims.lineWidth));
-        pdf.line(offsetX + node.x, offsetY + node.y + dims.nodeHeight, offsetX + node.x, midY);
-        if (node.children.length > 1) {
-            var first = node.children[0], last = node.children[node.children.length - 1];
-            pdf.line(offsetX + first.x, midY, offsetX + last.x, midY);
-        }
+        pdf.line(connX, offsetY + node.y + dims.boxHeight, connX, offsetY + last.y + dims.boxHeight / 2);
         node.children.forEach(function (child) {
-            pdf.line(offsetX + child.x, midY, offsetX + child.x, offsetY + child.y);
+            var midY = offsetY + child.y + dims.boxHeight / 2;
+            pdf.line(connX, midY, offsetX + child.x, midY);
             drawConnectorsPdf(pdf, child, dims, offsetX, offsetY);
         });
     }
 
     function drawNodePdf(pdf, node, dims, offsetX, offsetY) {
-        var x = offsetX + node.x - dims.nodeWidth / 2, y = offsetY + node.y;
+        var x = offsetX + node.x, y = offsetY + node.y;
         pdf.setFillColor(255, 255, 255);
         pdf.setDrawColor(196, 30, 58);
         pdf.setLineWidth(Math.max(0.5, dims.lineWidth * 1.5));
-        pdf.roundedRect(x, y, dims.nodeWidth, dims.nodeHeight, dims.radius, dims.radius, 'FD');
+        pdf.roundedRect(x, y, dims.nodeWidth, dims.boxHeight, dims.radius, dims.radius, 'FD');
 
         var textX = x + dims.textPad, maxTextWidth = dims.nodeWidth - dims.textPad * 2;
         pdf.setFont('helvetica', 'bold');
         pdf.setFontSize(dims.nameFontSize);
         pdf.setTextColor(26, 26, 26);
-        pdf.text(truncatePdf(pdf, node.name || '(unnamed)', maxTextWidth), textX, y + dims.nameLineY);
-
-        var lineY = y + dims.secondLineY;
-        pdf.setFont('helvetica', 'normal');
+        pdf.text(truncatePdf(pdf, node.name || '(unnamed)', maxTextWidth),
+                 textX, y + (node.title ? dims.nameY : dims.nameOnlyY));
         if (node.title) {
+            pdf.setFont('helvetica', 'normal');
             pdf.setFontSize(dims.smallFontSize);
             pdf.setTextColor(108, 117, 125);
-            pdf.text(truncatePdf(pdf, node.title, maxTextWidth), textX, lineY);
-            lineY += dims.smallLineGap;
-        }
-        if (node.secondary) {
-            pdf.setFontSize(dims.smallFontSize - 1);
-            pdf.setTextColor(108, 117, 125);
-            pdf.text(truncatePdf(pdf, node.secondary, maxTextWidth), textX, lineY);
+            pdf.text(truncatePdf(pdf, node.title, maxTextWidth), textX, y + dims.titleY);
         }
         node.children.forEach(function (child) { drawNodePdf(pdf, child, dims, offsetX, offsetY); });
     }
@@ -1044,11 +1005,12 @@ document.addEventListener('click', function (e) {
             // real vector shape/text object at its final size, so this is
             // still lossless at any PDF viewer zoom level.
             var scaledDims = {
-                nodeWidth: PDF_DIMS.nodeWidth * scale, nodeHeight: PDF_DIMS.nodeHeight * scale,
-                hGap: PDF_DIMS.hGap * scale, vGap: PDF_DIMS.vGap * scale,
-                radius: 4 * scale, textPad: 8 * scale, lineWidth: scale,
-                nameFontSize: 9.5 * scale, smallFontSize: 7.5 * scale,
-                nameLineY: 16 * scale, secondLineY: 28 * scale, smallLineGap: 10 * scale,
+                nodeWidth: PDF_DIMS.nodeWidth * scale, boxHeight: PDF_DIMS.boxHeight * scale,
+                rowHeight: PDF_DIMS.rowHeight * scale, indent: PDF_DIMS.indent * scale,
+                connX: PDF_DIMS.connX * scale, radius: PDF_DIMS.radius * scale,
+                textPad: PDF_DIMS.textPad * scale, lineWidth: scale,
+                nameFontSize: PDF_DIMS.nameFontSize * scale, smallFontSize: PDF_DIMS.smallFontSize * scale,
+                nameOnlyY: PDF_DIMS.nameOnlyY * scale, nameY: PDF_DIMS.nameY * scale, titleY: PDF_DIMS.titleY * scale,
             };
             var forest = computeForestLayout(scaledDims);
             var offsetX = margin + (maxWidth - forest.width) / 2;
