@@ -845,3 +845,97 @@ class POTermsOrderingTests(TestCase):
         # A checked box missing from the hint (JS off) still appears, at the end.
         post['selected_terms_ordered'] = '9'
         self.assertEqual(_ordered_selected_term_ids(post), [9, 5, 3])
+
+
+def _png_bytes():
+    buf = io.BytesIO()
+    Image.new('RGBA', (8, 8), (0, 0, 0, 0)).save(buf, 'PNG')
+    return buf.getvalue()
+
+
+class POEditSignatureTests(TestCase):
+    """Editing an already-signed stage's signature: allowed for the original
+    signer or a super admin; the recorded approver + timestamp never change."""
+
+    def setUp(self):
+        from django.utils import timezone
+        from django.core.files.base import ContentFile
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.pm_role, _ = Role.objects.get_or_create(name=Role.PROCUREMENT_MGR)
+        self.super_admin = User.objects.create_user('sa', password='pw', role=self.sa_role)
+        self.signer = User.objects.create_user('shaker', password='pw', role=self.pm_role)
+        self.other_pm = User.objects.create_user('other_pm', password='pw', role=self.pm_role)
+        self.po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-SIG-1',
+            vendor_name='ACME', po_issued_by='Tester', created_by=self.super_admin)
+        # Sign SCM directly (bypassing the endpoint) so we start from a signed stage.
+        self.signed_at = timezone.now()
+        self.po.scm_approved_at = self.signed_at
+        self.po.scm_approved_by = self.signer
+        self.po.scm_signature.save('orig.png', ContentFile(_png_bytes()), save=False)
+        self.po.save()
+
+    def _url(self, stage='scm'):
+        return reverse('procurement:po_edit_signature',
+                       kwargs={'pk': self.po.pk, 'stage': stage})
+
+    def _post_new_sig(self):
+        return self.client.post(self._url('scm'), {'signature_data': _png_data_url()})
+
+    def test_original_signer_can_edit_metadata_unchanged(self):
+        self.client.force_login(self.signer)
+        r = self._post_new_sig()
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()['ok'])
+        self.po.refresh_from_db()
+        # Approver + timestamp must be untouched — only the image was swapped.
+        self.assertEqual(self.po.scm_approved_by_id, self.signer.id)
+        self.assertEqual(self.po.scm_approved_at, self.signed_at)
+        self.assertTrue(self.po.scm_signature)
+
+    def test_super_admin_can_edit(self):
+        self.client.force_login(self.super_admin)
+        r = self._post_new_sig()
+        self.assertEqual(r.status_code, 200)
+        self.po.refresh_from_db()
+        self.assertEqual(self.po.scm_approved_by_id, self.signer.id)  # still the signer
+
+    def test_non_signer_non_superadmin_forbidden(self):
+        # A different procurement manager can SEE the PO but isn't the signer.
+        self.client.force_login(self.other_pm)
+        r = self._post_new_sig()
+        self.assertEqual(r.status_code, 403)
+        self.po.refresh_from_db()
+        self.assertEqual(self.po.scm_approved_by_id, self.signer.id)
+
+    def test_edit_unsigned_stage_is_400(self):
+        self.client.force_login(self.super_admin)
+        r = self.client.post(self._url('pm'), {'signature_data': _png_data_url()})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('not been signed', r.json()['error'].lower())
+
+    def test_out_of_scope_user_gets_404(self):
+        outsider = User.objects.create_user('outsider', password='pw')
+        self.client.force_login(outsider)
+        r = self._post_new_sig()
+        self.assertEqual(r.status_code, 404)
+
+    def test_missing_signature_is_400(self):
+        self.client.force_login(self.signer)
+        r = self.client.post(self._url('scm'), {})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('signature', r.json()['error'].lower())
+
+    def test_detail_page_edit_button_gated_to_signer(self):
+        detail = reverse('procurement:po_detail', kwargs={'pk': self.po.pk})
+        # Assert on the button's edit URL, which only renders when the button
+        # does (the class name alone also appears in the static JS selector).
+        edit_url = self._url('scm')
+        # The original signer sees the "Edit signature" control...
+        self.client.force_login(self.signer)
+        r = self.client.get(detail)
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(edit_url, r.content.decode())
+        # ...a different procurement manager (can view the PO) does not.
+        self.client.force_login(self.other_pm)
+        self.assertNotIn(edit_url, self.client.get(detail).content.decode())
