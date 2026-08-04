@@ -85,9 +85,10 @@
                     {% elif day.status == 'wfh' %}<span class="badge" style="background-color:#BDD7EE; color:#000;">WFH</span>
                     {% elif day.status == 'leave' %}<span class="badge bg-secondary">Leave</span>
                     {% elif day.status == 'holiday' %}<span class="badge bg-success">Holiday</span>
-                    {% elif day.status == 'weekend' %}<span class="badge bg-light text-dark border">Weekend</span>
                     {% elif day.status == 'late' %}<span class="badge bg-warning text-dark">Late</span>
+                    {% elif day.is_weekend %}<span class="badge" style="background-color:#D9D2E9; color:#000;">Weekend</span>
                     {% else %}<span class="text-muted">-</span>{% endif %}
+                    {% if day.check_in %}<span class="text-muted small ms-1">{{ day.check_in|time:"H:i" }}{% if day.check_out %}-{{ day.check_out|time:"H:i" }}{% endif %}</span>{% endif %}
                   </td>
                 </tr>
                 {% endfor %}
