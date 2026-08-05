@@ -1,12 +1,9 @@
 import re
 
-# Matches things like "CS-2091", "Ref# CS-2091", "REF: CS 2091".
 REFERENCE_PATTERN = re.compile(r'\bCS[-\s]?(\d{3,6})\b', re.IGNORECASE)
 
 
 def extract_reference(subject, body=''):
-    """Pull the first costing-sheet reference number out of subject/body,
-    normalized to 'CS-####'. Returns '' if none found."""
     for text in (subject or '', body or ''):
         m = REFERENCE_PATTERN.search(text)
         if m:
@@ -15,20 +12,7 @@ def extract_reference(subject, body=''):
 
 
 def find_matching_sheet(sender_email, reference):
-    """Return (sheet_or_None, reason_string).
-
-    Two checks, either can confirm a match:
-      1. Reference number in the email matches an open costing sheet's
-         customer_reference, exactly.
-      2. The sender's email is already on file as a vendor contact on an
-         open costing sheet (from a previous VendorQuote), and that sheet
-         is the ONLY open sheet that vendor is tied to right now — if
-         they're on multiple open sheets, it's too ambiguous to guess.
-
-    If both checks agree on the same sheet, or either one confidently
-    finds exactly one sheet, we auto-attach. Anything else goes to review.
-    """
-    from costing.models import CostingSheet, VendorQuote
+    from costing.models import CostingSheet
 
     sheet_by_reference = None
     if reference:
@@ -40,7 +24,6 @@ def find_matching_sheet(sender_email, reference):
         .distinct()
     ) if sender_email else []
 
-    # Case 1: reference matches a sheet, and sender either agrees or is unknown.
     if sheet_by_reference:
         if not candidate_sheets_by_sender or sheet_by_reference in candidate_sheets_by_sender:
             return sheet_by_reference, f'Matched on reference "{reference}".'
@@ -49,7 +32,6 @@ def find_matching_sheet(sender_email, reference):
             f'known on a different sheet — needs a human to confirm.'
         )
 
-    # Case 2: no usable reference, but sender is uniquely tied to one open sheet.
     if len(candidate_sheets_by_sender) == 1:
         return candidate_sheets_by_sender[0], f'Matched on known sender {sender_email} (no reference number needed).'
 

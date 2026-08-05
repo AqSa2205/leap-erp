@@ -1242,13 +1242,14 @@ class VendorQuote(models.Model):
     )
     SOURCE_CHOICES = [
         ('manual', 'Manually uploaded'),
-        ('email', 'Auto-detected from email'),
+        ('email_auto', 'Auto-matched from email'),
+        ('email_manual', 'Manually resolved from email'),
     ]
 
     vendor_name = models.CharField(max_length=255)
     quote_reference = models.CharField(max_length=100, blank=True)
     source = models.CharField(
-        max_length=10, choices=SOURCE_CHOICES, default='manual',
+        max_length=20, choices=SOURCE_CHOICES, default='manual',
         help_text='Whether this was uploaded by hand or auto-attached by the vendor-email matcher.',
     )
     file = models.FileField(upload_to='costing/vendor_quotes/')

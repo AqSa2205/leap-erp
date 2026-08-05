@@ -8,4 +8,5 @@ urlpatterns = [
     path('', views.triage, name='triage'),
     path('resolve/<int:pk>/', views.resolve, name='resolve'),
     path('simulate/', views.simulate, name='simulate'),
+    
 ]

@@ -10,6 +10,7 @@ from django.contrib import messages
 from django.shortcuts import redirect
 
 
+
 @login_required
 def triage(request):
     unmatched = VendorEmailMessage.objects.filter(status='unmatched')
@@ -44,3 +45,5 @@ def simulate(request):
         else:
             messages.warning(request, f'Simulated email from {msg.sender_email} needs review — {msg.match_reason}')
     return redirect('vendor_email:triage')
+
+
