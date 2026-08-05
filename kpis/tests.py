@@ -53,11 +53,11 @@ class RegistryTests(TestCase):
         self.assertEqual(len(kpis_for_department(SALES)), 5)
         self.assertEqual(len(kpis_for_department(PROPOSAL)), 6)
         self.assertEqual(len(kpis_for_department(PROCUREMENT)), 10)
-        self.assertEqual(len(KPI_DEFINITIONS), 21)
+        self.assertEqual(len(KPI_DEFINITIONS), 22)
 
     def test_eleven_auto_ten_manual(self):
         auto = [k for k in KPI_DEFINITIONS if k.is_auto]
-        self.assertEqual(len(auto), 11)
+        self.assertEqual(len(auto), 12)
         self.assertEqual(len(KPI_DEFINITIONS) - len(auto), 10)
 
     def test_evaluate_higher(self):
@@ -211,7 +211,7 @@ class PerUserComputeTests(ComputeFixtureMixin, TestCase):
     def test_scorecard_excludes_manual_and_dept_only(self):
         card = build_person_scorecard('2026-Q2', self.alice)
         keys = [c['key'] for d in card['departments'] for c in d['cards']]
-        self.assertEqual(len(keys), 10)
+        self.assertEqual(len(keys), 11)
         self.assertNotIn('proc_supplier_performance', keys)   # manual excluded
         self.assertNotIn('sales_pipeline_coverage', keys)     # dept-only excluded
 
@@ -219,9 +219,9 @@ class PerUserComputeTests(ComputeFixtureMixin, TestCase):
 class ServiceTests(ComputeFixtureMixin, TestCase):
     def test_build_dashboard_shape(self):
         data = build_dashboard('2026-Q2')
-        self.assertEqual(len(data['departments']), 3)
+        self.assertEqual(len(data['departments']), 4)
         counts = {d['key']: len(d['cards']) for d in data['departments']}
-        self.assertEqual(counts, {SALES: 5, PROPOSAL: 6, PROCUREMENT: 10})
+        self.assertEqual(counts, {SALES: 5, PROPOSAL: 6, PROCUREMENT: 10, 'hr': 1})
 
     def test_manual_value_flows_into_card(self):
         KPIEntry.objects.create(
@@ -564,3 +564,4 @@ class ActivityViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, 'Pipelines created')
         self.assertContains(resp, 'Total')
+

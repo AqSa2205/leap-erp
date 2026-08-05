@@ -151,6 +151,9 @@ def attributable_users():
                .values_list('created_by_id', flat=True))
     ids |= set(PurchaseOrder.objects.exclude(created_by__isnull=True)
                .values_list('created_by_id', flat=True))
+    from hr.models import Employee
+    ids |= set(Employee.objects.exclude(user__isnull=True)
+               .values_list('user_id', flat=True))
 
     User = get_user_model()
     return list(User.objects.filter(pk__in=ids)
