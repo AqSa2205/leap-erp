@@ -1,5 +1,5 @@
 from django import forms
-from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, TermsTemplate, ScopeOfWorkItem, ClientRemarkTemplate, ClientRemarkPair
+from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, TermsTemplate, ScopeOfWorkItem, ClientRemarkTemplate
 from projects.models import Project
 
 
@@ -111,56 +111,6 @@ class ClientRemarkTemplateForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['name'].widget.attrs['class'] = 'form-control'
-
-
-def _validate_hex_color(value):
-    value = (value or '#000000').strip()
-    if not value.startswith('#') or len(value) != 7:
-        raise forms.ValidationError('Enter a 7-character hex color, e.g. #C41E3A.')
-    try:
-        int(value[1:], 16)
-    except ValueError:
-        raise forms.ValidationError('Invalid hex color.')
-    return value
-
-
-class ClientRemarkPairForm(forms.ModelForm):
-    class Meta:
-        model = ClientRemarkPair
-        fields = ['remark', 'answer', 'remark_color', 'answer_color', 'order']
-        widgets = {
-            'remark': forms.Textarea(attrs={'rows': 2, 'class': 'pair-input pair-remark'}),
-            'answer': forms.Textarea(attrs={'rows': 2, 'class': 'pair-input pair-answer'}),
-            'remark_color': forms.TextInput(attrs={'type': 'color'}),
-            'answer_color': forms.TextInput(attrs={'type': 'color'}),
-            'order': forms.HiddenInput(),
-        }
-
-    def clean_remark_color(self):
-        return _validate_hex_color(self.cleaned_data.get('remark_color'))
-
-    def clean_answer_color(self):
-        return _validate_hex_color(self.cleaned_data.get('answer_color'))
-
-    def has_changed(self):
-        # Fresh blank rows shouldn't trigger validation (extra=0 + cloned
-        # rows with just the default colors). Treat a row with no remark
-        # AND no answer as untouched.
-        if not self.instance.pk:
-            remark = (self.data.get(self.add_prefix('remark')) or '').strip()
-            answer = (self.data.get(self.add_prefix('answer')) or '').strip()
-            if not remark and not answer:
-                return False
-        return super().has_changed()
-
-
-ClientRemarkPairFormSet = forms.inlineformset_factory(
-    ClientRemarkTemplate,
-    ClientRemarkPair,
-    form=ClientRemarkPairForm,
-    extra=0,
-    can_delete=True,
-)
 
 
 class CostingFilterForm(forms.Form):

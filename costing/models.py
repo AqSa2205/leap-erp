@@ -118,12 +118,33 @@ class TermsTemplate(models.Model):
         return f"{self.get_category_display()} - {self.name}"
 
 
+def default_remark_columns():
+    """Starting columns for a fresh Client Remarks bundle. Column headers are
+    editable per-bundle; each column carries a stable `key` that ties every
+    row's cell back to its column even after headers are renamed/reordered."""
+    return [
+        {'key': 'c1', 'name': 'Client Remark'},
+        {'key': 'c2', 'name': "Leap's Answer"},
+    ]
+
+
 class ClientRemarkTemplate(models.Model):
-    """Named bundle of Q&A pairs for the 'Client Remarks & Leap's Answers'
-    PDF section. Each bundle holds many ClientRemarkPair rows that the
-    user can edit as a table (paste-from-Excel friendly). Sheets attach
-    one or more bundles via CostingSheet.selected_client_remarks (M2M)."""
+    """Named bundle backing the 'Client Remarks & Leap's Answers' PDF section.
+
+    The bundle is a small spreadsheet: `columns` holds an ordered list of
+    editable headers (add/remove/rename freely), and `rows` holds the grid
+    data. Sheets attach one or more bundles via
+    CostingSheet.selected_client_remarks (M2M).
+
+    Shapes:
+        columns = [{"key": "c1", "name": "Client Remark"}, ...]
+        rows    = [{"cells": {"c1": {"text": "...", "color": "#000000"}, ...}}, ...]
+
+    A cell keyed by a column that no longer exists is simply ignored on
+    render; a column with no matching cell renders blank."""
     name = models.CharField(max_length=255)
+    columns = models.JSONField(default=default_remark_columns)
+    rows = models.JSONField(default=list)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -138,24 +159,19 @@ class ClientRemarkTemplate(models.Model):
     def __str__(self):
         return self.name
 
+    @property
+    def row_count(self):
+        return len(self.rows or [])
 
-class ClientRemarkPair(models.Model):
-    """One row in a ClientRemarkTemplate: a client remark + Leap's answer,
-    with independently-colored text in each cell."""
-    template = models.ForeignKey(
-        ClientRemarkTemplate, on_delete=models.CASCADE, related_name='pairs',
-    )
-    remark = models.TextField()
-    answer = models.TextField(blank=True)
-    remark_color = models.CharField(max_length=7, default='#000000')
-    answer_color = models.CharField(max_length=7, default='#000000')
-    order = models.PositiveSmallIntegerField(default=0)
+    @property
+    def column_count(self):
+        return len(self.columns or [])
 
-    class Meta:
-        ordering = ['order', 'pk']
-
-    def __str__(self):
-        return f"{self.template.name} #{self.order}"
+    def cell(self, row, key):
+        """Return (text, color) for a row's cell under column `key`."""
+        cells = (row or {}).get('cells') or {}
+        data = cells.get(key) or {}
+        return data.get('text', '') or '', data.get('color') or '#000000'
 
 
 class ExchangeRate(models.Model):
