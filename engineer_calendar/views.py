@@ -1,23 +1,22 @@
 # engineer_calendar/views.py
-import json
 import calendar
+import json
 from datetime import date, timedelta
 
-from django.contrib.auth.decorators import login_required
-from django.http import JsonResponse
-from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from django.http import HttpResponse, JsonResponse
+from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from accounts.permissions import require_capability
+from hr.models import Employee
+
 from .models import CalendarCell
 from .services import generate_draft
-from hr.models import Employee
-from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-from django.http import JsonResponse, HttpResponse
 
-# engineer_calendar/views.py — add this near the top
 SOURCE_CSS = {
     'leave': 'src-leave',
     'holiday': 'src-holiday',
@@ -29,6 +28,60 @@ SOURCE_CSS = {
 }
 
 
+def _clear_merge_span(employee, start_date, end_date):
+    """Clear merge markers on every cell in [start_date, end_date]."""
+    CalendarCell.objects.filter(
+        employee=employee,
+        date__gte=start_date,
+        date__lte=end_date,
+    ).update(merge_start_date=None, merge_end_date=None)
+
+
+def _build_day_cells(emp_cells, year, month, days_in_month):
+    """Build day cell dicts for one employee row, collapsing merge spans
+    into a single colspan entry."""
+    day_cells = []
+    day = 1
+    while day <= days_in_month:
+        cell_date = date(year, month, day)
+        cell = emp_cells.get(day)
+
+        if (
+            cell
+            and cell.merge_start_date
+            and cell.merge_end_date
+            and cell.merge_start_date <= cell_date <= cell.merge_end_date
+        ):
+            # Only emit a cell on the first visible day of the merge in this month
+            span_start = max(cell.merge_start_date, date(year, month, 1))
+            span_end = min(cell.merge_end_date, date(year, month, days_in_month))
+            if cell_date != span_start:
+                day += 1
+                continue
+            colspan = (span_end - span_start).days + 1
+            day_cells.append({
+                'text': cell.display_text,
+                'css_class': SOURCE_CSS.get(cell.source, 'src-blank'),
+                'needs_review': cell.needs_review,
+                'date': span_start.isoformat(),
+                'colspan': colspan,
+                'merge_start': cell.merge_start_date.isoformat(),
+                'merge_end': cell.merge_end_date.isoformat(),
+            })
+            day += colspan
+            continue
+
+        day_cells.append({
+            'text': cell.display_text if cell else '',
+            'css_class': SOURCE_CSS.get(cell.source, 'src-blank') if cell else 'src-blank',
+            'needs_review': cell.needs_review if cell else False,
+            'date': cell_date.isoformat(),
+            'colspan': 1,
+            'merge_start': '',
+            'merge_end': '',
+        })
+        day += 1
+    return day_cells
 
 
 @login_required
@@ -54,13 +107,12 @@ def export_excel(request):
     header_font = Font(name='Cambria', size=10, bold=True)
     normal_font = Font(name='Cambria', size=10)
 
-    # Real colors pulled from HR's actual template — see explanation above
     FILL_WEEKEND = PatternFill('solid', fgColor='C00000')
-    FILL_HOLIDAY = PatternFill('solid', fgColor='C00000')   # same as weekend — no real sample found
-    FILL_LEAVE   = PatternFill('solid', fgColor='FBE5D6')
-    FILL_WORK    = PatternFill('solid', fgColor='E2EFDA')   # timesheet / wfh / manual entries
+    FILL_HOLIDAY = PatternFill('solid', fgColor='C00000')
+    FILL_LEAVE = PatternFill('solid', fgColor='FBE5D6')
+    FILL_WORK = PatternFill('solid', fgColor='E2EFDA')
     FILL_NAME_ROW = PatternFill('solid', fgColor='DEEBF7')
-    FILL_SPACER   = PatternFill('solid', fgColor='F2F2F2')
+    FILL_SPACER = PatternFill('solid', fgColor='F2F2F2')
 
     SOURCE_FILL = {
         'weekend': FILL_WEEKEND,
@@ -82,7 +134,6 @@ def export_excel(request):
     ws['B5'] = date(year, month, 1)
     ws['B5'].font = Font(name='Cambria', size=10, bold=True, color='FF0000')
 
-    # Column widths matching the real template
     ws.column_dimensions['A'].width = 7.1
     ws.column_dimensions['B'].width = 19.4
     ws.column_dimensions['C'].width = 16.7
@@ -126,22 +177,25 @@ def export_excel(request):
             if cell and cell.source in SOURCE_FILL:
                 xcell.fill = SOURCE_FILL[cell.source]
 
-        remarks_cell = ws.cell(row=row, column=4 + days_in_month, value='')  # Remarks — blank for now
+        remarks_cell = ws.cell(row=row, column=4 + days_in_month, value='')
         remarks_cell.border = border
         remarks_cell.alignment = center
 
-        row += 1  # employment-type/DOJ row — blank for now
+        row += 1
         ws.row_dimensions[row].height = 15
         row += 1
         ws.row_dimensions[row].height = 8
-        ws.cell(row=row, column=1).fill = FILL_SPACER  # spacer row tint
+        ws.cell(row=row, column=1).fill = FILL_SPACER
         row += 1
 
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    response['Content-Disposition'] = f'attachment; filename="Engineer_Calendar_{calendar.month_abbr[month]}_{year}.xlsx"'
+    response['Content-Disposition'] = (
+        f'attachment; filename="Engineer_Calendar_{calendar.month_abbr[month]}_{year}.xlsx"'
+    )
     wb.save(response)
     return response
+
 
 @login_required
 @require_capability('engineer_calendar.access')
@@ -162,13 +216,57 @@ def save_cell(request):
         date=cell_date,
         defaults={'source': 'manual'},
     )
+
+    # Editing a merged block (clicked start cell): update the whole span text.
+    if cell.merge_start_date and cell.merge_end_date:
+        merge_start, merge_end = cell.merge_start_date, cell.merge_end_date
+        if not text:
+            # Clearing the block also breaks the merge so HR can rebuild.
+            current = merge_start
+            while current <= merge_end:
+                span_cell, _ = CalendarCell.objects.get_or_create(
+                    employee=employee, date=current, defaults={'source': 'manual'})
+                span_cell.display_text = ''
+                span_cell.source = CalendarCell.SOURCE_MANUAL
+                span_cell.merge_start_date = None
+                span_cell.merge_end_date = None
+                span_cell.needs_review = False
+                span_cell.updated_by = request.user
+                span_cell.save()
+                current += timedelta(days=1)
+            return JsonResponse({
+                'text': '',
+                'css_class': 'src-manual',
+                'reload': True,
+            })
+
+        current = merge_start
+        while current <= merge_end:
+            span_cell, _ = CalendarCell.objects.get_or_create(
+                employee=employee, date=current, defaults={'source': 'manual'})
+            span_cell.display_text = text
+            span_cell.source = CalendarCell.SOURCE_MANUAL
+            span_cell.merge_start_date = merge_start
+            span_cell.merge_end_date = merge_end
+            span_cell.needs_review = False
+            span_cell.updated_by = request.user
+            span_cell.save()
+            current += timedelta(days=1)
+        return JsonResponse({
+            'text': text,
+            'css_class': 'src-manual',
+            'reload': False,
+        })
+
     cell.display_text = text
-    cell.source = 'manual'
+    cell.source = CalendarCell.SOURCE_MANUAL
+    cell.merge_start_date = None
+    cell.merge_end_date = None
     cell.needs_review = False
     cell.updated_by = request.user
     cell.save()
 
-    return JsonResponse({'text': cell.display_text, 'css_class': 'src-manual'})
+    return JsonResponse({'text': cell.display_text, 'css_class': 'src-manual', 'reload': False})
 
 
 @login_required
@@ -176,34 +274,60 @@ def save_cell(request):
 @require_POST
 def fill_range(request):
     try:
-        payload = json.loads(request.body)
-        employee_id = payload['employee_id']
-        start_date = date.fromisoformat(payload['start_date'])
-        end_date = date.fromisoformat(payload['end_date'])
-        text = payload.get('text', '').strip()
-    except (KeyError, ValueError, json.JSONDecodeError):
+        data = json.loads(request.body)
+        employee_id = data['employee_id']
+        start_date = date.fromisoformat(data['start_date'])
+        end_date = date.fromisoformat(data['end_date'])
+        text = (data.get('text') or '').strip()
+    except (KeyError, ValueError, TypeError, json.JSONDecodeError):
         return JsonResponse({'error': 'Invalid request.'}, status=400)
 
     if end_date < start_date:
-        return JsonResponse({'error': 'End date must be on or after the start date.'}, status=400)
+        return JsonResponse({'error': 'End date must be on or after start date.'}, status=400)
 
     employee = get_object_or_404(Employee, pk=employee_id)
 
+    # Clear any merges that overlap this range so stamps stay consistent.
+    overlapping = CalendarCell.objects.filter(
+        employee=employee,
+        date__gte=start_date,
+        date__lte=end_date,
+        merge_start_date__isnull=False,
+    )
+    for cell in overlapping:
+        if cell.merge_start_date and cell.merge_end_date:
+            _clear_merge_span(employee, cell.merge_start_date, cell.merge_end_date)
+
+    CalendarCell.objects.filter(
+        employee=employee,
+        date__gte=start_date,
+        date__lte=end_date,
+    ).update(merge_start_date=None, merge_end_date=None)
+
     updated_days = []
-    current = start_date
-    while current <= end_date:
-        cell, _created = CalendarCell.objects.get_or_create(
-            employee=employee, date=current, defaults={'source': 'manual'},
+    current_date = start_date
+    while current_date <= end_date:
+        cell, _ = CalendarCell.objects.get_or_create(
+            employee=employee,
+            date=current_date,
+            defaults={'source': CalendarCell.SOURCE_MANUAL},
         )
         cell.display_text = text
-        cell.source = 'manual'
+        cell.source = CalendarCell.SOURCE_MANUAL
+        cell.merge_start_date = start_date
+        cell.merge_end_date = end_date
         cell.needs_review = False
         cell.updated_by = request.user
         cell.save()
-        updated_days.append(current.day)
-        current += timedelta(days=1)
+        updated_days.append(current_date.day)
+        current_date += timedelta(days=1)
 
-    return JsonResponse({'text': text, 'css_class': 'src-manual', 'updated_days': updated_days})
+    return JsonResponse({
+        'updated_days': updated_days,
+        'text': text,
+        'css_class': 'src-manual',
+        'reload': True,
+    })
 
 
 @login_required
@@ -219,7 +343,6 @@ def calendar_grid(request):
         date__year=year, date__month=month
     ).select_related('employee')
 
-    # Build employee_id -> {day_number: cell}
     cell_map = {}
     for cell in cells:
         cell_map.setdefault(cell.employee_id, {})[cell.date.day] = cell
@@ -227,16 +350,10 @@ def calendar_grid(request):
     rows = []
     for emp in employees:
         emp_cells = cell_map.get(emp.id, {})
-        day_cells = []
-        for day in range(1, days_in_month + 1):
-            cell = emp_cells.get(day)
-            day_cells.append({
-                'text': cell.display_text if cell else '',
-                'css_class': SOURCE_CSS.get(cell.source, 'src-blank') if cell else 'src-blank',
-                'needs_review': cell.needs_review if cell else False,
-                'date': date(year, month, day).isoformat(),
-            })
-        rows.append({'employee': emp, 'day_cells': day_cells})
+        rows.append({
+            'employee': emp,
+            'day_cells': _build_day_cells(emp_cells, year, month, days_in_month),
+        })
 
     weekday_letters = [
         calendar.day_abbr[date(year, month, day).weekday()][0]

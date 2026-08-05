@@ -71,6 +71,9 @@ class CalendarCell(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    merge_start_date = models.DateField(null=True, blank=True)
+    merge_end_date = models.DateField(null=True, blank=True)
+
     class Meta:
         unique_together = ('employee', 'date')
         ordering = ['employee', 'date']

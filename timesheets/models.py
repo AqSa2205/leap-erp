@@ -124,10 +124,9 @@ class TimesheetRequest(models.Model):
 
 
 class TimesheetRequestAck(models.Model):
-        """Tracks which employee confirmed they sent their timesheet for a given
-        request. Self-reported — Option B (opening the employee's own Outlook)
-        means the server has no way to verify the email was actually sent, only
-        that the employee clicked 'I've sent this'."""
+        """Tracks which employee successfully emailed their timesheet for a
+        given HR request. Created only after the server sends the Excel via
+        Graph to HRSettings.hr_email."""
         request = models.ForeignKey(TimesheetRequest, on_delete=models.CASCADE, related_name='acks')
         employee = models.ForeignKey('hr.Employee', on_delete=models.CASCADE, related_name='timesheet_acks')
         acknowledged_at = models.DateTimeField(auto_now_add=True)

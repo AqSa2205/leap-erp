@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.test import TestCase, Client
 from django.urls import reverse
@@ -489,7 +490,8 @@ class ReopenMonthTests(TestCase):
 class SendToHRTests(TestCase):
     """send_to_hr / acknowledge_send: an employee only ever acts on their
     own acknowledgment row, never someone else's, and double-acking is a
-    no-op rather than a duplicate or a crash."""
+    no-op rather than a duplicate or a crash. Email is mocked so tests
+    never call Microsoft Graph."""
 
     def setUp(self):
         self.client = Client()
@@ -506,9 +508,12 @@ class SendToHRTests(TestCase):
         self.client.login(username='senda', password='testpass123')
         resp = self.client.get(reverse('timesheets:send_to_hr', args=[self.ts_request.pk]))
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, 'Open in Outlook')
+        self.assertContains(resp, 'Send to HR')
+        self.assertNotContains(resp, 'Open in Outlook')
 
-    def test_acknowledge_creates_ack_for_correct_employee_only(self):
+    @patch('timesheets.views.EmailMessage')
+    def test_acknowledge_creates_ack_for_correct_employee_only(self, mock_email_cls):
+        mock_email_cls.return_value.send.return_value = 1
         self.client.login(username='senda', password='testpass123')
         self.client.post(reverse('timesheets:acknowledge_send', args=[self.ts_request.pk]))
         self.assertTrue(TimesheetRequestAck.objects.filter(
@@ -516,12 +521,16 @@ class SendToHRTests(TestCase):
         self.assertFalse(TimesheetRequestAck.objects.filter(
             request=self.ts_request, employee=self.emp_b).exists())
 
-    def test_double_acknowledge_does_not_duplicate(self):
+    @patch('timesheets.views.EmailMessage')
+    def test_double_acknowledge_does_not_duplicate(self, mock_email_cls):
+        mock_email_cls.return_value.send.return_value = 1
         self.client.login(username='senda', password='testpass123')
         self.client.post(reverse('timesheets:acknowledge_send', args=[self.ts_request.pk]))
         self.client.post(reverse('timesheets:acknowledge_send', args=[self.ts_request.pk]))
         self.assertEqual(TimesheetRequestAck.objects.filter(
             request=self.ts_request, employee=self.emp_a).count(), 1)
+        # Second click is already-acked — should not send email again
+        self.assertEqual(mock_email_cls.return_value.send.call_count, 1)
 
     def test_already_acked_employee_redirected_from_preview(self):
         TimesheetRequestAck.objects.create(request=self.ts_request, employee=self.emp_a)
@@ -529,16 +538,32 @@ class SendToHRTests(TestCase):
         resp = self.client.get(reverse('timesheets:send_to_hr', args=[self.ts_request.pk]))
         self.assertEqual(resp.status_code, 302)
 
-    def test_mailto_uses_fixed_hr_email_not_employee_input(self):
+    def test_preview_shows_fixed_hr_email_not_employee_input(self):
         """The HR email in the preview always comes from HRSettings, never
         from anything the employee could submit or influence."""
         self.client.login(username='senda', password='testpass123')
         resp = self.client.get(reverse('timesheets:send_to_hr', args=[self.ts_request.pk]))
         self.assertContains(resp, 'hr@leap-arabia.com')
 
-    def test_acknowledging_someone_elses_request_id_only_affects_own_employee(self):
+    @patch('timesheets.views.EmailMessage')
+    def test_send_uses_fixed_hr_email_and_employee_in_subject(self, mock_email_cls):
+        mock_msg = mock_email_cls.return_value
+        mock_msg.send.return_value = 1
+        self.client.login(username='senda', password='testpass123')
+        self.client.post(reverse('timesheets:acknowledge_send', args=[self.ts_request.pk]))
+        kwargs = mock_email_cls.call_args.kwargs
+        self.assertEqual(kwargs['to'], ['hr@leap-arabia.com'])
+        self.assertIn('Send A', kwargs['subject'])
+        self.assertIn('July 2026', kwargs['subject'])
+        mock_msg.attach.assert_called_once()
+        attach_args = mock_msg.attach.call_args[0]
+        self.assertTrue(attach_args[0].endswith('.xlsx'))
+
+    @patch('timesheets.views.EmailMessage')
+    def test_acknowledging_someone_elses_request_id_only_affects_own_employee(self, mock_email_cls):
         """B posting to the SAME ts_request only ever creates B's own ack —
         there's no way to forge an ack for A through this endpoint."""
+        mock_email_cls.return_value.send.return_value = 1
         self.client.login(username='sendb', password='testpass123')
         self.client.post(reverse('timesheets:acknowledge_send', args=[self.ts_request.pk]))
         self.assertTrue(TimesheetRequestAck.objects.filter(
@@ -546,9 +571,11 @@ class SendToHRTests(TestCase):
         self.assertFalse(TimesheetRequestAck.objects.filter(
             request=self.ts_request, employee=self.emp_a).exists())
 
-    def test_acknowledging_locks_that_months_entries(self):
+    @patch('timesheets.views.EmailMessage')
+    def test_acknowledging_locks_that_months_entries(self, mock_email_cls):
         """The actual gap fix: acknowledging now really locks entries,
         not just creates an Ack row."""
+        mock_email_cls.return_value.send.return_value = 1
         TimesheetEntry.objects.create(
             employee=self.emp_a, date=date(2026, 7, 5),
             task_description='work', activity_code=self.code, hours=Decimal('10'))
@@ -557,11 +584,27 @@ class SendToHRTests(TestCase):
         entry = TimesheetEntry.objects.get(employee=self.emp_a, date=date(2026, 7, 5))
         self.assertEqual(entry.status, TimesheetEntry.STATUS_SUBMITTED)
 
-    def test_double_acknowledge_does_not_crash_on_already_locked_month(self):
+    @patch('timesheets.views.EmailMessage')
+    def test_double_acknowledge_does_not_crash_on_already_locked_month(self, mock_email_cls):
+        mock_email_cls.return_value.send.return_value = 1
         self.client.login(username='senda', password='testpass123')
         self.client.post(reverse('timesheets:acknowledge_send', args=[self.ts_request.pk]))
         resp = self.client.post(reverse('timesheets:acknowledge_send', args=[self.ts_request.pk]))
         self.assertEqual(resp.status_code, 302)  # still succeeds, no 500
+
+    @patch('timesheets.views.EmailMessage')
+    def test_email_failure_does_not_ack_or_lock(self, mock_email_cls):
+        mock_email_cls.return_value.send.side_effect = RuntimeError('Graph down')
+        TimesheetEntry.objects.create(
+            employee=self.emp_a, date=date(2026, 7, 5),
+            task_description='work', activity_code=self.code, hours=Decimal('10'))
+        self.client.login(username='senda', password='testpass123')
+        resp = self.client.post(reverse('timesheets:acknowledge_send', args=[self.ts_request.pk]))
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(TimesheetRequestAck.objects.filter(
+            request=self.ts_request, employee=self.emp_a).exists())
+        entry = TimesheetEntry.objects.get(employee=self.emp_a, date=date(2026, 7, 5))
+        self.assertEqual(entry.status, TimesheetEntry.STATUS_DRAFT)
 
 class NotificationTargetingTests(TestCase):
     """request_timesheets notifies every active user regardless of role
@@ -804,8 +847,8 @@ class AdditionalCSRFEnforcementTests(TestCase):
 
 
 class NonexistentRequestIdTests(TestCase):
-    """send_to_hr and acknowledge_send must 404 cleanly on a request_id
-    that doesn't exist at all, not just one that belongs to someone else."""
+    """send_to_hr and acknowledge_send must handle a request_id that
+    doesn't exist at all, not just one that belongs to someone else."""
 
     def setUp(self):
         self.user, self.emp = _make_user_with_employee('nonexistuser')
@@ -821,9 +864,10 @@ class NonexistentRequestIdTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertRedirects(resp, reverse('timesheets:my_timesheet'))
 
-    def test_acknowledge_send_with_bad_id_404s(self):
+    def test_acknowledge_send_with_bad_id_redirects(self):
         resp = self.client.post(reverse('timesheets:acknowledge_send', args=[99999]))
-        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.status_code, 302)
+        self.assertRedirects(resp, reverse('timesheets:my_timesheet'))
 
 
 class HRRequestDetailQueryCountTests(TestCase):

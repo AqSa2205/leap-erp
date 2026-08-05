@@ -4,6 +4,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.http import require_POST
 from decimal import Decimal
 from collections import defaultdict
+from io import BytesIO
 from accounts.permissions import require_capability
 from .models import TimesheetEntry
 from .forms import TimesheetEntryForm
@@ -12,11 +13,10 @@ from datetime import date as date_cls
 from .services import employees_for_request, remind_employee
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from django.conf import settings
+from django.core.mail import EmailMessage
 from django.http import HttpResponse
-from datetime import date as date_cls
-from django.utils import timezone
 from .models import TimesheetRequest, TimesheetRequestAck, HRSettings
-from urllib.parse import quote
 from .services import request_timesheets, delete_request, submit_month, reopen_month
 from engineer_calendar.services import generate_draft
 
@@ -192,23 +192,34 @@ def timesheet_export(request):
         month = int(request.GET.get('month', today.month))
         if not (1 <= month <= 12):
             raise ValueError('Month out of range')
-        days_in_month = calendar.monthrange(year, month)[1]
+        calendar.monthrange(year, month)[1]
     except (ValueError, TypeError):
         messages.error(request, 'Invalid year or month.')
         return redirect('timesheets:my_timesheet')
 
-    
+    wb, filename = _build_timesheet_workbook(emp, year, month)
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    wb.save(response)
+    return response
+
+
+def _build_timesheet_workbook(emp, year, month):
+    """Build the HR-template timesheet workbook for one employee/month.
+    Shared by the download export and the Send-to-HR email attachment so
+    both always produce the same file."""
+    days_in_month = calendar.monthrange(year, month)[1]
     entries_by_day = defaultdict(list)
     for e in TimesheetEntry.objects.filter(
             employee=emp, date__year=year, date__month=month
-        ).select_related('activity_code','project').order_by('id'):
+        ).select_related('activity_code', 'project').order_by('id'):
         entries_by_day[e.date.day].append(e)
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = 'Time_Sheet'
 
-    # ─── Styles, copied from the real HR template ───
     title_font = Font(name='Century Gothic', bold=True, size=22)
     label_font = Font(name='Trebuchet MS', size=10)
     header_font = Font(name='Trebuchet MS', size=10, color='FFFFFF')
@@ -219,7 +230,6 @@ def timesheet_export(request):
     thin = Side(style='thin')
     thin_border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    # ─── Title block ───
     ws.merge_cells('D2:G2')
     ws['D2'] = 'MONTHLY  TIMESHEET'
     ws['D2'].font = title_font
@@ -250,39 +260,25 @@ def timesheet_export(request):
     ws['D9'] = f'{_ordinal(1)} {month_name} {year} to {_ordinal(days_in_month)} {month_name} {year}'
     ws['D9'].font = label_font
 
-    # ─── Table header (row 11) ───
     headers = ['Sr.No', 'Activity_Description', 'Date', 'Type', 'Hours ', 'Activity_code']
-    for col, text in enumerate(headers, start=2):  # starts at column B
+    for col, text in enumerate(headers, start=2):
         cell = ws.cell(row=11, column=col, value=text)
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = header_alignment
         cell.border = thin_border
 
-    # ─── One row per calendar day ───
     for day in range(1, days_in_month + 1):
         row = 11 + day
         the_date = date_cls(year, month, day)
         day_entries = entries_by_day.get(day, [])
-        is_weekend = the_date.weekday() in (4, 5)  # Friday=4, Saturday=5
+        is_weekend = the_date.weekday() in (4, 5)
 
-        # Multiple entries on the same day are combined into this one row.
-        # Descriptions and codes are joined in the SAME order (both come from
-        # the same day_entries list), so position N in one lines up with
-        # position N in the other — e.g. "Site visit; Office work" pairs with
-        # "COS_0005, COS_0009" meaning entry 1 -> COS_0005, entry 2 -> COS_0009.
         combined_description = '; '.join(e.task_description for e in day_entries) or None
-        # Office hours are a flat 10/day regardless of how many entries or
-        # activity codes exist for that date -- summing individual entries
-        # (e.g. auto-start + auto-end + a manual one) doesn't reflect real
-        # hours worked, since every entry defaults to 10 already.
         combined_hours = Decimal('10') if day_entries else None
-        # Same activity code used more than once in a day should only show
-        # once in the export — dedupe while keeping the order codes first
-        # appeared in (a plain set() would lose that order).
         seen_codes = []
         for e in day_entries:
-            label=_entry_label(e)
+            label = _entry_label(e)
             if label not in seen_codes:
                 seen_codes.append(label)
         combined_codes = ', '.join(seen_codes) or None
@@ -296,31 +292,25 @@ def timesheet_export(request):
             7: combined_codes,
         }
         for col, value in values.items():
-                cell = ws.cell(row=row, column=col, value=value)
-                cell.border = thin_border
-                # Description (col 3) and Activity_code (col 7) can hold multiple
-                # combined entries now, so they need wrap_text on — otherwise long
-                # combined text overflows into neighboring cells instead of
-                # wrapping inside its own column, which is what looked jumbled.
-                if col in (3, 7):
-                    cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-                else:
-                    cell.alignment = center_alignment
-                if col == 4:
-                    cell.number_format = 'dd/mmm/yyyy'
-                if is_weekend:
-                    cell.fill = weekend_fill
-    # ─── Column widths, matching the template ───
+            cell = ws.cell(row=row, column=col, value=value)
+            cell.border = thin_border
+            if col in (3, 7):
+                cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            else:
+                cell.alignment = center_alignment
+            if col == 4:
+                cell.number_format = 'dd/mmm/yyyy'
+            if is_weekend:
+                cell.fill = weekend_fill
+
     widths = {'A': 10, 'B': 10, 'C': 60, 'D': 34, 'E': 10, 'G': 16, 'H': 41}
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
 
-    response = HttpResponse(
-        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     filename = f'{emp.full_name.replace(" ", "_")}_Timesheet_{month_name}_{year}.xlsx'
-    response['Content-Disposition'] = f'attachment; filename="{filename}"'
-    wb.save(response)
-    return response
+    return wb, filename
+
+
 @login_required
 @require_capability('timesheets.review')
 def hr_request_timesheets(request):
@@ -345,6 +335,7 @@ def hr_request_timesheets(request):
         'recent_requests': recent_requests,
     })
 
+
 def _build_month_rows(emp, year, month):
     """Shared by both the Excel export and the HR preview page, so the two
     never quietly drift apart into showing different numbers for the same
@@ -353,7 +344,7 @@ def _build_month_rows(emp, year, month):
     entries_by_day = defaultdict(list)
     for e in TimesheetEntry.objects.filter(
             employee=emp, date__year=year, date__month=month
-        ).select_related('activity_code','project').order_by('id'):
+        ).select_related('activity_code', 'project').order_by('id'):
         entries_by_day[e.date.day].append(e)
 
     rows = []
@@ -361,14 +352,6 @@ def _build_month_rows(emp, year, month):
         the_date = date_cls(year, month, day)
         day_entries = entries_by_day.get(day, [])
 
-        # A task that auto-starts and auto-ends within the same day can
-        # leave more than one TimesheetEntry with the SAME activity code
-        # (default COS_0009) for that day. Treat those as one task instead
-        # of stacking them: keep only the first entry seen per unique code,
-        # so hours don't get summed past the standard workday (e.g. three
-        # 10-hour auto entries would otherwise show as 30). A genuinely
-        # different code — e.g. real onsite work entered separately — still
-        # shows on its own and still adds its own hours, same as before.
         unique_by_code = {}
         order = []
         for e in day_entries:
@@ -381,10 +364,6 @@ def _build_month_rows(emp, year, month):
             'day': day,
             'date': the_date,
             'description': '; '.join(unique_by_code[c].task_description for c in order),
-            # Flat 10/day office hours, matching the Excel export -- keeps
-            # the HR preview and the actual downloaded file showing the
-            # same number for the same day, rather than one summing
-            # individual entries and the other not.
             'hours': Decimal('10') if order else None,
             'codes': ', '.join(order),
             'is_weekend': the_date.weekday() in (4, 5),
@@ -402,19 +381,14 @@ def _pending_request_for(emp):
 
 @login_required
 def send_to_hr(request, request_id):
-    """Preview page: shows the month's data, a mailto: link pre-filled to
-    HR's fixed address (never typed by the employee), and a button to
-    confirm they've sent it. Ownership-scoped: only usable for a request
-    that's actually still pending for THIS employee."""
+    """Preview page before sending. Shows the month's data and a single
+    Send to HR button. Ownership-scoped: only usable for a request that
+    is still pending for THIS employee."""
     emp = _get_employee_or_none(request)
     if emp is None:
         messages.error(request, 'Your account is not linked to an employee record yet. Contact HR.')
         return redirect('timesheets:my_timesheet')
 
-    # A missing request_id — either it never existed, or HR deleted it
-    # after the employee already saw the "Send to HR" banner — redirects
-    # back with a friendly message instead of Django's default 404 page,
-    # so a stale banner link never dead-ends the employee.
     try:
         ts_request = TimesheetRequest.objects.get(pk=request_id)
     except TimesheetRequest.DoesNotExist:
@@ -424,28 +398,19 @@ def send_to_hr(request, request_id):
     already_acked = TimesheetRequestAck.objects.filter(
         request=ts_request, employee=emp).exists()
     if already_acked:
-        messages.info(request, 'You already confirmed sending this one.')
+        messages.info(request, 'You already sent this timesheet to HR.')
         return redirect('timesheets:my_timesheet')
 
     year, month = ts_request.year, ts_request.month
     rows = _build_month_rows(emp, year, month)
     month_name = calendar.month_name[month]
-
     hr_email = HRSettings.load().hr_email
-    subject = f'Timesheet - {emp.full_name} - {month_name} {year}'
-    body = (
-        f'Hi,\n\nPlease find attached my timesheet for {month_name} {year}.\n'
-        f'(Remember to attach the exported Excel file before sending.)\n\n'
-        f'Regards,\n{emp.full_name}'
-    )
-    mailto_url = f'mailto:{hr_email}?subject={quote(subject)}&body={quote(body)}'
 
     return render(request, 'timesheets/send_to_hr.html', {
         'employee': emp,
         'ts_request': ts_request,
         'rows': rows,
         'month_name': month_name,
-        'mailto_url': mailto_url,
         'hr_email': hr_email,
     })
 
@@ -453,25 +418,91 @@ def send_to_hr(request, request_id):
 @login_required
 @require_POST
 def acknowledge_send(request, request_id):
+    """Email the timesheet Excel to HR via Graph, then ack + lock + calendar draft.
+    On email failure: no ack, no lock, no draft."""
     emp = _get_employee_or_none(request)
     if emp is None:
         messages.error(request, 'Your account is not linked to an employee record yet. Contact HR.')
         return redirect('timesheets:my_timesheet')
 
-    ts_request = get_object_or_404(TimesheetRequest, pk=request_id)
-    TimesheetRequestAck.objects.get_or_create(request=ts_request, employee=emp)
+    try:
+        ts_request = TimesheetRequest.objects.get(pk=request_id)
+    except TimesheetRequest.DoesNotExist:
+        messages.info(request, 'HR deleted this request.')
+        return redirect('timesheets:my_timesheet')
 
-    generate_draft([emp], year=ts_request.year, month=ts_request.month)  # ← new line: fills this employee's row into the calendar
+    if TimesheetRequestAck.objects.filter(request=ts_request, employee=emp).exists():
+        messages.info(request, 'You already sent this timesheet to HR.')
+        return redirect('timesheets:my_timesheet')
+
+    year, month = ts_request.year, ts_request.month
+    month_name = calendar.month_name[month]
+    hr_email = (HRSettings.load().hr_email or '').strip()
+    if not hr_email:
+        messages.error(request, 'HR email is not configured yet. Contact an administrator.')
+        return redirect('timesheets:send_to_hr', request_id=ts_request.pk)
+
+    wb, filename = _build_timesheet_workbook(emp, year, month)
+    buf = BytesIO()
+    wb.save(buf)
+
+    # Stable subject for a future mailbox auto-detect feature.
+    subject = f'Timesheet - {emp.full_name} - {month_name} {year}'
+    body = (
+        f'Hi,\n\n'
+        f'Please find attached the timesheet for {emp.full_name} '
+        f'({month_name} {year}).\n\n'
+        f'Sent automatically from Leap ERP.\n'
+    )
+    msg = EmailMessage(
+        subject=subject,
+        body=body,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to=[hr_email],
+    )
+    reply_to = (
+        (emp.work_email or '').strip()
+        or (emp.personal_email or '').strip()
+        or (getattr(request.user, 'email', '') or '').strip()
+    )
+    if reply_to:
+        msg.reply_to = [reply_to]
+    msg.attach(
+        filename,
+        buf.getvalue(),
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
 
     try:
+        sent = msg.send(fail_silently=False)
+    except Exception:
+        messages.error(
+            request,
+            'Could not send the timesheet email to HR. Please try again in a moment. '
+            'Your timesheet was not locked.',
+        )
+        return redirect('timesheets:send_to_hr', request_id=ts_request.pk)
+
+    if not sent:
+        messages.error(
+            request,
+            'Could not send the timesheet email to HR. Please try again in a moment. '
+            'Your timesheet was not locked.',
+        )
+        return redirect('timesheets:send_to_hr', request_id=ts_request.pk)
+
+    TimesheetRequestAck.objects.get_or_create(request=ts_request, employee=emp)
+    generate_draft([emp], year=year, month=month)
+    try:
         submit_month(
-            employee=emp, year=ts_request.year, month=ts_request.month,
+            employee=emp, year=year, month=month,
             submitted_by=request.user)
     except ValueError:
         pass
 
-    messages.success(request, 'Thanks — marked as sent to HR.')
+    messages.success(request, f'Timesheet sent to HR ({hr_email}).')
     return redirect('timesheets:my_timesheet')
+
 
 @login_required
 @require_capability('timesheets.review')
@@ -513,8 +544,6 @@ def hr_request_delete(request, request_id):
     ts_request = get_object_or_404(TimesheetRequest, pk=request_id)
     year, month = ts_request.year, ts_request.month
 
-    # Capture who acknowledged BEFORE deleting — delete_request cascades
-    # and removes these Ack rows along with the request itself.
     acked_employees = [
         ack.employee for ack in
         TimesheetRequestAck.objects.filter(request=ts_request).select_related('employee')
@@ -523,8 +552,6 @@ def hr_request_delete(request, request_id):
         try:
             reopen_month(employee=emp, year=year, month=month, reopened_by=request.user)
         except ValueError:
-            # Already not submitted for some reason — nothing to reopen
-            # for this employee; the delete should still proceed.
             pass
 
     delete_request(ts_request)

@@ -16,16 +16,35 @@
     box-shadow: 0 2px 8px rgba(0,0,0,0.3);
   }
 
-  .cal-table { font-size: 0.8rem; border-collapse: collapse; }
-  .cal-table th, .cal-table td { border: 1px solid #ccc; text-align: center; vertical-align: middle; padding: 2px 4px; }
-  .cal-table td.day-cell { min-width: 60px; position: relative; }
+  .cal-table {
+    font-size: 0.8rem;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
 
-  .src-leave     { background-color: #cfe2ff; }  /* light blue */
-  .src-holiday   { background-color: #e2d9f3; }  /* light purple */
-  .src-weekend   { background-color: #fff3cd; }  /* yellow — matches the real template */
-  .src-wfh       { background-color: #d1e7dd; }  /* light green */
+  .cal-table th, .cal-table td {
+    border: 1px solid #ccc;
+    text-align: center;
+    vertical-align: middle;
+    padding: 2px 4px;
+  }
+
+  .cal-table td.day-cell {
+    min-width: 60px;
+    position: relative;
+  }
+
+  .cal-table td.day-cell[colspan]:not([colspan="1"]) {
+    background-clip: padding-box;
+    font-weight: 600;
+  }
+
+  .src-leave     { background-color: #cfe2ff; }
+  .src-holiday   { background-color: #e2d9f3; }
+  .src-weekend   { background-color: #fff3cd; }
+  .src-wfh       { background-color: #d1e7dd; }
   .src-timesheet { background-color: #ffffff; }
-  .src-manual    { background-color: #e9ecef; }  /* light gray — HR typed this by hand */
+  .src-manual    { background-color: #e9ecef; }
   .src-blank     { background-color: #ffffff; }
 
   .needs-review { border: 2px solid #dc3545 !important; }
@@ -55,8 +74,8 @@
       <i class="bi bi-calendar-range"></i> Fill Date Range
     </button>
     <a href="{% url 'engineer_calendar:export_excel' %}" class="btn btn-outline-success btn-sm">
-  <i class="bi bi-file-earmark-excel"></i> Export to Excel
-     </a>
+      <i class="bi bi-file-earmark-excel"></i> Export to Excel
+    </a>
   </div>
 </div>
 
@@ -84,15 +103,18 @@
       <td class="text-start">{{ row.employee.designation }}</td>
       {% for cell in row.day_cells %}
         <td class="day-cell {{ cell.css_class }} {% if cell.needs_review %}needs-review{% endif %} editable-cell"
+            colspan="{{ cell.colspan }}"
             data-employee-id="{{ row.employee.id }}"
-            data-date="{{ cell.date }}">
+            data-date="{{ cell.date }}"
+            data-merge-start="{{ cell.merge_start }}"
+            data-merge-end="{{ cell.merge_end }}">
           <span class="cell-text">{{ cell.text }}</span>
         </td>
       {% endfor %}
-      <td>{# per-employee monthly remark — not built yet, see note #}</td>
+      <td></td>
     </tr>
     <tr class="emp-meta-row">
-      <td colspan="3">{# employment type / DOJ — not built yet, see note #}</td>
+      <td colspan="3"></td>
       <td colspan="{{ day_numbers|length }}"></td>
       <td></td>
     </tr>
@@ -130,7 +152,8 @@
         </div>
         <div class="mb-2">
           <label class="form-label" for="fillRangeText">Text</label>
-          <textarea class="form-control form-control-sm" id="fillRangeText" rows="3"></textarea>
+          <textarea class="form-control form-control-sm" id="fillRangeText" rows="3"
+                    placeholder="e.g. ERP AND LEAP AI ENGINE"></textarea>
         </div>
         <div id="fillRangeError" class="text-danger small" style="display:none;"></div>
       </div>
@@ -151,7 +174,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   tbody.addEventListener('click', function (e) {
     const td = e.target.closest('td.editable-cell');
-    if (!td || td.querySelector('input')) return;
+    if (!td || td.querySelector('textarea')) return;
 
     const currentText = td.querySelector('.cell-text').textContent.trim();
     const input = document.createElement('textarea');
@@ -167,7 +190,10 @@ document.addEventListener('DOMContentLoaded', function () {
       saveCell(td, td.dataset.employeeId, td.dataset.date, input.value.trim(), currentText);
     });
     input.addEventListener('keydown', function (ev) {
-      if (ev.key === 'Enter') input.blur();
+      if (ev.key === 'Enter' && !ev.shiftKey) {
+        ev.preventDefault();
+        input.blur();
+      }
       if (ev.key === 'Escape') renderCell(td, currentText);
     });
   });
@@ -180,6 +206,10 @@ document.addEventListener('DOMContentLoaded', function () {
     })
       .then(function (resp) { if (!resp.ok) throw new Error(); return resp.json(); })
       .then(function (data) {
+        if (data.reload) {
+          window.location.reload();
+          return;
+        }
         td.className = 'day-cell ' + data.css_class + ' editable-cell';
         renderCell(td, data.text);
       })
@@ -202,8 +232,6 @@ document.addEventListener('DOMContentLoaded', function () {
     return match ? match.pop() : '';
   }
 
-  const fillRangeYear = {{ year }};
-  const fillRangeMonth = {{ month }};
   const fillRangeModalEl = document.getElementById('fillRangeModal');
   const fillRangeErrorEl = document.getElementById('fillRangeError');
   const bsFillRangeModal = fillRangeModalEl ? new bootstrap.Modal(fillRangeModalEl) : null;
@@ -234,22 +262,8 @@ document.addEventListener('DOMContentLoaded', function () {
           fillRangeErrorEl.style.display = 'block';
           return;
         }
-        result.data.updated_days.forEach(function (day) {
-          const mm = String(fillRangeMonth).padStart(2, '0');
-          const dd = String(day).padStart(2, '0');
-          const dateStr = fillRangeYear + '-' + mm + '-' + dd;
-          const td = document.querySelector(
-            'td.editable-cell[data-employee-id="' + employeeId + '"][data-date="' + dateStr + '"]'
-          );
-          if (td) {
-            td.className = 'day-cell ' + result.data.css_class + ' editable-cell';
-            renderCell(td, result.data.text);
-          }
-        });
-        if (bsFillRangeModal) bsFillRangeModal.hide();
-        document.getElementById('fillRangeStart').value = '';
-        document.getElementById('fillRangeEnd').value = '';
-        document.getElementById('fillRangeText').value = '';
+        // Reload so colspan merge blocks render correctly from the server.
+        window.location.reload();
       })
       .catch(function () {
         fillRangeErrorEl.textContent = 'Could not apply this range — please try again.';
