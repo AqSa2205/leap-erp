@@ -17,7 +17,7 @@
                 <thead class="leap-thead">
                     <tr>
                         <th>Name</th>
-                        <th class="text-center">Pairs</th>
+                        <th class="text-center">Rows</th>
                         <th>Created</th>
                         <th class="text-end">Actions</th>
                     </tr>
@@ -26,7 +26,7 @@
                     {% for tmpl in templates %}
                     <tr>
                         <td><strong>{{ tmpl.name }}</strong></td>
-                        <td class="text-center">{{ tmpl.pairs.count }}</td>
+                        <td class="text-center">{{ tmpl.row_count }}</td>
                         <td class="text-muted small">{{ tmpl.created_at|date:"d M Y" }}</td>
                         <td class="text-end">
                             <a href="{% url 'costing:client_remark_template_edit' tmpl.pk %}" class="btn btn-sm btn-outline-secondary">

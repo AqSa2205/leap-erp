@@ -848,3 +848,113 @@ class CommercialPipelineTests(TestCase):
         self.assertEqual(mr[0]['person'], self.proposal)
         # Duration = working days created → finalised (weekends excluded).
         self.assertIsNotNone(sheet.total_cycle_days)
+
+
+class ClientRemarkGridTests(TestCase):
+    """The Client Remarks bundle is an editable grid: dynamic, renameable
+    columns + per-cell coloured text, posted back as JSON. These guard the
+    round-trip through the editor view, the sanitiser, and the PDF export."""
+
+    def setUp(self):
+        import json
+        self.json = json
+        self.client = Client()
+        self.region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.project = Project.objects.create(
+            project_name='P', proposal_reference='REF-CR',
+            status=self.status, region=self.region)
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('cruser', password='x')
+        self.user.role = role
+        self.user.region = self.region
+        self.user.save()
+        self.client.force_login(self.user)
+
+    def _post(self, name, columns, rows):
+        return self.client.post(
+            reverse('costing:client_remark_template_create'),
+            {
+                'name': name,
+                'columns_json': self.json.dumps(columns),
+                'rows_json': self.json.dumps(rows),
+            },
+        )
+
+    def test_default_columns_on_new_model(self):
+        from costing.models import ClientRemarkTemplate
+        t = ClientRemarkTemplate.objects.create(name='Fresh', created_by=self.user)
+        t.refresh_from_db()
+        self.assertEqual([c['name'] for c in t.columns],
+                         ['Client Remark', "Leap's Answer"])
+        self.assertEqual(t.rows, [])
+
+    def test_create_with_extra_renamed_columns_round_trips(self):
+        from costing.models import ClientRemarkTemplate
+        columns = [
+            {'key': 'c1', 'name': 'Requirement'},
+            {'key': 'c2', 'name': "Leap's Answer"},
+            {'key': 'c3', 'name': 'Compliance'},
+            {'key': 'c4', 'name': 'Reference'},
+        ]
+        rows = [
+            {'cells': {
+                'c1': {'text': 'Need X', 'color': '#C41E3A'},
+                'c2': {'text': 'Yes', 'color': '#008000'},
+                'c3': {'text': 'Full', 'color': '#000000'},
+                'c4': {'text': 'Sec 2.1', 'color': '#000000'},
+            }},
+        ]
+        resp = self._post('Compliance matrix', columns, rows)
+        self.assertEqual(resp.status_code, 302)
+        t = ClientRemarkTemplate.objects.get(name='Compliance matrix')
+        self.assertEqual([c['name'] for c in t.columns],
+                         ['Requirement', "Leap's Answer", 'Compliance', 'Reference'])
+        self.assertEqual(t.row_count, 1)
+        self.assertEqual(t.cell(t.rows[0], 'c1'), ('Need X', '#C41E3A'))
+        self.assertEqual(t.cell(t.rows[0], 'c3'), ('Full', '#000000'))
+
+    def test_empty_rows_and_bad_colors_are_sanitized(self):
+        from costing.models import ClientRemarkTemplate
+        columns = [{'key': 'c1', 'name': 'A'}, {'key': 'c2', 'name': 'B'}]
+        rows = [
+            {'cells': {'c1': {'text': '   ', 'color': 'bad'}, 'c2': {'text': '', 'color': ''}}},
+            {'cells': {'c1': {'text': 'keep', 'color': 'notahex'}, 'c9': {'text': 'orphan', 'color': '#111111'}}},
+        ]
+        self._post('Sanitize', columns, rows)
+        t = ClientRemarkTemplate.objects.get(name='Sanitize')
+        # First row is all-empty -> dropped. Second row kept, bad colour -> black,
+        # orphan cell (no such column) -> discarded.
+        self.assertEqual(t.row_count, 1)
+        self.assertEqual(t.cell(t.rows[0], 'c1'), ('keep', '#000000'))
+        self.assertNotIn('c9', t.rows[0]['cells'])
+
+    def test_no_columns_falls_back_to_defaults(self):
+        from costing.models import ClientRemarkTemplate
+        self._post('Empty cols', [], [])
+        t = ClientRemarkTemplate.objects.get(name='Empty cols')
+        self.assertEqual([c['name'] for c in t.columns],
+                         ['Client Remark', "Leap's Answer"])
+
+    def test_pdf_export_builds_with_multicolumn_bundle(self):
+        from costing.models import ClientRemarkTemplate
+        bundle = ClientRemarkTemplate.objects.create(
+            name='Matrix', created_by=self.user,
+            columns=[
+                {'key': 'c1', 'name': 'Requirement'},
+                {'key': 'c2', 'name': "Leap's Answer"},
+                {'key': 'c3', 'name': 'Compliance'},
+            ],
+            rows=[{'cells': {
+                'c1': {'text': 'Line\nbreak here', 'color': '#C41E3A'},
+                'c2': {'text': 'Answered', 'color': '#000000'},
+                'c3': {'text': 'Full', 'color': '#008000'},
+            }}],
+        )
+        sheet = CostingSheet.objects.create(
+            title='S', project=self.project, created_by=self.user)
+        sheet.selected_client_remarks.add(bundle)
+        resp = self.client.get(reverse('costing:export_pdf', kwargs={'pk': sheet.pk}))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+        self.assertTrue(bytes(resp.content).startswith(b'%PDF'))

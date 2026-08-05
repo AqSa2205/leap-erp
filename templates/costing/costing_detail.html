@@ -1288,7 +1288,7 @@
     </div>
     <div class="card-body">
         {% if client_remark_templates %}
-        <p class="text-muted small mb-2">Tick a bundle to include all of its Q&amp;A pairs in the PDF.</p>
+        <p class="text-muted small mb-2">Tick a bundle to include all of its rows in the PDF.</p>
         <div class="row">
             {% for item in client_remark_templates %}
             <div class="col-md-6 col-lg-4 mb-2">
@@ -1299,7 +1299,7 @@
                            {% if item.selected %}checked{% endif %}>
                     <label class="form-check-label" for="client-remark-{{ item.template.pk }}">
                         <strong>{{ item.template.name }}</strong>
-                        <br><small class="text-muted">{{ item.pair_count }} pair{{ item.pair_count|pluralize }}</small>
+                        <br><small class="text-muted">{{ item.pair_count }} row{{ item.pair_count|pluralize }}</small>
                     </label>
                 </div>
             </div>
