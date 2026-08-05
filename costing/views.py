@@ -1,3 +1,4 @@
+import json
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.shortcuts import get_object_or_404, redirect, render
@@ -33,7 +34,7 @@ def _safe_filename(name, suffix='', extension=''):
         extension = f'.{extension}'
     return f'{safe}{extension}'
 
-from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, TermsTemplate, ScopeOfWorkItem, ClientRemarkTemplate, ClientRemarkPair
+from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, TermsTemplate, ScopeOfWorkItem, ClientRemarkTemplate
 from .models import WORKFLOW_STAGE_SEQUENCE, STAGE_BADGES
 from notifications.services import notify_users
 
@@ -54,7 +55,7 @@ def _conversion_rate(output_currency, rates_dict):
 from .forms import (
     CostingSheetForm, CostingSectionForm, CostingLineItemForm,
     ExchangeRateForm, CostingFilterForm, TermsTemplateForm,
-    ClientRemarkTemplateForm, ClientRemarkPairFormSet,
+    ClientRemarkTemplateForm,
 )
 
 
@@ -1030,9 +1031,9 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
             {
                 'template': t,
                 'selected': t.pk in selected_remark_ids,
-                'pair_count': t.pairs.count(),
+                'pair_count': t.row_count,
             }
-            for t in ClientRemarkTemplate.objects.all().prefetch_related('pairs')
+            for t in ClientRemarkTemplate.objects.all()
         ]
 
         # Additional contacts: only Sales-team users (the only people whose
@@ -1546,14 +1547,70 @@ class ClientRemarkTemplateListView(LoginRequiredMixin, ListView):
     context_object_name = 'templates'
 
     def get_queryset(self):
-        return ClientRemarkTemplate.objects.all().prefetch_related('pairs')
+        return ClientRemarkTemplate.objects.all()
+
+
+def _sanitize_remark_color(value):
+    """Return a valid 7-char hex colour, falling back to black."""
+    value = (value or '').strip()
+    if len(value) == 7 and value.startswith('#'):
+        try:
+            int(value[1:], 16)
+            return value
+        except (TypeError, ValueError):
+            pass
+    return '#000000'
+
+
+def _sanitize_remark_grid(columns_raw, rows_raw):
+    """Coerce the posted columns/rows JSON into the stored grid shape,
+    dropping anything malformed. Returns (columns, rows).
+
+    columns -> [{"key": "c1", "name": "Client Remark"}, ...]  (keys forced unique,
+                blank names allowed — the header is free-text)
+    rows    -> [{"cells": {key: {"text": str, "color": "#hex"}}}, ...]  (only cells
+                whose key maps to a surviving column are kept)"""
+    columns, seen_keys = [], set()
+    for idx, col in enumerate(columns_raw if isinstance(columns_raw, list) else []):
+        if not isinstance(col, dict):
+            continue
+        key = str(col.get('key') or '').strip() or f'c{idx + 1}'
+        # Guarantee uniqueness so cells can't collide across columns.
+        while key in seen_keys:
+            key = f'{key}_{idx}'
+        seen_keys.add(key)
+        name = str(col.get('name') or '').strip()
+        columns.append({'key': key, 'name': name})
+
+    if not columns:
+        columns = [
+            {'key': 'c1', 'name': 'Client Remark'},
+            {'key': 'c2', 'name': "Leap's Answer"},
+        ]
+        seen_keys = {'c1', 'c2'}
+
+    rows = []
+    for row in rows_raw if isinstance(rows_raw, list) else []:
+        cells_raw = (row or {}).get('cells') if isinstance(row, dict) else None
+        cells = {}
+        if isinstance(cells_raw, dict):
+            for key, data in cells_raw.items():
+                if key not in seen_keys or not isinstance(data, dict):
+                    continue
+                cells[key] = {
+                    'text': str(data.get('text') or ''),
+                    'color': _sanitize_remark_color(data.get('color')),
+                }
+        # Skip rows where every surviving cell is empty.
+        if any((c.get('text') or '').strip() for c in cells.values()):
+            rows.append({'cells': cells})
+    return columns, rows
 
 
 @login_required
 def client_remark_template_edit(request, pk=None):
-    """Create or edit a ClientRemarkTemplate (bundle of Q&A pairs).
-    Single function-based view so we can save the parent + inline formset
-    in one transaction."""
+    """Create or edit a ClientRemarkTemplate — a small editable grid whose
+    columns (headers) and rows are posted back as JSON blobs."""
     if pk is None:
         template = ClientRemarkTemplate(created_by=request.user)
         is_new = True
@@ -1563,35 +1620,37 @@ def client_remark_template_edit(request, pk=None):
 
     if request.method == 'POST':
         form = ClientRemarkTemplateForm(request.POST, instance=template)
-        # Bind the formset against an in-memory parent for new templates;
-        # we save the parent first below, then re-bind if necessary.
+        try:
+            columns_raw = json.loads(request.POST.get('columns_json') or '[]')
+            rows_raw = json.loads(request.POST.get('rows_json') or '[]')
+        except (ValueError, TypeError):
+            columns_raw, rows_raw = [], []
+        columns, rows = _sanitize_remark_grid(columns_raw, rows_raw)
+
         if form.is_valid():
-            with transaction.atomic():
-                template = form.save(commit=False)
-                if is_new and not template.created_by:
-                    template.created_by = request.user
-                template.save()
-                formset = ClientRemarkPairFormSet(request.POST, instance=template)
-                if formset.is_valid():
-                    formset.save()
-                    messages.success(
-                        request,
-                        'Client remarks bundle created.' if is_new else 'Client remarks bundle updated.',
-                    )
-                    return redirect('costing:client_remark_templates')
-                # Rollback parent save if the formset rejects.
-                transaction.set_rollback(True)
-        else:
-            formset = ClientRemarkPairFormSet(request.POST, instance=template)
+            template = form.save(commit=False)
+            if is_new and not template.created_by:
+                template.created_by = request.user
+            template.columns = columns
+            template.rows = rows
+            template.save()
+            messages.success(
+                request,
+                'Client remarks bundle created.' if is_new else 'Client remarks bundle updated.',
+            )
+            return redirect('costing:client_remark_templates')
+        # Invalid name — re-render with what the user typed.
+        template.columns = columns
+        template.rows = rows
         for field, errs in form.errors.items():
             messages.error(request, f'{field}: {errs[0]}')
     else:
         form = ClientRemarkTemplateForm(instance=template)
-        formset = ClientRemarkPairFormSet(instance=template)
 
     return render(request, 'costing/client_remark_template_form.html', {
         'form': form,
-        'formset': formset,
+        'columns_json': json.dumps(template.columns or []),
+        'rows_json': json.dumps(template.rows or []),
         'template_obj': template if not is_new else None,
         'is_new': is_new,
     })
@@ -4033,25 +4092,53 @@ def costing_export_pdf(request, pk):
         elements.append(Spacer(1, 3 * mm))
 
     # ─── CLIENT REMARKS & LEAP'S ANSWERS ───
-    # Two-column table; iterates every pair across every selected bundle.
-    # Each cell uses its own color (pair.remark_color / pair.answer_color).
+    # One table per selected bundle. Each bundle carries its own editable
+    # columns (headers) and rows; every cell keeps its own text colour.
     from xml.sax.saxutils import escape as _xml_escape
-    client_pairs = list(
-        ClientRemarkPair.objects.filter(template__in=sheet.selected_client_remarks.all())
-        .select_related('template')
-        .order_by('template__name', 'order', 'pk')
-    )
-    if client_pairs:
-        elements.append(Paragraph("Client Remarks &amp; Leap's Answers", section_hdr_style))
+    remark_bundles = list(sheet.selected_client_remarks.all().order_by('name'))
 
-        cr_header_style = ParagraphStyle(
-            'CRHeader', fontName='Helvetica-Bold', fontSize=9, leading=11,
-            alignment=TA_CENTER, textColor=colors.HexColor('#333333'),
-        )
-        cr_rows = [[
-            Paragraph('Client Remark', cr_header_style),
-            Paragraph("Leap's Answer", cr_header_style),
-        ]]
+    def _hex(value, fallback=colors.black):
+        try:
+            return colors.HexColor(value or '#000000')
+        except Exception:
+            return fallback
+
+    cr_header_style = ParagraphStyle(
+        'CRHeader', fontName='Helvetica-Bold', fontSize=9, leading=11,
+        alignment=TA_CENTER, textColor=colors.HexColor('#333333'),
+    )
+    _cr_cell_seq = 0
+    _cr_section_started = False
+    for bundle in remark_bundles:
+        columns = [c for c in (bundle.columns or []) if isinstance(c, dict)]
+        rows = [r for r in (bundle.rows or []) if isinstance(r, dict)]
+        if not columns or not rows:
+            continue
+
+        if not _cr_section_started:
+            elements.append(Paragraph("Client Remarks &amp; Leap's Answers", section_hdr_style))
+            _cr_section_started = True
+
+        header_row = [
+            Paragraph(_xml_escape(str(c.get('name') or '')), cr_header_style)
+            for c in columns
+        ]
+        cr_rows = [header_row]
+        for row in rows:
+            cells = []
+            for col in columns:
+                text, color = bundle.cell(row, col.get('key'))
+                _cr_cell_seq += 1
+                cell_style = ParagraphStyle(
+                    f'CRCell-{bundle.pk}-{_cr_cell_seq}', fontName='Helvetica',
+                    fontSize=9, leading=12, textColor=_hex(color),
+                )
+                cell_html = _xml_escape(text or '').replace('\n', '<br/>')
+                cells.append(Paragraph(cell_html, cell_style))
+            cr_rows.append(cells)
+
+        n = len(columns)
+        col_width = PAGE_WIDTH / n
         cr_styles = [
             # Header
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F5D7DC')),
@@ -4060,43 +4147,22 @@ def costing_export_pdf(request, pk):
             ('BOX', (0, 0), (-1, -1), 1.0, colors.HexColor('#333333')),
             # Strong horizontal dividers between every row (emphasise "row" structure)
             ('LINEBELOW', (0, 0), (-1, -2), 0.9, colors.HexColor('#555555')),
-            # Vertical line between remark and answer columns
-            ('LINEAFTER', (0, 0), (0, -1), 0.7, colors.HexColor('#888888')),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
             ('LEFTPADDING', (0, 0), (-1, -1), 6),
             ('RIGHTPADDING', (0, 0), (-1, -1), 6),
             ('TOPPADDING', (0, 0), (-1, -1), 6),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
         ]
-
-        def _hex(value, fallback=colors.black):
-            try:
-                return colors.HexColor(value or '#000000')
-            except Exception:
-                return fallback
-
-        for pair in client_pairs:
-            remark_style = ParagraphStyle(
-                f'CRRemark-{pair.pk}', fontName='Helvetica', fontSize=9,
-                leading=12, textColor=_hex(pair.remark_color),
-            )
-            answer_style = ParagraphStyle(
-                f'CRAnswer-{pair.pk}', fontName='Helvetica', fontSize=9,
-                leading=12, textColor=_hex(pair.answer_color),
-            )
-            remark_html = _xml_escape(pair.remark or '').replace('\n', '<br/>')
-            answer_html = _xml_escape(pair.answer or '').replace('\n', '<br/>')
-            cr_rows.append([
-                Paragraph(remark_html, remark_style),
-                Paragraph(answer_html, answer_style),
-            ])
+        # Vertical divider after every column except the last.
+        for ci in range(n - 1):
+            cr_styles.append(('LINEAFTER', (ci, 0), (ci, -1), 0.7, colors.HexColor('#888888')))
 
         # splitInRow=1 lets a single tall cell (e.g. a long pasted remark)
         # break across pages instead of raising LayoutError; repeatRows=1
         # re-prints the header on subsequent pages.
         cr_table = Table(
             cr_rows,
-            colWidths=[PAGE_WIDTH * 0.5, PAGE_WIDTH * 0.5],
+            colWidths=[col_width] * n,
             repeatRows=1,
             splitByRow=1,
             splitInRow=1,

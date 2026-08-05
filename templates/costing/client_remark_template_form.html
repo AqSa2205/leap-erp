@@ -7,7 +7,7 @@
 <style>
     /* Excel-like cell editing: kill the textarea's own border so the cell IS the input. */
     #pairs-table { table-layout: fixed; }
-    #pairs-table thead th { background: #F5D7DC; color: #333; font-weight: 600; }
+    #pairs-table thead th { background: #F5D7DC; color: #333; font-weight: 600; vertical-align: top; }
     #pairs-table td { padding: 0; vertical-align: top; }
     #pairs-table td.cell-num,
     #pairs-table td.cell-actions { padding: 6px; vertical-align: middle; text-align: center; }
@@ -32,9 +32,31 @@
     #pairs-table input[type="color"] {
         width: 36px; height: 28px; padding: 0; border: 1px solid #ccc; cursor: pointer;
     }
+    /* Editable column header: looks like plain text until focused. */
+    #pairs-table th .col-head-wrap { display: flex; align-items: center; gap: 4px; }
+    #pairs-table input.col-name {
+        border: 1px solid transparent;
+        background: transparent;
+        font-weight: 600;
+        color: #333;
+        width: 100%;
+        padding: 4px 6px;
+        border-radius: 4px;
+        font-size: 0.875rem;
+    }
+    #pairs-table input.col-name:hover { border-color: #E0A9B4; }
+    #pairs-table input.col-name:focus { background: #fff; border-color: #C41E3A; outline: none; }
+    #pairs-table th.col-head { min-width: 160px; }
+    #pairs-table .btn-del-col {
+        --bs-btn-padding-y: 0; --bs-btn-padding-x: 4px; line-height: 1.1; border: 0;
+    }
+    #pairs-table th.col-color-th { width: 60px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: .03em; }
 </style>
 <form method="post" id="bundle-form">
     {% csrf_token %}
+    <input type="hidden" name="columns_json" id="columns_json">
+    <input type="hidden" name="rows_json" id="rows_json">
+
     <div class="card">
         <div class="card-header">
             <i class="bi bi-pencil me-2"></i> Bundle details
@@ -51,6 +73,9 @@
                     <button type="button" class="btn btn-outline-secondary" id="btn-paste-modal">
                         <i class="bi bi-clipboard me-1"></i> Paste from Excel…
                     </button>
+                    <button type="button" class="btn btn-outline-primary" id="btn-add-col">
+                        <i class="bi bi-layout-three-columns me-1"></i> Add column
+                    </button>
                     <button type="button" class="btn btn-outline-dark" id="btn-add-row">
                         <i class="bi bi-plus-lg me-1"></i> Add row
                     </button>
@@ -60,52 +85,27 @@
     </div>
 
     <div class="card mt-3">
-        <div class="card-header">
-            <i class="bi bi-table me-2"></i> Q&amp;A pairs
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-table me-2"></i> Remarks table</span>
+            <small class="text-muted">Click a column heading to rename it.</small>
         </div>
         <div class="card-body p-0">
-            {{ formset.management_form }}
-            {% if formset.non_form_errors %}
-                <div class="alert alert-danger m-2">{{ formset.non_form_errors }}</div>
-            {% endif %}
             <div class="table-responsive">
                 <table class="table table-bordered align-middle mb-0" id="pairs-table">
                     <thead class="leap-thead">
-                        <tr>
+                        <tr id="pairs-head-row">
                             <th style="width:32px;">#</th>
-                            <th>Client Remark</th>
-                            <th style="width:60px;">Color</th>
-                            <th>Leap's Answer</th>
-                            <th style="width:60px;">Color</th>
+                            <!-- column headers injected here -->
                             <th style="width:50px;"></th>
                         </tr>
                     </thead>
                     <tbody id="pairs-tbody">
-                        {% for pair_form in formset %}
-                            <tr class="pair-row {% if pair_form.DELETE.value %}d-none{% endif %}">
-                                {{ pair_form.id }}
-                                {{ pair_form.order }}
-                                <td class="cell-num text-muted small row-num"></td>
-                                <td>
-                                    {{ pair_form.remark }}
-                                    {% if pair_form.remark.errors %}<div class="text-danger small px-2 pb-1">{{ pair_form.remark.errors.0 }}</div>{% endif %}
-                                </td>
-                                <td class="cell-color">{{ pair_form.remark_color }}</td>
-                                <td>
-                                    {{ pair_form.answer }}
-                                    {% if pair_form.answer.errors %}<div class="text-danger small px-2 pb-1">{{ pair_form.answer.errors.0 }}</div>{% endif %}
-                                </td>
-                                <td class="cell-color">{{ pair_form.answer_color }}</td>
-                                <td class="cell-actions">
-                                    <span class="d-none">{{ pair_form.DELETE }}</span>
-                                    <button type="button" class="btn btn-sm btn-outline-danger btn-delete-row" title="Remove">
-                                        <i class="bi bi-trash"></i>
-                                    </button>
-                                </td>
-                            </tr>
-                        {% endfor %}
+                        <!-- rows injected here -->
                     </tbody>
                 </table>
+            </div>
+            <div id="empty-hint" class="text-muted small p-3 d-none">
+                No rows yet. Use <strong>Add row</strong> or <strong>Paste from Excel</strong> to begin.
             </div>
         </div>
     </div>
@@ -118,25 +118,6 @@
     </div>
 </form>
 
-<!-- Hidden empty-form template for cloning -->
-<template id="pair-row-template">
-    <tr class="pair-row">
-        {{ formset.empty_form.id }}
-        {{ formset.empty_form.order }}
-        <td class="cell-num text-muted small row-num"></td>
-        <td>{{ formset.empty_form.remark }}</td>
-        <td class="cell-color">{{ formset.empty_form.remark_color }}</td>
-        <td>{{ formset.empty_form.answer }}</td>
-        <td class="cell-color">{{ formset.empty_form.answer_color }}</td>
-        <td class="cell-actions">
-            <span class="d-none">{{ formset.empty_form.DELETE }}</span>
-            <button type="button" class="btn btn-sm btn-outline-danger btn-delete-row" title="Remove">
-                <i class="bi bi-trash"></i>
-            </button>
-        </td>
-    </tr>
-</template>
-
 <!-- Paste-from-Excel modal -->
 <div class="modal fade" id="paste-modal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-lg">
@@ -147,8 +128,8 @@
             </div>
             <div class="modal-body">
                 <p class="text-muted small mb-2">
-                    Paste two Excel columns (Remark + Answer). One row per line; columns separated by Tab.
-                    Single-column pastes go into <strong>Remark</strong>; you can fill answers afterwards.
+                    Paste one row per line; columns separated by Tab. Values fill the table's
+                    columns left-to-right. Extra columns beyond the table are ignored.
                 </p>
                 <textarea id="paste-textarea" class="form-control" rows="10" placeholder="Remark 1&#9;Answer 1&#10;Remark 2&#9;Answer 2"></textarea>
             </div>
@@ -166,77 +147,161 @@
 {% block extra_js %}
 <script>
 (function () {
-    const prefix = '{{ formset.prefix }}';
-    const totalForms = document.getElementById('id_' + prefix + '-TOTAL_FORMS');
+    const INITIAL_COLUMNS = JSON.parse('{{ columns_json|escapejs }}');
+    const INITIAL_ROWS = JSON.parse('{{ rows_json|escapejs }}');
+
+    const headRow = document.getElementById('pairs-head-row');
     const tbody = document.getElementById('pairs-tbody');
-    const tplNode = document.getElementById('pair-row-template');
+    const emptyHint = document.getElementById('empty-hint');
+    const form = document.getElementById('bundle-form');
+
+    // Stable key generator — seed above any existing numeric "cN" key.
+    let keyCounter = 0;
+    (INITIAL_COLUMNS || []).forEach((c) => {
+        const m = /^c(\d+)$/.exec(c && c.key || '');
+        if (m) keyCounter = Math.max(keyCounter, parseInt(m[1], 10));
+    });
+    function nextKey() { keyCounter += 1; return 'c' + keyCounter; }
+
+    // ─── Column header cell ─────────────────────────────────────
+    function makeHeaderTh(key, name) {
+        const th = document.createElement('th');
+        th.className = 'col-head';
+        th.dataset.key = key;
+        const wrap = document.createElement('div');
+        wrap.className = 'col-head-wrap';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'col-name';
+        input.value = name || '';
+        input.placeholder = 'Column name';
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'btn btn-sm btn-outline-danger btn-del-col';
+        del.title = 'Delete column';
+        del.innerHTML = '<i class="bi bi-x-lg"></i>';
+        del.addEventListener('click', () => deleteColumn(key));
+        wrap.appendChild(input);
+        wrap.appendChild(del);
+        th.appendChild(wrap);
+        return th;
+    }
+
+    // ─── Body cell (textarea + colour) ──────────────────────────
+    function makeBodyCell(key, text, color) {
+        const wrap = document.createElement('td');
+        wrap.className = 'cell-body';
+        wrap.dataset.key = key;
+        wrap.style.padding = '0';
+        // inner layout: textarea on top row, colour swatch below-right
+        const inner = document.createElement('div');
+        inner.style.display = 'flex';
+        inner.style.alignItems = 'stretch';
+        const ta = document.createElement('textarea');
+        ta.className = 'pair-input';
+        ta.rows = 2;
+        ta.value = text || '';
+        const colorTd = document.createElement('div');
+        colorTd.style.padding = '4px';
+        colorTd.style.display = 'flex';
+        colorTd.style.alignItems = 'center';
+        const ci = document.createElement('input');
+        ci.type = 'color';
+        ci.className = 'cell-color-input';
+        ci.value = color || '#000000';
+        ci.title = 'Text colour';
+        colorTd.appendChild(ci);
+        inner.appendChild(ta);
+        inner.appendChild(colorTd);
+        wrap.appendChild(inner);
+        return wrap;
+    }
+
+    function columnKeys() {
+        return Array.from(headRow.querySelectorAll('th.col-head')).map((th) => th.dataset.key);
+    }
 
     function renumber() {
-        let visibleIdx = 0;
+        let i = 0;
         tbody.querySelectorAll('tr.pair-row').forEach((row) => {
-            if (row.classList.contains('d-none')) return;
-            visibleIdx += 1;
+            i += 1;
             const rn = row.querySelector('.row-num');
-            if (rn) rn.textContent = visibleIdx;
-            const orderInput = row.querySelector('input[name$="-order"]');
-            if (orderInput) orderInput.value = visibleIdx;
+            if (rn) rn.textContent = i;
         });
+        emptyHint.classList.toggle('d-none', i > 0);
     }
 
-    function addRow(remarkText, answerText) {
-        const idx = parseInt(totalForms.value, 10);
-        const html = tplNode.innerHTML.replace(/__prefix__/g, idx);
-        const tmp = document.createElement('tbody');
-        tmp.innerHTML = html.trim();
-        const row = tmp.firstElementChild;
-        if (remarkText !== undefined) {
-            const r = row.querySelector('textarea[name$="-remark"]');
-            if (r) r.value = remarkText;
-        }
-        if (answerText !== undefined) {
-            const a = row.querySelector('textarea[name$="-answer"]');
-            if (a) a.value = answerText;
-        }
-        tbody.appendChild(row);
-        totalForms.value = idx + 1;
-        wireRow(row);
+    // Build one body <tr> for the current columns; cellData maps key -> {text,color}.
+    function makeRow(cellData) {
+        cellData = cellData || {};
+        const tr = document.createElement('tr');
+        tr.className = 'pair-row';
+        const numTd = document.createElement('td');
+        numTd.className = 'cell-num text-muted small row-num';
+        tr.appendChild(numTd);
+        columnKeys().forEach((key) => {
+            const d = cellData[key] || {};
+            tr.appendChild(makeBodyCell(key, d.text, d.color));
+        });
+        const actTd = document.createElement('td');
+        actTd.className = 'cell-actions';
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'btn btn-sm btn-outline-danger btn-delete-row';
+        del.title = 'Remove row';
+        del.innerHTML = '<i class="bi bi-trash"></i>';
+        del.addEventListener('click', () => { tr.remove(); renumber(); });
+        actTd.appendChild(del);
+        tr.appendChild(actTd);
+        return tr;
+    }
+
+    function addRow(cellData) {
+        const tr = makeRow(cellData);
+        tbody.appendChild(tr);
         renumber();
-        return row;
+        return tr;
     }
 
-    function wireRow(row) {
-        const delBtn = row.querySelector('.btn-delete-row');
-        if (!delBtn) return;
-        delBtn.addEventListener('click', () => {
-            const deleteCb = row.querySelector('input[type="checkbox"][name$="-DELETE"]');
-            const idInput = row.querySelector('input[name$="-id"]');
-            if (idInput && idInput.value && deleteCb) {
-                // Existing DB row — flag for delete on submit, hide it.
-                deleteCb.checked = true;
-                row.classList.add('d-none');
-            } else {
-                // Unsaved row — just remove from DOM and decrement totals.
-                row.remove();
-                totalForms.value = Math.max(0, parseInt(totalForms.value, 10) - 1);
-                // Re-index remaining unsaved rows so prefixes stay contiguous.
-                let i = 0;
-                tbody.querySelectorAll('tr.pair-row').forEach((r) => {
-                    r.querySelectorAll('input,textarea,select').forEach((el) => {
-                        if (!el.name) return;
-                        el.name = el.name.replace(new RegExp('^' + prefix + '-\\d+-'), prefix + '-' + i + '-');
-                        if (el.id) el.id = el.id.replace(new RegExp('^id_' + prefix + '-\\d+-'), 'id_' + prefix + '-' + i + '-');
-                    });
-                    i += 1;
-                });
-            }
-            renumber();
+    function addColumn(name) {
+        const key = nextKey();
+        const th = makeHeaderTh(key, name || '');
+        // Insert before the trailing actions <th> (last child).
+        headRow.insertBefore(th, headRow.lastElementChild);
+        // Add a matching cell to every existing row, before its actions cell.
+        tbody.querySelectorAll('tr.pair-row').forEach((row) => {
+            row.insertBefore(makeBodyCell(key, '', '#000000'), row.lastElementChild);
         });
+        return key;
     }
 
-    document.querySelectorAll('#pairs-tbody tr.pair-row').forEach(wireRow);
+    function deleteColumn(key) {
+        const cols = columnKeys();
+        if (cols.length <= 1) {
+            alert('A bundle needs at least one column.');
+            return;
+        }
+        const th = headRow.querySelector('th.col-head[data-key="' + key + '"]');
+        if (th) th.remove();
+        tbody.querySelectorAll('td.cell-body[data-key="' + key + '"]').forEach((td) => td.remove());
+    }
+
+    // ─── Initial render ─────────────────────────────────────────
+    let cols = (INITIAL_COLUMNS && INITIAL_COLUMNS.length)
+        ? INITIAL_COLUMNS
+        : [{ key: 'c1', name: 'Client Remark' }, { key: 'c2', name: "Leap's Answer" }];
+    cols.forEach((c) => {
+        headRow.insertBefore(makeHeaderTh(c.key, c.name), headRow.lastElementChild);
+    });
+    (INITIAL_ROWS || []).forEach((r) => addRow((r && r.cells) || {}));
+    if (!(INITIAL_ROWS || []).length) addRow({});
     renumber();
 
-    document.getElementById('btn-add-row').addEventListener('click', () => addRow());
+    // ─── Toolbar wiring ─────────────────────────────────────────
+    document.getElementById('btn-add-row').addEventListener('click', () => addRow({}));
+    document.getElementById('btn-add-col').addEventListener('click', () => {
+        addColumn('New column');
+    });
 
     // ─── Paste-from-Excel modal ─────────────────────────────────
     const pasteModalEl = document.getElementById('paste-modal');
@@ -248,18 +313,38 @@
     document.getElementById('btn-paste-apply').addEventListener('click', () => {
         const raw = document.getElementById('paste-textarea').value;
         if (!raw.trim()) { pasteModal.hide(); return; }
-        const lines = raw.split(/\r?\n/);
-        let added = 0;
-        lines.forEach((line) => {
+        const keys = columnKeys();
+        raw.split(/\r?\n/).forEach((line) => {
             if (!line.trim()) return;
-            const cols = line.split('\t');
-            const remark = (cols[0] || '').trim();
-            const answer = (cols[1] || '').trim();
-            if (!remark && !answer) return;
-            addRow(remark, answer);
-            added += 1;
+            const parts = line.split('\t');
+            const cellData = {};
+            keys.forEach((key, i) => {
+                cellData[key] = { text: (parts[i] || '').trim(), color: '#000000' };
+            });
+            addRow(cellData);
         });
         pasteModal.hide();
+    });
+
+    // ─── Serialize to hidden inputs on submit ───────────────────
+    form.addEventListener('submit', () => {
+        const columns = Array.from(headRow.querySelectorAll('th.col-head')).map((th) => ({
+            key: th.dataset.key,
+            name: (th.querySelector('input.col-name').value || '').trim(),
+        }));
+        const rows = [];
+        tbody.querySelectorAll('tr.pair-row').forEach((row) => {
+            const cells = {};
+            row.querySelectorAll('td.cell-body').forEach((td) => {
+                cells[td.dataset.key] = {
+                    text: td.querySelector('textarea.pair-input').value,
+                    color: td.querySelector('input.cell-color-input').value || '#000000',
+                };
+            });
+            rows.push({ cells: cells });
+        });
+        document.getElementById('columns_json').value = JSON.stringify(columns);
+        document.getElementById('rows_json').value = JSON.stringify(rows);
     });
 })();
 </script>
