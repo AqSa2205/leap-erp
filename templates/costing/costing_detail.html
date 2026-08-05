@@ -1029,7 +1029,7 @@
                             </span>
                         </td>
                         <td class="text-end">
-                            <a href="{{ q.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary" title="Preview"><i class="bi bi-eye"></i></a>
+                            {% if q.file %}<a href="{{ q.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary" title="Preview"><i class="bi bi-eye"></i></a>{% else %}<span class="btn btn-sm btn-outline-secondary disabled" title="No file attached">—</span>{% endif %}
                             {% if can_edit %}
                             <button type="button" class="btn btn-sm btn-outline-danger btn-delete-vendor-quote" data-id="{{ q.pk }}" title="Delete"><i class="bi bi-trash"></i></button>
                             {% endif %}

@@ -1240,8 +1240,17 @@ class VendorQuote(models.Model):
         on_delete=models.CASCADE,
         related_name='vendor_quotes',
     )
+    SOURCE_CHOICES = [
+        ('manual', 'Manually uploaded'),
+        ('email', 'Auto-detected from email'),
+    ]
+
     vendor_name = models.CharField(max_length=255)
     quote_reference = models.CharField(max_length=100, blank=True)
+    source = models.CharField(
+        max_length=10, choices=SOURCE_CHOICES, default='manual',
+        help_text='Whether this was uploaded by hand or auto-attached by the vendor-email matcher.',
+    )
     file = models.FileField(upload_to='costing/vendor_quotes/')
     original_filename = models.CharField(max_length=255, blank=True)
     amount = models.DecimalField(

@@ -1,0 +1,143 @@
+{% extends 'base.html' %}
+{% block title %}Vendor Email Triage - Leap Networks ERP{% endblock %}
+{% block page_title %}Vendor Email Triage{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'costing:list' %}">Costing</a>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">Vendor Email Triage</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<p class="text-muted small">Drag an email card onto the costing sheet it belongs to.</p>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="small text-muted mb-2">Demo only — simulate an incoming email:</div>
+        <div class="row g-2">
+            <div class="col-md-4">
+                <form method="post" action="{% url 'vendor_email:simulate' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="scenario" value="matched">
+                    <button type="submit" class="btn btn-outline-success w-100">Clean match</button>
+                </form>
+            </div>
+            <div class="col-md-4">
+                <form method="post" action="{% url 'vendor_email:simulate' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="scenario" value="no_reference">
+                    <button type="submit" class="btn btn-outline-warning w-100">No reference number</button>
+                </form>
+            </div>
+            <div class="col-md-4">
+                <form method="post" action="{% url 'vendor_email:simulate' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="scenario" value="unknown_reference">
+                    <button type="submit" class="btn btn-outline-warning w-100">Unrecognized reference</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-md-5">
+        <div class="card">
+            <div class="card-header"><i class="bi bi-envelope-exclamation me-2"></i>Needs review <span class="badge bg-warning text-dark ms-1" id="unmatchedCount">{{ unmatched|length }}</span></div>
+            <div class="card-body" id="emailList">
+                {% for m in unmatched %}
+                <div class="card mb-2 email-card" draggable="true" data-email-id="{{ m.pk }}" style="cursor: grab;">
+                    <div class="card-body py-2">
+                        <div class="fw-semibold small">{{ m.sender_name|default:m.sender_email }}</div>
+                        <div class="text-muted small">{{ m.sender_email }}</div>
+                        <div class="small mt-1">"{{ m.subject }}"</div>
+                        {% if m.attachment_filename %}<div class="small text-muted"><i class="bi bi-paperclip"></i> {{ m.attachment_filename }}</div>{% endif %}
+                        <div class="small text-warning-emphasis mt-1">{{ m.match_reason }}</div>
+                    </div>
+                </div>
+                {% empty %}
+                <p class="text-muted small mb-0" id="emptyMsg">Nothing waiting on review.</p>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-7">
+        <div class="card">
+            <div class="card-header"><i class="bi bi-calculator me-2"></i>Costing sheets</div>
+            <div class="card-body">
+                <input type="text" class="form-control mb-2" id="sheetSearch" placeholder="Search sheets…">
+                <div id="sheetList" style="max-height: 500px; overflow-y: auto;">
+                    {% for s in sheets %}
+                    <div class="card mb-2 sheet-card" data-sheet-id="{{ s.pk }}" data-sheet-title="{{ s.title }}" style="cursor: pointer;">
+                        <div class="card-body py-2 d-flex justify-content-between align-items-center">
+                            <div>
+                                <div class="fw-semibold small">{{ s.title }}</div>
+                                <div class="text-muted small">{% if s.customer_reference %}Ref: {{ s.customer_reference }}{% else %}No reference{% endif %} · {{ s.customer_name|default:"—" }}</div>
+                            </div>
+                            <span class="badge {{ s.stage_badge.css }}">{{ s.stage_badge.label }}</span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% csrf_token %}
+
+<script>
+(function () {
+    const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    
+
+    function assign(emailId, sheetId, sheetTitle) {
+        fetch(`/vendor-email/resolve/${emailId}/`, {
+            method: 'POST',
+            headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/x-www-form-urlencoded'},
+            body: `sheet_id=${sheetId}`,
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (!data.ok) { alert('Could not assign — try again.'); return; }
+            const card = document.querySelector(`.email-card[data-email-id="${emailId}"]`);
+            if (card) card.remove();
+            selectedEmailId = null;
+            document.querySelectorAll('.email-card').forEach(c => c.classList.remove('border-primary'));
+            const countEl = document.getElementById('unmatchedCount');
+            const remaining = document.querySelectorAll('.email-card').length;
+            countEl.textContent = remaining;
+            if (remaining === 0) {
+                document.getElementById('emailList').insertAdjacentHTML('beforeend', '<p class="text-muted small mb-0" id="emptyMsg">Nothing waiting on review.</p>');
+            }
+        })
+        .catch(() => alert('Network error — try again.'));
+    }
+
+   // Drag and drop only — desktop/laptop use only, no touch support needed.
+    document.querySelectorAll('.email-card').forEach(card => {
+        card.addEventListener('dragstart', e => {
+            e.dataTransfer.setData('text/plain', card.dataset.emailId);
+        });
+    });
+
+    document.querySelectorAll('.sheet-card').forEach(card => {
+        card.addEventListener('dragover', e => e.preventDefault());
+        card.addEventListener('drop', e => {
+            e.preventDefault();
+            const emailId = e.dataTransfer.getData('text/plain');
+            if (emailId) assign(emailId, card.dataset.sheetId, card.dataset.sheetTitle);
+        });
+    });
+
+    document.getElementById('sheetSearch').addEventListener('input', e => {
+        const q = e.target.value.toLowerCase();
+        document.querySelectorAll('.sheet-card').forEach(card => {
+            card.style.display = card.dataset.sheetTitle.toLowerCase().includes(q) ? '' : 'none';
+        });
+    });
+})();
+</script>
+{% endblock %}

@@ -1574,7 +1574,10 @@
             </div>
             {% endfor %}
             {% endif %}
-
+            {% load vendor_email_tags %}
+            {% if request.resolver_match.app_name == 'costing' %}
+            {% vendor_email_review_banner %}
+            {% endif %}
             {% block content %}{% endblock %}
         </div>
     </div>

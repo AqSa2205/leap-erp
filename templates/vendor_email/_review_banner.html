@@ -1,0 +1,14 @@
+{% if count %}
+<div class="alert alert-warning d-flex justify-content-between align-items-start mb-3" role="alert">
+    <div>
+        <i class="bi bi-envelope-exclamation me-2"></i>
+        <strong>{{ count }} vendor email{{ count|pluralize }} need{{ count|pluralize:"s," }} review</strong>
+        <ul class="mb-0 mt-1 small">
+            {% for m in unmatched %}
+            <li>{{ m.sender_name|default:m.sender_email }} — "{{ m.subject }}"</li>
+            {% endfor %}
+        </ul>
+    </div>
+    <a href="{% url 'vendor_email:triage' %}" class="btn btn-sm btn-warning text-nowrap">Review &amp; assign</a>
+</div>
+{% endif %}

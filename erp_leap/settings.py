@@ -99,6 +99,7 @@ INSTALLED_APPS = [
     "company",
     "finance",
     "attendance",
+    "vendor_email",
 ]
 
 # ── Wi-Fi automatic attendance ────────────────────────────────────────────────
