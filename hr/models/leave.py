@@ -6,6 +6,9 @@ class LeaveType(models.Model):
     name = models.CharField(max_length=100)
     code = models.SlugField(max_length=40, unique=True)
     default_annual_days = models.DecimalField(max_digits=5, decimal_places=1, default=0)
+    site_default_annual_days = models.DecimalField(
+        max_digits=5, decimal_places=1, null=True, blank=True,
+        help_text='Override default for Site employees. Blank = same as the default above (Office).')
     is_paid = models.BooleanField(default=True)
     color = models.CharField(max_length=20, default='secondary', help_text='Bootstrap color name for badges')
     requires_medical_certificate = models.BooleanField(
@@ -26,18 +29,34 @@ class LeaveType(models.Model):
     def __str__(self):
         return self.name
 
+    def default_days_for(self, work_location):
+        if work_location == 'site' and self.site_default_annual_days is not None:
+            return self.site_default_annual_days
+        return self.default_annual_days
+
     def save(self, *args, **kwargs):
         old_days = None
+        old_site_days = None
         if self.pk:
-            prev = type(self).objects.filter(pk=self.pk).only('default_annual_days').first()
+            prev = type(self).objects.filter(pk=self.pk).only(
+                'default_annual_days', 'site_default_annual_days').first()
             if prev is not None:
                 old_days = prev.default_annual_days
+                old_site_days = prev.site_default_annual_days
         super().save(*args, **kwargs)
-        # When the day count changes, propagate it to ALL existing entitlements
-        # of this type (every year, every employee) — the leave type is the
-        # source of truth. Applies to every type, including Annual (flat).
-        if old_days is not None and old_days != self.default_annual_days:
-            self.entitlements.update(entitled_days=self.default_annual_days)
+        # When either day count changes, propagate it to ALL existing
+        # entitlements of this type (every year, every employee) — the leave
+        # type is the source of truth. Office and Site employees get their
+        # own default; this never touches LeaveExceptionGrant rows, which
+        # live outside entitled_days entirely.
+        if old_days is not None and (old_days != self.default_annual_days or old_site_days != self.site_default_annual_days):
+            # work_location is blank for employees never assigned one — treat
+            # that the same as 'office' (today's only behavior) rather than
+            # silently skipping them.
+            self.entitlements.exclude(employee__work_location='site').update(
+                entitled_days=self.default_annual_days)
+            self.entitlements.filter(employee__work_location='site').update(
+                entitled_days=self.default_days_for('site'))
 
 
 class LeaveEntitlement(models.Model):

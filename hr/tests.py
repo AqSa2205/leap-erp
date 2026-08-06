@@ -233,6 +233,40 @@ class LeaveRecordTests(TestCase):
             rec.full_clean()
 
 
+class LeaveTypeLocationDefaultsTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': None})
+
+    def test_default_days_for_office_uses_flat_default(self):
+        self.assertEqual(self.lt.default_days_for('office'), Decimal('30'))
+
+    def test_default_days_for_blank_location_falls_back_to_office(self):
+        self.assertEqual(self.lt.default_days_for(''), Decimal('30'))
+
+    def test_default_days_for_site_falls_back_when_blank(self):
+        self.assertEqual(self.lt.default_days_for('site'), Decimal('30'))
+
+    def test_default_days_for_site_uses_override_when_set(self):
+        self.lt.site_default_annual_days = Decimal('45')
+        self.lt.save()
+        self.assertEqual(self.lt.default_days_for('site'), Decimal('45'))
+
+    def test_propagate_on_save_is_location_aware(self):
+        office_emp = Employee.objects.create(iqama_number='LOC-OFF-1', full_name='Office Emp', work_location='office')
+        site_emp = Employee.objects.create(iqama_number='LOC-SITE-1', full_name='Site Emp', work_location='site')
+        blank_emp = Employee.objects.create(iqama_number='LOC-BLANK-1', full_name='Blank Emp')
+        LeaveEntitlement.objects.create(employee=office_emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        LeaveEntitlement.objects.create(employee=site_emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        LeaveEntitlement.objects.create(employee=blank_emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        self.lt.default_annual_days = Decimal('32')
+        self.lt.site_default_annual_days = Decimal('47')
+        self.lt.save()
+        self.assertEqual(LeaveEntitlement.objects.get(employee=office_emp).entitled_days, Decimal('32'))
+        self.assertEqual(LeaveEntitlement.objects.get(employee=site_emp).entitled_days, Decimal('47'))
+        self.assertEqual(LeaveEntitlement.objects.get(employee=blank_emp).entitled_days, Decimal('32'))
+
+
 from hr.leave_services import generate_year_entitlements
 
 

@@ -18,7 +18,7 @@ class AssetAdmin(admin.ModelAdmin):
 
 @admin.register(LeaveType)
 class LeaveTypeAdmin(admin.ModelAdmin):
-    list_display = ['name', 'code', 'default_annual_days', 'is_paid', 'is_active']
+    list_display = ['name', 'code', 'default_annual_days', 'site_default_annual_days', 'is_paid', 'is_active']
 
 
 @admin.register(Holiday)
