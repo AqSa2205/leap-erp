@@ -619,6 +619,24 @@ class SidebarBadgeMarkupTests(TestCase):
         self.assertNotContains(resp, '<span class="nav-badge-dot">')
 
 
+class TeamExceptionsTabCountTests(TestCase):
+    def test_tab_buttons_show_pending_counts(self):
+        from hr.attendance_exception_services import submit_attendance_exception
+        manager_user = make_user('tabmgr')
+        manager_user.set_password('testpass123')
+        manager_user.save()
+        manager = Employee.objects.create(iqama_number='TABC-MGR', full_name='Tab Manager', user=manager_user)
+        report = Employee.objects.create(iqama_number='TABC-RPT', full_name='Tab Report', main_manager=manager)
+        submit_attendance_exception(
+            employee=report, event_date=_timezone.now().date(), event_start_time=_time(0, 1),
+            reason_category='site_visit', created_by=manager_user)
+        self.client.login(username='tabmgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertEqual(resp.context['direct_tab_count'], 1)
+        self.assertEqual(resp.context['secondary_tab_count'], 0)
+        self.assertContains(resp, 'Direct Reports <span class="nav-badge-count">1</span>')
+
+
 from hr.leave_services import generate_year_entitlements
 
 

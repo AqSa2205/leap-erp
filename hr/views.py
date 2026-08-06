@@ -3006,6 +3006,13 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         # HR/Super-Admin — "Direct Reports"/"Secondary Reports" are always
         # shown (even empty) for everyone who can reach this page.
         ctx['show_all_tab'] = is_hr
+        # Per-tab pending counts for the tab labels — always all three
+        # (regardless of which tab is currently selected), so switching tabs
+        # doesn't need a second request to know what the other tabs hold.
+        ctx['direct_tab_count'] = self._tab_queryset('direct', user, emp).filter(status__in=('pending', 'expired')).count()
+        ctx['secondary_tab_count'] = self._tab_queryset('secondary', user, emp).filter(status__in=('pending', 'expired')).count()
+        if ctx['show_all_tab']:
+            ctx['all_tab_count'] = self._tab_queryset('all', user, emp).filter(status__in=('pending', 'expired')).count()
         return ctx
 
     def post(self, request, *args, **kwargs):
