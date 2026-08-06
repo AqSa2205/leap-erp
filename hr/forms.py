@@ -453,12 +453,13 @@ class AssetReturnForm(forms.ModelForm):
 class LeaveTypeForm(forms.ModelForm):
     class Meta:
         model = LeaveType
-        fields = ['name', 'code', 'default_annual_days', 'is_paid', 'color',
+        fields = ['name', 'code', 'default_annual_days', 'site_default_annual_days', 'is_paid', 'color',
                   'requires_medical_certificate', 'is_active']
         widgets = {
             'name': forms.TextInput(attrs={'class': 'form-control'}),
             'code': forms.TextInput(attrs={'class': 'form-control'}),
             'default_annual_days': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.5'}),
+            'site_default_annual_days': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.5'}),
             'is_paid': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
             'color': forms.TextInput(attrs={'class': 'form-control'}),
             'requires_medical_certificate': forms.CheckboxInput(attrs={'class': 'form-check-input'}),

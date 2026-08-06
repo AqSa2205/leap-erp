@@ -78,6 +78,29 @@ def validate_leave_submission(employee, leave_type, start_date, end_date, lock=F
     return exceeds_balance
 
 
+def preview_leave_shortfall(employee, leave_type, start_date, end_date):
+    """Read-only preview (no locking, no side effects, never raises): how
+    many days, if any, this request would exceed the employee's effective
+    balance by. Returns Decimal('0') if it fits (or there's no entitlement
+    set up — validate_leave_submission is what raises that error). Used by
+    the HR 'log on behalf of' form to show a warning before submission."""
+    from decimal import Decimal
+    from .models import LeaveEntitlement, LeaveRequest
+
+    entitlement = LeaveEntitlement.objects.filter(
+        employee=employee, leave_type=leave_type, year=start_date.year).first()
+    if entitlement is None:
+        return Decimal('0')
+    requested_days = Decimal((end_date - start_date).days + 1)
+    pending_days = sum(
+        (r.days or Decimal('0') for r in LeaveRequest.objects.filter(
+            employee=employee, leave_type=leave_type, status='pending', start_date__year=start_date.year)),
+        Decimal('0'))
+    available_days = entitlement.effective_remaining_days - pending_days
+    shortfall = requested_days - available_days
+    return shortfall if shortfall > Decimal('0') else Decimal('0')
+
+
 def generate_entitlements_for_employee(employee, year, actor=None):
     """Create this one employee's missing LeaveEntitlement rows for `year`,
     using each leave type's default_annual_days, or site_default_annual_days

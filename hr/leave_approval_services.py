@@ -208,21 +208,20 @@ def submit_leave_request(*, employee, leave_type, start_date, end_date, employee
             employee_reason=employee_reason, document=document, created_by=created_by,
             exceeds_balance=exceeds_balance,
         )
-        if not exceeds_balance:
-            # A held (balance-exceeding) request gets no approver roster at
-            # all — the normal approver roster only ever decides in-cap
-            # requests; a held request sits pending until a Super Admin
-            # override decision, via the existing override_finalize path.
-            approvers = LeaveDashboardAccess.objects.filter(is_active=True)
-            if employee.user_id:
-                approvers = approvers.exclude(user_id=employee.user_id)
-            for grant in approvers:
-                LeaveRequestApproval.objects.create(leave_request=leave_request, approver=grant.user)
+        # A held (balance-exceeding) request goes through the exact same
+        # approver roster and decide/override flow as any other request —
+        # exceeds_balance only drives the warning shown on the request, not
+        # who can decide it.
+        approvers = LeaveDashboardAccess.objects.filter(is_active=True)
+        if employee.user_id:
+            approvers = approvers.exclude(user_id=employee.user_id)
+        for grant in approvers:
+            LeaveRequestApproval.objects.create(leave_request=leave_request, approver=grant.user)
 
     if employee.user_id:
         from notifications.services import notify_users
-        verb = ('Your leave request was submitted — it exceeds your available balance and needs '
-                'Super Admin review' if exceeds_balance else
+        verb = ('Your leave request was submitted — it exceeds your available balance, so it may need extra '
+                'review' if exceeds_balance else
                 'Your leave request was submitted and is pending approval')
         notify_users(recipients=[employee.user], verb=verb, actor=created_by)
     return leave_request

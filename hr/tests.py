@@ -414,7 +414,10 @@ class SubmitLeaveRequestHeldTests(TestCase):
         self.approver_user = make_user('slrh-appr')
         LeaveDashboardAccess.objects.create(user=self.approver_user, is_active=True)
 
-    def test_held_request_has_no_approval_rows(self):
+    def test_held_request_still_gets_the_normal_approver_roster(self):
+        # A held (exceeds_balance) request routes through the exact same
+        # approver roster and decide flow as any other request — the only
+        # difference is the warning shown on it, not who can decide it.
         from hr.leave_approval_services import submit_leave_request
         emp = Employee.objects.create(iqama_number='SLRH-1', full_name='Site Over', work_location='site')
         LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
@@ -422,7 +425,8 @@ class SubmitLeaveRequestHeldTests(TestCase):
             employee=emp, leave_type=self.lt, start_date=date(2026, 1, 1), end_date=date(2026, 2, 15),
             created_by=self.approver_user)
         self.assertTrue(req.exceeds_balance)
-        self.assertEqual(req.approvals.count(), 0)
+        self.assertEqual(req.approvals.count(), 1)
+        self.assertEqual(req.approvals.first().approver, self.approver_user)
         self.assertEqual(req.status, 'pending')
 
     def test_normal_request_still_gets_approval_rows(self):
@@ -457,6 +461,137 @@ class GrantExceptionDaysTests(TestCase):
         with self.assertRaises(ValueError):
             grant_exception_days(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('5'),
                                   granted_by=self.hr_user, reason='   ')
+
+
+class GrantExceptionDaysViewPermissionTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.emp = Employee.objects.create(iqama_number='GEDV-1', full_name='Grantee View', work_location='site')
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=timezone.now().year, entitled_days=Decimal('45'))
+
+    def test_super_admin_can_grant_via_the_view(self):
+        from accounts.models import Role
+        _make_role_user('gedv-super', Role.SUPER_ADMIN)
+        self.client.login(username='gedv-super', password='testpass123')
+        resp = self.client.post(reverse('hr:grant_exception_days', args=[self.emp.pk]), data={
+            'leave_type': self.lt.pk, 'year': timezone.now().year, 'days': '3', 'reason': 'Test grant via view.'})
+        self.assertEqual(resp.status_code, 302)
+        ent = LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.lt, year=timezone.now().year)
+        self.assertEqual(ent.exception_days, Decimal('3'))
+
+    def test_plain_user_is_denied(self):
+        plain_user = make_user('gedv-plain')
+        plain_user.set_password('x')
+        plain_user.save()
+        self.client.login(username='gedv-plain', password='x')
+        resp = self.client.get(reverse('hr:grant_exception_days', args=[self.emp.pk]))
+        self.assertEqual(resp.status_code, 403)
+        resp = self.client.post(reverse('hr:grant_exception_days', args=[self.emp.pk]), data={
+            'leave_type': self.lt.pk, 'year': timezone.now().year, 'days': '3', 'reason': 'Should not work.'})
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(LeaveEntitlement.objects.get(employee=self.emp).exception_days, Decimal('0'))
+
+
+class BalanceHoldSettingsViewTests(TestCase):
+    def test_super_admin_can_change_balance_hold_settings(self):
+        from accounts.models import Role
+        from hr.models import OverrideAccessSettings
+        _make_role_user('bhsv-super', Role.SUPER_ADMIN)
+        self.client.login(username='bhsv-super', password='testpass123')
+        resp = self.client.post(reverse('hr:org_chart') + '?tab=access', data={
+            'set_balance_hold': '1', 'allow_office_balance_hold': '1',
+        })
+        self.assertEqual(resp.status_code, 302)
+        config = OverrideAccessSettings.get_solo()
+        self.assertTrue(config.allow_office_balance_hold)
+        self.assertFalse(config.allow_site_balance_hold)  # unchecked box -> off
+
+    def test_plain_user_cannot_change_balance_hold_settings(self):
+        from hr.models import OverrideAccessSettings
+        plain_user = make_user('bhsv-plain')
+        plain_user.set_password('x')
+        plain_user.save()
+        self.client.login(username='bhsv-plain', password='x')
+        resp = self.client.post(reverse('hr:org_chart') + '?tab=access', data={
+            'set_balance_hold': '1', 'allow_office_balance_hold': '1',
+        })
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(OverrideAccessSettings.get_solo().allow_office_balance_hold)
+
+
+class LogRequestBalanceWarningTests(TestCase):
+    """The 'Log Request' (log-on-behalf-of) form: a Super Admin submitting an
+    over-cap request sees an inline warning and must explicitly confirm
+    before anything is created; confirming grants the exact shortfall as an
+    exception and then logs the request normally (not held)."""
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.emp = Employee.objects.create(iqama_number='LRBW-1', full_name='Warning Test', work_location='site')
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+
+    def _post(self, **extra):
+        data = {
+            'employee': self.emp.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-01-01', 'end_date': '2026-02-16',  # 47 days, 2 over the 45-day Site baseline
+        }
+        data.update(extra)
+        return self.client.post(reverse('hr:leave_request_create'), data=data)
+
+    def test_super_admin_first_submit_shows_warning_and_creates_nothing(self):
+        from accounts.models import Role
+        _make_role_user('lrbw-super1', Role.SUPER_ADMIN)
+        self.client.login(username='lrbw-super1', password='testpass123')
+        resp = self._post()
+        self.assertEqual(resp.status_code, 200)  # re-rendered, not redirected
+        self.assertContains(resp, 'Exceeds balance')
+        self.assertContains(resp, 'Log Anyway')
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.emp).exists())
+        self.assertEqual(LeaveEntitlement.objects.get(employee=self.emp).exception_days, Decimal('0'))
+
+    def test_super_admin_confirms_grants_shortfall_and_logs_normally(self):
+        from accounts.models import Role
+        _make_role_user('lrbw-super2', Role.SUPER_ADMIN)
+        self.client.login(username='lrbw-super2', password='testpass123')
+        resp = self._post(confirm_grant_and_log='1')
+        self.assertEqual(resp.status_code, 302)
+        ent = LeaveEntitlement.objects.get(employee=self.emp)
+        self.assertEqual(ent.entitled_days, Decimal('45'))  # baseline untouched
+        self.assertEqual(ent.exception_days, Decimal('2'))  # exact shortfall granted
+        req = LeaveRequest.objects.get(employee=self.emp)
+        self.assertFalse(req.exceeds_balance)  # fits now, logged normally
+        self.assertEqual(req.approvals.count(), 0)  # no LeaveDashboardAccess holders in this test's DB, unrelated to the grant
+
+    def test_non_super_admin_gets_no_warning_request_is_just_held(self):
+        from accounts.models import Role
+        _make_role_user('lrbw-erp', Role.ERP_ADMIN)
+        self.client.login(username='lrbw-erp', password='testpass123')
+        resp = self._post()
+        self.assertEqual(resp.status_code, 302)  # no warning step — logged straight through
+        req = LeaveRequest.objects.get(employee=self.emp)
+        self.assertTrue(req.exceeds_balance)
+        self.assertEqual(LeaveEntitlement.objects.get(employee=self.emp).exception_days, Decimal('0'))
+
+    def test_confirm_flag_without_override_access_is_denied(self):
+        # Defense in depth: a direct POST with the confirm flag set, from a
+        # user who isn't actually allowed to grant, must not silently work.
+        from accounts.models import Role
+        _make_role_user('lrbw-erp2', Role.ERP_ADMIN)
+        self.client.login(username='lrbw-erp2', password='testpass123')
+        resp = self._post(confirm_grant_and_log='1')
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(LeaveEntitlement.objects.get(employee=self.emp).exception_days, Decimal('0'))
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.emp).exists())
+
+    def test_within_cap_submission_never_shows_warning(self):
+        from accounts.models import Role
+        _make_role_user('lrbw-super3', Role.SUPER_ADMIN)
+        self.client.login(username='lrbw-super3', password='testpass123')
+        resp = self._post(end_date='2026-01-10')  # 10 days, well within 45
+        self.assertEqual(resp.status_code, 302)
+        req = LeaveRequest.objects.get(employee=self.emp)
+        self.assertFalse(req.exceeds_balance)
 
 
 class EmployeeWorkLocationTransferTests(TestCase):

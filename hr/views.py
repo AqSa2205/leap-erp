@@ -2134,11 +2134,45 @@ class LeaveRequestCreateView(HRScopedAccessMixin, FormView):
         return initial
 
     def form_valid(self, form):
-        from hr.leave_approval_services import submit_leave_request
+        from hr.leave_approval_services import submit_leave_request, grant_exception_days
+        from hr.leave_services import preview_leave_shortfall
+
+        employee = form.cleaned_data['employee']
+        leave_type = form.cleaned_data['leave_type']
+        start_date = form.cleaned_data['start_date']
+        end_date = form.cleaned_data['end_date']
+        confirmed = bool(self.request.POST.get('confirm_grant_and_log'))
+        can_grant = has_override_access(self.request.user)
+
+        # Super Admins only: before creating anything, warn inline in this
+        # same form if the entered request exceeds the employee's balance,
+        # and offer a one-click "Log Anyway" that grants the exact shortfall
+        # as an exception (so the employee's limit itself reflects it,
+        # e.g. 45 -> 47) and then logs the request normally. Anyone without
+        # override access skips straight to the existing behavior below —
+        # their over-cap Site request still gets held for normal approval,
+        # per validate_leave_submission's location-based rule.
+        if can_grant and not confirmed:
+            shortfall = preview_leave_shortfall(employee, leave_type, start_date, end_date)
+            if shortfall:
+                return self.render_to_response(self.get_context_data(
+                    form=form, balance_shortfall=shortfall, balance_warning_employee=employee,
+                    balance_warning_leave_type=leave_type))
+
         try:
+            if confirmed:
+                if not can_grant:
+                    raise PermissionDenied
+                shortfall = preview_leave_shortfall(employee, leave_type, start_date, end_date)
+                if shortfall:
+                    grant_exception_days(
+                        employee=employee, leave_type=leave_type, year=start_date.year, days=shortfall,
+                        granted_by=self.request.user,
+                        reason=f'Auto-granted via Log Request by '
+                               f'{self.request.user.get_full_name() or self.request.user.username} to allow a '
+                               f'{start_date}–{end_date} request that exceeded the balance by {shortfall} day(s).')
             submit_leave_request(
-                employee=form.cleaned_data['employee'], leave_type=form.cleaned_data['leave_type'],
-                start_date=form.cleaned_data['start_date'], end_date=form.cleaned_data['end_date'],
+                employee=employee, leave_type=leave_type, start_date=start_date, end_date=end_date,
                 employee_reason=form.cleaned_data['employee_reason'], document=form.cleaned_data['document'],
                 created_by=self.request.user,
             )
@@ -3223,6 +3257,7 @@ class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         _access_keys = (
             'grant_dashboard_access', 'revoke_dashboard_access', 'set_override_mode',
             'toggle_override_role', 'grant_override_employee', 'revoke_override_employee',
+            'set_balance_hold',
         )
         if any(request.POST.get(k) for k in _access_keys) and not self._can_config_access():
             raise PermissionDenied
@@ -3267,6 +3302,15 @@ class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
             config.save(update_fields=['mode', 'updated_by', 'updated_at'])
             messages.success(
                 request, f'Override access mode set to "{config.get_mode_display()}".')
+            return redirect(access_tab_url)
+
+        if 'set_balance_hold' in request.POST:
+            config = OverrideAccessSettings.get_solo()
+            config.allow_site_balance_hold = bool(request.POST.get('allow_site_balance_hold'))
+            config.allow_office_balance_hold = bool(request.POST.get('allow_office_balance_hold'))
+            config.updated_by = request.user
+            config.save(update_fields=['allow_site_balance_hold', 'allow_office_balance_hold', 'updated_by', 'updated_at'])
+            messages.success(request, 'Balance-hold settings updated.')
             return redirect(access_tab_url)
 
         toggle_role_id = request.POST.get('toggle_override_role')

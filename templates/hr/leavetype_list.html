@@ -26,7 +26,8 @@
                         <tr>
                             <th>Name</th>
                             <th>Code</th>
-                            <th>Default Days</th>
+                            <th>Default Days (Office)</th>
+                            <th>Default Days (Site)</th>
                             <th>Paid</th>
                             <th>Color</th>
                             <th>Active</th>
@@ -39,6 +40,7 @@
                             <td><strong>{{ lt.name }}</strong></td>
                             <td><code>{{ lt.code }}</code></td>
                             <td>{{ lt.default_annual_days }}</td>
+                            <td>{{ lt.site_default_annual_days|default:lt.default_annual_days }}{% if not lt.site_default_annual_days %} <span class="text-muted small">(same as Office)</span>{% endif %}</td>
                             <td>
                                 {% if lt.is_paid %}
                                 <span class="badge bg-success">Yes</span>

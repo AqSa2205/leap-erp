@@ -17,7 +17,6 @@
           {{ entitlement.entitled_days }} standard{% if entitlement.exception_days %} + {{ entitlement.exception_days }} exception{% endif %},
           {{ entitlement.taken_days }} taken.
         {% endif %}
-        No normal approver can decide this — only a Super Admin Override can approve or reject it.
       </div>
       {% endif %}
 
@@ -130,7 +129,7 @@
             {% csrf_token %}
             <input type="hidden" name="action" value="override">
             <div class="mb-2">
-              <label class="form-label small">Override (use if an approver is unavailable, or to approve/reject a balance-exceeding request)</label>
+              <label class="form-label small">Override (use only if an approver is unavailable)</label>
               <textarea name="reason" class="form-control" rows="2" placeholder="Reason — required" required></textarea>
             </div>
             <button type="submit" name="decision" value="approved" class="btn btn-outline-success btn-sm">Override — Approve</button>
