@@ -1017,7 +1017,9 @@
                 <tbody id="vendorQuotesTbody">
                     {% for q in vendor_quotes %}
                     <tr data-quote-id="{{ q.pk }}">
-                        <td>{{ q.vendor_name }}</td>
+                        <td>{{ q.vendor_name }}
+                            {% if q.source == 'email_auto' %}<span class="badge bg-success-subtle text-success-emphasis border border-success-subtle ms-1" title="Matched automatically, no human involved"><i class="bi bi-envelope-check"></i> Auto-matched</span>{% elif q.source == 'email_manual' %}<span class="badge bg-info-subtle text-info-emphasis border border-info-subtle ms-1" title="System couldn't match it — a person assigned it"><i class="bi bi-envelope-check"></i> Manually resolved from email</span>{% endif %}
+                        </td>
                         <td class="small"><code>{{ q.quote_reference|default:"—" }}</code></td>
                         <td class="small">{% if q.amount %}{{ q.currency }} {{ q.amount|floatformat:2 }}{% else %}—{% endif %}</td>
                         <td class="small">{{ q.uploaded_at|date:"d M Y H:i" }}</td>

@@ -10,8 +10,8 @@ class DemoMailReader:
 
     SCENARIOS = {
         'matched': dict(
-            sender_email='sales@gulfcables.sa',
-            sender_name='Gulf Cables & Electrical Industries',
+            sender_email='syed.muhammad.asadullah9@gmail.com',
+            sender_name='Syed Muhammad Asadullah',
             subject='RE: Quotation Request — Ref# CS-2091',
             body='Please find attached our best offer under Ref# CS-2091.',
             attachment_filename='GulfCables_Quote_Rev2.pdf',

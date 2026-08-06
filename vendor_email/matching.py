@@ -12,33 +12,11 @@ def extract_reference(subject, body=''):
 
 
 def find_matching_sheet(sender_email, reference):
-    from costing.models import CostingSheet
-
-    sheet_by_reference = None
+    """Auto-matching is intentionally disabled — every email goes to the
+    manual review queue, no matter how clean the reference number looks.
+    A person always makes the final call on which costing sheet it belongs
+    to. `reference` is still extracted and shown to them as a hint, it's
+    just never used to auto-decide."""
     if reference:
-        sheet_by_reference = CostingSheet.objects.filter(customer_reference__iexact=reference).first()
-
-    candidate_sheets_by_sender = list(
-        CostingSheet.objects
-        .filter(vendor_quotes__vendor_name__icontains=sender_email.split('@')[0])
-        .distinct()
-    ) if sender_email else []
-
-    if sheet_by_reference:
-        if not candidate_sheets_by_sender or sheet_by_reference in candidate_sheets_by_sender:
-            return sheet_by_reference, f'Matched on reference "{reference}".'
-        return None, (
-            f'Reference "{reference}" matches "{sheet_by_reference.title}", but this sender is '
-            f'known on a different sheet — needs a human to confirm.'
-        )
-
-    if len(candidate_sheets_by_sender) == 1:
-        return candidate_sheets_by_sender[0], f'Matched on known sender {sender_email} (no reference number needed).'
-
-    if len(candidate_sheets_by_sender) > 1:
-        return None, f'{sender_email} is linked to {len(candidate_sheets_by_sender)} open sheets — needs a human to pick the right one.'
-
-    if not reference:
-        return None, 'No reference number found in the subject or body, and sender is not a known vendor.'
-
-    return None, f'Reference "{reference}" does not match any open costing sheet.'
+        return None, f'Reference "{reference}" found — pick the matching costing sheet below.'
+    return None, 'No reference number found in the subject or body — pick the matching costing sheet below.'
