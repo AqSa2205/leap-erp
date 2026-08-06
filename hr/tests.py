@@ -157,7 +157,7 @@ class HolidayAndSettingsTests(TestCase):
 from decimal import Decimal
 from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
-from hr.models import (Employee, LeaveEntitlement, LeaveRecord,
+from hr.models import (Employee, LeaveEntitlement, LeaveRecord, LeaveExceptionGrant,
                        LeaveDashboardAccess, LeaveRequest, LeaveRequestApproval, LeaveRequestNote)
 
 User = get_user_model()
@@ -265,6 +265,22 @@ class LeaveTypeLocationDefaultsTests(TestCase):
         self.assertEqual(LeaveEntitlement.objects.get(employee=office_emp).entitled_days, Decimal('32'))
         self.assertEqual(LeaveEntitlement.objects.get(employee=site_emp).entitled_days, Decimal('47'))
         self.assertEqual(LeaveEntitlement.objects.get(employee=blank_emp).entitled_days, Decimal('32'))
+
+
+class LeaveExceptionGrantTests(TestCase):
+    def setUp(self):
+        self.emp = Employee.objects.create(iqama_number='LEG-1', full_name='Grant Test', work_location='site')
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.hr_user = make_user('leg-hr1')
+
+    def test_grant_is_recorded_with_audit_fields(self):
+        grant = LeaveExceptionGrant.objects.create(
+            employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('5'),
+            granted_by=self.hr_user, reason='Worked through Eid holidays.')
+        self.assertEqual(grant.days, Decimal('5'))
+        self.assertEqual(grant.granted_by, self.hr_user)
+        self.assertIsNotNone(grant.granted_at)
 
 
 from hr.leave_services import generate_year_entitlements

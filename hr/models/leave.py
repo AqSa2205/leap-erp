@@ -88,6 +88,27 @@ class LeaveEntitlement(models.Model):
         return self.entitled_days - self.taken_days
 
 
+class LeaveExceptionGrant(models.Model):
+    """One HR-granted addition to an employee's standard entitlement for a
+    year — an audit log (one row per grant action), not a single
+    overwritable counter, so multiple grants across a year each keep their
+    own reason/date. LeaveEntitlement.exception_days sums these rather than
+    storing a redundant total."""
+    employee = models.ForeignKey('hr.Employee', on_delete=models.CASCADE, related_name='leave_exception_grants')
+    leave_type = models.ForeignKey(LeaveType, on_delete=models.PROTECT, related_name='exception_grants')
+    year = models.PositiveIntegerField()
+    days = models.DecimalField(max_digits=5, decimal_places=1)
+    granted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    granted_at = models.DateTimeField(auto_now_add=True)
+    reason = models.TextField()
+
+    class Meta:
+        ordering = ['-granted_at']
+
+    def __str__(self):
+        return f"{self.employee.full_name} +{self.days} {self.leave_type.name} ({self.year})"
+
+
 class LeaveRecord(models.Model):
     employee = models.ForeignKey('hr.Employee', on_delete=models.CASCADE, related_name='leave_records')
     leave_type = models.ForeignKey(LeaveType, on_delete=models.PROTECT, related_name='records')
