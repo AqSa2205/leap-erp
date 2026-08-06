@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django import forms
 from django.core.exceptions import ValidationError
 from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, VehicleDocument, LeaveType, Holiday, AttendanceSettings, WorkingDay, WFHRecord, AttendanceException
@@ -463,6 +464,15 @@ class LeaveTypeForm(forms.ModelForm):
             'requires_medical_certificate': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
             'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
         }
+
+
+class ExceptionGrantForm(forms.Form):
+    leave_type = forms.ModelChoiceField(
+        queryset=LeaveType.objects.filter(is_active=True),
+        widget=forms.Select(attrs={'class': 'form-select'}))
+    year = forms.IntegerField(widget=forms.NumberInput(attrs={'class': 'form-control'}))
+    days = forms.DecimalField(min_value=Decimal('0.5'), widget=forms.NumberInput(attrs={'class': 'form-control'}))
+    reason = forms.CharField(widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 2}))
 
 
 class HolidayForm(forms.ModelForm):

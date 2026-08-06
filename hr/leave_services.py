@@ -128,3 +128,29 @@ def reapply_leave_type_defaults(year=None, leave_type=None):
         updated += qs.exclude(employee__work_location='site').update(entitled_days=lt.default_annual_days)
         updated += qs.filter(employee__work_location='site').update(entitled_days=lt.default_days_for('site'))
     return updated
+
+
+def apply_work_location_transfer(employee, *, old_location, new_location, year, actor):
+    """Recompute the current year's Annual entitlement baseline after an
+    Employee.work_location change — retroactive for the whole year. On a
+    downgrade where taken_days already exceeds the new, lower baseline,
+    auto-grants the exact shortfall as a LeaveExceptionGrant so the
+    employee isn't shown a negative balance for leave they validly took
+    under the old baseline."""
+    from decimal import Decimal
+    from hr.models import LeaveType, LeaveEntitlement, LeaveExceptionGrant
+    if old_location == new_location:
+        return
+    for lt in LeaveType.objects.filter(is_active=True, code='annual'):
+        ent = LeaveEntitlement.objects.filter(employee=employee, leave_type=lt, year=year).first()
+        if ent is None:
+            continue
+        new_baseline = lt.default_days_for(new_location)
+        shortfall = ent.taken_days - new_baseline
+        ent.entitled_days = new_baseline
+        ent.save(update_fields=['entitled_days'])
+        if shortfall > Decimal('0'):
+            LeaveExceptionGrant.objects.create(
+                employee=employee, leave_type=lt, year=year, days=shortfall, granted_by=actor,
+                reason=f'Auto-preserved {shortfall} day(s) already taken under the {old_location or "unassigned"} '
+                       f'baseline before transfer to {new_location}.')

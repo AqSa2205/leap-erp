@@ -23,7 +23,7 @@ from .forms import (
     VehicleForm, VehicleFilterForm, EmployeeDocumentForm, VehicleDocumentForm,
     LeaveTypeForm, HolidayForm, WorkingDayForm, WFHRecordForm,
     AttendanceSettingsForm, LeaveRequestForm, AttendanceExceptionForm,
-    EmployeeHierarchyForm,
+    EmployeeHierarchyForm, ExceptionGrantForm,
 )
 from .leave_services import generate_year_entitlements
 from .attendance_services import derive_status
@@ -623,14 +623,53 @@ class EmployeeUpdateView(AdminRequiredMixin, UpdateView):
     success_url = reverse_lazy('hr:employee_list')
 
     def form_valid(self, form):
+        old_location = Employee.objects.filter(pk=self.object.pk).values_list('work_location', flat=True).first()
+        response = super().form_valid(form)
+        new_location = self.object.work_location
+        if old_location != new_location:
+            from hr.leave_services import apply_work_location_transfer
+            apply_work_location_transfer(
+                self.object, old_location=old_location, new_location=new_location,
+                year=timezone.now().year, actor=self.request.user)
         messages.success(self.request, 'Employee updated successfully.')
-        return super().form_valid(form)
+        return response
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['title'] = 'Edit Employee'
         context['button_text'] = 'Update Employee'
         return context
+
+
+class EmployeeGrantExceptionDaysView(SuperAdminRequiredMixin, FormView):
+    """HR action: '+N Exception Days' on an employee's profile — creates one
+    audited LeaveExceptionGrant row. Gated by the same override-access
+    permission as the balance-override escape hatch on Leave Requests."""
+    form_class = ExceptionGrantForm
+    template_name = 'hr/exception_grant_form.html'
+
+    def test_func(self):
+        return has_override_access(self.request.user)
+
+    def dispatch(self, request, *args, **kwargs):
+        self.employee = get_object_or_404(Employee, pk=kwargs['pk'])
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_initial(self):
+        return {'year': timezone.now().year}
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['employee'] = self.employee
+        return ctx
+
+    def form_valid(self, form):
+        from hr.leave_approval_services import grant_exception_days
+        grant_exception_days(
+            employee=self.employee, leave_type=form.cleaned_data['leave_type'], year=form.cleaned_data['year'],
+            days=form.cleaned_data['days'], granted_by=self.request.user, reason=form.cleaned_data['reason'])
+        messages.success(self.request, f'Granted {form.cleaned_data["days"]} exception day(s) to {self.employee.full_name}.')
+        return redirect('hr:leave_summary', pk=self.employee.pk)
 
 
 class EmployeeDeleteView(AdminRequiredMixin, DeleteView):

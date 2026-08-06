@@ -226,3 +226,16 @@ def submit_leave_request(*, employee, leave_type, start_date, end_date, employee
                 'Your leave request was submitted and is pending approval')
         notify_users(recipients=[employee.user], verb=verb, actor=created_by)
     return leave_request
+
+
+def grant_exception_days(*, employee, leave_type, year, days, granted_by, reason):
+    """HR-granted addition to an employee's standard entitlement for a
+    year — creates one audited LeaveExceptionGrant row. Immediately
+    reflected in LeaveEntitlement.exception_days/effective_remaining_days
+    and usable by the employee's own future self-service submissions."""
+    if not reason or not reason.strip():
+        raise ValueError('An exception grant requires a written reason.')
+    from hr.models import LeaveExceptionGrant
+    return LeaveExceptionGrant.objects.create(
+        employee=employee, leave_type=leave_type, year=year, days=days,
+        granted_by=granted_by, reason=reason.strip())

@@ -436,6 +436,85 @@ class SubmitLeaveRequestHeldTests(TestCase):
         self.assertEqual(req.approvals.count(), 1)
 
 
+class GrantExceptionDaysTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.emp = Employee.objects.create(iqama_number='GED-1', full_name='Grantee', work_location='site')
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        self.hr_user = make_user('ged-hr1')
+
+    def test_grant_increases_effective_but_not_baseline(self):
+        from hr.leave_approval_services import grant_exception_days
+        grant_exception_days(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('5'),
+                              granted_by=self.hr_user, reason='Eid overtime.')
+        ent = LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.lt, year=2026)
+        self.assertEqual(ent.entitled_days, Decimal('45'))
+        self.assertEqual(ent.exception_days, Decimal('5'))
+
+    def test_grant_requires_a_reason(self):
+        from hr.leave_approval_services import grant_exception_days
+        with self.assertRaises(ValueError):
+            grant_exception_days(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('5'),
+                                  granted_by=self.hr_user, reason='   ')
+
+
+class EmployeeWorkLocationTransferTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+
+    def test_upgrade_recomputes_baseline_for_whole_year(self):
+        emp = Employee.objects.create(iqama_number='EWLT-1', full_name='Upgrade', work_location='office')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        LeaveRecord.objects.create(employee=emp, leave_type=self.lt, start_date=date(2026, 2, 1), end_date=date(2026, 2, 10))  # 10 days taken
+        from hr.leave_services import apply_work_location_transfer
+        apply_work_location_transfer(emp, old_location='office', new_location='site', year=2026, actor=None)
+        ent = LeaveEntitlement.objects.get(employee=emp, leave_type=self.lt, year=2026)
+        self.assertEqual(ent.entitled_days, Decimal('45'))
+
+    def test_downgrade_auto_grants_the_shortfall(self):
+        emp = Employee.objects.create(iqama_number='EWLT-2', full_name='Downgrade', work_location='site')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        LeaveRecord.objects.create(employee=emp, leave_type=self.lt, start_date=date(2026, 1, 1), end_date=date(2026, 2, 4))  # 35 days taken
+        from hr.leave_services import apply_work_location_transfer
+        apply_work_location_transfer(emp, old_location='site', new_location='office', year=2026, actor=None)
+        ent = LeaveEntitlement.objects.get(employee=emp, leave_type=self.lt, year=2026)
+        self.assertEqual(ent.entitled_days, Decimal('30'))  # baseline drops to Office
+        self.assertEqual(ent.exception_days, Decimal('5'))  # 35 taken - 30 new baseline, auto-preserved
+        self.assertEqual(ent.effective_remaining_days, Decimal('0'))
+
+    def test_no_op_when_location_unchanged(self):
+        emp = Employee.objects.create(iqama_number='EWLT-3', full_name='NoOp', work_location='site')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        from hr.leave_services import apply_work_location_transfer
+        apply_work_location_transfer(emp, old_location='site', new_location='site', year=2026, actor=None)
+        ent = LeaveEntitlement.objects.get(employee=emp, leave_type=self.lt, year=2026)
+        self.assertEqual(ent.entitled_days, Decimal('45'))
+        self.assertEqual(ent.exception_days, Decimal('0'))
+
+
+class EmployeeUpdateViewTransferTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        from accounts.models import Role
+        self.admin_user = _make_role_user('euvt-admin', Role.SUPER_ADMIN)
+
+    def test_editing_work_location_via_view_triggers_recompute(self):
+        self.client.login(username='euvt-admin', password='testpass123')
+        emp = Employee.objects.create(iqama_number='EUVT-1', full_name='View Transfer', work_location='office')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=timezone.now().year, entitled_days=Decimal('30'))
+        resp = self.client.post(reverse('hr:employee_update', args=[emp.pk]), data={
+            'iqama_number': 'EUVT-1', 'full_name': 'View Transfer', 'work_location': 'site',
+        })
+        self.assertEqual(resp.status_code, 302)
+        emp.refresh_from_db()
+        self.assertEqual(emp.work_location, 'site')
+        ent = LeaveEntitlement.objects.get(employee=emp, leave_type=self.lt, year=timezone.now().year)
+        self.assertEqual(ent.entitled_days, Decimal('45'))
+
+
 from hr.leave_services import generate_year_entitlements
 
 
