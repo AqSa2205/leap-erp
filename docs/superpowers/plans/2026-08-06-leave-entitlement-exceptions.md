@@ -45,7 +45,7 @@ the exact querysets the real pages already filter by.
 **Interfaces:**
 - Produces: `LeaveType.site_default_annual_days` (nullable `DecimalField`), `LeaveType.default_days_for(work_location)` — returns `site_default_annual_days` if set and `work_location == 'site'`, else `default_annual_days`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 class LeaveTypeLocationDefaultsTests(TestCase):
@@ -75,12 +75,12 @@ class LeaveTypeLocationDefaultsTests(TestCase):
         self.assertEqual(LeaveEntitlement.objects.get(employee=site_emp).entitled_days, Decimal('47'))
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.LeaveTypeLocationDefaultsTests -v 2`
 Expected: FAIL — `site_default_annual_days`/`default_days_for` don't exist yet.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `hr/models/leave.py`, add the field to `LeaveType` (after `default_annual_days`, line 8):
 
@@ -132,17 +132,17 @@ Update `LeaveTypeAdmin.list_display` in `hr/admin.py`:
     list_display = ['name', 'code', 'default_annual_days', 'site_default_annual_days', 'is_paid', 'is_active']
 ```
 
-- [ ] **Step 4: Generate and apply the migration**
+- [x] **Step 4: Generate and apply the migration**
 
 Run: `venv\Scripts\python.exe manage.py makemigrations hr`
 Expected: creates `hr/migrations/0037_leavetype_site_default_annual_days.py` (or similar auto-generated name) adding the one field. Then: `venv\Scripts\python.exe manage.py migrate hr`
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.LeaveTypeLocationDefaultsTests -v 2`
 Expected: PASS (4/4).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add hr/models/leave.py hr/admin.py hr/migrations/ hr/tests.py
@@ -163,7 +163,7 @@ git commit -m "hr: location-aware LeaveType defaults (Office/Site)"
 - Consumes: `hr.models.Employee`, `hr.models.LeaveType`.
 - Produces: `LeaveExceptionGrant(employee, leave_type, year, days, granted_by, granted_at, reason)`, importable from `hr.models`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 class LeaveExceptionGrantTests(TestCase):
@@ -181,12 +181,12 @@ class LeaveExceptionGrantTests(TestCase):
         self.assertIsNotNone(grant.granted_at)
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.LeaveExceptionGrantTests -v 2`
 Expected: FAIL — `LeaveExceptionGrant` does not exist.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `hr/models/leave.py`, add:
 
@@ -233,16 +233,16 @@ class LeaveExceptionGrantAdmin(admin.ModelAdmin):
     readonly_fields = ['granted_at']
 ```
 
-- [ ] **Step 4: Generate and apply the migration**
+- [x] **Step 4: Generate and apply the migration**
 
 Run: `venv\Scripts\python.exe manage.py makemigrations hr` then `venv\Scripts\python.exe manage.py migrate hr`
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.LeaveExceptionGrantTests -v 2`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add hr/models/leave.py hr/models/__init__.py hr/admin.py hr/migrations/ hr/tests.py
@@ -261,7 +261,7 @@ git commit -m "hr: add LeaveExceptionGrant audit model"
 - Consumes: `LeaveExceptionGrant` (Task 2).
 - Produces: `LeaveEntitlement.exception_days` (property), `LeaveEntitlement.effective_entitled_days` (property), `LeaveEntitlement.effective_remaining_days` (property), `LeaveRequest.exceeds_balance` (field, default `False`).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 class LeaveEntitlementEffectiveDaysTests(TestCase):
@@ -283,12 +283,12 @@ class LeaveEntitlementEffectiveDaysTests(TestCase):
         self.assertEqual(self.ent.effective_entitled_days, Decimal('52'))
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.LeaveEntitlementEffectiveDaysTests -v 2`
 Expected: FAIL — properties don't exist.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add to `LeaveEntitlement` (after the existing `remaining_days` property):
 
@@ -319,16 +319,16 @@ Add to `LeaveRequest` (alongside the other flags, e.g. next to `is_overridden`):
                    'holding is enabled. Requires a Super Admin override to approve.')
 ```
 
-- [ ] **Step 4: Generate and apply the migration**
+- [x] **Step 4: Generate and apply the migration**
 
 Run: `venv\Scripts\python.exe manage.py makemigrations hr` then `venv\Scripts\python.exe manage.py migrate hr`
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.LeaveEntitlementEffectiveDaysTests -v 2`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add hr/models/leave.py hr/migrations/ hr/tests.py
@@ -346,7 +346,7 @@ git commit -m "hr: computed effective-entitlement properties + LeaveRequest.exce
 **Interfaces:**
 - Produces: `OverrideAccessSettings.allow_site_balance_hold` (bool, default `True`), `OverrideAccessSettings.allow_office_balance_hold` (bool, default `False`), `OverrideAccessSettings.balance_hold_enabled_for(work_location)`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 class OverrideAccessSettingsBalanceHoldTests(TestCase):
@@ -362,12 +362,12 @@ class OverrideAccessSettingsBalanceHoldTests(TestCase):
         self.assertTrue(OverrideAccessSettings.get_solo().balance_hold_enabled_for('office'))
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.OverrideAccessSettingsBalanceHoldTests -v 2`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add fields to `OverrideAccessSettings` (after `mode`, before `updated_at`):
 ```python
@@ -385,16 +385,16 @@ Add method:
         return self.allow_site_balance_hold if work_location == 'site' else self.allow_office_balance_hold
 ```
 
-- [ ] **Step 4: Generate and apply the migration**
+- [x] **Step 4: Generate and apply the migration**
 
 Run: `venv\Scripts\python.exe manage.py makemigrations hr` then `venv\Scripts\python.exe manage.py migrate hr`
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.OverrideAccessSettingsBalanceHoldTests -v 2`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add hr/models/leave.py hr/migrations/ hr/tests.py
@@ -413,7 +413,7 @@ git commit -m "hr: add per-location balance-hold toggles to OverrideAccessSettin
 - Consumes: `LeaveType.default_days_for(work_location)` (Task 1).
 - Produces: same function signatures, unchanged callers.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 class LocationAwareGenerationTests(TestCase):
@@ -441,12 +441,12 @@ class LocationAwareGenerationTests(TestCase):
         self.assertEqual(ent.exception_days, Decimal('5'))  # untouched
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.LocationAwareGenerationTests -v 2`
 Expected: FAIL — both currently use the flat `lt.default_annual_days` for everyone.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `hr/leave_services.py`, change `generate_entitlements_for_employee`:
 ```python
@@ -479,17 +479,17 @@ def reapply_leave_type_defaults(year=None, leave_type=None):
     return updated
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.LocationAwareGenerationTests -v 2`
 Expected: PASS.
 
-- [ ] **Step 5: Run the full suite (shared code touched)**
+- [x] **Step 5: Run the full suite (shared code touched)**
 
 Run: `venv\Scripts\python.exe manage.py test`
 Expected: same pre-existing failures as before this branch (the unrelated staticfiles-manifest errors), no new failures.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add hr/leave_services.py hr/tests.py
@@ -508,7 +508,7 @@ git commit -m "hr: location-aware entitlement generation and defaults reapply"
 - Consumes: `LeaveEntitlement.effective_remaining_days` (Task 3), `OverrideAccessSettings.balance_hold_enabled_for` (Task 4).
 - Produces: `validate_leave_submission(...)` now **returns `bool`** — `True` means "exceeds balance, held" — instead of always returning `None`. Still raises `ValueError` for every existing invariant (no entitlement, overlap, and Office-style hard block).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 class ValidateLeaveSubmissionHoldTests(TestCase):
@@ -545,12 +545,12 @@ class ValidateLeaveSubmissionHoldTests(TestCase):
         self.assertFalse(held)
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.ValidateLeaveSubmissionHoldTests -v 2`
 Expected: FAIL — today it always raises past 45/30 regardless of location, and never returns `True`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Replace the balance-check block in `validate_leave_submission` (currently the `if requested_days > available_days:` block that always raises) with:
 
@@ -593,17 +593,17 @@ Replace the balance-check block in `validate_leave_submission` (currently the `i
     return exceeds_balance
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.ValidateLeaveSubmissionHoldTests -v 2`
 Expected: PASS (4/4).
 
-- [ ] **Step 5: Run the full suite (this function is the shared validation path for every leave submission)**
+- [x] **Step 5: Run the full suite (this function is the shared validation path for every leave submission)**
 
 Run: `venv\Scripts\python.exe manage.py test`
 Expected: no new failures beyond the pre-existing unrelated staticfiles ones.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add hr/models/leave.py hr/tests.py
@@ -623,7 +623,7 @@ git commit -m "hr: validate_leave_submission holds over-cap Site requests instea
 - Consumes: `validate_leave_submission` now returning `bool` (Task 6).
 - Produces: `submit_leave_request(...)` — same signature and return type (`LeaveRequest`), but sets `exceeds_balance` on the created row and skips creating `LeaveRequestApproval` rows when held.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 class SubmitLeaveRequestHeldTests(TestCase):
@@ -654,12 +654,12 @@ class SubmitLeaveRequestHeldTests(TestCase):
         self.assertEqual(req.approvals.count(), 1)
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.SubmitLeaveRequestHeldTests -v 2`
 Expected: FAIL — `exceeds_balance` never gets set True and approval rows are always created.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `hr/leave_approval_services.py`, change the `with transaction.atomic():` block:
 
@@ -691,17 +691,17 @@ Update the notification message right after (still inside `if employee.user_id:`
 
 No change needed in `hr/forms.py`'s `check_leave_balance` — it already just calls `validate_leave_submission` and only reacts to a raised `ValueError`; a `True` return (held, not raised) now correctly passes form validation without any edit there. Confirm this by reading `hr/forms.py:413-431` — no code change, just verifying the existing call site doesn't need one.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.SubmitLeaveRequestHeldTests -v 2`
 Expected: PASS.
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `venv\Scripts\python.exe manage.py test`
 Expected: no new failures.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add hr/leave_approval_services.py hr/tests.py
@@ -724,7 +724,7 @@ git commit -m "hr: submit_leave_request holds over-cap requests with no approver
 - Consumes: `has_override_access` (`hr/views.py:75`), `LeaveExceptionGrant` (Task 2), `LeaveType.default_days_for` (Task 1).
 - Produces: `grant_exception_days(*, employee, leave_type, year, days, granted_by, reason) -> LeaveExceptionGrant`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 class GrantExceptionDaysTests(TestCase):
@@ -774,12 +774,12 @@ class EmployeeWorkLocationTransferTests(TestCase):
         self.assertEqual(ent.effective_remaining_days, Decimal('0'))
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.GrantExceptionDaysTests hr.tests.EmployeeWorkLocationTransferTests -v 2`
 Expected: FAIL — neither function exists yet.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add to `hr/leave_approval_services.py`:
 ```python
@@ -909,22 +909,22 @@ Create `templates/hr/exception_grant_form.html`:
 {% endblock %}
 ```
 
-- [ ] **Step 4: Generate and apply the migration (none expected — this task adds no fields)**
+- [x] **Step 4: Generate and apply the migration (none expected — this task adds no fields)**
 
 Run: `venv\Scripts\python.exe manage.py makemigrations --check --dry-run`
 Expected: `No changes detected`.
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.GrantExceptionDaysTests hr.tests.EmployeeWorkLocationTransferTests -v 2`
 Expected: PASS.
 
-- [ ] **Step 6: Run the full suite**
+- [x] **Step 6: Run the full suite**
 
 Run: `venv\Scripts\python.exe manage.py test`
 Expected: no new failures.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add hr/leave_approval_services.py hr/leave_services.py hr/views.py hr/forms.py hr/urls.py templates/hr/exception_grant_form.html hr/tests.py
@@ -942,7 +942,7 @@ git commit -m "hr: HR-granted exception days action + work-location transfer rec
 **Interfaces:**
 - Consumes: `LeaveRequest.exceeds_balance` (Task 3), `LeaveEntitlement.effective_remaining_days`/`exception_days`/`entitled_days`/`taken_days` (Task 3).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 class HeldRequestDisplayTests(TestCase):
@@ -968,12 +968,12 @@ class HeldRequestDisplayTests(TestCase):
         self.assertContains(resp, 'Exceeds balance')
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.HeldRequestDisplayTests -v 2`
 Expected: FAIL — neither template mentions "Exceeds balance" yet.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `templates/hr/leave_request_list.html`, find the row loop for `pending_requests` and add, right after the employee/leave-type cell (inspect the existing `<td>` structure first and match its style — the addition is a small badge):
 ```html
@@ -994,12 +994,12 @@ In `templates/hr/leave_request_detail.html`, add near the top of the detail card
 {% endif %}
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.HeldRequestDisplayTests -v 2`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add templates/hr/leave_request_list.html templates/hr/leave_request_detail.html hr/tests.py
@@ -1017,7 +1017,7 @@ git commit -m "hr: show an Exceeds Balance badge on held leave requests"
 **Interfaces:**
 - Consumes: `LeaveEntitlement.exception_days`/`effective_remaining_days` (Task 3).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 class EmployeeDashboardExceptionDisplayTests(TestCase):
@@ -1035,12 +1035,12 @@ class EmployeeDashboardExceptionDisplayTests(TestCase):
         self.assertContains(resp, '+5')  # exception line, not blended into 50
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.EmployeeDashboardExceptionDisplayTests -v 2`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Read `templates/hr/leave_summary.html` in full first to match its existing table structure exactly (it iterates `entitlements` — confirm the loop variable name), then add, inside the same row as the existing `entitled_days`/`taken_days`/`remaining_days` cells:
 ```html
@@ -1053,12 +1053,12 @@ Read `templates/hr/leave_summary.html` in full first to match its existing table
 ```
 Adjust the exact `<td>` count/colspan to match the real table's column count (confirmed by reading the file first — do not guess the column count blind).
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.EmployeeDashboardExceptionDisplayTests -v 2`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add templates/hr/leave_summary.html hr/tests.py
@@ -1078,7 +1078,7 @@ git commit -m "hr: show exception-day grants as a separate line, baseline stays 
 - Consumes: `can_view_team_exceptions`, `TeamExceptionsView._tab_queryset` pattern (`hr/views.py:2413-2481`), `can_view_leave_dashboard` (`hr/views.py:93`).
 - Produces: template context keys `leave_requests_pending_count`, `team_exceptions_pending_count`, `team_exceptions_direct_count`, `team_exceptions_secondary_count`, `team_exceptions_all_count` (present only for users who qualify; absent — not zero — for everyone else, so `{% if %}` in the template naturally hides the dot for users who can't see these pages at all).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 class PendingCountsContextProcessorTests(TestCase):
@@ -1104,12 +1104,12 @@ class PendingCountsContextProcessorTests(TestCase):
         self.assertNotIn('leave_requests_pending_count', resp.context)
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.PendingCountsContextProcessorTests -v 2`
 Expected: FAIL — context processor doesn't exist, keys absent for everyone.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `hr/context_processors.py`:
 ```python
@@ -1150,17 +1150,17 @@ def pending_counts(request):
 
 In `erp_leap/settings.py`, find `TEMPLATES` (`context_processors` list under `django.template.context_processors.*`) and add `'hr.context_processors.pending_counts',` to that list.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.PendingCountsContextProcessorTests -v 2`
 Expected: PASS.
 
-- [ ] **Step 5: Run the full suite (settings.py + a global context processor touches every page)**
+- [x] **Step 5: Run the full suite (settings.py + a global context processor touches every page)**
 
 Run: `venv\Scripts\python.exe manage.py test`
 Expected: no new failures.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add hr/context_processors.py erp_leap/settings.py hr/tests.py
@@ -1178,7 +1178,7 @@ git commit -m "hr: add pending-count context processor for sidebar badges"
 **Interfaces:**
 - Consumes: `leave_requests_pending_count`, `team_exceptions_pending_count` (Task 11).
 
-- [ ] **Step 1: Add CSS**
+- [x] **Step 1: Add CSS**
 
 In `templates/base.html`, right after the `.notif-badge.show { display: block; }` rule (line 422), add:
 ```css
@@ -1205,7 +1205,7 @@ In `templates/base.html`, right after the `.notif-badge.show { display: block; }
         }
 ```
 
-- [ ] **Step 2: Add the child-level count badges**
+- [x] **Step 2: Add the child-level count badges**
 
 In the "Leave" submenu (`templates/base.html:1249-1253`), change the "Leave Requests" link to:
 ```html
@@ -1227,7 +1227,7 @@ In the "My Profile" submenu (`templates/base.html:870-874`), change the "Team Ex
                         </li>
 ```
 
-- [ ] **Step 3: Add the parent-level dots**
+- [x] **Step 3: Add the parent-level dots**
 
 In the "Leave" parent link (`templates/base.html:1242-1244`), change:
 ```html
@@ -1246,11 +1246,11 @@ In the "My Profile" parent link (`templates/base.html:858-862`), change:
 ```
 (Preserve the rest of each `<a>` tag's existing classes/conditionals exactly as they are today — only inserting the new `{% if %}` span, not replacing the whole tag. Read the exact current lines before editing since the surrounding conditional classes are long.)
 
-- [ ] **Step 4: Manual verification**
+- [x] **Step 4: Manual verification**
 
 Run the dev server, log in as a user with `LeaveDashboardAccess` and a pending held request from Task 7/9's tests (or seed one), confirm: the "Leave" parent shows a small red dot when collapsed, "Leave Requests" shows the numbered pill once expanded, and the same for My Profile/Team Exceptions. Confirm both are absent for a plain employee account with no pending items.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add templates/base.html
@@ -1270,7 +1270,7 @@ git commit -m "hr: sidebar pending-count dot/badge indicators for Leave and Team
 - Consumes: `TeamExceptionsView._tab_queryset` (existing, `hr/views.py:2442-2466`).
 - Produces: context keys `direct_tab_count`, `secondary_tab_count`, `all_tab_count` (the last only when `show_all_tab` is true) on `TeamExceptionsView`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 class TeamExceptionsTabCountTests(TestCase):
@@ -1286,12 +1286,12 @@ class TeamExceptionsTabCountTests(TestCase):
         self.assertEqual(resp.context['direct_tab_count'], 1)
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.TeamExceptionsTabCountTests -v 2`
 Expected: FAIL — `direct_tab_count` not in context.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `TeamExceptionsView.get_context_data` (`hr/views.py`, right after `is_hr = bool(...)` at line 2488), add:
 ```python
@@ -1317,17 +1317,17 @@ In `templates/hr/team_exceptions.html`, update the 3 tab buttons:
     {% endif %}
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `venv\Scripts\python.exe manage.py test hr.tests.TeamExceptionsTabCountTests -v 2`
 Expected: PASS.
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `venv\Scripts\python.exe manage.py test`
 Expected: no new failures.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add hr/views.py templates/hr/team_exceptions.html hr/tests.py
@@ -1338,18 +1338,18 @@ git commit -m "hr: per-tab pending-count badges on Team Exceptions"
 
 ### Task 14: Final whole-branch verification and cleanup
 
-- [ ] **Step 1: Run the complete suite one more time**
+- [x] **Step 1: Run the complete suite one more time**
 
 Run: `venv\Scripts\python.exe manage.py test`
 Expected: identical failure set to the branch's starting point (the pre-existing, unrelated staticfiles-manifest errors from PR #22 — `CostingProjectAutofillTests` x2, `PipelineVisibilityTests.test_sales_can_edit_own_project`) — zero new failures.
 
-- [ ] **Step 2: Check for stray migration conflicts**
+- [x] **Step 2: Check for stray migration conflicts**
 
 Run: `venv\Scripts\python.exe manage.py makemigrations --check --dry-run`
 Expected: `No changes detected`.
 
-- [ ] **Step 3: Confirm no stray artifacts**
+- [x] **Step 3: Confirm no stray artifacts**
 
 Run: `git status --short` — expect only the intended modified/new files from Tasks 1-13, nothing else (no debug prints, no scratch files).
 
-- [ ] **Step 4: Do not commit further — this task is verification only, report results to the user.**
+- [x] **Step 4: Do not commit further — this task is verification only, report results to the user.**
