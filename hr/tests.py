@@ -568,6 +568,57 @@ class EmployeeDashboardExceptionDisplayTests(TestCase):
         self.assertContains(resp, 'Add Exception Days')
 
 
+class PendingCountsContextProcessorTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30')})
+        from accounts.models import Role
+        self.hr_user = _make_role_user('pccp-hr', Role.SUPER_ADMIN)
+        LeaveDashboardAccess.objects.create(user=self.hr_user, is_active=True)
+
+    def test_leave_requests_pending_count_reflects_actual_pending(self):
+        self.client.login(username='pccp-hr', password='testpass123')
+        emp = Employee.objects.create(iqama_number='PCCP-1', full_name='Ctx Test', work_location='office')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=timezone.now().year, entitled_days=Decimal('30'))
+        from hr.leave_approval_services import submit_leave_request
+        submit_leave_request(employee=emp, leave_type=self.lt, start_date=date.today(), end_date=date.today(), created_by=self.hr_user)
+        resp = self.client.get(reverse('hr:hr_dashboard'))
+        self.assertEqual(resp.context['leave_requests_pending_count'], 1)
+
+    def test_plain_employee_gets_no_counts_in_context(self):
+        plain_user = make_user('pccp-plain')
+        plain_user.set_password('x')
+        plain_user.save()
+        self.client.login(username='pccp-plain', password='x')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotIn('leave_requests_pending_count', resp.context)
+        self.assertNotIn('team_exceptions_pending_count', resp.context)
+
+
+class SidebarBadgeMarkupTests(TestCase):
+    def test_leave_requests_badge_renders_when_pending(self):
+        lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': Decimal('30')})
+        from accounts.models import Role
+        hr_user = _make_role_user('sbmt-hr', Role.SUPER_ADMIN)
+        LeaveDashboardAccess.objects.create(user=hr_user, is_active=True)
+        emp = Employee.objects.create(iqama_number='SBMT-1', full_name='Badge Test', work_location='office')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=lt, year=timezone.now().year, entitled_days=Decimal('30'))
+        from hr.leave_approval_services import submit_leave_request
+        submit_leave_request(employee=emp, leave_type=lt, start_date=date.today(), end_date=date.today(), created_by=hr_user)
+        self.client.login(username='sbmt-hr', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, '<span class="nav-badge-count">1</span>')
+
+    def test_no_badge_when_nothing_pending(self):
+        from accounts.models import Role
+        hr_user = _make_role_user('sbmt-hr2', Role.SUPER_ADMIN)
+        LeaveDashboardAccess.objects.create(user=hr_user, is_active=True)
+        self.client.login(username='sbmt-hr2', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, '<span class="nav-badge-count">')
+        self.assertNotContains(resp, '<span class="nav-badge-dot">')
+
+
 from hr.leave_services import generate_year_entitlements
 
 
