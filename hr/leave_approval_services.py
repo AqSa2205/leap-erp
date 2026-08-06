@@ -202,21 +202,27 @@ def submit_leave_request(*, employee, leave_type, start_date, end_date, employee
     from hr.models import LeaveDashboardAccess, LeaveRequest, LeaveRequestApproval
 
     with transaction.atomic():
-        validate_leave_submission(employee, leave_type, start_date, end_date, lock=True)
+        exceeds_balance = validate_leave_submission(employee, leave_type, start_date, end_date, lock=True)
         leave_request = LeaveRequest.objects.create(
             employee=employee, leave_type=leave_type, start_date=start_date, end_date=end_date,
             employee_reason=employee_reason, document=document, created_by=created_by,
+            exceeds_balance=exceeds_balance,
         )
-        approvers = LeaveDashboardAccess.objects.filter(is_active=True)
-        if employee.user_id:
-            approvers = approvers.exclude(user_id=employee.user_id)
-        for grant in approvers:
-            LeaveRequestApproval.objects.create(leave_request=leave_request, approver=grant.user)
+        if not exceeds_balance:
+            # A held (balance-exceeding) request gets no approver roster at
+            # all — the normal approver roster only ever decides in-cap
+            # requests; a held request sits pending until a Super Admin
+            # override decision, via the existing override_finalize path.
+            approvers = LeaveDashboardAccess.objects.filter(is_active=True)
+            if employee.user_id:
+                approvers = approvers.exclude(user_id=employee.user_id)
+            for grant in approvers:
+                LeaveRequestApproval.objects.create(leave_request=leave_request, approver=grant.user)
 
     if employee.user_id:
         from notifications.services import notify_users
-        notify_users(
-            recipients=[employee.user], verb='Your leave request was submitted and is pending approval',
-            actor=created_by,
-        )
+        verb = ('Your leave request was submitted — it exceeds your available balance and needs '
+                'Super Admin review' if exceeds_balance else
+                'Your leave request was submitted and is pending approval')
+        notify_users(recipients=[employee.user], verb=verb, actor=created_by)
     return leave_request

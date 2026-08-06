@@ -407,6 +407,35 @@ class ValidateLeaveSubmissionHoldTests(TestCase):
             validate_leave_submission(emp, self.lt, date(2026, 1, 1), date(2026, 2, 15))  # over cap AND overlaps
 
 
+class SubmitLeaveRequestHeldTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.approver_user = make_user('slrh-appr')
+        LeaveDashboardAccess.objects.create(user=self.approver_user, is_active=True)
+
+    def test_held_request_has_no_approval_rows(self):
+        from hr.leave_approval_services import submit_leave_request
+        emp = Employee.objects.create(iqama_number='SLRH-1', full_name='Site Over', work_location='site')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        req = submit_leave_request(
+            employee=emp, leave_type=self.lt, start_date=date(2026, 1, 1), end_date=date(2026, 2, 15),
+            created_by=self.approver_user)
+        self.assertTrue(req.exceeds_balance)
+        self.assertEqual(req.approvals.count(), 0)
+        self.assertEqual(req.status, 'pending')
+
+    def test_normal_request_still_gets_approval_rows(self):
+        from hr.leave_approval_services import submit_leave_request
+        emp = Employee.objects.create(iqama_number='SLRH-2', full_name='Site OK', work_location='site')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        req = submit_leave_request(
+            employee=emp, leave_type=self.lt, start_date=date(2026, 3, 1), end_date=date(2026, 3, 5),
+            created_by=self.approver_user)
+        self.assertFalse(req.exceeds_balance)
+        self.assertEqual(req.approvals.count(), 1)
+
+
 from hr.leave_services import generate_year_entitlements
 
 
