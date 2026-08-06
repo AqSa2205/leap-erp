@@ -333,6 +333,80 @@ class OverrideAccessSettingsBalanceHoldTests(TestCase):
         self.assertTrue(OverrideAccessSettings.get_solo().balance_hold_enabled_for('office'))
 
 
+class LocationAwareGenerationTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+
+    def test_generate_picks_baseline_by_location(self):
+        from hr.leave_services import generate_entitlements_for_employee
+        office_emp = Employee.objects.create(iqama_number='LAG-OFF-1', full_name='Office', work_location='office')
+        site_emp = Employee.objects.create(iqama_number='LAG-SITE-1', full_name='Site', work_location='site')
+        generate_entitlements_for_employee(office_emp, 2026)
+        generate_entitlements_for_employee(site_emp, 2026)
+        self.assertEqual(LeaveEntitlement.objects.get(employee=office_emp, leave_type=self.lt).entitled_days, Decimal('30'))
+        self.assertEqual(LeaveEntitlement.objects.get(employee=site_emp, leave_type=self.lt).entitled_days, Decimal('45'))
+
+    def test_reapply_is_location_aware_and_preserves_exceptions(self):
+        from hr.leave_services import generate_entitlements_for_employee, reapply_leave_type_defaults
+        site_emp = Employee.objects.create(iqama_number='LAG-SITE-2', full_name='Site2', work_location='site')
+        generate_entitlements_for_employee(site_emp, 2026)
+        LeaveExceptionGrant.objects.create(employee=site_emp, leave_type=self.lt, year=2026, days=Decimal('5'), reason='x')
+        reapply_leave_type_defaults(2026)
+        ent = LeaveEntitlement.objects.get(employee=site_emp, leave_type=self.lt)
+        self.assertEqual(ent.entitled_days, Decimal('45'))  # still the Site default, not wiped to Office's 30
+        self.assertEqual(ent.exception_days, Decimal('5'))  # untouched
+
+
+class ValidateLeaveSubmissionHoldTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+
+    def test_within_cap_returns_false(self):
+        from hr.leave_services import validate_leave_submission
+        emp = Employee.objects.create(iqama_number='VLS-1', full_name='OK', work_location='site')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        held = validate_leave_submission(emp, self.lt, date(2026, 3, 1), date(2026, 3, 5))
+        self.assertFalse(held)
+
+    def test_site_over_cap_is_held_not_blocked(self):
+        from hr.leave_services import validate_leave_submission
+        emp = Employee.objects.create(iqama_number='VLS-2', full_name='Site Over', work_location='site')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        held = validate_leave_submission(emp, self.lt, date(2026, 1, 1), date(2026, 2, 15))  # 46 days
+        self.assertTrue(held)
+
+    def test_office_over_cap_still_hard_blocks(self):
+        from hr.leave_services import validate_leave_submission
+        emp = Employee.objects.create(iqama_number='VLS-3', full_name='Office Over', work_location='office')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        with self.assertRaises(ValueError):
+            validate_leave_submission(emp, self.lt, date(2026, 1, 1), date(2026, 2, 1))  # 32 days
+
+    def test_site_within_effective_cap_via_exception_grant_returns_false(self):
+        from hr.leave_services import validate_leave_submission
+        emp = Employee.objects.create(iqama_number='VLS-4', full_name='Site Grant', work_location='site')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        LeaveExceptionGrant.objects.create(employee=emp, leave_type=self.lt, year=2026, days=Decimal('5'), reason='x')
+        held = validate_leave_submission(emp, self.lt, date(2026, 1, 1), date(2026, 2, 19))  # 50 days
+        self.assertFalse(held)
+
+    def test_no_entitlement_still_raises(self):
+        from hr.leave_services import validate_leave_submission
+        emp = Employee.objects.create(iqama_number='VLS-5', full_name='No Ent', work_location='site')
+        with self.assertRaises(ValueError):
+            validate_leave_submission(emp, self.lt, date(2026, 3, 1), date(2026, 3, 5))
+
+    def test_overlap_still_raises_even_when_held(self):
+        from hr.leave_services import validate_leave_submission
+        emp = Employee.objects.create(iqama_number='VLS-6', full_name='Overlap', work_location='site')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        LeaveRecord.objects.create(employee=emp, leave_type=self.lt, start_date=date(2026, 1, 10), end_date=date(2026, 1, 12))
+        with self.assertRaises(ValueError):
+            validate_leave_submission(emp, self.lt, date(2026, 1, 1), date(2026, 2, 15))  # over cap AND overlaps
+
+
 from hr.leave_services import generate_year_entitlements
 
 
