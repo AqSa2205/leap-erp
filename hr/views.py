@@ -2170,6 +2170,7 @@ class EmployeeLeaveSummaryView(HRScopedAccessMixin, DetailView):
             employee=self.object, year=year).select_related('leave_type')
         ctx['records'] = self.object.leave_records.filter(
             start_date__year=year).select_related('leave_type')
+        ctx['can_grant_exception'] = has_override_access(self.request.user)
         return ctx
 
 

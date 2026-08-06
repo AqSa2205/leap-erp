@@ -547,6 +547,27 @@ class HeldRequestDisplayTests(TestCase):
         self.assertNotContains(resp, 'Exceeds balance')
 
 
+class EmployeeDashboardExceptionDisplayTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.emp = Employee.objects.create(iqama_number='EDED-1', full_name='Dashboard Test', work_location='site')
+        self.ent = LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        LeaveExceptionGrant.objects.create(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('5'), reason='x')
+        from accounts.models import Role
+        self.hr_user = _make_role_user('edeview', Role.SUPER_ADMIN)
+        self.client.login(username='edeview', password='testpass123')
+
+    def test_leave_summary_shows_baseline_and_exception_separately(self):
+        resp = self.client.get(reverse('hr:leave_summary', args=[self.emp.pk]) + '?year=2026')
+        self.assertContains(resp, '45')  # baseline anchor
+        self.assertContains(resp, '+ 5 exception days granted')
+
+    def test_grant_exception_days_link_visible_for_override_access(self):
+        resp = self.client.get(reverse('hr:leave_summary', args=[self.emp.pk]))
+        self.assertContains(resp, 'Add Exception Days')
+
+
 from hr.leave_services import generate_year_entitlements
 
 
