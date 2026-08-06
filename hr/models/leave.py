@@ -87,6 +87,22 @@ class LeaveEntitlement(models.Model):
     def remaining_days(self):
         return self.entitled_days - self.taken_days
 
+    @property
+    def exception_days(self):
+        from decimal import Decimal
+        agg = self.employee.leave_exception_grants.filter(
+            leave_type=self.leave_type, year=self.year,
+        ).aggregate(models.Sum('days'))
+        return agg['days__sum'] or Decimal('0')
+
+    @property
+    def effective_entitled_days(self):
+        return self.entitled_days + self.exception_days
+
+    @property
+    def effective_remaining_days(self):
+        return self.effective_entitled_days - self.taken_days
+
 
 class LeaveExceptionGrant(models.Model):
     """One HR-granted addition to an employee's standard entitlement for a
@@ -249,6 +265,11 @@ class LeaveRequest(models.Model):
     employee_reason = models.TextField(blank=True)
     document = models.FileField(upload_to='leave_requests/%Y/%m/', null=True, blank=True)
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default='pending')
+    exceeds_balance = models.BooleanField(
+        default=False,
+        help_text='True if this request was held (not hard-blocked) because it exceeds the '
+                   "employee's effective balance — only possible for work locations where balance "
+                   'holding is enabled. Requires a Super Admin override to approve.')
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
                                    related_name='leave_requests_created')
     leave_record = models.OneToOneField(LeaveRecord, on_delete=models.SET_NULL, null=True, blank=True,

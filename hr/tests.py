@@ -283,6 +283,40 @@ class LeaveExceptionGrantTests(TestCase):
         self.assertIsNotNone(grant.granted_at)
 
 
+class LeaveEntitlementEffectiveDaysTests(TestCase):
+    def setUp(self):
+        self.emp = Employee.objects.create(iqama_number='LEED-1', full_name='Eff Test', work_location='site')
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.ent = LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+
+    def test_no_grants_effective_equals_baseline(self):
+        self.assertEqual(self.ent.exception_days, Decimal('0'))
+        self.assertEqual(self.ent.effective_entitled_days, Decimal('45'))
+        self.assertEqual(self.ent.effective_remaining_days, Decimal('45'))
+
+    def test_grants_sum_into_effective_but_not_baseline(self):
+        LeaveExceptionGrant.objects.create(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('5'), reason='x')
+        LeaveExceptionGrant.objects.create(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('2'), reason='y')
+        self.assertEqual(self.ent.entitled_days, Decimal('45'))  # baseline untouched
+        self.assertEqual(self.ent.exception_days, Decimal('7'))
+        self.assertEqual(self.ent.effective_entitled_days, Decimal('52'))
+
+    def test_grants_from_other_years_or_types_dont_count(self):
+        other_lt, _ = LeaveType.objects.get_or_create(code='sick', defaults={'name': 'Sick', 'default_annual_days': 12})
+        LeaveExceptionGrant.objects.create(employee=self.emp, leave_type=self.lt, year=2025, days=Decimal('9'), reason='wrong year')
+        LeaveExceptionGrant.objects.create(employee=self.emp, leave_type=other_lt, year=2026, days=Decimal('9'), reason='wrong type')
+        self.assertEqual(self.ent.exception_days, Decimal('0'))
+
+
+class LeaveRequestExceedsBalanceFieldTests(TestCase):
+    def test_defaults_false(self):
+        emp = Employee.objects.create(iqama_number='LREB-1', full_name='Default Test')
+        lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': Decimal('30')})
+        req = LeaveRequest.objects.create(employee=emp, leave_type=lt, start_date=_date(2026, 1, 1), end_date=_date(2026, 1, 2))
+        self.assertFalse(req.exceeds_balance)
+
+
 from hr.leave_services import generate_year_entitlements
 
 
