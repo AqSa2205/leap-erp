@@ -28,15 +28,20 @@
           {% for r in pending_requests %}
           {% url 'hr:leave_request_detail' r.pk as detail_url %}
           <tr>
-            <td><a href="{{ detail_url }}">{{ r.employee.full_name }}</a></td>
+            <td><a href="{{ detail_url }}">{{ r.employee.full_name }}</a>
+              {% if r.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
+            </td>
             <td>{{ r.leave_type.name }}</td>
             <td>{{ r.start_date }} – {{ r.end_date }}</td>
             <td>{{ r.days }}</td>
             <td class="text-muted small">
-              {% with waiting=r.pending_approvers %}
-                {% if waiting %}{% for a in waiting %}{{ a.get_full_name|default:a.username }}{% if not forloop.last %}, {% endif %}{% endfor %}
-                {% else %}<span class="text-danger">No eligible approver — requires override</span>{% endif %}
-              {% endwith %}
+              {% if r.exceeds_balance %}<span class="text-danger">Exceeds balance — requires Super Admin override</span>
+              {% else %}
+                {% with waiting=r.pending_approvers %}
+                  {% if waiting %}{% for a in waiting %}{{ a.get_full_name|default:a.username }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                  {% else %}<span class="text-danger">No eligible approver — requires override</span>{% endif %}
+                {% endwith %}
+              {% endif %}
             </td>
             <td><a href="{{ detail_url }}" class="btn btn-sm btn-outline-primary">Review</a></td>
           </tr>

@@ -515,6 +515,38 @@ class EmployeeUpdateViewTransferTests(TestCase):
         self.assertEqual(ent.entitled_days, Decimal('45'))
 
 
+class HeldRequestDisplayTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.emp = Employee.objects.create(iqama_number='HRD-1', full_name='Held Display', work_location='site')
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        from accounts.models import Role
+        self.hr_user = _make_role_user('hrdview', Role.SUPER_ADMIN)
+        self.client.login(username='hrdview', password='testpass123')
+
+    def test_list_page_shows_exceeds_balance_badge(self):
+        from hr.leave_approval_services import submit_leave_request
+        submit_leave_request(employee=self.emp, leave_type=self.lt, start_date=date(2026, 1, 1),
+                              end_date=date(2026, 2, 15), created_by=self.hr_user)
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertContains(resp, 'Exceeds balance')
+
+    def test_detail_page_shows_breakdown(self):
+        from hr.leave_approval_services import submit_leave_request
+        req = submit_leave_request(employee=self.emp, leave_type=self.lt, start_date=date(2026, 1, 1),
+                                    end_date=date(2026, 2, 15), created_by=self.hr_user)
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[req.pk]))
+        self.assertContains(resp, 'Exceeds balance')
+
+    def test_normal_request_shows_no_badge(self):
+        from hr.leave_approval_services import submit_leave_request
+        submit_leave_request(employee=self.emp, leave_type=self.lt, start_date=date(2026, 3, 1),
+                              end_date=date(2026, 3, 5), created_by=self.hr_user)
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertNotContains(resp, 'Exceeds balance')
+
+
 from hr.leave_services import generate_year_entitlements
 
 

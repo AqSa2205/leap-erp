@@ -2814,6 +2814,10 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
             and self.object.status == 'pending'
             and my_approval.decided_at is not None
             and timezone.now() - my_approval.decided_at <= DECISION_EDIT_WINDOW)
+        if self.object.exceeds_balance:
+            ctx['entitlement'] = LeaveEntitlement.objects.filter(
+                employee=self.object.employee, leave_type=self.object.leave_type,
+                year=self.object.start_date.year).first()
         return ctx
 
     def post(self, request, *args, **kwargs):

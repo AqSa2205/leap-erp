@@ -9,6 +9,18 @@
         <a href="{% url 'hr:leave_request_list' %}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Back to Queue</a>
       </div>
 
+      {% if leave_request.exceeds_balance %}
+      <div class="alert alert-danger">
+        <strong>Exceeds balance</strong> — this request goes over {{ leave_request.employee.full_name }}'s
+        available balance for {{ leave_request.leave_type.name }} ({{ leave_request.start_date|date:"Y" }}).
+        {% if entitlement %}
+          {{ entitlement.entitled_days }} standard{% if entitlement.exception_days %} + {{ entitlement.exception_days }} exception{% endif %},
+          {{ entitlement.taken_days }} taken.
+        {% endif %}
+        No normal approver can decide this — only a Super Admin Override can approve or reject it.
+      </div>
+      {% endif %}
+
       {% if is_own_request and leave_request.status == 'pending' %}
       <div class="alert alert-info d-flex align-items-start gap-2">
         <i class="bi bi-info-circle-fill mt-1"></i>
@@ -118,7 +130,7 @@
             {% csrf_token %}
             <input type="hidden" name="action" value="override">
             <div class="mb-2">
-              <label class="form-label small">Override (use only if an approver is unavailable)</label>
+              <label class="form-label small">Override (use if an approver is unavailable, or to approve/reject a balance-exceeding request)</label>
               <textarea name="reason" class="form-control" rows="2" placeholder="Reason — required" required></textarea>
             </div>
             <button type="submit" name="decision" value="approved" class="btn btn-outline-success btn-sm">Override — Approve</button>
