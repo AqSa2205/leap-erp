@@ -42,12 +42,18 @@
         </div>
     </div>
 
-    <form method="post" action="{% url 'timesheets:acknowledge_send' ts_request.pk %}"
-          onsubmit="return confirm('Send this timesheet Excel to HR ({{ hr_email }}) now?');">
-        {% csrf_token %}
-        <button type="submit" class="btn btn-primary">
-            <i class="bi bi-send"></i> Send to HR
-        </button>
-    </form>
+    <div class="d-flex gap-2 align-items-center">
+        <form method="post" action="{% url 'timesheets:acknowledge_send' ts_request.pk %}"
+              onsubmit="return confirm('Send this timesheet Excel to HR ({{ hr_email }}) now?');">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-send"></i> Send to HR
+            </button>
+        </form>
+        <a href="{% url 'timesheets:export' %}?year={{ ts_request.year }}&month={{ ts_request.month }}"
+           target="_blank" rel="noopener" class="btn btn-outline-primary">
+            <i class="bi bi-file-earmark-excel"></i> Export as Excel
+        </a>
+    </div>
 </div>
 {% endblock %}
