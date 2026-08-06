@@ -7,11 +7,16 @@ baselines + HR exception overrides feature:
 - DEMO-LEAVEEXC-SITE-GRANT: a Site employee (45-day baseline) with a +5
   HR-granted exception day bank (50 available total) — open their Leave
   Summary to see the baseline stay the anchor number, with the exception
-  shown as its own line.
+  shown as its own line. Has a login (see below) so you can also see it from
+  the employee's own My Profile page.
 - DEMO-LEAVEEXC-SITE-HELD: a Site employee with a 47-day leave request that
-  exceeds their 45-day baseline — held (not blocked) with no approver
-  roster. Open Leave Requests to see the red "Exceeds balance" badge, then
-  use the Super Admin Override control on its detail page.
+  exceeds their 45-day baseline — held (not blocked), routed through the
+  normal approver roster with a red "Exceeds balance" warning. Also has a
+  login.
+
+Both Site employees are linked to a login account (password ``DemoPass123!``)
+so you can see their own Leave Balance section on My Profile, not just the
+HR-facing pages.
 
 Safe to re-run: everything here is tagged with a "DEMO-LEAVEEXC-" iqama
 prefix and upserted, never duplicated. Run
@@ -42,6 +47,7 @@ class Command(BaseCommand):
         if existing.exists():
             existing.delete()
             self.stdout.write(f'Removed {existing.count()} existing demo employee(s).')
+        User.objects.filter(username__in=['demo.sami', 'demo.hind']).delete()
 
         if options['wipe']:
             self.stdout.write(self.style.SUCCESS('Demo data wiped.'))
@@ -64,9 +70,10 @@ class Command(BaseCommand):
             employee=office_emp, leave_type=lt, year=year,
             entitled_days=lt.default_days_for('office'))
 
+        sami_user = User.objects.create_user(username='demo.sami', password='DemoPass123!')
         grant_emp = Employee.objects.create(
             iqama_number=f'{TAG_PREFIX}SITE-GRANT', full_name='Sami Al-Harbi (Site, granted)',
-            work_location='site', is_active=True)
+            work_location='site', is_active=True, user=sami_user)
         LeaveEntitlement.objects.create(
             employee=grant_emp, leave_type=lt, year=year,
             entitled_days=lt.default_days_for('site'))
@@ -75,9 +82,10 @@ class Command(BaseCommand):
             employee=grant_emp, leave_type=lt, year=year, days=Decimal('5'),
             granted_by=actor, reason='DEMO: worked through Eid holidays.')
 
+        hind_user = User.objects.create_user(username='demo.hind', password='DemoPass123!')
         held_emp = Employee.objects.create(
             iqama_number=f'{TAG_PREFIX}SITE-HELD', full_name='Hind Al-Otaibi (Site, over balance)',
-            work_location='site', is_active=True)
+            work_location='site', is_active=True, user=hind_user)
         LeaveEntitlement.objects.create(
             employee=held_emp, leave_type=lt, year=year,
             entitled_days=lt.default_days_for('site'))
@@ -89,9 +97,10 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(
             f"Seeded demo data for year {year}:\n"
-            f"  - {office_emp.full_name}: Office, {lt.default_days_for('office')}-day baseline.\n"
+            f"  - {office_emp.full_name}: Office, {lt.default_days_for('office')}-day baseline. No login.\n"
             f"  - {grant_emp.full_name}: Site, {lt.default_days_for('site')}-day baseline + 5 exception days "
-            f"granted (open /hr/{grant_emp.pk}/leave/ to see the separate exception line).\n"
-            f"  - {held_emp.full_name}: Site, {lt.default_days_for('site')}-day baseline, a 47-day request "
-            f"is held pending Super Admin Override (open /hr/leave-requests/{held_request.pk}/)."
+            f"granted (open /hr/{grant_emp.pk}/leave/, or log in as demo.sami / DemoPass123! and check My Profile).\n"
+            f"  - {held_emp.full_name}: Site, {lt.default_days_for('site')}-day baseline, a 47-day request is "
+            f"held, waiting on the normal approvers with a red 'Exceeds balance' warning "
+            f"(open /hr/leave-requests/{held_request.pk}/, or log in as demo.hind / DemoPass123!)."
         ))

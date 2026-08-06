@@ -371,6 +371,7 @@ def my_profile(request):
         accumulative = [e for e in entitlements if e.leave_type.is_accumulative]
         context['leave_total_entitled'] = sum((e.entitled_days for e in accumulative), Decimal('0'))
         context['leave_total_remaining'] = sum((e.remaining_days for e in accumulative), Decimal('0'))
+        context['leave_total_exception'] = sum((e.exception_days for e in accumulative), Decimal('0'))
         # This employee's own leave requests (pending/approved/disapproved), newest first.
         context['leave_requests'] = (
             emp.leave_requests.select_related('leave_type', 'overridden_by')
@@ -2230,14 +2231,23 @@ def entitlement_year(request):
                     .select_related('employee', 'leave_type')
                     .order_by('employee__full_name', 'leave_type__name'))
 
-    # Batch the taken-days per (employee, leave_type) in one query (avoid N+1).
+    # Batch the taken-days and exception-grant totals per (employee, leave_type)
+    # in one query each (avoid N+1) — mirrors LeaveEntitlement.taken_days/
+    # exception_days, but batched for a whole-company table instead of one
+    # row at a time.
     from decimal import Decimal
     from collections import OrderedDict
+    from .models import LeaveExceptionGrant
     taken_map = {}
     for r in (LeaveRecord.objects.filter(start_date__year=year)
               .values('employee_id', 'leave_type_id')
               .annotate(t=Sum('days'))):
         taken_map[(r['employee_id'], r['leave_type_id'])] = r['t'] or Decimal('0')
+    exception_map = {}
+    for r in (LeaveExceptionGrant.objects.filter(year=year)
+              .values('employee_id', 'leave_type_id')
+              .annotate(t=Sum('days'))):
+        exception_map[(r['employee_id'], r['leave_type_id'])] = r['t'] or Decimal('0')
 
     # Group entitlement rows under each employee with combined totals.
     groups = OrderedDict()
@@ -2247,18 +2257,20 @@ def entitlement_year(request):
             g = groups[e.employee_id] = {
                 'employee': e.employee, 'rows': [],
                 'total_entitled': Decimal('0'), 'total_taken': Decimal('0'),
-                'total_remaining': Decimal('0'),
+                'total_exception': Decimal('0'), 'total_remaining': Decimal('0'),
             }
         taken = taken_map.get((e.employee_id, e.leave_type_id), Decimal('0'))
-        remaining = e.entitled_days - taken
+        exception = exception_map.get((e.employee_id, e.leave_type_id), Decimal('0'))
+        remaining = e.entitled_days + exception - taken
         g['rows'].append({'leave_type': e.leave_type, 'entitled': e.entitled_days,
-                          'taken': taken, 'remaining': remaining})
+                          'taken': taken, 'exception': exception, 'remaining': remaining})
         # Only standard accrued leave (Annual) counts toward the top-level totals.
         # Conditional/incidental leave (Sick, Marriage, Death of Family Member, Umrah,
         # New Born) is shown in the per-type breakdown above but excluded from the summary.
         if e.leave_type.is_accumulative:
             g['total_entitled'] += e.entitled_days
             g['total_taken'] += taken
+            g['total_exception'] += exception
             g['total_remaining'] += remaining
 
     return render(request, 'hr/entitlement_year.html',

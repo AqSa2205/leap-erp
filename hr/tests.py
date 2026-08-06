@@ -703,6 +703,54 @@ class EmployeeDashboardExceptionDisplayTests(TestCase):
         self.assertContains(resp, 'Add Exception Days')
 
 
+class EntitlementYearExceptionDisplayTests(TestCase):
+    """The company-wide Entitlements page (HR -> Leave -> Entitlements) must
+    also reflect exception grants — it used to compute Remaining from raw
+    entitled_days only, so a grant never showed up there even though it was
+    correctly visible on the employee's own Leave Summary."""
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.emp = Employee.objects.create(iqama_number='EYED-1', full_name='Entitlement Year Test', work_location='site')
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        LeaveExceptionGrant.objects.create(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('1'), reason='x')
+        from accounts.models import Role
+        _make_role_user('eyed-hr', Role.SUPER_ADMIN)
+        self.client.login(username='eyed-hr', password='testpass123')
+
+    def test_remaining_includes_the_granted_day(self):
+        resp = self.client.get(reverse('hr:entitlement_year') + '?year=2026')
+        self.assertEqual(resp.context['groups'][0]['total_remaining'], Decimal('46'))
+        self.assertEqual(resp.context['groups'][0]['total_exception'], Decimal('1'))
+        self.assertContains(resp, '+1')
+
+    def test_row_breakdown_includes_exception_column(self):
+        resp = self.client.get(reverse('hr:entitlement_year') + '?year=2026')
+        row = resp.context['groups'][0]['rows'][0]
+        self.assertEqual(row['exception'], Decimal('1'))
+        self.assertEqual(row['remaining'], Decimal('46'))
+
+
+class MyProfileExceptionDisplayTests(TestCase):
+    """The employee's own My Profile leave-balance table must also reflect
+    an exception grant, not just HR-facing pages."""
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.user = User.objects.create_user('mped-emp', password='x')
+        self.emp = Employee.objects.create(
+            iqama_number='MPED-1', full_name='Profile Exception Test', work_location='site', user=self.user)
+        year = timezone.now().year
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=year, entitled_days=Decimal('45'))
+        LeaveExceptionGrant.objects.create(employee=self.emp, leave_type=self.lt, year=year, days=Decimal('1'), reason='x')
+
+    def test_my_profile_shows_the_granted_day(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, '+ 1 exception day(s) granted')
+        self.assertEqual(resp.context['leave_total_exception'], Decimal('1'))
+
+
 class PendingCountsContextProcessorTests(TestCase):
     def setUp(self):
         self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
