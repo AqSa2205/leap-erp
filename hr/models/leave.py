@@ -209,6 +209,13 @@ class OverrideAccessSettings(models.Model):
         (MODE_SPECIFIC_EMPLOYEES, 'Specific Employees'),
     ]
     mode = models.CharField(max_length=20, choices=MODE_CHOICES, default=MODE_ALL_SUPER_ADMINS)
+    allow_site_balance_hold = models.BooleanField(
+        default=True,
+        help_text='Site employees who submit leave exceeding their available balance get a held, '
+                   'reviewable request instead of a hard block.')
+    allow_office_balance_hold = models.BooleanField(
+        default=False,
+        help_text='Same as above, for Office employees. Off by default — Office keeps the plain hard block.')
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
 
@@ -219,6 +226,9 @@ class OverrideAccessSettings(models.Model):
     def get_solo(cls):
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+    def balance_hold_enabled_for(self, work_location):
+        return self.allow_site_balance_hold if work_location == 'site' else self.allow_office_balance_hold
 
 
 class OverrideAccessRole(models.Model):

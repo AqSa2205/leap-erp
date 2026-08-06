@@ -317,6 +317,22 @@ class LeaveRequestExceedsBalanceFieldTests(TestCase):
         self.assertFalse(req.exceeds_balance)
 
 
+class OverrideAccessSettingsBalanceHoldTests(TestCase):
+    def test_defaults_site_enabled_office_disabled(self):
+        from hr.models import OverrideAccessSettings
+        config = OverrideAccessSettings.get_solo()
+        self.assertTrue(config.balance_hold_enabled_for('site'))
+        self.assertFalse(config.balance_hold_enabled_for('office'))
+        self.assertFalse(config.balance_hold_enabled_for(''))
+
+    def test_office_can_be_enabled_without_code_change(self):
+        from hr.models import OverrideAccessSettings
+        config = OverrideAccessSettings.get_solo()
+        config.allow_office_balance_hold = True
+        config.save()
+        self.assertTrue(OverrideAccessSettings.get_solo().balance_hold_enabled_for('office'))
+
+
 from hr.leave_services import generate_year_entitlements
 
 
