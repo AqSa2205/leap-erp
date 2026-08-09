@@ -6794,14 +6794,12 @@ class SalaryDeductionCompactUITests(TestCase):
 
     def test_message_is_always_visible_not_behind_a_toggle(self):
         resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'Taking this leave will result in a salary deduction.')
         content = resp.content.decode()
-        self.assertIn(
-            '<div class="small text-danger"><i class="bi bi-exclamation-triangle"></i> '
-            'Taking this leave will result in a salary deduction.</div>',
-            content)
         # No collapse wrapper around it — this warning must never require a
         # click to see.
         self.assertNotIn(f'id="salaryDeduction{self.req.pk}"', content)
+        self.assertNotIn('data-bs-toggle="collapse" data-bs-target="#salaryDeduction', content)
 
     def test_no_message_when_not_applicable(self):
         self.req.salary_deduction_applicable = False
