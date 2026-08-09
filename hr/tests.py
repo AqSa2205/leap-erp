@@ -157,7 +157,7 @@ class HolidayAndSettingsTests(TestCase):
 from decimal import Decimal
 from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
-from hr.models import (Employee, LeaveEntitlement, LeaveRecord,
+from hr.models import (Employee, LeaveEntitlement, LeaveRecord, LeaveExceptionGrant,
                        LeaveDashboardAccess, LeaveRequest, LeaveRequestApproval, LeaveRequestNote)
 
 User = get_user_model()
@@ -231,6 +231,593 @@ class LeaveRecordTests(TestCase):
                           start_date=_date(2026, 7, 9), end_date=_date(2026, 7, 5))
         with self.assertRaises(ValidationError):
             rec.full_clean()
+
+
+class LeaveTypeLocationDefaultsTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': None})
+
+    def test_default_days_for_office_uses_flat_default(self):
+        self.assertEqual(self.lt.default_days_for('office'), Decimal('30'))
+
+    def test_default_days_for_blank_location_falls_back_to_office(self):
+        self.assertEqual(self.lt.default_days_for(''), Decimal('30'))
+
+    def test_default_days_for_site_falls_back_when_blank(self):
+        self.assertEqual(self.lt.default_days_for('site'), Decimal('30'))
+
+    def test_default_days_for_site_uses_override_when_set(self):
+        self.lt.site_default_annual_days = Decimal('45')
+        self.lt.save()
+        self.assertEqual(self.lt.default_days_for('site'), Decimal('45'))
+
+    def test_propagate_on_save_is_location_aware(self):
+        office_emp = Employee.objects.create(iqama_number='LOC-OFF-1', full_name='Office Emp', work_location='office')
+        site_emp = Employee.objects.create(iqama_number='LOC-SITE-1', full_name='Site Emp', work_location='site')
+        blank_emp = Employee.objects.create(iqama_number='LOC-BLANK-1', full_name='Blank Emp')
+        LeaveEntitlement.objects.create(employee=office_emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        LeaveEntitlement.objects.create(employee=site_emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        LeaveEntitlement.objects.create(employee=blank_emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        self.lt.default_annual_days = Decimal('32')
+        self.lt.site_default_annual_days = Decimal('47')
+        self.lt.save()
+        self.assertEqual(LeaveEntitlement.objects.get(employee=office_emp).entitled_days, Decimal('32'))
+        self.assertEqual(LeaveEntitlement.objects.get(employee=site_emp).entitled_days, Decimal('47'))
+        self.assertEqual(LeaveEntitlement.objects.get(employee=blank_emp).entitled_days, Decimal('32'))
+
+
+class LeaveExceptionGrantTests(TestCase):
+    def setUp(self):
+        self.emp = Employee.objects.create(iqama_number='LEG-1', full_name='Grant Test', work_location='site')
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.hr_user = make_user('leg-hr1')
+
+    def test_grant_is_recorded_with_audit_fields(self):
+        grant = LeaveExceptionGrant.objects.create(
+            employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('5'),
+            granted_by=self.hr_user, reason='Worked through Eid holidays.')
+        self.assertEqual(grant.days, Decimal('5'))
+        self.assertEqual(grant.granted_by, self.hr_user)
+        self.assertIsNotNone(grant.granted_at)
+
+
+class LeaveEntitlementEffectiveDaysTests(TestCase):
+    def setUp(self):
+        self.emp = Employee.objects.create(iqama_number='LEED-1', full_name='Eff Test', work_location='site')
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.ent = LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+
+    def test_no_grants_effective_equals_baseline(self):
+        self.assertEqual(self.ent.exception_days, Decimal('0'))
+        self.assertEqual(self.ent.effective_entitled_days, Decimal('45'))
+        self.assertEqual(self.ent.effective_remaining_days, Decimal('45'))
+
+    def test_grants_sum_into_effective_but_not_baseline(self):
+        LeaveExceptionGrant.objects.create(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('5'), reason='x')
+        LeaveExceptionGrant.objects.create(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('2'), reason='y')
+        self.assertEqual(self.ent.entitled_days, Decimal('45'))  # baseline untouched
+        self.assertEqual(self.ent.exception_days, Decimal('7'))
+        self.assertEqual(self.ent.effective_entitled_days, Decimal('52'))
+
+    def test_grants_from_other_years_or_types_dont_count(self):
+        other_lt, _ = LeaveType.objects.get_or_create(code='sick', defaults={'name': 'Sick', 'default_annual_days': 12})
+        LeaveExceptionGrant.objects.create(employee=self.emp, leave_type=self.lt, year=2025, days=Decimal('9'), reason='wrong year')
+        LeaveExceptionGrant.objects.create(employee=self.emp, leave_type=other_lt, year=2026, days=Decimal('9'), reason='wrong type')
+        self.assertEqual(self.ent.exception_days, Decimal('0'))
+
+
+class LeaveRequestExceedsBalanceFieldTests(TestCase):
+    def test_defaults_false(self):
+        emp = Employee.objects.create(iqama_number='LREB-1', full_name='Default Test')
+        lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': Decimal('30')})
+        req = LeaveRequest.objects.create(employee=emp, leave_type=lt, start_date=_date(2026, 1, 1), end_date=_date(2026, 1, 2))
+        self.assertFalse(req.exceeds_balance)
+
+
+class OverrideAccessSettingsBalanceHoldTests(TestCase):
+    def test_defaults_site_enabled_office_disabled(self):
+        from hr.models import OverrideAccessSettings
+        config = OverrideAccessSettings.get_solo()
+        self.assertTrue(config.balance_hold_enabled_for('site'))
+        self.assertFalse(config.balance_hold_enabled_for('office'))
+        self.assertFalse(config.balance_hold_enabled_for(''))
+
+    def test_office_can_be_enabled_without_code_change(self):
+        from hr.models import OverrideAccessSettings
+        config = OverrideAccessSettings.get_solo()
+        config.allow_office_balance_hold = True
+        config.save()
+        self.assertTrue(OverrideAccessSettings.get_solo().balance_hold_enabled_for('office'))
+
+
+class LocationAwareGenerationTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+
+    def test_generate_picks_baseline_by_location(self):
+        from hr.leave_services import generate_entitlements_for_employee
+        office_emp = Employee.objects.create(iqama_number='LAG-OFF-1', full_name='Office', work_location='office')
+        site_emp = Employee.objects.create(iqama_number='LAG-SITE-1', full_name='Site', work_location='site')
+        generate_entitlements_for_employee(office_emp, 2026)
+        generate_entitlements_for_employee(site_emp, 2026)
+        self.assertEqual(LeaveEntitlement.objects.get(employee=office_emp, leave_type=self.lt).entitled_days, Decimal('30'))
+        self.assertEqual(LeaveEntitlement.objects.get(employee=site_emp, leave_type=self.lt).entitled_days, Decimal('45'))
+
+    def test_reapply_is_location_aware_and_preserves_exceptions(self):
+        from hr.leave_services import generate_entitlements_for_employee, reapply_leave_type_defaults
+        site_emp = Employee.objects.create(iqama_number='LAG-SITE-2', full_name='Site2', work_location='site')
+        generate_entitlements_for_employee(site_emp, 2026)
+        LeaveExceptionGrant.objects.create(employee=site_emp, leave_type=self.lt, year=2026, days=Decimal('5'), reason='x')
+        reapply_leave_type_defaults(2026)
+        ent = LeaveEntitlement.objects.get(employee=site_emp, leave_type=self.lt)
+        self.assertEqual(ent.entitled_days, Decimal('45'))  # still the Site default, not wiped to Office's 30
+        self.assertEqual(ent.exception_days, Decimal('5'))  # untouched
+
+
+class ValidateLeaveSubmissionHoldTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+
+    def test_within_cap_returns_false(self):
+        from hr.leave_services import validate_leave_submission
+        emp = Employee.objects.create(iqama_number='VLS-1', full_name='OK', work_location='site')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        held = validate_leave_submission(emp, self.lt, date(2026, 3, 1), date(2026, 3, 5))
+        self.assertFalse(held)
+
+    def test_site_over_cap_is_held_not_blocked(self):
+        from hr.leave_services import validate_leave_submission
+        emp = Employee.objects.create(iqama_number='VLS-2', full_name='Site Over', work_location='site')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        held = validate_leave_submission(emp, self.lt, date(2026, 1, 1), date(2026, 2, 15))  # 46 days
+        self.assertTrue(held)
+
+    def test_office_over_cap_still_hard_blocks(self):
+        from hr.leave_services import validate_leave_submission
+        emp = Employee.objects.create(iqama_number='VLS-3', full_name='Office Over', work_location='office')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        with self.assertRaises(ValueError):
+            validate_leave_submission(emp, self.lt, date(2026, 1, 1), date(2026, 2, 1))  # 32 days
+
+    def test_site_within_effective_cap_via_exception_grant_returns_false(self):
+        from hr.leave_services import validate_leave_submission
+        emp = Employee.objects.create(iqama_number='VLS-4', full_name='Site Grant', work_location='site')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        LeaveExceptionGrant.objects.create(employee=emp, leave_type=self.lt, year=2026, days=Decimal('5'), reason='x')
+        held = validate_leave_submission(emp, self.lt, date(2026, 1, 1), date(2026, 2, 19))  # 50 days
+        self.assertFalse(held)
+
+    def test_no_entitlement_still_raises(self):
+        from hr.leave_services import validate_leave_submission
+        emp = Employee.objects.create(iqama_number='VLS-5', full_name='No Ent', work_location='site')
+        with self.assertRaises(ValueError):
+            validate_leave_submission(emp, self.lt, date(2026, 3, 1), date(2026, 3, 5))
+
+    def test_overlap_still_raises_even_when_held(self):
+        from hr.leave_services import validate_leave_submission
+        emp = Employee.objects.create(iqama_number='VLS-6', full_name='Overlap', work_location='site')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        LeaveRecord.objects.create(employee=emp, leave_type=self.lt, start_date=date(2026, 1, 10), end_date=date(2026, 1, 12))
+        with self.assertRaises(ValueError):
+            validate_leave_submission(emp, self.lt, date(2026, 1, 1), date(2026, 2, 15))  # over cap AND overlaps
+
+
+class SubmitLeaveRequestHeldTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.approver_user = make_user('slrh-appr')
+        LeaveDashboardAccess.objects.create(user=self.approver_user, is_active=True)
+
+    def test_held_request_still_gets_the_normal_approver_roster(self):
+        # A held (exceeds_balance) request routes through the exact same
+        # approver roster and decide flow as any other request — the only
+        # difference is the warning shown on it, not who can decide it.
+        from hr.leave_approval_services import submit_leave_request
+        emp = Employee.objects.create(iqama_number='SLRH-1', full_name='Site Over', work_location='site')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        req = submit_leave_request(
+            employee=emp, leave_type=self.lt, start_date=date(2026, 1, 1), end_date=date(2026, 2, 15),
+            created_by=self.approver_user)
+        self.assertTrue(req.exceeds_balance)
+        self.assertEqual(req.approvals.count(), 1)
+        self.assertEqual(req.approvals.first().approver, self.approver_user)
+        self.assertEqual(req.status, 'pending')
+
+    def test_normal_request_still_gets_approval_rows(self):
+        from hr.leave_approval_services import submit_leave_request
+        emp = Employee.objects.create(iqama_number='SLRH-2', full_name='Site OK', work_location='site')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        req = submit_leave_request(
+            employee=emp, leave_type=self.lt, start_date=date(2026, 3, 1), end_date=date(2026, 3, 5),
+            created_by=self.approver_user)
+        self.assertFalse(req.exceeds_balance)
+        self.assertEqual(req.approvals.count(), 1)
+
+
+class GrantExceptionDaysTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.emp = Employee.objects.create(iqama_number='GED-1', full_name='Grantee', work_location='site')
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        self.hr_user = make_user('ged-hr1')
+
+    def test_grant_increases_effective_but_not_baseline(self):
+        from hr.leave_approval_services import grant_exception_days
+        grant_exception_days(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('5'),
+                              granted_by=self.hr_user, reason='Eid overtime.')
+        ent = LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.lt, year=2026)
+        self.assertEqual(ent.entitled_days, Decimal('45'))
+        self.assertEqual(ent.exception_days, Decimal('5'))
+
+    def test_grant_requires_a_reason(self):
+        from hr.leave_approval_services import grant_exception_days
+        with self.assertRaises(ValueError):
+            grant_exception_days(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('5'),
+                                  granted_by=self.hr_user, reason='   ')
+
+
+class GrantExceptionDaysViewPermissionTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.emp = Employee.objects.create(iqama_number='GEDV-1', full_name='Grantee View', work_location='site')
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=timezone.now().year, entitled_days=Decimal('45'))
+
+    def test_super_admin_can_grant_via_the_view(self):
+        from accounts.models import Role
+        _make_role_user('gedv-super', Role.SUPER_ADMIN)
+        self.client.login(username='gedv-super', password='testpass123')
+        resp = self.client.post(reverse('hr:grant_exception_days', args=[self.emp.pk]), data={
+            'leave_type': self.lt.pk, 'year': timezone.now().year, 'days': '3', 'reason': 'Test grant via view.'})
+        self.assertEqual(resp.status_code, 302)
+        ent = LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.lt, year=timezone.now().year)
+        self.assertEqual(ent.exception_days, Decimal('3'))
+
+    def test_plain_user_is_denied(self):
+        plain_user = make_user('gedv-plain')
+        plain_user.set_password('x')
+        plain_user.save()
+        self.client.login(username='gedv-plain', password='x')
+        resp = self.client.get(reverse('hr:grant_exception_days', args=[self.emp.pk]))
+        self.assertEqual(resp.status_code, 403)
+        resp = self.client.post(reverse('hr:grant_exception_days', args=[self.emp.pk]), data={
+            'leave_type': self.lt.pk, 'year': timezone.now().year, 'days': '3', 'reason': 'Should not work.'})
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(LeaveEntitlement.objects.get(employee=self.emp).exception_days, Decimal('0'))
+
+
+class BalanceHoldSettingsViewTests(TestCase):
+    def test_super_admin_can_change_balance_hold_settings(self):
+        from accounts.models import Role
+        from hr.models import OverrideAccessSettings
+        _make_role_user('bhsv-super', Role.SUPER_ADMIN)
+        self.client.login(username='bhsv-super', password='testpass123')
+        resp = self.client.post(reverse('hr:org_chart') + '?tab=access', data={
+            'set_balance_hold': '1', 'allow_office_balance_hold': '1',
+        })
+        self.assertEqual(resp.status_code, 302)
+        config = OverrideAccessSettings.get_solo()
+        self.assertTrue(config.allow_office_balance_hold)
+        self.assertFalse(config.allow_site_balance_hold)  # unchecked box -> off
+
+    def test_plain_user_cannot_change_balance_hold_settings(self):
+        from hr.models import OverrideAccessSettings
+        plain_user = make_user('bhsv-plain')
+        plain_user.set_password('x')
+        plain_user.save()
+        self.client.login(username='bhsv-plain', password='x')
+        resp = self.client.post(reverse('hr:org_chart') + '?tab=access', data={
+            'set_balance_hold': '1', 'allow_office_balance_hold': '1',
+        })
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(OverrideAccessSettings.get_solo().allow_office_balance_hold)
+
+
+class LogRequestBalanceWarningTests(TestCase):
+    """The 'Log Request' (log-on-behalf-of) form: a Super Admin submitting an
+    over-cap request sees an inline warning and must explicitly confirm
+    before anything is created; confirming grants the exact shortfall as an
+    exception and then logs the request normally (not held)."""
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.emp = Employee.objects.create(iqama_number='LRBW-1', full_name='Warning Test', work_location='site')
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+
+    def _post(self, **extra):
+        data = {
+            'employee': self.emp.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-01-01', 'end_date': '2026-02-16',  # 47 days, 2 over the 45-day Site baseline
+        }
+        data.update(extra)
+        return self.client.post(reverse('hr:leave_request_create'), data=data)
+
+    def test_super_admin_first_submit_shows_warning_and_creates_nothing(self):
+        from accounts.models import Role
+        _make_role_user('lrbw-super1', Role.SUPER_ADMIN)
+        self.client.login(username='lrbw-super1', password='testpass123')
+        resp = self._post()
+        self.assertEqual(resp.status_code, 200)  # re-rendered, not redirected
+        self.assertContains(resp, 'Exceeds balance')
+        self.assertContains(resp, 'Log Anyway')
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.emp).exists())
+        self.assertEqual(LeaveEntitlement.objects.get(employee=self.emp).exception_days, Decimal('0'))
+
+    def test_super_admin_confirms_grants_shortfall_and_logs_normally(self):
+        from accounts.models import Role
+        _make_role_user('lrbw-super2', Role.SUPER_ADMIN)
+        self.client.login(username='lrbw-super2', password='testpass123')
+        resp = self._post(confirm_grant_and_log='1')
+        self.assertEqual(resp.status_code, 302)
+        ent = LeaveEntitlement.objects.get(employee=self.emp)
+        self.assertEqual(ent.entitled_days, Decimal('45'))  # baseline untouched
+        self.assertEqual(ent.exception_days, Decimal('2'))  # exact shortfall granted
+        req = LeaveRequest.objects.get(employee=self.emp)
+        self.assertFalse(req.exceeds_balance)  # fits now, logged normally
+        self.assertEqual(req.approvals.count(), 0)  # no LeaveDashboardAccess holders in this test's DB, unrelated to the grant
+
+    def test_non_super_admin_gets_no_warning_request_is_just_held(self):
+        from accounts.models import Role
+        _make_role_user('lrbw-erp', Role.ERP_ADMIN)
+        self.client.login(username='lrbw-erp', password='testpass123')
+        resp = self._post()
+        self.assertEqual(resp.status_code, 302)  # no warning step — logged straight through
+        req = LeaveRequest.objects.get(employee=self.emp)
+        self.assertTrue(req.exceeds_balance)
+        self.assertEqual(LeaveEntitlement.objects.get(employee=self.emp).exception_days, Decimal('0'))
+
+    def test_confirm_flag_without_override_access_is_denied(self):
+        # Defense in depth: a direct POST with the confirm flag set, from a
+        # user who isn't actually allowed to grant, must not silently work.
+        from accounts.models import Role
+        _make_role_user('lrbw-erp2', Role.ERP_ADMIN)
+        self.client.login(username='lrbw-erp2', password='testpass123')
+        resp = self._post(confirm_grant_and_log='1')
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(LeaveEntitlement.objects.get(employee=self.emp).exception_days, Decimal('0'))
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.emp).exists())
+
+    def test_within_cap_submission_never_shows_warning(self):
+        from accounts.models import Role
+        _make_role_user('lrbw-super3', Role.SUPER_ADMIN)
+        self.client.login(username='lrbw-super3', password='testpass123')
+        resp = self._post(end_date='2026-01-10')  # 10 days, well within 45
+        self.assertEqual(resp.status_code, 302)
+        req = LeaveRequest.objects.get(employee=self.emp)
+        self.assertFalse(req.exceeds_balance)
+
+
+class EmployeeWorkLocationTransferTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+
+    def test_upgrade_recomputes_baseline_for_whole_year(self):
+        emp = Employee.objects.create(iqama_number='EWLT-1', full_name='Upgrade', work_location='office')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        LeaveRecord.objects.create(employee=emp, leave_type=self.lt, start_date=date(2026, 2, 1), end_date=date(2026, 2, 10))  # 10 days taken
+        from hr.leave_services import apply_work_location_transfer
+        apply_work_location_transfer(emp, old_location='office', new_location='site', year=2026, actor=None)
+        ent = LeaveEntitlement.objects.get(employee=emp, leave_type=self.lt, year=2026)
+        self.assertEqual(ent.entitled_days, Decimal('45'))
+
+    def test_downgrade_auto_grants_the_shortfall(self):
+        emp = Employee.objects.create(iqama_number='EWLT-2', full_name='Downgrade', work_location='site')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        LeaveRecord.objects.create(employee=emp, leave_type=self.lt, start_date=date(2026, 1, 1), end_date=date(2026, 2, 4))  # 35 days taken
+        from hr.leave_services import apply_work_location_transfer
+        apply_work_location_transfer(emp, old_location='site', new_location='office', year=2026, actor=None)
+        ent = LeaveEntitlement.objects.get(employee=emp, leave_type=self.lt, year=2026)
+        self.assertEqual(ent.entitled_days, Decimal('30'))  # baseline drops to Office
+        self.assertEqual(ent.exception_days, Decimal('5'))  # 35 taken - 30 new baseline, auto-preserved
+        self.assertEqual(ent.effective_remaining_days, Decimal('0'))
+
+    def test_no_op_when_location_unchanged(self):
+        emp = Employee.objects.create(iqama_number='EWLT-3', full_name='NoOp', work_location='site')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        from hr.leave_services import apply_work_location_transfer
+        apply_work_location_transfer(emp, old_location='site', new_location='site', year=2026, actor=None)
+        ent = LeaveEntitlement.objects.get(employee=emp, leave_type=self.lt, year=2026)
+        self.assertEqual(ent.entitled_days, Decimal('45'))
+        self.assertEqual(ent.exception_days, Decimal('0'))
+
+
+class EmployeeUpdateViewTransferTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        from accounts.models import Role
+        self.admin_user = _make_role_user('euvt-admin', Role.SUPER_ADMIN)
+
+    def test_editing_work_location_via_view_triggers_recompute(self):
+        self.client.login(username='euvt-admin', password='testpass123')
+        emp = Employee.objects.create(iqama_number='EUVT-1', full_name='View Transfer', work_location='office')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=timezone.now().year, entitled_days=Decimal('30'))
+        resp = self.client.post(reverse('hr:employee_update', args=[emp.pk]), data={
+            'iqama_number': 'EUVT-1', 'full_name': 'View Transfer', 'work_location': 'site',
+        })
+        self.assertEqual(resp.status_code, 302)
+        emp.refresh_from_db()
+        self.assertEqual(emp.work_location, 'site')
+        ent = LeaveEntitlement.objects.get(employee=emp, leave_type=self.lt, year=timezone.now().year)
+        self.assertEqual(ent.entitled_days, Decimal('45'))
+
+
+class HeldRequestDisplayTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.emp = Employee.objects.create(iqama_number='HRD-1', full_name='Held Display', work_location='site')
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        from accounts.models import Role
+        self.hr_user = _make_role_user('hrdview', Role.SUPER_ADMIN)
+        self.client.login(username='hrdview', password='testpass123')
+
+    def test_list_page_shows_exceeds_balance_badge(self):
+        from hr.leave_approval_services import submit_leave_request
+        submit_leave_request(employee=self.emp, leave_type=self.lt, start_date=date(2026, 1, 1),
+                              end_date=date(2026, 2, 15), created_by=self.hr_user)
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertContains(resp, 'Exceeds balance')
+
+    def test_detail_page_shows_breakdown(self):
+        from hr.leave_approval_services import submit_leave_request
+        req = submit_leave_request(employee=self.emp, leave_type=self.lt, start_date=date(2026, 1, 1),
+                                    end_date=date(2026, 2, 15), created_by=self.hr_user)
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[req.pk]))
+        self.assertContains(resp, 'Exceeds balance')
+
+    def test_normal_request_shows_no_badge(self):
+        from hr.leave_approval_services import submit_leave_request
+        submit_leave_request(employee=self.emp, leave_type=self.lt, start_date=date(2026, 3, 1),
+                              end_date=date(2026, 3, 5), created_by=self.hr_user)
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertNotContains(resp, 'Exceeds balance')
+
+
+class EmployeeDashboardExceptionDisplayTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.emp = Employee.objects.create(iqama_number='EDED-1', full_name='Dashboard Test', work_location='site')
+        self.ent = LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        LeaveExceptionGrant.objects.create(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('5'), reason='x')
+        from accounts.models import Role
+        self.hr_user = _make_role_user('edeview', Role.SUPER_ADMIN)
+        self.client.login(username='edeview', password='testpass123')
+
+    def test_leave_summary_shows_baseline_and_exception_separately(self):
+        resp = self.client.get(reverse('hr:leave_summary', args=[self.emp.pk]) + '?year=2026')
+        self.assertContains(resp, '45')  # baseline anchor
+        self.assertContains(resp, '+ 5 exception days granted')
+
+    def test_grant_exception_days_link_visible_for_override_access(self):
+        resp = self.client.get(reverse('hr:leave_summary', args=[self.emp.pk]))
+        self.assertContains(resp, 'Add Exception Days')
+
+
+class EntitlementYearExceptionDisplayTests(TestCase):
+    """The company-wide Entitlements page (HR -> Leave -> Entitlements) must
+    also reflect exception grants — it used to compute Remaining from raw
+    entitled_days only, so a grant never showed up there even though it was
+    correctly visible on the employee's own Leave Summary."""
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.emp = Employee.objects.create(iqama_number='EYED-1', full_name='Entitlement Year Test', work_location='site')
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        LeaveExceptionGrant.objects.create(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('1'), reason='x')
+        from accounts.models import Role
+        _make_role_user('eyed-hr', Role.SUPER_ADMIN)
+        self.client.login(username='eyed-hr', password='testpass123')
+
+    def test_remaining_includes_the_granted_day(self):
+        resp = self.client.get(reverse('hr:entitlement_year') + '?year=2026')
+        self.assertEqual(resp.context['groups'][0]['total_remaining'], Decimal('46'))
+        self.assertEqual(resp.context['groups'][0]['total_exception'], Decimal('1'))
+        self.assertContains(resp, '+1')
+
+    def test_row_breakdown_includes_exception_column(self):
+        resp = self.client.get(reverse('hr:entitlement_year') + '?year=2026')
+        row = resp.context['groups'][0]['rows'][0]
+        self.assertEqual(row['exception'], Decimal('1'))
+        self.assertEqual(row['remaining'], Decimal('46'))
+
+
+class MyProfileExceptionDisplayTests(TestCase):
+    """The employee's own My Profile leave-balance table must also reflect
+    an exception grant, not just HR-facing pages."""
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.user = User.objects.create_user('mped-emp', password='x')
+        self.emp = Employee.objects.create(
+            iqama_number='MPED-1', full_name='Profile Exception Test', work_location='site', user=self.user)
+        year = timezone.now().year
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=year, entitled_days=Decimal('45'))
+        LeaveExceptionGrant.objects.create(employee=self.emp, leave_type=self.lt, year=year, days=Decimal('1'), reason='x')
+
+    def test_my_profile_shows_the_granted_day(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, '+ 1 exception day(s) granted')
+        self.assertEqual(resp.context['leave_total_exception'], Decimal('1'))
+
+
+class PendingCountsContextProcessorTests(TestCase):
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30')})
+        from accounts.models import Role
+        self.hr_user = _make_role_user('pccp-hr', Role.SUPER_ADMIN)
+        LeaveDashboardAccess.objects.create(user=self.hr_user, is_active=True)
+
+    def test_leave_requests_pending_count_reflects_actual_pending(self):
+        self.client.login(username='pccp-hr', password='testpass123')
+        emp = Employee.objects.create(iqama_number='PCCP-1', full_name='Ctx Test', work_location='office')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=self.lt, year=timezone.now().year, entitled_days=Decimal('30'))
+        from hr.leave_approval_services import submit_leave_request
+        submit_leave_request(employee=emp, leave_type=self.lt, start_date=date.today(), end_date=date.today(), created_by=self.hr_user)
+        resp = self.client.get(reverse('hr:hr_dashboard'))
+        self.assertEqual(resp.context['leave_requests_pending_count'], 1)
+
+    def test_plain_employee_gets_no_counts_in_context(self):
+        plain_user = make_user('pccp-plain')
+        plain_user.set_password('x')
+        plain_user.save()
+        self.client.login(username='pccp-plain', password='x')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotIn('leave_requests_pending_count', resp.context)
+        self.assertNotIn('team_exceptions_pending_count', resp.context)
+
+
+class SidebarBadgeMarkupTests(TestCase):
+    def test_leave_requests_badge_renders_when_pending(self):
+        lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': Decimal('30')})
+        from accounts.models import Role
+        hr_user = _make_role_user('sbmt-hr', Role.SUPER_ADMIN)
+        LeaveDashboardAccess.objects.create(user=hr_user, is_active=True)
+        emp = Employee.objects.create(iqama_number='SBMT-1', full_name='Badge Test', work_location='office')
+        LeaveEntitlement.objects.create(employee=emp, leave_type=lt, year=timezone.now().year, entitled_days=Decimal('30'))
+        from hr.leave_approval_services import submit_leave_request
+        submit_leave_request(employee=emp, leave_type=lt, start_date=date.today(), end_date=date.today(), created_by=hr_user)
+        self.client.login(username='sbmt-hr', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, '<span class="nav-badge-count">1</span>')
+
+    def test_no_badge_when_nothing_pending(self):
+        from accounts.models import Role
+        hr_user = _make_role_user('sbmt-hr2', Role.SUPER_ADMIN)
+        LeaveDashboardAccess.objects.create(user=hr_user, is_active=True)
+        self.client.login(username='sbmt-hr2', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, '<span class="nav-badge-count">')
+        self.assertNotContains(resp, '<span class="nav-badge-dot">')
+
+
+class TeamExceptionsTabCountTests(TestCase):
+    def test_tab_buttons_show_pending_counts(self):
+        from hr.attendance_exception_services import submit_attendance_exception
+        manager_user = make_user('tabmgr')
+        manager_user.set_password('testpass123')
+        manager_user.save()
+        manager = Employee.objects.create(iqama_number='TABC-MGR', full_name='Tab Manager', user=manager_user)
+        report = Employee.objects.create(iqama_number='TABC-RPT', full_name='Tab Report', main_manager=manager)
+        submit_attendance_exception(
+            employee=report, event_date=_timezone.now().date(), event_start_time=_time(0, 1),
+            reason_category='site_visit', created_by=manager_user)
+        self.client.login(username='tabmgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertEqual(resp.context['direct_tab_count'], 1)
+        self.assertEqual(resp.context['secondary_tab_count'], 0)
+        self.assertContains(resp, 'Direct Reports <span class="nav-badge-count">1</span>')
 
 
 from hr.leave_services import generate_year_entitlements

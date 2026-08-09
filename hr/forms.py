@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django import forms
 from django.core.exceptions import ValidationError
 from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, VehicleDocument, LeaveType, Holiday, AttendanceSettings, WorkingDay, WFHRecord, AttendanceException
@@ -452,17 +453,27 @@ class AssetReturnForm(forms.ModelForm):
 class LeaveTypeForm(forms.ModelForm):
     class Meta:
         model = LeaveType
-        fields = ['name', 'code', 'default_annual_days', 'is_paid', 'color',
+        fields = ['name', 'code', 'default_annual_days', 'site_default_annual_days', 'is_paid', 'color',
                   'requires_medical_certificate', 'is_active']
         widgets = {
             'name': forms.TextInput(attrs={'class': 'form-control'}),
             'code': forms.TextInput(attrs={'class': 'form-control'}),
             'default_annual_days': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.5'}),
+            'site_default_annual_days': forms.NumberInput(attrs={'class': 'form-control', 'step': '0.5'}),
             'is_paid': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
             'color': forms.TextInput(attrs={'class': 'form-control'}),
             'requires_medical_certificate': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
             'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
         }
+
+
+class ExceptionGrantForm(forms.Form):
+    leave_type = forms.ModelChoiceField(
+        queryset=LeaveType.objects.filter(is_active=True),
+        widget=forms.Select(attrs={'class': 'form-select'}))
+    year = forms.IntegerField(widget=forms.NumberInput(attrs={'class': 'form-control'}))
+    days = forms.DecimalField(min_value=Decimal('0.5'), widget=forms.NumberInput(attrs={'class': 'form-control'}))
+    reason = forms.CharField(widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 2}))
 
 
 class HolidayForm(forms.ModelForm):

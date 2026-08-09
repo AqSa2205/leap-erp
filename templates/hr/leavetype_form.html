@@ -59,6 +59,17 @@
                             </div>
                         </div>
 
+                        <div class="row mb-3">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Site Default Annual Days</label>
+                                {{ form.site_default_annual_days }}
+                                {% if form.site_default_annual_days.errors %}
+                                <div class="invalid-feedback d-block">{{ form.site_default_annual_days.errors.0 }}</div>
+                                {% endif %}
+                                <small class="text-muted">Override for Site employees (Office / Site field on the employee profile). Leave blank to use the same default as Office above.</small>
+                            </div>
+                        </div>
+
                         <div class="row mb-4">
                             <div class="col-md-6 mb-3">
                                 <div class="form-check mt-2">

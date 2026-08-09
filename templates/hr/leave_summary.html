@@ -13,6 +13,11 @@
             <a href="{% url 'hr:employee_detail' pk=employee.pk %}" class="btn btn-outline-secondary">
                 <i class="bi bi-arrow-left"></i> Back to Employee
             </a>
+            {% if can_grant_exception %}
+            <a href="{% url 'hr:grant_exception_days' pk=employee.pk %}" class="btn btn-outline-danger">
+                <i class="bi bi-plus-circle"></i> Add Exception Days
+            </a>
+            {% endif %}
             <a href="{% url 'hr:leave_record_create' %}?employee={{ employee.pk }}" class="btn btn-primary">
                 <i class="bi bi-plus-lg"></i> Add Leave
             </a>
@@ -52,6 +57,12 @@
                             {{ e.remaining_days }}
                         </td>
                     </tr>
+                    {% if e.exception_days %}
+                    <tr class="table-light">
+                        <td colspan="3" class="ps-4 text-muted">+ {{ e.exception_days }} exception days granted</td>
+                        <td class="text-end text-muted">{{ e.effective_remaining_days }} available</td>
+                    </tr>
+                    {% endif %}
                     {% endfor %}
                 </tbody>
             </table>

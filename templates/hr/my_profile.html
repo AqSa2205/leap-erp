@@ -101,6 +101,9 @@
           <p class="text-muted small mb-2">
             Total remaining: <strong>{{ leave_total_remaining }}</strong> of {{ leave_total_entitled }} days
             <span class="text-muted">(accrued leave only — Annual; conditional leave shown below isn't counted in this total)</span>
+            {% if leave_total_exception %}
+            <br><span class="text-muted">+ {{ leave_total_exception }} exception day(s) granted — {{ leave_total_remaining|add:leave_total_exception }} truly available</span>
+            {% endif %}
           </p>
           <table class="table table-sm mb-0">
             <thead class="table-light"><tr><th>Type</th><th class="text-end">Entitled</th><th class="text-end">Taken</th><th class="text-end">Remaining</th></tr></thead>
@@ -117,6 +120,12 @@
                 <td class="text-end">{{ ent.taken_days }}</td>
                 <td class="text-end fw-semibold">{{ ent.remaining_days }}</td>
               </tr>
+              {% if ent.exception_days %}
+              <tr class="table-light">
+                <td colspan="2" class="ps-4 text-muted small">+ {{ ent.exception_days }} exception days granted</td>
+                <td class="text-end text-muted small" colspan="2">{{ ent.effective_remaining_days }} available</td>
+              </tr>
+              {% endif %}
               {% endfor %}
             </tbody>
           </table>

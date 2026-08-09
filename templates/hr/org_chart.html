@@ -415,6 +415,33 @@
             </div>
         </div>
     </div>
+
+    <div class="row g-4 mt-1">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <strong>Balance-Hold Settings</strong>
+                    <span class="text-muted small">Who gets a held, reviewable request instead of a hard block when a leave request exceeds their available balance</span>
+                </div>
+                <div class="card-body">
+                    <form method="post" action="{% url 'hr:org_chart' %}?tab=access">
+                        {% csrf_token %}
+                        <div class="form-check mb-2">
+                            <input type="checkbox" name="allow_site_balance_hold" value="on" class="form-check-input" id="allowSiteHold"
+                                   {% if override_settings.allow_site_balance_hold %}checked{% endif %}>
+                            <label class="form-check-label" for="allowSiteHold">Site employees — hold instead of block (default: on)</label>
+                        </div>
+                        <div class="form-check mb-3">
+                            <input type="checkbox" name="allow_office_balance_hold" value="on" class="form-check-input" id="allowOfficeHold"
+                                   {% if override_settings.allow_office_balance_hold %}checked{% endif %}>
+                            <label class="form-check-label" for="allowOfficeHold">Office employees — hold instead of block (default: off)</label>
+                        </div>
+                        <button type="submit" name="set_balance_hold" value="save" class="btn btn-sm btn-primary">Save</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
     {% else %}
 
     {% if can_manage_org %}
