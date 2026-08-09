@@ -5992,3 +5992,175 @@ class AttendanceExportColorTests(TestCase):
                 break
         fill = target_row[col_16 - 1].fill.start_color.rgb
         self.assertEqual(fill[-6:].upper(), 'C6E0B4', 'Present cell is not the expected green color')
+
+
+class DirectManagerLeaveLoggingAccessTests(TestCase):
+    def setUp(self):
+        self.manager_user = User.objects.create_user(username='dmla-mgr', password='x')
+        self.manager = Employee.objects.create(
+            iqama_number='DMLA-MGR', full_name='Direct Manager', user=self.manager_user)
+        self.report = Employee.objects.create(
+            iqama_number='DMLA-RPT', full_name='Direct Report', main_manager=self.manager)
+        self.other_manager_user = User.objects.create_user(username='dmla-other', password='x')
+        Employee.objects.create(
+            iqama_number='DMLA-OTHERMGR', full_name='Other Manager', user=self.other_manager_user)
+        self.stranger = Employee.objects.create(iqama_number='DMLA-STRANGER', full_name='Stranger')
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30')})
+        LeaveEntitlement.objects.create(
+            employee=self.report, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+
+    def test_direct_manager_can_reach_the_log_request_page(self):
+        self.client.login(username='dmla-mgr', password='x')
+        resp = self.client.get(reverse('hr:leave_request_create'))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_direct_manager_sees_only_their_report_in_the_dropdown(self):
+        self.client.login(username='dmla-mgr', password='x')
+        resp = self.client.get(reverse('hr:leave_request_create'))
+        ids = set(resp.context['form'].fields['employee'].queryset.values_list('pk', flat=True))
+        self.assertEqual(ids, {self.report.pk})
+
+    def test_manager_with_no_reports_is_denied(self):
+        self.client.login(username='dmla-other', password='x')
+        resp = self.client.get(reverse('hr:leave_request_create'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_direct_manager_can_log_for_their_report(self):
+        self.client.login(username='dmla-mgr', password='x')
+        resp = self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(LeaveRequest.objects.filter(employee=self.report).exists())
+
+    def test_manager_cannot_log_for_a_non_report(self):
+        self.client.login(username='dmla-mgr', password='x')
+        resp = self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.stranger.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        })
+        self.assertEqual(resp.status_code, 200)  # form_invalid re-render, not a 302
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.stranger).exists())
+
+    def test_manager_cannot_log_for_their_own_manager(self):
+        # Upward abuse: DMLA-MGR reports to nobody here, but prove a manager
+        # two levels up can't reach a peer/superior via this dropdown either.
+        upline_user = User.objects.create_user(username='dmla-upline', password='x')
+        upline = Employee.objects.create(iqama_number='DMLA-UPLINE', full_name='Upline', user=upline_user)
+        self.manager.main_manager = upline
+        self.manager.save(update_fields=['main_manager'])
+        self.client.login(username='dmla-mgr', password='x')
+        resp = self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': upline.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(LeaveRequest.objects.filter(employee=upline).exists())
+
+    def test_manager_cannot_log_for_a_reports_report(self):
+        sub_report = Employee.objects.create(
+            iqama_number='DMLA-SUBRPT', full_name='Sub Report', main_manager=self.report)
+        self.client.login(username='dmla-mgr', password='x')
+        resp = self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': sub_report.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(LeaveRequest.objects.filter(employee=sub_report).exists())
+
+    def test_inactive_report_is_excluded_from_the_dropdown(self):
+        # A second active report keeps the manager on the page at all (with
+        # zero active reports they'd lose access entirely, per test_func) —
+        # this isolates "is the inactive one filtered out of the dropdown."
+        active_report = Employee.objects.create(
+            iqama_number='DMLA-ACTIVE', full_name='Still Active', main_manager=self.manager)
+        self.report.is_active = False
+        self.report.save(update_fields=['is_active'])
+        self.client.login(username='dmla-mgr', password='x')
+        resp = self.client.get(reverse('hr:leave_request_create'))
+        ids = set(resp.context['form'].fields['employee'].queryset.values_list('pk', flat=True))
+        self.assertNotIn(self.report.pk, ids)
+        self.assertIn(active_report.pk, ids)
+
+
+class ManagerLoggedRequestRoutingTests(TestCase):
+    def setUp(self):
+        self.manager_user = User.objects.create_user(username='mlrr-mgr', password='x')
+        self.manager = Employee.objects.create(
+            iqama_number='MLRR-MGR', full_name='Routing Manager', user=self.manager_user)
+        self.report = Employee.objects.create(
+            iqama_number='MLRR-RPT', full_name='Routing Report', main_manager=self.manager, work_location='site')
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        LeaveEntitlement.objects.create(
+            employee=self.report, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        self.approver_user = User.objects.create_user(username='mlrr-appr', password='x')
+        LeaveDashboardAccess.objects.create(user=self.approver_user, is_active=True)
+
+    def test_manager_logged_request_goes_to_the_normal_approver_roster(self):
+        self.client.login(username='mlrr-mgr', password='x')
+        self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        })
+        req = LeaveRequest.objects.get(employee=self.report)
+        self.assertEqual(req.status, 'pending')
+        self.assertEqual(list(req.approvals.values_list('approver', flat=True)), [self.approver_user.pk])
+
+    def test_manager_logged_request_is_not_auto_approved(self):
+        self.client.login(username='mlrr-mgr', password='x')
+        self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        })
+        req = LeaveRequest.objects.get(employee=self.report)
+        self.assertNotEqual(req.status, 'approved')
+
+    def test_manager_logged_over_cap_request_is_held_not_blocked(self):
+        self.client.login(username='mlrr-mgr', password='x')
+        resp = self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-01-01', 'end_date': '2026-02-15',  # 46 days, 1 over the 45-day Site baseline
+        })
+        self.assertEqual(resp.status_code, 302)
+        req = LeaveRequest.objects.get(employee=self.report)
+        self.assertTrue(req.exceeds_balance)
+        self.assertEqual(req.approvals.count(), 1)  # still the normal roster, not held-and-approver-less
+
+    def test_manager_never_sees_the_log_anyway_grant_option(self):
+        # A plain manager has no override access, so form_valid's
+        # can_grant-gated warning branch never triggers for them — the
+        # over-cap request goes straight through to a normal 302 redirect,
+        # never pausing on an in-page "Log Anyway" warning at all.
+        self.client.login(username='mlrr-mgr', password='x')
+        resp = self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-01-01', 'end_date': '2026-02-15',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(LeaveEntitlement.objects.get(employee=self.report).exception_days, Decimal('0'))
+
+
+class MyProfileTeamSectionTests(TestCase):
+    def setUp(self):
+        self.manager_user = User.objects.create_user(username='mpts-mgr', password='x')
+        self.manager = Employee.objects.create(
+            iqama_number='MPTS-MGR', full_name='Team Section Manager', user=self.manager_user)
+        self.report = Employee.objects.create(
+            iqama_number='MPTS-RPT', full_name='Team Section Report', main_manager=self.manager)
+        self.plain_user = User.objects.create_user(username='mpts-plain', password='x')
+        Employee.objects.create(iqama_number='MPTS-PLAIN', full_name='Plain Employee', user=self.plain_user)
+
+    def test_manager_sees_my_team_section_with_report_and_log_leave_link(self):
+        self.client.login(username='mpts-mgr', password='x')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'My Team')
+        self.assertContains(resp, 'Team Section Report')
+        self.assertContains(resp, f"{reverse('hr:leave_request_create')}?employee={self.report.pk}")
+
+    def test_plain_employee_does_not_see_my_team_section(self):
+        self.client.login(username='mpts-plain', password='x')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, 'My Team')

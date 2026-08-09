@@ -128,6 +128,17 @@ def can_view_team_exceptions(user):
     )
 
 
+def is_direct_manager_of_anyone(user):
+    """True if `user` is the live main_manager of at least one active
+    employee — the org-chart-derived counterpart to the Role-based
+    scoped_employee_ids(). Deliberately checks direct reports only (never
+    walks get_downstream_employee_ids) and deliberately does NOT touch
+    scoped_employee_ids/scope_asset_queryset — a manager's leave-logging
+    power must not leak into Asset/Attendance visibility as a side effect."""
+    emp = getattr(user, 'employee_profile', None)
+    return bool(emp and emp.main_reports.filter(is_active=True).exists())
+
+
 def can_decide_attendance_exception(user, exc):
     """True if user is the assigned main manager, OR user is HR (global
     visibility/override), OR user has an employee_profile that is upstream of
@@ -360,6 +371,9 @@ def my_profile(request):
         context['assets'] = Asset.objects.filter(id__in=asset_ids).order_by('asset_name')
         # Documents (iqama/passport copies, contracts, etc.).
         context['documents'] = emp.documents.all()
+        # Direct reports (live Org Chart relationship) — powers the "My Team"
+        # section's Log Leave links, independent of any HR Role.
+        context['my_team'] = emp.main_reports.filter(is_active=True).order_by('full_name')
         # Leave balance for the current year. The summary total only counts
         # standard accrued allowances (Annual) — conditional/incidental
         # leave (Sick, Marriage, Umrah, etc.) still appears in the per-type rows but
@@ -2108,23 +2122,37 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
 
 
 class LeaveRequestCreateView(HRScopedAccessMixin, FormView):
-    # HRScopedAccessMixin: Admin/Super Admin/ERP Admin (all employees) plus the
-    # team-scoped roles (their own reports only — enforced by scoping the
-    # employee dropdown in get_form). This view serves the "Add Leave" buttons
-    # (Entitlements -> Leave Summary / Attendance Matrix). A submitter can only
-    # *log* a request here — approving it in the queue stays with designated
-    # approvers.
+    # HRScopedAccessMixin covers the Role-based tiers (admin/super_admin/
+    # erp_admin, plus site/project_manager, document_controller); test_func
+    # is overridden below to also admit anyone who is the live main_manager
+    # of at least one active employee, independent of Role — direct reports
+    # only, never the downstream subtree (see is_direct_manager_of_anyone).
+    # This view serves the "Add Leave" buttons (Entitlements -> Leave
+    # Summary / Attendance Matrix) and My Profile's "My Team" section. A
+    # submitter can only *log* a request here — approving it in the queue
+    # stays with designated approvers, unchanged for manager-logged
+    # requests too.
     form_class = LeaveRequestForm
     template_name = 'hr/leave_request_form.html'
 
+    def test_func(self):
+        return can_manage_hr_scoped(self.request.user) or is_direct_manager_of_anyone(self.request.user)
+
     def get_form(self, form_class=None):
         form = super().get_form(form_class)
-        # Restrict the employee dropdown to the submitter's team. A scoped role
-        # thus cannot log leave for anyone outside their reports (an out-of-team
-        # pk would also fail ModelChoiceField validation).
+        if 'employee' not in form.fields:
+            return form
+        # Restrict the employee dropdown to the union of the submitter's
+        # Role-based team scope and their own live direct reports. A scoped
+        # role (or plain manager) thus cannot log leave for anyone outside
+        # that set (an out-of-scope pk would also fail ModelChoiceField
+        # validation).
         ids = scoped_employee_ids(self.request.user)
-        if ids is not None and 'employee' in form.fields:
-            form.fields['employee'].queryset = form.fields['employee'].queryset.filter(pk__in=ids)
+        if ids is None:
+            return form  # unrestricted (admin tiers) — direct reports add nothing new
+        emp = getattr(self.request.user, 'employee_profile', None)
+        direct_report_ids = set(emp.main_reports.filter(is_active=True).values_list('pk', flat=True)) if emp else set()
+        form.fields['employee'].queryset = form.fields['employee'].queryset.filter(pk__in=(ids | direct_report_ids))
         return form
 
     def get_initial(self):
