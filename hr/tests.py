@@ -6390,3 +6390,326 @@ class ManagerSeesOnlyTheirOwnInBehalfStatusTests(TestCase):
         })
         resp = self.client.get(reverse('hr:my_profile'))
         self.assertNotContains(resp, 'Logged by your manager')
+
+
+class LeaveQueueHistoryCollapseTests(TestCase):
+    """History card on the Leave Approval Queue is collapsed by default so a
+    long history doesn't push the Pending section down the page, but the
+    data is still in the DOM (Bootstrap collapse hides via CSS, not by
+    dropping markup) and the header shows an accurate count badge."""
+
+    def setUp(self):
+        self.emp = make_employee(iqama='LQHC-1', name='Queue History Employee')
+        self.lt, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.superadmin = make_user('lqhc_super', password='x')
+        self.superadmin.set_password('testpass123')
+        from accounts.models import Role
+        role, _ = Role.objects.get_or_create(name='super_admin')
+        self.superadmin.role = role
+        self.superadmin.save()
+
+    def _decided_request(self, n, status='approved'):
+        req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.lt,
+            start_date=_date(2026, 1, n), end_date=_date(2026, 1, n + 1))
+        req.status = status
+        req.decided_at = timezone.now()
+        req.save(update_fields=['status', 'decided_at'])
+        return req
+
+    def test_history_panel_collapsed_by_default(self):
+        self._decided_request(1)
+        self.client.login(username='lqhc_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        content = resp.content.decode()
+        self.assertIn('<div class="collapse" id="leaveHistoryCollapse">', content)
+
+    def test_history_badge_shows_accurate_count(self):
+        for n in range(1, 4):
+            self._decided_request(n)
+        self.client.login(username='lqhc_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertContains(resp, '<span class="badge bg-secondary ms-1">3</span>')
+
+    def test_decided_request_data_still_renders_while_collapsed(self):
+        self._decided_request(1)
+        self.client.login(username='lqhc_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        # The row is present in the response body even though the panel
+        # starts visually collapsed — Bootstrap's collapse only toggles a
+        # CSS class, it never removes the content from the page.
+        self.assertContains(resp, self.emp.full_name)
+
+    def test_history_panel_scoped_to_only_decided_requests(self):
+        # A large pending queue must not get swept into the same collapsed
+        # panel or count — Pending stays its own always-visible section.
+        LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.lt,
+            start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 2))
+        self._decided_request(1)
+        self.client.login(username='lqhc_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertContains(resp, '<span class="badge bg-secondary ms-1">1</span>')
+
+
+class TeamExceptionsHistoryCollapseTests(TestCase):
+    """Same collapsible-History treatment on Team Exceptions, verified
+    alongside its existing per-row inline Override collapse form to make
+    sure the two nested collapses don't collide."""
+
+    def setUp(self):
+        self.manager = make_employee(iqama='TEHC-MGR', name='TE History Manager')
+        self.manager_user = _login_user('tehc_mgr')
+        self.manager.user = self.manager_user
+        self.manager.save(update_fields=['user'])
+        self.report = make_employee(iqama='TEHC-REPORT', name='TE History Report')
+        self.report.main_manager = self.manager
+        self.report.save(update_fields=['main_manager'])
+        self.creator = make_user('tehc_creator')
+
+    def test_history_panel_collapsed_by_default(self):
+        exc = _submit_aex(
+            employee=self.report, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+        decide_attendance_exception(exc, self.manager_user, 'approved')
+        self.client.login(username='tehc_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        content = resp.content.decode()
+        self.assertIn('<div class="collapse" id="exceptionHistoryCollapse">', content)
+
+    def test_history_badge_shows_accurate_count(self):
+        for day in (18, 19, 20):
+            exc = _submit_aex(
+                employee=self.report, event_date=_date(2026, 7, day), event_start_time=_time(9, 0),
+                reason_category='site_visit', created_by=self.creator)
+            decide_attendance_exception(exc, self.manager_user, 'approved')
+        self.client.login(username='tehc_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertContains(resp, '<span class="badge bg-secondary ms-1">3</span>')
+
+    def test_overridden_attribution_still_renders_inside_collapsed_history(self):
+        # History only ever holds already-decided (approved/rejected) rows
+        # — 'expired' stays in the active Pending queue until a human acts,
+        # so the per-row Override *form* never actually appears in History
+        # (can_override requires status in pending/expired). What DOES
+        # render there is the "Overridden by {name}" attribution on a row
+        # that was decided via Override — confirm that per-row conditional
+        # content still renders correctly nested inside the new outer
+        # History collapse wrapper.
+        exc = _submit_aex(
+            employee=self.report, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+        override_attendance_exception(exc, self.manager_user, 'approved', reason='Covering for the assigned manager.')
+        self.client.login(username='tehc_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertContains(resp, 'Overridden by')
+
+
+class MyProfileHistoryCollapseTests(TestCase):
+    """My Profile: both 'My Leave Requests' and 'My Attendance Exceptions'
+    get the same collapsed-by-default History treatment as the queue
+    pages, scoped to just the table (the request/report forms above each
+    table must stay visible, not get swept into the collapse)."""
+
+    def setUp(self):
+        self.emp = make_employee(iqama='MPHC-1', name='Profile History Employee')
+        self.user = _login_user('mphc_user')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        self.lt, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=3)
+
+    def test_leave_requests_history_collapsed_by_default_with_count(self):
+        LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.lt, start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 2))
+        self.client.login(username='mphc_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        content = resp.content.decode()
+        self.assertIn('<div class="collapse" id="myLeaveRequestsCollapse">', content)
+        self.assertContains(resp, '<span class="badge bg-secondary ms-1">1</span>')
+
+    def test_request_leave_form_stays_outside_the_history_collapse(self):
+        # The "Request Leave" form toggle is a separate, always-reachable
+        # control — it must not end up nested inside the collapsed history.
+        self.client.login(username='mphc_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'id="requestLeaveForm"')
+
+    def test_attendance_exceptions_history_collapsed_by_default_with_count(self):
+        _submit_aex(employee=self.emp, event_date=_date(2026, 7, 20), event_start_time=_time(9, 30),
+                    reason_category='site_visit', created_by=self.user)
+        self.client.login(username='mphc_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        content = resp.content.decode()
+        self.assertIn('<div class="collapse" id="myExceptionsCollapse">', content)
+        self.assertContains(resp, '<span class="badge bg-secondary ms-1">1</span>')
+
+    def test_report_exception_form_stays_outside_the_history_collapse(self):
+        self.client.login(username='mphc_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'id="reportExceptionForm"')
+
+
+class MyProfileDirectReportsCollapseTests(TestCase):
+    """Direct Reports (inside 'My Reporting Structure') gets the same
+    collapse affordance as the History sections, but — unlike History,
+    which is past/reference data — it's the card's primary actionable
+    content (the Log Leave button lives there), so it defaults to
+    expanded rather than hidden."""
+
+    def setUp(self):
+        self.manager = make_employee(iqama='MPDR-MGR', name='Direct Reports Manager')
+        self.manager_user = _login_user('mpdr_mgr')
+        self.manager.user = self.manager_user
+        self.manager.save(update_fields=['user'])
+
+    def test_direct_reports_panel_defaults_expanded(self):
+        report = make_employee(iqama='MPDR-REPORT', name='Direct Reports Report')
+        report.main_manager = self.manager
+        report.save(update_fields=['main_manager'])
+        self.client.login(username='mpdr_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        content = resp.content.decode()
+        self.assertIn('<div class="collapse show" id="directReportsCollapse">', content)
+        self.assertContains(resp, 'Direct Reports Report')
+
+    def test_no_toggle_rendered_when_there_are_no_direct_reports(self):
+        self.client.login(username='mpdr_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, 'id="directReportsCollapse"')
+
+
+class ApprovalDecisionMessageVisibilityTests(TestCase):
+    """Bug fix: a message an approver types while deciding a leave request
+    used to be saved only on LeaveRequestApproval.comment, which nothing
+    employee-facing ever reads — a plain employee can't reach
+    leave_request_detail.html (it's gated to can_view_leave_dashboard), so
+    the message was effectively invisible to the person it was about.
+    record_approver_decision now also creates an employee-visible
+    LeaveRequestNote, and My Profile renders it behind a small toggle so it
+    doesn't clutter the page when there's nothing to show."""
+
+    def setUp(self):
+        self.emp = make_employee(iqama='ADMV-1')
+        self.lt, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.user = _login_user('admv_user')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=3)
+        self.approver = User.objects.create_user(
+            username='admv-approver', password='x', first_name='Admv', last_name='Approver')
+        LeaveDashboardAccess.objects.create(user=self.approver, is_active=True)
+        # Roster is snapshotted onto the request AT SUBMISSION TIME (see
+        # submit_leave_request) — the approver's LeaveDashboardAccess grant
+        # must exist before this call, or no LeaveRequestApproval row gets
+        # created for them.
+        self.req = submit_leave_request(
+            employee=self.emp, leave_type=self.lt, start_date=date(2026, 8, 1), end_date=date(2026, 8, 2),
+            created_by=self.user)
+
+    def test_decision_comment_creates_an_employee_visible_note(self):
+        record_approver_decision(self.req, self.approver, 'approved', comment='Approved — enjoy your trip.')
+        self.assertEqual(self.req.notes.count(), 1)
+        note = self.req.notes.first()
+        self.assertFalse(note.is_internal)
+        self.assertEqual(note.note, 'Approved — enjoy your trip.')
+        self.assertEqual(note.author, self.approver)
+
+    def test_decision_without_comment_creates_no_note(self):
+        record_approver_decision(self.req, self.approver, 'approved')
+        self.assertEqual(self.req.notes.count(), 0)
+
+    def test_message_shows_on_my_profile_behind_a_toggle(self):
+        record_approver_decision(self.req, self.approver, 'approved', comment='Approved — enjoy your trip.')
+        self.client.login(username='admv_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, '1 message from HR')
+        self.assertContains(resp, 'Approved — enjoy your trip.')
+        self.assertContains(resp, f'id="leaveNotes{self.req.pk}"')
+
+    def test_no_toggle_rendered_when_there_is_no_message(self):
+        record_approver_decision(self.req, self.approver, 'approved')
+        self.client.login(username='admv_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, 'message from HR')
+
+    def test_internal_only_note_never_shows_on_my_profile(self):
+        LeaveRequestNote.objects.create(
+            leave_request=self.req, author=self.approver, note='Internal HR context.', is_internal=True)
+        self.client.login(username='admv_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, 'Internal HR context.')
+
+
+class LeaveDecisionFormUXTests(TestCase):
+    """The decide form now carries an optional employee-message field
+    directly (one submit for decision + message, instead of a second,
+    separate Add Note submission), and both the initial-decide and
+    edit-decide forms confirm before submitting."""
+
+    def setUp(self):
+        self.emp = make_employee(iqama='LDFU-1')
+        self.lt, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.approver = make_user('ldfu-approver', password='x')
+        self.approver.set_password('testpass123')
+        self.approver.save()
+        LeaveDashboardAccess.objects.create(user=self.approver, is_active=True)
+        self.req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.lt, start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 2))
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=self.approver)
+        self.client.login(username='ldfu-approver', password='testpass123')
+
+    def test_decide_form_has_message_field_and_confirmation(self):
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertContains(resp, 'Add a message for the employee')
+        self.assertContains(resp, "onsubmit=\"return confirm(")
+        self.assertContains(resp, 'name="comment"')
+
+    def test_single_submit_decides_and_creates_note_together(self):
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]), {
+            'action': 'decide', 'decision': 'approved', 'comment': 'All set.',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'approved')
+        self.assertEqual(self.req.notes.count(), 1)
+
+
+class SalaryDeductionCompactUITests(TestCase):
+    """The salary-deduction warning must stay reachable but not stretch the
+    My Leave Requests table row — collapsed behind a small toggle (same
+    pattern as the HR-message toggle) instead of an always-visible
+    sentence that pushed the row taller."""
+
+    def setUp(self):
+        self.emp = make_employee(iqama='SDCU-1')
+        self.lt, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        self.user = _login_user('sdcu_user')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=3)
+        req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.lt, start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 2))
+        req.status = 'disapproved'
+        req.salary_deduction_applicable = True
+        req.save(update_fields=['status', 'salary_deduction_applicable'])
+        self.req = req
+        self.client.login(username='sdcu_user', password='testpass123')
+
+    def test_message_reachable_behind_a_compact_toggle(self):
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'Taking this leave will result in a salary deduction.')
+        self.assertContains(resp, f'id="salaryDeduction{self.req.pk}"')
+        content = resp.content.decode()
+        self.assertIn(f'<div class="collapse" id="salaryDeduction{self.req.pk}">', content)
+
+    def test_no_toggle_when_not_applicable(self):
+        self.req.salary_deduction_applicable = False
+        self.req.save(update_fields=['salary_deduction_applicable'])
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, 'Salary deduction')

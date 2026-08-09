@@ -49,6 +49,18 @@ def record_approver_decision(leave_request, approver_user, decision, comment='')
         approval.decided_at = timezone.now()
         approval.save(update_fields=['decision', 'comment', 'decided_at'])
 
+        if comment and comment.strip():
+            # A comment typed alongside the decision IS the message to the
+            # employee — mirrored onto a LeaveRequestNote (is_internal=False
+            # by default) so it actually reaches My Profile, the only page a
+            # plain employee can view their own request from. Previously
+            # this text was saved only on the LeaveRequestApproval row,
+            # which nothing employee-facing ever reads — a decision comment
+            # was effectively invisible to the person it was about.
+            from hr.models import LeaveRequestNote
+            LeaveRequestNote.objects.create(
+                leave_request=leave_request, author=approver_user, note=comment.strip())
+
         _reconcile(leave_request)
     leave_request.refresh_from_db()
     if leave_request.status == 'pending':

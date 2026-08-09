@@ -384,10 +384,16 @@ def my_profile(request):
         context['leave_total_remaining'] = sum((e.remaining_days for e in accumulative), Decimal('0'))
         context['leave_total_exception'] = sum((e.exception_days for e in accumulative), Decimal('0'))
         # This employee's own leave requests (pending/approved/disapproved), newest first.
-        context['leave_requests'] = (
+        context['leave_requests'] = list(
             emp.leave_requests.select_related('leave_type', 'overridden_by')
-            .prefetch_related('approvals__approver')
+            .prefetch_related('approvals__approver', 'notes__author')
             .order_by('-created_at')[:10])
+        for r in context['leave_requests']:
+            # Only employee-facing notes (is_internal=False) — internal HR
+            # notes must never leak here. Filtered in Python against the
+            # prefetch cache rather than a second queryset, so this doesn't
+            # cost an extra query per row.
+            r.visible_notes = [n for n in r.notes.all() if not n.is_internal]
         # This employee's own attendance exceptions, newest event first.
         context['my_attendance_exceptions'] = emp.attendance_exceptions.order_by('-event_date')[:10]
         # Attendance summary for the current month.
