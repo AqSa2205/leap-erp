@@ -7320,3 +7320,83 @@ class MyProfileRequestRevokeLeaveUITests(TestCase):
         revoke_leave_request(self.req, revoker, 'Applied for testing.')
         resp = self.client.get(reverse('hr:my_profile'))
         self.assertContains(resp, 'Revoked')
+
+
+class MyProfileExceptionEditDeleteUITests(TestCase):
+    def setUp(self):
+        self.emp = make_employee(iqama='MPEED-1')
+        self.user = _login_user('mpeed_user')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        self.exc = _submit_aex(
+            employee=self.emp, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.user)
+        self.client.login(username='mpeed_user', password='testpass123')
+
+    def test_edit_delete_buttons_render_for_own_pending_exception(self):
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, f'edit_attendance_exception_{self.exc.pk}')
+        self.assertContains(resp, f'delete_attendance_exception_{self.exc.pk}')
+
+    def test_no_buttons_once_decided(self):
+        self.exc.status = 'approved'
+        self.exc.save(update_fields=['status'])
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, f'delete_attendance_exception_{self.exc.pk}')
+
+    def test_post_edit_updates_exception(self):
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'edit_attendance_exception', 'request_id': self.exc.pk,
+            'event_date': '2026-07-21', 'event_start_time': '10:00',
+            'reason_category': 'outside_meeting', 'custom_reason': '',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.exc.refresh_from_db()
+        self.assertEqual(self.exc.event_date, _date(2026, 7, 21))
+        self.assertEqual(self.exc.reason_category, 'outside_meeting')
+
+    def test_post_delete_removes_exception(self):
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'delete_attendance_exception', 'request_id': self.exc.pk,
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(AttendanceException.objects.filter(pk=self.exc.pk).exists())
+
+
+class MyProfileRequestRevokeExceptionUITests(TestCase):
+    def setUp(self):
+        self.manager = make_employee(iqama='MPRRE-MGR', name='RRE Manager')
+        self.manager_user = _login_user('mprre_mgr')
+        self.manager.user = self.manager_user
+        self.manager.save(update_fields=['user'])
+        self.emp = make_employee(iqama='MPRRE-1')
+        self.emp.main_manager = self.manager
+        self.emp.save(update_fields=['main_manager'])
+        self.user = _login_user('mprre_user')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        self.exc = _submit_aex(
+            employee=self.emp, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.user)
+        decide_attendance_exception(self.exc, self.manager_user, 'approved')
+        self.exc.refresh_from_db()
+        self.client.login(username='mprre_user', password='testpass123')
+
+    def test_request_revoke_button_renders(self):
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, f'request_revoke_exception_{self.exc.pk}')
+
+    def test_post_creates_pending_revoke_request(self):
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'request_attendance_exception_revoke', 'request_id': self.exc.pk, 'reason': 'No longer needed.',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(AttendanceExceptionRevokeRequest.objects.filter(
+            attendance_exception=self.exc, status='pending').exists())
+
+    def test_revoked_badge_renders(self):
+        from hr.attendance_exception_services import revoke_attendance_exception
+        revoker = _login_user('mprre_revoker')
+        revoke_attendance_exception(self.exc, revoker, 'Applied for testing.')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'Revoked')

@@ -407,6 +407,57 @@ def my_profile(request):
         exception_form = AttendanceExceptionForm()
     context['attendance_exception_form'] = exception_form
 
+    is_edit_exception_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'edit_attendance_exception')
+    if is_edit_exception_post:
+        from hr.attendance_exception_services import edit_attendance_exception
+        target = AttendanceException.objects.filter(pk=request.POST.get('request_id')).first()
+        if target is None or target.created_by_id != request.user.id:
+            return HttpResponse('You did not submit this request.', status=403)
+        edit_exc_form = AttendanceExceptionForm(request.POST)
+        if edit_exc_form.is_valid():
+            try:
+                edit_attendance_exception(
+                    target, request.user, event_date=edit_exc_form.cleaned_data['event_date'],
+                    event_start_time=edit_exc_form.cleaned_data['event_start_time'],
+                    reason_category=edit_exc_form.cleaned_data['reason_category'],
+                    custom_reason=edit_exc_form.cleaned_data['custom_reason'],
+                    employee_comment=edit_exc_form.cleaned_data['employee_comment'])
+                messages.success(request, 'Attendance exception updated.')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+        else:
+            messages.error(request, 'Could not update the exception — please check the form.')
+        return redirect('hr:my_profile')
+
+    is_delete_exception_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'delete_attendance_exception')
+    if is_delete_exception_post:
+        from hr.attendance_exception_services import delete_attendance_exception
+        target = AttendanceException.objects.filter(pk=request.POST.get('request_id')).first()
+        if target is None or target.created_by_id != request.user.id:
+            return HttpResponse('You did not submit this request.', status=403)
+        try:
+            delete_attendance_exception(target, request.user)
+            messages.success(request, 'Attendance exception deleted.')
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        return redirect('hr:my_profile')
+
+    is_request_revoke_exception_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'request_attendance_exception_revoke')
+    if is_request_revoke_exception_post:
+        from hr.attendance_exception_services import request_attendance_exception_revoke
+        target = AttendanceException.objects.filter(pk=request.POST.get('request_id')).first()
+        if target is None or not (target.employee.user_id and target.employee.user_id == request.user.id):
+            return HttpResponse('This is not your attendance exception.', status=403)
+        try:
+            request_attendance_exception_revoke(target, request.user, request.POST.get('reason', ''))
+            messages.success(request, 'Revoke requested — it will not take effect until reviewed.')
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        return redirect('hr:my_profile')
+
     if emp:
         today = timezone.localtime(timezone.now()).date()
         # Assets in custody. The roster tracks holders two ways: proper
@@ -453,7 +504,13 @@ def my_profile(request):
                 and not r.revoke_requests.filter(status='pending').exists())
             r.pending_revoke_request = r.revoke_requests.filter(status='pending').first()
         # This employee's own attendance exceptions, newest event first.
-        context['my_attendance_exceptions'] = emp.attendance_exceptions.order_by('-event_date')[:10]
+        context['my_attendance_exceptions'] = list(emp.attendance_exceptions.order_by('-event_date')[:10])
+        for e in context['my_attendance_exceptions']:
+            e.can_edit_delete = bool(e.created_by_id == request.user.id and e.status == 'pending')
+            e.can_request_revoke = bool(
+                e.employee.user_id == request.user.id and e.status == 'approved'
+                and not e.revoke_requests.filter(status='pending').exists())
+            e.pending_revoke_request = e.revoke_requests.filter(status='pending').first()
         # Attendance summary for the current month.
         # Attendance for the selected month (defaults to current month; user can
         # navigate Prev/Next via ?date=YYYY-MM-DD in the query string).
