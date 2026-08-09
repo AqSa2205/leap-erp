@@ -7561,3 +7561,45 @@ class PendingRevokeRequestsLeaveQueueUITests(TestCase):
         # 1 pending revoke request; no pending LeaveRequest (the only one was
         # already approved in setUp) — the badge count is exactly 1.
         self.assertEqual(resp.context['leave_requests_pending_count'], 1)
+
+
+class PendingRevokeRequestsTeamExceptionsUITests(TestCase):
+    def setUp(self):
+        self.manager = make_employee(iqama='PRRTE-MGR', name='PRRTE Manager')
+        self.manager_user = _login_user('prrte_mgr')
+        self.manager.user = self.manager_user
+        self.manager.save(update_fields=['user'])
+        self.emp = make_employee(iqama='PRRTE-1')
+        self.emp.main_manager = self.manager
+        self.emp.save(update_fields=['main_manager'])
+        self.user = _login_user('prrte_user')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        self.exc = _submit_aex(
+            employee=self.emp, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.user)
+        decide_attendance_exception(self.exc, self.manager_user, 'approved')
+        self.exc.refresh_from_db()
+        self.revoke_req = AttendanceExceptionRevokeRequest.objects.create(
+            attendance_exception=self.exc, requested_by=self.user, reason='No longer needed.')
+        self.client.login(username='prrte_mgr', password='testpass123')
+
+    def test_pending_revoke_request_shows_for_assigned_manager(self):
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        self.assertContains(resp, 'No longer needed.')
+        self.assertEqual(list(resp.context['pending_exception_revoke_requests']), [self.revoke_req])
+
+    def test_approve_applies_the_revoke(self):
+        resp = self.client.post(reverse('hr:team_exceptions'), {
+            'action': 'decide_revoke_request', 'revoke_request_id': self.revoke_req.pk, 'decision': 'approved',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.exc.refresh_from_db()
+        self.assertEqual(self.exc.status, 'revoked')
+
+    def test_sidebar_badge_includes_pending_revoke_requests(self):
+        # hr_dashboard is admin-only and this manager has no Role — use
+        # my_profile (universally reachable) to read the context
+        # processor's injected badge count instead.
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(resp.context['team_exceptions_direct_count'], 1)

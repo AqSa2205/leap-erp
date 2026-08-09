@@ -18,23 +18,29 @@ def pending_counts(request):
             + LeaveRevokeRequest.objects.filter(status='pending').count())
 
     if can_view_team_exceptions(user):
+        from .models import AttendanceExceptionRevokeRequest
         emp = getattr(user, 'employee_profile', None)
         is_hr = bool(user.is_super_admin_user or user.is_admin_user)
         active_qs = AttendanceException.objects.filter(status__in=('pending', 'expired'))
+        revoke_qs = AttendanceExceptionRevokeRequest.objects.filter(status='pending')
         if emp:
             direct = active_qs.filter(employee__main_manager=emp).exclude(employee__user=user)
             secondary = active_qs.filter(employee__secondary_managers=emp).exclude(employee__user=user)
+            direct_revokes = revoke_qs.filter(attendance_exception__employee__main_manager=emp)
+            secondary_revokes = revoke_qs.filter(attendance_exception__employee__secondary_managers=emp)
         else:
             direct = active_qs.none()
             secondary = active_qs.none()
-        ctx['team_exceptions_direct_count'] = direct.count()
-        ctx['team_exceptions_secondary_count'] = secondary.count()
+            direct_revokes = revoke_qs.none()
+            secondary_revokes = revoke_qs.none()
+        ctx['team_exceptions_direct_count'] = direct.count() + direct_revokes.count()
+        ctx['team_exceptions_secondary_count'] = secondary.count() + secondary_revokes.count()
         total = ctx['team_exceptions_direct_count'] + ctx['team_exceptions_secondary_count']
         if is_hr:
             # HR's org-wide reach is the broadest view they have of this
             # queue — the dot reflects that total, not just their own
             # direct/secondary reports.
-            ctx['team_exceptions_all_count'] = active_qs.count()
+            ctx['team_exceptions_all_count'] = active_qs.count() + revoke_qs.count()
             total = ctx['team_exceptions_all_count']
         ctx['team_exceptions_pending_count'] = total
 

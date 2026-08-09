@@ -16,7 +16,7 @@ from datetime import datetime, date, timedelta
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-from .models import Employee, Asset, AssetAssignment, Vehicle, VehicleDocument, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay, WFHRecord, LeaveRequest, AttendanceException, LeaveRevokeRequest
+from .models import Employee, Asset, AssetAssignment, Vehicle, VehicleDocument, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay, WFHRecord, LeaveRequest, AttendanceException, LeaveRevokeRequest, AttendanceExceptionRevokeRequest
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm, AssetIssueForm, AssetReturnForm,
@@ -3298,6 +3298,11 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         # shown (even empty) for everyone who can reach this page.
         ctx['show_all_tab'] = is_hr
         ctx['can_revoke'] = has_override_access(user)
+        ctx['pending_exception_revoke_requests'] = (
+            AttendanceExceptionRevokeRequest.objects.filter(
+                status='pending', attendance_exception__in=self._tab_queryset(tab, user, emp))
+            .select_related('attendance_exception__employee', 'requested_by')
+            .order_by('created_at'))
         # Per-tab pending counts for the tab labels — always all three
         # (regardless of which tab is currently selected), so switching tabs
         # doesn't need a second request to know what the other tabs hold.
@@ -3357,6 +3362,20 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
             try:
                 revoke_attendance_exception(exc, request.user, request.POST.get('reason', ''))
                 messages.success(request, 'Attendance exception revoked.')
+            except ValueError as e:
+                messages.error(request, str(e))
+
+        elif action == 'decide_revoke_request':
+            from hr.attendance_exception_services import decide_attendance_exception_revoke_request
+            revoke_req = AttendanceExceptionRevokeRequest.objects.filter(
+                pk=request.POST.get('revoke_request_id')).first()
+            if revoke_req is None:
+                raise Http404('No such revoke request.')
+            try:
+                decide_attendance_exception_revoke_request(
+                    revoke_req, request.user, request.POST.get('decision'),
+                    decision_note=request.POST.get('decision_note', ''))
+                messages.success(request, 'Revoke request decided.')
             except ValueError as e:
                 messages.error(request, str(e))
 
