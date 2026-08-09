@@ -6651,8 +6651,8 @@ class ApprovalDecisionMessageVisibilityTests(TestCase):
 class LeaveDecisionFormUXTests(TestCase):
     """The decide form now carries an optional employee-message field
     directly (one submit for decision + message, instead of a second,
-    separate Add Note submission), and both the initial-decide and
-    edit-decide forms confirm before submitting."""
+    separate Add Note submission), laid out as numbered steps
+    (1. decision, 2. message, 3. submit)."""
 
     def setUp(self):
         self.emp = make_employee(iqama='LDFU-1')
@@ -6667,11 +6667,13 @@ class LeaveDecisionFormUXTests(TestCase):
         LeaveRequestApproval.objects.create(leave_request=self.req, approver=self.approver)
         self.client.login(username='ldfu-approver', password='testpass123')
 
-    def test_decide_form_has_message_field_and_confirmation(self):
+    def test_decide_form_has_numbered_steps_and_message_field(self):
         resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertContains(resp, '1. Choose a decision')
         self.assertContains(resp, 'Add a message for the employee')
-        self.assertContains(resp, "onsubmit=\"return confirm(")
         self.assertContains(resp, 'name="comment"')
+        content = resp.content.decode()
+        self.assertIn('<span class="fw-semibold small">3.</span>', content)
 
     def test_single_submit_decides_and_creates_note_together(self):
         resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]), {

@@ -252,3 +252,60 @@ def grant_exception_days(*, employee, leave_type, year, days, granted_by, reason
     return LeaveExceptionGrant.objects.create(
         employee=employee, leave_type=leave_type, year=year, days=days,
         granted_by=granted_by, reason=reason.strip())
+
+
+def edit_leave_request(leave_request, editing_user, *, leave_type, start_date, end_date,
+                       employee_reason='', document=None):
+    """The creator edits their own still-pending, undecided request in
+    place. Re-runs the exact same balance/overlap validation a fresh
+    submission would (via exclude_request_id, so the request doesn't
+    collide with its own unmodified row) — an edit is not exempt from the
+    rules that applied to the original submission, and could newly become
+    exceeds_balance if the new dates push it over the balance-hold
+    threshold, exactly like any other submission.
+
+    Does NOT reset the approver roster — the same LeaveDashboardAccess
+    snapshot taken at original submission stays; this is safe because the
+    lock condition below guarantees nobody has decided yet, so there's
+    nothing to invalidate."""
+    from hr.leave_services import validate_leave_submission
+
+    if leave_request.created_by_id != editing_user.id:
+        raise ValueError('Only the person who submitted this request can edit it.')
+    leave_request.refresh_from_db()
+    if leave_request.status != 'pending':
+        raise ValueError('This request has already been decided and can no longer be edited.')
+    if leave_request.approvals.exclude(decision='pending').exists():
+        raise ValueError('An approver has already recorded a decision on this request; it can no longer be edited.')
+
+    with transaction.atomic():
+        exceeds_balance = validate_leave_submission(
+            leave_request.employee, leave_type, start_date, end_date, lock=True,
+            exclude_request_id=leave_request.pk)
+        leave_request.leave_type = leave_type
+        leave_request.start_date = start_date
+        leave_request.end_date = end_date
+        leave_request.employee_reason = employee_reason
+        if document is not None:
+            leave_request.document = document
+        leave_request.exceeds_balance = exceeds_balance
+        leave_request.days = leave_request.computed_days()
+        leave_request.save(update_fields=[
+            'leave_type', 'start_date', 'end_date', 'employee_reason', 'document',
+            'exceeds_balance', 'days', 'updated_at'])
+    return leave_request
+
+
+def delete_leave_request(leave_request, deleting_user):
+    """The creator withdraws their own still-pending, undecided request.
+    No LeaveRecord exists yet at this stage (only created on approval —
+    see _finalize), so there's nothing else to clean up; approvals cascade-
+    delete with the row."""
+    if leave_request.created_by_id != deleting_user.id:
+        raise ValueError('Only the person who submitted this request can delete it.')
+    leave_request.refresh_from_db()
+    if leave_request.status != 'pending':
+        raise ValueError('This request has already been decided and can no longer be deleted.')
+    if leave_request.approvals.exclude(decision='pending').exists():
+        raise ValueError('An approver has already recorded a decision on this request; it can no longer be deleted.')
+    leave_request.delete()

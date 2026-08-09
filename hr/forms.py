@@ -511,7 +511,7 @@ class WFHRecordForm(forms.ModelForm):
         }
 
 
-def check_leave_balance(employee, leave_type, start_date, end_date):
+def check_leave_balance(employee, leave_type, start_date, end_date, exclude_request_id=None):
     """Form-level fast-fail check: block a leave submission that would
     exceed the employee's remaining balance, or overlaps another leave they
     already have. Shared by every leave-creation entry point (admin
@@ -527,7 +527,8 @@ def check_leave_balance(employee, leave_type, start_date, end_date):
     fast with a friendly message before that point."""
     from .leave_services import validate_leave_submission
     try:
-        validate_leave_submission(employee, leave_type, start_date, end_date, lock=False)
+        validate_leave_submission(employee, leave_type, start_date, end_date, lock=False,
+                                  exclude_request_id=exclude_request_id)
     except ValueError as exc:
         raise forms.ValidationError(str(exc))
 
@@ -545,9 +546,10 @@ class LeaveRequestForm(forms.Form):
         required=False, widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 3}))
     document = forms.FileField(required=False, widget=forms.ClearableFileInput(attrs={'class': 'form-control'}))
 
-    def __init__(self, *args, fixed_employee=None, **kwargs):
+    def __init__(self, *args, fixed_employee=None, exclude_request_id=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.fixed_employee = fixed_employee
+        self.exclude_request_id = exclude_request_id
         if fixed_employee is not None:
             del self.fields['employee']
 
@@ -575,7 +577,8 @@ class LeaveRequestForm(forms.Form):
                 self.add_error('document',
                     f'A medical certificate/document is required for {leave_type.name} leave.')
             else:
-                check_leave_balance(employee, leave_type, start_date, end_date)
+                check_leave_balance(employee, leave_type, start_date, end_date,
+                                    exclude_request_id=self.exclude_request_id)
         return cleaned
 
 
