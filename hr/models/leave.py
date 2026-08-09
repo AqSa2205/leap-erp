@@ -264,6 +264,7 @@ class LeaveRequest(models.Model):
         ('approved', 'Approved'),
         ('disapproved', 'Disapproved'),
         ('cancelled', 'Cancelled'),
+        ('revoked', 'Revoked'),
     ]
 
     employee = models.ForeignKey('hr.Employee', on_delete=models.CASCADE, related_name='leave_requests')
@@ -296,6 +297,10 @@ class LeaveRequest(models.Model):
     overridden_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
                                       related_name='leave_requests_overridden')
     override_reason = models.TextField(blank=True)
+    revoked_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name='leave_requests_revoked')
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoke_reason = models.TextField(blank=True)
     decided_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -379,6 +384,39 @@ class LeaveRequestApproval(models.Model):
 
     def __str__(self):
         return f"{self.approver} -> {self.decision} on request #{self.leave_request_id}"
+
+
+class LeaveRevokeRequest(models.Model):
+    """An employee's request to void their own already-approved leave (e.g.
+    a project emergency means they can no longer take it) — decided by the
+    same roster that decides normal leave requests (LeaveDashboardAccess +
+    Super Admins), NOT by the employee's manager specifically. Distinct from
+    a Super Admin's direct revoke (see LeaveRequest.revoked_by/revoked_at/
+    revoke_reason) — this model exists only to track the request-and-review
+    step; applying the revoke itself still goes through the same mechanism
+    (see hr.leave_approval_services.revoke_leave_request)."""
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
+    leave_request = models.ForeignKey(LeaveRequest, on_delete=models.CASCADE, related_name='revoke_requests')
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='+')
+    reason = models.TextField()
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    decided_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name='+')
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.TextField(
+        blank=True, help_text='Required when rejecting; optional when approving (the reason already explains why).')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"Revoke request for leave request #{self.leave_request_id} ({self.status})"
 
 
 class LeaveRequestNote(models.Model):

@@ -158,7 +158,8 @@ from decimal import Decimal
 from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
 from hr.models import (Employee, LeaveEntitlement, LeaveRecord, LeaveExceptionGrant,
-                       LeaveDashboardAccess, LeaveRequest, LeaveRequestApproval, LeaveRequestNote)
+                       LeaveDashboardAccess, LeaveRequest, LeaveRequestApproval, LeaveRequestNote,
+                       LeaveRevokeRequest)
 
 User = get_user_model()
 
@@ -6718,3 +6719,35 @@ class SalaryDeductionCompactUITests(TestCase):
         self.req.save(update_fields=['salary_deduction_applicable'])
         resp = self.client.get(reverse('hr:my_profile'))
         self.assertNotContains(resp, 'salary deduction')
+
+
+class LeaveRequestRevokeFieldsTests(TestCase):
+    def test_revoked_is_a_valid_status_choice(self):
+        self.assertIn(('revoked', 'Revoked'), LeaveRequest.STATUS_CHOICES)
+
+    def test_revoke_fields_exist_and_default_empty(self):
+        emp = make_employee(iqama='LRRF-1')
+        lt, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        req = LeaveRequest.objects.create(
+            employee=emp, leave_type=lt, start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 2))
+        self.assertIsNone(req.revoked_by)
+        self.assertIsNone(req.revoked_at)
+        self.assertEqual(req.revoke_reason, '')
+
+
+class LeaveRevokeRequestModelTests(TestCase):
+    def test_create_and_defaults(self):
+        emp = make_employee(iqama='LRRM-1')
+        lt, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        req = LeaveRequest.objects.create(
+            employee=emp, leave_type=lt, start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 2), status='approved')
+        user = make_user('lrrm-user', password='x')
+        revoke_req = LeaveRevokeRequest.objects.create(
+            leave_request=req, requested_by=user, reason='Project emergency, cannot take leave.')
+        self.assertEqual(revoke_req.status, 'pending')
+        self.assertIsNone(revoke_req.decided_by)
+        self.assertIsNone(revoke_req.decided_at)
+        self.assertEqual(revoke_req.decision_note, '')
+        self.assertEqual(list(req.revoke_requests.all()), [revoke_req])
