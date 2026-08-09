@@ -7108,3 +7108,78 @@ class RevokeLeaveRequestServiceTests(TestCase):
         revoke_req = request_leave_revoke(self.req, self.user, 'Plans changed.')
         with self.assertRaises(ValueError):
             decide_leave_revoke_request(revoke_req, self.user, 'approved')
+
+
+class RevokeAttendanceExceptionServiceTests(TestCase):
+    def setUp(self):
+        self.manager = make_employee(iqama='RAE-MGR', name='Revoke Exc Manager')
+        self.manager_user = _login_user('rae_mgr')
+        self.manager.user = self.manager_user
+        self.manager.save(update_fields=['user'])
+        self.emp = make_employee(iqama='RAE-1')
+        self.emp.main_manager = self.manager
+        self.emp.save(update_fields=['main_manager'])
+        self.user = _login_user('rae_user')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        self.exc = _submit_aex(
+            employee=self.emp, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.user)
+        decide_attendance_exception(self.exc, self.manager_user, 'approved')
+        self.exc.refresh_from_db()
+        self.assertEqual(self.exc.status, 'approved')
+        self.revoker = _login_user('rae_revoker')
+
+    def test_direct_revoke_sets_fields_and_marks_day_absent(self):
+        from hr.attendance_exception_services import revoke_attendance_exception
+        from hr.models import AttendanceRecord
+        updated = revoke_attendance_exception(self.exc, self.revoker, 'No longer applicable.')
+        self.assertEqual(updated.status, 'revoked')
+        self.assertEqual(updated.revoked_by, self.revoker)
+        self.assertEqual(updated.revoke_reason, 'No longer applicable.')
+        record = AttendanceRecord.objects.get(employee=self.emp, date=_date(2026, 7, 20))
+        self.assertEqual(record.status, 'absent')
+
+    def test_direct_revoke_requires_reason(self):
+        from hr.attendance_exception_services import revoke_attendance_exception
+        with self.assertRaises(ValueError):
+            revoke_attendance_exception(self.exc, self.revoker, '')
+
+    def test_cannot_revoke_non_approved_exception(self):
+        from hr.attendance_exception_services import revoke_attendance_exception
+        pending = _submit_aex(
+            employee=self.emp, event_date=_date(2026, 7, 25), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.user)
+        with self.assertRaises(ValueError):
+            revoke_attendance_exception(pending, self.revoker, 'reason')
+
+    def test_employee_can_request_revoke(self):
+        from hr.attendance_exception_services import request_attendance_exception_revoke
+        revoke_req = request_attendance_exception_revoke(self.exc, self.user, 'Plans changed.')
+        self.assertEqual(revoke_req.status, 'pending')
+
+    def test_duplicate_pending_revoke_request_blocked(self):
+        from hr.attendance_exception_services import request_attendance_exception_revoke
+        request_attendance_exception_revoke(self.exc, self.user, 'First.')
+        with self.assertRaises(ValueError):
+            request_attendance_exception_revoke(self.exc, self.user, 'Second.')
+
+    def test_assigned_manager_can_decide_revoke_request(self):
+        from hr.attendance_exception_services import request_attendance_exception_revoke, decide_attendance_exception_revoke_request
+        revoke_req = request_attendance_exception_revoke(self.exc, self.user, 'Plans changed.')
+        decide_attendance_exception_revoke_request(revoke_req, self.manager_user, 'approved')
+        self.exc.refresh_from_db()
+        self.assertEqual(self.exc.status, 'revoked')
+
+    def test_unrelated_user_cannot_decide_revoke_request(self):
+        from hr.attendance_exception_services import request_attendance_exception_revoke, decide_attendance_exception_revoke_request
+        revoke_req = request_attendance_exception_revoke(self.exc, self.user, 'Plans changed.')
+        stranger = _login_user('rae_stranger')
+        with self.assertRaises(ValueError):
+            decide_attendance_exception_revoke_request(revoke_req, stranger, 'approved')
+
+    def test_reject_requires_decision_note(self):
+        from hr.attendance_exception_services import request_attendance_exception_revoke, decide_attendance_exception_revoke_request
+        revoke_req = request_attendance_exception_revoke(self.exc, self.user, 'Plans changed.')
+        with self.assertRaises(ValueError):
+            decide_attendance_exception_revoke_request(revoke_req, self.manager_user, 'rejected', decision_note='')
