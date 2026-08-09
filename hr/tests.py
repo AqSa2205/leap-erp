@@ -6680,10 +6680,11 @@ class LeaveDecisionFormUXTests(TestCase):
 
 
 class SalaryDeductionCompactUITests(TestCase):
-    """The salary-deduction warning must stay reachable but not stretch the
-    My Leave Requests table row — collapsed behind a small toggle (same
-    pattern as the HR-message toggle) instead of an always-visible
-    sentence that pushed the row taller."""
+    """The salary-deduction warning is important enough that it must stay
+    always visible — never hidden behind a click — but the row's secondary
+    status lines (decided-by, warning, HR-message toggle) share one tight
+    flex-column gap instead of each carrying its own margin, so the row
+    doesn't look like it's sprawling."""
 
     def setUp(self):
         self.emp = make_employee(iqama='SDCU-1')
@@ -6701,15 +6702,19 @@ class SalaryDeductionCompactUITests(TestCase):
         self.req = req
         self.client.login(username='sdcu_user', password='testpass123')
 
-    def test_message_reachable_behind_a_compact_toggle(self):
+    def test_message_is_always_visible_not_behind_a_toggle(self):
         resp = self.client.get(reverse('hr:my_profile'))
-        self.assertContains(resp, 'Taking this leave will result in a salary deduction.')
-        self.assertContains(resp, f'id="salaryDeduction{self.req.pk}"')
         content = resp.content.decode()
-        self.assertIn(f'<div class="collapse" id="salaryDeduction{self.req.pk}">', content)
+        self.assertIn(
+            '<div class="small text-danger"><i class="bi bi-exclamation-triangle"></i> '
+            'Taking this leave will result in a salary deduction.</div>',
+            content)
+        # No collapse wrapper around it — this warning must never require a
+        # click to see.
+        self.assertNotIn(f'id="salaryDeduction{self.req.pk}"', content)
 
-    def test_no_toggle_when_not_applicable(self):
+    def test_no_message_when_not_applicable(self):
         self.req.salary_deduction_applicable = False
         self.req.save(update_fields=['salary_deduction_applicable'])
         resp = self.client.get(reverse('hr:my_profile'))
-        self.assertNotContains(resp, 'Salary deduction')
+        self.assertNotContains(resp, 'salary deduction')

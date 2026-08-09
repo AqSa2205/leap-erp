@@ -201,22 +201,18 @@
                   </td>
                   <td>{{ r.start_date }} – {{ r.end_date }}</td>
                   <td>
+                    <div class="d-flex flex-column gap-1">
                     {% if r.status == 'approved' %}
-                      <span class="badge bg-success">Approved</span>
+                      <span class="badge bg-success align-self-start">Approved</span>
                       {% if r.decided_by_display %}<div class="small text-muted">{{ r.decided_by_display }}</div>{% endif %}
                     {% elif r.status == 'disapproved' %}
-                      <span class="badge bg-danger">Disapproved</span>
+                      <span class="badge bg-danger align-self-start">Disapproved</span>
                       {% if r.decided_by_display %}<div class="small text-muted">{{ r.decided_by_display }}</div>{% endif %}
                       {% if r.salary_deduction_applicable %}
-                      <button type="button" class="btn btn-sm btn-link text-danger p-0" data-bs-toggle="collapse" data-bs-target="#salaryDeduction{{ r.pk }}">
-                        <i class="bi bi-exclamation-triangle"></i> Salary deduction
-                      </button>
-                      <div class="collapse" id="salaryDeduction{{ r.pk }}">
-                        <div class="small text-danger">Taking this leave will result in a salary deduction.</div>
-                      </div>
+                      <div class="small text-danger"><i class="bi bi-exclamation-triangle"></i> Taking this leave will result in a salary deduction.</div>
                       {% endif %}
                     {% else %}
-                      <span class="badge bg-warning text-dark">Pending</span>
+                      <span class="badge bg-warning text-dark align-self-start">Pending</span>
                       <div class="small text-muted">
                         {% with waiting=r.pending_approvers %}
                           {% if waiting %}Waiting on {% for a in waiting %}{{ a.get_full_name|default:a.username }}{% if not forloop.last %}, {% endif %}{% endfor %}
@@ -225,19 +221,22 @@
                       </div>
                     {% endif %}
                     {% if r.visible_notes %}
-                    <button type="button" class="btn btn-sm btn-link p-0 mt-1" data-bs-toggle="collapse" data-bs-target="#leaveNotes{{ r.pk }}">
-                      <i class="bi bi-chat-left-text"></i> {{ r.visible_notes|length }} message{{ r.visible_notes|length|pluralize }} from HR
-                    </button>
-                    <div class="collapse mt-1" id="leaveNotes{{ r.pk }}">
-                      {% for n in r.visible_notes %}
-                      <div class="small border-start ps-2 mb-1">
-                        <strong>{% if n.author %}{{ n.author.get_full_name|default:n.author.username }}{% else %}—{% endif %}</strong>
-                        <span class="text-muted">{{ n.created_at|date:'d M Y, H:i' }}</span>
-                        <div>{{ n.note }}</div>
+                    <div>
+                      <button type="button" class="btn btn-sm btn-link p-0" data-bs-toggle="collapse" data-bs-target="#leaveNotes{{ r.pk }}">
+                        <i class="bi bi-chat-left-text"></i> {{ r.visible_notes|length }} message{{ r.visible_notes|length|pluralize }} from HR
+                      </button>
+                      <div class="collapse mt-1" id="leaveNotes{{ r.pk }}">
+                        {% for n in r.visible_notes %}
+                        <div class="small border-start ps-2 mb-1">
+                          <strong>{% if n.author %}{{ n.author.get_full_name|default:n.author.username }}{% else %}—{% endif %}</strong>
+                          <span class="text-muted">{{ n.created_at|date:'d M Y, H:i' }}</span>
+                          <div>{{ n.note }}</div>
+                        </div>
+                        {% endfor %}
                       </div>
-                      {% endfor %}
                     </div>
                     {% endif %}
+                    </div>
                   </td>
                 </tr>
                 {% endfor %}
