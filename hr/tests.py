@@ -3504,7 +3504,7 @@ class LeaveRequestDecidedByDisplayTests(TestCase):
 
 from datetime import datetime as _datetime, time as _time
 from django.utils import timezone as _timezone
-from hr.models import AttendanceException
+from hr.models import AttendanceException, AttendanceExceptionRevokeRequest
 
 
 class EmployeeDownstreamChainTests(TestCase):
@@ -6751,3 +6751,44 @@ class LeaveRevokeRequestModelTests(TestCase):
         self.assertIsNone(revoke_req.decided_at)
         self.assertEqual(revoke_req.decision_note, '')
         self.assertEqual(list(req.revoke_requests.all()), [revoke_req])
+
+
+class AttendanceExceptionRevokeFieldsTests(TestCase):
+    def test_revoked_is_a_valid_status_choice(self):
+        self.assertIn(('revoked', 'Revoked'), AttendanceException.STATUS_CHOICES)
+
+    def test_revoke_fields_exist_and_default_empty(self):
+        emp = make_employee(iqama='AERF-1')
+        exc = _submit_aex(employee=emp, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+                           reason_category='site_visit', created_by=make_user('aerf-creator'))
+        self.assertIsNone(exc.revoked_by)
+        self.assertIsNone(exc.revoked_at)
+        self.assertEqual(exc.revoke_reason, '')
+
+
+class AttendanceExceptionRevokeRequestModelTests(TestCase):
+    def test_create_and_defaults(self):
+        emp = make_employee(iqama='AERRM-1')
+        exc = _submit_aex(employee=emp, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+                           reason_category='site_visit', created_by=make_user('aerrm-creator'))
+        exc.status = 'approved'
+        exc.save(update_fields=['status'])
+        user = make_user('aerrm-user', password='x')
+        revoke_req = AttendanceExceptionRevokeRequest.objects.create(
+            attendance_exception=exc, requested_by=user, reason='No longer needed.')
+        self.assertEqual(revoke_req.status, 'pending')
+        self.assertEqual(list(exc.revoke_requests.all()), [revoke_req])
+
+
+class AttendanceOutcomeRevokedTests(TestCase):
+    def test_revoked_exception_marks_day_absent(self):
+        from hr.attendance_exception_services import _apply_attendance_outcome
+        from hr.models import AttendanceRecord
+        emp = make_employee(iqama='AORT-1')
+        exc = _submit_aex(employee=emp, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+                           reason_category='site_visit', created_by=make_user('aort-creator'))
+        exc.status = 'revoked'
+        exc.save(update_fields=['status'])
+        _apply_attendance_outcome(exc)
+        record = AttendanceRecord.objects.get(employee=emp, date=_date(2026, 7, 20))
+        self.assertEqual(record.status, 'absent')

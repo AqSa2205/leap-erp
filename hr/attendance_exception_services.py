@@ -184,7 +184,7 @@ def _apply_attendance_outcome(exc):
         # check-in time when an approved exception exists for that day; this
         # upsert just marks the day as excused/present at decision time.
         new_status = 'present'
-    elif exc.status in ('rejected', 'expired'):
+    elif exc.status in ('rejected', 'expired', 'revoked'):
         new_status = 'absent'
     else:  # pending — no-op
         return

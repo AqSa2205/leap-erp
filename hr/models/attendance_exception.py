@@ -30,6 +30,7 @@ class AttendanceException(models.Model):
         ('approved', 'Approved'),
         ('rejected', 'Rejected'),
         ('expired', 'Expired'),
+        ('revoked', 'Revoked'),
     ]
 
     employee = models.ForeignKey('hr.Employee', on_delete=models.CASCADE, related_name='attendance_exceptions')
@@ -52,6 +53,10 @@ class AttendanceException(models.Model):
     overridden_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
     override_reason = models.TextField(blank=True)
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoke_reason = models.TextField(blank=True)
     reminder_sent_at = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
@@ -106,3 +111,33 @@ class AttendanceException(models.Model):
         if not deadline:
             return None
         return (deadline - now).total_seconds()
+
+
+class AttendanceExceptionRevokeRequest(models.Model):
+    """Employee-requested revoke of their own already-approved attendance
+    exception — same shape and purpose as hr.models.leave.LeaveRevokeRequest,
+    kept as a separate model rather than a shared generic-relation one: the
+    two source models differ enough (multi- vs single-approver, linked
+    LeaveRecord vs none) that a shared model would need nearly as much
+    special-casing per type as just having two, for no real savings."""
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
+    attendance_exception = models.ForeignKey(AttendanceException, on_delete=models.CASCADE, related_name='revoke_requests')
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='+')
+    reason = models.TextField()
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    decided_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name='+')
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"Revoke request for exception #{self.attendance_exception_id} ({self.status})"
