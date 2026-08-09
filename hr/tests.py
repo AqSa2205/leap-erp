@@ -2411,29 +2411,57 @@ class LeaveApprovalServiceTests(TestCase):
         ent = LeaveEntitlement.objects.create(
             employee=self.emp, leave_type=self.marriage, year=2026, entitled_days=Decimal('3'))
         record_approver_decision(self.req, self.aamna, 'disapproved', comment='No.')
+        record_approver_decision(self.req, self.ali, 'disapproved', comment='Agreed, no.')
         self.req.refresh_from_db()
         self.assertEqual(self.req.status, 'disapproved')
         self.assertEqual(ent.remaining_days, Decimal('3'))
 
-    def test_one_disapproval_is_decisive(self):
-        record_approver_decision(self.req, self.aamna, 'approved')
-        record_approver_decision(self.req, self.ali, 'disapproved', comment='Not enough notice')
+    def test_unanimous_disapproval_finalizes_as_disapproved(self):
+        record_approver_decision(self.req, self.aamna, 'disapproved', comment='Not enough notice')
+        record_approver_decision(self.req, self.ali, 'disapproved', comment='Agreed')
         self.req.refresh_from_db()
         self.assertEqual(self.req.status, 'disapproved')
         self.assertTrue(self.req.salary_deduction_applicable)
         self.assertIsNone(self.req.leave_record)
 
-    def test_fail_fast_disapproval_skips_other_pending_approvals(self):
+    def test_split_decision_stays_pending_not_disapproved(self):
+        # Regression: a single dissenting vote used to fail-fast finalize
+        # the whole request as disapproved — reported as a bug, since it
+        # instantly locked in a decision the OTHER approver never agreed to
+        # and gave no way to reconsider. Disapproval now requires the same
+        # unanimity approval already does.
+        record_approver_decision(self.req, self.aamna, 'approved')
+        record_approver_decision(self.req, self.ali, 'disapproved', comment='Not enough notice')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'pending')
+        self.assertFalse(self.req.salary_deduction_applicable)
+        self.assertIsNone(self.req.leave_record)
+
+    def test_single_disapproval_does_not_skip_the_other_pending_approver(self):
         record_approver_decision(self.req, self.aamna, 'disapproved', comment='Not enough notice')
         self.req.refresh_from_db()
-        self.assertEqual(self.req.status, 'disapproved')
+        self.assertEqual(self.req.status, 'pending')
         ali_approval = self.req.approvals.get(approver=self.ali)
-        self.assertEqual(ali_approval.decision, 'skipped')
+        self.assertEqual(ali_approval.decision, 'pending')
 
-    def test_late_decision_after_fail_fast_disapproval_rejected(self):
+    def test_second_approvers_conflicting_decision_is_accepted_not_rejected(self):
+        # A second, disagreeing decision is a normal vote now, not a "late"
+        # decision arriving after the request already finalized — it must
+        # be accepted (and simply leaves the request in conflict/pending),
+        # never raise.
         record_approver_decision(self.req, self.aamna, 'disapproved', comment='Not enough notice')
-        with self.assertRaises(ValueError):
-            record_approver_decision(self.req, self.ali, 'approved')
+        record_approver_decision(self.req, self.ali, 'approved')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'pending')
+        ali_approval = self.req.approvals.get(approver=self.ali)
+        self.assertEqual(ali_approval.decision, 'approved')
+
+    def test_conflict_notifies_the_other_decided_approver(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        record_approver_decision(self.req, self.ali, 'disapproved', comment='Not enough notice')
+        conflict_note = Notification.objects.filter(
+            recipient=self.aamna, verb__icontains='disagreed').first()
+        self.assertIsNotNone(conflict_note)
 
     def test_non_approver_cannot_decide(self):
         stranger = make_user('someone_else')
@@ -2467,29 +2495,46 @@ class LeaveApprovalServiceTests(TestCase):
         self.assertEqual(self.req.status, 'approved')
         self.assertIsNotNone(self.req.leave_record)
 
-    def test_edit_decision_within_window_updates_and_finalizes(self):
+    def test_edit_decision_updates_and_finalizes_when_it_reaches_unanimity(self):
         record_approver_decision(self.req, self.aamna, 'approved')
         edit_approver_decision(self.req, self.aamna, 'disapproved', edit_note='Misclicked, meant to disapprove.')
         self.req.refresh_from_db()
-        self.assertEqual(self.req.status, 'disapproved')
+        # Only aamna has decided (ali is still pending) — editing to
+        # disapproved doesn't finalize anything by itself; it just changes
+        # aamna's own vote.
+        self.assertEqual(self.req.status, 'pending')
         aamna_approval = self.req.approvals.get(approver=self.aamna)
         self.assertEqual(aamna_approval.decision, 'disapproved')
         note = self.req.notes.get()
         self.assertIn('Misclicked, meant to disapprove.', note.note)
         self.assertEqual(note.author, self.aamna)
 
+    def test_editing_a_decision_can_resolve_a_conflict_and_finalize(self):
+        record_approver_decision(self.req, self.aamna, 'approved')
+        record_approver_decision(self.req, self.ali, 'disapproved', comment='Not enough notice')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'pending')  # conflict — split decision
+        edit_approver_decision(self.req, self.aamna, 'disapproved', edit_note='Agreed with Ali after all.')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'disapproved')  # now unanimous
+
     def test_edit_decision_requires_note(self):
         record_approver_decision(self.req, self.aamna, 'approved')
         with self.assertRaises(ValueError):
             edit_approver_decision(self.req, self.aamna, 'disapproved', edit_note='')
 
-    def test_edit_decision_rejected_after_24_hour_window(self):
+    def test_edit_decision_still_allowed_after_24_hours_while_awaiting_other_approver(self):
+        # Regression: editing used to be blocked after a fixed 24-hour
+        # window even while the request was still genuinely awaiting a
+        # decision — reported as a bug. There is no time limit now, only
+        # whether the overall request is still pending.
         record_approver_decision(self.req, self.aamna, 'approved')
         approval = self.req.approvals.get(approver=self.aamna)
         approval.decided_at = timezone.now() - timedelta(hours=25)
         approval.save(update_fields=['decided_at'])
-        with self.assertRaises(ValueError):
-            edit_approver_decision(self.req, self.aamna, 'disapproved', edit_note='Too late now.')
+        edit_approver_decision(self.req, self.aamna, 'disapproved', edit_note='Changed my mind, no time limit now.')
+        approval.refresh_from_db()
+        self.assertEqual(approval.decision, 'disapproved')
 
     def test_edit_decision_rejected_once_request_finalized(self):
         record_approver_decision(self.req, self.aamna, 'approved')
@@ -2867,6 +2912,7 @@ class LeaveApprovalNotificationTests(TestCase):
 
     def test_employee_notified_on_disapproval(self):
         record_approver_decision(self.req, self.aamna, 'disapproved')
+        record_approver_decision(self.req, self.ali, 'disapproved')
         self.assertTrue(Notification.objects.filter(recipient=self.emp_user, verb__icontains='disapproved').exists())
 
 
@@ -3208,6 +3254,44 @@ class LeaveRequestDetailViewTests(TestCase):
         self.client.login(username='detail_grantee', password='testpass123')
         resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
         self.assertEqual(resp.status_code, 200)
+
+    def test_deciding_approver_sees_can_change_decision_ui_not_an_instant_finalize(self):
+        # Bug report: choosing Disapprove used to instantly finalize the
+        # whole request (fail-fast) — the deciding approver never got shown
+        # that they could still change their mind. With a co-approver still
+        # pending, disapproving now just records the vote and the page must
+        # offer to change it.
+        self.client.login(username='detail_aamna', password='testpass123')
+        self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]), {
+            'action': 'decide', 'decision': 'disapproved',
+        })
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'pending')
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertContains(resp, 'You can change this any time until every approver has decided.')
+
+    def test_conflict_banner_shows_when_approvers_disagree(self):
+        self.client.login(username='detail_aamna', password='testpass123')
+        self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]), {
+            'action': 'decide', 'decision': 'approved',
+        })
+        self.client.logout()
+        self.client.login(username='detail_ali', password='testpass123')
+        self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]), {
+            'action': 'decide', 'decision': 'disapproved',
+        })
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'pending')
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertContains(resp, 'Approvers disagree on this request.')
+
+    def test_no_conflict_banner_while_genuinely_still_awaiting_a_vote(self):
+        self.client.login(username='detail_aamna', password='testpass123')
+        self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]), {
+            'action': 'decide', 'decision': 'approved',
+        })
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertNotContains(resp, 'Approvers disagree on this request.')
 
 
 class CheckLeaveBalanceTests(TestCase):

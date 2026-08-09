@@ -2914,7 +2914,6 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
         return can_view_leave_dashboard(self.request.user)
 
     def get_context_data(self, **kwargs):
-        from hr.leave_approval_services import DECISION_EDIT_WINDOW
         ctx = super().get_context_data(**kwargs)
         # A user must never be able to act on their own leave request —
         # decide, edit a decision, add a note, or override — regardless of
@@ -2927,11 +2926,21 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
         ctx['my_approval'] = my_approval if not ctx['is_own_request'] else None
         ctx['visible_notes'] = self.object.notes.filter(is_internal=False) if not self.request.user.is_super_admin_user \
             else self.object.notes.all()
+        # No fixed time limit — a decision stays editable for as long as the
+        # overall request is still pending (see
+        # hr.leave_approval_services._reconcile: finalizing requires every
+        # approver to agree, so 'pending' here also covers a split decision
+        # awaiting resolution, not just an outstanding vote).
         ctx['can_edit_decision'] = bool(
             my_approval and my_approval.decision in ('approved', 'disapproved')
-            and self.object.status == 'pending'
-            and my_approval.decided_at is not None
-            and timezone.now() - my_approval.decided_at <= DECISION_EDIT_WINDOW)
+            and self.object.status == 'pending')
+        # A genuine conflict: every approver has decided, but not
+        # unanimously — the request stays pending until one of them changes
+        # their vote. Surfaced so the page can explain why it hasn't
+        # finalized instead of leaving that a mystery.
+        ctx['has_conflicting_decisions'] = bool(
+            self.object.status == 'pending' and self.object.approvals.exists()
+            and not self.object.approvals.filter(decision='pending').exists())
         if self.object.exceeds_balance:
             ctx['entitlement'] = LeaveEntitlement.objects.filter(
                 employee=self.object.employee, leave_type=self.object.leave_type,

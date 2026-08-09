@@ -9,16 +9,22 @@ Two entry points:
 
 Both funnel through _finalize, which is the single place that creates the
 balance-deducting LeaveRecord or sets the salary-deduction flag.
-"""
-from datetime import timedelta
 
+Reconciliation requires UNANIMOUS agreement in either direction: the request
+only finalizes once every designated approver has decided AND all of their
+decisions agree (all-approved -> approved, all-disapproved -> disapproved).
+A split decision (some approve, some disapprove) leaves the request pending
+indefinitely rather than fail-fast finalizing on the first disapproval —
+each approver can keep changing their own decision (see
+edit_approver_decision) for as long as the request stays pending; there is
+no fixed time limit, only whichever happens first: unanimous agreement, or
+someone changing their mind to match the others.
+"""
 from django.db import transaction
 from django.utils import timezone
 
 from hr.models import LeaveRecord
 from notifications.services import notify_users
-
-DECISION_EDIT_WINDOW = timedelta(hours=24)
 
 
 def record_approver_decision(leave_request, approver_user, decision, comment=''):
@@ -63,25 +69,18 @@ def record_approver_decision(leave_request, approver_user, decision, comment='')
 
         _reconcile(leave_request)
     leave_request.refresh_from_db()
-    if leave_request.status == 'pending':
-        remaining = leave_request.pending_approvers()
-        if remaining:
-            notify_users(
-                recipients=remaining,
-                verb=f'{approver_user.get_full_name() or approver_user.username} decided on a leave request awaiting your review',
-                actor=approver_user,
-                description=f'{leave_request.employee.full_name} — {leave_request.leave_type.name} '
-                            f'({leave_request.start_date} to {leave_request.end_date})',
-            )
+    _notify_after_reconcile(leave_request, actor=approver_user)
     return leave_request
 
 
 def edit_approver_decision(leave_request, approver_user, new_decision, edit_note):
-    """Let an approver change their own already-recorded decision within the
-    24-hour edit window, while the request is still pending (see _finalize —
-    once finalized, decisions lock; there's no reversal of a created
-    LeaveRecord or a salary-deduction flag). Requires a note explaining why,
-    which is recorded as a visible LeaveRequestNote."""
+    """Let an approver change their own already-recorded decision for as
+    long as the overall request is still pending (see _finalize — once
+    finalized, decisions lock; there's no reversal of a created LeaveRecord
+    or a salary-deduction flag). No fixed time limit — the request stays
+    pending, and therefore editable, until every approver agrees one way or
+    the other. Requires a note explaining why, which is recorded as a
+    visible LeaveRequestNote."""
     from hr.models import LeaveRequestNote
 
     if new_decision not in ('approved', 'disapproved'):
@@ -99,8 +98,6 @@ def edit_approver_decision(leave_request, approver_user, new_decision, edit_note
         raise ValueError(f"{approver_user} is not a designated approver for this request.")
     if approval.decision not in ('approved', 'disapproved'):
         raise ValueError('No prior decision to edit.')
-    if approval.decided_at is None or timezone.now() - approval.decided_at > DECISION_EDIT_WINDOW:
-        raise ValueError('The 24-hour edit window for this decision has passed.')
 
     old_decision = approval.decision
     if old_decision == new_decision:
@@ -118,7 +115,43 @@ def edit_approver_decision(leave_request, approver_user, new_decision, edit_note
             note=f'Changed decision from {old_decision} to {new_decision}: {edit_note.strip()}',
         )
         _reconcile(leave_request)
+    leave_request.refresh_from_db()
+    _notify_after_reconcile(leave_request, actor=approver_user)
     return leave_request
+
+
+def _notify_after_reconcile(leave_request, actor):
+    """Shared post-decision notification logic for record_approver_decision
+    and edit_approver_decision — called after _reconcile, once the request's
+    current status reflects the just-recorded/edited decision. Only ever
+    notifies while the request is still 'pending' (a finalized request's own
+    approve/disapprove notification is sent separately, from _finalize)."""
+    if leave_request.status != 'pending':
+        return
+    remaining = leave_request.pending_approvers()
+    if remaining:
+        notify_users(
+            recipients=remaining,
+            verb=f'{actor.get_full_name() or actor.username} decided on a leave request awaiting your review',
+            actor=actor,
+            description=f'{leave_request.employee.full_name} — {leave_request.leave_type.name} '
+                        f'({leave_request.start_date} to {leave_request.end_date})',
+        )
+        return
+    # Every approver has now decided, but they disagree — nobody
+    # auto-finalizes a split decision. Notify the OTHER already-decided
+    # approver(s) that there's a conflict to resolve, since they'd
+    # otherwise have no way to know their vote is being contested.
+    others = [
+        a.approver for a in leave_request.approvals.exclude(approver=actor).exclude(decision='pending')]
+    if others:
+        notify_users(
+            recipients=others,
+            verb=f'{actor.get_full_name() or actor.username} disagreed on a leave request — please reconsider your decision',
+            actor=actor,
+            description=f'{leave_request.employee.full_name} — {leave_request.leave_type.name} '
+                        f'({leave_request.start_date} to {leave_request.end_date})',
+        )
 
 
 def override_finalize(leave_request, superadmin_user, decision, reason):
@@ -140,14 +173,19 @@ def override_finalize(leave_request, superadmin_user, decision, reason):
 
 
 def _reconcile(leave_request):
-    """Re-derive overall status from the individual approval rows."""
+    """Re-derive overall status from the individual approval rows. Finalizes
+    only once every approver has decided AND all decisions agree — see the
+    module docstring for why a split decision does not fail-fast finalize."""
     leave_request.refresh_from_db()
     decisions = list(leave_request.approvals.values_list('decision', flat=True))
-    if any(d == 'disapproved' for d in decisions):
-        _finalize(leave_request, 'disapproved')
-    elif decisions and all(d == 'approved' for d in decisions):
+    if not decisions or any(d == 'pending' for d in decisions):
+        return  # still waiting on at least one approver
+    if all(d == 'approved' for d in decisions):
         _finalize(leave_request, 'approved')
-    # else: still pending, nothing to do.
+    elif all(d == 'disapproved' for d in decisions):
+        _finalize(leave_request, 'disapproved')
+    # else: split decision — stays pending, unresolved until someone changes
+    # their vote to match consensus.
 
 
 def _finalize(leave_request, status):

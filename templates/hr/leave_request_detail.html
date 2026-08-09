@@ -34,6 +34,16 @@
       </div>
       {% endif %}
 
+      {% if has_conflicting_decisions %}
+      <div class="alert alert-warning d-flex align-items-start gap-2">
+        <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+        <div>
+          <strong>Approvers disagree on this request.</strong> Every approver has decided, but not unanimously, so
+          it's still pending — one of them needs to change their decision below for this to finalize.
+        </div>
+      </div>
+      {% endif %}
+
       <div class="card mb-4">
         <div class="card-body">
           <p class="mb-1"><strong>Dates:</strong> {{ leave_request.start_date }} – {{ leave_request.end_date }} ({{ leave_request.days }} days)</p>
@@ -85,7 +95,7 @@
           </ul>
 
           {% if is_approver and my_approval.decision == 'pending' and leave_request.status == 'pending' %}
-          <form method="post" class="border-top pt-3 mt-3" onsubmit="return confirm('Submit this decision? The employee will be notified and, once every approver has decided, it cannot be undone here — use Revoke afterward if something changes.');">
+          <form method="post" class="border-top pt-3 mt-3">
             {% csrf_token %}
             <input type="hidden" name="action" value="decide">
             <div class="mb-2">
@@ -104,15 +114,18 @@
               <label class="form-label small fw-semibold mb-1">2. Add a message for the employee (optional)</label>
               <textarea name="comment" class="form-control" rows="2" placeholder="They'll see this on their My Profile page"></textarea>
             </div>
-            <button type="submit" class="btn btn-primary btn-sm">3. Submit Decision</button>
+            <div class="d-flex align-items-center gap-2">
+              <span class="fw-semibold small">3.</span>
+              <button type="submit" class="btn btn-primary btn-sm">Submit Decision</button>
+            </div>
           </form>
           {% elif can_edit_decision %}
-          <form method="post" class="border-top pt-3 mt-3" onsubmit="return confirm('Submit this updated decision? The employee will be notified.');">
+          <form method="post" class="border-top pt-3 mt-3">
             {% csrf_token %}
             <input type="hidden" name="action" value="decide">
             <p class="small text-muted mb-2">
               You decided <strong>{{ my_approval.get_decision_display }}</strong> on {{ my_approval.decided_at }}.
-              You can change this within 24 hours of your original decision.
+              You can change this any time until every approver has decided.
             </p>
             <div class="mb-2">
               <label class="form-label small fw-semibold mb-1">1. Choose a decision</label><br>
@@ -131,7 +144,10 @@
               <label class="form-label small fw-semibold mb-1">2. Note explaining the change (required)</label>
               <textarea name="edit_note" class="form-control" rows="2" placeholder="Why are you changing your decision? — the employee will see this" required></textarea>
             </div>
-            <button type="submit" class="btn btn-outline-primary btn-sm">3. Update Decision</button>
+            <div class="d-flex align-items-center gap-2">
+              <span class="fw-semibold small">3.</span>
+              <button type="submit" class="btn btn-outline-primary btn-sm">Update Decision</button>
+            </div>
           </form>
           {% endif %}
 
