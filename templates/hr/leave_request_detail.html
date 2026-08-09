@@ -51,6 +51,7 @@
           <p class="mb-1"><strong>Status:</strong>
             {% if leave_request.status == 'approved' %}<span class="badge bg-success">Approved</span>
             {% elif leave_request.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
+            {% elif leave_request.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
             {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
             {% if leave_request.is_overridden %}
               <span class="badge bg-info text-dark">
@@ -63,7 +64,14 @@
                 manager, {{ leave_request.created_by.get_full_name|default:leave_request.created_by.username }}
               </span>
             {% endif %}
-            {% if leave_request.decided_by_display %}<div class="small text-muted mt-1">{{ leave_request.decided_by_display }}</div>{% endif %}
+            {% if leave_request.status == 'revoked' %}
+              <div class="small text-muted mt-1">
+                Revoked
+                {% if leave_request.revoked_by %}by {{ leave_request.revoked_by.get_full_name|default:leave_request.revoked_by.username }}{% endif %}
+                {% if leave_request.revoked_at %} on {{ leave_request.revoked_at|date:'d M Y, H:i' }}{% endif %}
+                {% if leave_request.revoke_reason %} — "{{ leave_request.revoke_reason }}"{% endif %}
+              </div>
+            {% elif leave_request.decided_by_display %}<div class="small text-muted mt-1">{{ leave_request.decided_by_display }}</div>{% endif %}
           </p>
           {% if leave_request.status == 'disapproved' and leave_request.salary_deduction_applicable %}
           <p class="text-danger mb-1"><i class="bi bi-exclamation-triangle"></i> Taking this leave will result in a salary deduction.
@@ -161,6 +169,18 @@
             </div>
             <button type="submit" name="decision" value="approved" class="btn btn-outline-success btn-sm">Override — Approve</button>
             <button type="submit" name="decision" value="disapproved" class="btn btn-outline-danger btn-sm">Override — Disapprove</button>
+          </form>
+          {% endif %}
+
+          {% if can_override and leave_request.status == 'approved' %}
+          <form method="post" class="border-top pt-3 mt-3" onsubmit="return confirm('Revoke this approved leave? It will no longer count toward taken days.');">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="revoke">
+            <div class="mb-2">
+              <label class="form-label small">Revoke this approved leave</label>
+              <textarea name="reason" class="form-control" rows="2" placeholder="Reason — required" required></textarea>
+            </div>
+            <button type="submit" class="btn btn-outline-danger btn-sm">Revoke</button>
           </form>
           {% endif %}
         </div>

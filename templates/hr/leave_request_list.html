@@ -80,9 +80,32 @@
               <td>
                 {% if r.status == 'approved' %}<span class="badge bg-success">Approved</span>
                 {% elif r.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
+                {% elif r.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
                 {% else %}<span class="badge bg-secondary">{{ r.get_status_display }}</span>{% endif %}
                 {% if r.is_overridden %}<span class="badge bg-info text-dark ms-1">Overridden</span>{% endif %}
-                {% if r.decided_by_display %}<div class="small text-muted">{{ r.decided_by_display }}</div>{% endif %}
+                {% if r.status == 'revoked' %}
+                  <div class="small text-muted">
+                    {% if r.revoked_by %}by {{ r.revoked_by.get_full_name|default:r.revoked_by.username }}{% endif %}
+                    {% if r.revoked_at %} on {{ r.revoked_at|date:'d M Y' }}{% endif %}
+                  </div>
+                  {% if r.revoke_reason %}<div class="small text-muted fst-italic">"{{ r.revoke_reason }}"</div>{% endif %}
+                {% elif r.decided_by_display %}<div class="small text-muted">{{ r.decided_by_display }}</div>{% endif %}
+                {% if r.status == 'approved' and can_revoke %}
+                <div class="mt-1">
+                  <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="collapse" data-bs-target="#revoke_{{ r.pk }}" id="revoke_leave_{{ r.pk }}">
+                    Revoke
+                  </button>
+                  <div class="collapse mt-2" id="revoke_{{ r.pk }}">
+                    <form method="post" class="border rounded p-2">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="revoke">
+                      <input type="hidden" name="request_id" value="{{ r.pk }}">
+                      <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Revoke reason — required" required></textarea>
+                      <button type="submit" class="btn btn-sm btn-outline-danger">Confirm Revoke</button>
+                    </form>
+                  </div>
+                </div>
+                {% endif %}
               </td>
               <td><a href="{{ detail_url }}" class="btn btn-sm btn-outline-secondary">View</a></td>
             </tr>

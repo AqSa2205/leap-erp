@@ -7400,3 +7400,64 @@ class MyProfileRequestRevokeExceptionUITests(TestCase):
         revoke_attendance_exception(self.exc, revoker, 'Applied for testing.')
         resp = self.client.get(reverse('hr:my_profile'))
         self.assertContains(resp, 'Revoked')
+
+
+class DirectRevokeLeaveRequestQueueUITests(TestCase):
+    def setUp(self):
+        self.emp = make_employee(iqama='DRLQ-1')
+        self.lt, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': Decimal('30')})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        self.superadmin = make_user('drlq_super', password='x')
+        self.superadmin.set_password('testpass123')
+        from accounts.models import Role
+        role, _ = Role.objects.get_or_create(name='super_admin')
+        self.superadmin.role = role
+        self.superadmin.save()
+        approver = make_user('drlq_approver', password='x')
+        LeaveDashboardAccess.objects.create(user=approver, is_active=True)
+        req = submit_leave_request(
+            employee=self.emp, leave_type=self.lt, start_date=date(2026, 8, 1), end_date=date(2026, 8, 2),
+            created_by=self.superadmin)
+        record_approver_decision(req, approver, 'approved')
+        self.req = req
+        self.client.login(username='drlq_super', password='testpass123')
+
+    def test_revoke_button_renders_in_history_for_override_access_holder(self):
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertContains(resp, f'revoke_leave_{self.req.pk}')
+
+    def test_post_revoke_via_list_view(self):
+        resp = self.client.post(reverse('hr:leave_request_list'), {
+            'action': 'revoke', 'request_id': self.req.pk, 'reason': 'No longer needed.',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'revoked')
+
+    def test_post_revoke_via_detail_view(self):
+        resp = self.client.post(reverse('hr:leave_request_detail', args=[self.req.pk]), {
+            'action': 'revoke', 'reason': 'No longer needed.',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'revoked')
+
+    def test_non_override_user_cannot_revoke(self):
+        grantee = make_user('drlq_grantee', password='x')
+        grantee.set_password('testpass123')
+        grantee.save()
+        LeaveDashboardAccess.objects.create(user=grantee, is_active=True)
+        self.client.logout()
+        self.client.login(username='drlq_grantee', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_list'), {
+            'action': 'revoke', 'request_id': self.req.pk, 'reason': 'Trying anyway.',
+        })
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'approved')  # unchanged
+
+    def test_revoked_badge_renders_in_history(self):
+        from hr.leave_approval_services import revoke_leave_request
+        revoke_leave_request(self.req, self.superadmin, 'Applied for testing.')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertContains(resp, 'Revoked')

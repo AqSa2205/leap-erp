@@ -2268,7 +2268,25 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
             .prefetch_related('approvals__approver')
             .order_by('-decided_at')[:50])
         ctx['current_sort'] = self.request.GET.get('sort') or 'submitted'
+        ctx['can_revoke'] = has_override_access(self.request.user)
         return ctx
+
+    def post(self, request, *args, **kwargs):
+        from django.http import Http404
+        from hr.leave_approval_services import revoke_leave_request
+        action = request.POST.get('action')
+        if action == 'revoke':
+            if not has_override_access(request.user):
+                return HttpResponse('You do not have override access to revoke this request.', status=403)
+            target = LeaveRequest.objects.filter(pk=request.POST.get('request_id')).first()
+            if target is None:
+                raise Http404('No such leave request.')
+            try:
+                revoke_leave_request(target, request.user, request.POST.get('reason', ''))
+                messages.success(request, 'Leave request revoked.')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+        return redirect('hr:leave_request_list')
 
 
 class LeaveRequestCreateView(HRScopedAccessMixin, FormView):
@@ -3097,6 +3115,16 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
                 override_finalize(self.object, request.user, request.POST.get('decision'),
                                   request.POST.get('reason', ''))
                 messages.success(request, 'Request finalized via override.')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+
+        elif action == 'revoke':
+            if not has_override_access(request.user):
+                return HttpResponse('You do not have override access to revoke this request.', status=403)
+            from hr.leave_approval_services import revoke_leave_request
+            try:
+                revoke_leave_request(self.object, request.user, request.POST.get('reason', ''))
+                messages.success(request, 'Leave request revoked.')
             except ValueError as exc:
                 messages.error(request, str(exc))
 
