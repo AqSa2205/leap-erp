@@ -199,7 +199,7 @@
                 <tbody>
                     {% for project in projects %}
                     <tr class="clickable-row" data-href="{% url 'projects:detail' project.pk %}">
-                        <td>
+                        <td {% if project.milestone_overall_status == 'success' %}style="border-bottom: 3px solid #198754;"{% elif project.milestone_overall_status == 'warning' %}style="border-bottom: 3px solid #ffc107;"{% elif project.milestone_overall_status == 'danger' %}style="border-bottom: 3px solid #dc3545;"{% endif %}>
                             <a href="{% url 'projects:detail' project.pk %}" class="text-decoration-none fw-bold" style="color: #C41E3A;">
                                 {{ project.proposal_reference }}
                             </a>
@@ -238,10 +238,11 @@
                             {% endif %}
                         </td>
                         {% if project.cycle_sheet %}
-                        {% for m in project.cycle_sheet.milestone_rows %}
+                        {% for m in project.milestone_display_rows %}
                         <td class="text-nowrap">
                             <span class="fw-semibold">{{ m.date }}</span>
                             {% if m.person %}<div class="text-muted small">{{ m.person.get_full_name|default:m.person.username }}</div>{% endif %}
+                            {% if m.variance_display %}<div class="text-muted small">{{ m.variance_display }}</div>{% endif %}
                         </td>
                         {% endfor %}
                         <td class="fw-semibold">{{ project.cycle_sheet.total_cycle_display }}</td>

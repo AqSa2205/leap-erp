@@ -23,6 +23,7 @@ class ProjectForm(forms.ModelForm):
         fields = [
             'project_name', 'proposal_reference', 'client_rfq_reference',
             'po_number', 'submission_deadline', 'estimated_po_date',
+            'bom_started_deadline', 'handed_over_deadline', 'costing_started_deadline', 'finalized_deadline',
             'owner', 'customer', 'end_user', 'project_stage', 'priority', 'status', 'region', 'year', 'estimated_value',
             'estimated_value_usd', 'estimated_value_per_annum', 'estimated_gp',
             'actual_sales', 'po_award_quarter', 'success_quotient', 'minimum_achievement',
@@ -31,6 +32,10 @@ class ProjectForm(forms.ModelForm):
         widgets = {
             'submission_deadline': forms.DateInput(attrs={'type': 'date'}),
             'estimated_po_date': forms.DateInput(attrs={'type': 'date'}),
+            'bom_started_deadline': forms.DateInput(attrs={'type': 'date'}),
+            'handed_over_deadline': forms.DateInput(attrs={'type': 'date'}),
+            'costing_started_deadline': forms.DateInput(attrs={'type': 'date'}),
+            'finalized_deadline': forms.DateInput(attrs={'type': 'date'}),
             'remarks': forms.Textarea(attrs={'rows': 3}),
             'notes': forms.Textarea(attrs={'rows': 3}),
             'year': forms.Select(choices=[('', 'Select Year')] + Project.YEAR_CHOICES),
