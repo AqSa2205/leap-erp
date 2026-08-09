@@ -268,3 +268,41 @@ def send_pending_start_reminders():
         exc.save(update_fields=['reminder_sent_at'])
         count += 1
     return count
+
+
+def edit_attendance_exception(exc, editing_user, *, event_date, event_start_time, reason_category,
+                              custom_reason='', employee_comment=''):
+    """The creator edits their own still-pending, undecided exception in
+    place. Assumes the caller (the view, via AttendanceExceptionForm) has
+    already validated the fields — same trust level as
+    submit_attendance_exception, which also doesn't re-validate
+    reason_category/custom_reason itself."""
+    if exc.created_by_id != editing_user.id:
+        raise ValueError('Only the person who submitted this request can edit it.')
+    exc.refresh_from_db()
+    if exc.status != 'pending':
+        raise ValueError('This request has already been decided and can no longer be edited.')
+    if AttendanceException.objects.filter(
+            employee=exc.employee, event_date=event_date, event_start_time=event_start_time,
+            status__in=('pending', 'expired')).exclude(pk=exc.pk).exists():
+        raise ValueError(
+            'An attendance exception for this exact event has already been submitted and is still awaiting a decision.')
+
+    exc.event_date = event_date
+    exc.event_start_time = event_start_time
+    exc.reason_category = reason_category
+    exc.custom_reason = custom_reason
+    exc.employee_comment = employee_comment
+    exc.save(update_fields=[
+        'event_date', 'event_start_time', 'reason_category', 'custom_reason', 'employee_comment', 'updated_at'])
+    return exc
+
+
+def delete_attendance_exception(exc, deleting_user):
+    """The creator withdraws their own still-pending, undecided exception."""
+    if exc.created_by_id != deleting_user.id:
+        raise ValueError('Only the person who submitted this request can delete it.')
+    exc.refresh_from_db()
+    if exc.status != 'pending':
+        raise ValueError('This request has already been decided and can no longer be deleted.')
+    exc.delete()

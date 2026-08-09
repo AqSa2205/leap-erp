@@ -6866,3 +6866,59 @@ class EditDeleteLeaveRequestServiceTests(TestCase):
         with self.assertRaises(ValueError):
             delete_leave_request(self.req, self.user)
         self.assertTrue(LeaveRequest.objects.filter(pk=self.req.pk).exists())
+
+
+class EditDeleteAttendanceExceptionServiceTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee(iqama='EDAE-1')
+        self.user = _login_user('edae-user')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        self.exc = _submit_aex(
+            employee=self.emp, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.user)
+
+    def test_creator_can_edit_pending_exception(self):
+        from hr.attendance_exception_services import edit_attendance_exception
+        updated = edit_attendance_exception(
+            self.exc, self.user, event_date=_date(2026, 7, 21), event_start_time=_time(10, 0),
+            reason_category='outside_meeting')
+        self.assertEqual(updated.event_date, _date(2026, 7, 21))
+        self.assertEqual(updated.reason_category, 'outside_meeting')
+
+    def test_non_creator_cannot_edit(self):
+        from hr.attendance_exception_services import edit_attendance_exception
+        other = make_user('edae-other', password='x')
+        with self.assertRaises(ValueError):
+            edit_attendance_exception(
+                self.exc, other, event_date=_date(2026, 7, 21), event_start_time=_time(10, 0),
+                reason_category='outside_meeting')
+
+    def test_cannot_edit_once_decided(self):
+        from hr.attendance_exception_services import edit_attendance_exception
+        self.exc.status = 'approved'
+        self.exc.save(update_fields=['status'])
+        with self.assertRaises(ValueError):
+            edit_attendance_exception(
+                self.exc, self.user, event_date=_date(2026, 7, 21), event_start_time=_time(10, 0),
+                reason_category='outside_meeting')
+
+    def test_creator_can_delete_pending_exception(self):
+        from hr.attendance_exception_services import delete_attendance_exception
+        pk = self.exc.pk
+        delete_attendance_exception(self.exc, self.user)
+        self.assertFalse(AttendanceException.objects.filter(pk=pk).exists())
+
+    def test_non_creator_cannot_delete(self):
+        from hr.attendance_exception_services import delete_attendance_exception
+        other = make_user('edae-other2', password='x')
+        with self.assertRaises(ValueError):
+            delete_attendance_exception(self.exc, other)
+        self.assertTrue(AttendanceException.objects.filter(pk=self.exc.pk).exists())
+
+    def test_cannot_delete_once_decided(self):
+        from hr.attendance_exception_services import delete_attendance_exception
+        self.exc.status = 'expired'
+        self.exc.save(update_fields=['status'])
+        with self.assertRaises(ValueError):
+            delete_attendance_exception(self.exc, self.user)
