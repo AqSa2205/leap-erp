@@ -10,4 +10,5 @@ urlpatterns = [
     path('cell/save/', views.save_cell, name='save_cell'),
     path('cell/fill-range/', views.fill_range, name='fill_range'),
     path('export/', views.export_excel, name='export_excel'),
+    path('export/all/', views.download_all_months_zip, name='download_all_zip'),
 ]

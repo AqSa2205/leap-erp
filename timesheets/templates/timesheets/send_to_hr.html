@@ -1,6 +1,47 @@
 {% extends 'base.html' %}
 {% block title %}Send Timesheet to HR{% endblock %}
 {% block page_title %}Send Timesheet to HR{% endblock %}
+
+{% block extra_css %}
+<style>
+  .xlsx-preview { font-family: 'Trebuchet MS', Arial, sans-serif; font-size: 0.85rem; }
+  .xlsx-title {
+    font-family: 'Century Gothic', 'Trebuchet MS', Arial, sans-serif;
+    font-weight: bold;
+    font-size: 1.7rem;
+    text-align: center;
+    margin-bottom: 14px;
+  }
+  .xlsx-info { border-collapse: collapse; }
+  .xlsx-info td { padding: 2px 8px; vertical-align: bottom; }
+  .xlsx-info td.label { font-weight: 600; white-space: nowrap; }
+  .xlsx-info td.sig { color: #555; white-space: nowrap; padding-left: 40px; }
+
+  .xlsx-grid { border-collapse: collapse; width: 100%; }
+  .xlsx-grid th, .xlsx-grid td {
+    border: 1px solid #999;
+    padding: 4px 6px;
+  }
+  .xlsx-grid td.center { text-align: center; }
+  .xlsx-grid thead th {
+    background-color: #C00000;
+    color: #fff;
+    text-align: center;
+    font-weight: normal;
+  }
+  .xlsx-grid tbody tr.xlsx-weekend td { background-color: #FFFF00; }
+
+  .xlsx-desc-text.xlsx-editable { cursor: pointer; }
+  .xlsx-desc-text.xlsx-editable:hover { background-color: #fff3cd; }
+  .xlsx-summary-row { cursor: pointer; }
+  .xlsx-detail-entry { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; }
+  .xlsx-detail-entry + .xlsx-detail-entry { border-top: 1px dashed #ddd; }
+  .xlsx-inline-form textarea { width: 100%; font-size: 0.85rem; margin-bottom: 4px; }
+  .xlsx-inline-form input[type="number"] { width: 90px; font-size: 0.85rem; }
+  .xlsx-inline-error { color: #C00000; font-size: 0.8em; margin-top: 2px; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container-fluid">
     <div class="d-flex justify-content-between align-items-center mb-4">
@@ -20,21 +61,70 @@
     </div>
 
     <div class="card mb-4">
-        <div class="card-header bg-white"><strong>Preview</strong></div>
-        <div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table table-sm mb-0 align-middle">
-                    <thead class="table-light">
-                        <tr><th>Date</th><th>Description</th><th>Hours</th><th>Activity code(s)</th></tr>
+        <div class="card-header bg-white"><strong>Preview — exactly what HR will receive</strong></div>
+        <div class="card-body">
+            <div class="table-responsive xlsx-preview">
+                <div class="xlsx-title">MONTHLY&nbsp;&nbsp;TIMESHEET</div>
+                <table class="xlsx-info mb-3">
+                    <tr><td class="label">Employee:</td><td>{{ employee.full_name }}</td><td class="sig" rowspan="2">Signature:____________________________</td></tr>
+                    <tr><td class="label">Designation</td><td>{{ employee.designation }}</td></tr>
+                    <tr><td class="label">Supervisor Name :</td><td>{% if employee.main_manager %}{{ employee.main_manager.full_name }}{% endif %}</td><td class="sig">Signature:____________________________</td></tr>
+                    <tr><td class="label">Month of</td><td colspan="2">{{ date_range_label }}</td></tr>
+                </table>
+                <table class="xlsx-grid mb-0">
+                    <thead>
+                        <tr>
+                            <th>Sr.No</th>
+                            <th>Activity_Description</th>
+                            <th>Date</th>
+                            <th>Type</th>
+                            <th>Hours</th>
+                            <th>Activity_code</th>
+                        </tr>
                     </thead>
                     <tbody>
                         {% for row in rows %}
-                        <tr class="{% if row.is_weekend %}table-warning{% endif %}">
-                            <td>{{ row.date|date:"d M Y" }}</td>
-                            <td>{{ row.description }}</td>
-                            <td>{{ row.hours|default:"" }}</td>
-                            <td>{{ row.codes }}</td>
+                        <tr class="{% if row.is_weekend %}xlsx-weekend{% endif %}{% if row.entries|length > 1 %} xlsx-summary-row{% endif %}"
+                            {% if row.entries|length > 1 %}data-target="ts-detail-{{ forloop.counter }}"{% endif %}>
+                            <td class="center">{{ row.day }}</td>
+                            <td>
+                                {% if row.entries|length > 1 %}<i class="bi bi-chevron-right xlsx-chevron me-1"></i>{% endif %}
+                                <span class="xlsx-desc-text{% if row.entries|length == 1 %} xlsx-editable{% endif %}"
+                                      {% if row.entries|length == 1 %}
+                                      data-entry-id="{{ row.entries.0.pk }}"
+                                      data-entry-type="{% if row.entries.0.project_id %}project{% else %}activity{% endif %}"
+                                      data-project-id="{{ row.entries.0.project_id|default:'' }}"
+                                      data-activity-code-id="{{ row.entries.0.activity_code_id|default:'' }}"
+                                      data-description="{{ row.entries.0.task_description }}"
+                                      data-hours="{{ row.entries.0.hours }}"
+                                      {% endif %}>{{ row.description }}</span>
+                            </td>
+                            <td class="center">{{ row.date|date:"d/M/Y" }}</td>
+                            <td class="center">{% if row.hours %}Normal{% endif %}</td>
+                            <td class="center">{{ row.hours|default:"" }}</td>
+                            <td class="center">{{ row.codes }}</td>
                         </tr>
+                        {% if row.entries|length > 1 %}
+                        <tr class="xlsx-detail-row d-none" id="ts-detail-{{ forloop.counter }}">
+                            <td></td>
+                            <td colspan="5">
+                               {% for entry in row.entries %}
+                                <div class="xlsx-detail-entry">
+                                    <span class="xlsx-desc-text xlsx-editable"
+                                          data-entry-id="{{ entry.pk }}"
+                                          data-entry-type="{% if entry.project_id %}project{% else %}activity{% endif %}"
+                                          data-project-id="{{ entry.project_id|default:'' }}"
+                                          data-activity-code-id="{{ entry.activity_code_id|default:'' }}"
+                                          data-description="{{ entry.task_description }}"
+                                          data-hours="{{ entry.hours }}">
+                                        {{ entry.task_description }}
+                                        ({{ entry.hours }}h, {% if entry.project %}{{ entry.project.proposal_reference }}{% else %}{{ entry.activity_code.code }}{% endif %})
+                                    </span>
+                                </div>
+                                {% endfor %}
+                            </td>
+                        </tr>
+                        {% endif %}
                         {% endfor %}
                     </tbody>
                 </table>
@@ -56,4 +146,95 @@
         </a>
     </div>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll('.xlsx-summary-row').forEach(function (tr) {
+    tr.addEventListener('click', function (e) {
+      if (e.target.closest('.xlsx-edit-icon')) return;
+      const target = document.getElementById(tr.dataset.target);
+      if (!target) return;
+      target.classList.toggle('d-none');
+      const chevron = tr.querySelector('.xlsx-chevron');
+      if (chevron) chevron.classList.toggle('bi-chevron-down');
+    });
+  });
+
+  function getCookie(name) {
+    const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return match ? match.pop() : '';
+  }
+  
+  document.addEventListener('click', function (e) {
+    const textSpan = e.target.closest('.xlsx-editable');
+    if (!textSpan) return;
+    e.stopPropagation();
+    if (textSpan.dataset.editing) return; // already editing
+
+    const icon = textSpan; // same element now carries the data-* attributes
+    const wrapper = textSpan.parentElement;
+    textSpan.dataset.editing = '1';
+
+    const form = document.createElement('div');
+    form.className = 'xlsx-inline-form mt-1';
+    form.innerHTML =
+      '<textarea rows="2"></textarea>' +
+      '<input type="number" step="0.5" min="0" max="24"> hrs ' +
+      '<button type="button" class="btn btn-sm btn-primary save-btn">Save</button> ' +
+      '<button type="button" class="btn btn-sm btn-outline-secondary cancel-btn">Cancel</button>' +
+      '<div class="xlsx-inline-error d-none"></div>';
+
+    const textarea = form.querySelector('textarea');
+    const hoursInput = form.querySelector('input');
+    textarea.value = icon.dataset.description;
+    hoursInput.value = icon.dataset.hours;
+
+    textSpan.classList.add('d-none');
+    wrapper.appendChild(form);
+
+    form.querySelector('.cancel-btn').addEventListener('click', function () {
+      form.remove();
+      textSpan.classList.remove('d-none');
+      delete textSpan.dataset.editing;
+    });
+
+    form.querySelector('.save-btn').addEventListener('click', function () {
+      const errEl = form.querySelector('.xlsx-inline-error');
+      errEl.classList.add('d-none');
+
+      const body = new URLSearchParams();
+      body.set('entry_type', icon.dataset.entryType);
+      if (icon.dataset.entryType === 'project') {
+        body.set('project', icon.dataset.projectId);
+      } else {
+        body.set('activity_code', icon.dataset.activityCodeId);
+      }
+      body.set('task_description', textarea.value.trim());
+      body.set('hours', hoursInput.value);
+
+      fetch('/timesheets/entry/' + icon.dataset.entryId + '/inline-save/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'X-CSRFToken': getCookie('csrftoken'),
+        },
+        body: body.toString(),
+      })
+        .then(function (resp) { return resp.json().then(function (data) { return { ok: resp.ok, data: data }; }); })
+        .then(function (result) {
+          if (!result.ok) {
+            errEl.textContent = result.data.error || 'Could not save — please try again.';
+            errEl.classList.remove('d-none');
+            return;
+          }
+          window.location.reload();
+        })
+        .catch(function () {
+          errEl.textContent = 'Could not save — please try again.';
+          errEl.classList.remove('d-none');
+        });
+    });
+  });
+});
+</script>
 {% endblock %}

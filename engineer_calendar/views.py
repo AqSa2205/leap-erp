@@ -1,10 +1,13 @@
 # engineer_calendar/views.py
 import calendar
 import json
+import zipfile
 from datetime import date, timedelta
+from io import BytesIO
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
@@ -26,6 +29,32 @@ SOURCE_CSS = {
     'manual': 'src-manual',
     'blank': 'src-blank',
 }
+
+
+def _resolve_year_month(request):
+    """Read year/month from the query string (used for HR paging through
+    past months), falling back to today when absent or invalid — same
+    'never 500 on bad input' rule timesheet_export already follows."""
+    today = date.today()
+    try:
+        year = int(request.GET.get('year', today.year))
+        month = int(request.GET.get('month', today.month))
+        if not (1 <= month <= 12):
+            raise ValueError('Month out of range')
+        calendar.monthrange(year, month)
+    except (ValueError, TypeError, OverflowError):
+        year, month = today.year, today.month
+    return year, month
+
+
+def _adjacent_month(year, month, delta):
+    """delta=-1 for the previous month, +1 for the next, wrapping the year."""
+    month += delta
+    if month < 1:
+        month, year = 12, year - 1
+    elif month > 12:
+        month, year = 1, year + 1
+    return year, month
 
 
 def _clear_merge_span(employee, start_date, end_date):
@@ -84,15 +113,21 @@ def _build_day_cells(emp_cells, year, month, days_in_month):
     return day_cells
 
 
-@login_required
-@require_capability('engineer_calendar.access')
-def export_excel(request):
-    today = date.today()
-    year, month = today.year, today.month
+def _build_calendar_workbook(year, month):
+    """Build one month's Engineer Calendar workbook. Pulled out of
+    export_excel so the zip download can reuse it for many months without
+    duplicating any of the styling/merge logic."""
     days_in_month = calendar.monthrange(year, month)[1]
 
-    employees = Employee.objects.filter(is_active=True)
     cells = CalendarCell.objects.filter(date__year=year, date__month=month).select_related('employee')
+    # Active roster, PLUS anyone (even since-deactivated) who actually has
+    # attendance data for this specific month -- otherwise a departed
+    # employee's history silently disappears from every past export the
+    # moment they're deactivated, even though the CalendarCell rows are
+    # still sitting in the database untouched.
+    employees = Employee.objects.filter(
+        Q(is_active=True) | Q(pk__in=cells.values_list('employee_id', flat=True))
+    ).distinct()
     cell_map = {}
     for cell in cells:
         cell_map.setdefault(cell.employee_id, {})[cell.date.day] = cell
@@ -168,14 +203,45 @@ def export_excel(request):
             c.fill = FILL_NAME_ROW
 
         emp_cells = cell_map.get(emp.id, {})
-        for day in range(1, days_in_month + 1):
+        day = 1
+        while day <= days_in_month:
             cell = emp_cells.get(day)
+            cell_date = date(year, month, day)
+
+            if (cell and cell.merge_start_date and cell.merge_end_date
+                    and cell.merge_start_date <= cell_date <= cell.merge_end_date):
+                # Same idea as _build_day_cells for the on-screen grid: only
+                # emit one cell for the whole merged span, clipped to what's
+                # actually visible in this month.
+                span_start = max(cell.merge_start_date, date(year, month, 1))
+                span_end = min(cell.merge_end_date, date(year, month, days_in_month))
+                start_col = 3 + span_start.day
+                end_col = 3 + span_end.day
+
+                if end_col > start_col:
+                    ws.merge_cells(start_row=row, start_column=start_col, end_row=row, end_column=end_col)
+
+                fill = SOURCE_FILL.get(cell.source)
+                for col in range(start_col, end_col + 1):
+                    c = ws.cell(row=row, column=col)
+                    c.border = border
+                    if fill:
+                        c.fill = fill
+
+                xcell = ws.cell(row=row, column=start_col, value=cell.display_text)
+                xcell.font = normal_font
+                xcell.alignment = center
+
+                day = span_end.day + 1
+                continue
+
             xcell = ws.cell(row=row, column=3 + day, value=cell.display_text if cell else '')
             xcell.font = normal_font
             xcell.alignment = center
             xcell.border = border
             if cell and cell.source in SOURCE_FILL:
                 xcell.fill = SOURCE_FILL[cell.source]
+            day += 1
 
         remarks_cell = ws.cell(row=row, column=4 + days_in_month, value='')
         remarks_cell.border = border
@@ -183,17 +249,60 @@ def export_excel(request):
 
         row += 1
         ws.row_dimensions[row].height = 15
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+        if emp.work_location:
+            emp_type_cell = ws.cell(row=row, column=1, value=f'LNA {emp.get_work_location_display()} Staff')
+        else:
+            emp_type_cell = ws.cell(row=row, column=1, value='')
+        emp_type_cell.font = normal_font
+        if emp.joining_date:
+            doj_cell = ws.cell(row=row, column=3, value=f"DOJ: {emp.joining_date.strftime('%d-%B-%Y')}")
+            doj_cell.font = normal_font
         row += 1
         ws.row_dimensions[row].height = 8
         ws.cell(row=row, column=1).fill = FILL_SPACER
         row += 1
 
+    filename = f'Engineer_Calendar_{calendar.month_abbr[month]}_{year}.xlsx'
+    return wb, filename
+
+
+@login_required
+@require_capability('engineer_calendar.access')
+def export_excel(request):
+    year, month = _resolve_year_month(request)
+    wb, filename = _build_calendar_workbook(year, month)
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    response['Content-Disposition'] = (
-        f'attachment; filename="Engineer_Calendar_{calendar.month_abbr[month]}_{year}.xlsx"'
-    )
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)
+    return response
+
+
+@login_required
+@require_capability('engineer_calendar.access')
+def download_all_months_zip(request):
+    """One zip with a full Engineer Calendar workbook for every month that
+    has any CalendarCell data at all — one file per month, same format as
+    the single-month Export to Excel button."""
+    months = list(
+        CalendarCell.objects.values_list('date__year', 'date__month')
+        .distinct().order_by('-date__year', '-date__month')
+    )
+    if not months:
+        messages.error(request, 'There is no calendar data to download yet.')
+        return redirect('engineer_calendar:grid')
+
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for yr, mo in months:
+            month_wb, month_filename = _build_calendar_workbook(yr, mo)
+            month_buf = BytesIO()
+            month_wb.save(month_buf)
+            zf.writestr(month_filename, month_buf.getvalue())
+
+    response = HttpResponse(buf.getvalue(), content_type='application/zip')
+    response['Content-Disposition'] = 'attachment; filename="Engineer_Calendar_All_Months.zip"'
     return response
 
 
@@ -333,8 +442,7 @@ def fill_range(request):
 @login_required
 @require_capability('engineer_calendar.access')
 def calendar_grid(request):
-    today = date.today()
-    year, month = today.year, today.month
+    year, month = _resolve_year_month(request)
     days_in_month = calendar.monthrange(year, month)[1]
 
     employees = Employee.objects.filter(is_active=True)
@@ -360,6 +468,9 @@ def calendar_grid(request):
         for day in range(1, days_in_month + 1)
     ]
 
+    prev_year, prev_month = _adjacent_month(year, month, -1)
+    next_year, next_month = _adjacent_month(year, month, 1)
+
     context = {
         'year': year,
         'month': month,
@@ -367,6 +478,10 @@ def calendar_grid(request):
         'day_numbers': range(1, days_in_month + 1),
         'weekday_letters': weekday_letters,
         'rows': rows,
+        'prev_year': prev_year,
+        'prev_month': prev_month,
+        'next_year': next_year,
+        'next_month': next_month,
     }
     return render(request, 'engineer_calendar/calendar_grid.html', context)
 

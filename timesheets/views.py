@@ -1,10 +1,12 @@
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import render, redirect, get_object_or_404
+from django.urls import reverse
 from django.views.decorators.http import require_POST
 from decimal import Decimal
 from collections import defaultdict
 from io import BytesIO
+import zipfile
 from accounts.permissions import require_capability
 from .models import TimesheetEntry
 from .forms import TimesheetEntryForm
@@ -15,7 +17,7 @@ import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from django.conf import settings
 from django.core.mail import EmailMessage
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from .models import TimesheetRequest, TimesheetRequestAck, HRSettings
 from .services import request_timesheets, delete_request, submit_month, reopen_month
 from engineer_calendar.services import generate_draft
@@ -87,6 +89,8 @@ def my_timesheet(request):
         messages.error(request, 'Your account is not linked to an employee record yet. Contact HR.')
         return render(request, 'timesheets/my_timesheet.html', {'employee': None, 'entries': [], 'form': None})
 
+    year, month = _resolve_timesheet_month(request)
+
     if request.method == 'POST':
         form = TimesheetEntryForm(request.POST)
         if form.is_valid():
@@ -94,13 +98,15 @@ def my_timesheet(request):
             entry.employee = emp
             entry.save()
             messages.success(request, 'Entry added.')
-            return redirect('timesheets:my_timesheet')
+            return redirect(f"{reverse('timesheets:my_timesheet')}?year={year}&month={month}")
         else:
             messages.error(request, 'Please fix the errors below.')
     else:
         form = TimesheetEntryForm()
 
-    entries = TimesheetEntry.objects.filter(employee=emp).select_related('activity_code','project')
+    entries = TimesheetEntry.objects.filter(
+        employee=emp, date__year=year, date__month=month
+    ).select_related('activity_code', 'project')
     grouped_entries = _group_entries_by_date(entries)
     # Only nag about the COS_0009 default when the employee actually has an
     # entry the auto-start/auto-end signal created -- checking the activity
@@ -112,6 +118,8 @@ def my_timesheet(request):
         task_description__startswith='Ended task: '
     ).exists()
     pending_request = _pending_request_for(emp)
+    prev_year, prev_month = _adjacent_month(year, month, -1)
+    next_year, next_month = _adjacent_month(year, month, 1)
 
     return render(request, 'timesheets/my_timesheet.html', {
         'employee': emp,
@@ -120,6 +128,13 @@ def my_timesheet(request):
         'show_autogen_banner': show_autogen_banner,
         'form': form,
         'pending_request': pending_request,
+        'year': year,
+        'month': month,
+        'month_name': calendar.month_name[month],
+        'prev_year': prev_year,
+        'prev_month': prev_month,
+        'next_year': next_year,
+        'next_month': next_month,
     })
 
 
@@ -164,6 +179,39 @@ def timesheet_entry_delete(request, pk):
     entry.delete()
     messages.success(request, 'Entry deleted.')
     return redirect('timesheets:my_timesheet')
+
+
+@login_required
+@require_POST
+def timesheet_entry_inline_save(request, pk):
+    """AJAX-only save used by the Send to HR preview page's inline edit.
+    Same ownership/lock rules as timesheet_entry_edit — the employee just
+    never has to leave the preview to make a last-minute fix before sending.
+    The date is intentionally not editable here: it's fixed by which row
+    on the preview they clicked, so we always keep the entry's real date."""
+    emp = _get_employee_or_none(request)
+    if emp is None:
+        return JsonResponse({'error': 'Your account is not linked to an employee record.'}, status=400)
+
+    entry = get_object_or_404(TimesheetEntry, pk=pk, employee=emp)
+    if entry.status != TimesheetEntry.STATUS_DRAFT:
+        return JsonResponse({'error': 'This entry has been submitted and can no longer be edited.'}, status=400)
+
+    data = request.POST.copy()
+    data['date'] = entry.date.isoformat()
+    form = TimesheetEntryForm(data, instance=entry)
+    if not form.is_valid():
+        first_error = next(iter(form.errors.values()))[0]
+        return JsonResponse({'error': first_error}, status=400)
+
+    entry = form.save()
+    return JsonResponse({
+        'ok': True,
+        'task_description': entry.task_description,
+        'hours': str(entry.hours),
+        'code_label': _entry_label(entry),
+    })
+
 
 def _ordinal(n):
     """1 -> '1st', 2 -> '2nd', 3 -> '3rd', 4 -> '4th', etc."""
@@ -307,7 +355,7 @@ def _build_timesheet_workbook(emp, year, month):
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
 
-    filename = f'{emp.full_name.replace(" ", "_")}_Timesheet_{month_name}_{year}.xlsx'
+    filename = f'{emp.full_name.replace(" ", "_")}_{emp.pk}_Timesheet_{month_name}_{year}.xlsx'
     return wb, filename
 
 
@@ -329,11 +377,72 @@ def hr_request_timesheets(request):
         messages.success(request, f'Timesheet request sent for {month}/{year}.')
         return redirect('timesheets:hr_request')
     recent_requests = TimesheetRequest.objects.all()[:10]
+    month_choices = [(i, calendar.month_name[i]) for i in range(1, 13)]
     return render(request, 'timesheets/hr_request.html', {
         'today': today,
         'month_name': calendar.month_name[today.month],
         'recent_requests': recent_requests,
+        'month_choices': month_choices,
     })
+
+
+@login_required
+@require_capability('timesheets.review')
+def hr_download_zip(request):
+    """HR bulk-downloads timesheets as a zip: either every employee's
+    .xlsx for one chosen month, or one zip covering every month that has
+    any entries at all, organized into per-month folders inside the zip.
+    Reuses _build_timesheet_workbook so the files inside are byte-for-byte
+    the same format as the personal export / HR email attachment."""
+    from hr.models import Employee
+
+    download_all = request.GET.get('all') == '1'
+
+    if download_all:
+        months = list(
+            TimesheetEntry.objects.values_list('date__year', 'date__month')
+            .distinct().order_by('-date__year', '-date__month')
+        )
+        if not months:
+            messages.error(request, 'There are no timesheet entries to download yet.')
+            return redirect('timesheets:hr_request')
+        zip_filename = 'Timesheets_All_Months.zip'
+    else:
+        today = date_cls.today()
+        try:
+            year = int(request.GET.get('year', today.year))
+            month = int(request.GET.get('month', today.month))
+            if not (1 <= month <= 12):
+                raise ValueError('Month out of range')
+            calendar.monthrange(year, month)
+        except (ValueError, TypeError):
+            messages.error(request, 'Invalid year or month.')
+            return redirect('timesheets:hr_request')
+        months = [(year, month)]
+        zip_filename = f'Timesheets_{calendar.month_name[month]}_{year}.zip'
+
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for yr, mo in months:
+            employee_ids = TimesheetEntry.objects.filter(
+                date__year=yr, date__month=mo
+            ).values_list('employee_id', flat=True).distinct()
+            employees = Employee.objects.filter(pk__in=employee_ids)
+
+            if not employees:
+                continue
+
+            month_folder = f'{calendar.month_name[mo]}_{yr}'
+            for emp in employees:
+                wb, filename = _build_timesheet_workbook(emp, yr, mo)
+                emp_buf = BytesIO()
+                wb.save(emp_buf)
+                arcname = f'{month_folder}/{filename}' if download_all else filename
+                zf.writestr(arcname, emp_buf.getvalue())
+
+    response = HttpResponse(buf.getvalue(), content_type='application/zip')
+    response['Content-Disposition'] = f'attachment; filename="{zip_filename}"'
+    return response
 
 
 def _build_month_rows(emp, year, month):
@@ -371,6 +480,31 @@ def _build_month_rows(emp, year, month):
     return rows
 
 
+def _resolve_timesheet_month(request):
+    """Read year/month from the query string for the My Timesheet month
+    browser, falling back to today when absent or invalid."""
+    today = date_cls.today()
+    try:
+        year = int(request.GET.get('year', today.year))
+        month = int(request.GET.get('month', today.month))
+        if not (1 <= month <= 12):
+            raise ValueError('Month out of range')
+        calendar.monthrange(year, month)
+    except (ValueError, TypeError, OverflowError):
+        year, month = today.year, today.month
+    return year, month
+
+
+def _adjacent_month(year, month, delta):
+    """delta=-1 for the previous month, +1 for the next, wrapping the year."""
+    month += delta
+    if month < 1:
+        month, year = 12, year - 1
+    elif month > 12:
+        month, year = 1, year + 1
+    return year, month
+
+
 def _pending_request_for(emp):
     """The most recent TimesheetRequest this employee hasn't acknowledged
     yet, or None if they're all caught up."""
@@ -404,13 +538,24 @@ def send_to_hr(request, request_id):
     year, month = ts_request.year, ts_request.month
     rows = _build_month_rows(emp, year, month)
     month_name = calendar.month_name[month]
+    days_in_month = calendar.monthrange(year, month)[1]
+    date_range_label = f'{_ordinal(1)} {month_name} {year} to {_ordinal(days_in_month)} {month_name} {year}'
     hr_email = HRSettings.load().hr_email
+
+    entries_by_day = defaultdict(list)
+    for e in TimesheetEntry.objects.filter(
+            employee=emp, date__year=year, date__month=month
+        ).select_related('activity_code', 'project').order_by('id'):
+        entries_by_day[e.date.day].append(e)
+    for row in rows:
+        row['entries'] = entries_by_day.get(row['day'], [])
 
     return render(request, 'timesheets/send_to_hr.html', {
         'employee': emp,
         'ts_request': ts_request,
         'rows': rows,
         'month_name': month_name,
+        'date_range_label': date_range_label,
         'hr_email': hr_email,
     })
 

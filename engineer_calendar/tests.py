@@ -6,6 +6,7 @@ explicit assertion so a future regression (IDOR-ish capability leak, silent
 display_text bug, CSRF bypass, merge split) fails loudly.
 """
 import json
+import zipfile
 from datetime import date, timedelta
 from decimal import Decimal
 from io import BytesIO
@@ -689,3 +690,154 @@ class SuperAdminAccessTests(TestCase):
         self.client.login(username='calsuper', password='testpass123')
         resp = self.client.get(reverse('engineer_calendar:grid'))
         self.assertEqual(resp.status_code, 200)
+
+
+class EngineerCalendarMonthNavigationTests(TestCase):
+    """_resolve_year_month / _adjacent_month on the HR grid and export --
+    same 'never 500, always fall back to today' contract as the timesheets
+    side, plus year-boundary wrapping for Prev/Next."""
+
+    def setUp(self):
+        self.client = Client()
+        self.admin, self.emp = _make_user_with_employee(
+            'calnav', role_name=Role.ADMIN, full_name='Cal Nav Emp')
+        seed_default_permissions()
+        self.client.login(username='calnav', password='testpass123')
+        CalendarCell.objects.create(
+            employee=self.emp, date=date(2026, 7, 10),
+            display_text='JULY CELL', source=CalendarCell.SOURCE_MANUAL)
+        CalendarCell.objects.create(
+            employee=self.emp, date=date(2026, 10, 10),
+            display_text='OCTOBER CELL', source=CalendarCell.SOURCE_MANUAL)
+
+    def test_explicit_month_shows_only_that_months_cells(self):
+        resp = self.client.get(reverse('engineer_calendar:grid') + '?year=2026&month=7')
+        self.assertContains(resp, 'JULY CELL')
+        self.assertNotContains(resp, 'OCTOBER CELL')
+
+    def test_default_no_params_uses_current_month(self):
+        today = date.today()
+        resp = self.client.get(reverse('engineer_calendar:grid'))
+        self.assertEqual(resp.context['year'], today.year)
+        self.assertEqual(resp.context['month'], today.month)
+
+    def test_invalid_month_falls_back_to_today_not_500(self):
+        today = date.today()
+        resp = self.client.get(reverse('engineer_calendar:grid') + '?year=2026&month=0')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context['year'], today.year)
+        self.assertEqual(resp.context['month'], today.month)
+
+    def test_garbage_year_falls_back_to_today_not_500(self):
+        today = date.today()
+        resp = self.client.get(reverse('engineer_calendar:grid') + '?year=xx&month=7')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context['year'], today.year)
+        self.assertEqual(resp.context['month'], today.month)
+
+    def test_prev_next_wrap_december_to_january(self):
+        resp = self.client.get(reverse('engineer_calendar:grid') + '?year=2026&month=12')
+        self.assertEqual(resp.context['next_year'], 2027)
+        self.assertEqual(resp.context['next_month'], 1)
+        self.assertEqual(resp.context['prev_year'], 2026)
+        self.assertEqual(resp.context['prev_month'], 11)
+
+    def test_prev_next_wrap_january_to_december(self):
+        resp = self.client.get(reverse('engineer_calendar:grid') + '?year=2026&month=1')
+        self.assertEqual(resp.context['prev_year'], 2025)
+        self.assertEqual(resp.context['prev_month'], 12)
+
+    def test_export_link_carries_the_month_being_viewed(self):
+        resp = self.client.get(reverse('engineer_calendar:grid') + '?year=2026&month=7')
+        self.assertContains(resp, 'year=2026')
+        self.assertContains(resp, 'month=7')
+
+    def test_export_excel_respects_query_params_not_just_today(self):
+        resp = self.client.get(reverse('engineer_calendar:export_excel') + '?year=2026&month=7')
+        wb = load_workbook(BytesIO(resp.content))
+        ws = wb.active
+        values = [str(v) for row in ws.iter_rows(values_only=True) for v in row if v is not None]
+        self.assertTrue(any('JULY CELL' in v for v in values))
+        self.assertFalse(any('OCTOBER CELL' in v for v in values))
+
+    def test_generate_draft_ignores_query_params_always_uses_today(self):
+        """Deliberate design decision: Generate Draft never regenerates a
+        month HR is just browsing -- it always runs against today."""
+        before = CalendarCell.objects.filter(date__year=2020).count()
+        self.client.post(reverse('engineer_calendar:generate_draft') + '?year=2020&month=1')
+        after = CalendarCell.objects.filter(date__year=2020).count()
+        self.assertEqual(before, after)
+
+
+class EngineerCalendarZipDownloadTests(TestCase):
+    """download_all_months_zip: role-gated, one workbook per month with
+    data, and no cross-month leakage inside a single month's workbook."""
+
+    def setUp(self):
+        self.client = Client()
+        self.admin, self.emp = _make_user_with_employee(
+            'calzip', role_name=Role.ADMIN, full_name='Cal Zip Emp')
+        self.plain, _ = _make_user_with_employee('calzipplain', role_name=Role.SALES_REP)
+        seed_default_permissions()
+        CalendarCell.objects.create(
+            employee=self.emp, date=date(2026, 7, 10),
+            display_text='JULY CELL', source=CalendarCell.SOURCE_MANUAL)
+        CalendarCell.objects.create(
+            employee=self.emp, date=date(2026, 8, 10),
+            display_text='AUGUST CELL', source=CalendarCell.SOURCE_MANUAL)
+
+    def test_plain_employee_cannot_download_all_zip(self):
+        self.client.login(username='calzipplain', password='testpass123')
+        resp = self.client.get(reverse('engineer_calendar:download_all_zip'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_anonymous_redirected(self):
+        resp = self.client.get(reverse('engineer_calendar:download_all_zip'))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/login', resp.url)
+
+    def test_all_zip_contains_one_workbook_per_month_with_data(self):
+        self.client.login(username='calzip', password='testpass123')
+        resp = self.client.get(reverse('engineer_calendar:download_all_zip'))
+        self.assertEqual(resp.status_code, 200)
+        zf = zipfile.ZipFile(BytesIO(resp.content))
+        names = zf.namelist()
+        self.assertIn('Engineer_Calendar_Jul_2026.xlsx', names)
+        self.assertIn('Engineer_Calendar_Aug_2026.xlsx', names)
+
+    def test_all_zip_isolates_data_per_month(self):
+        self.client.login(username='calzip', password='testpass123')
+        resp = self.client.get(reverse('engineer_calendar:download_all_zip'))
+        zf = zipfile.ZipFile(BytesIO(resp.content))
+        july_wb = load_workbook(BytesIO(zf.read('Engineer_Calendar_Jul_2026.xlsx')))
+        ws = july_wb.active
+        values = [str(v) for row in ws.iter_rows(values_only=True) for v in row if v is not None]
+        self.assertTrue(any('JULY CELL' in v for v in values))
+        self.assertFalse(any('AUGUST CELL' in v for v in values))
+
+    def test_no_data_redirects_with_message(self):
+        CalendarCell.objects.all().delete()
+        self.client.login(username='calzip', password='testpass123')
+        resp = self.client.get(reverse('engineer_calendar:download_all_zip'))
+        self.assertEqual(resp.status_code, 302)
+        self.assertRedirects(resp, reverse('engineer_calendar:grid'))
+
+    def test_KNOWN_ISSUE_departed_employees_data_missing_from_historical_export(self):
+        """RED TEST -- documents a real bug: _build_calendar_workbook
+        filters Employee.objects.filter(is_active=True) with NO scoping
+        to the month being exported. Once an employee is deactivated,
+        ALL their past CalendarCell rows vanish from every export/zip,
+        even for months they were actively employed -- the data is still
+        in the DB, just unreachable through this feature. This test
+        currently FAILS. Fix by deriving the employee set per-month from
+        CalendarCell.objects.filter(date__year=yr, date__month=mo)
+        instead of the live is_active roster."""
+        self.emp.is_active = False
+        self.emp.save()
+        self.client.login(username='calzip', password='testpass123')
+        resp = self.client.get(
+            reverse('engineer_calendar:export_excel') + '?year=2026&month=7')
+        wb = load_workbook(BytesIO(resp.content))
+        ws = wb.active
+        values = [str(v) for row in ws.iter_rows(values_only=True) for v in row if v is not None]
+        self.assertTrue(any('JULY CELL' in v for v in values))
