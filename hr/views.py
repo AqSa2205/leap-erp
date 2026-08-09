@@ -333,6 +333,57 @@ def my_profile(request):
         form = LeaveRequestForm(fixed_employee=emp) if emp else LeaveRequestForm()
     context['leave_request_form'] = form
 
+    is_edit_leave_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'edit_leave_request')
+    if is_edit_leave_post:
+        from hr.leave_approval_services import edit_leave_request
+        target = LeaveRequest.objects.filter(pk=request.POST.get('request_id')).first()
+        if target is None or target.created_by_id != request.user.id:
+            return HttpResponse('You did not submit this request.', status=403)
+        edit_form = LeaveRequestForm(
+            request.POST, request.FILES, fixed_employee=target.employee, exclude_request_id=target.pk)
+        if edit_form.is_valid():
+            try:
+                edit_leave_request(
+                    target, request.user, leave_type=edit_form.cleaned_data['leave_type'],
+                    start_date=edit_form.cleaned_data['start_date'], end_date=edit_form.cleaned_data['end_date'],
+                    employee_reason=edit_form.cleaned_data['employee_reason'],
+                    document=edit_form.cleaned_data['document'] or None)
+                messages.success(request, 'Leave request updated.')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+        else:
+            messages.error(request, 'Could not update the request — please check the form.')
+        return redirect('hr:my_profile')
+
+    is_delete_leave_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'delete_leave_request')
+    if is_delete_leave_post:
+        from hr.leave_approval_services import delete_leave_request
+        target = LeaveRequest.objects.filter(pk=request.POST.get('request_id')).first()
+        if target is None or target.created_by_id != request.user.id:
+            return HttpResponse('You did not submit this request.', status=403)
+        try:
+            delete_leave_request(target, request.user)
+            messages.success(request, 'Leave request deleted.')
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        return redirect('hr:my_profile')
+
+    is_request_revoke_leave_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'request_leave_revoke')
+    if is_request_revoke_leave_post:
+        from hr.leave_approval_services import request_leave_revoke
+        target = LeaveRequest.objects.filter(pk=request.POST.get('request_id')).first()
+        if target is None or not (target.employee.user_id and target.employee.user_id == request.user.id):
+            return HttpResponse('This is not your leave request.', status=403)
+        try:
+            request_leave_revoke(target, request.user, request.POST.get('reason', ''))
+            messages.success(request, 'Revoke requested — it will not take effect until reviewed.')
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        return redirect('hr:my_profile')
+
     is_attendance_exception_post = (
         emp and request.method == 'POST' and request.POST.get('action') == 'submit_attendance_exception')
     if is_attendance_exception_post:
@@ -394,6 +445,13 @@ def my_profile(request):
             # prefetch cache rather than a second queryset, so this doesn't
             # cost an extra query per row.
             r.visible_notes = [n for n in r.notes.all() if not n.is_internal]
+            r.can_edit_delete = bool(
+                r.created_by_id == request.user.id and r.status == 'pending'
+                and not r.approvals.exclude(decision='pending').exists())
+            r.can_request_revoke = bool(
+                r.employee.user_id == request.user.id and r.status == 'approved'
+                and not r.revoke_requests.filter(status='pending').exists())
+            r.pending_revoke_request = r.revoke_requests.filter(status='pending').first()
         # This employee's own attendance exceptions, newest event first.
         context['my_attendance_exceptions'] = emp.attendance_exceptions.order_by('-event_date')[:10]
         # Attendance summary for the current month.
@@ -452,6 +510,13 @@ def my_profile(request):
                             employee_id__in=[r.pk for r in direct_reports],
                             created_by=request.user, logged_by_manager=True)
                         .select_related('leave_type').order_by('employee_id', '-created_at')):
+                # created_by == request.user is already guaranteed by the
+                # queryset filter above, so only the status/approvals check
+                # is needed here (unlike the top-level leave_requests list,
+                # which mixes self-submitted and manager-logged rows and
+                # needs the full creator check).
+                req.can_edit_delete = bool(
+                    req.status == 'pending' and not req.approvals.exclude(decision='pending').exists())
                 in_behalf_by_employee[req.employee_id].append(req)
             for r in direct_reports:
                 r.in_behalf_requests = in_behalf_by_employee.get(r.pk, [])

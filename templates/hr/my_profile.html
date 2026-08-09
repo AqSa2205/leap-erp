@@ -186,7 +186,7 @@
             <div class="collapse" id="myLeaveRequestsCollapse">
             <div style="max-height: 360px; overflow-y: auto;">
             <table class="table table-sm mb-0">
-              <thead class="table-light"><tr><th>Type</th><th>Dates</th><th>Status</th></tr></thead>
+              <thead class="table-light"><tr><th>Type</th><th>Dates</th><th>Status</th><th></th></tr></thead>
               <tbody>
                 {% for r in leave_requests %}
                 <tr>
@@ -205,6 +205,29 @@
                     {% if r.status == 'approved' %}
                       <span class="badge bg-success align-self-start">Approved</span>
                       {% if r.decided_by_display %}<div class="small text-muted">{{ r.decided_by_display }}</div>{% endif %}
+                      {% if r.pending_revoke_request %}
+                        <div class="small text-muted"><i class="bi bi-hourglass-split"></i> Revoke requested — awaiting review</div>
+                      {% elif r.can_request_revoke %}
+                        <button type="button" class="btn btn-sm btn-link text-danger p-0 align-self-start" data-bs-toggle="collapse" data-bs-target="#requestRevoke{{ r.pk }}" id="request_revoke_leave_{{ r.pk }}">
+                          Request Revoke
+                        </button>
+                        <div class="collapse" id="requestRevoke{{ r.pk }}">
+                          <form method="post" class="border rounded p-2">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="request_leave_revoke">
+                            <input type="hidden" name="request_id" value="{{ r.pk }}">
+                            <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Why does this leave need to be revoked? — required" required></textarea>
+                            <button type="submit" class="btn btn-sm btn-outline-danger">Submit Revoke Request</button>
+                          </form>
+                        </div>
+                      {% endif %}
+                    {% elif r.status == 'revoked' %}
+                      <span class="badge bg-secondary align-self-start">Revoked</span>
+                      <div class="small text-muted">
+                        {% if r.revoked_by %}by {{ r.revoked_by.get_full_name|default:r.revoked_by.username }}{% endif %}
+                        {% if r.revoked_at %} on {{ r.revoked_at|date:'d M Y' }}{% endif %}
+                      </div>
+                      {% if r.revoke_reason %}<div class="small text-muted fst-italic">"{{ r.revoke_reason }}"</div>{% endif %}
                     {% elif r.status == 'disapproved' %}
                       <span class="badge bg-danger align-self-start">Disapproved</span>
                       {% if r.decided_by_display %}<div class="small text-muted">{{ r.decided_by_display }}</div>{% endif %}
@@ -238,7 +261,49 @@
                     {% endif %}
                     </div>
                   </td>
+                  <td class="text-end">
+                    {% if r.can_edit_delete %}
+                    <button type="button" class="btn btn-sm btn-outline-secondary py-0" data-bs-toggle="collapse" data-bs-target="#editLeave{{ r.pk }}" id="edit_leave_request_{{ r.pk }}">
+                      <i class="bi bi-pencil"></i>
+                    </button>
+                    <form method="post" class="d-inline" onsubmit="return confirm('Delete this leave request?');">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="delete_leave_request">
+                      <input type="hidden" name="request_id" value="{{ r.pk }}">
+                      <button type="submit" class="btn btn-sm btn-outline-danger py-0" id="delete_leave_request_{{ r.pk }}">
+                        <i class="bi bi-trash"></i>
+                      </button>
+                    </form>
+                    {% endif %}
+                  </td>
                 </tr>
+                {% if r.can_edit_delete %}
+                <tr class="collapse" id="editLeave{{ r.pk }}">
+                  <td colspan="4">
+                    <form method="post" enctype="multipart/form-data" class="border rounded p-2">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="edit_leave_request">
+                      <input type="hidden" name="request_id" value="{{ r.pk }}">
+                      <div class="row g-2">
+                        <div class="col-md-3">
+                          <label class="form-label small">Start</label>
+                          <input type="date" name="start_date" class="form-control form-control-sm" value="{{ r.start_date|date:'Y-m-d' }}" required>
+                        </div>
+                        <div class="col-md-3">
+                          <label class="form-label small">End</label>
+                          <input type="date" name="end_date" class="form-control form-control-sm" value="{{ r.end_date|date:'Y-m-d' }}" required>
+                        </div>
+                        <div class="col-md-6">
+                          <label class="form-label small">Reason</label>
+                          <input type="text" name="employee_reason" class="form-control form-control-sm" value="{{ r.employee_reason }}">
+                        </div>
+                      </div>
+                      <input type="hidden" name="leave_type" value="{{ r.leave_type_id }}">
+                      <button type="submit" class="btn btn-sm btn-primary mt-2">Save Changes</button>
+                    </form>
+                  </td>
+                </tr>
+                {% endif %}
                 {% endfor %}
               </tbody>
             </table>
@@ -475,10 +540,21 @@
                   Your request:
                   {% if req.status == 'approved' %}<span class="badge bg-success">Approved</span>
                   {% elif req.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
+                  {% elif req.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
                   {% elif req.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
                   {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
                   {% if req.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
                   {{ req.leave_type.name }}, {{ req.start_date }}–{{ req.end_date }}
+                  {% if req.can_edit_delete %}
+                  <form method="post" class="d-inline ms-1" onsubmit="return confirm('Delete this leave request?');">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="delete_leave_request">
+                    <input type="hidden" name="request_id" value="{{ req.pk }}">
+                    <button type="submit" class="btn btn-sm btn-link text-danger p-0" id="delete_leave_request_{{ req.pk }}">
+                      <i class="bi bi-trash"></i>
+                    </button>
+                  </form>
+                  {% endif %}
                 </div>
                 {% endif %}
                 {% endfor %}
@@ -493,10 +569,21 @@
                     Your request:
                     {% if req.status == 'approved' %}<span class="badge bg-success">Approved</span>
                     {% elif req.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
+                    {% elif req.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
                     {% elif req.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
                     {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
                     {% if req.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
                     {{ req.leave_type.name }}, {{ req.start_date }}–{{ req.end_date }}
+                    {% if req.can_edit_delete %}
+                    <form method="post" class="d-inline ms-1" onsubmit="return confirm('Delete this leave request?');">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="delete_leave_request">
+                      <input type="hidden" name="request_id" value="{{ req.pk }}">
+                      <button type="submit" class="btn btn-sm btn-link text-danger p-0" id="delete_leave_request_{{ req.pk }}">
+                        <i class="bi bi-trash"></i>
+                      </button>
+                    </form>
+                    {% endif %}
                   </div>
                   {% endif %}
                   {% endfor %}

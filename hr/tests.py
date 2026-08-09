@@ -7183,3 +7183,140 @@ class RevokeAttendanceExceptionServiceTests(TestCase):
         revoke_req = request_attendance_exception_revoke(self.exc, self.user, 'Plans changed.')
         with self.assertRaises(ValueError):
             decide_attendance_exception_revoke_request(revoke_req, self.manager_user, 'rejected', decision_note='')
+
+
+class MyProfileLeaveEditDeleteUITests(TestCase):
+    def setUp(self):
+        self.emp = make_employee(iqama='MPLED-1')
+        self.lt, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 5, 'is_accumulative': False})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=5)
+        self.user = _login_user('mpled_user')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        self.req = submit_leave_request(
+            employee=self.emp, leave_type=self.lt, start_date=date(2026, 8, 1), end_date=date(2026, 8, 2),
+            created_by=self.user)
+        self.client.login(username='mpled_user', password='testpass123')
+
+    def test_edit_delete_buttons_render_for_own_pending_request(self):
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, f'edit_leave_request_{self.req.pk}')
+        self.assertContains(resp, f'delete_leave_request_{self.req.pk}')
+
+    def test_no_edit_delete_buttons_once_decided(self):
+        approver = make_user('mpled_approver', password='x')
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=approver, decision='approved')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, f'edit_leave_request_{self.req.pk}')
+
+    def test_post_edit_updates_request(self):
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'edit_leave_request', 'request_id': self.req.pk,
+            'leave_type': self.lt.pk, 'start_date': '2026-08-05', 'end_date': '2026-08-06',
+            'employee_reason': 'Rescheduled',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.start_date, date(2026, 8, 5))
+        self.assertEqual(self.req.employee_reason, 'Rescheduled')
+
+    def test_post_delete_removes_request(self):
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'delete_leave_request', 'request_id': self.req.pk,
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(LeaveRequest.objects.filter(pk=self.req.pk).exists())
+
+    def test_cannot_delete_someone_elses_request(self):
+        other_emp = make_employee(iqama='MPLED-2')
+        other_user = _login_user('mpled_other')
+        other_emp.user = other_user
+        other_emp.save(update_fields=['user'])
+        LeaveEntitlement.objects.create(employee=other_emp, leave_type=self.lt, year=2026, entitled_days=5)
+        other_req = submit_leave_request(
+            employee=other_emp, leave_type=self.lt, start_date=date(2026, 8, 10), end_date=date(2026, 8, 11),
+            created_by=other_user)
+        self.client.post(reverse('hr:my_profile'), {
+            'action': 'delete_leave_request', 'request_id': other_req.pk,
+        })
+        self.assertTrue(LeaveRequest.objects.filter(pk=other_req.pk).exists())
+
+
+class MyProfileManagerInBehalfEditDeleteUITests(TestCase):
+    """Edit/Delete for a manager's own in-behalf-logged pending request
+    render in the Reporting Structure card, not the report's own table —
+    the gate is request.user == created_by, and the manager (not the
+    report) is the creator here."""
+
+    def setUp(self):
+        self.manager_user = User.objects.create_user(username='mpmied-mgr', password='x')
+        self.manager = Employee.objects.create(
+            iqama_number='MPMIED-MGR', full_name='InBehalf Edit Manager', user=self.manager_user)
+        self.report_user = User.objects.create_user(username='mpmied-rpt', password='x')
+        self.report = Employee.objects.create(
+            iqama_number='MPMIED-RPT', full_name='InBehalf Edit Report',
+            main_manager=self.manager, user=self.report_user)
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30')})
+        LeaveEntitlement.objects.create(employee=self.report, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        self.client.login(username='mpmied-mgr', password='x')
+        self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        })
+        self.req = LeaveRequest.objects.get(employee=self.report)
+
+    def test_manager_sees_edit_delete_for_own_in_behalf_request(self):
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, f'delete_leave_request_{self.req.pk}')
+
+    def test_report_does_not_see_edit_delete_on_their_own_profile(self):
+        # The report views their OWN My Leave Requests table — they didn't
+        # create this request (their manager did), so no Edit/Delete for
+        # them, even though it's about their own leave.
+        self.client.logout()
+        self.client.login(username='mpmied-rpt', password='x')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, f'delete_leave_request_{self.req.pk}')
+
+
+class MyProfileRequestRevokeLeaveUITests(TestCase):
+    def setUp(self):
+        self.emp = make_employee(iqama='MPRRL-1')
+        self.lt, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': Decimal('30')})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        self.user = _login_user('mprrl_user')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        approver = make_user('mprrl_approver', password='x')
+        LeaveDashboardAccess.objects.create(user=approver, is_active=True)
+        self.req = submit_leave_request(
+            employee=self.emp, leave_type=self.lt, start_date=date(2026, 8, 1), end_date=date(2026, 8, 2),
+            created_by=self.user)
+        record_approver_decision(self.req, approver, 'approved')
+        self.client.login(username='mprrl_user', password='testpass123')
+
+    def test_request_revoke_button_renders_on_approved_own_request(self):
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, f'request_revoke_leave_{self.req.pk}')
+
+    def test_post_creates_pending_revoke_request(self):
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'request_leave_revoke', 'request_id': self.req.pk, 'reason': 'Plans changed.',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(LeaveRevokeRequest.objects.filter(leave_request=self.req, status='pending').exists())
+
+    def test_awaiting_review_note_shows_after_requesting(self):
+        LeaveRevokeRequest.objects.create(leave_request=self.req, requested_by=self.user, reason='Plans changed.')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'Revoke requested')
+
+    def test_revoked_badge_renders(self):
+        from hr.leave_approval_services import revoke_leave_request
+        revoker = make_user('mprrl_revoker', password='x')
+        revoke_leave_request(self.req, revoker, 'Applied for testing.')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'Revoked')
