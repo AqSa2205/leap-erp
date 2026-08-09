@@ -7006,3 +7006,105 @@ class EditDeleteAttendanceExceptionServiceTests(TestCase):
         self.exc.save(update_fields=['status'])
         with self.assertRaises(ValueError):
             delete_attendance_exception(self.exc, self.user)
+
+
+class RevokeLeaveRequestServiceTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee(iqama='RLR-1')
+        self.lt, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': Decimal('30')})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        self.user = make_user('rlr-user', password='x')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        approver = make_user('rlr-approver', password='x')
+        # Roster is snapshotted onto the request AT SUBMISSION TIME (see
+        # submit_leave_request) — the approver's LeaveDashboardAccess grant
+        # must exist before this call, or no LeaveRequestApproval row gets
+        # created for them.
+        LeaveDashboardAccess.objects.create(user=approver, is_active=True)
+        self.req = submit_leave_request(
+            employee=self.emp, leave_type=self.lt, start_date=date(2026, 8, 1), end_date=date(2026, 8, 3),
+            created_by=self.user)
+        record_approver_decision(self.req, approver, 'approved')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'approved')
+        self.assertIsNotNone(self.req.leave_record_id)
+        self.revoker = make_user('rlr-revoker', password='x')
+
+    def test_direct_revoke_deletes_leave_record_and_sets_fields(self):
+        from hr.leave_approval_services import revoke_leave_request
+        record_id = self.req.leave_record_id
+        updated = revoke_leave_request(self.req, self.revoker, 'Project emergency.')
+        self.assertEqual(updated.status, 'revoked')
+        self.assertEqual(updated.revoked_by, self.revoker)
+        self.assertIsNotNone(updated.revoked_at)
+        self.assertEqual(updated.revoke_reason, 'Project emergency.')
+        self.assertFalse(LeaveRecord.objects.filter(pk=record_id).exists())
+
+    def test_direct_revoke_requires_reason(self):
+        from hr.leave_approval_services import revoke_leave_request
+        with self.assertRaises(ValueError):
+            revoke_leave_request(self.req, self.revoker, '')
+
+    def test_cannot_revoke_a_non_approved_request(self):
+        from hr.leave_approval_services import revoke_leave_request
+        pending = submit_leave_request(
+            employee=self.emp, leave_type=self.lt, start_date=date(2026, 9, 1), end_date=date(2026, 9, 2),
+            created_by=self.user)
+        with self.assertRaises(ValueError):
+            revoke_leave_request(pending, self.revoker, 'reason')
+
+    def test_cannot_self_revoke(self):
+        from hr.leave_approval_services import revoke_leave_request
+        with self.assertRaises(ValueError):
+            revoke_leave_request(self.req, self.user, 'reason')
+
+    def test_employee_can_request_revoke_on_own_approved_request(self):
+        from hr.leave_approval_services import request_leave_revoke
+        revoke_req = request_leave_revoke(self.req, self.user, 'Plans changed.')
+        self.assertEqual(revoke_req.status, 'pending')
+        self.assertEqual(revoke_req.requested_by, self.user)
+
+    def test_non_employee_cannot_request_revoke(self):
+        from hr.leave_approval_services import request_leave_revoke
+        with self.assertRaises(ValueError):
+            request_leave_revoke(self.req, self.revoker, 'reason')
+
+    def test_duplicate_pending_revoke_request_blocked(self):
+        from hr.leave_approval_services import request_leave_revoke
+        request_leave_revoke(self.req, self.user, 'First request.')
+        with self.assertRaises(ValueError):
+            request_leave_revoke(self.req, self.user, 'Second request.')
+
+    def test_decide_revoke_request_approve_applies_the_revoke(self):
+        from hr.leave_approval_services import request_leave_revoke, decide_leave_revoke_request
+        revoke_req = request_leave_revoke(self.req, self.user, 'Plans changed.')
+        decide_leave_revoke_request(revoke_req, self.revoker, 'approved')
+        self.req.refresh_from_db()
+        revoke_req.refresh_from_db()
+        self.assertEqual(self.req.status, 'revoked')
+        self.assertEqual(revoke_req.status, 'approved')
+        self.assertEqual(revoke_req.decided_by, self.revoker)
+
+    def test_decide_revoke_request_reject_leaves_original_untouched(self):
+        from hr.leave_approval_services import request_leave_revoke, decide_leave_revoke_request
+        revoke_req = request_leave_revoke(self.req, self.user, 'Plans changed.')
+        decide_leave_revoke_request(revoke_req, self.revoker, 'rejected', decision_note='Coverage already arranged.')
+        self.req.refresh_from_db()
+        revoke_req.refresh_from_db()
+        self.assertEqual(self.req.status, 'approved')  # unchanged
+        self.assertEqual(revoke_req.status, 'rejected')
+        self.assertEqual(revoke_req.decision_note, 'Coverage already arranged.')
+
+    def test_reject_without_decision_note_is_rejected(self):
+        from hr.leave_approval_services import request_leave_revoke, decide_leave_revoke_request
+        revoke_req = request_leave_revoke(self.req, self.user, 'Plans changed.')
+        with self.assertRaises(ValueError):
+            decide_leave_revoke_request(revoke_req, self.revoker, 'rejected', decision_note='')
+
+    def test_self_decision_on_own_revoke_request_blocked(self):
+        from hr.leave_approval_services import request_leave_revoke, decide_leave_revoke_request
+        revoke_req = request_leave_revoke(self.req, self.user, 'Plans changed.')
+        with self.assertRaises(ValueError):
+            decide_leave_revoke_request(revoke_req, self.user, 'approved')

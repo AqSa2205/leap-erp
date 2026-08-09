@@ -23,7 +23,7 @@ someone changing their mind to match the others.
 from django.db import transaction
 from django.utils import timezone
 
-from hr.models import LeaveRecord
+from hr.models import LeaveRecord, LeaveRequest, LeaveRevokeRequest
 from notifications.services import notify_users
 
 
@@ -347,3 +347,110 @@ def delete_leave_request(leave_request, deleting_user):
     if leave_request.approvals.exclude(decision='pending').exists():
         raise ValueError('An approver has already recorded a decision on this request; it can no longer be deleted.')
     leave_request.delete()
+
+
+def revoke_leave_request(leave_request, revoking_user, reason):
+    """Direct revoke by someone with override access — does NOT check
+    has_override_access itself (that's the caller's/view's job, same
+    separation of concerns as override_finalize). Deletes the linked
+    LeaveRecord so taken_days/remaining_days recompute live; the
+    LeaveRequest row stays, re-labeled status='revoked'."""
+    if leave_request.employee.user_id and leave_request.employee.user_id == revoking_user.id:
+        raise ValueError('You cannot revoke your own leave request.')
+    if not reason or not reason.strip():
+        raise ValueError('A revoke requires a written reason.')
+    leave_request.refresh_from_db()
+    if leave_request.status != 'approved':
+        raise ValueError(f'This request is {leave_request.status}; only an approved request can be revoked.')
+
+    with transaction.atomic():
+        current = LeaveRequest.objects.select_for_update().get(pk=leave_request.pk)
+        if current.status != 'approved':
+            raise ValueError(f'This request is {current.status}; only an approved request can be revoked.')
+        if current.leave_record_id:
+            LeaveRecord.objects.filter(pk=current.leave_record_id).delete()
+        current.status = 'revoked'
+        current.revoked_by = revoking_user
+        current.revoked_at = timezone.now()
+        current.revoke_reason = reason.strip()
+        current.leave_record = None
+        current.save(update_fields=['status', 'revoked_by', 'revoked_at', 'revoke_reason', 'leave_record'])
+        # Auto-close any pending employee-initiated revoke request for the
+        # same leave rather than leaving it dangling — a direct revoke by
+        # someone with override access always wins immediately.
+        LeaveRevokeRequest.objects.filter(leave_request=current, status='pending').update(
+            status='approved', decided_by=revoking_user, decided_at=timezone.now(),
+            decision_note='Applied via a direct revoke before this request was reviewed.')
+    if leave_request.employee.user_id:
+        notify_users(
+            recipients=[leave_request.employee.user],
+            verb=f'Your approved {leave_request.leave_type.name} leave was revoked',
+            actor=revoking_user, description=reason.strip())
+    leave_request.refresh_from_db()
+    return leave_request
+
+
+def request_leave_revoke(leave_request, requesting_user, reason):
+    """The employee themselves requests to void their own approved leave.
+    HR/Super Admin use revoke_leave_request (direct) instead of this queue —
+    requested_by is always the employee, never a manager acting on their
+    behalf, even for a request the manager originally logged."""
+    if not (leave_request.employee.user_id and leave_request.employee.user_id == requesting_user.id):
+        raise ValueError('Only the employee themselves can request a revoke of their own leave.')
+    if not reason or not reason.strip():
+        raise ValueError('A reason is required to request a revoke.')
+    leave_request.refresh_from_db()
+    if leave_request.status != 'approved':
+        raise ValueError(f'This request is {leave_request.status}; only an approved request can have its revoke requested.')
+    if LeaveRevokeRequest.objects.filter(leave_request=leave_request, status='pending').exists():
+        raise ValueError('A revoke request for this leave is already pending review.')
+
+    revoke_request = LeaveRevokeRequest.objects.create(
+        leave_request=leave_request, requested_by=requesting_user, reason=reason.strip())
+
+    from django.contrib.auth import get_user_model
+    from accounts.models import Role
+    from hr.models import LeaveDashboardAccess
+    User = get_user_model()
+    recipients = set(g.user for g in LeaveDashboardAccess.objects.filter(is_active=True))
+    recipients |= set(User.objects.filter(role__name=Role.SUPER_ADMIN))
+    if recipients:
+        notify_users(
+            recipients=list(recipients),
+            verb=f'{leave_request.employee.full_name} requested to revoke an approved leave',
+            actor=requesting_user, description=reason.strip())
+    return revoke_request
+
+
+def decide_leave_revoke_request(revoke_request, deciding_user, decision, decision_note=''):
+    """HR/Super Admin (the same roster that decides normal leave requests)
+    approves or rejects an employee's revoke request. Approving applies the
+    exact same mechanic as a direct revoke (revoke_leave_request) —
+    reusing it keeps the LeaveRecord-deletion/notification logic in one
+    place."""
+    if decision not in ('approved', 'rejected'):
+        raise ValueError(f"decision must be 'approved' or 'rejected', got {decision!r}")
+    revoke_request.refresh_from_db()
+    if revoke_request.status != 'pending':
+        raise ValueError(f'This revoke request is already {revoke_request.status}.')
+    leave_request = revoke_request.leave_request
+    if leave_request.employee.user_id and leave_request.employee.user_id == deciding_user.id:
+        raise ValueError('You cannot decide a revoke request on your own leave.')
+    if decision == 'rejected' and not (decision_note or '').strip():
+        raise ValueError('Rejecting a revoke request requires a note explaining why.')
+
+    with transaction.atomic():
+        revoke_request.status = decision
+        revoke_request.decided_by = deciding_user
+        revoke_request.decided_at = timezone.now()
+        revoke_request.decision_note = decision_note.strip()
+        revoke_request.save(update_fields=['status', 'decided_by', 'decided_at', 'decision_note'])
+        if decision == 'approved':
+            revoke_leave_request(leave_request, deciding_user, revoke_request.reason)
+        else:
+            if leave_request.employee.user_id:
+                notify_users(
+                    recipients=[leave_request.employee.user],
+                    verb=f'Your revoke request for a {leave_request.leave_type.name} leave was rejected',
+                    actor=deciding_user, description=decision_note.strip())
+    return revoke_request
