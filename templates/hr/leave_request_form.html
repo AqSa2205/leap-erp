@@ -12,6 +12,14 @@
         <form method="post" enctype="multipart/form-data" novalidate>
           {% csrf_token %}
           {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+          {% if balance_shortfall %}
+          <div class="alert alert-danger">
+            <strong>Exceeds balance</strong> — this request goes {{ balance_shortfall }} day(s) over
+            {{ balance_warning_employee.full_name }}'s available balance for {{ balance_warning_leave_type.name }}.
+            Clicking <strong>Log Anyway</strong> will grant {{ balance_warning_employee.full_name }} {{ balance_shortfall }} extra
+            day(s) (visible on their Leave Summary, noted as granted by you) and log this request normally.
+          </div>
+          {% endif %}
           <div class="mb-3"><label class="form-label">Employee *</label>{{ form.employee }}
             {% if form.employee.errors %}<div class="invalid-feedback d-block">{{ form.employee.errors.0 }}</div>{% endif %}</div>
           <div class="mb-3"><label class="form-label">Leave Type *</label>{{ form.leave_type }}
@@ -28,7 +36,13 @@
             {% if form.document.errors %}<div class="invalid-feedback d-block">{{ form.document.errors.0 }}</div>{% endif %}</div>
           <div class="d-flex justify-content-end gap-2 border-top pt-3">
             <a href="{% url 'hr:leave_request_list' %}" class="btn btn-outline-secondary">Cancel</a>
+            {% if balance_shortfall %}
+            <button type="submit" name="confirm_grant_and_log" value="1" class="btn btn-danger">
+              <i class="bi bi-exclamation-triangle"></i> Log Anyway (grants {{ balance_shortfall }} extra day(s))
+            </button>
+            {% else %}
             <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> Submit for Approval</button>
+            {% endif %}
           </div>
         </form>
       </div></div>

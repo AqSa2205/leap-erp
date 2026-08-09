@@ -23,7 +23,7 @@ from .forms import (
     VehicleForm, VehicleFilterForm, EmployeeDocumentForm, VehicleDocumentForm,
     LeaveTypeForm, HolidayForm, WorkingDayForm, WFHRecordForm,
     AttendanceSettingsForm, LeaveRequestForm, AttendanceExceptionForm,
-    EmployeeHierarchyForm,
+    EmployeeHierarchyForm, ExceptionGrantForm,
 )
 from .leave_services import generate_year_entitlements
 from .attendance_services import derive_status
@@ -371,6 +371,7 @@ def my_profile(request):
         accumulative = [e for e in entitlements if e.leave_type.is_accumulative]
         context['leave_total_entitled'] = sum((e.entitled_days for e in accumulative), Decimal('0'))
         context['leave_total_remaining'] = sum((e.remaining_days for e in accumulative), Decimal('0'))
+        context['leave_total_exception'] = sum((e.exception_days for e in accumulative), Decimal('0'))
         # This employee's own leave requests (pending/approved/disapproved), newest first.
         context['leave_requests'] = (
             emp.leave_requests.select_related('leave_type', 'overridden_by')
@@ -623,14 +624,53 @@ class EmployeeUpdateView(AdminRequiredMixin, UpdateView):
     success_url = reverse_lazy('hr:employee_list')
 
     def form_valid(self, form):
+        old_location = Employee.objects.filter(pk=self.object.pk).values_list('work_location', flat=True).first()
+        response = super().form_valid(form)
+        new_location = self.object.work_location
+        if old_location != new_location:
+            from hr.leave_services import apply_work_location_transfer
+            apply_work_location_transfer(
+                self.object, old_location=old_location, new_location=new_location,
+                year=timezone.now().year, actor=self.request.user)
         messages.success(self.request, 'Employee updated successfully.')
-        return super().form_valid(form)
+        return response
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['title'] = 'Edit Employee'
         context['button_text'] = 'Update Employee'
         return context
+
+
+class EmployeeGrantExceptionDaysView(SuperAdminRequiredMixin, FormView):
+    """HR action: '+N Exception Days' on an employee's profile — creates one
+    audited LeaveExceptionGrant row. Gated by the same override-access
+    permission as the balance-override escape hatch on Leave Requests."""
+    form_class = ExceptionGrantForm
+    template_name = 'hr/exception_grant_form.html'
+
+    def test_func(self):
+        return has_override_access(self.request.user)
+
+    def dispatch(self, request, *args, **kwargs):
+        self.employee = get_object_or_404(Employee, pk=kwargs['pk'])
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_initial(self):
+        return {'year': timezone.now().year}
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['employee'] = self.employee
+        return ctx
+
+    def form_valid(self, form):
+        from hr.leave_approval_services import grant_exception_days
+        grant_exception_days(
+            employee=self.employee, leave_type=form.cleaned_data['leave_type'], year=form.cleaned_data['year'],
+            days=form.cleaned_data['days'], granted_by=self.request.user, reason=form.cleaned_data['reason'])
+        messages.success(self.request, f'Granted {form.cleaned_data["days"]} exception day(s) to {self.employee.full_name}.')
+        return redirect('hr:leave_summary', pk=self.employee.pk)
 
 
 class EmployeeDeleteView(AdminRequiredMixin, DeleteView):
@@ -2095,11 +2135,45 @@ class LeaveRequestCreateView(HRScopedAccessMixin, FormView):
         return initial
 
     def form_valid(self, form):
-        from hr.leave_approval_services import submit_leave_request
+        from hr.leave_approval_services import submit_leave_request, grant_exception_days
+        from hr.leave_services import preview_leave_shortfall
+
+        employee = form.cleaned_data['employee']
+        leave_type = form.cleaned_data['leave_type']
+        start_date = form.cleaned_data['start_date']
+        end_date = form.cleaned_data['end_date']
+        confirmed = bool(self.request.POST.get('confirm_grant_and_log'))
+        can_grant = has_override_access(self.request.user)
+
+        # Super Admins only: before creating anything, warn inline in this
+        # same form if the entered request exceeds the employee's balance,
+        # and offer a one-click "Log Anyway" that grants the exact shortfall
+        # as an exception (so the employee's limit itself reflects it,
+        # e.g. 45 -> 47) and then logs the request normally. Anyone without
+        # override access skips straight to the existing behavior below —
+        # their over-cap Site request still gets held for normal approval,
+        # per validate_leave_submission's location-based rule.
+        if can_grant and not confirmed:
+            shortfall = preview_leave_shortfall(employee, leave_type, start_date, end_date)
+            if shortfall:
+                return self.render_to_response(self.get_context_data(
+                    form=form, balance_shortfall=shortfall, balance_warning_employee=employee,
+                    balance_warning_leave_type=leave_type))
+
         try:
+            if confirmed:
+                if not can_grant:
+                    raise PermissionDenied
+                shortfall = preview_leave_shortfall(employee, leave_type, start_date, end_date)
+                if shortfall:
+                    grant_exception_days(
+                        employee=employee, leave_type=leave_type, year=start_date.year, days=shortfall,
+                        granted_by=self.request.user,
+                        reason=f'Auto-granted via Log Request by '
+                               f'{self.request.user.get_full_name() or self.request.user.username} to allow a '
+                               f'{start_date}–{end_date} request that exceeded the balance by {shortfall} day(s).')
             submit_leave_request(
-                employee=form.cleaned_data['employee'], leave_type=form.cleaned_data['leave_type'],
-                start_date=form.cleaned_data['start_date'], end_date=form.cleaned_data['end_date'],
+                employee=employee, leave_type=leave_type, start_date=start_date, end_date=end_date,
                 employee_reason=form.cleaned_data['employee_reason'], document=form.cleaned_data['document'],
                 created_by=self.request.user,
             )
@@ -2131,6 +2205,7 @@ class EmployeeLeaveSummaryView(HRScopedAccessMixin, DetailView):
             employee=self.object, year=year).select_related('leave_type')
         ctx['records'] = self.object.leave_records.filter(
             start_date__year=year).select_related('leave_type')
+        ctx['can_grant_exception'] = has_override_access(self.request.user)
         return ctx
 
 
@@ -2156,14 +2231,23 @@ def entitlement_year(request):
                     .select_related('employee', 'leave_type')
                     .order_by('employee__full_name', 'leave_type__name'))
 
-    # Batch the taken-days per (employee, leave_type) in one query (avoid N+1).
+    # Batch the taken-days and exception-grant totals per (employee, leave_type)
+    # in one query each (avoid N+1) — mirrors LeaveEntitlement.taken_days/
+    # exception_days, but batched for a whole-company table instead of one
+    # row at a time.
     from decimal import Decimal
     from collections import OrderedDict
+    from .models import LeaveExceptionGrant
     taken_map = {}
     for r in (LeaveRecord.objects.filter(start_date__year=year)
               .values('employee_id', 'leave_type_id')
               .annotate(t=Sum('days'))):
         taken_map[(r['employee_id'], r['leave_type_id'])] = r['t'] or Decimal('0')
+    exception_map = {}
+    for r in (LeaveExceptionGrant.objects.filter(year=year)
+              .values('employee_id', 'leave_type_id')
+              .annotate(t=Sum('days'))):
+        exception_map[(r['employee_id'], r['leave_type_id'])] = r['t'] or Decimal('0')
 
     # Group entitlement rows under each employee with combined totals.
     groups = OrderedDict()
@@ -2173,18 +2257,20 @@ def entitlement_year(request):
             g = groups[e.employee_id] = {
                 'employee': e.employee, 'rows': [],
                 'total_entitled': Decimal('0'), 'total_taken': Decimal('0'),
-                'total_remaining': Decimal('0'),
+                'total_exception': Decimal('0'), 'total_remaining': Decimal('0'),
             }
         taken = taken_map.get((e.employee_id, e.leave_type_id), Decimal('0'))
-        remaining = e.entitled_days - taken
+        exception = exception_map.get((e.employee_id, e.leave_type_id), Decimal('0'))
+        remaining = e.entitled_days + exception - taken
         g['rows'].append({'leave_type': e.leave_type, 'entitled': e.entitled_days,
-                          'taken': taken, 'remaining': remaining})
+                          'taken': taken, 'exception': exception, 'remaining': remaining})
         # Only standard accrued leave (Annual) counts toward the top-level totals.
         # Conditional/incidental leave (Sick, Marriage, Death of Family Member, Umrah,
         # New Born) is shown in the per-type breakdown above but excluded from the summary.
         if e.leave_type.is_accumulative:
             g['total_entitled'] += e.entitled_days
             g['total_taken'] += taken
+            g['total_exception'] += exception
             g['total_remaining'] += remaining
 
     return render(request, 'hr/entitlement_year.html',
@@ -2775,6 +2861,10 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
             and self.object.status == 'pending'
             and my_approval.decided_at is not None
             and timezone.now() - my_approval.decided_at <= DECISION_EDIT_WINDOW)
+        if self.object.exceeds_balance:
+            ctx['entitlement'] = LeaveEntitlement.objects.filter(
+                employee=self.object.employee, leave_type=self.object.leave_type,
+                year=self.object.start_date.year).first()
         return ctx
 
     def post(self, request, *args, **kwargs):
@@ -2962,6 +3052,13 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         # HR/Super-Admin — "Direct Reports"/"Secondary Reports" are always
         # shown (even empty) for everyone who can reach this page.
         ctx['show_all_tab'] = is_hr
+        # Per-tab pending counts for the tab labels — always all three
+        # (regardless of which tab is currently selected), so switching tabs
+        # doesn't need a second request to know what the other tabs hold.
+        ctx['direct_tab_count'] = self._tab_queryset('direct', user, emp).filter(status__in=('pending', 'expired')).count()
+        ctx['secondary_tab_count'] = self._tab_queryset('secondary', user, emp).filter(status__in=('pending', 'expired')).count()
+        if ctx['show_all_tab']:
+            ctx['all_tab_count'] = self._tab_queryset('all', user, emp).filter(status__in=('pending', 'expired')).count()
         return ctx
 
     def post(self, request, *args, **kwargs):
@@ -3172,6 +3269,7 @@ class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         _access_keys = (
             'grant_dashboard_access', 'revoke_dashboard_access', 'set_override_mode',
             'toggle_override_role', 'grant_override_employee', 'revoke_override_employee',
+            'set_balance_hold',
         )
         if any(request.POST.get(k) for k in _access_keys) and not self._can_config_access():
             raise PermissionDenied
@@ -3216,6 +3314,15 @@ class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
             config.save(update_fields=['mode', 'updated_by', 'updated_at'])
             messages.success(
                 request, f'Override access mode set to "{config.get_mode_display()}".')
+            return redirect(access_tab_url)
+
+        if 'set_balance_hold' in request.POST:
+            config = OverrideAccessSettings.get_solo()
+            config.allow_site_balance_hold = bool(request.POST.get('allow_site_balance_hold'))
+            config.allow_office_balance_hold = bool(request.POST.get('allow_office_balance_hold'))
+            config.updated_by = request.user
+            config.save(update_fields=['allow_site_balance_hold', 'allow_office_balance_hold', 'updated_by', 'updated_at'])
+            messages.success(request, 'Balance-hold settings updated.')
             return redirect(access_tab_url)
 
         toggle_role_id = request.POST.get('toggle_override_role')

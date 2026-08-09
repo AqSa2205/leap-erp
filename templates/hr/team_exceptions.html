@@ -125,14 +125,14 @@
 
   <ul class="nav nav-tabs mb-4 team-exc-tabs">
     <li class="nav-item">
-      <a class="nav-link team-exc-tab-direct {% if tab == 'direct' %}active{% endif %}" href="?tab=direct">Direct Reports</a>
+      <a class="nav-link team-exc-tab-direct {% if tab == 'direct' %}active{% endif %}" href="?tab=direct">Direct Reports{% if direct_tab_count %} <span class="nav-badge-count">{{ direct_tab_count }}</span>{% endif %}</a>
     </li>
     <li class="nav-item">
-      <a class="nav-link team-exc-tab-secondary {% if tab == 'secondary' %}active{% endif %}" href="?tab=secondary">Secondary Reports</a>
+      <a class="nav-link team-exc-tab-secondary {% if tab == 'secondary' %}active{% endif %}" href="?tab=secondary">Secondary Reports{% if secondary_tab_count %} <span class="nav-badge-count">{{ secondary_tab_count }}</span>{% endif %}</a>
     </li>
     {% if show_all_tab %}
     <li class="nav-item">
-      <a class="nav-link team-exc-tab-all {% if tab == 'all' %}active{% endif %}" href="?tab=all">All Organization Requests</a>
+      <a class="nav-link team-exc-tab-all {% if tab == 'all' %}active{% endif %}" href="?tab=all">All Organization Requests{% if all_tab_count %} <span class="nav-badge-count">{{ all_tab_count }}</span>{% endif %}</a>
     </li>
     {% endif %}
   </ul>

@@ -431,6 +431,27 @@
             display: none;
         }
         .notif-badge.show { display: block; }
+        .nav-badge-count {
+            background: var(--leap-red);
+            color: #fff;
+            font-size: 0.65rem;
+            font-weight: 700;
+            min-width: 18px;
+            height: 18px;
+            line-height: 18px;
+            text-align: center;
+            border-radius: 9px;
+            padding: 0 5px;
+            margin-left: auto;
+        }
+        .nav-badge-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--leap-red);
+            display: inline-block;
+            margin-left: 6px;
+        }
         .notif-dropdown {
             position: absolute;
             right: 0;
@@ -924,7 +945,7 @@
             {% if user.is_admin_user or user.is_super_admin_user or user.is_ai_head_user or user.is_finance_head_user or user.is_procurement_manager_user or user.is_proposal_head_user or user.employee_profile.main_reports.exists or user.employee_profile.secondary_reports.exists %}
             <li class="nav-item">
                 <a class="nav-link d-flex justify-content-between align-items-center {% if request.resolver_match.url_name == 'my_profile' or 'team_exceptions' in request.resolver_match.url_name %}active{% endif %}" data-bs-toggle="collapse" href="#myProfileSubmenu" role="button" aria-expanded="{% if request.resolver_match.url_name == 'my_profile' or 'team_exceptions' in request.resolver_match.url_name %}true{% else %}false{% endif %}">
-                    <span><i class="bi bi-person-badge"></i> <span>My Profile</span></span>
+                    <span><i class="bi bi-person-badge"></i> <span>My Profile</span>{% if team_exceptions_pending_count %}<span class="nav-badge-dot"></span>{% endif %}</span>
                     <i class="bi bi-chevron-down" style="font-size:0.7rem;"></i>
                 </a>
                 <div class="collapse {% if request.resolver_match.url_name == 'my_profile' or 'team_exceptions' in request.resolver_match.url_name %}show{% endif %}" id="myProfileSubmenu">
@@ -935,8 +956,9 @@
                             </a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link py-1 {% if 'team_exceptions' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:team_exceptions' %}">
-                                <i class="bi bi-geo-alt"></i> <span>Team Exceptions</span>
+                            <a class="nav-link py-1 d-flex justify-content-between align-items-center {% if 'team_exceptions' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:team_exceptions' %}">
+                                <span><i class="bi bi-geo-alt"></i> <span>Team Exceptions</span></span>
+                                {% if team_exceptions_pending_count %}<span class="nav-badge-count">{{ team_exceptions_pending_count }}</span>{% endif %}
                             </a>
                         </li>
                     </ul>
@@ -1340,15 +1362,16 @@
             </li>
             <li class="nav-item">
                 <a class="nav-link d-flex justify-content-between align-items-center" data-bs-toggle="collapse" href="#leaveSubmenu" role="button" aria-expanded="{% if 'leave' in request.resolver_match.url_name or 'entitlement' in request.resolver_match.url_name or 'holiday' in request.resolver_match.url_name or 'leavetype' in request.resolver_match.url_name %}true{% else %}false{% endif %}">
-                    <span><i class="bi bi-calendar2-check"></i> <span>Leave</span></span>
+                    <span><i class="bi bi-calendar2-check"></i> <span>Leave</span>{% if leave_requests_pending_count %}<span class="nav-badge-dot"></span>{% endif %}</span>
                     <i class="bi bi-chevron-down" style="font-size:0.7rem;"></i>
                 </a>
                 <div class="collapse {% if 'leave' in request.resolver_match.url_name or 'entitlement' in request.resolver_match.url_name or 'holiday' in request.resolver_match.url_name or 'leavetype' in request.resolver_match.url_name %}show{% endif %}" id="leaveSubmenu">
                     <ul class="nav flex-column ms-3">
                         {% if user.is_super_admin_user or user.leave_dashboard_access.is_active %}
                         <li class="nav-item">
-                            <a class="nav-link py-1 {% if 'leave_request' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:leave_request_list' %}">
-                                <i class="bi bi-inboxes"></i> <span>Leave Requests</span>
+                            <a class="nav-link py-1 d-flex justify-content-between align-items-center {% if 'leave_request' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:leave_request_list' %}">
+                                <span><i class="bi bi-inboxes"></i> <span>Leave Requests</span></span>
+                                {% if leave_requests_pending_count %}<span class="nav-badge-count">{{ leave_requests_pending_count }}</span>{% endif %}
                             </a>
                         </li>
                         {% endif %}

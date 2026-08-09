@@ -80,6 +80,7 @@
                         <th style="width:2.5rem;"></th>
                         <th>Employee</th>
                         <th class="text-end">Entitled</th>
+                        <th class="text-end">Exception</th>
                         <th class="text-end">Taken</th>
                         <th class="text-end">Remaining</th>
                     </tr>
@@ -103,6 +104,9 @@
                             {% endif %}
                         </td>
                         <td class="text-end">{{ g.total_entitled }}</td>
+                        <td class="text-end {% if g.total_exception %}text-muted{% endif %}">
+                            {% if g.total_exception %}+{{ g.total_exception }}{% else %}—{% endif %}
+                        </td>
                         <td class="text-end">{{ g.total_taken }}</td>
                         <td class="text-end {% if g.total_remaining < 0 %}text-danger fw-bold{% endif %}">
                             {{ g.total_remaining }}
@@ -110,12 +114,13 @@
                     </tr>
                     <tr class="collapse" id="emp-{{ g.employee.pk }}">
                         <td></td>
-                        <td colspan="4" class="p-0">
+                        <td colspan="5" class="p-0">
                             <table class="table table-sm mb-0">
                                 <thead class="table-light">
                                     <tr>
                                         <th>Leave Type</th>
                                         <th class="text-end">Entitled</th>
+                                        <th class="text-end">Exception</th>
                                         <th class="text-end">Taken</th>
                                         <th class="text-end">Remaining</th>
                                     </tr>
@@ -130,6 +135,9 @@
                                             {% endif %}
                                         </td>
                                         <td class="text-end">{{ row.entitled }}</td>
+                                        <td class="text-end {% if row.exception %}text-muted{% endif %}">
+                                            {% if row.exception %}+{{ row.exception }}{% else %}—{% endif %}
+                                        </td>
                                         <td class="text-end">{{ row.taken }}</td>
                                         <td class="text-end {% if row.remaining < 0 %}text-danger fw-bold{% endif %}">
                                             {{ row.remaining }}
