@@ -47,6 +47,12 @@
                 Overridden{% if leave_request.overridden_by %} by {{ leave_request.overridden_by.get_full_name|default:leave_request.overridden_by.username }}{% endif %}
               </span>
             {% endif %}
+            {% if leave_request.logged_by_manager %}
+              <span class="badge bg-light text-dark border">
+                <i class="bi bi-person-badge"></i> Logged on behalf of {{ leave_request.employee.full_name }} by their
+                manager, {{ leave_request.created_by.get_full_name|default:leave_request.created_by.username }}
+              </span>
+            {% endif %}
             {% if leave_request.decided_by_display %}<div class="small text-muted mt-1">{{ leave_request.decided_by_display }}</div>{% endif %}
           </p>
           {% if leave_request.status == 'disapproved' and leave_request.salary_deduction_applicable %}

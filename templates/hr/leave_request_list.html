@@ -3,8 +3,7 @@
 {% block content %}
 <div class="container-fluid">
   <div class="d-flex justify-content-between align-items-center mb-4">
-    <div><h1 class="h3 mb-1">Conditional Leave Approval Queue</h1>
-      <p class="text-muted mb-0">Super Admin only. FIFO — oldest pending request first.</p></div>
+    <div><h1 class="h3 mb-1">Conditional Leave Approval Queue</h1></div>
     <a href="{% url 'hr:leave_request_create' %}" class="btn btn-primary"><i class="bi bi-plus-lg"></i> Log Request</a>
   </div>
 
@@ -16,6 +15,7 @@
         <label class="small text-muted mb-0">Sort by</label>
         <select name="sort" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
           <option value="submitted" {% if current_sort == 'submitted' %}selected{% endif %}>Submission date (oldest first)</option>
+          <option value="submitted_newest" {% if current_sort == 'submitted_newest' %}selected{% endif %}>Submission date (newest first)</option>
           <option value="vacation_date" {% if current_sort == 'vacation_date' %}selected{% endif %}>Vacation date</option>
         </select>
       </form>
@@ -30,6 +30,11 @@
           <tr>
             <td><a href="{{ detail_url }}">{{ r.employee.full_name }}</a>
               {% if r.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
+              {% if r.logged_by_manager %}
+              <span class="badge bg-light text-dark border" title="This employee's manager logged this request on their behalf">
+                <i class="bi bi-person-badge"></i> By {{ r.created_by.get_full_name|default:r.created_by.username }} (manager)
+              </span>
+              {% endif %}
             </td>
             <td>{{ r.leave_type.name }}</td>
             <td>{{ r.start_date }} – {{ r.end_date }}</td>

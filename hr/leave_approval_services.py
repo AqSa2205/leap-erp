@@ -203,10 +203,12 @@ def submit_leave_request(*, employee, leave_type, start_date, end_date, employee
 
     with transaction.atomic():
         exceeds_balance = validate_leave_submission(employee, leave_type, start_date, end_date, lock=True)
+        logged_by_manager = bool(
+            created_by is not None and employee.main_manager_id and employee.main_manager.user_id == created_by.id)
         leave_request = LeaveRequest.objects.create(
             employee=employee, leave_type=leave_type, start_date=start_date, end_date=end_date,
             employee_reason=employee_reason, document=document, created_by=created_by,
-            exceeds_balance=exceeds_balance,
+            exceeds_balance=exceeds_balance, logged_by_manager=logged_by_manager,
         )
         # A held (balance-exceeding) request goes through the exact same
         # approver roster and decide/override flow as any other request —

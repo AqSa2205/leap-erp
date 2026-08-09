@@ -46,34 +46,6 @@
       </div>
     </div>
 
-    {% if my_team %}
-    <!-- My Team — direct reports (live Org Chart relationship), with a
-         quick Log Leave entry point into the existing Log Request form. -->
-    <div class="col-lg-6">
-      <div class="card h-100">
-        <div class="card-header fw-semibold"><i class="bi bi-people me-1"></i> My Team</div>
-        <div class="card-body">
-          <table class="table table-sm mb-0">
-            <thead class="table-light"><tr><th>Name</th><th>Designation</th><th></th></tr></thead>
-            <tbody>
-              {% for member in my_team %}
-              <tr>
-                <td>{{ member.full_name }}</td>
-                <td>{{ member.designation|default:"-" }}</td>
-                <td class="text-end">
-                  <a href="{% url 'hr:leave_request_create' %}?employee={{ member.pk }}" class="btn btn-sm btn-outline-primary">
-                    <i class="bi bi-calendar-plus"></i> Log Leave
-                  </a>
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-    {% endif %}
-
     <!-- Attendance (this month) + Leave -->
     <div class="col-lg-6">
       <div class="card h-100">
@@ -209,7 +181,15 @@
               <tbody>
                 {% for r in leave_requests %}
                 <tr>
-                  <td>{{ r.leave_type.name }}</td>
+                  <td>
+                    {{ r.leave_type.name }}
+                    {% if r.logged_by_manager %}
+                    <div class="small text-muted">
+                      <i class="bi bi-person-badge"></i> Logged by your manager,
+                      {{ r.created_by.get_full_name|default:r.created_by.username }}
+                    </div>
+                    {% endif %}
+                  </td>
                   <td>{{ r.start_date }} – {{ r.end_date }}</td>
                   <td>
                     {% if r.status == 'approved' %}
@@ -425,21 +405,65 @@
 
           <hr class="my-3">
 
-          {% with direct_reports=employee.main_reports.all %}
           <div class="text-uppercase text-muted small fw-semibold mb-1">
             <i class="bi bi-person-down me-1"></i>Direct Reports
             {% if direct_reports %}<span class="badge bg-secondary">{{ direct_reports|length }}</span>{% endif %}
           </div>
           {% if direct_reports %}
-          <ul class="list-group list-group-flush small mb-2" style="max-height: 180px; overflow-y: auto;">
+          <ul class="list-group list-group-flush small mb-2" style="max-height: 220px; overflow-y: auto;">
             {% for r in direct_reports %}
-            <li class="list-group-item px-0 py-1">{{ r.full_name }}</li>
+            <li class="list-group-item px-0 py-1">
+              <div class="d-flex justify-content-between align-items-center flex-wrap gap-1">
+                <span>{{ r.full_name }}</span>
+                {% if r.is_active %}
+                <a href="{% url 'hr:leave_request_create' %}?employee={{ r.pk }}" class="btn btn-sm btn-outline-primary py-0">
+                  <i class="bi bi-calendar-plus"></i> Log Leave
+                </a>
+                {% endif %}
+              </div>
+              {% if r.in_behalf_requests %}
+              <div class="small text-muted mt-1">
+                {% for req in r.in_behalf_requests %}
+                {% if forloop.counter <= 2 %}
+                <div>
+                  Your request:
+                  {% if req.status == 'approved' %}<span class="badge bg-success">Approved</span>
+                  {% elif req.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
+                  {% elif req.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
+                  {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
+                  {% if req.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
+                  {{ req.leave_type.name }}, {{ req.start_date }}–{{ req.end_date }}
+                </div>
+                {% endif %}
+                {% endfor %}
+                {% if r.in_behalf_requests|length > 2 %}
+                <button type="button" class="btn btn-sm btn-link px-0 py-0 text-decoration-none" data-bs-toggle="collapse" data-bs-target="#inBehalf{{ r.pk }}">
+                  +{{ r.in_behalf_requests|length|add:"-2" }} more request(s) you logged for {{ r.full_name }}
+                </button>
+                <div class="collapse" id="inBehalf{{ r.pk }}">
+                  {% for req in r.in_behalf_requests %}
+                  {% if forloop.counter > 2 %}
+                  <div>
+                    Your request:
+                    {% if req.status == 'approved' %}<span class="badge bg-success">Approved</span>
+                    {% elif req.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
+                    {% elif req.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
+                    {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
+                    {% if req.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
+                    {{ req.leave_type.name }}, {{ req.start_date }}–{{ req.end_date }}
+                  </div>
+                  {% endif %}
+                  {% endfor %}
+                </div>
+                {% endif %}
+              </div>
+              {% endif %}
+            </li>
             {% endfor %}
           </ul>
           {% else %}
           <span class="text-muted small fst-italic">None — you have no one reporting to you directly.</span>
           {% endif %}
-          {% endwith %}
 
           {% if downstream_reports %}
           <button type="button" class="btn btn-sm btn-link px-0 text-decoration-none" data-bs-toggle="collapse" data-bs-target="#downstreamReports">

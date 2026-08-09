@@ -371,9 +371,6 @@ def my_profile(request):
         context['assets'] = Asset.objects.filter(id__in=asset_ids).order_by('asset_name')
         # Documents (iqama/passport copies, contracts, etc.).
         context['documents'] = emp.documents.all()
-        # Direct reports (live Org Chart relationship) — powers the "My Team"
-        # section's Log Leave links, independent of any HR Role.
-        context['my_team'] = emp.main_reports.filter(is_active=True).order_by('full_name')
         # Leave balance for the current year. The summary total only counts
         # standard accrued allowances (Annual) — conditional/incidental
         # leave (Sick, Marriage, Umrah, etc.) still appears in the per-type rows but
@@ -432,11 +429,33 @@ def my_profile(request):
         context['attendance_next_month'] = next_month_first
         context['recent_leaves'] = emp.leave_records.select_related(
             'leave_type').order_by('-start_date')[:5]
+        # Direct Reports list — each report gets EVERY in-behalf (manager-
+        # logged) request attached as a plain in-memory list, newest first,
+        # batched in one query rather than N+1. Scoped to created_by=this
+        # viewer AND logged_by_manager=True: a manager sees the status of
+        # what THEY logged, never a report's own self-submitted requests —
+        # that stays private to the employee and HR's approval queue.
+        # Deliberately a list, not just the most recent one — a manager who
+        # logs two separate leave periods for the same report must see the
+        # status of both, not have the older one silently disappear.
+        direct_reports = list(emp.main_reports.all())
+        if direct_reports:
+            from collections import defaultdict
+            in_behalf_by_employee = defaultdict(list)
+            for req in (LeaveRequest.objects.filter(
+                            employee_id__in=[r.pk for r in direct_reports],
+                            created_by=request.user, logged_by_manager=True)
+                        .select_related('leave_type').order_by('employee_id', '-created_at')):
+                in_behalf_by_employee[req.employee_id].append(req)
+            for r in direct_reports:
+                r.in_behalf_requests = in_behalf_by_employee.get(r.pk, [])
+        context['direct_reports'] = direct_reports
+
         # Reporting Structure "expand" control: the further-down reporting
         # chain (grandreports and beyond) that direct reports alone don't
         # show. Excludes direct reports themselves so expanding never
         # duplicates what's already listed above it.
-        direct_report_ids = [r.pk for r in emp.main_reports.all()]
+        direct_report_ids = [r.pk for r in direct_reports]
         context['downstream_reports'] = Employee.objects.filter(
             pk__in=emp.get_downstream_employee_ids()).exclude(pk__in=direct_report_ids)
         # Vehicles. No hard FK, so match on driver_id == iqama (the reliable
@@ -2106,8 +2125,11 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
 
     def get_queryset(self):
         qs = LeaveRequest.objects.filter(status='pending').select_related('employee', 'leave_type')
-        if self.request.GET.get('sort') == 'vacation_date':
+        sort = self.request.GET.get('sort')
+        if sort == 'vacation_date':
             return qs.order_by('start_date')
+        if sort == 'submitted_newest':
+            return qs.order_by('-created_at')
         return qs.order_by('created_at')
 
     def get_context_data(self, **kwargs):
@@ -2162,6 +2184,21 @@ class LeaveRequestCreateView(HRScopedAccessMixin, FormView):
             initial['employee'] = employee_id
         return initial
 
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        # A plain direct manager (no Role, no LeaveDashboardAccess/override
+        # access) can submit here but cannot view the Leave Requests queue —
+        # that's a separate, more restrictive page. The template's Back/
+        # Cancel links, and this view's own success redirect, must not
+        # point them at a page they'll immediately get a 403 on.
+        ctx['can_view_queue'] = can_view_leave_dashboard(self.request.user)
+        return ctx
+
+    def _success_redirect(self):
+        if can_view_leave_dashboard(self.request.user):
+            return redirect('hr:leave_request_list')
+        return redirect('hr:my_profile')
+
     def form_valid(self, form):
         from hr.leave_approval_services import submit_leave_request, grant_exception_days
         from hr.leave_services import preview_leave_shortfall
@@ -2213,7 +2250,7 @@ class LeaveRequestCreateView(HRScopedAccessMixin, FormView):
             form.add_error(None, str(exc))
             return self.form_invalid(form)
         messages.success(self.request, 'Leave request logged and sent for approval.')
-        return redirect('hr:leave_request_list')
+        return self._success_redirect()
 
 
 class EmployeeLeaveSummaryView(HRScopedAccessMixin, DetailView):

@@ -6144,23 +6144,249 @@ class ManagerLoggedRequestRoutingTests(TestCase):
 
 
 class MyProfileTeamSectionTests(TestCase):
+    """The 'Log Leave' entry point lives inside the existing 'My Reporting
+    Structure' card's Direct Reports list — not a separate new section."""
     def setUp(self):
         self.manager_user = User.objects.create_user(username='mpts-mgr', password='x')
         self.manager = Employee.objects.create(
             iqama_number='MPTS-MGR', full_name='Team Section Manager', user=self.manager_user)
         self.report = Employee.objects.create(
             iqama_number='MPTS-RPT', full_name='Team Section Report', main_manager=self.manager)
+        self.inactive_report = Employee.objects.create(
+            iqama_number='MPTS-INACTIVE', full_name='Inactive Report', main_manager=self.manager, is_active=False)
         self.plain_user = User.objects.create_user(username='mpts-plain', password='x')
         Employee.objects.create(iqama_number='MPTS-PLAIN', full_name='Plain Employee', user=self.plain_user)
 
-    def test_manager_sees_my_team_section_with_report_and_log_leave_link(self):
+    def test_manager_sees_log_leave_link_for_their_direct_report(self):
         self.client.login(username='mpts-mgr', password='x')
         resp = self.client.get(reverse('hr:my_profile'))
-        self.assertContains(resp, 'My Team')
+        self.assertContains(resp, 'My Reporting Structure')
         self.assertContains(resp, 'Team Section Report')
         self.assertContains(resp, f"{reverse('hr:leave_request_create')}?employee={self.report.pk}")
 
-    def test_plain_employee_does_not_see_my_team_section(self):
+    def test_inactive_report_shows_no_log_leave_link(self):
+        self.client.login(username='mpts-mgr', password='x')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'Inactive Report')
+        self.assertNotContains(resp, f"{reverse('hr:leave_request_create')}?employee={self.inactive_report.pk}")
+
+    def test_plain_employee_sees_no_log_leave_link(self):
         self.client.login(username='mpts-plain', password='x')
         resp = self.client.get(reverse('hr:my_profile'))
-        self.assertNotContains(resp, 'My Team')
+        self.assertNotContains(resp, reverse('hr:leave_request_create'))
+
+
+class ManagerSuccessRedirectTests(TestCase):
+    """Bug found in manual testing: a plain direct manager could submit the
+    Log Request form (widened access), but the success redirect always
+    pointed at the Leave Requests queue — a separate, more restrictive page
+    (can_view_leave_dashboard) they don't have permission to view, so they
+    hit a 403 immediately after a successful submission. Must redirect
+    somewhere the submitter can actually see."""
+    def setUp(self):
+        self.manager_user = User.objects.create_user(username='msr-mgr', password='x')
+        self.manager = Employee.objects.create(
+            iqama_number='MSR-MGR', full_name='Redirect Manager', user=self.manager_user)
+        self.report = Employee.objects.create(
+            iqama_number='MSR-RPT', full_name='Redirect Report', main_manager=self.manager)
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30')})
+        LeaveEntitlement.objects.create(employee=self.report, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        from accounts.models import Role
+        self.hr_user = _make_role_user('msr-hr', Role.SUPER_ADMIN)
+        LeaveDashboardAccess.objects.create(user=self.hr_user, is_active=True)
+
+    def test_plain_manager_redirect_target_is_reachable(self):
+        self.client.login(username='msr-mgr', password='x')
+        resp = self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        }, follow=True)
+        self.assertEqual(resp.status_code, 200)  # the final page in the redirect chain, not a 403
+        self.assertEqual(resp.redirect_chain[-1][0], reverse('hr:my_profile'))
+
+    def test_hr_user_still_lands_on_the_queue(self):
+        # Unchanged behavior for anyone who could already view the queue.
+        self.client.login(username='msr-hr', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        }, follow=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.redirect_chain[-1][0], reverse('hr:leave_request_list'))
+
+    def test_plain_manager_back_and_cancel_links_do_not_point_at_the_queue(self):
+        self.client.login(username='msr-mgr', password='x')
+        resp = self.client.get(reverse('hr:leave_request_create'))
+        self.assertNotContains(resp, f'href="{reverse("hr:leave_request_list")}"')
+        self.assertContains(resp, f'href="{reverse("hr:my_profile")}"')
+
+
+class LoggedByManagerFlagTests(TestCase):
+    def setUp(self):
+        self.manager_user = User.objects.create_user(
+            username='lbmf-mgr', password='x', first_name='Flag', last_name='Manager')
+        self.manager = Employee.objects.create(
+            iqama_number='LBMF-MGR', full_name='Flag Manager', user=self.manager_user)
+        self.report = Employee.objects.create(
+            iqama_number='LBMF-RPT', full_name='Flag Report', main_manager=self.manager)
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30')})
+        LeaveEntitlement.objects.create(employee=self.report, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        from accounts.models import Role
+        self.hr_user = _make_role_user('lbmf-hr', Role.SUPER_ADMIN)
+        LeaveDashboardAccess.objects.create(user=self.hr_user, is_active=True)
+
+    def test_manager_logged_request_sets_the_flag(self):
+        self.client.login(username='lbmf-mgr', password='x')
+        self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        })
+        req = LeaveRequest.objects.get(employee=self.report)
+        self.assertTrue(req.logged_by_manager)
+
+    def test_hr_logged_request_does_not_set_the_flag(self):
+        self.client.login(username='lbmf-hr', password='testpass123')
+        self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        })
+        req = LeaveRequest.objects.get(employee=self.report)
+        self.assertFalse(req.logged_by_manager)
+
+    def test_self_service_request_does_not_set_the_flag(self):
+        report_user = User.objects.create_user(username='lbmf-emp', password='x')
+        self.report.user = report_user
+        self.report.save(update_fields=['user'])
+        self.client.login(username='lbmf-emp', password='x')
+        self.client.post(reverse('hr:my_profile'), data={
+            'action': 'request_leave', 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        })
+        req = LeaveRequest.objects.get(employee=self.report)
+        self.assertFalse(req.logged_by_manager)
+
+    def test_badge_shows_on_queue_and_detail_pages(self):
+        self.client.login(username='lbmf-mgr', password='x')
+        self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        })
+        req = LeaveRequest.objects.get(employee=self.report)
+        self.client.logout()
+        self.client.login(username='lbmf-hr', password='testpass123')
+        list_resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertContains(list_resp, 'By Flag Manager (manager)')
+        detail_resp = self.client.get(reverse('hr:leave_request_detail', args=[req.pk]))
+        self.assertContains(detail_resp, 'Logged on behalf of')
+        self.assertContains(detail_resp, 'Flag Manager')
+
+
+class ManagerSeesOnlyTheirOwnInBehalfStatusTests(TestCase):
+    """My Profile -> Reporting Structure: a manager sees the status of
+    requests THEY logged for a direct report, and only those — never a
+    report's own self-submitted requests, and never another manager's
+    in-behalf requests for the same person."""
+    def setUp(self):
+        self.manager_user = User.objects.create_user(
+            username='msob-mgr', password='x', first_name='Msob', last_name='Manager')
+        self.manager = Employee.objects.create(
+            iqama_number='MSOB-MGR', full_name='Msob Manager', user=self.manager_user)
+        self.report_user = User.objects.create_user(username='msob-emp', password='x')
+        self.report = Employee.objects.create(
+            iqama_number='MSOB-RPT', full_name='Msob Report', main_manager=self.manager, user=self.report_user)
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30')})
+        LeaveEntitlement.objects.create(employee=self.report, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+
+    def test_manager_sees_status_of_a_request_they_logged(self):
+        self.client.login(username='msob-mgr', password='x')
+        self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        })
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'Your request:')
+        self.assertContains(resp, 'Pending')
+
+    def test_manager_does_not_see_reports_self_submitted_request(self):
+        self.client.login(username='msob-emp', password='x')
+        self.client.post(reverse('hr:my_profile'), data={
+            'action': 'request_leave', 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        })
+        req = LeaveRequest.objects.get(employee=self.report)
+        self.assertFalse(req.logged_by_manager)  # sanity: really self-submitted
+        self.client.logout()
+        self.client.login(username='msob-mgr', password='x')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, 'Your request:')
+
+    def test_manager_does_not_see_a_different_managers_in_behalf_request(self):
+        other_manager_user = User.objects.create_user(username='msob-other', password='x')
+        other_manager = Employee.objects.create(
+            iqama_number='MSOB-OTHER', full_name='Other Manager', user=other_manager_user)
+        # Simulate a historical request logged by a different manager (e.g.
+        # before a reassignment) by calling the service directly.
+        submit_leave_request(
+            employee=self.report, leave_type=self.lt, start_date=date(2026, 1, 1), end_date=date(2026, 1, 3),
+            created_by=other_manager_user)
+        self.client.login(username='msob-mgr', password='x')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, 'Your request:')
+
+    def test_multiple_in_behalf_requests_for_the_same_report_all_show(self):
+        # Bug found in manual testing: logging two separate periods for the
+        # same report only showed one status line — the view kept just the
+        # most recent request per employee instead of every one of them.
+        self.client.login(username='msob-mgr', password='x')
+        self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-01-01', 'end_date': '2026-01-03',
+        })
+        self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-06-01', 'end_date': '2026-06-03',
+        })
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'Your request:', count=2)
+        shown_report = next(r for r in resp.context['direct_reports'] if r.pk == self.report.pk)
+        self.assertEqual(len(shown_report.in_behalf_requests), 2)
+        # Newest first.
+        self.assertEqual(shown_report.in_behalf_requests[0].start_date, date(2026, 6, 1))
+        self.assertEqual(shown_report.in_behalf_requests[1].start_date, date(2026, 1, 1))
+
+    def test_more_than_two_in_behalf_requests_collapse_behind_a_show_more_control(self):
+        self.client.login(username='msob-mgr', password='x')
+        for month in (1, 3, 6):
+            self.client.post(reverse('hr:leave_request_create'), data={
+                'employee': self.report.pk, 'leave_type': self.lt.pk,
+                'start_date': f'2026-{month:02d}-01', 'end_date': f'2026-{month:02d}-02',
+            })
+        resp = self.client.get(reverse('hr:my_profile'))
+        # Only the 2 most recent render unconditionally; the 3rd is tucked
+        # behind a "+N more" control instead of cluttering the card.
+        self.assertContains(resp, 'Your request:', count=3)  # 2 visible + 1 inside the collapsed region
+        self.assertContains(resp, '+1 more request(s)')
+
+    def test_employee_sees_flag_that_manager_logged_it(self):
+        self.client.login(username='msob-mgr', password='x')
+        self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        })
+        self.client.logout()
+        self.client.login(username='msob-emp', password='x')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'Logged by your manager')
+        self.assertContains(resp, 'Msob Manager')
+
+    def test_employee_sees_no_flag_on_their_own_self_submitted_request(self):
+        self.client.login(username='msob-emp', password='x')
+        self.client.post(reverse('hr:my_profile'), data={
+            'action': 'request_leave', 'leave_type': self.lt.pk,
+            'start_date': '2026-03-01', 'end_date': '2026-03-05',
+        })
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, 'Logged by your manager')

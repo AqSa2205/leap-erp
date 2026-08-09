@@ -2,14 +2,15 @@
 requests (direct-manager Org Chart link, not a named Role):
 
 - DEMO-MGRLEAVE-MANAGER: a plain employee (no special Role) with a login,
-  set as the main_manager of the employee below.
-- DEMO-MGRLEAVE-REPORT: their direct report, with a current-year Annual
-  entitlement already set up.
+  set as the main_manager of the two employees below.
+- DEMO-MGRLEAVE-REPORT / DEMO-MGRLEAVE-REPORT2: two direct reports, each
+  with a current-year Annual entitlement already set up.
 
 Log in as demo.manager / DemoPass123!, open My Profile, and use the
-"My Team" section's Log Leave link to log a request for the report —
-it should land in the normal Leave Requests queue, waiting on whoever
-holds LeaveDashboardAccess, exactly like any other request.
+"Log Leave" link next to either report in the "My Reporting Structure"
+card's Direct Reports list — it should land in the normal Leave Requests
+queue, waiting on whoever holds LeaveDashboardAccess, exactly like any
+other request.
 
 Safe to re-run: tagged with a "DEMO-MGRLEAVE-" iqama prefix and upserted.
 Run ``python manage.py seed_manager_leave_demo --wipe`` to remove it.
@@ -51,12 +52,19 @@ class Command(BaseCommand):
         manager = Employee.objects.create(
             iqama_number=f'{TAG_PREFIX}MANAGER', full_name='Layla Al-Zahrani (Manager)',
             is_active=True, user=manager_user)
+
         report = Employee.objects.create(
             iqama_number=f'{TAG_PREFIX}REPORT', full_name='Yousef Al-Qahtani (Report)',
             is_active=True, main_manager=manager)
         LeaveEntitlement.objects.create(employee=report, leave_type=lt, year=year, entitled_days=Decimal('30'))
 
+        report2 = Employee.objects.create(
+            iqama_number=f'{TAG_PREFIX}REPORT2', full_name='Noura Al-Dosari (Report)',
+            is_active=True, main_manager=manager)
+        LeaveEntitlement.objects.create(employee=report2, leave_type=lt, year=year, entitled_days=Decimal('30'))
+
         self.stdout.write(self.style.SUCCESS(
             f'Seeded manager-leave demo for year {year}: log in as demo.manager / DemoPass123!, '
-            f'open My Profile, and use the My Team section to log leave for {report.full_name}.'
+            f'open My Profile, and use the Log Leave link next to {report.full_name} or '
+            f'{report2.full_name} in the My Reporting Structure card.'
         ))
