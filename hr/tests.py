@@ -7504,3 +7504,60 @@ class DirectRevokeTeamExceptionUITests(TestCase):
         resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'all'})
         self.assertContains(resp, 'Revoked')
         self.assertIn(self.exc, list(resp.context['decided_exceptions']))
+
+
+class PendingRevokeRequestsLeaveQueueUITests(TestCase):
+    def setUp(self):
+        self.emp = make_employee(iqama='PRRQ-1')
+        self.lt, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': Decimal('30')})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        self.superadmin = make_user('prrq_super', password='x')
+        self.superadmin.set_password('testpass123')
+        from accounts.models import Role
+        role, _ = Role.objects.get_or_create(name='super_admin')
+        self.superadmin.role = role
+        self.superadmin.save()
+        self.user = _login_user('prrq_user')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        approver = make_user('prrq_approver', password='x')
+        LeaveDashboardAccess.objects.create(user=approver, is_active=True)
+        req = submit_leave_request(
+            employee=self.emp, leave_type=self.lt, start_date=date(2026, 8, 1), end_date=date(2026, 8, 2),
+            created_by=self.user)
+        record_approver_decision(req, approver, 'approved')
+        self.req = req
+        self.revoke_req = LeaveRevokeRequest.objects.create(
+            leave_request=req, requested_by=self.user, reason='Plans changed.')
+
+    def test_pending_revoke_request_shows_on_queue_page(self):
+        self.client.login(username='prrq_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertContains(resp, 'Plans changed.')
+        self.assertEqual(list(resp.context['pending_leave_revoke_requests']), [self.revoke_req])
+
+    def test_approve_applies_the_revoke(self):
+        self.client.login(username='prrq_super', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_list'), {
+            'action': 'decide_revoke_request', 'revoke_request_id': self.revoke_req.pk, 'decision': 'approved',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'revoked')
+
+    def test_reject_requires_decision_note(self):
+        self.client.login(username='prrq_super', password='testpass123')
+        self.client.post(reverse('hr:leave_request_list'), {
+            'action': 'decide_revoke_request', 'revoke_request_id': self.revoke_req.pk, 'decision': 'rejected',
+            'decision_note': '',
+        })
+        self.revoke_req.refresh_from_db()
+        self.assertEqual(self.revoke_req.status, 'pending')  # blocked, unchanged
+
+    def test_sidebar_badge_includes_pending_revoke_requests(self):
+        self.client.login(username='prrq_super', password='testpass123')
+        resp = self.client.get(reverse('hr:hr_dashboard'))
+        # 1 pending revoke request; no pending LeaveRequest (the only one was
+        # already approved in setUp) — the badge count is exactly 1.
+        self.assertEqual(resp.context['leave_requests_pending_count'], 1)

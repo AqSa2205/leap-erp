@@ -12,7 +12,10 @@ def pending_counts(request):
 
     ctx = {}
     if can_view_leave_dashboard(user):
-        ctx['leave_requests_pending_count'] = LeaveRequest.objects.filter(status='pending').count()
+        from .models import LeaveRevokeRequest
+        ctx['leave_requests_pending_count'] = (
+            LeaveRequest.objects.filter(status='pending').count()
+            + LeaveRevokeRequest.objects.filter(status='pending').count())
 
     if can_view_team_exceptions(user):
         emp = getattr(user, 'employee_profile', None)

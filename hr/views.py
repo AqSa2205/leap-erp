@@ -16,7 +16,7 @@ from datetime import datetime, date, timedelta
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-from .models import Employee, Asset, AssetAssignment, Vehicle, VehicleDocument, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay, WFHRecord, LeaveRequest, AttendanceException
+from .models import Employee, Asset, AssetAssignment, Vehicle, VehicleDocument, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay, WFHRecord, LeaveRequest, AttendanceException, LeaveRevokeRequest
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm, AssetIssueForm, AssetReturnForm,
@@ -2269,11 +2269,15 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
             .order_by('-decided_at')[:50])
         ctx['current_sort'] = self.request.GET.get('sort') or 'submitted'
         ctx['can_revoke'] = has_override_access(self.request.user)
+        ctx['pending_leave_revoke_requests'] = (
+            LeaveRevokeRequest.objects.filter(status='pending')
+            .select_related('leave_request__employee', 'leave_request__leave_type', 'requested_by')
+            .order_by('created_at'))
         return ctx
 
     def post(self, request, *args, **kwargs):
         from django.http import Http404
-        from hr.leave_approval_services import revoke_leave_request
+        from hr.leave_approval_services import revoke_leave_request, decide_leave_revoke_request
         action = request.POST.get('action')
         if action == 'revoke':
             if not has_override_access(request.user):
@@ -2284,6 +2288,17 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
             try:
                 revoke_leave_request(target, request.user, request.POST.get('reason', ''))
                 messages.success(request, 'Leave request revoked.')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+        elif action == 'decide_revoke_request':
+            revoke_req = LeaveRevokeRequest.objects.filter(pk=request.POST.get('revoke_request_id')).first()
+            if revoke_req is None:
+                raise Http404('No such revoke request.')
+            try:
+                decide_leave_revoke_request(
+                    revoke_req, request.user, request.POST.get('decision'),
+                    decision_note=request.POST.get('decision_note', ''))
+                messages.success(request, 'Revoke request decided.')
             except ValueError as exc:
                 messages.error(request, str(exc))
         return redirect('hr:leave_request_list')
