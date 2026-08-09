@@ -24,11 +24,14 @@ from typing import Callable, Optional
 SALES = 'sales'
 PROPOSAL = 'proposal'
 PROCUREMENT = 'procurement'
+HR = 'hr'
+
 
 DEPARTMENTS = [
     (SALES, 'Sales'),
     (PROPOSAL, 'Proposal'),
     (PROCUREMENT, 'Procurement'),
+    (HR, 'HR'),
 ]
 
 # ── Units (drive display formatting in the template) ─────────────────────────
@@ -158,6 +161,23 @@ def compute_sales_win_rate(ctx):
         return KPIResult(None, 'no deals tagged won/lost in this period')
     val = (Decimal(won) / Decimal(decided) * Decimal('100')).quantize(Decimal('0.1'))
     return KPIResult(val, f'{won} won of {decided} decided')
+
+def compute_attendance_punctuality(ctx):
+    from hr.models import AttendanceRecord
+    qs = AttendanceRecord.objects.filter(date__gte=ctx.start, date__lte=ctx.end)
+    if ctx.user is not None:
+        emp = getattr(ctx.user, 'employee_profile', None)
+        qs = qs.filter(employee=emp) if emp else qs.none()
+    if ctx.region is not None:
+        qs = qs.filter(employee__user__region=ctx.region)
+    worked = qs.filter(status__in=['present', 'late'])
+    total = worked.count()
+    if not total:
+        return KPIResult(None, 'no attendance recorded in this period')
+    on_time = worked.exclude(status='late').count()
+    val = (Decimal(on_time) / Decimal(total) * Decimal('100')).quantize(Decimal('0.1'))
+    return KPIResult(val, f'{on_time} on-time of {total} attendance days')
+
 
 
 def compute_revenue_won(ctx):
@@ -455,6 +475,9 @@ KPI_DEFINITIONS = [
     KPI('proc_stakeholder_satisfaction', PROCUREMENT, 'Stakeholder satisfaction', SCORE, 'higher',
         target=Decimal('90'), source='manual',
         help='Internal stakeholder satisfaction (0–100). Manual entry.'),
+    KPI('hr_attendance_punctuality', HR, 'Attendance punctuality', PERCENT, 'higher',
+        target=Decimal('95'), source='auto', compute=compute_attendance_punctuality,
+        help='Share of attendance days marked Present (not Late) this period.'),
 ]
 
 KPI_BY_KEY = {k.key: k for k in KPI_DEFINITIONS}
@@ -465,6 +488,7 @@ USER_ATTRIBUTABLE_KEYS = {
     'sales_ontime_rfq',
     'proposal_submission_ontime', 'proposal_win_rate',
     'proc_cost_savings', 'proc_ppv', 'proc_pr_to_po_cycle', 'proc_ontime_delivery',
+    'hr_attendance_punctuality',
 }
 
 
