@@ -485,6 +485,29 @@ class CalendarGridRenderTests(TestCase):
         self.assertContains(resp, 'Fill Date Range')
         self.assertContains(resp, 'fillRangeModal')
 
+    def test_grid_still_shows_departed_employee_for_a_month_they_have_data_in(self):
+        """Same roster rule as _build_calendar_workbook: a deactivated
+        employee with real CalendarCell data for the month being viewed
+        must still appear on screen, so the on-screen grid and the Excel
+        export for that same past month never disagree on who's listed."""
+        self.emp.is_active = False
+        self.emp.save()
+        resp = self.client.get(
+            reverse('engineer_calendar:grid') + f'?year={self.start.year}&month={self.start.month}')
+        self.assertContains(resp, 'Grid Emp Active')
+
+    def test_grid_hides_departed_employee_for_a_month_they_have_no_data_in(self):
+        """The fix must not turn into 'show every employee ever' -- a
+        departed employee should still disappear from months where they
+        genuinely have no calendar data."""
+        other_month = self.start.month - 1 or 12
+        other_year = self.start.year if self.start.month > 1 else self.start.year - 1
+        self.emp.is_active = False
+        self.emp.save()
+        resp = self.client.get(
+            reverse('engineer_calendar:grid') + f'?year={other_year}&month={other_month}')
+        self.assertNotContains(resp, 'Grid Emp Active')
+
 
 class GenerateDraftViewTests(TestCase):
     def setUp(self):

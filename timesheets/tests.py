@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from django.test import TestCase, Client
 from django.urls import reverse
+from django.utils import timezone
 
 from accounts.models import Role, User
 from accounts.permissions import seed_default_permissions
@@ -1517,6 +1518,81 @@ class MyTimesheetMonthNavigationTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertIn('year=2026', resp.url)
         self.assertIn('month=10', resp.url)
+
+
+class LockedMonthCannotBeTamperedWithTests(TestCase):
+    """The month-picker makes it trivial to browse back to an already
+    -submitted month. Confirms that browsing there is harmless: neither
+    adding a brand-new entry nor editing a still-draft entry's date can
+    land data inside a month HR has already received."""
+
+    def setUp(self):
+        from .models import TimesheetMonth
+        self.TimesheetMonth = TimesheetMonth
+
+        self.client = Client()
+        self.code, _ = ActivityCode.objects.get_or_create(
+            code='COS_0009', defaults={'label': 'Office', 'is_active': True})
+        self.user, self.emp = _make_user_with_employee('lockedemp', full_name='Locked Emp')
+        seed_default_permissions()
+        self.client.login(username='lockedemp', password='testpass123')
+
+        # A real submitted entry for July, so the month is genuinely locked.
+        TimesheetEntry.objects.create(
+            employee=self.emp, date=date(2026, 7, 10),
+            task_description='Already submitted', activity_code=self.code,
+            hours=Decimal('10'), status=TimesheetEntry.STATUS_SUBMITTED)
+        self.tsm = TimesheetMonth.objects.create(
+            employee=self.emp, year=2026, month=7, submitted_at=timezone.now())
+
+        # A still-draft entry in an OPEN month, used for the edit-into-locked test.
+        self.draft_entry = TimesheetEntry.objects.create(
+            employee=self.emp, date=date(2026, 8, 5),
+            task_description='Still a draft', activity_code=self.code, hours=Decimal('10'))
+
+    def test_cannot_add_new_entry_into_a_locked_month(self):
+        resp = self.client.post(
+            reverse('timesheets:my_timesheet') + '?year=2026&month=7', {
+                'entry_type': 'activity',
+                'date': '2026-07-20', 'activity_code': self.code.pk,
+                'task_description': 'Sneaky post-submit entry', 'hours': '5',
+            })
+        self.assertFalse(
+            TimesheetEntry.objects.filter(task_description='Sneaky post-submit entry').exists())
+        self.assertEqual(resp.status_code, 200)  # re-renders the form, no redirect
+
+    def test_can_still_add_entry_into_an_open_month(self):
+        resp = self.client.post(
+            reverse('timesheets:my_timesheet') + '?year=2026&month=8', {
+                'entry_type': 'activity',
+                'date': '2026-08-20', 'activity_code': self.code.pk,
+                'task_description': 'Legit open-month entry', 'hours': '5',
+            })
+        self.assertTrue(
+            TimesheetEntry.objects.filter(task_description='Legit open-month entry').exists())
+        self.assertEqual(resp.status_code, 302)
+
+    def test_cannot_edit_a_draft_entrys_date_into_a_locked_month(self):
+        resp = self.client.post(
+            reverse('timesheets:entry_edit', args=[self.draft_entry.pk]), {
+                'entry_type': 'activity',
+                'date': '2026-07-25', 'activity_code': self.code.pk,
+                'task_description': 'Still a draft', 'hours': '10',
+            })
+        self.draft_entry.refresh_from_db()
+        self.assertEqual(self.draft_entry.date, date(2026, 8, 5))  # unchanged
+        self.assertEqual(resp.status_code, 200)
+
+    def test_can_still_edit_a_draft_entry_within_its_own_open_month(self):
+        resp = self.client.post(
+            reverse('timesheets:entry_edit', args=[self.draft_entry.pk]), {
+                'entry_type': 'activity',
+                'date': '2026-08-06', 'activity_code': self.code.pk,
+                'task_description': 'Edited within open month', 'hours': '6',
+            })
+        self.draft_entry.refresh_from_db()
+        self.assertEqual(self.draft_entry.task_description, 'Edited within open month')
+        self.assertEqual(resp.status_code, 302)
 
 
 class HRDownloadZipTests(TestCase):

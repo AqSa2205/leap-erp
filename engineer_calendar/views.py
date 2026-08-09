@@ -445,7 +445,14 @@ def calendar_grid(request):
     year, month = _resolve_year_month(request)
     days_in_month = calendar.monthrange(year, month)[1]
 
-    employees = Employee.objects.filter(is_active=True)
+    # Same roster rule as _build_calendar_workbook: active employees, plus
+    # anyone since deactivated who still has calendar data for this exact
+    # month, so a past month never quietly shows fewer people on screen
+    # than what the Excel export for that same month contains.
+    month_cells = CalendarCell.objects.filter(date__year=year, date__month=month)
+    employees = Employee.objects.filter(
+        Q(is_active=True) | Q(pk__in=month_cells.values_list('employee_id', flat=True))
+    ).distinct()
 
     cells = CalendarCell.objects.filter(
         date__year=year, date__month=month

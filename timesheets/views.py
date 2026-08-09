@@ -8,7 +8,7 @@ from collections import defaultdict
 from io import BytesIO
 import zipfile
 from accounts.permissions import require_capability
-from .models import TimesheetEntry
+from .models import TimesheetEntry, TimesheetMonth
 from .forms import TimesheetEntryForm
 import calendar
 from datetime import date as date_cls
@@ -35,6 +35,17 @@ def _get_employee_or_none(request):
     """Same lookup my_profile uses in hr/views.py — an authenticated user
     isn't guaranteed to be linked to an Employee record yet."""
     return getattr(request.user, 'employee_profile', None)
+
+
+def _month_is_locked(employee, on_date):
+    """True if `on_date` falls in a month that's already been submitted
+    to HR for this employee (and not since reopened). Used to stop a new
+    or edited entry from landing in a month HR has already received —
+    the month-picker makes it easy to browse back into one, so this has
+    to be enforced server-side, not just by hiding the form."""
+    tsm = TimesheetMonth.objects.filter(
+        employee=employee, year=on_date.year, month=on_date.month).first()
+    return bool(tsm and tsm.is_submitted)
 
 
 def _group_entries_by_date(entries):
@@ -94,16 +105,23 @@ def my_timesheet(request):
     if request.method == 'POST':
         form = TimesheetEntryForm(request.POST)
         if form.is_valid():
-            entry = form.save(commit=False)
-            entry.employee = emp
-            entry.save()
-            messages.success(request, 'Entry added.')
-            return redirect(f"{reverse('timesheets:my_timesheet')}?year={year}&month={month}")
+            entry_date = form.cleaned_data['date']
+            if _month_is_locked(emp, entry_date):
+                messages.error(
+                    request,
+                    f'{calendar.month_name[entry_date.month]} {entry_date.year} has already '
+                    'been submitted to HR and is locked. Contact HR if this needs a correction.',
+                )
+            else:
+                entry = form.save(commit=False)
+                entry.employee = emp
+                entry.save()
+                messages.success(request, 'Entry added.')
+                return redirect(f"{reverse('timesheets:my_timesheet')}?year={year}&month={month}")
         else:
             messages.error(request, 'Please fix the errors below.')
     else:
         form = TimesheetEntryForm()
-
     entries = TimesheetEntry.objects.filter(
         employee=emp, date__year=year, date__month=month
     ).select_related('activity_code', 'project')
@@ -153,9 +171,17 @@ def timesheet_entry_edit(request, pk):
     if request.method == 'POST':
         form = TimesheetEntryForm(request.POST, instance=entry)
         if form.is_valid():
-            form.save()
-            messages.success(request, 'Entry updated.')
-            return redirect('timesheets:my_timesheet')
+            entry_date = form.cleaned_data['date']
+            if _month_is_locked(emp, entry_date):
+                messages.error(
+                    request,
+                    f'{calendar.month_name[entry_date.month]} {entry_date.year} has already '
+                    'been submitted to HR and is locked. Contact HR if this needs a correction.',
+                )
+            else:
+                form.save()
+                messages.success(request, 'Entry updated.')
+                return redirect('timesheets:my_timesheet')
         else:
             messages.error(request, 'Please fix the errors below.')
     else:
