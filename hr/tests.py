@@ -7461,3 +7461,46 @@ class DirectRevokeLeaveRequestQueueUITests(TestCase):
         revoke_leave_request(self.req, self.superadmin, 'Applied for testing.')
         resp = self.client.get(reverse('hr:leave_request_list'))
         self.assertContains(resp, 'Revoked')
+
+
+class DirectRevokeTeamExceptionUITests(TestCase):
+    def setUp(self):
+        self.manager = make_employee(iqama='DRTE-MGR', name='DRTE Manager')
+        self.manager_user = _login_user('drte_mgr')
+        self.manager.user = self.manager_user
+        self.manager.save(update_fields=['user'])
+        self.emp = make_employee(iqama='DRTE-1')
+        self.emp.main_manager = self.manager
+        self.emp.save(update_fields=['main_manager'])
+        self.creator = make_user('drte_creator')
+        self.exc = _submit_aex(
+            employee=self.emp, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+        decide_attendance_exception(self.exc, self.manager_user, 'approved')
+        self.exc.refresh_from_db()
+        self.superadmin = make_user('drte_super', password='x')
+        self.superadmin.set_password('testpass123')
+        from accounts.models import Role
+        role, _ = Role.objects.get_or_create(name='super_admin')
+        self.superadmin.role = role
+        self.superadmin.save()
+        self.client.login(username='drte_super', password='testpass123')
+
+    def test_revoke_button_renders_for_override_access_holder(self):
+        resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'all'})
+        self.assertContains(resp, f'revoke_exception_{self.exc.pk}')
+
+    def test_post_revoke_direct(self):
+        resp = self.client.post(reverse('hr:team_exceptions'), {
+            'action': 'revoke_direct', 'exc_id': self.exc.pk, 'reason': 'No longer needed.', 'tab': 'all',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.exc.refresh_from_db()
+        self.assertEqual(self.exc.status, 'revoked')
+
+    def test_revoked_row_included_in_history(self):
+        from hr.attendance_exception_services import revoke_attendance_exception
+        revoke_attendance_exception(self.exc, self.superadmin, 'Applied for testing.')
+        resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'all'})
+        self.assertContains(resp, 'Revoked')
+        self.assertIn(self.exc, list(resp.context['decided_exceptions']))

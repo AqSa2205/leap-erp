@@ -3229,7 +3229,7 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         # requests stay in the active queue above until a human actually
         # decides them.
         decided = list(
-            self._tab_queryset(tab, user, emp).filter(status__in=('approved', 'rejected'))
+            self._tab_queryset(tab, user, emp).filter(status__in=('approved', 'rejected', 'revoked'))
             .select_related('employee', 'employee__main_manager', 'main_manager', 'decided_by', 'overridden_by')
             .order_by('-decided_at')[:50])
 
@@ -3282,6 +3282,7 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         # HR/Super-Admin — "Direct Reports"/"Secondary Reports" are always
         # shown (even empty) for everyone who can reach this page.
         ctx['show_all_tab'] = is_hr
+        ctx['can_revoke'] = has_override_access(user)
         # Per-tab pending counts for the tab labels — always all three
         # (regardless of which tab is currently selected), so switching tabs
         # doesn't need a second request to know what the other tabs hold.
@@ -3329,6 +3330,18 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
                     exc, request.user, request.POST.get('decision'),
                     request.POST.get('reason', ''))
                 messages.success(request, 'Request finalized via override.')
+            except ValueError as e:
+                messages.error(request, str(e))
+
+        elif action == 'revoke_direct':
+            if not has_override_access(request.user):
+                return HttpResponse('You do not have override access to revoke this request.', status=403)
+            if exc is None:
+                raise Http404('No such attendance exception.')
+            from hr.attendance_exception_services import revoke_attendance_exception
+            try:
+                revoke_attendance_exception(exc, request.user, request.POST.get('reason', ''))
+                messages.success(request, 'Attendance exception revoked.')
             except ValueError as e:
                 messages.error(request, str(e))
 

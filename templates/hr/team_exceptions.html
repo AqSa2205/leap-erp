@@ -248,11 +248,19 @@
               {% if exc.status == 'approved' %}<span class="badge bg-success">Approved</span>
               {% elif exc.status == 'rejected' %}<span class="badge bg-danger">Rejected</span>
               {% elif exc.status == 'expired' %}<span class="badge bg-secondary">Expired</span>
+              {% elif exc.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
               {% else %}<span class="badge bg-warning text-dark">{{ exc.get_status_display }}</span>{% endif %}
               {% if exc.is_overridden %}
                 <span class="badge bg-info text-dark ms-1">
                   Overridden{% if exc.overridden_by %} by {{ exc.overridden_by.get_full_name|default:exc.overridden_by.username }}{% endif %}
                 </span>
+              {% endif %}
+              {% if exc.status == 'revoked' %}
+                <div class="small text-muted">
+                  {% if exc.revoked_by %}by {{ exc.revoked_by.get_full_name|default:exc.revoked_by.username }}{% endif %}
+                  {% if exc.revoked_at %} on {{ exc.revoked_at|date:'d M Y' }}{% endif %}
+                </div>
+                {% if exc.revoke_reason %}<div class="small text-muted fst-italic">"{{ exc.revoke_reason }}"</div>{% endif %}
               {% endif %}
               {% if exc.can_override %}
               <button type="button" class="btn btn-sm btn-outline-warning ms-1" data-bs-toggle="collapse" data-bs-target="#override_{{ exc.pk }}">
@@ -269,6 +277,21 @@
                     <button type="submit" name="decision" value="approved" class="btn btn-sm btn-outline-success">Override — Approve</button>
                     <button type="submit" name="decision" value="rejected" class="btn btn-sm btn-outline-danger">Override — Reject</button>
                   </div>
+                </form>
+              </div>
+              {% endif %}
+              {% if exc.status == 'approved' and can_revoke %}
+              <button type="button" class="btn btn-sm btn-outline-danger ms-1" data-bs-toggle="collapse" data-bs-target="#revoke_{{ exc.pk }}" id="revoke_exception_{{ exc.pk }}">
+                Revoke
+              </button>
+              <div class="collapse mt-2" id="revoke_{{ exc.pk }}">
+                <form method="post" class="border rounded p-2" onsubmit="return confirm('Revoke this approved exception? The day will no longer be excused.');">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="revoke_direct">
+                  <input type="hidden" name="exc_id" value="{{ exc.pk }}">
+                  <input type="hidden" name="tab" value="{{ tab }}">
+                  <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Revoke reason — required" required></textarea>
+                  <button type="submit" class="btn btn-sm btn-outline-danger">Confirm Revoke</button>
                 </form>
               </div>
               {% endif %}
