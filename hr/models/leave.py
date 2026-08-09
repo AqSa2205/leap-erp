@@ -6,6 +6,9 @@ class LeaveType(models.Model):
     name = models.CharField(max_length=100)
     code = models.SlugField(max_length=40, unique=True)
     default_annual_days = models.DecimalField(max_digits=5, decimal_places=1, default=0)
+    site_default_annual_days = models.DecimalField(
+        max_digits=5, decimal_places=1, null=True, blank=True,
+        help_text='Override default for Site employees. Blank = same as the default above (Office).')
     is_paid = models.BooleanField(default=True)
     color = models.CharField(max_length=20, default='secondary', help_text='Bootstrap color name for badges')
     requires_medical_certificate = models.BooleanField(
@@ -26,18 +29,34 @@ class LeaveType(models.Model):
     def __str__(self):
         return self.name
 
+    def default_days_for(self, work_location):
+        if work_location == 'site' and self.site_default_annual_days is not None:
+            return self.site_default_annual_days
+        return self.default_annual_days
+
     def save(self, *args, **kwargs):
         old_days = None
+        old_site_days = None
         if self.pk:
-            prev = type(self).objects.filter(pk=self.pk).only('default_annual_days').first()
+            prev = type(self).objects.filter(pk=self.pk).only(
+                'default_annual_days', 'site_default_annual_days').first()
             if prev is not None:
                 old_days = prev.default_annual_days
+                old_site_days = prev.site_default_annual_days
         super().save(*args, **kwargs)
-        # When the day count changes, propagate it to ALL existing entitlements
-        # of this type (every year, every employee) — the leave type is the
-        # source of truth. Applies to every type, including Annual (flat).
-        if old_days is not None and old_days != self.default_annual_days:
-            self.entitlements.update(entitled_days=self.default_annual_days)
+        # When either day count changes, propagate it to ALL existing
+        # entitlements of this type (every year, every employee) — the leave
+        # type is the source of truth. Office and Site employees get their
+        # own default; this never touches LeaveExceptionGrant rows, which
+        # live outside entitled_days entirely.
+        if old_days is not None and (old_days != self.default_annual_days or old_site_days != self.site_default_annual_days):
+            # work_location is blank for employees never assigned one — treat
+            # that the same as 'office' (today's only behavior) rather than
+            # silently skipping them.
+            self.entitlements.exclude(employee__work_location='site').update(
+                entitled_days=self.default_annual_days)
+            self.entitlements.filter(employee__work_location='site').update(
+                entitled_days=self.default_days_for('site'))
 
 
 class LeaveEntitlement(models.Model):
@@ -67,6 +86,43 @@ class LeaveEntitlement(models.Model):
     @property
     def remaining_days(self):
         return self.entitled_days - self.taken_days
+
+    @property
+    def exception_days(self):
+        from decimal import Decimal
+        agg = self.employee.leave_exception_grants.filter(
+            leave_type=self.leave_type, year=self.year,
+        ).aggregate(models.Sum('days'))
+        return agg['days__sum'] or Decimal('0')
+
+    @property
+    def effective_entitled_days(self):
+        return self.entitled_days + self.exception_days
+
+    @property
+    def effective_remaining_days(self):
+        return self.effective_entitled_days - self.taken_days
+
+
+class LeaveExceptionGrant(models.Model):
+    """One HR-granted addition to an employee's standard entitlement for a
+    year — an audit log (one row per grant action), not a single
+    overwritable counter, so multiple grants across a year each keep their
+    own reason/date. LeaveEntitlement.exception_days sums these rather than
+    storing a redundant total."""
+    employee = models.ForeignKey('hr.Employee', on_delete=models.CASCADE, related_name='leave_exception_grants')
+    leave_type = models.ForeignKey(LeaveType, on_delete=models.PROTECT, related_name='exception_grants')
+    year = models.PositiveIntegerField()
+    days = models.DecimalField(max_digits=5, decimal_places=1)
+    granted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    granted_at = models.DateTimeField(auto_now_add=True)
+    reason = models.TextField()
+
+    class Meta:
+        ordering = ['-granted_at']
+
+    def __str__(self):
+        return f"{self.employee.full_name} +{self.days} {self.leave_type.name} ({self.year})"
 
 
 class LeaveRecord(models.Model):
@@ -153,6 +209,13 @@ class OverrideAccessSettings(models.Model):
         (MODE_SPECIFIC_EMPLOYEES, 'Specific Employees'),
     ]
     mode = models.CharField(max_length=20, choices=MODE_CHOICES, default=MODE_ALL_SUPER_ADMINS)
+    allow_site_balance_hold = models.BooleanField(
+        default=True,
+        help_text='Site employees who submit leave exceeding their available balance get a held, '
+                   'reviewable request instead of a hard block.')
+    allow_office_balance_hold = models.BooleanField(
+        default=False,
+        help_text='Same as above, for Office employees. Off by default — Office keeps the plain hard block.')
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
 
@@ -163,6 +226,9 @@ class OverrideAccessSettings(models.Model):
     def get_solo(cls):
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+    def balance_hold_enabled_for(self, work_location):
+        return self.allow_site_balance_hold if work_location == 'site' else self.allow_office_balance_hold
 
 
 class OverrideAccessRole(models.Model):
@@ -209,6 +275,11 @@ class LeaveRequest(models.Model):
     employee_reason = models.TextField(blank=True)
     document = models.FileField(upload_to='leave_requests/%Y/%m/', null=True, blank=True)
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default='pending')
+    exceeds_balance = models.BooleanField(
+        default=False,
+        help_text='True if this request was held (not hard-blocked) because it exceeds the '
+                   "employee's effective balance — only possible for work locations where balance "
+                   'holding is enabled. Requires a Super Admin override to approve.')
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
                                    related_name='leave_requests_created')
     leave_record = models.OneToOneField(LeaveRecord, on_delete=models.SET_NULL, null=True, blank=True,

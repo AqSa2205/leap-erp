@@ -28,7 +28,9 @@
           {% for r in pending_requests %}
           {% url 'hr:leave_request_detail' r.pk as detail_url %}
           <tr>
-            <td><a href="{{ detail_url }}">{{ r.employee.full_name }}</a></td>
+            <td><a href="{{ detail_url }}">{{ r.employee.full_name }}</a>
+              {% if r.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
+            </td>
             <td>{{ r.leave_type.name }}</td>
             <td>{{ r.start_date }} – {{ r.end_date }}</td>
             <td>{{ r.days }}</td>

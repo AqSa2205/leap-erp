@@ -1,5 +1,6 @@
 from django.contrib import admin
-from .models import Employee, Asset, LeaveType, LeaveEntitlement, LeaveRecord, Holiday, AttendanceSettings, AttendanceRecord, WorkingDay, WFHRecord
+from .models import (Employee, Asset, LeaveType, LeaveEntitlement, LeaveRecord, LeaveExceptionGrant,
+                     Holiday, AttendanceSettings, AttendanceRecord, WorkingDay, WFHRecord)
 
 
 @admin.register(Employee)
@@ -18,7 +19,7 @@ class AssetAdmin(admin.ModelAdmin):
 
 @admin.register(LeaveType)
 class LeaveTypeAdmin(admin.ModelAdmin):
-    list_display = ['name', 'code', 'default_annual_days', 'is_paid', 'is_active']
+    list_display = ['name', 'code', 'default_annual_days', 'site_default_annual_days', 'is_paid', 'is_active']
 
 
 @admin.register(Holiday)
@@ -39,6 +40,14 @@ class LeaveRecordAdmin(admin.ModelAdmin):
     list_display = ['employee', 'leave_type', 'start_date', 'end_date', 'days']
     list_filter = ['leave_type']
     search_fields = ['employee__full_name']
+
+
+@admin.register(LeaveExceptionGrant)
+class LeaveExceptionGrantAdmin(admin.ModelAdmin):
+    list_display = ['employee', 'leave_type', 'year', 'days', 'granted_by', 'granted_at']
+    list_filter = ['year', 'leave_type']
+    search_fields = ['employee__full_name', 'reason']
+    readonly_fields = ['granted_at']
 
 
 @admin.register(AttendanceRecord)

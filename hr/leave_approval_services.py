@@ -202,11 +202,16 @@ def submit_leave_request(*, employee, leave_type, start_date, end_date, employee
     from hr.models import LeaveDashboardAccess, LeaveRequest, LeaveRequestApproval
 
     with transaction.atomic():
-        validate_leave_submission(employee, leave_type, start_date, end_date, lock=True)
+        exceeds_balance = validate_leave_submission(employee, leave_type, start_date, end_date, lock=True)
         leave_request = LeaveRequest.objects.create(
             employee=employee, leave_type=leave_type, start_date=start_date, end_date=end_date,
             employee_reason=employee_reason, document=document, created_by=created_by,
+            exceeds_balance=exceeds_balance,
         )
+        # A held (balance-exceeding) request goes through the exact same
+        # approver roster and decide/override flow as any other request —
+        # exceeds_balance only drives the warning shown on the request, not
+        # who can decide it.
         approvers = LeaveDashboardAccess.objects.filter(is_active=True)
         if employee.user_id:
             approvers = approvers.exclude(user_id=employee.user_id)
@@ -215,8 +220,21 @@ def submit_leave_request(*, employee, leave_type, start_date, end_date, employee
 
     if employee.user_id:
         from notifications.services import notify_users
-        notify_users(
-            recipients=[employee.user], verb='Your leave request was submitted and is pending approval',
-            actor=created_by,
-        )
+        verb = ('Your leave request was submitted — it exceeds your available balance, so it may need extra '
+                'review' if exceeds_balance else
+                'Your leave request was submitted and is pending approval')
+        notify_users(recipients=[employee.user], verb=verb, actor=created_by)
     return leave_request
+
+
+def grant_exception_days(*, employee, leave_type, year, days, granted_by, reason):
+    """HR-granted addition to an employee's standard entitlement for a
+    year — creates one audited LeaveExceptionGrant row. Immediately
+    reflected in LeaveEntitlement.exception_days/effective_remaining_days
+    and usable by the employee's own future self-service submissions."""
+    if not reason or not reason.strip():
+        raise ValueError('An exception grant requires a written reason.')
+    from hr.models import LeaveExceptionGrant
+    return LeaveExceptionGrant.objects.create(
+        employee=employee, leave_type=leave_type, year=year, days=days,
+        granted_by=granted_by, reason=reason.strip())
