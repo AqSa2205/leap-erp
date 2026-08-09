@@ -319,6 +319,16 @@ git commit -m "hr: prove manager-logged requests use normal approval and balance
 
 ### Task 3: "My Team" section on My Profile
 
+> **Deviation from plan (post-review feedback):** My Profile already has a
+> "My Reporting Structure" card with a Direct Reports list — the "Log
+> Leave" link was added directly to each active report's row there instead
+> of the new standalone card this task originally specified. No new
+> section, no new `my_team` context var; `direct_reports` (already built
+> from `employee.main_reports.all()`) is what the template loop actually
+> uses. See the updated spec's Discoverability section for the corrected
+> design. The code below is kept as the original record of what was
+> initially planned before that feedback.
+
 **Files:**
 - Modify: `hr/views.py` (`my_profile` function, ~line 286-380 region)
 - Modify: `templates/hr/my_profile.html`

@@ -87,11 +87,13 @@ def can_log_leave_for(user, employee):
 ### Discoverability
 
 A manager with no other HR-facing role currently has no reason to ever find
-`/hr/leave-requests/create/`. Add a small **"My Team"** section to **My
-Profile** (visible only when `emp.main_reports.filter(is_active=True).exists()`)
-listing direct reports, each with a **"Log Leave"** link that opens the
-existing form pre-filled via its already-supported `?employee=<id>` query
-parameter — no new form, just a new door into the existing one.
+`/hr/leave-requests/create/`. **My Profile already has a "My Reporting
+Structure" card listing Direct Reports by name** — add the **"Log Leave"**
+link directly to each active report's row there (opening the existing form
+pre-filled via its already-supported `?employee=<id>` query parameter)
+instead of introducing a new, separate section. No new form, no new card —
+just a new control inside the section that already exists for this exact
+purpose.
 
 ## Edge cases and how each is resolved
 
@@ -125,6 +127,6 @@ parameter — no new form, just a new door into the existing one.
 - A manager-logged over-cap Site request is held with the same
   `exceeds_balance=True` behavior as an HR-logged one; a manager never sees
   or can trigger the "Log Anyway" grant action.
-- My Profile: "My Team" section appears only for users with at least one
-  active direct report, and its "Log Leave" links pre-fill the right
-  employee.
+- My Profile: the "My Reporting Structure" card's Direct Reports list shows
+  a "Log Leave" link for each active report (none for inactive ones), and
+  it pre-fills the right employee.
