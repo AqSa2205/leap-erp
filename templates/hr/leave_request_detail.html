@@ -104,8 +104,7 @@
               <label class="form-label small fw-semibold mb-1">2. Add a message for the employee (optional)</label>
               <textarea name="comment" class="form-control" rows="2" placeholder="They'll see this on their My Profile page"></textarea>
             </div>
-            <label class="form-label small fw-semibold mb-1">3. Submit</label><br>
-            <button type="submit" class="btn btn-primary btn-sm">Submit Decision</button>
+            <button type="submit" class="btn btn-primary btn-sm">3. Submit Decision</button>
           </form>
           {% elif can_edit_decision %}
           <form method="post" class="border-top pt-3 mt-3" onsubmit="return confirm('Submit this updated decision? The employee will be notified.');">
@@ -132,8 +131,7 @@
               <label class="form-label small fw-semibold mb-1">2. Note explaining the change (required)</label>
               <textarea name="edit_note" class="form-control" rows="2" placeholder="Why are you changing your decision? — the employee will see this" required></textarea>
             </div>
-            <label class="form-label small fw-semibold mb-1">3. Submit</label><br>
-            <button type="submit" class="btn btn-outline-primary btn-sm">Update Decision</button>
+            <button type="submit" class="btn btn-outline-primary btn-sm">3. Update Decision</button>
           </form>
           {% endif %}
 
@@ -147,39 +145,6 @@
             </div>
             <button type="submit" name="decision" value="approved" class="btn btn-outline-success btn-sm">Override — Approve</button>
             <button type="submit" name="decision" value="disapproved" class="btn btn-outline-danger btn-sm">Override — Disapprove</button>
-          </form>
-          {% endif %}
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-header"><h5 class="mb-0">Notes</h5></div>
-        <div class="card-body">
-          {% for n in visible_notes %}
-          <div class="mb-2 {% if n.is_internal %}bg-light p-2 rounded{% endif %}">
-            <strong>{% if n.author %}{{ n.author.get_full_name|default:n.author.username }}{% else %}—{% endif %}</strong>
-            {% if n.is_internal %}<span class="badge bg-secondary">Internal</span>{% endif %}
-            <div class="small text-muted">{{ n.created_at }}</div>
-            <div>{{ n.note }}</div>
-          </div>
-          {% empty %}
-          <p class="text-muted mb-0">No notes yet.</p>
-          {% endfor %}
-
-          {% if my_approval %}
-          <p class="small text-muted mb-2">
-            Use this for a follow-up note after the fact — to message the employee as part of your decision, use
-            the "Add a message for the employee" field in the decision form above instead.
-          </p>
-          <form method="post" class="border-top pt-3 mt-3">
-            {% csrf_token %}
-            <input type="hidden" name="action" value="add_note">
-            <div class="mb-2"><textarea name="note" class="form-control" rows="2" placeholder="Add a follow-up note the employee can see" required></textarea></div>
-            <div class="form-check mb-2">
-              <input type="checkbox" name="is_internal" value="1" class="form-check-input" id="internalNote">
-              <label class="form-check-label small" for="internalNote">Internal only (hidden from employee)</label>
-            </div>
-            <button type="submit" class="btn btn-sm btn-primary">Add Note</button>
           </form>
           {% endif %}
         </div>

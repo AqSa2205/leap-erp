@@ -3178,15 +3178,18 @@ class LeaveRequestDetailViewTests(TestCase):
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(self.req.notes.count(), 0)
 
-    def test_non_assigned_superadmin_does_not_see_add_note_form(self):
+    def test_standalone_add_note_form_no_longer_rendered(self):
+        # The separate "Add Note" card was removed as redundant — the
+        # decide form's own "Add a message for the employee" field now
+        # covers that use case in one submit.
         self.client.login(username='detail_super', password='testpass123')
         resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
         self.assertNotContains(resp, 'name="note"')
 
-    def test_assigned_approver_sees_add_note_form(self):
+    def test_assigned_approver_sees_message_field_on_the_decide_form(self):
         self.client.login(username='detail_aamna', password='testpass123')
         resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
-        self.assertContains(resp, 'name="note"')
+        self.assertContains(resp, 'name="comment"')
 
     def test_non_approver_non_superadmin_cannot_decide(self):
         outsider = make_user('detail_outsider', password='x')
@@ -6792,3 +6795,72 @@ class AttendanceOutcomeRevokedTests(TestCase):
         _apply_attendance_outcome(exc)
         record = AttendanceRecord.objects.get(employee=emp, date=_date(2026, 7, 20))
         self.assertEqual(record.status, 'absent')
+
+
+class EditDeleteLeaveRequestServiceTests(TestCase):
+    def setUp(self):
+        self.emp = make_employee(iqama='EDLR-1')
+        self.lt, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 5, 'is_accumulative': False})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=5)
+        self.user = make_user('edlr-user', password='x')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        self.req = submit_leave_request(
+            employee=self.emp, leave_type=self.lt, start_date=date(2026, 8, 1), end_date=date(2026, 8, 2),
+            created_by=self.user)
+
+    def test_creator_can_edit_pending_undecided_request(self):
+        from hr.leave_approval_services import edit_leave_request
+        updated = edit_leave_request(
+            self.req, self.user, leave_type=self.lt, start_date=date(2026, 8, 3), end_date=date(2026, 8, 4),
+            employee_reason='Updated reason')
+        self.assertEqual(updated.start_date, date(2026, 8, 3))
+        self.assertEqual(updated.end_date, date(2026, 8, 4))
+        self.assertEqual(updated.employee_reason, 'Updated reason')
+        self.assertEqual(updated.days, 2)
+
+    def test_non_creator_cannot_edit(self):
+        from hr.leave_approval_services import edit_leave_request
+        other = make_user('edlr-other', password='x')
+        with self.assertRaises(ValueError):
+            edit_leave_request(self.req, other, leave_type=self.lt, start_date=date(2026, 8, 3), end_date=date(2026, 8, 4))
+
+    def test_cannot_edit_once_a_decision_is_recorded(self):
+        from hr.leave_approval_services import edit_leave_request
+        approver = make_user('edlr-approver', password='x')
+        LeaveDashboardAccess.objects.create(user=approver, is_active=True)
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=approver, decision='approved')
+        with self.assertRaises(ValueError):
+            edit_leave_request(self.req, self.user, leave_type=self.lt, start_date=date(2026, 8, 3), end_date=date(2026, 8, 4))
+
+    def test_edit_does_not_count_the_requests_own_prior_dates_against_itself(self):
+        # Regression guard: without exclude_request_id, editing a request
+        # would collide with its own still-pending row (self-overlap and
+        # self-counted-toward-balance), making every edit fail.
+        from hr.leave_approval_services import edit_leave_request
+        updated = edit_leave_request(
+            self.req, self.user, leave_type=self.lt, start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))
+        self.assertEqual(updated.pk, self.req.pk)
+
+    def test_creator_can_delete_pending_undecided_request(self):
+        from hr.leave_approval_services import delete_leave_request
+        pk = self.req.pk
+        delete_leave_request(self.req, self.user)
+        self.assertFalse(LeaveRequest.objects.filter(pk=pk).exists())
+
+    def test_non_creator_cannot_delete(self):
+        from hr.leave_approval_services import delete_leave_request
+        other = make_user('edlr-other2', password='x')
+        with self.assertRaises(ValueError):
+            delete_leave_request(self.req, other)
+        self.assertTrue(LeaveRequest.objects.filter(pk=self.req.pk).exists())
+
+    def test_cannot_delete_once_a_decision_is_recorded(self):
+        from hr.leave_approval_services import delete_leave_request
+        approver = make_user('edlr-approver2', password='x')
+        LeaveDashboardAccess.objects.create(user=approver, is_active=True)
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=approver, decision='disapproved')
+        with self.assertRaises(ValueError):
+            delete_leave_request(self.req, self.user)
+        self.assertTrue(LeaveRequest.objects.filter(pk=self.req.pk).exists())
