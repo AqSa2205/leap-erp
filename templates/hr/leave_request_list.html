@@ -101,6 +101,92 @@
   </div>
   {% endif %}
 
+  {% if my_logged_requests %}
+  <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center" style="cursor:pointer;"
+         data-bs-toggle="collapse" data-bs-target="#myLoggedCollapse" role="button" aria-expanded="false">
+      <h5 class="mb-0"><i class="bi bi-journal-text"></i> Requests You've Logged
+        <span class="badge bg-secondary ms-1">{{ my_logged_requests|length }}</span></h5>
+      <i class="bi bi-chevron-down"></i>
+    </div>
+    <div class="collapse" id="myLoggedCollapse">
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <thead class="table-light"><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            {% for r in my_logged_requests %}
+            <tr>
+              <td>{{ r.employee.full_name }}</td>
+              <td>{{ r.leave_type.name }}</td>
+              <td>{{ r.start_date }} – {{ r.end_date }}</td>
+              <td>
+                {% if r.status == 'approved' %}<span class="badge bg-success">Approved</span>
+                {% elif r.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
+                {% elif r.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
+                {% elif r.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
+                {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if r.can_edit %}
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0" data-bs-toggle="collapse" data-bs-target="#editLogged{{ r.pk }}" id="edit_leave_request_{{ r.pk }}">
+                  <i class="bi bi-pencil"></i>
+                </button>
+                {% endif %}
+                {% if r.can_cancel %}
+                <button type="button" class="btn btn-sm btn-outline-warning py-0" data-bs-toggle="collapse" data-bs-target="#cancelLogged{{ r.pk }}" id="cancel_leave_request_{{ r.pk }}">
+                  Cancel
+                </button>
+                {% endif %}
+              </td>
+            </tr>
+            {% if r.can_edit %}
+            <tr class="collapse" id="editLogged{{ r.pk }}">
+              <td colspan="5">
+                <form method="post" enctype="multipart/form-data" class="border rounded p-2">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="edit_leave_request">
+                  <input type="hidden" name="request_id" value="{{ r.pk }}">
+                  <input type="hidden" name="leave_type" value="{{ r.leave_type_id }}">
+                  <div class="row g-2">
+                    <div class="col-md-3">
+                      <label class="form-label small">Start</label>
+                      <input type="date" name="start_date" class="form-control form-control-sm" value="{{ r.start_date|date:'Y-m-d' }}" required>
+                    </div>
+                    <div class="col-md-3">
+                      <label class="form-label small">End</label>
+                      <input type="date" name="end_date" class="form-control form-control-sm" value="{{ r.end_date|date:'Y-m-d' }}" required>
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label small">Reason</label>
+                      <input type="text" name="employee_reason" class="form-control form-control-sm" value="{{ r.employee_reason }}">
+                    </div>
+                  </div>
+                  <button type="submit" class="btn btn-sm btn-primary mt-2">Save Changes</button>
+                </form>
+              </td>
+            </tr>
+            {% endif %}
+            {% if r.can_cancel %}
+            <tr class="collapse" id="cancelLogged{{ r.pk }}">
+              <td colspan="5">
+                <form method="post" class="border rounded p-2">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="cancel_leave_request">
+                  <input type="hidden" name="request_id" value="{{ r.pk }}">
+                  <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Reason (required if an approver already decided)"></textarea>
+                  <button type="submit" class="btn btn-sm btn-outline-warning" onclick="return confirm('Cancel this leave request?');">Confirm Cancel</button>
+                </form>
+              </td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center" style="cursor:pointer;"
          data-bs-toggle="collapse" data-bs-target="#leaveHistoryCollapse" role="button" aria-expanded="false">

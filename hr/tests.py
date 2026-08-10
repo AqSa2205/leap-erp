@@ -7696,6 +7696,96 @@ class DirectRevokeTeamExceptionUITests(TestCase):
         self.assertIn(self.exc, list(resp.context['decided_exceptions']))
 
 
+class LeaveQueueMyLoggedRequestsUITests(TestCase):
+    """'Requests You've Logged' on the Leave Approval Queue page — closes a
+    real gap: edit_leave_request/cancel_leave_request were already gated
+    purely on created_by, but the only place to reach them was My Profile's
+    Reporting Structure card, itself scoped to LIVE DIRECT REPORTS. A Super
+    Admin/HR user can log a request for ANY employee company-wide via "Log
+    Request" here, and — per this codebase's own convention (see e.g.
+    PendingRevokeRequestsLeaveQueueUITests) — commonly has NO employee_profile
+    at all, so My Profile isn't reachable either way. This lives on the
+    queue page instead, which needs no employee_profile to access."""
+
+    def setUp(self):
+        self.superadmin = make_user('lqmlr_super', password='x')
+        self.superadmin.set_password('testpass123')
+        from accounts.models import Role
+        role, _ = Role.objects.get_or_create(name='super_admin')
+        self.superadmin.role = role
+        self.superadmin.save()
+        self.emp = make_employee(iqama='LQMLR-1')  # NOT a direct report of superadmin — no relationship at all
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30')})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        # Two approvers, created before submission — the roster is
+        # snapshotted at submission time, and unanimous-consensus
+        # reconciliation means a single approver would fully finalize the
+        # request on one decision, defeating the "still pending, one
+        # decided" scenario the test below needs.
+        self.approver = make_user('lqmlr_approver', password='x')
+        self.approver2 = make_user('lqmlr_approver2', password='x')
+        LeaveDashboardAccess.objects.create(user=self.approver, is_active=True)
+        LeaveDashboardAccess.objects.create(user=self.approver2, is_active=True)
+        self.client.login(username='lqmlr_super', password='testpass123')
+        self.client.post(reverse('hr:leave_request_create'), data={
+            'employee': self.emp.pk, 'leave_type': self.lt.pk,
+            'start_date': '2026-04-01', 'end_date': '2026-04-02',
+        })
+        self.req = LeaveRequest.objects.get(employee=self.emp)
+
+    def test_superadmin_has_no_employee_profile(self):
+        # Sanity check the premise: My Profile would show nothing for this
+        # user regardless of what it displays, so the feature MUST live
+        # somewhere reachable without one.
+        self.assertFalse(hasattr(self.superadmin, 'employee_profile'))
+
+    def test_logged_request_shows_on_queue_page_with_edit_and_cancel(self):
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertContains(resp, f'edit_leave_request_{self.req.pk}')
+        self.assertContains(resp, f'cancel_leave_request_{self.req.pk}')
+
+    def test_post_edit_updates_the_request(self):
+        resp = self.client.post(reverse('hr:leave_request_list'), {
+            'action': 'edit_leave_request', 'request_id': self.req.pk,
+            'leave_type': self.lt.pk, 'start_date': '2026-04-05', 'end_date': '2026-04-06',
+            'employee_reason': 'Rescheduled',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.start_date, date(2026, 4, 5))
+
+    def test_post_cancel_marks_cancelled(self):
+        resp = self.client.post(reverse('hr:leave_request_list'), {
+            'action': 'cancel_leave_request', 'request_id': self.req.pk,
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'cancelled')
+
+    def test_edit_closes_once_a_decision_is_recorded_but_cancel_remains(self):
+        record_approver_decision(self.req, self.approver, 'approved')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertNotContains(resp, f'edit_leave_request_{self.req.pk}')
+        self.assertContains(resp, f'cancel_leave_request_{self.req.pk}')
+
+    def test_other_user_cannot_edit_or_cancel_someone_elses_logged_request(self):
+        other = make_user('lqmlr_other', password='x')
+        other.set_password('testpass123')
+        from accounts.models import Role
+        role, _ = Role.objects.get_or_create(name='super_admin')
+        other.role = role
+        other.save()
+        self.client.logout()
+        self.client.login(username='lqmlr_other', password='testpass123')
+        resp = self.client.post(reverse('hr:leave_request_list'), {
+            'action': 'cancel_leave_request', 'request_id': self.req.pk,
+        })
+        self.assertEqual(resp.status_code, 403)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'pending')
+
+
 class PendingRevokeRequestsLeaveQueueUITests(TestCase):
     def setUp(self):
         self.emp = make_employee(iqama='PRRQ-1')

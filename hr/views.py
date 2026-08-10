@@ -2282,13 +2282,59 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
             LeaveRevokeRequest.objects.filter(status='pending')
             .select_related('leave_request__employee', 'leave_request__leave_type', 'requested_by')
             .order_by('created_at'))
+        # Everything the VIEWER has personally logged for someone else —
+        # not scoped to direct reports, so this is where an HR/Super Admin
+        # user (who can log a request for any employee company-wide via
+        # "Log Request" above, and may have no employee_profile of their
+        # own to check My Profile with) finds and edits/cancels what they
+        # logged. Scoped purely to created_by=self.request.user, matching
+        # exactly what edit_leave_request/cancel_leave_request check.
+        my_logged_requests = list(
+            LeaveRequest.objects.filter(created_by=self.request.user)
+            .select_related('employee', 'leave_type').prefetch_related('approvals')
+            .order_by('-created_at')[:20])
+        for req in my_logged_requests:
+            req.can_edit = bool(
+                req.status == 'pending' and not req.approvals.exclude(decision='pending').exists())
+            req.can_cancel = bool(req.status == 'pending')
+        ctx['my_logged_requests'] = my_logged_requests
         return ctx
 
     def post(self, request, *args, **kwargs):
         from django.http import Http404
-        from hr.leave_approval_services import revoke_leave_request, decide_leave_revoke_request
+        from hr.leave_approval_services import (
+            revoke_leave_request, decide_leave_revoke_request, edit_leave_request, cancel_leave_request,
+        )
         action = request.POST.get('action')
-        if action == 'revoke':
+        if action == 'edit_leave_request':
+            from .forms import LeaveRequestForm
+            target = LeaveRequest.objects.filter(pk=request.POST.get('request_id')).first()
+            if target is None or target.created_by_id != request.user.id:
+                return HttpResponse('You did not submit this request.', status=403)
+            edit_form = LeaveRequestForm(
+                request.POST, request.FILES, fixed_employee=target.employee, exclude_request_id=target.pk)
+            if edit_form.is_valid():
+                try:
+                    edit_leave_request(
+                        target, request.user, leave_type=edit_form.cleaned_data['leave_type'],
+                        start_date=edit_form.cleaned_data['start_date'], end_date=edit_form.cleaned_data['end_date'],
+                        employee_reason=edit_form.cleaned_data['employee_reason'],
+                        document=edit_form.cleaned_data['document'] or None)
+                    messages.success(request, 'Leave request updated.')
+                except ValueError as exc:
+                    messages.error(request, str(exc))
+            else:
+                messages.error(request, 'Could not update the request — please check the form.')
+        elif action == 'cancel_leave_request':
+            target = LeaveRequest.objects.filter(pk=request.POST.get('request_id')).first()
+            if target is None or target.created_by_id != request.user.id:
+                return HttpResponse('You did not submit this request.', status=403)
+            try:
+                cancel_leave_request(target, request.user, request.POST.get('reason', ''))
+                messages.success(request, 'Leave request cancelled.')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+        elif action == 'revoke':
             if not has_override_access(request.user):
                 return HttpResponse('You do not have override access to revoke this request.', status=403)
             target = LeaveRequest.objects.filter(pk=request.POST.get('request_id')).first()
