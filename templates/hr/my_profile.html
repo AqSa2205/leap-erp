@@ -345,14 +345,18 @@
                           <label class="form-label small">Document</label>
                           {% if r.document %}
                           <div class="small mb-1">
-                            Currently: <a href="{{ r.document.url }}" target="_blank">{{ r.document_filename }}</a>
-                            <div class="form-check form-check-inline ms-2">
-                              <input class="form-check-input" type="checkbox" name="document-clear" id="docClear{{ r.pk }}">
-                              <label class="form-check-label small" for="docClear{{ r.pk }}">Remove</label>
-                            </div>
+                            Attached: <a href="{{ r.document.url }}" target="_blank">{{ r.document_filename }}</a>
                           </div>
                           {% endif %}
                           <input type="file" name="document" class="form-control form-control-sm">
+                          {% if r.document %}
+                          <div class="form-check mt-1">
+                            <input class="form-check-input" type="checkbox" name="document-clear" id="docClear{{ r.pk }}">
+                            <label class="form-check-label small text-muted" for="docClear{{ r.pk }}">
+                              Remove it, don't replace it — leave this unchecked if you're choosing a new file above
+                            </label>
+                          </div>
+                          {% endif %}
                         </div>
                       </div>
                       <input type="hidden" name="leave_type" value="{{ r.leave_type_id }}">
@@ -797,6 +801,24 @@
     }
     reasonSelect.addEventListener('change', toggleCustomReason);
     toggleCustomReason();
+})();
+
+(function () {
+    // Edit forms' Document field: choosing a new file and checking
+    // "Remove it, don't replace it" are mutually exclusive — the server
+    // already rejects the contradiction, this just stops it from being
+    // submittable in the first place.
+    document.querySelectorAll('input[type="file"][name="document"]').forEach(function (fileInput) {
+        var form = fileInput.closest('form');
+        var clearBox = form ? form.querySelector('input[name="document-clear"]') : null;
+        if (!clearBox) return;
+        fileInput.addEventListener('change', function () {
+            if (fileInput.files.length) clearBox.checked = false;
+        });
+        clearBox.addEventListener('change', function () {
+            if (clearBox.checked) fileInput.value = '';
+        });
+    });
 })();
 </script>
 {% endblock %}
