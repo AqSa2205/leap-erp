@@ -276,19 +276,17 @@
                     <div class="col-md-6">
                       <label class="form-label small">Document</label>
                       {% if r.document %}
-                      <div class="small mb-1">
-                        Attached: <a href="{{ r.document.url }}" target="_blank">{{ r.document_filename }}</a>
+                      <div class="small mb-1 d-flex align-items-center gap-1">
+                        <span>Attached: <a href="{{ r.document.url }}" target="_blank">{{ r.document_filename }}</a></span>
+                        <button type="submit" name="document-clear" value="on"
+                                class="btn btn-sm btn-link text-danger p-0"
+                                title="Remove this document"
+                                onclick="if (!confirm('Remove this document? This also saves any other changes you've made above.')) return false; this.form.querySelector('input[type=file][name=document]').value=''; return true;">
+                          <i class="bi bi-x-circle"></i>
+                        </button>
                       </div>
                       {% endif %}
                       <input type="file" name="document" class="form-control form-control-sm">
-                      {% if r.document %}
-                      <div class="form-check mt-1">
-                        <input class="form-check-input" type="checkbox" name="document-clear" id="docClearLogged{{ r.pk }}">
-                        <label class="form-check-label small text-muted" for="docClearLogged{{ r.pk }}">
-                          Remove it, don't replace it — leave this unchecked if you're choosing a new file above
-                        </label>
-                      </div>
-                      {% endif %}
                     </div>
                   </div>
                   <button type="submit" class="btn btn-sm btn-primary mt-2">Save Changes</button>
@@ -376,26 +374,4 @@
     </div>
   </div>
 </div>
-{% endblock %}
-
-{% block extra_js %}
-<script>
-(function () {
-    // Edit forms' Document field: choosing a new file and checking
-    // "Remove it, don't replace it" are mutually exclusive — the server
-    // already rejects the contradiction, this just stops it from being
-    // submittable in the first place.
-    document.querySelectorAll('input[type="file"][name="document"]').forEach(function (fileInput) {
-        var form = fileInput.closest('form');
-        var clearBox = form ? form.querySelector('input[name="document-clear"]') : null;
-        if (!clearBox) return;
-        fileInput.addEventListener('change', function () {
-            if (fileInput.files.length) clearBox.checked = false;
-        });
-        clearBox.addEventListener('change', function () {
-            if (clearBox.checked) fileInput.value = '';
-        });
-    });
-})();
-</script>
 {% endblock %}
