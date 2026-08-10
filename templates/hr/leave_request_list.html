@@ -1,59 +1,106 @@
 {% extends 'base.html' %}
 {% block title %}Leave Approval Queue{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Leave Approval Queue tabs — same treatment as Team Exceptions'
+       per-tab accent colors (see team_exceptions.html): Bootstrap's stock
+       nav-tabs render every inactive tab in the same link-blue, so they
+       read as generic hyperlinks rather than distinct destinations.
+       Selectors chain the specific tab class alongside .active so they
+       out-specificity `.nav-tabs .nav-link.active` regardless of load
+       order.
+         - Pending (default/primary view, needs a decision) -> amber
+         - Requests You've Logged (what you personally logged)  -> blue
+         - History (the settled record)                        -> slate navy */
+    .leave-queue-tabs .nav-link {
+        font-weight: 500;
+        color: #495057;
+        border: 1px solid transparent;
+        transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+    }
+
+    .leave-queue-tabs .nav-link.lq-tab-pending:hover:not(.active) {
+        color: #b45309;
+        background-color: rgba(180, 83, 9, 0.08);
+    }
+    .leave-queue-tabs .nav-link.lq-tab-pending.active {
+        color: #212529;
+        background-color: #ffc107;
+        border-color: #ffc107;
+    }
+    /* The count badge stays amber while the tab itself is still neutral
+       (unselected) — once the tab's own background turns amber on
+       selection, a same-color badge on top of it loses contrast, so it
+       switches to the same neutral gray the other two tabs' badges use. */
+    .leave-queue-tabs .nav-link.lq-tab-pending.active .badge {
+        /* Bootstrap 5's .bg-warning/.text-dark utilities set their own
+           color with !important, so a normal-weight override here would
+           lose regardless of selector specificity — match its weight. */
+        background-color: #6c757d !important;
+        color: #fff !important;
+    }
+
+    .leave-queue-tabs .nav-link.lq-tab-logged:hover:not(.active) {
+        color: #1d4ed8;
+        background-color: rgba(29, 78, 216, 0.08);
+    }
+    .leave-queue-tabs .nav-link.lq-tab-logged.active {
+        color: #fff;
+        background-color: #1d4ed8;
+        border-color: #1d4ed8;
+    }
+
+    .leave-queue-tabs .nav-link.lq-tab-history:hover:not(.active) {
+        color: #1e293b;
+        background-color: rgba(30, 41, 59, 0.08);
+    }
+    .leave-queue-tabs .nav-link.lq-tab-history.active {
+        color: #fff;
+        background-color: #1e293b;
+        border-color: #1e293b;
+    }
+
+    [data-theme="dark"] .leave-queue-tabs { border-bottom-color: #333; }
+    [data-theme="dark"] .leave-queue-tabs .nav-link { color: #ccc; }
+
+    [data-theme="dark"] .leave-queue-tabs .nav-link.lq-tab-pending:hover:not(.active) {
+        color: #fbbf24;
+        background-color: rgba(180, 83, 9, 0.2);
+    }
+    [data-theme="dark"] .leave-queue-tabs .nav-link.lq-tab-pending.active {
+        color: #212529;
+        background-color: #ffc107;
+        border-color: #ffc107;
+    }
+
+    [data-theme="dark"] .leave-queue-tabs .nav-link.lq-tab-logged:hover:not(.active) {
+        color: #60a5fa;
+        background-color: rgba(29, 78, 216, 0.2);
+    }
+    [data-theme="dark"] .leave-queue-tabs .nav-link.lq-tab-logged.active {
+        color: #fff;
+        background-color: #1d4ed8;
+        border-color: #1d4ed8;
+    }
+
+    [data-theme="dark"] .leave-queue-tabs .nav-link.lq-tab-history:hover:not(.active) {
+        color: #94a3b8;
+        background-color: rgba(51, 65, 85, 0.3);
+    }
+    [data-theme="dark"] .leave-queue-tabs .nav-link.lq-tab-history.active {
+        color: #fff;
+        background-color: #334155;
+        border-color: #334155;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container-fluid">
   <div class="d-flex justify-content-between align-items-center mb-4">
     <div><h1 class="h3 mb-1">Conditional Leave Approval Queue</h1></div>
     <a href="{% url 'hr:leave_request_create' %}" class="btn btn-primary"><i class="bi bi-plus-lg"></i> Log Request</a>
-  </div>
-
-  <div class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center">
-      <h5 class="mb-0"><i class="bi bi-hourglass-split"></i> Pending
-        <span class="badge bg-warning text-dark ms-2">{{ pending_requests|length }}</span></h5>
-      <form method="get" class="d-flex align-items-center gap-2 mb-0">
-        <label class="small text-muted mb-0">Sort by</label>
-        <select name="sort" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
-          <option value="submitted" {% if current_sort == 'submitted' %}selected{% endif %}>Submission date (oldest first)</option>
-          <option value="submitted_newest" {% if current_sort == 'submitted_newest' %}selected{% endif %}>Submission date (newest first)</option>
-          <option value="vacation_date" {% if current_sort == 'vacation_date' %}selected{% endif %}>Vacation date</option>
-        </select>
-      </form>
-    </div>
-    <div class="card-body p-0">
-      {% if pending_requests %}
-      <table class="table table-hover align-middle mb-0">
-        <thead class="table-light"><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Days</th><th>Waiting On</th><th></th></tr></thead>
-        <tbody>
-          {% for r in pending_requests %}
-          {% url 'hr:leave_request_detail' r.pk as detail_url %}
-          <tr>
-            <td><a href="{{ detail_url }}">{{ r.employee.full_name }}</a>
-              {% if r.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
-              {% if r.logged_by_manager %}
-              <span class="badge bg-light text-dark border" title="This employee's manager logged this request on their behalf">
-                <i class="bi bi-person-badge"></i> By {{ r.created_by.get_full_name|default:r.created_by.username }} (manager)
-              </span>
-              {% endif %}
-            </td>
-            <td>{{ r.leave_type.name }}</td>
-            <td>{{ r.start_date }} – {{ r.end_date }}</td>
-            <td>{{ r.days }}</td>
-            <td class="text-muted small">
-              {% with waiting=r.pending_approvers %}
-                {% if waiting %}{% for a in waiting %}{{ a.get_full_name|default:a.username }}{% if not forloop.last %}, {% endif %}{% endfor %}
-                {% else %}<span class="text-danger">No eligible approver — requires override</span>{% endif %}
-              {% endwith %}
-            </td>
-            <td><a href="{{ detail_url }}" class="btn btn-sm btn-outline-primary">Review</a></td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      {% else %}
-      <p class="text-muted p-3 mb-0">No pending requests.</p>
-      {% endif %}
-    </div>
   </div>
 
   {% if pending_leave_revoke_requests %}
@@ -101,16 +148,82 @@
   </div>
   {% endif %}
 
-  {% if my_logged_requests %}
-  <div class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center" style="cursor:pointer;"
-         data-bs-toggle="collapse" data-bs-target="#myLoggedCollapse" role="button" aria-expanded="false">
-      <h5 class="mb-0"><i class="bi bi-journal-text"></i> Requests You've Logged
-        <span class="badge bg-secondary ms-1">{{ my_logged_requests|length }}</span></h5>
-      <i class="bi bi-chevron-down"></i>
-    </div>
-    <div class="collapse" id="myLoggedCollapse">
-      <div class="card-body p-0">
+  <ul class="nav nav-tabs mb-3 leave-queue-tabs" role="tablist">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link lq-tab-pending active" id="pendingTab-tab" data-bs-toggle="tab" data-bs-target="#pendingTab"
+              type="button" role="tab" aria-controls="pendingTab" aria-selected="true">
+        <i class="bi bi-hourglass-split"></i> Pending
+        <span class="badge bg-warning text-dark ms-1">{{ pending_requests|length }}</span>
+      </button>
+    </li>
+    {% if my_logged_requests %}
+    <li class="nav-item" role="presentation">
+      <button class="nav-link lq-tab-logged" id="myLoggedTab-tab" data-bs-toggle="tab" data-bs-target="#myLoggedTab"
+              type="button" role="tab" aria-controls="myLoggedTab" aria-selected="false">
+        <i class="bi bi-journal-text"></i> Requests You've Logged
+        <span class="badge bg-secondary ms-1">{{ my_logged_requests|length }}</span>
+      </button>
+    </li>
+    {% endif %}
+    <li class="nav-item" role="presentation">
+      <button class="nav-link lq-tab-history" id="historyTab-tab" data-bs-toggle="tab" data-bs-target="#historyTab"
+              type="button" role="tab" aria-controls="historyTab" aria-selected="false">
+        <i class="bi bi-clock-history"></i> History
+        <span class="badge bg-secondary ms-1">{{ decided_requests|length }}</span>
+      </button>
+    </li>
+  </ul>
+
+  <div class="card">
+    <div class="tab-content">
+
+      <div class="tab-pane fade show active" id="pendingTab" role="tabpanel" aria-labelledby="pendingTab-tab">
+        <div class="d-flex justify-content-end p-2">
+          <form method="get" class="d-flex align-items-center gap-2 mb-0">
+            <label class="small text-muted mb-0">Sort by</label>
+            <select name="sort" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
+              <option value="submitted" {% if current_sort == 'submitted' %}selected{% endif %}>Submission date (oldest first)</option>
+              <option value="submitted_newest" {% if current_sort == 'submitted_newest' %}selected{% endif %}>Submission date (newest first)</option>
+              <option value="vacation_date" {% if current_sort == 'vacation_date' %}selected{% endif %}>Vacation date</option>
+            </select>
+          </form>
+        </div>
+        {% if pending_requests %}
+        <table class="table table-hover align-middle mb-0">
+          <thead class="table-light"><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Days</th><th>Waiting On</th><th></th></tr></thead>
+          <tbody>
+            {% for r in pending_requests %}
+            {% url 'hr:leave_request_detail' r.pk as detail_url %}
+            <tr>
+              <td><a href="{{ detail_url }}">{{ r.employee.full_name }}</a>
+                {% if r.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
+                {% if r.logged_by_manager %}
+                <span class="badge bg-light text-dark border" title="This employee's manager logged this request on their behalf">
+                  <i class="bi bi-person-badge"></i> By {{ r.created_by.get_full_name|default:r.created_by.username }} (manager)
+                </span>
+                {% endif %}
+              </td>
+              <td>{{ r.leave_type.name }}</td>
+              <td>{{ r.start_date }} – {{ r.end_date }}</td>
+              <td>{{ r.days }}</td>
+              <td class="text-muted small">
+                {% with waiting=r.pending_approvers %}
+                  {% if waiting %}{% for a in waiting %}{{ a.get_full_name|default:a.username }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                  {% else %}<span class="text-danger">No eligible approver — requires override</span>{% endif %}
+                {% endwith %}
+              </td>
+              <td><a href="{{ detail_url }}" class="btn btn-sm btn-outline-primary">Review</a></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted p-3 mb-0">No pending requests.</p>
+        {% endif %}
+      </div>
+
+      {% if my_logged_requests %}
+      <div class="tab-pane fade" id="myLoggedTab" role="tabpanel" aria-labelledby="myLoggedTab-tab">
         <table class="table table-sm mb-0">
           <thead class="table-light"><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Status</th><th></th></tr></thead>
           <tbody>
@@ -160,6 +273,19 @@
                       <label class="form-label small">Reason</label>
                       <input type="text" name="employee_reason" class="form-control form-control-sm" value="{{ r.employee_reason }}">
                     </div>
+                    <div class="col-md-6">
+                      <label class="form-label small">Document</label>
+                      {% if r.document %}
+                      <div class="small mb-1">
+                        Currently: <a href="{{ r.document.url }}" target="_blank">{{ r.document_filename }}</a>
+                        <div class="form-check form-check-inline ms-2">
+                          <input class="form-check-input" type="checkbox" name="document-clear" id="docClearLogged{{ r.pk }}">
+                          <label class="form-check-label small" for="docClearLogged{{ r.pk }}">Remove</label>
+                        </div>
+                      </div>
+                      {% endif %}
+                      <input type="file" name="document" class="form-control form-control-sm">
+                    </div>
                   </div>
                   <button type="submit" class="btn btn-sm btn-primary mt-2">Save Changes</button>
                 </form>
@@ -183,21 +309,9 @@
           </tbody>
         </table>
       </div>
-    </div>
-  </div>
-  {% endif %}
+      {% endif %}
 
-  <div class="card">
-    <div class="card-header d-flex justify-content-between align-items-center" style="cursor:pointer;"
-         data-bs-toggle="collapse" data-bs-target="#leaveHistoryCollapse" role="button" aria-expanded="false">
-      <h5 class="mb-0">
-        <i class="bi bi-clock-history"></i> History
-        <span class="badge bg-secondary ms-1">{{ decided_requests|length }}</span>
-      </h5>
-      <i class="bi bi-chevron-down"></i>
-    </div>
-    <div class="collapse" id="leaveHistoryCollapse">
-      <div class="card-body p-0">
+      <div class="tab-pane fade" id="historyTab" role="tabpanel" aria-labelledby="historyTab-tab">
         <div style="max-height: 480px; overflow-y: auto;">
         <table class="table table-sm mb-0">
           <thead class="table-light"><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Status</th><th></th></tr></thead>
@@ -254,6 +368,7 @@
         </table>
         </div>
       </div>
+
     </div>
   </div>
 </div>

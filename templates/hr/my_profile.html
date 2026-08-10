@@ -341,6 +341,19 @@
                           <label class="form-label small">Reason</label>
                           <input type="text" name="employee_reason" class="form-control form-control-sm" value="{{ r.employee_reason }}">
                         </div>
+                        <div class="col-md-6">
+                          <label class="form-label small">Document</label>
+                          {% if r.document %}
+                          <div class="small mb-1">
+                            Currently: <a href="{{ r.document.url }}" target="_blank">{{ r.document_filename }}</a>
+                            <div class="form-check form-check-inline ms-2">
+                              <input class="form-check-input" type="checkbox" name="document-clear" id="docClear{{ r.pk }}">
+                              <label class="form-check-label small" for="docClear{{ r.pk }}">Remove</label>
+                            </div>
+                          </div>
+                          {% endif %}
+                          <input type="file" name="document" class="form-control form-control-sm">
+                        </div>
                       </div>
                       <input type="hidden" name="leave_type" value="{{ r.leave_type_id }}">
                       <button type="submit" class="btn btn-sm btn-primary mt-2">Save Changes</button>

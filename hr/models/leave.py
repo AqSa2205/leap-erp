@@ -339,6 +339,11 @@ class LeaveRequest(models.Model):
         return [a.approver for a in self.approvals.filter(decision='pending')]
 
     @property
+    def document_filename(self):
+        import os
+        return os.path.basename(self.document.name) if self.document else ''
+
+    @property
     def decided_by_display(self):
         """Human-readable 'by X' summary for a finalized request — None
         while still pending, and None if there's no actor info to add.

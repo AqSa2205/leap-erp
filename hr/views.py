@@ -341,14 +341,15 @@ def my_profile(request):
         if target is None or target.created_by_id != request.user.id:
             return HttpResponse('You did not submit this request.', status=403)
         edit_form = LeaveRequestForm(
-            request.POST, request.FILES, fixed_employee=target.employee, exclude_request_id=target.pk)
+            request.POST, request.FILES, fixed_employee=target.employee, exclude_request_id=target.pk,
+            initial={'document': target.document})
         if edit_form.is_valid():
             try:
                 edit_leave_request(
                     target, request.user, leave_type=edit_form.cleaned_data['leave_type'],
                     start_date=edit_form.cleaned_data['start_date'], end_date=edit_form.cleaned_data['end_date'],
                     employee_reason=edit_form.cleaned_data['employee_reason'],
-                    document=edit_form.cleaned_data['document'] or None)
+                    document=edit_form.cleaned_data['document'])
                 messages.success(request, 'Leave request updated.')
             except ValueError as exc:
                 messages.error(request, str(exc))
@@ -2312,14 +2313,15 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
             if target is None or target.created_by_id != request.user.id:
                 return HttpResponse('You did not submit this request.', status=403)
             edit_form = LeaveRequestForm(
-                request.POST, request.FILES, fixed_employee=target.employee, exclude_request_id=target.pk)
+                request.POST, request.FILES, fixed_employee=target.employee, exclude_request_id=target.pk,
+                initial={'document': target.document})
             if edit_form.is_valid():
                 try:
                     edit_leave_request(
                         target, request.user, leave_type=edit_form.cleaned_data['leave_type'],
                         start_date=edit_form.cleaned_data['start_date'], end_date=edit_form.cleaned_data['end_date'],
                         employee_reason=edit_form.cleaned_data['employee_reason'],
-                        document=edit_form.cleaned_data['document'] or None)
+                        document=edit_form.cleaned_data['document'])
                     messages.success(request, 'Leave request updated.')
                 except ValueError as exc:
                     messages.error(request, str(exc))

@@ -6506,12 +6506,17 @@ class LeaveQueueHistoryCollapseTests(TestCase):
         req.save(update_fields=['status', 'decided_at'])
         return req
 
-    def test_history_panel_collapsed_by_default(self):
+    def test_history_panel_not_the_default_tab(self):
+        # History moved from a collapsible card into its own tab (see
+        # 'Requests You've Logged' / tabbed queue redesign) — the
+        # equivalent of "collapsed by default" is now "not the active
+        # tab-pane on page load", while Pending stays the default view.
         self._decided_request(1)
         self.client.login(username='lqhc_super', password='testpass123')
         resp = self.client.get(reverse('hr:leave_request_list'))
         content = resp.content.decode()
-        self.assertIn('<div class="collapse" id="leaveHistoryCollapse">', content)
+        self.assertIn('<div class="tab-pane fade" id="historyTab"', content)
+        self.assertIn('<div class="tab-pane fade show active" id="pendingTab"', content)
 
     def test_history_badge_shows_accurate_count(self):
         for n in range(1, 4):
@@ -6927,6 +6932,45 @@ class EditLeaveRequestServiceTests(TestCase):
             self.req, self.user, leave_type=self.lt, start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))
         self.assertEqual(updated.pk, self.req.pk)
 
+    def test_edit_with_document_none_leaves_existing_file_untouched(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from hr.leave_approval_services import edit_leave_request
+        original = SimpleUploadedFile('original.pdf', b'original-bytes')
+        self.req.document = original
+        self.req.save(update_fields=['document'])
+        original_name = self.req.document.name
+        updated = edit_leave_request(
+            self.req, self.user, leave_type=self.lt, start_date=date(2026, 8, 3), end_date=date(2026, 8, 4),
+            document=None)
+        self.assertEqual(updated.document.name, original_name)
+
+    def test_edit_with_a_new_file_replaces_the_old_one(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from hr.leave_approval_services import edit_leave_request
+        original = SimpleUploadedFile('original.pdf', b'original-bytes')
+        self.req.document = original
+        self.req.save(update_fields=['document'])
+        old_name = self.req.document.name
+        replacement = SimpleUploadedFile('replacement.pdf', b'replacement-bytes')
+        updated = edit_leave_request(
+            self.req, self.user, leave_type=self.lt, start_date=date(2026, 8, 3), end_date=date(2026, 8, 4),
+            document=replacement)
+        self.assertIn('replacement', updated.document.name)
+        self.assertFalse(updated.document.storage.exists(old_name))  # old file deleted, not orphaned
+
+    def test_edit_with_document_false_clears_the_existing_file(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from hr.leave_approval_services import edit_leave_request
+        original = SimpleUploadedFile('original.pdf', b'original-bytes')
+        self.req.document = original
+        self.req.save(update_fields=['document'])
+        old_name = self.req.document.name
+        updated = edit_leave_request(
+            self.req, self.user, leave_type=self.lt, start_date=date(2026, 8, 3), end_date=date(2026, 8, 4),
+            document=False)
+        self.assertFalse(updated.document)
+        self.assertFalse(updated.document.storage.exists(old_name))
+
 
 class CancelLeaveRequestServiceTests(TestCase):
     """Cancel is the ONLY way to withdraw a leave request — it covers the
@@ -7287,6 +7331,43 @@ class MyProfileLeaveEditCancelUITests(TestCase):
         self.req.refresh_from_db()
         self.assertEqual(self.req.start_date, date(2026, 8, 5))
         self.assertEqual(self.req.employee_reason, 'Rescheduled')
+
+    def test_post_edit_without_touching_document_keeps_existing_file(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        self.req.document = SimpleUploadedFile('cert.pdf', b'bytes')
+        self.req.save(update_fields=['document'])
+        original_name = self.req.document.name
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'edit_leave_request', 'request_id': self.req.pk,
+            'leave_type': self.lt.pk, 'start_date': '2026-08-05', 'end_date': '2026-08-06',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.document.name, original_name)
+
+    def test_post_edit_with_clear_checkbox_removes_the_document(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        self.req.document = SimpleUploadedFile('cert.pdf', b'bytes')
+        self.req.save(update_fields=['document'])
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'edit_leave_request', 'request_id': self.req.pk,
+            'leave_type': self.lt.pk, 'start_date': '2026-08-05', 'end_date': '2026-08-06',
+            'document-clear': 'on',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertFalse(self.req.document)
+
+    def test_post_edit_uploads_a_new_document(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'edit_leave_request', 'request_id': self.req.pk,
+            'leave_type': self.lt.pk, 'start_date': '2026-08-05', 'end_date': '2026-08-06',
+            'document': SimpleUploadedFile('newcert.pdf', b'bytes'),
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertIn('newcert', self.req.document.name)
 
     def test_post_cancel_before_any_decision_marks_cancelled_not_deleted(self):
         resp = self.client.post(reverse('hr:my_profile'), {
@@ -7762,6 +7843,57 @@ class LeaveQueueMyLoggedRequestsUITests(TestCase):
         self.assertEqual(resp.status_code, 302)
         self.req.refresh_from_db()
         self.assertEqual(self.req.status, 'cancelled')
+
+    def test_document_view_link_and_edit_button_both_render(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        self.req.document = SimpleUploadedFile('cert.pdf', b'bytes')
+        self.req.save(update_fields=['document'])
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertContains(resp, self.req.document.url)
+        self.assertContains(resp, f'edit_leave_request_{self.req.pk}')
+
+    def test_post_edit_without_touching_document_keeps_existing_file(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        self.req.document = SimpleUploadedFile('cert.pdf', b'bytes')
+        self.req.save(update_fields=['document'])
+        original_name = self.req.document.name
+        resp = self.client.post(reverse('hr:leave_request_list'), {
+            'action': 'edit_leave_request', 'request_id': self.req.pk,
+            'leave_type': self.lt.pk, 'start_date': '2026-04-05', 'end_date': '2026-04-06',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.document.name, original_name)
+
+    def test_post_edit_uploading_a_new_document_deletes_the_old_stored_file(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        self.req.document = SimpleUploadedFile('cert.pdf', b'original-bytes')
+        self.req.save(update_fields=['document'])
+        old_name = self.req.document.name
+        resp = self.client.post(reverse('hr:leave_request_list'), {
+            'action': 'edit_leave_request', 'request_id': self.req.pk,
+            'leave_type': self.lt.pk, 'start_date': '2026-04-05', 'end_date': '2026-04-06',
+            'document': SimpleUploadedFile('newcert.pdf', b'new-bytes'),
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertIn('newcert', self.req.document.name)
+        # The old file is gone from storage — not just unreferenced — so
+        # nothing orphaned accumulates as requests get re-edited.
+        self.assertFalse(self.req.document.storage.exists(old_name))
+
+    def test_post_edit_with_clear_checkbox_removes_the_document(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        self.req.document = SimpleUploadedFile('cert.pdf', b'bytes')
+        self.req.save(update_fields=['document'])
+        resp = self.client.post(reverse('hr:leave_request_list'), {
+            'action': 'edit_leave_request', 'request_id': self.req.pk,
+            'leave_type': self.lt.pk, 'start_date': '2026-04-05', 'end_date': '2026-04-06',
+            'document-clear': 'on',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertFalse(self.req.document)
 
     def test_edit_closes_once_a_decision_is_recorded_but_cancel_remains(self):
         record_approver_decision(self.req, self.approver, 'approved')

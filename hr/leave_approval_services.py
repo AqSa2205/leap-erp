@@ -302,6 +302,16 @@ def edit_leave_request(leave_request, editing_user, *, leave_type, start_date, e
     exceeds_balance if the new dates push it over the balance-hold
     threshold, exactly like any other submission.
 
+    document has three meaningful states, matching Django's
+    ClearableFileInput contract (pass the form's initial=current document
+    so 'leave unchanged' round-trips correctly instead of colliding with
+    'clear'):
+    - None: no instruction — leave the existing document untouched.
+    - False: the form's Clear checkbox was ticked — remove it.
+    - an UploadedFile (and different from the current one): replace it.
+    Either removal or replacement deletes the old stored file rather than
+    just dropping the reference, so nothing orphaned accumulates in storage.
+
     Does NOT reset the approver roster — the same LeaveDashboardAccess
     snapshot taken at original submission stays; this is safe because the
     lock condition below guarantees nobody has decided yet, so there's
@@ -324,7 +334,13 @@ def edit_leave_request(leave_request, editing_user, *, leave_type, start_date, e
         leave_request.start_date = start_date
         leave_request.end_date = end_date
         leave_request.employee_reason = employee_reason
-        if document is not None:
+        if document is False:
+            if leave_request.document:
+                leave_request.document.delete(save=False)
+            leave_request.document = None
+        elif document not in (None, leave_request.document):
+            if leave_request.document:
+                leave_request.document.delete(save=False)
             leave_request.document = document
         leave_request.exceeds_balance = exceeds_balance
         leave_request.days = leave_request.computed_days()
