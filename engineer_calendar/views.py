@@ -330,22 +330,25 @@ def save_cell(request):
     if cell.merge_start_date and cell.merge_end_date:
         merge_start, merge_end = cell.merge_start_date, cell.merge_end_date
         if not text:
-            # Clearing the block also breaks the merge so HR can rebuild.
+            # Clearing the block breaks the merge AND falls back to
+            # whatever would normally show for each day (timesheet entry,
+            # leave, holiday, weekend, WFH) instead of leaving every day
+            # in the range permanently blank.
+            CalendarCell.objects.filter(
+                employee=employee, date__gte=merge_start, date__lte=merge_end
+            ).delete()
+
+            months_touched = set()
             current = merge_start
             while current <= merge_end:
-                span_cell, _ = CalendarCell.objects.get_or_create(
-                    employee=employee, date=current, defaults={'source': 'manual'})
-                span_cell.display_text = ''
-                span_cell.source = CalendarCell.SOURCE_MANUAL
-                span_cell.merge_start_date = None
-                span_cell.merge_end_date = None
-                span_cell.needs_review = False
-                span_cell.updated_by = request.user
-                span_cell.save()
+                months_touched.add((current.year, current.month))
                 current += timedelta(days=1)
+            for yr, mo in months_touched:
+                generate_draft([employee], year=yr, month=mo, updated_by=request.user)
+
             return JsonResponse({
                 'text': '',
-                'css_class': 'src-manual',
+                'css_class': 'src-blank',
                 'reload': True,
             })
 
@@ -364,6 +367,20 @@ def save_cell(request):
         return JsonResponse({
             'text': text,
             'css_class': 'src-manual',
+            'reload': False,
+        })
+
+    if not text:
+        # Same fix as the merged-block case above: clearing a single cell
+        # falls back to whatever would normally show (timesheet entry,
+        # leave, holiday, weekend, WFH) instead of leaving it permanently
+        # blank until someone happens to click "Generate Draft".
+        cell.delete()
+        generate_draft([employee], year=cell_date.year, month=cell_date.month, updated_by=request.user)
+        refreshed = CalendarCell.objects.filter(employee=employee, date=cell_date).first()
+        return JsonResponse({
+            'text': refreshed.display_text if refreshed else '',
+            'css_class': SOURCE_CSS.get(refreshed.source, 'src-blank') if refreshed else 'src-blank',
             'reload': False,
         })
 

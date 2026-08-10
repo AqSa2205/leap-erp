@@ -861,3 +861,204 @@ class EngineerCalendarZipDownloadTests(TestCase):
         ws = wb.active
         values = [str(v) for row in ws.iter_rows(values_only=True) for v in row if v is not None]
         self.assertTrue(any('JULY CELL' in v for v in values))
+
+
+class ClearCellFallbackTests(TestCase):
+    """save_cell clearing (single cell and merged block) must fall back to
+    whatever generate_draft would normally produce for that day, instead
+    of leaving it permanently blank until someone happens to click
+    Generate Draft separately. Regression guard for the bug where clearing
+    a manually-typed description wiped out the real timesheet/weekend data
+    underneath it instead of revealing it."""
+
+    def setUp(self):
+        self.client = Client()
+        self.admin, self.emp = _make_user_with_employee(
+            'calclear', role_name=Role.ADMIN, full_name='Clear Fallback Emp')
+        seed_default_permissions()
+        self.client.login(username='calclear', password='testpass123')
+        self.code, _ = ActivityCode.objects.get_or_create(
+            code='COS_0009', defaults={'label': 'Office', 'is_active': True})
+        self.save_url = reverse('engineer_calendar:save_cell')
+        self.fill_url = reverse('engineer_calendar:fill_range')
+
+    def _workday(self, year, month, start_day):
+        """First non-Fri/Sat day on/after start_day (same weekend
+        convention as GenerateDraftServiceTests._weekday elsewhere in this
+        file: weekday() 4/5 == Fri/Sat in this codebase)."""
+        d = date(year, month, start_day)
+        while d.weekday() in (4, 5):
+            d += timedelta(days=1)
+        return d
+
+    def test_clearing_single_manual_cell_reveals_timesheet_text(self):
+        workday = self._workday(2026, 3, 2)
+        TimesheetEntry.objects.create(
+            employee=self.emp, date=workday,
+            task_description='Underlying timesheet work',
+            activity_code=self.code, hours=Decimal('8'))
+
+        # HR types over the auto-generated text.
+        _json_post(self.client, self.save_url, {
+            'employee_id': self.emp.pk,
+            'date': workday.isoformat(),
+            'text': 'HR note',
+        })
+        self.assertEqual(
+            CalendarCell.objects.get(employee=self.emp, date=workday).source,
+            CalendarCell.SOURCE_MANUAL)
+
+        # HR clears it.
+        resp = _json_post(self.client, self.save_url, {
+            'employee_id': self.emp.pk,
+            'date': workday.isoformat(),
+            'text': '',
+        })
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn('Underlying timesheet work', data['text'])
+        self.assertEqual(data['css_class'], 'src-timesheet')
+
+        cell = CalendarCell.objects.get(employee=self.emp, date=workday)
+        self.assertEqual(cell.source, CalendarCell.SOURCE_TIMESHEET)
+        self.assertIn('Underlying timesheet work', cell.display_text)
+
+    def test_clearing_single_manual_cell_reveals_weekend(self):
+        workday = self._workday(2026, 3, 1)
+        weekend_day = workday
+        while weekend_day.weekday() not in (4, 5):
+            weekend_day += timedelta(days=1)
+
+        _json_post(self.client, self.save_url, {
+            'employee_id': self.emp.pk,
+            'date': weekend_day.isoformat(),
+            'text': 'HR note on a weekend',
+        })
+        resp = _json_post(self.client, self.save_url, {
+            'employee_id': self.emp.pk,
+            'date': weekend_day.isoformat(),
+            'text': '',
+        })
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data['text'], 'Weekend')
+        cell = CalendarCell.objects.get(employee=self.emp, date=weekend_day)
+        self.assertEqual(cell.source, CalendarCell.SOURCE_WEEKEND)
+
+    def test_clearing_single_cell_with_no_underlying_data_stays_blank(self):
+        workday = self._workday(2026, 3, 3)
+        _json_post(self.client, self.save_url, {
+            'employee_id': self.emp.pk,
+            'date': workday.isoformat(),
+            'text': 'HR note, nothing underneath',
+        })
+        resp = _json_post(self.client, self.save_url, {
+            'employee_id': self.emp.pk,
+            'date': workday.isoformat(),
+            'text': '',
+        })
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data['text'], '')
+        self.assertEqual(data['css_class'], 'src-blank')
+        cell = CalendarCell.objects.get(employee=self.emp, date=workday)
+        self.assertEqual(cell.source, CalendarCell.SOURCE_BLANK)
+
+    def test_clearing_merged_range_falls_back_per_day_not_uniformly_blank(self):
+        """The regression case: a range covering both a real workday and a
+        weekend day must reveal DIFFERENT text on each day after clearing.
+        A 'blank the whole range' bug would make both days identical
+        (empty) instead of each falling back to its own real value."""
+        workday = self._workday(2026, 3, 1)
+        weekend_day = workday
+        while weekend_day.weekday() not in (4, 5):
+            weekend_day += timedelta(days=1)
+        start, end = workday, weekend_day
+
+        TimesheetEntry.objects.create(
+            employee=self.emp, date=workday,
+            task_description='Range underlying work',
+            activity_code=self.code, hours=Decimal('8'))
+
+        _json_post(self.client, self.fill_url, {
+            'employee_id': self.emp.pk,
+            'start_date': start.isoformat(),
+            'end_date': end.isoformat(),
+            'text': 'MERGED HR NOTE',
+        })
+        self.assertEqual(
+            CalendarCell.objects.get(employee=self.emp, date=workday).display_text,
+            'MERGED HR NOTE')
+
+        resp = _json_post(self.client, self.save_url, {
+            'employee_id': self.emp.pk,
+            'date': start.isoformat(),
+            'text': '',
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json().get('reload'))
+
+        workday_cell = CalendarCell.objects.get(employee=self.emp, date=workday)
+        weekend_cell = CalendarCell.objects.get(employee=self.emp, date=weekend_day)
+
+        self.assertIn('Range underlying work', workday_cell.display_text)
+        self.assertEqual(workday_cell.source, CalendarCell.SOURCE_TIMESHEET)
+        self.assertEqual(weekend_cell.display_text, 'Weekend')
+        self.assertEqual(weekend_cell.source, CalendarCell.SOURCE_WEEKEND)
+
+        # The merge itself must still be broken on every day in the old span.
+        for d in (start, end):
+            c = CalendarCell.objects.get(employee=self.emp, date=d)
+            self.assertIsNone(c.merge_start_date)
+            self.assertIsNone(c.merge_end_date)
+
+    def test_clearing_merge_spanning_two_months_refreshes_both_months(self):
+        """The fix groups affected days by (year, month) and calls
+        generate_draft once per month touched -- a range crossing a month
+        boundary must correctly refresh both months, not just the first."""
+        march_workday = self._workday(2026, 3, 28)
+        april_workday = self._workday(2026, 4, 1)
+        start, end = march_workday, april_workday
+
+        TimesheetEntry.objects.create(
+            employee=self.emp, date=march_workday,
+            task_description='March side of the range',
+            activity_code=self.code, hours=Decimal('8'))
+        TimesheetEntry.objects.create(
+            employee=self.emp, date=april_workday,
+            task_description='April side of the range',
+            activity_code=self.code, hours=Decimal('8'))
+
+        _json_post(self.client, self.fill_url, {
+            'employee_id': self.emp.pk,
+            'start_date': start.isoformat(),
+            'end_date': end.isoformat(),
+            'text': 'CROSS MONTH NOTE',
+        })
+        resp = _json_post(self.client, self.save_url, {
+            'employee_id': self.emp.pk,
+            'date': start.isoformat(),
+            'text': '',
+        })
+        self.assertEqual(resp.status_code, 200)
+
+        march_cell = CalendarCell.objects.get(employee=self.emp, date=march_workday)
+        april_cell = CalendarCell.objects.get(employee=self.emp, date=april_workday)
+        self.assertIn('March side of the range', march_cell.display_text)
+        self.assertIn('April side of the range', april_cell.display_text)
+
+    def test_clearing_single_cell_does_not_force_full_page_reload(self):
+        """Single-cell clear must return reload: false -- the JS swaps the
+        cell's text/class in place rather than reloading the whole grid."""
+        workday = self._workday(2026, 3, 9)
+        TimesheetEntry.objects.create(
+            employee=self.emp, date=workday,
+            task_description='In-place swap check',
+            activity_code=self.code, hours=Decimal('8'))
+        _json_post(self.client, self.save_url, {
+            'employee_id': self.emp.pk, 'date': workday.isoformat(), 'text': 'note',
+        })
+        resp = _json_post(self.client, self.save_url, {
+            'employee_id': self.emp.pk, 'date': workday.isoformat(), 'text': '',
+        })
+        self.assertFalse(resp.json().get('reload', False))
