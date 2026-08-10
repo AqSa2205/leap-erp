@@ -282,6 +282,12 @@ class LeaveRequest(models.Model):
                    'holding is enabled. Requires a Super Admin override to approve.')
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
                                    related_name='leave_requests_created')
+    logged_by_manager = models.BooleanField(
+        default=False,
+        help_text="True if created_by was the employee's direct main_manager at the time this request "
+                  'was submitted (not the employee themselves, not HR). Captured at submission time — '
+                  "deliberately not live-recomputed, so it stays accurate even if the employee's manager "
+                  'changes later.')
     leave_record = models.OneToOneField(LeaveRecord, on_delete=models.SET_NULL, null=True, blank=True,
                                         related_name='source_request')
     salary_deduction_applicable = models.BooleanField(default=False)

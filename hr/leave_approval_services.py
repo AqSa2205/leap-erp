@@ -49,6 +49,18 @@ def record_approver_decision(leave_request, approver_user, decision, comment='')
         approval.decided_at = timezone.now()
         approval.save(update_fields=['decision', 'comment', 'decided_at'])
 
+        if comment and comment.strip():
+            # A comment typed alongside the decision IS the message to the
+            # employee — mirrored onto a LeaveRequestNote (is_internal=False
+            # by default) so it actually reaches My Profile, the only page a
+            # plain employee can view their own request from. Previously
+            # this text was saved only on the LeaveRequestApproval row,
+            # which nothing employee-facing ever reads — a decision comment
+            # was effectively invisible to the person it was about.
+            from hr.models import LeaveRequestNote
+            LeaveRequestNote.objects.create(
+                leave_request=leave_request, author=approver_user, note=comment.strip())
+
         _reconcile(leave_request)
     leave_request.refresh_from_db()
     if leave_request.status == 'pending':
@@ -203,10 +215,12 @@ def submit_leave_request(*, employee, leave_type, start_date, end_date, employee
 
     with transaction.atomic():
         exceeds_balance = validate_leave_submission(employee, leave_type, start_date, end_date, lock=True)
+        logged_by_manager = bool(
+            created_by is not None and employee.main_manager_id and employee.main_manager.user_id == created_by.id)
         leave_request = LeaveRequest.objects.create(
             employee=employee, leave_type=leave_type, start_date=start_date, end_date=end_date,
             employee_reason=employee_reason, document=document, created_by=created_by,
-            exceeds_balance=exceeds_balance,
+            exceeds_balance=exceeds_balance, logged_by_manager=logged_by_manager,
         )
         # A held (balance-exceeding) request goes through the exact same
         # approver roster and decide/override flow as any other request —

@@ -6,7 +6,11 @@
     <div class="col-lg-6">
       <div class="d-flex justify-content-between align-items-center mb-4">
         <h1 class="h3 mb-0">Log Leave Request</h1>
+        {% if can_view_queue %}
         <a href="{% url 'hr:leave_request_list' %}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Back to Queue</a>
+        {% else %}
+        <a href="{% url 'hr:my_profile' %}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Back to My Profile</a>
+        {% endif %}
       </div>
       <div class="card"><div class="card-body">
         <form method="post" enctype="multipart/form-data" novalidate>
@@ -35,7 +39,7 @@
           <div class="mb-4"><label class="form-label">Document (optional)</label>{{ form.document }}
             {% if form.document.errors %}<div class="invalid-feedback d-block">{{ form.document.errors.0 }}</div>{% endif %}</div>
           <div class="d-flex justify-content-end gap-2 border-top pt-3">
-            <a href="{% url 'hr:leave_request_list' %}" class="btn btn-outline-secondary">Cancel</a>
+            <a href="{% if can_view_queue %}{% url 'hr:leave_request_list' %}{% else %}{% url 'hr:my_profile' %}{% endif %}" class="btn btn-outline-secondary">Cancel</a>
             {% if balance_shortfall %}
             <button type="submit" name="confirm_grant_and_log" value="1" class="btn btn-danger">
               <i class="bi bi-exclamation-triangle"></i> Log Anyway (grants {{ balance_shortfall }} extra day(s))

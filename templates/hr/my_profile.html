@@ -176,12 +176,29 @@
             </div>
 
             {% if leave_requests %}
+            <div class="d-flex justify-content-between align-items-center mb-1" style="cursor:pointer;"
+                 data-bs-toggle="collapse" data-bs-target="#myLeaveRequestsCollapse" role="button" aria-expanded="false">
+              <span class="small text-muted">
+                <i class="bi bi-chevron-down"></i> History
+                <span class="badge bg-secondary ms-1">{{ leave_requests|length }}</span>
+              </span>
+            </div>
+            <div class="collapse" id="myLeaveRequestsCollapse">
+            <div style="max-height: 360px; overflow-y: auto;">
             <table class="table table-sm mb-0">
               <thead class="table-light"><tr><th>Type</th><th>Dates</th><th>Status</th></tr></thead>
               <tbody>
                 {% for r in leave_requests %}
                 <tr>
-                  <td>{{ r.leave_type.name }}</td>
+                  <td>
+                    {{ r.leave_type.name }}
+                    {% if r.logged_by_manager %}
+                    <div class="small text-muted">
+                      <i class="bi bi-person-badge"></i> Logged by your manager,
+                      {{ r.created_by.get_full_name|default:r.created_by.username }}
+                    </div>
+                    {% endif %}
+                  </td>
                   <td>{{ r.start_date }} – {{ r.end_date }}</td>
                   <td>
                     {% if r.status == 'approved' %}
@@ -190,7 +207,14 @@
                     {% elif r.status == 'disapproved' %}
                       <span class="badge bg-danger">Disapproved</span>
                       {% if r.decided_by_display %}<div class="small text-muted">{{ r.decided_by_display }}</div>{% endif %}
-                      {% if r.salary_deduction_applicable %}<div class="small text-danger">Salary deduction applicable</div>{% endif %}
+                      {% if r.salary_deduction_applicable %}
+                      <button type="button" class="btn btn-sm btn-link text-danger p-0" data-bs-toggle="collapse" data-bs-target="#salaryDeduction{{ r.pk }}">
+                        <i class="bi bi-exclamation-triangle"></i> Salary deduction
+                      </button>
+                      <div class="collapse" id="salaryDeduction{{ r.pk }}">
+                        <div class="small text-danger">Taking this leave will result in a salary deduction.</div>
+                      </div>
+                      {% endif %}
                     {% else %}
                       <span class="badge bg-warning text-dark">Pending</span>
                       <div class="small text-muted">
@@ -200,11 +224,27 @@
                         {% endwith %}
                       </div>
                     {% endif %}
+                    {% if r.visible_notes %}
+                    <button type="button" class="btn btn-sm btn-link p-0 mt-1" data-bs-toggle="collapse" data-bs-target="#leaveNotes{{ r.pk }}">
+                      <i class="bi bi-chat-left-text"></i> {{ r.visible_notes|length }} message{{ r.visible_notes|length|pluralize }} from HR
+                    </button>
+                    <div class="collapse mt-1" id="leaveNotes{{ r.pk }}">
+                      {% for n in r.visible_notes %}
+                      <div class="small border-start ps-2 mb-1">
+                        <strong>{% if n.author %}{{ n.author.get_full_name|default:n.author.username }}{% else %}—{% endif %}</strong>
+                        <span class="text-muted">{{ n.created_at|date:'d M Y, H:i' }}</span>
+                        <div>{{ n.note }}</div>
+                      </div>
+                      {% endfor %}
+                    </div>
+                    {% endif %}
                   </td>
                 </tr>
                 {% endfor %}
               </tbody>
             </table>
+            </div>
+            </div>
             {% else %}
             <p class="text-muted small mb-0">No leave requests yet.</p>
             {% endif %}
@@ -309,6 +349,15 @@
           </div>
 
           {% if my_attendance_exceptions %}
+          <div class="d-flex justify-content-between align-items-center mb-1" style="cursor:pointer;"
+               data-bs-toggle="collapse" data-bs-target="#myExceptionsCollapse" role="button" aria-expanded="false">
+            <span class="small text-muted">
+              <i class="bi bi-chevron-down"></i> History
+              <span class="badge bg-secondary ms-1">{{ my_attendance_exceptions|length }}</span>
+            </span>
+          </div>
+          <div class="collapse" id="myExceptionsCollapse">
+          <div style="max-height: 360px; overflow-y: auto;">
           <table class="table table-sm mb-0">
             <thead class="table-light"><tr><th>Date</th><th>Reason</th><th>Status</th></tr></thead>
             <tbody>
@@ -331,6 +380,8 @@
               {% endfor %}
             </tbody>
           </table>
+          </div>
+          </div>
           {% else %}
           <p class="text-muted small mb-0">No attendance exceptions reported yet.</p>
           {% endif %}
@@ -397,21 +448,70 @@
 
           <hr class="my-3">
 
-          {% with direct_reports=employee.main_reports.all %}
-          <div class="text-uppercase text-muted small fw-semibold mb-1">
-            <i class="bi bi-person-down me-1"></i>Direct Reports
-            {% if direct_reports %}<span class="badge bg-secondary">{{ direct_reports|length }}</span>{% endif %}
+          <div class="text-uppercase text-muted small fw-semibold mb-1 d-flex justify-content-between align-items-center"
+               {% if direct_reports %}style="cursor:pointer;" data-bs-toggle="collapse" data-bs-target="#directReportsCollapse" role="button" aria-expanded="true"{% endif %}>
+            <span><i class="bi bi-person-down me-1"></i>Direct Reports
+              {% if direct_reports %}<span class="badge bg-secondary">{{ direct_reports|length }}</span>{% endif %}
+            </span>
+            {% if direct_reports %}<i class="bi bi-chevron-down"></i>{% endif %}
           </div>
           {% if direct_reports %}
-          <ul class="list-group list-group-flush small mb-2" style="max-height: 180px; overflow-y: auto;">
+          <div class="collapse show" id="directReportsCollapse">
+          <ul class="list-group list-group-flush small mb-2" style="max-height: 220px; overflow-y: auto;">
             {% for r in direct_reports %}
-            <li class="list-group-item px-0 py-1">{{ r.full_name }}</li>
+            <li class="list-group-item px-0 py-1">
+              <div class="d-flex justify-content-between align-items-center flex-wrap gap-1">
+                <span>{{ r.full_name }}</span>
+                {% if r.is_active %}
+                <a href="{% url 'hr:leave_request_create' %}?employee={{ r.pk }}" class="btn btn-sm btn-outline-primary py-0">
+                  <i class="bi bi-calendar-plus"></i> Log Leave
+                </a>
+                {% endif %}
+              </div>
+              {% if r.in_behalf_requests %}
+              <div class="small text-muted mt-1">
+                {% for req in r.in_behalf_requests %}
+                {% if forloop.counter <= 2 %}
+                <div>
+                  Your request:
+                  {% if req.status == 'approved' %}<span class="badge bg-success">Approved</span>
+                  {% elif req.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
+                  {% elif req.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
+                  {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
+                  {% if req.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
+                  {{ req.leave_type.name }}, {{ req.start_date }}–{{ req.end_date }}
+                </div>
+                {% endif %}
+                {% endfor %}
+                {% if r.in_behalf_requests|length > 2 %}
+                <button type="button" class="btn btn-sm btn-link px-0 py-0 text-decoration-none" data-bs-toggle="collapse" data-bs-target="#inBehalf{{ r.pk }}">
+                  +{{ r.in_behalf_requests|length|add:"-2" }} more request(s) you logged for {{ r.full_name }}
+                </button>
+                <div class="collapse" id="inBehalf{{ r.pk }}">
+                  {% for req in r.in_behalf_requests %}
+                  {% if forloop.counter > 2 %}
+                  <div>
+                    Your request:
+                    {% if req.status == 'approved' %}<span class="badge bg-success">Approved</span>
+                    {% elif req.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
+                    {% elif req.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
+                    {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
+                    {% if req.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
+                    {{ req.leave_type.name }}, {{ req.start_date }}–{{ req.end_date }}
+                  </div>
+                  {% endif %}
+                  {% endfor %}
+                </div>
+                {% endif %}
+              </div>
+              {% endif %}
+            </li>
             {% endfor %}
           </ul>
+          </div>
           {% else %}
           <span class="text-muted small fst-italic">None — you have no one reporting to you directly.</span>
           {% endif %}
-          {% endwith %}
 
           {% if downstream_reports %}
           <button type="button" class="btn btn-sm btn-link px-0 text-decoration-none" data-bs-toggle="collapse" data-bs-target="#downstreamReports">
