@@ -845,16 +845,13 @@ class EngineerCalendarZipDownloadTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertRedirects(resp, reverse('engineer_calendar:grid'))
 
-    def test_KNOWN_ISSUE_departed_employees_data_missing_from_historical_export(self):
-        """RED TEST -- documents a real bug: _build_calendar_workbook
-        filters Employee.objects.filter(is_active=True) with NO scoping
-        to the month being exported. Once an employee is deactivated,
-        ALL their past CalendarCell rows vanish from every export/zip,
-        even for months they were actively employed -- the data is still
-        in the DB, just unreachable through this feature. This test
-        currently FAILS. Fix by deriving the employee set per-month from
-        CalendarCell.objects.filter(date__year=yr, date__month=mo)
-        instead of the live is_active roster."""
+    def test_departed_employees_data_present_in_historical_export(self):
+        """Regression guard, not an open bug: _build_calendar_workbook
+        derives its employee set per-month from CalendarCell data (not
+        just the live is_active roster), so a deactivated employee's
+        past cells still appear in an export for a month they were
+        actively employed. (calendar_grid, the on-screen page, has the
+        matching fix covered separately, in CalendarGridRenderTests.)"""
         self.emp.is_active = False
         self.emp.save()
         self.client.login(username='calzip', password='testpass123')

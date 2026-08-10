@@ -11,6 +11,7 @@ from accounts.permissions import require_capability
 from .models import TimesheetEntry, TimesheetMonth
 from .forms import TimesheetEntryForm
 import calendar
+import re
 from datetime import date as date_cls
 from .services import employees_for_request, remind_employee
 import openpyxl
@@ -381,7 +382,8 @@ def _build_timesheet_workbook(emp, year, month):
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
 
-    filename = f'{emp.full_name.replace(" ", "_")}_{emp.pk}_Timesheet_{month_name}_{year}.xlsx'
+    safe_name = re.sub(r'[^A-Za-z0-9_-]', '_', emp.full_name.replace(' ', '_'))
+    filename = f'{safe_name}_{emp.pk}_Timesheet_{month_name}_{year}.xlsx'
     return wb, filename
 
 

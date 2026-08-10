@@ -1173,6 +1173,24 @@ class RemainingCSRFEnforcementTests(TestCase):
             {'employee_id': self.emp.pk})
         self.assertEqual(resp.status_code, 403)
 
+    def test_inline_save_without_csrf_token_rejected(self):
+        """entry_inline_save (the Send to HR preview's click-to-edit) is a
+        newer endpoint than the rest of this class -- added this session,
+        so it needs the same proof as everything else here that it isn't
+        secretly relying on @csrf_exempt."""
+        entry = TimesheetEntry.objects.create(
+            employee=self.emp, date=date(2026, 7, 1),
+            task_description='original', activity_code=self.code, hours=Decimal('4'))
+        self.client.login(username='csrfall', password='testpass123')
+        resp = self.client.post(
+            reverse('timesheets:entry_inline_save', args=[entry.pk]), {
+                'entry_type': 'activity', 'activity_code': self.code.pk,
+                'task_description': 'HIJACKED', 'hours': '1',
+            })
+        self.assertEqual(resp.status_code, 403)
+        entry.refresh_from_db()
+        self.assertEqual(entry.task_description, 'original')
+
 
 class TimesheetEntryOrderingTests(TestCase):
     """The entries list on My Timesheet is ordered most-recent-first,
@@ -1593,6 +1611,55 @@ class LockedMonthCannotBeTamperedWithTests(TestCase):
         self.draft_entry.refresh_from_db()
         self.assertEqual(self.draft_entry.task_description, 'Edited within open month')
         self.assertEqual(resp.status_code, 302)
+
+    def test_can_add_entry_after_hr_reopens_the_month(self):
+        """reopen_month is HR's way of unlocking a month for a correction.
+        Confirms _month_is_locked actually respects that -- not just that
+        submitted_at is set, but that a later reopened_at unlocks it again."""
+        from .services import reopen_month
+        reopen_month(employee=self.emp, year=2026, month=7, reopened_by=self.user)
+
+        resp = self.client.post(
+            reverse('timesheets:my_timesheet') + '?year=2026&month=7', {
+                'entry_type': 'activity',
+                'date': '2026-07-22', 'activity_code': self.code.pk,
+                'task_description': 'Added after HR reopened July', 'hours': '4',
+            })
+        self.assertTrue(
+            TimesheetEntry.objects.filter(task_description='Added after HR reopened July').exists())
+        self.assertEqual(resp.status_code, 302)
+
+    def test_month_with_no_timesheetmonth_row_is_not_locked(self):
+        """A month that was never submitted at all has no TimesheetMonth
+        row -- distinct code path from one that exists with is_submitted
+        =False. Both must behave as 'open'."""
+        self.assertFalse(
+            self.TimesheetMonth.objects.filter(employee=self.emp, year=2026, month=9).exists())
+        resp = self.client.post(
+            reverse('timesheets:my_timesheet') + '?year=2026&month=9', {
+                'entry_type': 'activity',
+                'date': '2026-09-10', 'activity_code': self.code.pk,
+                'task_description': 'Never-submitted month entry', 'hours': '5',
+            })
+        self.assertTrue(
+            TimesheetEntry.objects.filter(task_description='Never-submitted month entry').exists())
+        self.assertEqual(resp.status_code, 302)
+
+    def test_inline_save_still_blocked_on_a_locked_months_submitted_entry(self):
+        """The Send to HR preview's inline pencil-edit uses a separate
+        endpoint (timesheet_entry_inline_save). Confirms it's independently
+        safe, not just 'probably fine' because it never touches the date --
+        it must still refuse to save once the underlying entry is locked."""
+        locked_entry = TimesheetEntry.objects.get(
+            employee=self.emp, date=date(2026, 7, 10))
+        resp = self.client.post(
+            reverse('timesheets:entry_inline_save', args=[locked_entry.pk]), {
+                'entry_type': 'activity', 'activity_code': self.code.pk,
+                'task_description': 'Sneaky inline edit', 'hours': '2',
+            })
+        self.assertEqual(resp.status_code, 400)
+        locked_entry.refresh_from_db()
+        self.assertEqual(locked_entry.task_description, 'Already submitted')
 
 
 class HRDownloadZipTests(TestCase):
