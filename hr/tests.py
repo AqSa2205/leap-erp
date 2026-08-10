@@ -775,11 +775,11 @@ class EmployeeDashboardExceptionDisplayTests(TestCase):
     def test_leave_summary_shows_baseline_and_exception_separately(self):
         resp = self.client.get(reverse('hr:leave_summary', args=[self.emp.pk]) + '?year=2026')
         self.assertContains(resp, '45')  # baseline anchor
-        self.assertContains(resp, '+ 5 exception days granted')
+        self.assertContains(resp, 'Exception adjustment: +5 day(s)')
 
     def test_grant_exception_days_link_visible_for_override_access(self):
         resp = self.client.get(reverse('hr:leave_summary', args=[self.emp.pk]))
-        self.assertContains(resp, 'Add Exception Days')
+        self.assertContains(resp, 'Adjust Balance')
 
 
 class EntitlementYearExceptionDisplayTests(TestCase):
@@ -826,8 +826,22 @@ class MyProfileExceptionDisplayTests(TestCase):
     def test_my_profile_shows_the_granted_day(self):
         self.client.force_login(self.user)
         resp = self.client.get(reverse('hr:my_profile'))
-        self.assertContains(resp, '+ 1 exception day(s) granted')
+        self.assertContains(resp, 'Exception adjustment: +1 day(s)')
         self.assertEqual(resp.context['leave_total_exception'], Decimal('1'))
+
+    def test_negative_adjustment_renders_without_a_stray_plus_sign(self):
+        # Regression guard: this template hardcoded a literal '+' prefix
+        # the same way leave_summary.html and entitlement_year.html did —
+        # fixed alongside those two.
+        hr_user = make_user('mped-hr2')
+        from hr.leave_approval_services import grant_exception_days
+        grant_exception_days(employee=self.emp, leave_type=self.lt, year=timezone.now().year, days=Decimal('-4'),
+                              granted_by=hr_user, reason='Correction.')
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, '+ -4')
+        self.assertNotContains(resp, '+-4')
+        self.assertContains(resp, 'Exception adjustment: -3 day(s)')  # net: +1 - 4
 
 
 class PendingCountsContextProcessorTests(TestCase):
