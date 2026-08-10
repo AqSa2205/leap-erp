@@ -1,4 +1,3 @@
-from decimal import Decimal
 from django import forms
 from django.core.exceptions import ValidationError
 from .models import Employee, Asset, AssetAssignment, Vehicle, EmployeeDocument, VehicleDocument, LeaveType, Holiday, AttendanceSettings, WorkingDay, WFHRecord, AttendanceException
@@ -468,12 +467,23 @@ class LeaveTypeForm(forms.ModelForm):
 
 
 class ExceptionGrantForm(forms.Form):
+    """Positive to grant extra days, negative to correct a past grant or
+    claw back an allowance — see hr.leave_approval_services.grant_exception_days.
+    Both directions go through the same audited, reasoned mechanism rather
+    than a raw balance overwrite, so every adjustment keeps its own reason
+    and stays in the employee's grant history."""
     leave_type = forms.ModelChoiceField(
         queryset=LeaveType.objects.filter(is_active=True),
         widget=forms.Select(attrs={'class': 'form-select'}))
     year = forms.IntegerField(widget=forms.NumberInput(attrs={'class': 'form-control'}))
-    days = forms.DecimalField(min_value=Decimal('0.5'), widget=forms.NumberInput(attrs={'class': 'form-control'}))
+    days = forms.DecimalField(widget=forms.NumberInput(attrs={'class': 'form-control', 'step': '0.5'}))
     reason = forms.CharField(widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 2}))
+
+    def clean_days(self):
+        days = self.cleaned_data['days']
+        if days == 0:
+            raise forms.ValidationError('Enter a non-zero adjustment — positive to add, negative to subtract.')
+        return days
 
 
 class HolidayForm(forms.ModelForm):

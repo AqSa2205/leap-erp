@@ -682,8 +682,9 @@ class EmployeeUpdateView(AdminRequiredMixin, UpdateView):
 
 
 class EmployeeGrantExceptionDaysView(SuperAdminRequiredMixin, FormView):
-    """HR action: '+N Exception Days' on an employee's profile — creates one
-    audited LeaveExceptionGrant row. Gated by the same override-access
+    """HR action: 'Adjust Balance' on an employee's profile — creates one
+    audited LeaveExceptionGrant row, positive to add days or negative to
+    correct/claw back a past grant. Gated by the same override-access
     permission as the balance-override escape hatch on Leave Requests."""
     form_class = ExceptionGrantForm
     template_name = 'hr/exception_grant_form.html'
@@ -708,7 +709,11 @@ class EmployeeGrantExceptionDaysView(SuperAdminRequiredMixin, FormView):
         grant_exception_days(
             employee=self.employee, leave_type=form.cleaned_data['leave_type'], year=form.cleaned_data['year'],
             days=form.cleaned_data['days'], granted_by=self.request.user, reason=form.cleaned_data['reason'])
-        messages.success(self.request, f'Granted {form.cleaned_data["days"]} exception day(s) to {self.employee.full_name}.')
+        verb = 'Added' if form.cleaned_data['days'] > 0 else 'Subtracted'
+        messages.success(
+            self.request,
+            f'{verb} {abs(form.cleaned_data["days"])} day(s) {"to" if form.cleaned_data["days"] > 0 else "from"} '
+            f'{self.employee.full_name}\'s balance.')
         return redirect('hr:leave_summary', pk=self.employee.pk)
 
 

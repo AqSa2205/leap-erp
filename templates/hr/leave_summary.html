@@ -15,7 +15,7 @@
             </a>
             {% if can_grant_exception %}
             <a href="{% url 'hr:grant_exception_days' pk=employee.pk %}" class="btn btn-outline-danger">
-                <i class="bi bi-plus-circle"></i> Add Exception Days
+                <i class="bi bi-sliders"></i> Adjust Balance
             </a>
             {% endif %}
             <a href="{% url 'hr:leave_record_create' %}?employee={{ employee.pk }}" class="btn btn-primary">
@@ -59,7 +59,9 @@
                     </tr>
                     {% if e.exception_days %}
                     <tr class="table-light">
-                        <td colspan="3" class="ps-4 text-muted">+ {{ e.exception_days }} exception days granted</td>
+                        <td colspan="3" class="ps-4 text-muted">
+                            Exception adjustment: {% if e.exception_days > 0 %}+{% endif %}{{ e.exception_days }} day(s)
+                        </td>
                         <td class="text-end text-muted">{{ e.effective_remaining_days }} available</td>
                     </tr>
                     {% endif %}

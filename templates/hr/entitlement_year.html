@@ -105,7 +105,7 @@
                         </td>
                         <td class="text-end">{{ g.total_entitled }}</td>
                         <td class="text-end {% if g.total_exception %}text-muted{% endif %}">
-                            {% if g.total_exception %}+{{ g.total_exception }}{% else %}—{% endif %}
+                            {% if g.total_exception > 0 %}+{{ g.total_exception }}{% elif g.total_exception < 0 %}{{ g.total_exception }}{% else %}—{% endif %}
                         </td>
                         <td class="text-end">{{ g.total_taken }}</td>
                         <td class="text-end {% if g.total_remaining < 0 %}text-danger fw-bold{% endif %}">
@@ -136,7 +136,7 @@
                                         </td>
                                         <td class="text-end">{{ row.entitled }}</td>
                                         <td class="text-end {% if row.exception %}text-muted{% endif %}">
-                                            {% if row.exception %}+{{ row.exception }}{% else %}—{% endif %}
+                                            {% if row.exception > 0 %}+{{ row.exception }}{% elif row.exception < 0 %}{{ row.exception }}{% else %}—{% endif %}
                                         </td>
                                         <td class="text-end">{{ row.taken }}</td>
                                         <td class="text-end {% if row.remaining < 0 %}text-danger fw-bold{% endif %}">

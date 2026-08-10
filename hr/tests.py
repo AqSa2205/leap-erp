@@ -462,6 +462,32 @@ class GrantExceptionDaysTests(TestCase):
             grant_exception_days(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('5'),
                                   granted_by=self.hr_user, reason='   ')
 
+    def test_negative_adjustment_reduces_effective_balance(self):
+        # A correction/clawback — same audited mechanism as a positive
+        # grant, just moving the balance the other way.
+        from hr.leave_approval_services import grant_exception_days
+        grant_exception_days(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('-5'),
+                              granted_by=self.hr_user, reason='Correcting an earlier over-grant.')
+        ent = LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.lt, year=2026)
+        self.assertEqual(ent.entitled_days, Decimal('45'))  # baseline untouched
+        self.assertEqual(ent.exception_days, Decimal('-5'))
+        self.assertEqual(ent.effective_entitled_days, Decimal('40'))
+
+    def test_grant_rejects_zero_days(self):
+        from hr.leave_approval_services import grant_exception_days
+        with self.assertRaises(ValueError):
+            grant_exception_days(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('0'),
+                                  granted_by=self.hr_user, reason='Should be rejected.')
+
+    def test_multiple_grants_net_out_positive_and_negative(self):
+        from hr.leave_approval_services import grant_exception_days
+        grant_exception_days(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('8'),
+                              granted_by=self.hr_user, reason='Initial grant.')
+        grant_exception_days(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('-3'),
+                              granted_by=self.hr_user, reason='Partial correction.')
+        ent = LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.lt, year=2026)
+        self.assertEqual(ent.exception_days, Decimal('5'))
+
 
 class GrantExceptionDaysViewPermissionTests(TestCase):
     def setUp(self):
@@ -491,6 +517,59 @@ class GrantExceptionDaysViewPermissionTests(TestCase):
             'leave_type': self.lt.pk, 'year': timezone.now().year, 'days': '3', 'reason': 'Should not work.'})
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(LeaveEntitlement.objects.get(employee=self.emp).exception_days, Decimal('0'))
+
+    def test_super_admin_can_submit_a_negative_adjustment_via_the_view(self):
+        from accounts.models import Role
+        _make_role_user('gedv-super2', Role.SUPER_ADMIN)
+        self.client.login(username='gedv-super2', password='testpass123')
+        resp = self.client.post(reverse('hr:grant_exception_days', args=[self.emp.pk]), data={
+            'leave_type': self.lt.pk, 'year': timezone.now().year, 'days': '-3', 'reason': 'Correcting a mistake.'})
+        self.assertEqual(resp.status_code, 302)
+        ent = LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.lt, year=timezone.now().year)
+        self.assertEqual(ent.exception_days, Decimal('-3'))
+
+    def test_zero_adjustment_is_rejected_by_the_form(self):
+        from accounts.models import Role
+        _make_role_user('gedv-super3', Role.SUPER_ADMIN)
+        self.client.login(username='gedv-super3', password='testpass123')
+        resp = self.client.post(reverse('hr:grant_exception_days', args=[self.emp.pk]), data={
+            'leave_type': self.lt.pk, 'year': timezone.now().year, 'days': '0', 'reason': 'Should not work.'})
+        self.assertEqual(resp.status_code, 200)  # re-renders the form with an error, no redirect
+        self.assertEqual(LeaveEntitlement.objects.get(employee=self.emp).exception_days, Decimal('0'))
+
+
+class LeaveSummaryExceptionAdjustmentDisplayTests(TestCase):
+    """Regression guard: the exception-days line used to hardcode a literal
+    '+' prefix, which would have rendered a negative adjustment as the
+    nonsensical '+ -3 exception days granted' once negative adjustments
+    became possible (see grant_exception_days)."""
+
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30')})
+        self.emp = Employee.objects.create(iqama_number='LSEAD-1', full_name='Summary Display')
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        from accounts.models import Role
+        _make_role_user('lsead-super', Role.SUPER_ADMIN)
+        self.client.login(username='lsead-super', password='testpass123')
+
+    def test_negative_adjustment_renders_without_a_stray_plus_sign(self):
+        from hr.leave_approval_services import grant_exception_days
+        hr_user = make_user('lsead-hr')
+        grant_exception_days(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('-3'),
+                              granted_by=hr_user, reason='Correction.')
+        resp = self.client.get(reverse('hr:leave_summary', args=[self.emp.pk]) + '?year=2026')
+        self.assertNotContains(resp, '+ -3')
+        self.assertNotContains(resp, '+-3')
+        self.assertContains(resp, '-3')
+
+    def test_positive_adjustment_still_shows_a_plus_sign(self):
+        from hr.leave_approval_services import grant_exception_days
+        hr_user = make_user('lsead-hr2')
+        grant_exception_days(employee=self.emp, leave_type=self.lt, year=2026, days=Decimal('3'),
+                              granted_by=hr_user, reason='Extra days.')
+        resp = self.client.get(reverse('hr:leave_summary', args=[self.emp.pk]) + '?year=2026')
+        self.assertContains(resp, '+3')
 
 
 class BalanceHoldSettingsViewTests(TestCase):
