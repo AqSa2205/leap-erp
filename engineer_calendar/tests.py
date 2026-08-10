@@ -436,7 +436,12 @@ class MergeEditTests(TestCase):
         self.assertTrue(resp.json().get('reload'))
         for cell in CalendarCell.objects.filter(
                 employee=self.emp, date__gte=self.start, date__lte=self.end):
-            self.assertEqual(cell.display_text, '')
+            # Clearing now regenerates from live attendance data (weekend/
+            # holiday/leave/timesheet) instead of leaving the cell blank --
+            # see ClearCellFallbackTests for per-day content assertions.
+            # This test just confirms the stale manual text is gone and
+            # the merge is broken.
+            self.assertNotEqual(cell.display_text, 'ORIGINAL BLOCK')
             self.assertIsNone(cell.merge_start_date)
             self.assertIsNone(cell.merge_end_date)
 
