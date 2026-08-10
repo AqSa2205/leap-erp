@@ -356,16 +356,16 @@ def my_profile(request):
             messages.error(request, 'Could not update the request — please check the form.')
         return redirect('hr:my_profile')
 
-    is_delete_leave_post = (
-        emp and request.method == 'POST' and request.POST.get('action') == 'delete_leave_request')
-    if is_delete_leave_post:
-        from hr.leave_approval_services import delete_leave_request
+    is_cancel_leave_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'cancel_leave_request')
+    if is_cancel_leave_post:
+        from hr.leave_approval_services import cancel_leave_request
         target = LeaveRequest.objects.filter(pk=request.POST.get('request_id')).first()
         if target is None or target.created_by_id != request.user.id:
             return HttpResponse('You did not submit this request.', status=403)
         try:
-            delete_leave_request(target, request.user)
-            messages.success(request, 'Leave request deleted.')
+            cancel_leave_request(target, request.user, request.POST.get('reason', ''))
+            messages.success(request, 'Leave request cancelled.')
         except ValueError as exc:
             messages.error(request, str(exc))
         return redirect('hr:my_profile')
@@ -496,9 +496,18 @@ def my_profile(request):
             # prefetch cache rather than a second queryset, so this doesn't
             # cost an extra query per row.
             r.visible_notes = [n for n in r.notes.all() if not n.is_internal]
-            r.can_edit_delete = bool(
+            # Editing the dates/type only makes sense before anyone has
+            # acted on the original ones; Cancel (below) covers withdrawal
+            # for the entire pending window regardless of decisions.
+            r.can_edit = bool(
                 r.created_by_id == request.user.id and r.status == 'pending'
                 and not r.approvals.exclude(decision='pending').exists())
+            # Cancel spans the whole pending window — before any decision
+            # this is a same-day change of mind (no reason required); once
+            # an approver has decided, it still works but requires a
+            # reason and notifies them. Either way it's never a hard
+            # delete: the row stays visible as 'Cancelled' in History.
+            r.can_cancel = bool(r.created_by_id == request.user.id and r.status == 'pending')
             r.can_request_revoke = bool(
                 r.employee.user_id == request.user.id and r.status == 'approved'
                 and not r.revoke_requests.filter(status='pending').exists())
@@ -568,12 +577,12 @@ def my_profile(request):
                             created_by=request.user, logged_by_manager=True)
                         .select_related('leave_type').order_by('employee_id', '-created_at')):
                 # created_by == request.user is already guaranteed by the
-                # queryset filter above, so only the status/approvals check
-                # is needed here (unlike the top-level leave_requests list,
-                # which mixes self-submitted and manager-logged rows and
-                # needs the full creator check).
-                req.can_edit_delete = bool(
-                    req.status == 'pending' and not req.approvals.exclude(decision='pending').exists())
+                # queryset filter above, so only the status check is needed
+                # here (unlike the top-level leave_requests list, which
+                # mixes self-submitted and manager-logged rows and needs
+                # the full creator check). Cancel spans the whole pending
+                # window (see the top-level loop above for why).
+                req.can_cancel = bool(req.status == 'pending')
                 in_behalf_by_employee[req.employee_id].append(req)
             for r in direct_reports:
                 r.in_behalf_requests = in_behalf_by_employee.get(r.pk, [])

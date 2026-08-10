@@ -6881,7 +6881,7 @@ class AttendanceOutcomeRevokedTests(TestCase):
         self.assertEqual(record.status, 'absent')
 
 
-class EditDeleteLeaveRequestServiceTests(TestCase):
+class EditLeaveRequestServiceTests(TestCase):
     def setUp(self):
         self.emp = make_employee(iqama='EDLR-1')
         self.lt, _ = LeaveType.objects.get_or_create(
@@ -6927,27 +6927,95 @@ class EditDeleteLeaveRequestServiceTests(TestCase):
             self.req, self.user, leave_type=self.lt, start_date=date(2026, 8, 1), end_date=date(2026, 8, 2))
         self.assertEqual(updated.pk, self.req.pk)
 
-    def test_creator_can_delete_pending_undecided_request(self):
-        from hr.leave_approval_services import delete_leave_request
-        pk = self.req.pk
-        delete_leave_request(self.req, self.user)
-        self.assertFalse(LeaveRequest.objects.filter(pk=pk).exists())
 
-    def test_non_creator_cannot_delete(self):
-        from hr.leave_approval_services import delete_leave_request
-        other = make_user('edlr-other2', password='x')
-        with self.assertRaises(ValueError):
-            delete_leave_request(self.req, other)
-        self.assertTrue(LeaveRequest.objects.filter(pk=self.req.pk).exists())
+class CancelLeaveRequestServiceTests(TestCase):
+    """Cancel is the ONLY way to withdraw a leave request — it covers the
+    entire pending window, before or after any approver has decided (see
+    hr.leave_approval_services.cancel_leave_request). There is no separate
+    hard-delete path: even a same-day, zero-decisions withdrawal stays
+    visible in History as 'Cancelled', consistent with every other
+    terminal state this feature introduced (Revoked, etc.). Uses two
+    approvers so a single decision leaves the request genuinely still
+    pending (unanimous-consensus reconciliation) rather than immediately
+    finalizing, matching the real limbo window Cancel exists for."""
 
-    def test_cannot_delete_once_a_decision_is_recorded(self):
-        from hr.leave_approval_services import delete_leave_request
-        approver = make_user('edlr-approver2', password='x')
-        LeaveDashboardAccess.objects.create(user=approver, is_active=True)
-        LeaveRequestApproval.objects.create(leave_request=self.req, approver=approver, decision='disapproved')
+    def setUp(self):
+        self.emp = make_employee(iqama='CLR-1')
+        self.lt, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': Decimal('30')})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        self.user = make_user('clr-user', password='x')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        self.approver1 = make_user('clr-approver1', password='x')
+        self.approver2 = make_user('clr-approver2', password='x')
+        LeaveDashboardAccess.objects.create(user=self.approver1, is_active=True)
+        LeaveDashboardAccess.objects.create(user=self.approver2, is_active=True)
+        self.req = submit_leave_request(
+            employee=self.emp, leave_type=self.lt, start_date=date(2026, 8, 1), end_date=date(2026, 8, 2),
+            created_by=self.user)
+
+    def test_creator_can_cancel_before_any_decision_with_no_reason(self):
+        from hr.leave_approval_services import cancel_leave_request
+        updated = cancel_leave_request(self.req, self.user)
+        self.assertEqual(updated.status, 'cancelled')
+        self.assertIsNotNone(updated.cancelled_at)
+        self.assertEqual(updated.cancel_reason, '')
+
+    def test_cancelling_before_any_decision_sends_no_notification(self):
+        # Nobody has decided yet, so there's nobody to explain the
+        # cancellation to.
+        from hr.leave_approval_services import cancel_leave_request
+        cancel_leave_request(self.req, self.user)
+        self.assertFalse(Notification.objects.filter(verb__icontains='cancelled').exists())
+
+    def test_creator_can_cancel_after_one_of_two_approvers_decides(self):
+        from hr.leave_approval_services import cancel_leave_request
+        record_approver_decision(self.req, self.approver1, 'approved')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'pending')  # still awaiting approver2
+        updated = cancel_leave_request(self.req, self.user, 'Plans changed.')
+        self.assertEqual(updated.status, 'cancelled')
+        self.assertIsNotNone(updated.cancelled_at)
+        self.assertEqual(updated.cancel_reason, 'Plans changed.')
+
+    def test_non_creator_cannot_cancel(self):
+        from hr.leave_approval_services import cancel_leave_request
+        record_approver_decision(self.req, self.approver1, 'approved')
+        other = make_user('clr-other', password='x')
         with self.assertRaises(ValueError):
-            delete_leave_request(self.req, self.user)
-        self.assertTrue(LeaveRequest.objects.filter(pk=self.req.pk).exists())
+            cancel_leave_request(self.req, other, 'Not my request.')
+
+    def test_reason_is_required(self):
+        from hr.leave_approval_services import cancel_leave_request
+        record_approver_decision(self.req, self.approver1, 'approved')
+        with self.assertRaises(ValueError):
+            cancel_leave_request(self.req, self.user, '')
+
+    def test_cannot_cancel_once_fully_approved(self):
+        from hr.leave_approval_services import cancel_leave_request
+        record_approver_decision(self.req, self.approver1, 'approved')
+        record_approver_decision(self.req, self.approver2, 'approved')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'approved')
+        with self.assertRaises(ValueError):
+            cancel_leave_request(self.req, self.user, 'Too late.')
+
+    def test_decided_approver_is_notified(self):
+        from hr.leave_approval_services import cancel_leave_request
+        record_approver_decision(self.req, self.approver1, 'approved')
+        cancel_leave_request(self.req, self.user, 'Plans changed.')
+        self.assertTrue(
+            Notification.objects.filter(recipient=self.approver1, verb__icontains='cancelled').exists())
+
+    def test_still_pending_approver_is_not_sent_a_cancel_notice(self):
+        # approver2 never decided — nothing to explain to them, their
+        # outstanding review just stops mattering once the row is gone.
+        from hr.leave_approval_services import cancel_leave_request
+        record_approver_decision(self.req, self.approver1, 'approved')
+        cancel_leave_request(self.req, self.user, 'Plans changed.')
+        self.assertFalse(
+            Notification.objects.filter(recipient=self.approver2, verb__icontains='cancelled').exists())
 
 
 class EditDeleteAttendanceExceptionServiceTests(TestCase):
@@ -7183,7 +7251,7 @@ class RevokeAttendanceExceptionServiceTests(TestCase):
             decide_attendance_exception_revoke_request(revoke_req, self.manager_user, 'rejected', decision_note='')
 
 
-class MyProfileLeaveEditDeleteUITests(TestCase):
+class MyProfileLeaveEditCancelUITests(TestCase):
     def setUp(self):
         self.emp = make_employee(iqama='MPLED-1')
         self.lt, _ = LeaveType.objects.get_or_create(
@@ -7197,16 +7265,17 @@ class MyProfileLeaveEditDeleteUITests(TestCase):
             created_by=self.user)
         self.client.login(username='mpled_user', password='testpass123')
 
-    def test_edit_delete_buttons_render_for_own_pending_request(self):
+    def test_edit_and_cancel_buttons_render_for_own_pending_request(self):
         resp = self.client.get(reverse('hr:my_profile'))
         self.assertContains(resp, f'edit_leave_request_{self.req.pk}')
-        self.assertContains(resp, f'delete_leave_request_{self.req.pk}')
+        self.assertContains(resp, f'cancel_leave_request_{self.req.pk}')
 
-    def test_no_edit_delete_buttons_once_decided(self):
+    def test_no_edit_button_once_decided_but_cancel_remains(self):
         approver = make_user('mpled_approver', password='x')
         LeaveRequestApproval.objects.create(leave_request=self.req, approver=approver, decision='approved')
         resp = self.client.get(reverse('hr:my_profile'))
         self.assertNotContains(resp, f'edit_leave_request_{self.req.pk}')
+        self.assertContains(resp, f'cancel_leave_request_{self.req.pk}')
 
     def test_post_edit_updates_request(self):
         resp = self.client.post(reverse('hr:my_profile'), {
@@ -7219,14 +7288,15 @@ class MyProfileLeaveEditDeleteUITests(TestCase):
         self.assertEqual(self.req.start_date, date(2026, 8, 5))
         self.assertEqual(self.req.employee_reason, 'Rescheduled')
 
-    def test_post_delete_removes_request(self):
+    def test_post_cancel_before_any_decision_marks_cancelled_not_deleted(self):
         resp = self.client.post(reverse('hr:my_profile'), {
-            'action': 'delete_leave_request', 'request_id': self.req.pk,
+            'action': 'cancel_leave_request', 'request_id': self.req.pk,
         })
         self.assertEqual(resp.status_code, 302)
-        self.assertFalse(LeaveRequest.objects.filter(pk=self.req.pk).exists())
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'cancelled')
 
-    def test_cannot_delete_someone_elses_request(self):
+    def test_cannot_cancel_someone_elses_request(self):
         other_emp = make_employee(iqama='MPLED-2')
         other_user = _login_user('mpled_other')
         other_emp.user = other_user
@@ -7236,13 +7306,14 @@ class MyProfileLeaveEditDeleteUITests(TestCase):
             employee=other_emp, leave_type=self.lt, start_date=date(2026, 8, 10), end_date=date(2026, 8, 11),
             created_by=other_user)
         self.client.post(reverse('hr:my_profile'), {
-            'action': 'delete_leave_request', 'request_id': other_req.pk,
+            'action': 'cancel_leave_request', 'request_id': other_req.pk,
         })
-        self.assertTrue(LeaveRequest.objects.filter(pk=other_req.pk).exists())
+        other_req.refresh_from_db()
+        self.assertEqual(other_req.status, 'pending')
 
 
-class MyProfileManagerInBehalfEditDeleteUITests(TestCase):
-    """Edit/Delete for a manager's own in-behalf-logged pending request
+class MyProfileManagerInBehalfEditCancelUITests(TestCase):
+    """Edit/Cancel for a manager's own in-behalf-logged pending request
     render in the Reporting Structure card, not the report's own table —
     the gate is request.user == created_by, and the manager (not the
     report) is the creator here."""
@@ -7265,18 +7336,18 @@ class MyProfileManagerInBehalfEditDeleteUITests(TestCase):
         })
         self.req = LeaveRequest.objects.get(employee=self.report)
 
-    def test_manager_sees_edit_delete_for_own_in_behalf_request(self):
+    def test_manager_sees_cancel_for_own_in_behalf_request(self):
         resp = self.client.get(reverse('hr:my_profile'))
-        self.assertContains(resp, f'delete_leave_request_{self.req.pk}')
+        self.assertContains(resp, f'cancel_leave_request_{self.req.pk}')
 
-    def test_report_does_not_see_edit_delete_on_their_own_profile(self):
+    def test_report_does_not_see_cancel_on_their_own_profile(self):
         # The report views their OWN My Leave Requests table — they didn't
-        # create this request (their manager did), so no Edit/Delete for
-        # them, even though it's about their own leave.
+        # create this request (their manager did), so no Cancel for them,
+        # even though it's about their own leave.
         self.client.logout()
         self.client.login(username='mpmied-rpt', password='x')
         resp = self.client.get(reverse('hr:my_profile'))
-        self.assertNotContains(resp, f'delete_leave_request_{self.req.pk}')
+        self.assertNotContains(resp, f'cancel_leave_request_{self.req.pk}')
 
 
 class MyProfileRequestRevokeLeaveUITests(TestCase):
@@ -7318,6 +7389,75 @@ class MyProfileRequestRevokeLeaveUITests(TestCase):
         revoke_leave_request(self.req, revoker, 'Applied for testing.')
         resp = self.client.get(reverse('hr:my_profile'))
         self.assertContains(resp, 'Revoked')
+
+
+class MyProfileCancelLeaveRequestUITests(TestCase):
+    def setUp(self):
+        self.emp = make_employee(iqama='MPCLR-1')
+        self.lt, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': Decimal('30')})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        self.user = _login_user('mpclr_user')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        self.approver1 = make_user('mpclr_approver1', password='x')
+        self.approver2 = make_user('mpclr_approver2', password='x')
+        LeaveDashboardAccess.objects.create(user=self.approver1, is_active=True)
+        LeaveDashboardAccess.objects.create(user=self.approver2, is_active=True)
+        self.req = submit_leave_request(
+            employee=self.emp, leave_type=self.lt, start_date=date(2026, 8, 1), end_date=date(2026, 8, 2),
+            created_by=self.user)
+        self.client.login(username='mpclr_user', password='testpass123')
+
+    def test_cancel_button_renders_both_before_and_after_a_decision(self):
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, f'cancel_leave_request_{self.req.pk}')
+        record_approver_decision(self.req, self.approver1, 'approved')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, f'cancel_leave_request_{self.req.pk}')
+
+    def test_edit_button_disappears_once_a_decision_is_recorded(self):
+        # Edit and Cancel are no longer the same window: Edit closes the
+        # moment an approver decides, but Cancel (this whole class) stays
+        # open right through the rest of the pending window.
+        record_approver_decision(self.req, self.approver1, 'approved')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, f'edit_leave_request_{self.req.pk}')
+
+    def test_post_cancel_marks_request_cancelled_and_keeps_the_row(self):
+        record_approver_decision(self.req, self.approver1, 'approved')
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'cancel_leave_request', 'request_id': self.req.pk, 'reason': 'Plans changed.',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'cancelled')
+        self.assertEqual(self.req.cancel_reason, 'Plans changed.')
+
+    def test_cancelled_badge_and_reason_render(self):
+        from hr.leave_approval_services import cancel_leave_request
+        record_approver_decision(self.req, self.approver1, 'approved')
+        cancel_leave_request(self.req, self.user, 'Plans changed.')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'Cancelled')
+        self.assertContains(resp, 'Plans changed.')
+
+    def test_cannot_cancel_someone_elses_request(self):
+        other_emp = make_employee(iqama='MPCLR-2')
+        other_user = _login_user('mpclr_other')
+        other_emp.user = other_user
+        other_emp.save(update_fields=['user'])
+        LeaveEntitlement.objects.create(employee=other_emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        other_req = submit_leave_request(
+            employee=other_emp, leave_type=self.lt, start_date=date(2026, 8, 10), end_date=date(2026, 8, 11),
+            created_by=other_user)
+        record_approver_decision(other_req, self.approver1, 'approved')
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'cancel_leave_request', 'request_id': other_req.pk, 'reason': 'Not mine.',
+        })
+        self.assertEqual(resp.status_code, 403)
+        other_req.refresh_from_db()
+        self.assertEqual(other_req.status, 'pending')
 
 
 class MyProfileExceptionEditDeleteUITests(TestCase):
@@ -7459,6 +7599,58 @@ class DirectRevokeLeaveRequestQueueUITests(TestCase):
         revoke_leave_request(self.req, self.superadmin, 'Applied for testing.')
         resp = self.client.get(reverse('hr:leave_request_list'))
         self.assertContains(resp, 'Revoked')
+
+
+class CancelledLeaveRequestApproverHistoryUITests(TestCase):
+    """The 'Revoked must render symmetrically in both the requester's own
+    History and the decider's queue History' requirement extends to
+    Cancelled too — the approver who spent a decision on the request must
+    see what happened to it, on the Leave Approval Queue and the detail
+    page, not just the employee's own My Profile."""
+
+    def setUp(self):
+        self.emp = make_employee(iqama='CLRAH-1')
+        self.lt, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': Decimal('30')})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        self.user = make_user('clrah-user', password='x')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        self.superadmin = make_user('clrah_super', password='x')
+        self.superadmin.set_password('testpass123')
+        from accounts.models import Role
+        role, _ = Role.objects.get_or_create(name='super_admin')
+        self.superadmin.role = role
+        self.superadmin.save()
+        self.approver1 = make_user('clrah_approver1', password='x')
+        self.approver2 = make_user('clrah_approver2', password='x')
+        self.approver2.set_password('testpass123')
+        self.approver2.save()
+        LeaveDashboardAccess.objects.create(user=self.approver1, is_active=True)
+        LeaveDashboardAccess.objects.create(user=self.approver2, is_active=True)
+        self.req = submit_leave_request(
+            employee=self.emp, leave_type=self.lt, start_date=date(2026, 8, 1), end_date=date(2026, 8, 2),
+            created_by=self.user)
+        record_approver_decision(self.req, self.approver1, 'approved')
+        from hr.leave_approval_services import cancel_leave_request
+        cancel_leave_request(self.req, self.user, 'Plans changed.')
+        self.client.login(username='clrah_super', password='testpass123')
+
+    def test_cancelled_badge_renders_in_queue_history(self):
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertContains(resp, 'Cancelled')
+        self.assertContains(resp, 'Plans changed.')
+
+    def test_cancelled_status_and_reason_render_on_detail_page(self):
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertContains(resp, 'Cancelled')
+        self.assertContains(resp, 'Plans changed.')
+
+    def test_decide_form_no_longer_renders_for_a_cancelled_request(self):
+        self.client.logout()
+        self.client.login(username='clrah_approver2', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[self.req.pk]))
+        self.assertNotContains(resp, 'name="decision" value="approved"')
 
 
 class DirectRevokeTeamExceptionUITests(TestCase):

@@ -52,6 +52,7 @@
             {% if leave_request.status == 'approved' %}<span class="badge bg-success">Approved</span>
             {% elif leave_request.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
             {% elif leave_request.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
+            {% elif leave_request.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
             {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
             {% if leave_request.is_overridden %}
               <span class="badge bg-info text-dark">
@@ -70,6 +71,12 @@
                 {% if leave_request.revoked_by %}by {{ leave_request.revoked_by.get_full_name|default:leave_request.revoked_by.username }}{% endif %}
                 {% if leave_request.revoked_at %} on {{ leave_request.revoked_at|date:'d M Y, H:i' }}{% endif %}
                 {% if leave_request.revoke_reason %} — "{{ leave_request.revoke_reason }}"{% endif %}
+              </div>
+            {% elif leave_request.status == 'cancelled' %}
+              <div class="small text-muted mt-1">
+                Cancelled by {{ leave_request.employee.full_name }}
+                {% if leave_request.cancelled_at %} on {{ leave_request.cancelled_at|date:'d M Y, H:i' }}{% endif %}
+                {% if leave_request.cancel_reason %} — "{{ leave_request.cancel_reason }}"{% endif %}
               </div>
             {% elif leave_request.decided_by_display %}<div class="small text-muted mt-1">{{ leave_request.decided_by_display }}</div>{% endif %}
           </p>

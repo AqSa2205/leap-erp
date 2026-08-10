@@ -126,6 +126,7 @@
                 {% if r.status == 'approved' %}<span class="badge bg-success">Approved</span>
                 {% elif r.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
                 {% elif r.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
+                {% elif r.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
                 {% else %}<span class="badge bg-secondary">{{ r.get_status_display }}</span>{% endif %}
                 {% if r.is_overridden %}<span class="badge bg-info text-dark ms-1">Overridden</span>{% endif %}
                 {% if r.status == 'revoked' %}
@@ -134,6 +135,12 @@
                     {% if r.revoked_at %} on {{ r.revoked_at|date:'d M Y' }}{% endif %}
                   </div>
                   {% if r.revoke_reason %}<div class="small text-muted fst-italic">"{{ r.revoke_reason }}"</div>{% endif %}
+                {% elif r.status == 'cancelled' %}
+                  <div class="small text-muted">
+                    by {{ r.employee.full_name }}
+                    {% if r.cancelled_at %} on {{ r.cancelled_at|date:'d M Y' }}{% endif %}
+                  </div>
+                  {% if r.cancel_reason %}<div class="small text-muted fst-italic">"{{ r.cancel_reason }}"</div>{% endif %}
                 {% elif r.decided_by_display %}<div class="small text-muted">{{ r.decided_by_display }}</div>{% endif %}
                 {% if r.status == 'approved' and can_revoke %}
                 <div class="mt-1">

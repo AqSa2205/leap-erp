@@ -334,19 +334,38 @@ def edit_leave_request(leave_request, editing_user, *, leave_type, start_date, e
     return leave_request
 
 
-def delete_leave_request(leave_request, deleting_user):
-    """The creator withdraws their own still-pending, undecided request.
-    No LeaveRecord exists yet at this stage (only created on approval —
-    see _finalize), so there's nothing else to clean up; approvals cascade-
-    delete with the row."""
-    if leave_request.created_by_id != deleting_user.id:
-        raise ValueError('Only the person who submitted this request can delete it.')
+def cancel_leave_request(leave_request, cancelling_user, reason=''):
+    """The creator withdraws their own still-pending request — covers the
+    entire pending window, whether or not any approver has decided yet.
+    Unlike a hard delete, this is NEVER destructive: the row stays with
+    status='cancelled' so it's always visible in History, on both the
+    employee's own My Profile and the approver's queue, instead of
+    silently vanishing depending on exactly when the employee acted.
+
+    A reason is only required once at least one approver has already
+    recorded a decision — they spent effort deciding and deserve an
+    explanation; before that, nothing has happened yet, so demanding one
+    would just be friction for a same-day mistake."""
+    if leave_request.created_by_id != cancelling_user.id:
+        raise ValueError('Only the person who submitted this request can cancel it.')
     leave_request.refresh_from_db()
     if leave_request.status != 'pending':
-        raise ValueError('This request has already been decided and can no longer be deleted.')
-    if leave_request.approvals.exclude(decision='pending').exists():
-        raise ValueError('An approver has already recorded a decision on this request; it can no longer be deleted.')
-    leave_request.delete()
+        raise ValueError('This request has already been decided and can no longer be cancelled.')
+    decided_approvals = list(leave_request.approvals.exclude(decision='pending').select_related('approver'))
+    if decided_approvals and not (reason or '').strip():
+        raise ValueError('A reason is required to cancel a request an approver has already decided on.')
+
+    leave_request.status = 'cancelled'
+    leave_request.cancelled_at = timezone.now()
+    leave_request.cancel_reason = (reason or '').strip()
+    leave_request.save(update_fields=['status', 'cancelled_at', 'cancel_reason'])
+
+    if decided_approvals:
+        notify_users(
+            recipients=[a.approver for a in decided_approvals],
+            verb=f'{leave_request.employee.full_name} cancelled a leave request you had decided on',
+            actor=cancelling_user, description=leave_request.cancel_reason)
+    return leave_request
 
 
 def revoke_leave_request(leave_request, revoking_user, reason):

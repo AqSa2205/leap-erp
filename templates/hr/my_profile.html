@@ -205,6 +205,7 @@
                       {% if r.status == 'approved' %}<span class="badge bg-success align-self-start">Approved</span>
                       {% elif r.status == 'disapproved' %}<span class="badge bg-danger align-self-start">Disapproved</span>
                       {% elif r.status == 'revoked' %}<span class="badge bg-secondary align-self-start">Revoked</span>
+                      {% elif r.status == 'cancelled' %}<span class="badge bg-secondary align-self-start">Cancelled</span>
                       {% else %}<span class="badge bg-warning text-dark align-self-start">Pending</span>{% endif %}
 
                       {% if r.status == 'approved' or r.status == 'disapproved' %}
@@ -220,6 +221,12 @@
                           {% if r.revoked_at %}· {{ r.revoked_at|date:'d M Y' }}{% endif %}
                         </div>
                         {% if r.revoke_reason %}<div class="small text-muted fst-italic">"{{ r.revoke_reason }}"</div>{% endif %}
+                      {% elif r.status == 'cancelled' %}
+                        <div class="small text-muted d-flex align-items-center gap-1">
+                          <i class="bi bi-person"></i> You
+                          {% if r.cancelled_at %}· {{ r.cancelled_at|date:'d M Y' }}{% endif %}
+                        </div>
+                        {% if r.cancel_reason %}<div class="small text-muted fst-italic">"{{ r.cancel_reason }}"</div>{% endif %}
                       {% else %}
                         <div class="small text-muted">
                           {% with waiting=r.pending_approvers %}
@@ -227,6 +234,31 @@
                             {% else %}Waiting on a Super Admin to review (no other eligible approver is assigned){% endif %}
                           {% endwith %}
                         </div>
+                        {% if r.can_cancel %}
+                        {% if not r.can_edit %}
+                        <div class="small text-muted d-flex align-items-center gap-1">
+                          <i class="bi bi-exclamation-circle"></i> An approver already decided — cancelling now will still show in History.
+                        </div>
+                        {% endif %}
+                        <div>
+                          <button type="button" class="btn btn-sm btn-outline-warning" data-bs-toggle="collapse" data-bs-target="#cancelLeave{{ r.pk }}" id="cancel_leave_request_{{ r.pk }}">
+                            Cancel Request
+                          </button>
+                        </div>
+                        <div class="collapse" id="cancelLeave{{ r.pk }}">
+                          <form method="post" class="border rounded p-2 mt-1">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="cancel_leave_request">
+                            <input type="hidden" name="request_id" value="{{ r.pk }}">
+                            {% if r.can_edit %}
+                            <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Reason (optional)"></textarea>
+                            {% else %}
+                            <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Why are you cancelling? — required" required></textarea>
+                            {% endif %}
+                            <button type="submit" class="btn btn-sm btn-outline-warning" onclick="return confirm('Cancel this leave request?');">Confirm Cancel</button>
+                          </form>
+                        </div>
+                        {% endif %}
                       {% endif %}
 
                       {% if r.status == 'disapproved' and r.salary_deduction_applicable %}
@@ -282,22 +314,14 @@
                     </div>
                   </td>
                   <td class="text-end">
-                    {% if r.can_edit_delete %}
+                    {% if r.can_edit %}
                     <button type="button" class="btn btn-sm btn-outline-secondary py-0" data-bs-toggle="collapse" data-bs-target="#editLeave{{ r.pk }}" id="edit_leave_request_{{ r.pk }}">
                       <i class="bi bi-pencil"></i>
                     </button>
-                    <form method="post" class="d-inline" onsubmit="return confirm('Delete this leave request?');">
-                      {% csrf_token %}
-                      <input type="hidden" name="action" value="delete_leave_request">
-                      <input type="hidden" name="request_id" value="{{ r.pk }}">
-                      <button type="submit" class="btn btn-sm btn-outline-danger py-0" id="delete_leave_request_{{ r.pk }}">
-                        <i class="bi bi-trash"></i>
-                      </button>
-                    </form>
                     {% endif %}
                   </td>
                 </tr>
-                {% if r.can_edit_delete %}
+                {% if r.can_edit %}
                 <tr class="collapse" id="editLeave{{ r.pk }}">
                   <td colspan="4">
                     <form method="post" enctype="multipart/form-data" class="border rounded p-2">
@@ -651,15 +675,19 @@
                   {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
                   {% if req.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
                   {{ req.leave_type.name }}, {{ req.start_date }}–{{ req.end_date }}
-                  {% if req.can_edit_delete %}
-                  <form method="post" class="d-inline ms-1" onsubmit="return confirm('Delete this leave request?');">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="delete_leave_request">
-                    <input type="hidden" name="request_id" value="{{ req.pk }}">
-                    <button type="submit" class="btn btn-sm btn-link text-danger p-0" id="delete_leave_request_{{ req.pk }}">
-                      <i class="bi bi-trash"></i>
-                    </button>
-                  </form>
+                  {% if req.can_cancel %}
+                  <button type="button" class="btn btn-sm btn-link text-warning p-0 ms-1" data-bs-toggle="collapse" data-bs-target="#cancelInBehalf{{ req.pk }}" id="cancel_leave_request_{{ req.pk }}">
+                    Cancel
+                  </button>
+                  <div class="collapse mt-1" id="cancelInBehalf{{ req.pk }}">
+                    <form method="post" class="border rounded p-2">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="cancel_leave_request">
+                      <input type="hidden" name="request_id" value="{{ req.pk }}">
+                      <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Reason (required if an approver already decided)"></textarea>
+                      <button type="submit" class="btn btn-sm btn-outline-warning" onclick="return confirm('Cancel this leave request?');">Confirm Cancel</button>
+                    </form>
+                  </div>
                   {% endif %}
                 </div>
                 {% endif %}
@@ -680,15 +708,19 @@
                     {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
                     {% if req.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
                     {{ req.leave_type.name }}, {{ req.start_date }}–{{ req.end_date }}
-                    {% if req.can_edit_delete %}
-                    <form method="post" class="d-inline ms-1" onsubmit="return confirm('Delete this leave request?');">
-                      {% csrf_token %}
-                      <input type="hidden" name="action" value="delete_leave_request">
-                      <input type="hidden" name="request_id" value="{{ req.pk }}">
-                      <button type="submit" class="btn btn-sm btn-link text-danger p-0" id="delete_leave_request_{{ req.pk }}">
-                        <i class="bi bi-trash"></i>
-                      </button>
-                    </form>
+                    {% if req.can_cancel %}
+                    <button type="button" class="btn btn-sm btn-link text-warning p-0 ms-1" data-bs-toggle="collapse" data-bs-target="#cancelInBehalf{{ req.pk }}" id="cancel_leave_request_{{ req.pk }}">
+                      Cancel
+                    </button>
+                    <div class="collapse mt-1" id="cancelInBehalf{{ req.pk }}">
+                      <form method="post" class="border rounded p-2">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="cancel_leave_request">
+                        <input type="hidden" name="request_id" value="{{ req.pk }}">
+                        <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Reason (required if an approver already decided)"></textarea>
+                        <button type="submit" class="btn btn-sm btn-outline-warning" onclick="return confirm('Cancel this leave request?');">Confirm Cancel</button>
+                      </form>
+                    </div>
                     {% endif %}
                   </div>
                   {% endif %}

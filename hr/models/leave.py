@@ -301,6 +301,8 @@ class LeaveRequest(models.Model):
                                    related_name='leave_requests_revoked')
     revoked_at = models.DateTimeField(null=True, blank=True)
     revoke_reason = models.TextField(blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancel_reason = models.TextField(blank=True)
     decided_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
