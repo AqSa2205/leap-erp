@@ -1,4 +1,4 @@
-from datetime import time
+from datetime import time, timedelta
 from django.db import models
 from django.conf import settings
 
@@ -87,6 +87,90 @@ class AttendanceRecord(models.Model):
             raise ValidationError({'check_out': 'Check-out cannot be before check-in.'})
 
 
+    def save(self, *args, **kwargs):
+        is_new = self._state.adding
+        was_late_before = None
+        if not is_new:
+            was_late_before = AttendanceRecord.objects.filter(pk=self.pk).values_list('status', flat=True).first() == 'late'
+        super().save(*args, **kwargs)
+        just_became_late = self.status == 'late' and not was_late_before
+        if just_became_late:
+            self._maybe_notify_late_threshold()
+
+    def _maybe_notify_late_threshold(self):
+        # Fires an email once, exactly when this employee's late count for the
+        # current calendar month reaches 3 - not on every late after that.
+        month_start = self.date.replace(day=1)
+        next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        late_count = AttendanceRecord.objects.filter(
+            employee=self.employee, status='late',
+            date__gte=month_start, date__lt=next_month).count()
+        if late_count == 3:
+            self._notify_late_threshold(late_count, month_start)
+
+    def _notify_late_threshold(self, late_count, month_start):
+        from notifications.services import create_notification, notify_users
+        from accounts.models import User
+        emp = self.employee
+        month_label = month_start.strftime('%B %Y')
+        employee_verb = 'was late 3 times this month'
+        employee_description = 'You were late thrice this month. An email has been sent to you.'
+        hr_verb = f'{emp.full_name} was late 3 times this month'
+        hr_description = f'{emp.full_name} was late 3 times this month. An email has been sent.'
+        from django.urls import reverse
+        if emp.user_id:
+            create_notification(
+                recipient=emp.user, verb=employee_verb, target=self,
+                description=employee_description, level='warning',
+                target_url=reverse('hr:my_profile'),
+            )
+        admins = User.objects.filter(is_active=True)
+        hr_admins = [u for u in admins if (u.is_super_admin_user or u.is_admin_user or u.is_erp_admin_user) and u.pk != emp.user_id]
+        notify_users(
+            recipients=hr_admins, verb=hr_verb, target=self,
+            description=hr_description, level='warning',
+            target_url=reverse('hr:attendance_grid'),
+        )
+        self._send_late_email(late_count, month_start)
+
+    def _send_late_email(self, late_count, month_start):
+        # Attaches the same monthly attendance PDF used on My Profile - sent
+        # in a background thread so saving attendance never waits on the
+        # network call to actually deliver it.
+        import threading
+        from django.conf import settings
+        from django.core.mail import EmailMessage
+        from django.db import connections
+        import logging
+        logger = logging.getLogger(__name__)
+        emp = self.employee
+        month_label = month_start.strftime('%B %Y')
+        month_end = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+        if not (emp.user_id and emp.user.email):
+            return
+        to_email = emp.user.email
+
+        def _send():
+            try:
+                from hr.views import build_attendance_pdf
+                buffer = build_attendance_pdf(emp, month_start, month_end)
+                msg = EmailMessage(
+                    subject=f'Attendance Notice - {late_count} Late Arrivals in {month_label}',
+                    body=(
+                        f'{emp.full_name},\nYou have been marked Late {late_count} times in {month_label}. '
+                        f'Your attendance record for the month is attached.\nLeap ERP'
+                    ),
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    to=[to_email],
+                )
+                msg.attach(f'{emp.full_name}_Attendance.pdf', buffer.getvalue(), 'application/pdf')
+                msg.send(fail_silently=False)
+            except Exception:
+                logger.exception('Failed to send late-attendance email to %s', to_email)
+            finally:
+                connections.close_all()
+
+        threading.Thread(target=_send, daemon=True).start()
 class WorkingDay(models.Model):
     """A normally-weekend date that is a working day (inverse of Holiday)."""
     date = models.DateField(unique=True)

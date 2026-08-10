@@ -477,26 +477,21 @@ def my_profile(request):
 
 
 @login_required
-def my_attendance_export_pdf(request):
+def build_attendance_pdf(emp, month_start, month_end):
+    # Builds the same monthly attendance PDF used by my_attendance_export_pdf
+    # (and reused for the automatic late-threshold email), returned as a
+    # BytesIO buffer rather than an HttpResponse, so callers decide what to
+    # do with it (download, or attach to an email).
     from reportlab.lib.pagesizes import A4
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.lib import colors
-    from hr.models import AttendanceRecord
-    from hr.attendance_matrix import period_range
+    from hr.models import AttendanceRecord, AttendanceSettings, WorkingDay
     import io
 
-    emp = getattr(request.user, 'employee_profile', None)
-    if emp is None:
-        messages.error(request, 'Your account is not linked to an employee record.')
-        return redirect('hr:my_profile')
-
-    anchor = _parse_date(request.GET.get('date'))
-    month_start, month_end = period_range('month', anchor)
     month_records = AttendanceRecord.objects.filter(
         employee=emp, date__gte=month_start, date__lte=month_end)
     records_by_date = {r.date: r for r in month_records}
-    from hr.models import AttendanceSettings, WorkingDay
     weekend_days = AttendanceSettings.load().weekend_day_set()
     working_days = set(WorkingDay.objects.filter(
         is_active=True, date__range=(month_start, month_end)).values_list('date', flat=True))
@@ -551,8 +546,21 @@ def my_attendance_export_pdf(request):
     ] + bg_commands))
     elements.append(table)
     doc.build(elements)
-
     buffer.seek(0)
+    return buffer
+
+
+def my_attendance_export_pdf(request):
+    from hr.attendance_matrix import period_range
+
+    emp = getattr(request.user, 'employee_profile', None)
+    if emp is None:
+        messages.error(request, 'Your account is not linked to an employee record.')
+        return redirect('hr:my_profile')
+
+    anchor = _parse_date(request.GET.get('date'))
+    month_start, month_end = period_range('month', anchor)
+    buffer = build_attendance_pdf(emp, month_start, month_end)
     filename = f'my_attendance_{month_start.strftime("%B_%Y").lower()}.pdf'
     response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'

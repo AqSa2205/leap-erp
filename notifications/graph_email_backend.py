@@ -115,6 +115,23 @@ class MicrosoftGraphEmailBackend(BaseEmailBackend):
         if message.bcc:
             graph_message['bccRecipients'] = [
                 {'emailAddress': {'address': _address_only(addr)}} for addr in message.bcc]
+        if message.attachments:
+            import base64
+            attachments = []
+            for att in message.attachments:
+                if isinstance(att, tuple):
+                    filename, content, mimetype = (att + (None, None))[:3]
+                else:
+                    filename, content, mimetype = att.get_filename(), att.get_payload(decode=True), att.get_content_type()
+                if isinstance(content, str):
+                    content = content.encode('utf-8')
+                attachments.append({
+                    '@odata.type': '#microsoft.graph.fileAttachment',
+                    'name': filename or 'attachment',
+                    'contentType': mimetype or 'application/octet-stream',
+                    'contentBytes': base64.b64encode(content).decode('ascii'),
+                })
+            graph_message['attachments'] = attachments
 
         return {'message': graph_message, 'saveToSentItems': 'false'}
 

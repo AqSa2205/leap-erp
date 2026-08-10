@@ -6713,3 +6713,70 @@ class SalaryDeductionCompactUITests(TestCase):
         self.req.save(update_fields=['salary_deduction_applicable'])
         resp = self.client.get(reverse('hr:my_profile'))
         self.assertNotContains(resp, 'Salary deduction')
+
+
+class LateThresholdTests(TransactionTestCase):
+    def setUp(self):
+        from accounts.models import User
+        self.user = User.objects.create_user('late_emp', password='x', email='late_emp@leap.com')
+        self.emp = make_employee(iqama='IQ-LATE', name='Late Tester')
+        self.emp.user = self.user
+        self.emp.save()
+        from accounts.models import Role
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.admin = User.objects.create_user('late_admin', password='x', email='admin@leap.com')
+        self.admin.role = role
+        self.admin.save()
+
+    def _mark_late(self, day):
+        return AttendanceRecord.objects.create(
+            employee=self.emp, date=_date(2026, 8, day), status='late')
+
+    def test_no_notification_before_third_late(self):
+        from notifications.models import Notification
+        self._mark_late(1)
+        self._mark_late(2)
+        self.assertEqual(Notification.objects.filter(verb__icontains='late').count(), 0)
+
+    def test_notification_fires_on_exactly_third_late(self):
+        from notifications.models import Notification
+        self._mark_late(1)
+        self._mark_late(2)
+        self._mark_late(3)
+        notifs = Notification.objects.filter(verb__icontains='late')
+        self.assertEqual(notifs.count(), 2)
+
+    def test_employee_notification_content_and_link(self):
+        from notifications.models import Notification
+        self._mark_late(1)
+        self._mark_late(2)
+        self._mark_late(3)
+        n = Notification.objects.get(recipient=self.user, verb__icontains='late')
+        self.assertIn('You were late', n.description)
+        self.assertIn('my-profile', n.target_url)
+
+    def test_hr_notification_content_and_link(self):
+        from notifications.models import Notification
+        self._mark_late(1)
+        self._mark_late(2)
+        self._mark_late(3)
+        n = Notification.objects.get(recipient=self.admin, verb__icontains='late')
+        self.assertIn('Late Tester', n.description)
+        self.assertIn('attendance', n.target_url)
+
+    def test_email_sent_with_pdf_attachment(self):
+        from django.core import mail
+        from django.test import override_settings
+        import time as _time
+        with override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend'):
+            self._mark_late(1)
+            self._mark_late(2)
+            self._mark_late(3)
+            _time.sleep(1)
+            self.assertEqual(len(mail.outbox), 1)
+            sent = mail.outbox[0]
+            self.assertIn('Late Tester', sent.body)
+            self.assertEqual(len(sent.attachments), 1)
+            filename, content, mimetype = sent.attachments[0]
+            self.assertEqual(mimetype, 'application/pdf')
+            self.assertGreater(len(content), 0)
