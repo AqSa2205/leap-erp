@@ -256,6 +256,69 @@ def _generate_outflow_rows(project, sheet):
     return added
 
 
+def _by_system_breakdown(project):
+    """Read-only 'By System' grouping for the cash-outflow page.
+
+    Every line item on this project's purchase orders, grouped by its `system`
+    (the free-text field on PurchaseOrderItem — Siren / PAGA / CCTV / …), then
+    by PO, rolled up to a per-PO amount = sum of item values (qty × rate, SAR)
+    plus 15% VAT. Mirrors the procurement Internal Summary's system grouping,
+    but scoped to a single project and summed to PO totals for finance.
+
+    All POs are included regardless of status. Returns (systems, grand) where
+    `systems` is a list of {system, pos, po_count, amount, vat, total} and
+    `grand` is the {amount, vat, total} across everything. Subtotals are sums
+    of the rounded PO rows so the displayed figures always reconcile."""
+    from procurement.models import PurchaseOrderItem
+    vat_rate = CashOutflowRow.VAT_RATE
+    items = (PurchaseOrderItem.objects
+             .filter(purchase_order__project=project)
+             .select_related('purchase_order')
+             .order_by('system', 'purchase_order__po_number', 'serial_number'))
+
+    # system_key -> {po_pk -> {po_number, vendor, item_count, amount}}
+    grouped = {}
+    for it in items:
+        sys_key = (it.system or '').strip() or '— Unassigned —'
+        po = it.purchase_order
+        pos = grouped.setdefault(sys_key, {})
+        row = pos.setdefault(po.pk, {
+            'po_pk': po.pk, 'po_number': po.po_number, 'vendor': po.vendor_name,
+            'payment_terms': po.payment_terms_text,
+            'item_count': 0, 'amount': Decimal('0'),
+        })
+        row['item_count'] += 1
+        row['amount'] += it.total_value
+
+    systems = []
+    grand = {'amount': Decimal('0'), 'vat': Decimal('0'), 'total': Decimal('0')}
+    for sys_key, pos in grouped.items():
+        po_rows = []
+        s_amount = s_vat = s_total = Decimal('0')
+        for row in pos.values():
+            amount = row['amount'].quantize(Decimal('0.01'))
+            vat = (amount * vat_rate).quantize(Decimal('0.01'))
+            total = amount + vat
+            po_rows.append({
+                'po_pk': row['po_pk'],
+                'po_number': row['po_number'], 'vendor': row['vendor'],
+                'payment_terms': row['payment_terms'],
+                'item_count': row['item_count'],
+                'amount': amount, 'vat': vat, 'total': total,
+            })
+            s_amount += amount
+            s_vat += vat
+            s_total += total
+        systems.append({
+            'system': sys_key, 'pos': po_rows, 'po_count': len(po_rows),
+            'amount': s_amount, 'vat': s_vat, 'total': s_total,
+        })
+        grand['amount'] += s_amount
+        grand['vat'] += s_vat
+        grand['total'] += s_total
+    return systems, grand
+
+
 @login_required
 def project_cash_outflow(request, project_pk):
     """Per-project cash-OUTFLOW schedule — vendor payments split into
@@ -336,10 +399,13 @@ def project_cash_outflow(request, project_pk):
     po_numbers = list(project.purchase_orders.exclude(po_number='')
                       .order_by('po_number').values_list('po_number', flat=True))
 
+    by_system, by_system_total = _by_system_breakdown(project)
+
     return render(request, 'finance/cash_outflow.html', {
         'project': project, 'sheet': sheet,
         'a1_display': _display(a1), 'a2_display': _display(a2),
         'totals': totals, 'po_numbers': po_numbers,
+        'by_system': by_system, 'by_system_total': by_system_total,
     })
 
 
