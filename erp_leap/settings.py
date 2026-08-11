@@ -310,6 +310,10 @@ DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'Leap ERP <notificatio
 from email.utils import parseaddr as _parseaddr
 MS_GRAPH_SENDER = os.environ.get('MS_GRAPH_SENDER') or _parseaddr(DEFAULT_FROM_EMAIL)[1]
 
+# The one mailbox the vendor-email matcher reads from. Blank = demo mode
+# (fixture emails only). Set this once the mailbox + Graph permission are ready.
+VENDOR_EMAIL_MAILBOX = os.environ.get('VENDOR_EMAIL_MAILBOX', '')
+
 
 # AI digest (devtracking) — Anthropic-powered developer-progress reports.
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')

@@ -41,6 +41,9 @@ class VendorEmailMessage(models.Model):
 
     attachment_filename = models.CharField(max_length=255, blank=True)
     attachment_file = models.FileField(upload_to='vendor_email/attachments/', blank=True, null=True)
+    # attachment_count > 1 means there are more files than just the one above —
+    # see VendorEmailAttachment for the rest.
+    attachment_count = models.PositiveSmallIntegerField(default=0)
 
     resolved_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
@@ -55,3 +58,16 @@ class VendorEmailMessage(models.Model):
 
     def __str__(self):
         return f'{self.sender_email} — {self.subject}'
+
+
+class VendorEmailAttachment(models.Model):
+    """Extra files on a message beyond the first one (kept on
+    VendorEmailMessage.attachment_file for backward compatibility)."""
+    message = models.ForeignKey(
+        VendorEmailMessage, on_delete=models.CASCADE, related_name='extra_attachments',
+    )
+    filename = models.CharField(max_length=255)
+    file = models.FileField(upload_to='vendor_email/attachments/')
+
+    def __str__(self):
+        return self.filename

@@ -36,10 +36,13 @@ class DemoMailReader:
         self.scenario = scenario
 
     def fetch_new_messages(self):
-        base = self.SCENARIOS.get(self.scenario, self.SCENARIOS['matched'])
+        base = dict(self.SCENARIOS.get(self.scenario, self.SCENARIOS['matched']))
+        filename = base.pop('attachment_filename', '')
+        attachments = [(filename, b'%PDF-1.4 demo placeholder only')] if filename else []
         return [{
             'message_id': f'demo-{uuid.uuid4()}',
             'received_at': datetime.now(timezone.utc),
+            'attachments': attachments,
             **base,
         }]
 
@@ -67,18 +70,58 @@ class GraphMailReader:
             raise RuntimeError(result.get('error_description', 'Could not acquire Graph token'))
         return token
 
+    def _fetch_all_attachments(self, headers, message_id):
+        """Return a list of (filename, bytes) for every real file attachment
+        on a message. Skips inline attachments (signature logos, tracking
+        pixels, etc.) — those show up as attachments too but aren't the
+        vendor's actual quote documents."""
+        import base64
+        import requests
+
+        url = f"https://graph.microsoft.com/v1.0/users/{self.mailbox}/messages/{message_id}/attachments"
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        results = []
+        for att in resp.json().get('value', []):
+            if att.get('@odata.type') != '#microsoft.graph.fileAttachment':
+                continue
+            if att.get('isInline'):
+                continue
+            content_bytes = att.get('contentBytes')
+            if content_bytes:
+                results.append((att.get('name', 'attachment'), base64.b64decode(content_bytes)))
+        return results
+
     def fetch_new_messages(self):
         import requests
+        from .models import VendorEmailMessage
+
         token = self._get_access_token()
         headers = {'Authorization': f'Bearer {token}'}
         url = (
             f"https://graph.microsoft.com/v1.0/users/{self.mailbox}/mailFolders/Inbox/messages"
-            f"?$filter=isRead eq false&$top=25&$select=id,subject,receivedDateTime,from,bodyPreview"
+            f"?$top=25&$orderby=receivedDateTime desc"
+            f"&$select=id,subject,receivedDateTime,from,bodyPreview,hasAttachments"
         )
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
+
+        # Skip anything already captured — this is the slow part fixed:
+        # only download attachments for messages we've never seen before.
+        messages = resp.json().get('value', [])
+        already_known = set(
+            VendorEmailMessage.objects.filter(
+                message_id__in=[m['id'] for m in messages]
+            ).values_list('message_id', flat=True)
+        )
+
         out = []
-        for m in resp.json().get('value', []):
+        for m in messages:
+            if m['id'] in already_known:
+                continue
+            attachments = []
+            if m.get('hasAttachments'):
+                attachments = self._fetch_all_attachments(headers, m['id'])
             out.append({
                 'message_id': m['id'],
                 'received_at': m['receivedDateTime'],
@@ -86,7 +129,7 @@ class GraphMailReader:
                 'sender_name': m.get('from', {}).get('emailAddress', {}).get('name', ''),
                 'subject': m.get('subject', ''),
                 'body': m.get('bodyPreview', ''),
-                'attachment_filename': '',  # TODO: fetch attachments separately if hasAttachments
+                'attachments': attachments,  # list of (filename, bytes)
             })
         return out
 

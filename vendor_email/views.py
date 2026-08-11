@@ -13,7 +13,18 @@ from django.shortcuts import redirect
 
 @login_required
 def triage(request):
-    unmatched = VendorEmailMessage.objects.filter(status='unmatched')
+    from .matching import suggest_matching_sheet
+    from .services import process_new_messages
+    try:
+        process_new_messages()
+    except Exception:
+        pass  # mailbox check failed silently — don't block the page from loading
+    unmatched = list(VendorEmailMessage.objects.filter(status='unmatched'))
+    for m in unmatched:
+        sheet, reason = suggest_matching_sheet(m.sender_email, m.extracted_reference)
+        m.suggested_sheet_id = sheet.pk if sheet else None
+        m.suggested_sheet_title = sheet.title if sheet else None
+        m.suggested_reason = reason
     sheets = CostingSheet.objects.order_by('-updated_at')
     return render(request, 'vendor_email/triage.html', {'unmatched': unmatched, 'sheets': sheets})
 
