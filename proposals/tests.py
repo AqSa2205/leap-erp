@@ -392,6 +392,42 @@ class PrequalificationTests(TestCase):
         self.nopdf.refresh_from_db()
         self.assertTrue(self.nopdf.pdf)
 
+    def test_erp_admin_full_access(self):
+        """ERP Admin gets company-wide view/create/edit/delete on submissions and
+        can manage the library (the Administration section it owns)."""
+        from django.urls import reverse
+        from proposals.models import PrequalSubmission
+        erp, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
+        erp_user = User.objects.create_user('erp_pq', password='pw', role=erp)
+        self.client.force_login(erp_user)
+
+        # View — and see ALL submissions (incl. one created by another user).
+        r = self.client.get(reverse('proposals:prequal_list'))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(self.sub, list(r.context['submissions']))
+
+        # Create.
+        r = self.client.post(reverse('proposals:prequal_create'), {'title': 'By ERP'})
+        self.assertEqual(r.status_code, 302)
+        new = PrequalSubmission.objects.get(title='By ERP')
+        self.assertEqual(new.created_by, erp_user)
+
+        # Edit another user's submission (visible company-wide).
+        r = self.client.post(reverse('proposals:prequal_edit', kwargs={'pk': self.sub.pk}),
+                             {'title': 'Edited by ERP', 'items': [str(self.a.pk)]})
+        self.assertEqual(r.status_code, 302)
+        self.sub.refresh_from_db()
+        self.assertEqual(self.sub.title, 'Edited by ERP')
+
+        # Manage the library.
+        self.assertEqual(
+            self.client.get(reverse('proposals:prequal_library')).status_code, 200)
+
+        # Delete.
+        r = self.client.post(reverse('proposals:prequal_delete', kwargs={'pk': new.pk}))
+        self.assertEqual(r.status_code, 302)
+        self.assertFalse(PrequalSubmission.objects.filter(pk=new.pk).exists())
+
 
 class AIProposalAccessTests(TestCase):
     """The AI department can create a technical proposal and link it to an
