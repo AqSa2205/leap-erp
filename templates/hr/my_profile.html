@@ -198,6 +198,11 @@
                       {{ r.created_by.get_full_name|default:r.created_by.username }}
                     </div>
                     {% endif %}
+                    {% if r.is_backdated %}
+                    <div class="small text-muted" data-bs-toggle="tooltip" title="This leave started before it was submitted">
+                      <i class="bi bi-clock-history"></i> Backdated
+                    </div>
+                    {% endif %}
                   </td>
                   <td>{{ r.start_date }} – {{ r.end_date }}</td>
                   <td>
@@ -344,15 +349,18 @@
                         <div class="col-md-6">
                           <label class="form-label small">Document</label>
                           {% if r.document %}
-                          <div class="small mb-1 d-flex align-items-center gap-1">
+                          <div class="small mb-1 d-flex align-items-center gap-1" data-doc-attached="{{ r.pk }}">
                             <span>Attached: <a href="{{ r.document.url }}" target="_blank">{{ r.document_filename }}</a></span>
-                            <button type="submit" name="document-clear" value="on"
-                                    class="btn btn-sm btn-link text-danger p-0"
-                                    title="Remove this document"
-                                    onclick="if (!confirm('Remove this document? This also saves any other changes you've made above.')) return false; this.form.querySelector('input[type=file][name=document]').value=''; return true;">
+                            <button type="button" class="btn btn-sm btn-link text-danger p-0" title="Remove this document"
+                                    onclick="return docQueueRemoval(this, '{{ r.pk }}');">
                               <i class="bi bi-x-circle"></i>
                             </button>
                           </div>
+                          <div class="small mb-1 text-danger d-none" data-doc-pending="{{ r.pk }}">
+                            <i class="bi bi-exclamation-circle"></i> Will be removed when you click Save Changes.
+                            <button type="button" class="btn btn-sm btn-link p-0" onclick="return docUndoRemoval(this, '{{ r.pk }}');">Undo</button>
+                          </div>
+                          <input type="hidden" name="document-clear" value="" data-doc-clear-flag="{{ r.pk }}">
                           {% endif %}
                           <input type="file" name="document" class="form-control form-control-sm">
                         </div>
@@ -487,7 +495,14 @@
               {% for e in my_attendance_exceptions %}
               <tr>
                 <td>{{ e.event_date }} {{ e.event_start_time|time:"H:i" }}</td>
-                <td>{{ e.get_reason_category_display }}{% if e.reason_category == 'other' %} — {{ e.custom_reason }}{% endif %}</td>
+                <td>
+                  {{ e.get_reason_category_display }}{% if e.reason_category == 'other' %} — {{ e.custom_reason }}{% endif %}
+                  {% if e.is_backdated %}
+                  <div class="small text-muted" data-bs-toggle="tooltip" title="This event happened before the exception was submitted">
+                    <i class="bi bi-clock-history"></i> Backdated
+                  </div>
+                  {% endif %}
+                </td>
                 <td>
                   <div class="d-flex flex-column gap-2 py-1">
                     {% if e.status == 'approved' %}<span class="badge bg-success align-self-start">Approved</span>
@@ -681,63 +696,17 @@
               <div class="small text-muted mt-1">
                 {% for req in r.in_behalf_requests %}
                 {% if forloop.counter <= 2 %}
-                <div>
-                  Your request:
-                  {% if req.status == 'approved' %}<span class="badge bg-success">Approved</span>
-                  {% elif req.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
-                  {% elif req.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
-                  {% elif req.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
-                  {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
-                  {% if req.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
-                  {{ req.leave_type.name }}, {{ req.start_date }}–{{ req.end_date }}
-                  {% if req.can_cancel %}
-                  <button type="button" class="btn btn-sm btn-link text-warning p-0 ms-1" data-bs-toggle="collapse" data-bs-target="#cancelInBehalf{{ req.pk }}" id="cancel_leave_request_{{ req.pk }}">
-                    Cancel
-                  </button>
-                  <div class="collapse mt-1" id="cancelInBehalf{{ req.pk }}">
-                    <form method="post" class="border rounded p-2">
-                      {% csrf_token %}
-                      <input type="hidden" name="action" value="cancel_leave_request">
-                      <input type="hidden" name="request_id" value="{{ req.pk }}">
-                      <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Reason (required if an approver already decided)"></textarea>
-                      <button type="submit" class="btn btn-sm btn-outline-warning" onclick="return confirm('Cancel this leave request?');">Confirm Cancel</button>
-                    </form>
-                  </div>
-                  {% endif %}
-                </div>
+                {% include 'hr/_in_behalf_request_line.html' %}
                 {% endif %}
                 {% endfor %}
                 {% if r.in_behalf_requests|length > 2 %}
                 <button type="button" class="btn btn-sm btn-link px-0 py-0 text-decoration-none" data-bs-toggle="collapse" data-bs-target="#inBehalf{{ r.pk }}">
-                  +{{ r.in_behalf_requests|length|add:"-2" }} more request(s) you logged for {{ r.full_name }}
+                  +{{ r.in_behalf_requests|length|add:"-2" }} more request(s) you logged
                 </button>
                 <div class="collapse" id="inBehalf{{ r.pk }}">
                   {% for req in r.in_behalf_requests %}
                   {% if forloop.counter > 2 %}
-                  <div>
-                    Your request:
-                    {% if req.status == 'approved' %}<span class="badge bg-success">Approved</span>
-                    {% elif req.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
-                    {% elif req.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
-                    {% elif req.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
-                    {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
-                    {% if req.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
-                    {{ req.leave_type.name }}, {{ req.start_date }}–{{ req.end_date }}
-                    {% if req.can_cancel %}
-                    <button type="button" class="btn btn-sm btn-link text-warning p-0 ms-1" data-bs-toggle="collapse" data-bs-target="#cancelInBehalf{{ req.pk }}" id="cancel_leave_request_{{ req.pk }}">
-                      Cancel
-                    </button>
-                    <div class="collapse mt-1" id="cancelInBehalf{{ req.pk }}">
-                      <form method="post" class="border rounded p-2">
-                        {% csrf_token %}
-                        <input type="hidden" name="action" value="cancel_leave_request">
-                        <input type="hidden" name="request_id" value="{{ req.pk }}">
-                        <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Reason (required if an approver already decided)"></textarea>
-                        <button type="submit" class="btn btn-sm btn-outline-warning" onclick="return confirm('Cancel this leave request?');">Confirm Cancel</button>
-                      </form>
-                    </div>
-                    {% endif %}
-                  </div>
+                  {% include 'hr/_in_behalf_request_line.html' %}
                   {% endif %}
                   {% endfor %}
                 </div>
@@ -757,7 +726,6 @@
             <i class="bi bi-diagram-3 me-1"></i>+{{ downstream_reports|length }} more further down your reporting chain
           </button>
           <div class="collapse mt-1" id="downstreamReports">
-            <div class="text-muted small mb-1">Full downstream chain (below your direct reports)</div>
             <ul class="list-group list-group-flush small mb-2" style="max-height: 180px; overflow-y: auto;">
               {% for r in downstream_reports %}
               <li class="list-group-item px-0 py-1">{{ r.full_name }}</li>
@@ -799,6 +767,50 @@
     }
     reasonSelect.addEventListener('change', toggleCustomReason);
     toggleCustomReason();
+})();
+
+// Document removal on an Edit form is deferred, not immediate: clicking
+// the X only confirms and queues it (toggling a hidden document-clear
+// flag + the visible state) — nothing is submitted until the user
+// clicks Save Changes for the whole form, same as any other field here.
+function docQueueRemoval(btn, pk) {
+    if (!confirm('Remove this document? It will be deleted when you click Save Changes.')) return false;
+    var form = btn.closest('form');
+    form.querySelector('[data-doc-attached="' + pk + '"]').classList.add('d-none');
+    form.querySelector('[data-doc-pending="' + pk + '"]').classList.remove('d-none');
+    form.querySelector('[data-doc-clear-flag="' + pk + '"]').value = 'on';
+    form.querySelector('input[type=file][name=document]').value = '';
+    return false;
+}
+function docUndoRemoval(btn, pk) {
+    var form = btn.closest('form');
+    form.querySelector('[data-doc-attached="' + pk + '"]').classList.remove('d-none');
+    form.querySelector('[data-doc-pending="' + pk + '"]').classList.add('d-none');
+    form.querySelector('[data-doc-clear-flag="' + pk + '"]').value = '';
+    return false;
+}
+document.querySelectorAll('input[type="file"][name="document"]').forEach(function (fileInput) {
+    fileInput.addEventListener('change', function () {
+        if (!fileInput.files.length) return;
+        var form = fileInput.closest('form');
+        var clearFlag = form.querySelector('[data-doc-clear-flag]');
+        // Picking a new file after queuing a removal cancels the removal —
+        // the upload already says what should happen to the document.
+        if (clearFlag && clearFlag.value === 'on') docUndoRemoval(fileInput, clearFlag.dataset.docClearFlag);
+    });
+});
+
+(function () {
+    // After a successful Edit save, the page reloads (see the
+    // ?opened_leave= redirect) — re-expand that specific row's panel and
+    // scroll to it, so the change is actually visible instead of the
+    // panel just collapsing back to hidden.
+    var openedLeave = new URLSearchParams(window.location.search).get('opened_leave');
+    if (!openedLeave) return;
+    var row = document.getElementById('editLeave' + openedLeave);
+    if (!row) return;
+    row.classList.add('show');
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
 })();
 </script>
 {% endblock %}

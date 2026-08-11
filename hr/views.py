@@ -4,7 +4,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_POST
 from django.contrib import messages
-from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView, FormView
+from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView, FormView, TemplateView
 from django.urls import reverse_lazy, reverse
 from django.db.models import Q, Count, Sum
 from django.db.models import ProtectedError
@@ -60,8 +60,8 @@ class HRScopedAccessMixin(LoginRequiredMixin, UserPassesTestMixin):
 
 def is_designated_approver(user):
     """True if `user` currently holds active approval authority for leave
-    requests — an active LeaveDashboardAccess grant (managed on the Org
-    Chart page's 'Leave Dashboard Access' tab). This — not a username check
+    requests — an active LeaveDashboardAccess grant (managed on the Leave
+    Access page, sidebar Leave -> Leave Access). This — not a username check
     — is what makes Aamna Khan and Ali Sultan (or whoever holds these rows)
     able to actually approve/reject. Note this is NOT the same as being a
     Super Admin: Super Admin status alone grants viewing, never approval
@@ -76,7 +76,7 @@ def has_override_access(user):
     """Access gate for the Super Admin 'override' escape hatch on leave
     requests (force-approve/disapprove when the real approver is
     unavailable) — configured via OverrideAccessSettings, managed from the
-    Org Chart page's 'Leave Dashboard Access' tab. Exactly one mode is
+    Leave Access page (sidebar Leave -> Leave Access). Exactly one mode is
     authoritative: by default (MODE_ALL_SUPER_ADMINS) every Super Admin has
     it, matching the original hardcoded behavior; narrowed to
     MODE_SPECIFIC_ROLES or MODE_SPECIFIC_EMPLOYEES, only that hand-picked
@@ -355,7 +355,10 @@ def my_profile(request):
                 messages.error(request, str(exc))
         else:
             messages.error(request, 'Could not update the request — please check the form.')
-        return redirect('hr:my_profile')
+        # opened_leave tells the page which row's edit panel to re-expand
+        # after the reload, so the employee actually sees the change they
+        # just made instead of it collapsing back to hidden.
+        return redirect(f"{reverse('hr:my_profile')}?opened_leave={target.pk}")
 
     is_cancel_leave_post = (
         emp and request.method == 'POST' and request.POST.get('action') == 'cancel_leave_request')
@@ -2258,7 +2261,7 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
         # reach individual detail pages via a notification link. Mirrors the same
         # widening already applied to LeaveRequestDetailView. can_view_leave_dashboard
         # also grants access to anyone with an active LeaveDashboardAccess record,
-        # managed by Super Admins from the Org Chart page's access tab.
+        # managed by Super Admins from the Leave Access page.
         return can_view_leave_dashboard(self.request.user)
 
     def get_queryset(self):
@@ -2327,6 +2330,11 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
                     messages.error(request, str(exc))
             else:
                 messages.error(request, 'Could not update the request — please check the form.')
+            # opened_leave + tab=logged tell the page which row's edit panel
+            # to re-expand, and which tab to switch to, after the reload —
+            # so the change is actually visible instead of collapsing back
+            # to hidden on a tab the user isn't looking at.
+            return redirect(f"{reverse('hr:leave_request_list')}?opened_leave={target.pk}&tab=logged")
         elif action == 'cancel_leave_request':
             target = LeaveRequest.objects.filter(pk=request.POST.get('request_id')).first()
             if target is None or target.created_by_id != request.user.id:
@@ -2407,9 +2415,24 @@ class LeaveRequestCreateView(HRScopedAccessMixin, FormView):
         # A plain direct manager (no Role, no LeaveDashboardAccess/override
         # access) can submit here but cannot view the Leave Requests queue —
         # that's a separate, more restrictive page. The template's Back/
-        # Cancel links, and this view's own success redirect, must not
-        # point them at a page they'll immediately get a 403 on.
+        # Cancel links must not point them at a page they'll immediately
+        # get a 403 on.
         ctx['can_view_queue'] = can_view_leave_dashboard(self.request.user)
+        # This view has multiple entry points (Leave Summary's "Add Leave",
+        # the sidebar, Attendance Matrix, My Profile's "My Team"). Only
+        # Leave Summary passes back=leave_summary&employee=<id>, so the
+        # Back/Cancel links can return there instead of defaulting to the
+        # queue/profile fallback below.
+        employee_id = self.request.GET.get('employee')
+        if self.request.GET.get('back') == 'leave_summary' and employee_id and employee_id.isdigit():
+            ctx['back_url'] = reverse('hr:leave_summary', kwargs={'pk': employee_id})
+            ctx['back_label'] = 'Back to Leave Summary'
+        elif ctx['can_view_queue']:
+            ctx['back_url'] = reverse('hr:leave_request_list')
+            ctx['back_label'] = 'Back to Queue'
+        else:
+            ctx['back_url'] = reverse('hr:my_profile')
+            ctx['back_label'] = 'Back to My Profile'
         return ctx
 
     def _success_redirect(self):
@@ -3122,7 +3145,7 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
         # Whether they're the *specific* pending approver for *this* request is enforced
         # per-action in post() (see the 'decide' branch) — this is just page access.
         # can_view_leave_dashboard also grants access to anyone with an active
-        # LeaveDashboardAccess record, managed from the Org Chart page's access tab.
+        # LeaveDashboardAccess record, managed from the Leave Access page.
         return can_view_leave_dashboard(self.request.user)
 
     def get_context_data(self, **kwargs):
@@ -3363,10 +3386,20 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         # Per-tab pending counts for the tab labels — always all three
         # (regardless of which tab is currently selected), so switching tabs
         # doesn't need a second request to know what the other tabs hold.
-        ctx['direct_tab_count'] = self._tab_queryset('direct', user, emp).filter(status__in=('pending', 'expired')).count()
-        ctx['secondary_tab_count'] = self._tab_queryset('secondary', user, emp).filter(status__in=('pending', 'expired')).count()
+        # Each count folds in pending revoke requests too, not just plain
+        # pending/expired exceptions — a revoke request needs a decision
+        # exactly as much as a new request does, so a tab reading "0" while
+        # a revoke sits there awaiting review would be misleading.
+        def _tab_count(tab_name):
+            base = self._tab_queryset(tab_name, user, emp)
+            return (
+                base.filter(status__in=('pending', 'expired')).count()
+                + AttendanceExceptionRevokeRequest.objects.filter(
+                    status='pending', attendance_exception__in=base).count())
+        ctx['direct_tab_count'] = _tab_count('direct')
+        ctx['secondary_tab_count'] = _tab_count('secondary')
         if ctx['show_all_tab']:
-            ctx['all_tab_count'] = self._tab_queryset('all', user, emp).filter(status__in=('pending', 'expired')).count()
+            ctx['all_tab_count'] = _tab_count('all')
         return ctx
 
     def post(self, request, *args, **kwargs):
@@ -3444,6 +3477,159 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         return redirect(url)
 
 
+class LeaveAccessView(SuperAdminRequiredMixin, TemplateView):
+    """Super-Admin-only page (linked from the sidebar's Leave section) for
+    the Leave Request workflow's permission surface: who can view the Leave
+    Request dashboard and approve requests (LeaveDashboardAccess), who can
+    force-approve/disapprove when the real approver is unavailable
+    (OverrideAccessSettings/Role/Employee), and the balance-hold settings
+    for over-balance submissions. Previously the Org Chart page's second
+    tab — Org Chart itself is purely about the reporting hierarchy now."""
+    template_name = 'hr/leave_access.html'
+
+    def get_context_data(self, **kwargs):
+        from django.db.models import Q
+        from accounts.models import User, Role
+        from .models import LeaveDashboardAccess, OverrideAccessSettings, OverrideAccessRole, OverrideAccessEmployee
+        ctx = super().get_context_data(**kwargs)
+
+        ctx['access_grants'] = (
+            LeaveDashboardAccess.objects.filter(is_active=True)
+            .select_related('user', 'granted_by').order_by('user__username'))
+
+        access_search = (self.request.GET.get('access_search') or '').strip()
+        ctx['access_search'] = access_search
+        access_results = None
+        if access_search:
+            granted_user_ids = set(
+                LeaveDashboardAccess.objects.filter(is_active=True).values_list('user_id', flat=True))
+            access_results = (
+                Employee.objects.filter(is_active=True, user__isnull=False)
+                .filter(
+                    Q(full_name__icontains=access_search)
+                    | Q(user__username__icontains=access_search)
+                    | Q(user__email__icontains=access_search))
+                .exclude(user_id__in=granted_user_ids)
+                .select_related('user').order_by('full_name')[:25])
+        ctx['access_results'] = access_results
+
+        # ── Override Access (who can use the leave-request override escape
+        # hatch) — lives on this same page since it's specifically about
+        # Leave Request access, not a general-purpose setting. ──
+        override_settings = OverrideAccessSettings.get_solo()
+        ctx['override_settings'] = override_settings
+        ctx['override_mode_choices'] = OverrideAccessSettings.MODE_CHOICES
+        ctx['current_super_admins'] = User.objects.filter(
+            role__name='super_admin', is_active=True).order_by('username')
+        ctx['override_roles'] = Role.objects.all().order_by('name')
+        ctx['override_role_ids'] = set(
+            OverrideAccessRole.objects.values_list('role_id', flat=True))
+        ctx['override_employees'] = (
+            OverrideAccessEmployee.objects.select_related('user', 'added_by').order_by('user__username'))
+
+        override_emp_search = (self.request.GET.get('override_emp_search') or '').strip()
+        ctx['override_emp_search'] = override_emp_search
+        override_emp_results = None
+        if override_emp_search:
+            granted_override_user_ids = set(
+                OverrideAccessEmployee.objects.values_list('user_id', flat=True))
+            override_emp_results = (
+                Employee.objects.filter(is_active=True, user__isnull=False)
+                .filter(
+                    Q(full_name__icontains=override_emp_search)
+                    | Q(user__username__icontains=override_emp_search)
+                    | Q(user__email__icontains=override_emp_search))
+                .exclude(user_id__in=granted_override_user_ids)
+                .select_related('user').order_by('full_name')[:25])
+        ctx['override_emp_results'] = override_emp_results
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        from accounts.models import Role
+        from .models import LeaveDashboardAccess, OverrideAccessSettings, OverrideAccessRole, OverrideAccessEmployee
+        access_url = reverse('hr:leave_access')
+
+        grant_employee_id = request.POST.get('grant_dashboard_access')
+        if grant_employee_id:
+            grant_employee = get_object_or_404(Employee, pk=grant_employee_id)
+            if not grant_employee.user_id:
+                messages.error(request, f'{grant_employee.full_name} has no linked user account.')
+            else:
+                LeaveDashboardAccess.objects.update_or_create(
+                    user=grant_employee.user,
+                    defaults={'is_active': True, 'granted_by': request.user})
+                messages.success(
+                    request,
+                    f'Granted {grant_employee.full_name} access to the Leave Request dashboard '
+                    'and approval authority on new leave requests.')
+            return redirect(access_url)
+
+        revoke_user_id = request.POST.get('revoke_dashboard_access')
+        if revoke_user_id:
+            grant = get_object_or_404(LeaveDashboardAccess, user_id=revoke_user_id, is_active=True)
+            display_name = grant.user.get_full_name() or grant.user.username
+            grant.delete()
+            messages.success(
+                request,
+                f'Revoked {display_name}\'s Leave Request dashboard access and approval authority.')
+            return redirect(access_url)
+
+        override_mode = request.POST.get('set_override_mode')
+        if override_mode:
+            if override_mode not in dict(OverrideAccessSettings.MODE_CHOICES):
+                messages.error(request, 'Not a valid override access mode.')
+                return redirect(access_url)
+            config = OverrideAccessSettings.get_solo()
+            config.mode = override_mode
+            config.updated_by = request.user
+            config.save(update_fields=['mode', 'updated_by', 'updated_at'])
+            messages.success(
+                request, f'Override access mode set to "{config.get_mode_display()}".')
+            return redirect(access_url)
+
+        if 'set_balance_hold' in request.POST:
+            config = OverrideAccessSettings.get_solo()
+            config.allow_site_balance_hold = bool(request.POST.get('allow_site_balance_hold'))
+            config.allow_office_balance_hold = bool(request.POST.get('allow_office_balance_hold'))
+            config.updated_by = request.user
+            config.save(update_fields=['allow_site_balance_hold', 'allow_office_balance_hold', 'updated_by', 'updated_at'])
+            messages.success(request, 'Balance-hold settings updated.')
+            return redirect(access_url)
+
+        toggle_role_id = request.POST.get('toggle_override_role')
+        if toggle_role_id:
+            role = get_object_or_404(Role, pk=toggle_role_id)
+            existing = OverrideAccessRole.objects.filter(role=role).first()
+            if existing:
+                existing.delete()
+                messages.success(request, f'Removed override access for the {role.get_name_display()} role.')
+            else:
+                OverrideAccessRole.objects.create(role=role)
+                messages.success(request, f'Granted override access to the {role.get_name_display()} role.')
+            return redirect(access_url)
+
+        grant_override_employee_id = request.POST.get('grant_override_employee')
+        if grant_override_employee_id:
+            grant_employee = get_object_or_404(Employee, pk=grant_override_employee_id)
+            if not grant_employee.user_id:
+                messages.error(request, f'{grant_employee.full_name} has no linked user account.')
+            else:
+                OverrideAccessEmployee.objects.update_or_create(
+                    user=grant_employee.user, defaults={'added_by': request.user})
+                messages.success(request, f'Granted {grant_employee.full_name} override access.')
+            return redirect(access_url)
+
+        revoke_override_employee_id = request.POST.get('revoke_override_employee')
+        if revoke_override_employee_id:
+            grant = get_object_or_404(OverrideAccessEmployee, user_id=revoke_override_employee_id)
+            display_name = grant.user.get_full_name() or grant.user.username
+            grant.delete()
+            messages.success(request, f'Revoked {display_name}\'s override access.')
+            return redirect(access_url)
+
+        return redirect(access_url)
+
+
 class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
     """Super-Admin-only page: assign each employee's main_manager/secondary_managers,
     and view the resulting hierarchy tree. Uses a per-row EmployeeHierarchyForm
@@ -3466,24 +3652,6 @@ class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         u = self.request.user
         return bool(u.is_super_admin_user or u.is_erp_admin_user)
 
-    def _can_config_access(self):
-        """Who may open/change the Leave Dashboard Access tab (a permission-
-        granting surface). Super Admin only — deliberately NOT ERP Admin."""
-        return self.request.user.is_super_admin_user
-
-    VALID_TABS = ('hierarchy', 'access')
-
-    def _resolve_tab(self):
-        """?tab=hierarchy|access, defaulting to 'hierarchy'. The 'access' tab is
-        a permission-granting surface, so a user without config-access rights is
-        silently downgraded to 'hierarchy' (mirrors TeamExceptionsView's 'all')."""
-        requested = self.request.GET.get('tab')
-        if requested not in self.VALID_TABS:
-            return 'hierarchy'
-        if requested == 'access' and not self._can_config_access():
-            return 'hierarchy'
-        return requested
-
     def get_queryset(self):
         qs = Employee.objects.filter(is_active=True).select_related('main_manager').order_by('full_name')
         # Team-scoped roles only ever see their own reports in the table.
@@ -3494,62 +3662,8 @@ class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         return qs
 
     def get_context_data(self, **kwargs):
-        from django.db.models import Q
-        from accounts.models import User, Role
-        from .models import LeaveDashboardAccess, OverrideAccessSettings, OverrideAccessRole, OverrideAccessEmployee
         ctx = super().get_context_data(**kwargs)
         ctx['search'] = self.request.GET.get('search', '')
-        ctx['tab'] = self._resolve_tab()
-
-        ctx['access_grants'] = (
-            LeaveDashboardAccess.objects.filter(is_active=True)
-            .select_related('user', 'granted_by').order_by('user__username'))
-
-        access_search = (self.request.GET.get('access_search') or '').strip()
-        ctx['access_search'] = access_search
-        access_results = None
-        if ctx['tab'] == 'access' and access_search:
-            granted_user_ids = set(
-                LeaveDashboardAccess.objects.filter(is_active=True).values_list('user_id', flat=True))
-            access_results = (
-                Employee.objects.filter(is_active=True, user__isnull=False)
-                .filter(
-                    Q(full_name__icontains=access_search)
-                    | Q(user__username__icontains=access_search)
-                    | Q(user__email__icontains=access_search))
-                .exclude(user_id__in=granted_user_ids)
-                .select_related('user').order_by('full_name')[:25])
-        ctx['access_results'] = access_results
-
-        # ── Override Access (who can use the leave-request override escape
-        # hatch) — lives inside this same tab since it's specifically about
-        # Leave Request access, not a general-purpose setting. ──
-        override_settings = OverrideAccessSettings.get_solo()
-        ctx['override_settings'] = override_settings
-        ctx['override_mode_choices'] = OverrideAccessSettings.MODE_CHOICES
-        ctx['current_super_admins'] = User.objects.filter(
-            role__name='super_admin', is_active=True).order_by('username')
-        ctx['override_roles'] = Role.objects.all().order_by('name')
-        ctx['override_role_ids'] = set(
-            OverrideAccessRole.objects.values_list('role_id', flat=True))
-        ctx['override_employees'] = (
-            OverrideAccessEmployee.objects.select_related('user', 'added_by').order_by('user__username'))
-
-        override_emp_search = (self.request.GET.get('override_emp_search') or '').strip()
-        ctx['override_emp_search'] = override_emp_search
-        override_emp_results = None
-        if ctx['tab'] == 'access' and override_emp_search:
-            granted_override_user_ids = set(
-                OverrideAccessEmployee.objects.values_list('user_id', flat=True))
-            override_emp_results = (
-                Employee.objects.filter(is_active=True, user__isnull=False)
-                .filter(
-                    Q(full_name__icontains=override_emp_search)
-                    | Q(user__username__icontains=override_emp_search)
-                    | Q(user__email__icontains=override_emp_search))
-                .exclude(user_id__in=granted_override_user_ids)
-                .select_related('user').order_by('full_name')[:25])
-        ctx['override_emp_results'] = override_emp_results
 
         forms_by_employee = {}
         for emp in ctx['employees']:
@@ -3586,109 +3700,12 @@ class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
                 Employee.objects.filter(pk=emp.pk, is_active=True) if emp
                 else Employee.objects.none())
         ctx['can_manage_org'] = self._can_manage()
-        ctx['can_config_access'] = self._can_config_access()
         return ctx
 
     def post(self, request, *args, **kwargs):
-        from accounts.models import Role
-        from .models import LeaveDashboardAccess, OverrideAccessSettings, OverrideAccessRole, OverrideAccessEmployee
-        access_tab_url = f"{reverse('hr:org_chart')}?tab=access"
-
         # Team-scoped roles have a read-only org chart — no mutations at all.
         if not self._can_manage():
             raise PermissionDenied
-        # The Leave Dashboard Access / Override actions are a permission-granting
-        # surface: Super Admin only, even for ERP Admin (who can still edit the
-        # hierarchy below). Any of these POST keys implies an access-tab action.
-        _access_keys = (
-            'grant_dashboard_access', 'revoke_dashboard_access', 'set_override_mode',
-            'toggle_override_role', 'grant_override_employee', 'revoke_override_employee',
-            'set_balance_hold',
-        )
-        if any(request.POST.get(k) for k in _access_keys) and not self._can_config_access():
-            raise PermissionDenied
-
-        # Leave Dashboard Access tab actions — handled first and returned early,
-        # since they key off a user/employee distinct from the hierarchy actions
-        # below (which always require an `employee_id`).
-        grant_employee_id = request.POST.get('grant_dashboard_access')
-        if grant_employee_id:
-            grant_employee = get_object_or_404(Employee, pk=grant_employee_id)
-            if not grant_employee.user_id:
-                messages.error(request, f'{grant_employee.full_name} has no linked user account.')
-            else:
-                LeaveDashboardAccess.objects.update_or_create(
-                    user=grant_employee.user,
-                    defaults={'is_active': True, 'granted_by': request.user})
-                messages.success(
-                    request,
-                    f'Granted {grant_employee.full_name} access to the Leave Request dashboard '
-                    'and approval authority on new leave requests.')
-            return redirect(access_tab_url)
-
-        revoke_user_id = request.POST.get('revoke_dashboard_access')
-        if revoke_user_id:
-            grant = get_object_or_404(LeaveDashboardAccess, user_id=revoke_user_id, is_active=True)
-            display_name = grant.user.get_full_name() or grant.user.username
-            grant.delete()
-            messages.success(
-                request,
-                f'Revoked {display_name}\'s Leave Request dashboard access and approval authority.')
-            return redirect(access_tab_url)
-
-        # ── Override Access actions ──
-        override_mode = request.POST.get('set_override_mode')
-        if override_mode:
-            if override_mode not in dict(OverrideAccessSettings.MODE_CHOICES):
-                messages.error(request, 'Not a valid override access mode.')
-                return redirect(access_tab_url)
-            config = OverrideAccessSettings.get_solo()
-            config.mode = override_mode
-            config.updated_by = request.user
-            config.save(update_fields=['mode', 'updated_by', 'updated_at'])
-            messages.success(
-                request, f'Override access mode set to "{config.get_mode_display()}".')
-            return redirect(access_tab_url)
-
-        if 'set_balance_hold' in request.POST:
-            config = OverrideAccessSettings.get_solo()
-            config.allow_site_balance_hold = bool(request.POST.get('allow_site_balance_hold'))
-            config.allow_office_balance_hold = bool(request.POST.get('allow_office_balance_hold'))
-            config.updated_by = request.user
-            config.save(update_fields=['allow_site_balance_hold', 'allow_office_balance_hold', 'updated_by', 'updated_at'])
-            messages.success(request, 'Balance-hold settings updated.')
-            return redirect(access_tab_url)
-
-        toggle_role_id = request.POST.get('toggle_override_role')
-        if toggle_role_id:
-            role = get_object_or_404(Role, pk=toggle_role_id)
-            existing = OverrideAccessRole.objects.filter(role=role).first()
-            if existing:
-                existing.delete()
-                messages.success(request, f'Removed override access for the {role.get_name_display()} role.')
-            else:
-                OverrideAccessRole.objects.create(role=role)
-                messages.success(request, f'Granted override access to the {role.get_name_display()} role.')
-            return redirect(access_tab_url)
-
-        grant_override_employee_id = request.POST.get('grant_override_employee')
-        if grant_override_employee_id:
-            grant_employee = get_object_or_404(Employee, pk=grant_override_employee_id)
-            if not grant_employee.user_id:
-                messages.error(request, f'{grant_employee.full_name} has no linked user account.')
-            else:
-                OverrideAccessEmployee.objects.update_or_create(
-                    user=grant_employee.user, defaults={'added_by': request.user})
-                messages.success(request, f'Granted {grant_employee.full_name} override access.')
-            return redirect(access_tab_url)
-
-        revoke_override_employee_id = request.POST.get('revoke_override_employee')
-        if revoke_override_employee_id:
-            grant = get_object_or_404(OverrideAccessEmployee, user_id=revoke_override_employee_id)
-            display_name = grant.user.get_full_name() or grant.user.username
-            grant.delete()
-            messages.success(request, f'Revoked {display_name}\'s override access.')
-            return redirect(access_tab_url)
 
         employee = get_object_or_404(Employee, pk=request.POST.get('employee_id'))
         # Every successful action redirects with a `#row-<pk>` fragment so

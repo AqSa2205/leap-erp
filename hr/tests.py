@@ -500,7 +500,7 @@ class BalanceHoldSettingsViewTests(TestCase):
         from hr.models import OverrideAccessSettings
         _make_role_user('bhsv-super', Role.SUPER_ADMIN)
         self.client.login(username='bhsv-super', password='testpass123')
-        resp = self.client.post(reverse('hr:org_chart') + '?tab=access', data={
+        resp = self.client.post(reverse('hr:leave_access'), data={
             'set_balance_hold': '1', 'allow_office_balance_hold': '1',
         })
         self.assertEqual(resp.status_code, 302)
@@ -514,7 +514,7 @@ class BalanceHoldSettingsViewTests(TestCase):
         plain_user.set_password('x')
         plain_user.save()
         self.client.login(username='bhsv-plain', password='x')
-        resp = self.client.post(reverse('hr:org_chart') + '?tab=access', data={
+        resp = self.client.post(reverse('hr:leave_access'), data={
             'set_balance_hold': '1', 'allow_office_balance_hold': '1',
         })
         self.assertEqual(resp.status_code, 403)
@@ -702,6 +702,48 @@ class EmployeeDashboardExceptionDisplayTests(TestCase):
     def test_grant_exception_days_link_visible_for_override_access(self):
         resp = self.client.get(reverse('hr:leave_summary', args=[self.emp.pk]))
         self.assertContains(resp, 'Add Exception Days')
+
+
+class LeaveSummaryAndRecordCreateNavigationTests(TestCase):
+    """Leave Summary used to show two redundant "Add Leave" buttons (only
+    one of which pre-filled the employee) and a "Back to Employee" link that
+    didn't reflect how the page is actually reached (only ever from Leave
+    Entitlements). The Add Leave form's own Back/Cancel links, in turn,
+    always said "Back to Queue"/"Back to My Profile" regardless of where the
+    submitter actually came from."""
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30')})
+        self.emp = Employee.objects.create(iqama_number='LSNT-1', full_name='Nav Test Employee')
+        from accounts.models import Role
+        self.hr_user = _make_role_user('lsntview', Role.SUPER_ADMIN)
+        self.client.login(username='lsntview', password='testpass123')
+
+    def test_leave_summary_shows_exactly_one_add_leave_button(self):
+        resp = self.client.get(reverse('hr:leave_summary', args=[self.emp.pk]) + '?year=2026')
+        self.assertContains(resp, 'Add Leave', count=1)
+        expected_href = f"{reverse('hr:leave_record_create')}?employee={self.emp.pk}&back=leave_summary"
+        self.assertContains(resp, expected_href)
+
+    def test_leave_summary_back_link_points_to_entitlements(self):
+        resp = self.client.get(reverse('hr:leave_summary', args=[self.emp.pk]) + '?year=2026')
+        self.assertContains(resp, 'Back to Leave Entitlements')
+        self.assertContains(resp, f"{reverse('hr:entitlement_year')}?year=2026")
+        self.assertNotContains(resp, 'Back to Employee')
+
+    def test_add_leave_form_reached_from_leave_summary_backs_to_leave_summary(self):
+        resp = self.client.get(
+            reverse('hr:leave_record_create') + f'?employee={self.emp.pk}&back=leave_summary')
+        self.assertContains(resp, 'Back to Leave Summary')
+        self.assertContains(resp, reverse('hr:leave_summary', args=[self.emp.pk]))
+
+    def test_add_leave_form_reached_directly_still_backs_to_queue(self):
+        # No employee/back params (e.g. the sidebar link, or Attendance Matrix)
+        # — existing behaviour for a submitter who can view the queue must be
+        # unchanged.
+        resp = self.client.get(reverse('hr:leave_record_create'))
+        self.assertContains(resp, 'Back to Queue')
+        self.assertNotContains(resp, 'Back to Leave Summary')
 
 
 class EntitlementYearExceptionDisplayTests(TestCase):
@@ -4855,9 +4897,10 @@ class OrgChartViewTests(TestCase):
         self.assertContains(resp, 'renderTreeCanvas')
 
 
-class OrgChartAccessTabTests(TestCase):
-    """The 'Leave Dashboard Access' tab: still Super-Admin-only (same page
-    gate as the Reporting Hierarchy tab), search-and-grant, and revoke."""
+class LeaveAccessViewTests(TestCase):
+    """The standalone Leave Access page (sidebar Leave -> Leave Access,
+    formerly the Org Chart's second tab): still Super-Admin-only, search-
+    and-grant, and revoke."""
     def setUp(self):
         from hr.models import LeaveDashboardAccess
         self.LeaveDashboardAccess = LeaveDashboardAccess
@@ -4878,40 +4921,38 @@ class OrgChartAccessTabTests(TestCase):
         self.frank.user = self.frank_user
         self.frank.save(update_fields=['user'])
 
-    # ── tab-level access gate (mirrors the whole-page gate) ──
-    def test_plain_admin_forbidden_on_access_tab(self):
+    # ── page-level access gate ──
+    def test_plain_admin_forbidden(self):
         self.client.login(username='access_admin', password='testpass123')
-        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access'})
+        resp = self.client.get(reverse('hr:leave_access'))
         self.assertEqual(resp.status_code, 403)
 
-    def test_super_admin_sees_access_tab(self):
+    def test_super_admin_sees_the_page(self):
         self.client.login(username='access_super', password='testpass123')
-        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access'})
+        resp = self.client.get(reverse('hr:leave_access'))
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, 'Leave Dashboard Access')
 
-    def test_invalid_tab_defaults_to_hierarchy(self):
-        self.client.login(username='access_super', password='testpass123')
-        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'bogus'})
-        self.assertEqual(resp.context['tab'], 'hierarchy')
+    def test_anonymous_redirected_to_login(self):
+        resp = self.client.get(reverse('hr:leave_access'))
+        self.assertEqual(resp.status_code, 302)
 
     # ── search ──
     def test_search_finds_employee_without_existing_access(self):
         self.client.login(username='access_super', password='testpass123')
-        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access', 'access_search': 'Eve'})
+        resp = self.client.get(reverse('hr:leave_access'), {'access_search': 'Eve'})
         self.assertContains(resp, 'Eve Grantee')
 
     def test_search_excludes_employee_who_already_has_access(self):
         self.LeaveDashboardAccess.objects.create(user=self.eve_user, is_active=True, granted_by=self.super_admin)
         self.client.login(username='access_super', password='testpass123')
-        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access', 'access_search': 'Eve'})
+        resp = self.client.get(reverse('hr:leave_access'), {'access_search': 'Eve'})
         self.assertNotContains(resp, 'value="{}"'.format(self.eve.pk))
 
     # ── grant ──
     def test_grant_creates_active_access_row(self):
         self.client.login(username='access_super', password='testpass123')
-        resp = self.client.post(reverse('hr:org_chart') + '?tab=access',
-                                {'grant_dashboard_access': self.eve.pk})
+        resp = self.client.post(reverse('hr:leave_access'), {'grant_dashboard_access': self.eve.pk})
         self.assertEqual(resp.status_code, 302)
         grant = self.LeaveDashboardAccess.objects.get(user=self.eve_user)
         self.assertTrue(grant.is_active)
@@ -4920,15 +4961,13 @@ class OrgChartAccessTabTests(TestCase):
     def test_granted_user_can_then_view_leave_dashboard(self):
         from hr.views import can_view_leave_dashboard
         self.client.login(username='access_super', password='testpass123')
-        self.client.post(reverse('hr:org_chart') + '?tab=access',
-                         {'grant_dashboard_access': self.eve.pk})
+        self.client.post(reverse('hr:leave_access'), {'grant_dashboard_access': self.eve.pk})
         self.assertTrue(can_view_leave_dashboard(self.eve_user))
         self.assertFalse(can_view_leave_dashboard(self.frank_user))
 
     def test_plain_admin_cannot_grant(self):
         self.client.login(username='access_admin', password='testpass123')
-        resp = self.client.post(reverse('hr:org_chart') + '?tab=access',
-                                {'grant_dashboard_access': self.eve.pk})
+        resp = self.client.post(reverse('hr:leave_access'), {'grant_dashboard_access': self.eve.pk})
         self.assertEqual(resp.status_code, 403)
         self.assertFalse(self.LeaveDashboardAccess.objects.filter(user=self.eve_user).exists())
 
@@ -4936,8 +4975,7 @@ class OrgChartAccessTabTests(TestCase):
     def test_revoke_removes_access_row(self):
         self.LeaveDashboardAccess.objects.create(user=self.eve_user, is_active=True, granted_by=self.super_admin)
         self.client.login(username='access_super', password='testpass123')
-        resp = self.client.post(reverse('hr:org_chart') + '?tab=access',
-                                {'revoke_dashboard_access': self.eve_user.pk})
+        resp = self.client.post(reverse('hr:leave_access'), {'revoke_dashboard_access': self.eve_user.pk})
         self.assertEqual(resp.status_code, 302)
         self.assertFalse(self.LeaveDashboardAccess.objects.filter(user=self.eve_user).exists())
 
@@ -4948,9 +4986,21 @@ class OrgChartAccessTabTests(TestCase):
         # full_name.
         self.LeaveDashboardAccess.objects.create(user=self.eve_user, is_active=True, granted_by=self.super_admin)
         self.client.login(username='access_super', password='testpass123')
-        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access'})
+        resp = self.client.get(reverse('hr:leave_access'))
         self.assertContains(resp, self.eve_user.username)
         self.assertContains(resp, self.super_admin.username)
+
+    # ── sidebar link ──
+    def test_sidebar_shows_leave_access_link_for_super_admin(self):
+        self.client.login(username='access_super', password='testpass123')
+        resp = self.client.get(reverse('hr:entitlement_year'))
+        self.assertContains(resp, reverse('hr:leave_access'))
+        self.assertContains(resp, 'Leave Access')
+
+    def test_sidebar_hides_leave_access_link_for_plain_admin(self):
+        self.client.login(username='access_admin', password='testpass123')
+        resp = self.client.get(reverse('hr:entitlement_year'))
+        self.assertNotContains(resp, reverse('hr:leave_access'))
 
 
 class HasOverrideAccessTests(TestCase):
@@ -5099,10 +5149,10 @@ class OverrideAccessViewTests(TestCase):
         self.assertEqual(self.req.status, 'approved')
 
 
-class OrgChartOverrideAccessTabTests(TestCase):
-    """The Override Access management section inside the Leave Dashboard
-    Access tab: mode switching, role toggles, employee grant/revoke, and the
-    at-a-glance 'currently granted to' summary."""
+class LeaveAccessOverrideAccessTests(TestCase):
+    """The Override Access management section on the Leave Access page: mode
+    switching, role toggles, employee grant/revoke, and the at-a-glance
+    'currently granted to' summary."""
     def setUp(self):
         from hr.models import OverrideAccessSettings
         OverrideAccessSettings.objects.all().delete()
@@ -5110,14 +5160,13 @@ class OrgChartOverrideAccessTabTests(TestCase):
         self.client.login(username='ooa_super', password='testpass123')
 
     def test_default_mode_shows_all_super_admins_summary(self):
-        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access'})
+        resp = self.client.get(reverse('hr:leave_access'))
         self.assertContains(resp, 'All Super Admins')
         self.assertContains(resp, 'ooa_super')  # listed as a current super admin
 
     def test_set_mode_to_specific_roles(self):
         from hr.models import OverrideAccessSettings
-        resp = self.client.post(reverse('hr:org_chart') + '?tab=access',
-                                {'set_override_mode': 'specific_roles'})
+        resp = self.client.post(reverse('hr:leave_access'), {'set_override_mode': 'specific_roles'})
         self.assertEqual(resp.status_code, 302)
         config = OverrideAccessSettings.get_solo()
         self.assertEqual(config.mode, 'specific_roles')
@@ -5125,8 +5174,7 @@ class OrgChartOverrideAccessTabTests(TestCase):
 
     def test_invalid_mode_rejected(self):
         from hr.models import OverrideAccessSettings
-        resp = self.client.post(reverse('hr:org_chart') + '?tab=access',
-                                {'set_override_mode': 'bogus_mode'})
+        resp = self.client.post(reverse('hr:leave_access'), {'set_override_mode': 'bogus_mode'})
         self.assertEqual(resp.status_code, 302)
         config = OverrideAccessSettings.get_solo()
         self.assertEqual(config.mode, OverrideAccessSettings.MODE_ALL_SUPER_ADMINS)
@@ -5136,19 +5184,17 @@ class OrgChartOverrideAccessTabTests(TestCase):
         OverrideAccessSettings.get_solo()
         finance_role, _ = Role.objects.get_or_create(name=Role.FINANCE_HEAD)
 
-        self.client.post(reverse('hr:org_chart') + '?tab=access',
-                         {'toggle_override_role': finance_role.pk})
+        self.client.post(reverse('hr:leave_access'), {'toggle_override_role': finance_role.pk})
         self.assertTrue(OverrideAccessRole.objects.filter(role=finance_role).exists())
 
-        self.client.post(reverse('hr:org_chart') + '?tab=access',
-                         {'toggle_override_role': finance_role.pk})
+        self.client.post(reverse('hr:leave_access'), {'toggle_override_role': finance_role.pk})
         self.assertFalse(OverrideAccessRole.objects.filter(role=finance_role).exists())
 
     def test_specific_roles_mode_renders_role_toggle_buttons(self):
-        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access'})
+        resp = self.client.get(reverse('hr:leave_access'))
         self.assertNotContains(resp, 'toggle_override_role')  # only shown in specific_roles mode
-        self.client.post(reverse('hr:org_chart') + '?tab=access', {'set_override_mode': 'specific_roles'})
-        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access'})
+        self.client.post(reverse('hr:leave_access'), {'set_override_mode': 'specific_roles'})
+        resp = self.client.get(reverse('hr:leave_access'))
         self.assertContains(resp, 'toggle_override_role')
         self.assertContains(resp, 'Finance Head')
 
@@ -5163,26 +5209,23 @@ class OrgChartOverrideAccessTabTests(TestCase):
         target_emp.user = target_user
         target_emp.save(update_fields=['user'])
 
-        resp = self.client.post(reverse('hr:org_chart') + '?tab=access',
-                                {'grant_override_employee': target_emp.pk})
+        resp = self.client.post(reverse('hr:leave_access'), {'grant_override_employee': target_emp.pk})
         self.assertEqual(resp.status_code, 302)
         self.assertTrue(OverrideAccessEmployee.objects.filter(user=target_user).exists())
 
-        resp = self.client.post(reverse('hr:org_chart') + '?tab=access',
-                                {'revoke_override_employee': target_user.pk})
+        resp = self.client.post(reverse('hr:leave_access'), {'revoke_override_employee': target_user.pk})
         self.assertEqual(resp.status_code, 302)
         self.assertFalse(OverrideAccessEmployee.objects.filter(user=target_user).exists())
 
     def test_empty_specific_roles_summary_warns_no_one_can_override(self):
-        self.client.post(reverse('hr:org_chart') + '?tab=access', {'set_override_mode': 'specific_roles'})
-        resp = self.client.get(reverse('hr:org_chart'), {'tab': 'access'})
+        self.client.post(reverse('hr:leave_access'), {'set_override_mode': 'specific_roles'})
+        resp = self.client.get(reverse('hr:leave_access'))
         self.assertContains(resp, 'no roles selected yet')
 
     def test_plain_admin_cannot_change_override_mode(self):
         plain_admin = _make_role_user('ooa_plainadmin', Role.ADMIN)
         self.client.login(username='ooa_plainadmin', password='testpass123')
-        resp = self.client.post(reverse('hr:org_chart') + '?tab=access',
-                                {'set_override_mode': 'specific_roles'})
+        resp = self.client.post(reverse('hr:leave_access'), {'set_override_mode': 'specific_roles'})
         self.assertEqual(resp.status_code, 403)
 
 
@@ -6395,7 +6438,7 @@ class ManagerSeesOnlyTheirOwnInBehalfStatusTests(TestCase):
             'start_date': '2026-03-01', 'end_date': '2026-03-05',
         })
         resp = self.client.get(reverse('hr:my_profile'))
-        self.assertContains(resp, 'Your request:')
+        self.assertContains(resp, 'Logged by you:')
         self.assertContains(resp, 'Pending')
 
     def test_manager_does_not_see_reports_self_submitted_request(self):
@@ -6409,7 +6452,7 @@ class ManagerSeesOnlyTheirOwnInBehalfStatusTests(TestCase):
         self.client.logout()
         self.client.login(username='msob-mgr', password='x')
         resp = self.client.get(reverse('hr:my_profile'))
-        self.assertNotContains(resp, 'Your request:')
+        self.assertNotContains(resp, 'Logged by you:')
 
     def test_manager_does_not_see_a_different_managers_in_behalf_request(self):
         other_manager_user = User.objects.create_user(username='msob-other', password='x')
@@ -6422,7 +6465,7 @@ class ManagerSeesOnlyTheirOwnInBehalfStatusTests(TestCase):
             created_by=other_manager_user)
         self.client.login(username='msob-mgr', password='x')
         resp = self.client.get(reverse('hr:my_profile'))
-        self.assertNotContains(resp, 'Your request:')
+        self.assertNotContains(resp, 'Logged by you:')
 
     def test_multiple_in_behalf_requests_for_the_same_report_all_show(self):
         # Bug found in manual testing: logging two separate periods for the
@@ -6438,7 +6481,7 @@ class ManagerSeesOnlyTheirOwnInBehalfStatusTests(TestCase):
             'start_date': '2026-06-01', 'end_date': '2026-06-03',
         })
         resp = self.client.get(reverse('hr:my_profile'))
-        self.assertContains(resp, 'Your request:', count=2)
+        self.assertContains(resp, 'Logged by you:', count=2)
         shown_report = next(r for r in resp.context['direct_reports'] if r.pk == self.report.pk)
         self.assertEqual(len(shown_report.in_behalf_requests), 2)
         # Newest first.
@@ -6455,7 +6498,7 @@ class ManagerSeesOnlyTheirOwnInBehalfStatusTests(TestCase):
         resp = self.client.get(reverse('hr:my_profile'))
         # Only the 2 most recent render unconditionally; the 3rd is tucked
         # behind a "+N more" control instead of cluttering the card.
-        self.assertContains(resp, 'Your request:', count=3)  # 2 visible + 1 inside the collapsed region
+        self.assertContains(resp, 'Logged by you:', count=3)  # 2 visible + 1 inside the collapsed region
         self.assertContains(resp, '+1 more request(s)')
 
     def test_employee_sees_flag_that_manager_logged_it(self):
@@ -6478,6 +6521,101 @@ class ManagerSeesOnlyTheirOwnInBehalfStatusTests(TestCase):
         })
         resp = self.client.get(reverse('hr:my_profile'))
         self.assertNotContains(resp, 'Logged by your manager')
+
+
+class BackdatedRequestTests(TestCase):
+    """'Backdated' badge — surfaced when a leave/exception's own date is
+    before the day it was actually submitted, so an after-the-fact
+    documentation request doesn't get mistaken for a live upcoming one."""
+
+    def setUp(self):
+        self.emp = make_employee(iqama='BDR-1')
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30')})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
+        self.user = _login_user('bdr_user')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+
+    def test_leave_request_is_backdated_when_start_date_precedes_submission(self):
+        req = submit_leave_request(
+            employee=self.emp, leave_type=self.lt, start_date=date(2026, 8, 1), end_date=date(2026, 8, 2),
+            created_by=self.user)
+        LeaveRequest.objects.filter(pk=req.pk).update(created_at=_timezone.make_aware(_datetime(2026, 8, 5, 9, 0)))
+        req.refresh_from_db()
+        self.assertTrue(req.is_backdated)
+
+    def test_leave_request_is_not_backdated_when_submitted_on_or_before_the_start_date(self):
+        req = submit_leave_request(
+            employee=self.emp, leave_type=self.lt, start_date=date(2026, 9, 1), end_date=date(2026, 9, 2),
+            created_by=self.user)
+        LeaveRequest.objects.filter(pk=req.pk).update(created_at=_timezone.make_aware(_datetime(2026, 8, 25, 9, 0)))
+        req.refresh_from_db()
+        self.assertFalse(req.is_backdated)
+
+    def test_attendance_exception_is_backdated_when_event_precedes_submission(self):
+        exc = submit_attendance_exception(
+            employee=self.emp, event_date=date(2026, 8, 1), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.user)
+        AttendanceException.objects.filter(pk=exc.pk).update(
+            created_at=_timezone.make_aware(_datetime(2026, 8, 5, 9, 0)))
+        exc.refresh_from_db()
+        self.assertTrue(exc.is_backdated)
+
+    def test_attendance_exception_reported_same_day_is_not_backdated(self):
+        # Reporting an event a few hours after it happened, same calendar
+        # day, is the expected/normal case — not a "backdated" flag.
+        exc = submit_attendance_exception(
+            employee=self.emp, event_date=date(2026, 8, 5), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.user)
+        AttendanceException.objects.filter(pk=exc.pk).update(
+            created_at=_timezone.make_aware(_datetime(2026, 8, 5, 17, 0)))
+        exc.refresh_from_db()
+        self.assertFalse(exc.is_backdated)
+
+    def test_backdated_badge_renders_on_my_profile(self):
+        req = submit_leave_request(
+            employee=self.emp, leave_type=self.lt, start_date=date(2026, 8, 1), end_date=date(2026, 8, 2),
+            created_by=self.user)
+        LeaveRequest.objects.filter(pk=req.pk).update(created_at=_timezone.make_aware(_datetime(2026, 8, 5, 9, 0)))
+        self.client.login(username='bdr_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'Backdated')
+
+    def test_backdated_badge_renders_on_leave_queue_pending_tab(self):
+        from accounts.models import Role
+        req = submit_leave_request(
+            employee=self.emp, leave_type=self.lt, start_date=date(2026, 8, 1), end_date=date(2026, 8, 2),
+            created_by=self.user)
+        LeaveRequest.objects.filter(pk=req.pk).update(created_at=_timezone.make_aware(_datetime(2026, 8, 5, 9, 0)))
+        _make_role_user('bdr-super', Role.SUPER_ADMIN)
+        self.client.login(username='bdr-super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertContains(resp, 'Backdated')
+
+    def test_no_backdated_badge_for_a_normal_advance_request(self):
+        self.client.login(username='bdr_user', password='testpass123')
+        submit_leave_request(
+            employee=self.emp, leave_type=self.lt, start_date=date(2026, 12, 1), end_date=date(2026, 12, 2),
+            created_by=self.user)
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, 'Backdated')
+
+    def test_backdated_badge_renders_on_team_exceptions_pending_tab(self):
+        manager = make_employee(iqama='BDR-MGR', name='BDR Manager')
+        manager_user = _login_user('bdr_manager')
+        manager.user = manager_user
+        manager.save(update_fields=['user'])
+        self.emp.main_manager = manager
+        self.emp.save(update_fields=['main_manager'])
+        exc = submit_attendance_exception(
+            employee=self.emp, event_date=date(2026, 8, 1), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.user)
+        AttendanceException.objects.filter(pk=exc.pk).update(
+            created_at=_timezone.make_aware(_datetime(2026, 8, 5, 9, 0)))
+        self.client.login(username='bdr_manager', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'direct'})
+        self.assertContains(resp, 'Backdated')
 
 
 class LeaveQueueHistoryCollapseTests(TestCase):
@@ -7332,6 +7470,18 @@ class MyProfileLeaveEditCancelUITests(TestCase):
         self.assertEqual(self.req.start_date, date(2026, 8, 5))
         self.assertEqual(self.req.employee_reason, 'Rescheduled')
 
+    def test_post_edit_redirect_reopens_the_same_rows_panel(self):
+        # The edited row's panel must re-expand after the reload (not
+        # collapse back to hidden), so the employee actually sees the
+        # change they just made.
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'edit_leave_request', 'request_id': self.req.pk,
+            'leave_type': self.lt.pk, 'start_date': '2026-08-05', 'end_date': '2026-08-06',
+        })
+        self.assertRedirects(resp, f"{reverse('hr:my_profile')}?opened_leave={self.req.pk}")
+        resp = self.client.get(resp.url)
+        self.assertContains(resp, f'id="editLeave{self.req.pk}"')
+
     def test_post_edit_without_touching_document_keeps_existing_file(self):
         from django.core.files.uploadedfile import SimpleUploadedFile
         self.req.document = SimpleUploadedFile('cert.pdf', b'bytes')
@@ -7836,6 +7986,15 @@ class LeaveQueueMyLoggedRequestsUITests(TestCase):
         self.req.refresh_from_db()
         self.assertEqual(self.req.start_date, date(2026, 4, 5))
 
+    def test_post_edit_redirect_reopens_the_logged_tab_and_row(self):
+        resp = self.client.post(reverse('hr:leave_request_list'), {
+            'action': 'edit_leave_request', 'request_id': self.req.pk,
+            'leave_type': self.lt.pk, 'start_date': '2026-04-05', 'end_date': '2026-04-06',
+        })
+        self.assertRedirects(resp, f"{reverse('hr:leave_request_list')}?opened_leave={self.req.pk}&tab=logged")
+        resp = self.client.get(resp.url)
+        self.assertContains(resp, f'id="editLogged{self.req.pk}"')
+
     def test_post_cancel_marks_cancelled(self):
         resp = self.client.post(reverse('hr:leave_request_list'), {
             'action': 'cancel_leave_request', 'request_id': self.req.pk,
@@ -8000,6 +8159,14 @@ class PendingRevokeRequestsTeamExceptionsUITests(TestCase):
         resp = self.client.get(reverse('hr:team_exceptions'))
         self.assertContains(resp, 'No longer needed.')
         self.assertEqual(list(resp.context['pending_exception_revoke_requests']), [self.revoke_req])
+
+    def test_direct_tab_count_includes_the_pending_revoke_request(self):
+        # The tab label's own count (not just the sidebar nav badge) must
+        # reflect a pending revoke request too — the exception itself is
+        # 'approved' (not pending/expired), so without this the tab would
+        # misleadingly read 0 while a revoke sits there awaiting review.
+        resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'direct'})
+        self.assertEqual(resp.context['direct_tab_count'], 1)
 
     def test_approve_applies_the_revoke(self):
         resp = self.client.post(reverse('hr:team_exceptions'), {

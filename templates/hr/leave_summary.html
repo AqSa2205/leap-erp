@@ -10,17 +10,14 @@
             <p class="text-muted mb-0">{{ employee.full_name }}</p>
         </div>
         <div class="d-flex gap-2">
-            <a href="{% url 'hr:employee_detail' pk=employee.pk %}" class="btn btn-outline-secondary">
-                <i class="bi bi-arrow-left"></i> Back to Employee
+            <a href="{% url 'hr:entitlement_year' %}?year={{ year }}" class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left"></i> Back to Leave Entitlements
             </a>
             {% if can_grant_exception %}
             <a href="{% url 'hr:grant_exception_days' pk=employee.pk %}" class="btn btn-outline-danger">
                 <i class="bi bi-plus-circle"></i> Add Exception Days
             </a>
             {% endif %}
-            <a href="{% url 'hr:leave_record_create' %}?employee={{ employee.pk }}" class="btn btn-primary">
-                <i class="bi bi-plus-lg"></i> Add Leave
-            </a>
         </div>
     </div>
 
@@ -76,7 +73,7 @@
     <div class="card">
         <div class="card-header d-flex justify-content-between align-items-center">
             <h5 class="mb-0"><i class="bi bi-calendar2-check"></i> Leave Records – {{ year }}</h5>
-            <a href="{% url 'hr:leave_record_create' %}" class="btn btn-sm btn-primary">
+            <a href="{% url 'hr:leave_record_create' %}?employee={{ employee.pk }}&back=leave_summary" class="btn btn-sm btn-primary">
                 <i class="bi bi-plus-lg"></i> Add Leave
             </a>
         </div>

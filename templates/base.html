@@ -1393,6 +1393,13 @@
                                 <i class="bi bi-calendar-event"></i> <span>Holidays</span>
                             </a>
                         </li>
+                        {% if user.is_super_admin_user %}
+                        <li class="nav-item">
+                            <a class="nav-link py-1 {% if request.resolver_match.url_name == 'leave_access' %}active{% endif %}" href="{% url 'hr:leave_access' %}">
+                                <i class="bi bi-person-check"></i> <span>Leave Access</span>
+                            </a>
+                        </li>
+                        {% endif %}
                     </ul>
                 </div>
             </li>

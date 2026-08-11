@@ -202,6 +202,11 @@
                   <i class="bi bi-person-badge"></i> By {{ r.created_by.get_full_name|default:r.created_by.username }} (manager)
                 </span>
                 {% endif %}
+                {% if r.is_backdated %}
+                <span class="badge bg-light text-dark border" data-bs-toggle="tooltip" title="This leave started before it was submitted">
+                  <i class="bi bi-clock-history"></i> Backdated
+                </span>
+                {% endif %}
               </td>
               <td>{{ r.leave_type.name }}</td>
               <td>{{ r.start_date }} – {{ r.end_date }}</td>
@@ -229,7 +234,14 @@
           <tbody>
             {% for r in my_logged_requests %}
             <tr>
-              <td>{{ r.employee.full_name }}</td>
+              <td>
+                {{ r.employee.full_name }}
+                {% if r.is_backdated %}
+                <div class="small text-muted" data-bs-toggle="tooltip" title="This leave started before it was submitted">
+                  <i class="bi bi-clock-history"></i> Backdated
+                </div>
+                {% endif %}
+              </td>
               <td>{{ r.leave_type.name }}</td>
               <td>{{ r.start_date }} – {{ r.end_date }}</td>
               <td>
@@ -276,15 +288,18 @@
                     <div class="col-md-6">
                       <label class="form-label small">Document</label>
                       {% if r.document %}
-                      <div class="small mb-1 d-flex align-items-center gap-1">
+                      <div class="small mb-1 d-flex align-items-center gap-1" data-doc-attached="{{ r.pk }}">
                         <span>Attached: <a href="{{ r.document.url }}" target="_blank">{{ r.document_filename }}</a></span>
-                        <button type="submit" name="document-clear" value="on"
-                                class="btn btn-sm btn-link text-danger p-0"
-                                title="Remove this document"
-                                onclick="if (!confirm('Remove this document? This also saves any other changes you've made above.')) return false; this.form.querySelector('input[type=file][name=document]').value=''; return true;">
+                        <button type="button" class="btn btn-sm btn-link text-danger p-0" title="Remove this document"
+                                onclick="return docQueueRemoval(this, '{{ r.pk }}');">
                           <i class="bi bi-x-circle"></i>
                         </button>
                       </div>
+                      <div class="small mb-1 text-danger d-none" data-doc-pending="{{ r.pk }}">
+                        <i class="bi bi-exclamation-circle"></i> Will be removed when you click Save Changes.
+                        <button type="button" class="btn btn-sm btn-link p-0" onclick="return docUndoRemoval(this, '{{ r.pk }}');">Undo</button>
+                      </div>
+                      <input type="hidden" name="document-clear" value="" data-doc-clear-flag="{{ r.pk }}">
                       {% endif %}
                       <input type="file" name="document" class="form-control form-control-sm">
                     </div>
@@ -321,7 +336,14 @@
             {% for r in decided_requests %}
             {% url 'hr:leave_request_detail' r.pk as detail_url %}
             <tr>
-              <td>{{ r.employee.full_name }}</td>
+              <td>
+                {{ r.employee.full_name }}
+                {% if r.is_backdated %}
+                <div class="small text-muted" data-bs-toggle="tooltip" title="This leave started before it was submitted">
+                  <i class="bi bi-clock-history"></i> Backdated
+                </div>
+                {% endif %}
+              </td>
               <td>{{ r.leave_type.name }}</td>
               <td>{{ r.start_date }} – {{ r.end_date }}</td>
               <td>
@@ -374,4 +396,57 @@
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Document removal on an Edit form is deferred, not immediate: clicking
+// the X only confirms and queues it (toggling a hidden document-clear
+// flag + the visible state) — nothing is submitted until the user
+// clicks Save Changes for the whole form, same as any other field here.
+function docQueueRemoval(btn, pk) {
+    if (!confirm('Remove this document? It will be deleted when you click Save Changes.')) return false;
+    var form = btn.closest('form');
+    form.querySelector('[data-doc-attached="' + pk + '"]').classList.add('d-none');
+    form.querySelector('[data-doc-pending="' + pk + '"]').classList.remove('d-none');
+    form.querySelector('[data-doc-clear-flag="' + pk + '"]').value = 'on';
+    form.querySelector('input[type=file][name=document]').value = '';
+    return false;
+}
+function docUndoRemoval(btn, pk) {
+    var form = btn.closest('form');
+    form.querySelector('[data-doc-attached="' + pk + '"]').classList.remove('d-none');
+    form.querySelector('[data-doc-pending="' + pk + '"]').classList.add('d-none');
+    form.querySelector('[data-doc-clear-flag="' + pk + '"]').value = '';
+    return false;
+}
+document.querySelectorAll('input[type="file"][name="document"]').forEach(function (fileInput) {
+    fileInput.addEventListener('change', function () {
+        if (!fileInput.files.length) return;
+        var form = fileInput.closest('form');
+        var clearFlag = form.querySelector('[data-doc-clear-flag]');
+        // Picking a new file after queuing a removal cancels the removal —
+        // the upload already says what should happen to the document.
+        if (clearFlag && clearFlag.value === 'on') docUndoRemoval(fileInput, clearFlag.dataset.docClearFlag);
+    });
+});
+
+(function () {
+    // After a successful Edit save, the page reloads on the same tab
+    // (see the ?opened_leave=&tab=logged redirect) — switch to that tab
+    // and re-expand the specific row's panel, so the change is actually
+    // visible instead of landing back on Pending with the row collapsed.
+    var params = new URLSearchParams(window.location.search);
+    var openedLeave = params.get('opened_leave');
+    if (!openedLeave) return;
+    if (params.get('tab') === 'logged') {
+        var tabButton = document.getElementById('myLoggedTab-tab');
+        if (tabButton) new bootstrap.Tab(tabButton).show();
+    }
+    var row = document.getElementById('editLogged' + openedLeave);
+    if (!row) return;
+    row.classList.add('show');
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+})();
+</script>
 {% endblock %}
