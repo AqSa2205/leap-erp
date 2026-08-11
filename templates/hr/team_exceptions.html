@@ -161,6 +161,11 @@
             <td class="small">
               {{ exc.get_reason_category_display }}
               {% if exc.status == 'expired' %}<span class="badge bg-secondary ms-1">Expired</span>{% endif %}
+              {% if exc.is_backdated %}
+              <span class="badge bg-light text-dark border ms-1" data-bs-toggle="tooltip" title="This event happened before the exception was submitted">
+                <i class="bi bi-clock-history"></i> Backdated
+              </span>
+              {% endif %}
               {% if exc.reason_category == 'other' and exc.custom_reason %}<div class="text-muted">{{ exc.custom_reason }}</div>{% endif %}
               {% if exc.employee_comment %}<div class="text-muted fst-italic">"{{ exc.employee_comment }}"</div>{% endif %}
             </td>
@@ -289,7 +294,14 @@
         <tbody>
           {% for exc in decided_exceptions %}
           <tr>
-            <td>{{ exc.employee.full_name }}</td>
+            <td>
+              {{ exc.employee.full_name }}
+              {% if exc.is_backdated %}
+              <div class="small text-muted" data-bs-toggle="tooltip" title="This event happened before the exception was submitted">
+                <i class="bi bi-clock-history"></i> Backdated
+              </div>
+              {% endif %}
+            </td>
             <td class="small text-muted">{{ exc.employee.main_manager.full_name|default:"—" }}</td>
             <td class="small">{{ exc.event_date }} {{ exc.event_start_time|time:"H:i" }}</td>
             <td>

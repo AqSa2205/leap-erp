@@ -339,6 +339,14 @@ class LeaveRequest(models.Model):
         return [a.approver for a in self.approvals.filter(decision='pending')]
 
     @property
+    def is_backdated(self):
+        """True if this request's leave already started before it was even
+        submitted — after-the-fact documentation of an absence rather than
+        a normal advance request. Surfaced as a badge so nobody mistakes
+        it for a live upcoming leave."""
+        return bool(self.start_date and self.created_at and self.start_date < self.created_at.date())
+
+    @property
     def document_filename(self):
         import os
         return os.path.basename(self.document.name) if self.document else ''

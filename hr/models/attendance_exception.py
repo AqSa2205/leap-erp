@@ -112,6 +112,14 @@ class AttendanceException(models.Model):
             return None
         return (deadline - now).total_seconds()
 
+    @property
+    def is_backdated(self):
+        """True if the event this excuses already happened before the
+        exception was even submitted — after-the-fact documentation
+        rather than a normal same-day report. Surfaced as a badge so
+        nobody mistakes it for a live, still-open case."""
+        return bool(self.event_date and self.created_at and self.event_date < self.created_at.date())
+
 
 class AttendanceExceptionRevokeRequest(models.Model):
     """Employee-requested revoke of their own already-approved attendance

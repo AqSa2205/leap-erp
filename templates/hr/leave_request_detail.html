@@ -46,7 +46,13 @@
 
       <div class="card mb-4">
         <div class="card-body">
-          <p class="mb-1"><strong>Dates:</strong> {{ leave_request.start_date }} – {{ leave_request.end_date }} ({{ leave_request.days }} days)</p>
+          <p class="mb-1"><strong>Dates:</strong> {{ leave_request.start_date }} – {{ leave_request.end_date }} ({{ leave_request.days }} days)
+            {% if leave_request.is_backdated %}
+            <span class="badge bg-light text-dark border ms-1" data-bs-toggle="tooltip" title="This leave started before it was submitted">
+              <i class="bi bi-clock-history"></i> Backdated
+            </span>
+            {% endif %}
+          </p>
           <p class="mb-1"><strong>Reason:</strong> {{ leave_request.employee_reason|default:"—" }}</p>
           <p class="mb-1"><strong>Status:</strong>
             {% if leave_request.status == 'approved' %}<span class="badge bg-success">Approved</span>
