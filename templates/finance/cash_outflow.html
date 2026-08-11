@@ -31,6 +31,14 @@
     .co-table thead th.co-grp-date { background: #e4f2ea; }
     .co-table thead th.co-grp-pct  { background: #f6ecd9; }
     .co-total-cell { font-weight: 600; white-space: nowrap; }
+
+    .co-sys-table { font-size: 0.82rem; }
+    .co-sys-table thead th { background: #eef7f2; color: #14503c; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.2px; border-bottom: 2px solid #1f6f54; white-space: nowrap; }
+    .co-sys-table td { vertical-align: middle; }
+    .co-sys-name { background: #f4faf7; border-left: 3px solid #1f6f54; }
+    .co-sys-subtotal td { background: #fbf6ee; border-top: 1px solid #e6d9bf; }
+    .co-sys-grand td { background: #eef7f2; border-top: 2px solid #1f6f54; }
+    .co-terms { white-space: normal; max-width: 260px; font-size: 0.78rem; color: #555; line-height: 1.3; }
 </style>
 {% endblock %}
 
@@ -66,6 +74,24 @@
                 {% for po in po_numbers %}<option value="{{ po }}"></option>{% endfor %}
             </datalist>
 
+            <!-- Tabs: editable payment schedule vs. read-only spend-by-system -->
+            <ul class="nav nav-tabs mb-3" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="tab-schedule-btn" data-bs-toggle="tab"
+                            data-bs-target="#tab-schedule" type="button" role="tab">
+                        <i class="bi bi-calendar2-week me-1"></i>Payment Schedule
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="tab-system-btn" data-bs-toggle="tab"
+                            data-bs-target="#tab-system" type="button" role="tab">
+                        <i class="bi bi-diagram-3 me-1"></i>By System
+                    </button>
+                </li>
+            </ul>
+
+            <div class="tab-content">
+            <div class="tab-pane fade show active" id="tab-schedule" role="tabpanel" aria-labelledby="tab-schedule-btn">
             <form method="post">
                 {% csrf_token %}
 
@@ -100,6 +126,88 @@
                     </div>
                 </div>
             </form>
+            </div><!-- /#tab-schedule -->
+
+            <!-- By System — read-only, live from procurement POs -->
+            <div class="tab-pane fade" id="tab-system" role="tabpanel" aria-labelledby="tab-system-btn">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <h2 class="h6 mb-1"><i class="bi bi-diagram-3 me-1"></i>Vendor spend by System</h2>
+                            <div class="text-muted small">
+                                Live from procurement — every purchase order on this project, grouped by system then PO.
+                                Amounts are item subtotals (qty&nbsp;×&nbsp;rate, SAR) plus 15% VAT.
+                            </div>
+                        </div>
+                        {% if by_system %}
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0 co-sys-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width:36px">#</th>
+                                        <th>System</th>
+                                        <th>PO S. No.</th>
+                                        <th>Vendor</th>
+                                        <th class="text-end">Items</th>
+                                        <th class="text-end">Amount (SAR)</th>
+                                        <th class="text-end">VAT 15%</th>
+                                        <th class="text-end">Total (SAR)</th>
+                                        <th>Payment Terms</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for s in by_system %}
+                                        {% for po in s.pos %}
+                                        <tr>
+                                            {% if forloop.first %}
+                                            <td rowspan="{{ s.po_count }}" class="fw-semibold co-sys-name">{{ forloop.parentloop.counter }}</td>
+                                            <td rowspan="{{ s.po_count }}" class="fw-semibold co-sys-name">{{ s.system }}</td>
+                                            {% endif %}
+                                            <td>
+                                                <a href="{% url 'procurement:po_detail' po.po_pk %}" target="_blank"
+                                                   class="text-decoration-none fw-semibold" title="Open purchase order">
+                                                    {{ po.po_number|default:'—' }}<i class="bi bi-box-arrow-up-right ms-1 small"></i>
+                                                </a>
+                                            </td>
+                                            <td>{{ po.vendor|default:'—'|truncatechars:32 }}</td>
+                                            <td class="text-end">{{ po.item_count }}</td>
+                                            <td class="text-end">{{ po.amount|floatformat:2|intcomma }}</td>
+                                            <td class="text-end">{{ po.vat|floatformat:2|intcomma }}</td>
+                                            <td class="text-end fw-semibold">{{ po.total|floatformat:2|intcomma }}</td>
+                                            <td class="co-terms">{% if po.payment_terms %}{{ po.payment_terms|linebreaksbr }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                                        </tr>
+                                        {% endfor %}
+                                        <tr class="co-sys-subtotal">
+                                            <td colspan="4" class="text-end fst-italic">{{ s.system }} subtotal</td>
+                                            <td class="text-end">{{ s.po_count }} PO{{ s.po_count|pluralize }}</td>
+                                            <td class="text-end">{{ s.amount|floatformat:2|intcomma }}</td>
+                                            <td class="text-end">{{ s.vat|floatformat:2|intcomma }}</td>
+                                            <td class="text-end fw-semibold">{{ s.total|floatformat:2|intcomma }}</td>
+                                            <td></td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                                <tfoot>
+                                    <tr class="co-sys-grand">
+                                        <td colspan="5" class="text-end fw-bold">Grand total outflow</td>
+                                        <td class="text-end fw-bold">{{ by_system_total.amount|floatformat:2|intcomma }}</td>
+                                        <td class="text-end fw-bold">{{ by_system_total.vat|floatformat:2|intcomma }}</td>
+                                        <td class="text-end fw-bold text-success">{{ by_system_total.total|floatformat:2|intcomma }}</td>
+                                        <td></td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+                        {% else %}
+                        <div class="text-center text-muted py-5">
+                            <i class="bi bi-diagram-3 display-6"></i>
+                            <p class="mt-2 mb-0">No purchase orders with line items on this project yet.</p>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div><!-- /#tab-system -->
+            </div><!-- /.tab-content -->
         </div>
     </div>
 </div>

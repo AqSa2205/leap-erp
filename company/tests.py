@@ -105,3 +105,25 @@ class CompanyDocumentTests(TestCase):
         self.client.force_login(self.plain)
         r = self.client.get(reverse('company:document_edit', kwargs={'pk': doc.pk}))
         self.assertEqual(r.status_code, 302)  # bounced, not allowed
+
+    def test_erp_admin_has_full_access(self):
+        erp, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
+        erp_user = User.objects.create_user('erp1', password='x', role=erp)
+        self.client.force_login(erp_user)
+        # view
+        self.assertEqual(
+            self.client.get(reverse('company:document_list')).status_code, 200)
+        # create
+        self._upload()
+        self.assertEqual(CompanyDocument.objects.count(), 1)
+        doc = CompanyDocument.objects.first()
+        # edit
+        self.client.post(reverse('company:document_edit', kwargs={'pk': doc.pk}), {
+            'title': 'ERP Renamed', 'document_type': 'license', 'custom_type': '',
+            'issuing_authority': 'MOC', 'reference_number': 'TL-123', 'notes': '',
+        })
+        doc.refresh_from_db()
+        self.assertEqual(doc.title, 'ERP Renamed')
+        # delete
+        self.client.get(reverse('company:document_delete', kwargs={'pk': doc.pk}))
+        self.assertEqual(CompanyDocument.objects.count(), 0)
