@@ -272,6 +272,13 @@
                   <input type="hidden" name="action" value="edit_leave_request">
                   <input type="hidden" name="request_id" value="{{ r.pk }}">
                   <input type="hidden" name="leave_type" value="{{ r.leave_type_id }}">
+                  {% if r.decided_approvers %}
+                  <div class="small text-warning-emphasis bg-warning-subtle border border-warning-subtle rounded p-2 mb-2">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    {{ r.decided_approvers|join:", " }} already decided on this request — saving changes
+                    will reset that decision and send it back for review.
+                  </div>
+                  {% endif %}
                   <div class="row g-2">
                     <div class="col-md-3">
                       <label class="form-label small">Start</label>
@@ -329,6 +336,16 @@
       {% endif %}
 
       <div class="tab-pane fade" id="historyTab" role="tabpanel" aria-labelledby="historyTab-tab">
+        <div class="d-flex justify-content-end p-2">
+          <form method="get" class="d-flex align-items-center gap-2 mb-0">
+            <input type="hidden" name="tab" value="history">
+            <label class="small text-muted mb-0">Sort by</label>
+            <select name="history_sort" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
+              <option value="newest" {% if current_history_sort == 'newest' %}selected{% endif %}>Decided (newest first)</option>
+              <option value="oldest" {% if current_history_sort == 'oldest' %}selected{% endif %}>Decided (oldest first)</option>
+            </select>
+          </form>
+        </div>
         <div style="max-height: 480px; overflow-y: auto;">
         <table class="table table-sm mb-0">
           <thead class="table-light"><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Status</th><th></th></tr></thead>
@@ -432,17 +449,22 @@ document.querySelectorAll('input[type="file"][name="document"]').forEach(functio
 });
 
 (function () {
-    // After a successful Edit save, the page reloads on the same tab
-    // (see the ?opened_leave=&tab=logged redirect) — switch to that tab
-    // and re-expand the specific row's panel, so the change is actually
-    // visible instead of landing back on Pending with the row collapsed.
+    // Two reasons the page reloads and needs to land back on a specific
+    // tab instead of the default Pending one: an Edit save (?opened_leave=
+    // &tab=logged — also re-expands and scrolls to the saved row), or the
+    // History tab's own Sort by control (?tab=history) submitting a plain
+    // GET that would otherwise silently drop back to Pending.
     var params = new URLSearchParams(window.location.search);
+    var tab = params.get('tab');
+    if (tab === 'logged') {
+        var loggedTabButton = document.getElementById('myLoggedTab-tab');
+        if (loggedTabButton) new bootstrap.Tab(loggedTabButton).show();
+    } else if (tab === 'history') {
+        var historyTabButton = document.getElementById('historyTab-tab');
+        if (historyTabButton) new bootstrap.Tab(historyTabButton).show();
+    }
     var openedLeave = params.get('opened_leave');
     if (!openedLeave) return;
-    if (params.get('tab') === 'logged') {
-        var tabButton = document.getElementById('myLoggedTab-tab');
-        if (tabButton) new bootstrap.Tab(tabButton).show();
-    }
     var row = document.getElementById('editLogged' + openedLeave);
     if (!row) return;
     row.classList.add('show');

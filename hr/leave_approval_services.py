@@ -294,13 +294,14 @@ def grant_exception_days(*, employee, leave_type, year, days, granted_by, reason
 
 def edit_leave_request(leave_request, editing_user, *, leave_type, start_date, end_date,
                        employee_reason='', document=None):
-    """The creator edits their own still-pending, undecided request in
-    place. Re-runs the exact same balance/overlap validation a fresh
-    submission would (via exclude_request_id, so the request doesn't
-    collide with its own unmodified row) — an edit is not exempt from the
-    rules that applied to the original submission, and could newly become
-    exceeds_balance if the new dates push it over the balance-hold
-    threshold, exactly like any other submission.
+    """The creator edits their own still-pending request in place — the
+    entire pending window, same as cancel_leave_request, not just the
+    undecided portion of it. Re-runs the exact same balance/overlap
+    validation a fresh submission would (via exclude_request_id, so the
+    request doesn't collide with its own unmodified row) — an edit is not
+    exempt from the rules that applied to the original submission, and
+    could newly become exceeds_balance if the new dates push it over the
+    balance-hold threshold, exactly like any other submission.
 
     document has three meaningful states, matching Django's
     ClearableFileInput contract (pass the form's initial=current document
@@ -312,10 +313,13 @@ def edit_leave_request(leave_request, editing_user, *, leave_type, start_date, e
     Either removal or replacement deletes the old stored file rather than
     just dropping the reference, so nothing orphaned accumulates in storage.
 
-    Does NOT reset the approver roster — the same LeaveDashboardAccess
-    snapshot taken at original submission stays; this is safe because the
-    lock condition below guarantees nobody has decided yet, so there's
-    nothing to invalidate."""
+    If any approver had already recorded a decision, editing resets every
+    approval on this request back to 'pending' — the substance of the
+    request just changed, so an existing decision was made on information
+    that's no longer accurate and can't be trusted to still apply. This is
+    the same "update like a new request" behavior a cancel+resubmit would
+    produce, just in place. Whoever's decision got reset is notified, same
+    as cancel_leave_request already notifies decided approvers."""
     from hr.leave_services import validate_leave_submission
 
     if leave_request.created_by_id != editing_user.id:
@@ -323,10 +327,10 @@ def edit_leave_request(leave_request, editing_user, *, leave_type, start_date, e
     leave_request.refresh_from_db()
     if leave_request.status != 'pending':
         raise ValueError('This request has already been decided and can no longer be edited.')
-    if leave_request.approvals.exclude(decision='pending').exists():
-        raise ValueError('An approver has already recorded a decision on this request; it can no longer be edited.')
 
     with transaction.atomic():
+        decided_approvals = list(
+            leave_request.approvals.exclude(decision='pending').select_related('approver'))
         exceeds_balance = validate_leave_submission(
             leave_request.employee, leave_type, start_date, end_date, lock=True,
             exclude_request_id=leave_request.pk)
@@ -347,6 +351,15 @@ def edit_leave_request(leave_request, editing_user, *, leave_type, start_date, e
         leave_request.save(update_fields=[
             'leave_type', 'start_date', 'end_date', 'employee_reason', 'document',
             'exceeds_balance', 'days', 'updated_at'])
+        if decided_approvals:
+            leave_request.approvals.exclude(decision='pending').update(
+                decision='pending', comment='', decided_at=None)
+
+    if decided_approvals:
+        notify_users(
+            recipients=[a.approver for a in decided_approvals],
+            verb=f'{leave_request.employee.full_name} edited a leave request you had decided on',
+            actor=editing_user, description='The request was changed and needs a fresh decision.')
     return leave_request
 
 

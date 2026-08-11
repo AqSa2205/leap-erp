@@ -500,12 +500,14 @@ def my_profile(request):
             # prefetch cache rather than a second queryset, so this doesn't
             # cost an extra query per row.
             r.visible_notes = [n for n in r.notes.all() if not n.is_internal]
-            # Editing the dates/type only makes sense before anyone has
-            # acted on the original ones; Cancel (below) covers withdrawal
-            # for the entire pending window regardless of decisions.
-            r.can_edit = bool(
-                r.created_by_id == request.user.id and r.status == 'pending'
-                and not r.approvals.exclude(decision='pending').exists())
+            # Edit spans the whole pending window, same as Cancel below —
+            # editing after a decision resets that decision (see
+            # edit_leave_request), so decided_approvers drives the "this
+            # will reset X's decision" warning in the edit form.
+            r.can_edit = bool(r.created_by_id == request.user.id and r.status == 'pending')
+            r.decided_approvers = [
+                a.approver.get_full_name() or a.approver.username
+                for a in r.approvals.all() if a.decision != 'pending']
             # Cancel spans the whole pending window — before any decision
             # this is a same-day change of mind (no reason required); once
             # an approver has decided, it still works but requires a
@@ -817,9 +819,14 @@ class EmployeeUpdateView(AdminRequiredMixin, UpdateView):
 
 
 class EmployeeGrantExceptionDaysView(SuperAdminRequiredMixin, FormView):
-    """HR action: '+N Exception Days' on an employee's profile — creates one
-    audited LeaveExceptionGrant row. Gated by the same override-access
-    permission as the balance-override escape hatch on Leave Requests."""
+    """HR action: adjust an employee's balance for one leave type/year —
+    creates one audited LeaveExceptionGrant row (positive or negative,
+    derived from the new-total-vs-current diff; see ExceptionGrantForm).
+    Gated by the same override-access permission as the balance-override
+    escape hatch on Leave Requests. Reachable from an employee's own Leave
+    Summary page, or from the Entitlements page's per-leave-type breakdown
+    (which pre-fills leave_type/year via query params, since that page
+    already shows the exact row being adjusted)."""
     form_class = ExceptionGrantForm
     template_name = 'hr/exception_grant_form.html'
 
@@ -830,20 +837,65 @@ class EmployeeGrantExceptionDaysView(SuperAdminRequiredMixin, FormView):
         self.employee = get_object_or_404(Employee, pk=kwargs['pk'])
         return super().dispatch(request, *args, **kwargs)
 
+    def _prefilled_leave_type_and_year(self):
+        """Only trusted when BOTH arrive together from a per-row Adjust
+        link — a lone leave_type or lone year isn't enough to safely lock
+        the fields (the other one would default silently)."""
+        leave_type_id = self.request.GET.get('leave_type')
+        year = self.request.GET.get('year')
+        if leave_type_id and leave_type_id.isdigit() and year and year.isdigit():
+            leave_type = LeaveType.objects.filter(pk=leave_type_id).first()
+            if leave_type:
+                return leave_type, int(year)
+        return None, None
+
+    def _current_total(self, leave_type, year):
+        entitlement = LeaveEntitlement.objects.filter(
+            employee=self.employee, leave_type=leave_type, year=year).first()
+        if entitlement:
+            return entitlement.effective_entitled_days
+        return leave_type.default_days_for(self.employee.work_location)
+
     def get_initial(self):
-        return {'year': timezone.now().year}
+        initial = {'year': timezone.now().year}
+        leave_type, year = self._prefilled_leave_type_and_year()
+        if leave_type:
+            initial['leave_type'] = leave_type.pk
+            initial['year'] = year
+            initial['new_total_days'] = self._current_total(leave_type, year)
+        return initial
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx['employee'] = self.employee
+        leave_type, year = self._prefilled_leave_type_and_year()
+        ctx['locked_leave_type'] = leave_type
+        ctx['locked_year'] = year
+        if leave_type:
+            ctx['current_total_days'] = self._current_total(leave_type, year)
         return ctx
 
     def form_valid(self, form):
         from hr.leave_approval_services import grant_exception_days
+        leave_type = form.cleaned_data['leave_type']
+        year = form.cleaned_data['year']
+        new_total = form.cleaned_data['new_total_days']
+        current_total = self._current_total(leave_type, year)
+        delta = new_total - current_total
+        if delta == 0:
+            messages.info(
+                self.request,
+                f'{self.employee.full_name} already has {new_total} day(s) for {leave_type.name} in {year} '
+                '— no change made.')
+            return redirect('hr:leave_summary', pk=self.employee.pk)
         grant_exception_days(
-            employee=self.employee, leave_type=form.cleaned_data['leave_type'], year=form.cleaned_data['year'],
-            days=form.cleaned_data['days'], granted_by=self.request.user, reason=form.cleaned_data['reason'])
-        messages.success(self.request, f'Granted {form.cleaned_data["days"]} exception day(s) to {self.employee.full_name}.')
+            employee=self.employee, leave_type=leave_type, year=year,
+            days=delta, granted_by=self.request.user, reason=form.cleaned_data['reason'])
+        verb = 'Granted' if delta > 0 else 'Deducted'
+        messages.success(
+            self.request,
+            f'{verb} {abs(delta)} day(s) — {self.employee.full_name} now has {new_total} total day(s) '
+            f'for {leave_type.name} in {year}.')
         return redirect('hr:leave_summary', pk=self.employee.pk)
 
 
@@ -2275,11 +2327,14 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
+        history_sort = self.request.GET.get('history_sort')
+        history_order = 'decided_at' if history_sort == 'oldest' else '-decided_at'
         ctx['decided_requests'] = (
             LeaveRequest.objects.exclude(status='pending')
             .select_related('employee', 'leave_type', 'overridden_by')
             .prefetch_related('approvals__approver')
-            .order_by('-decided_at')[:50])
+            .order_by(history_order)[:50])
+        ctx['current_history_sort'] = 'oldest' if history_sort == 'oldest' else 'newest'
         ctx['current_sort'] = self.request.GET.get('sort') or 'submitted'
         ctx['can_revoke'] = has_override_access(self.request.user)
         ctx['pending_leave_revoke_requests'] = (
@@ -2295,11 +2350,17 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
         # exactly what edit_leave_request/cancel_leave_request check.
         my_logged_requests = list(
             LeaveRequest.objects.filter(created_by=self.request.user)
-            .select_related('employee', 'leave_type').prefetch_related('approvals')
+            .select_related('employee', 'leave_type').prefetch_related('approvals__approver')
             .order_by('-created_at')[:20])
         for req in my_logged_requests:
-            req.can_edit = bool(
-                req.status == 'pending' and not req.approvals.exclude(decision='pending').exists())
+            # Edit spans the whole pending window, same as Cancel — editing
+            # after a decision resets that decision (see edit_leave_request),
+            # so decided_approvers drives the "this will reset X's decision"
+            # warning in the edit form.
+            req.can_edit = bool(req.status == 'pending')
+            req.decided_approvers = [
+                a.approver.get_full_name() or a.approver.username
+                for a in req.approvals.all() if a.decision != 'pending']
             req.can_cancel = bool(req.status == 'pending')
         ctx['my_logged_requests'] = my_logged_requests
         return ctx
@@ -2581,7 +2642,8 @@ def entitlement_year(request):
 
     return render(request, 'hr/entitlement_year.html',
                   {'year': year, 'groups': list(groups.values()),
-                   'entitlement_count': entitlements.count()})
+                   'entitlement_count': entitlements.count(),
+                   'can_adjust_balance': has_override_access(request.user)})
 
 
 class AttendanceHistoryView(HRScopedAccessMixin, DetailView):
@@ -3323,10 +3385,13 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         # only genuinely human-decided outcomes (approved/rejected) — expired
         # requests stay in the active queue above until a human actually
         # decides them.
+        history_sort = self.request.GET.get('history_sort')
+        history_order = 'decided_at' if history_sort == 'oldest' else '-decided_at'
+        ctx['current_history_sort'] = 'oldest' if history_sort == 'oldest' else 'newest'
         decided = list(
             self._tab_queryset(tab, user, emp).filter(status__in=('approved', 'rejected', 'revoked'))
             .select_related('employee', 'employee__main_manager', 'main_manager', 'decided_by', 'overridden_by')
-            .order_by('-decided_at')[:50])
+            .order_by(history_order)[:50])
 
         # Precompute per-row action visibility here (rather than re-deriving
         # the hierarchy/HR logic in the template): 'can_decide' is the normal

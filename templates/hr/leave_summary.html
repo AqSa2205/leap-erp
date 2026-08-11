@@ -13,11 +13,6 @@
             <a href="{% url 'hr:entitlement_year' %}?year={{ year }}" class="btn btn-outline-secondary">
                 <i class="bi bi-arrow-left"></i> Back to Leave Entitlements
             </a>
-            {% if can_grant_exception %}
-            <a href="{% url 'hr:grant_exception_days' pk=employee.pk %}" class="btn btn-outline-danger">
-                <i class="bi bi-plus-circle"></i> Add Exception Days
-            </a>
-            {% endif %}
         </div>
     </div>
 
@@ -42,24 +37,30 @@
                         <th class="text-end">Entitled</th>
                         <th class="text-end">Taken</th>
                         <th class="text-end">Remaining</th>
+                        {% if can_grant_exception %}<th></th>{% endif %}
                     </tr>
                 </thead>
                 <tbody>
                     {% for e in entitlements %}
                     <tr>
                         <td>{{ e.leave_type.name }}</td>
-                        <td class="text-end">{{ e.entitled_days }}</td>
-                        <td class="text-end">{{ e.taken_days }}</td>
-                        <td class="text-end {% if e.remaining_days < 0 %}text-danger fw-bold{% endif %}">
-                            {{ e.remaining_days }}
+                        <td class="text-end">
+                            <div class="fw-semibold">{{ e.effective_entitled_days }}</div>
+                            {% include 'hr/_exception_adjustment_badge.html' with standard_days=e.entitled_days exception_days=e.exception_days %}
                         </td>
+                        <td class="text-end">{{ e.taken_days }}</td>
+                        <td class="text-end {% if e.effective_remaining_days < 0 %}text-danger fw-bold{% endif %}">
+                            {{ e.effective_remaining_days }}
+                        </td>
+                        {% if can_grant_exception %}
+                        <td class="text-end">
+                            <a href="{% url 'hr:grant_exception_days' pk=employee.pk %}?leave_type={{ e.leave_type.pk }}&year={{ year }}"
+                               class="btn btn-sm btn-outline-primary py-0" title="Adjust this employee's balance for this leave type">
+                                <i class="bi bi-sliders"></i> Adjust
+                            </a>
+                        </td>
+                        {% endif %}
                     </tr>
-                    {% if e.exception_days %}
-                    <tr class="table-light">
-                        <td colspan="3" class="ps-4 text-muted">+ {{ e.exception_days }} exception days granted</td>
-                        <td class="text-end text-muted">{{ e.effective_remaining_days }} available</td>
-                    </tr>
-                    {% endif %}
                     {% endfor %}
                 </tbody>
             </table>

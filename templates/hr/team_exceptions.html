@@ -279,15 +279,26 @@
 
   <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center" style="cursor:pointer;"
-         data-bs-toggle="collapse" data-bs-target="#exceptionHistoryCollapse" role="button" aria-expanded="false">
+         data-bs-toggle="collapse" data-bs-target="#exceptionHistoryCollapse"
+         role="button" aria-expanded="{% if request.GET.history_sort %}true{% else %}false{% endif %}">
       <h5 class="mb-0">
         <i class="bi bi-clock-history"></i> History
         <span class="badge bg-secondary ms-1">{{ decided_exceptions|length }}</span>
       </h5>
       <i class="bi bi-chevron-down"></i>
     </div>
-    <div class="collapse" id="exceptionHistoryCollapse">
+    <div class="collapse{% if request.GET.history_sort %} show{% endif %}" id="exceptionHistoryCollapse">
     <div class="card-body p-0">
+      <div class="d-flex justify-content-end p-2">
+        <form method="get" class="d-flex align-items-center gap-2 mb-0">
+          <input type="hidden" name="tab" value="{{ tab }}">
+          <label class="small text-muted mb-0">Sort by</label>
+          <select name="history_sort" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
+            <option value="newest" {% if current_history_sort == 'newest' %}selected{% endif %}>Decided (newest first)</option>
+            <option value="oldest" {% if current_history_sort == 'oldest' %}selected{% endif %}>Decided (oldest first)</option>
+          </select>
+        </form>
+      </div>
       <div class="table-responsive" style="max-height: 480px; overflow-y: auto;">
       <table class="table table-sm mb-0">
         <thead class="table-light"><tr><th>Employee</th><th>Manager</th><th>Event</th><th>Status</th><th>Decided At</th></tr></thead>

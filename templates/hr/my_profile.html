@@ -102,7 +102,7 @@
             Total remaining: <strong>{{ leave_total_remaining }}</strong> of {{ leave_total_entitled }} days
             <span class="text-muted">(accrued leave only — Annual; conditional leave shown below isn't counted in this total)</span>
             {% if leave_total_exception %}
-            <br><span class="text-muted">+ {{ leave_total_exception }} exception day(s) granted — {{ leave_total_remaining|add:leave_total_exception }} truly available</span>
+            <br><span class="text-muted">Exception adjustment: {% if leave_total_exception > 0 %}+{% endif %}{{ leave_total_exception }} day(s) — {{ leave_total_remaining|add:leave_total_exception }} truly available</span>
             {% endif %}
           </p>
           <table class="table table-sm mb-0">
@@ -116,16 +116,13 @@
                     <span class="badge bg-light text-muted border ms-1">Conditional</span>
                     {% endif %}
                 </td>
-                <td class="text-end">{{ ent.entitled_days }}</td>
+                <td class="text-end">
+                    {% include 'hr/_exception_adjustment_icon.html' with standard_days=ent.entitled_days exception_days=ent.exception_days %}
+                    {{ ent.effective_entitled_days }}
+                </td>
                 <td class="text-end">{{ ent.taken_days }}</td>
-                <td class="text-end fw-semibold">{{ ent.remaining_days }}</td>
+                <td class="text-end fw-semibold">{{ ent.effective_remaining_days }}</td>
               </tr>
-              {% if ent.exception_days %}
-              <tr class="table-light">
-                <td colspan="2" class="ps-4 text-muted small">+ {{ ent.exception_days }} exception days granted</td>
-                <td class="text-end text-muted small" colspan="2">{{ ent.effective_remaining_days }} available</td>
-              </tr>
-              {% endif %}
               {% endfor %}
             </tbody>
           </table>
@@ -333,6 +330,13 @@
                       {% csrf_token %}
                       <input type="hidden" name="action" value="edit_leave_request">
                       <input type="hidden" name="request_id" value="{{ r.pk }}">
+                      {% if r.decided_approvers %}
+                      <div class="small text-warning-emphasis bg-warning-subtle border border-warning-subtle rounded p-2 mb-2">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        {{ r.decided_approvers|join:", " }} already decided on this request — saving changes
+                        will reset that decision and send it back for review.
+                      </div>
+                      {% endif %}
                       <div class="row g-2">
                         <div class="col-md-3">
                           <label class="form-label small">Start</label>

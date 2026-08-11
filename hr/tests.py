@@ -472,11 +472,15 @@ class GrantExceptionDaysViewPermissionTests(TestCase):
         LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=timezone.now().year, entitled_days=Decimal('45'))
 
     def test_super_admin_can_grant_via_the_view(self):
+        # Baseline is 45 (site default, no prior exception) — entering a new
+        # total of 48 should be stored as a +3 exception, same as before,
+        # just expressed as a target total instead of a raw delta.
         from accounts.models import Role
         _make_role_user('gedv-super', Role.SUPER_ADMIN)
         self.client.login(username='gedv-super', password='testpass123')
         resp = self.client.post(reverse('hr:grant_exception_days', args=[self.emp.pk]), data={
-            'leave_type': self.lt.pk, 'year': timezone.now().year, 'days': '3', 'reason': 'Test grant via view.'})
+            'leave_type': self.lt.pk, 'year': timezone.now().year, 'new_total_days': '48',
+            'reason': 'Test grant via view.'})
         self.assertEqual(resp.status_code, 302)
         ent = LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.lt, year=timezone.now().year)
         self.assertEqual(ent.exception_days, Decimal('3'))
@@ -489,9 +493,92 @@ class GrantExceptionDaysViewPermissionTests(TestCase):
         resp = self.client.get(reverse('hr:grant_exception_days', args=[self.emp.pk]))
         self.assertEqual(resp.status_code, 403)
         resp = self.client.post(reverse('hr:grant_exception_days', args=[self.emp.pk]), data={
-            'leave_type': self.lt.pk, 'year': timezone.now().year, 'days': '3', 'reason': 'Should not work.'})
+            'leave_type': self.lt.pk, 'year': timezone.now().year, 'new_total_days': '48',
+            'reason': 'Should not work.'})
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(LeaveEntitlement.objects.get(employee=self.emp).exception_days, Decimal('0'))
+
+
+class GrantExceptionDaysTargetTotalTests(TestCase):
+    """The Adjust Balance form takes a target total, not a signed +/- delta
+    — the view diffs it against the employee's current effective total
+    (LeaveEntitlement.effective_entitled_days) to derive the
+    LeaveExceptionGrant it actually stores. Reached with leave_type/year
+    pre-filled (the normal path, via a per-row Adjust link), those two
+    fields lock and the current total is shown/pre-filled; reached without
+    prefill (a bare URL visit), they stay editable and no total is shown."""
+    def setUp(self):
+        self.lt, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': Decimal('30'), 'site_default_annual_days': Decimal('45')})
+        self.emp = Employee.objects.create(iqama_number='GETT-1', full_name='Target Total Grantee', work_location='site')
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.lt, year=2026, entitled_days=Decimal('45'))
+        from accounts.models import Role
+        _make_role_user('gett-super', Role.SUPER_ADMIN)
+        self.client.login(username='gett-super', password='testpass123')
+
+    def _url(self, **params):
+        base = reverse('hr:grant_exception_days', args=[self.emp.pk])
+        if not params:
+            return base
+        return f"{base}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
+
+    def test_prefilled_locks_the_fields_and_shows_current_total(self):
+        resp = self.client.get(self._url(leave_type=self.lt.pk, year=2026))
+        self.assertContains(resp, f'value="{self.lt.pk}"')
+        self.assertContains(resp, 'currently 45.0 total day')
+        self.assertNotContains(resp, '<select name="leave_type"')
+
+    def test_prefilled_new_total_days_initial_is_the_current_total(self):
+        resp = self.client.get(self._url(leave_type=self.lt.pk, year=2026))
+        self.assertEqual(resp.context['form'].initial['new_total_days'], Decimal('45'))
+
+    def test_without_prefill_leave_type_stays_an_editable_dropdown(self):
+        resp = self.client.get(self._url())
+        self.assertContains(resp, '<select name="leave_type"')
+        self.assertNotContains(resp, 'currently')
+
+    def test_higher_total_grants_the_difference(self):
+        resp = self.client.post(self._url(leave_type=self.lt.pk, year=2026), data={
+            'leave_type': self.lt.pk, 'year': 2026, 'new_total_days': '50', 'reason': 'Worked through Eid.'})
+        self.assertEqual(resp.status_code, 302)
+        ent = LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.lt, year=2026)
+        self.assertEqual(ent.exception_days, Decimal('5'))
+
+    def test_lower_total_deducts_the_difference(self):
+        # This is the "reduce" case — a new employee entitled to fewer days
+        # than the standard baseline for company-policy reasons.
+        resp = self.client.post(self._url(leave_type=self.lt.pk, year=2026), data={
+            'leave_type': self.lt.pk, 'year': 2026, 'new_total_days': '40', 'reason': 'New-hire policy cap.'})
+        self.assertEqual(resp.status_code, 302)
+        ent = LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.lt, year=2026)
+        self.assertEqual(ent.exception_days, Decimal('-5'))
+        self.assertEqual(ent.effective_entitled_days, Decimal('40'))
+
+    def test_same_total_is_a_no_op(self):
+        resp = self.client.post(self._url(leave_type=self.lt.pk, year=2026), data={
+            'leave_type': self.lt.pk, 'year': 2026, 'new_total_days': '45', 'reason': 'No actual change.'})
+        self.assertEqual(resp.status_code, 302)
+        ent = LeaveEntitlement.objects.get(employee=self.emp, leave_type=self.lt, year=2026)
+        self.assertEqual(ent.exception_days, Decimal('0'))
+        self.assertFalse(LeaveExceptionGrant.objects.filter(employee=self.emp).exists())
+
+    def test_negative_new_total_rejected(self):
+        resp = self.client.post(self._url(leave_type=self.lt.pk, year=2026), data={
+            'leave_type': self.lt.pk, 'year': 2026, 'new_total_days': '-5', 'reason': 'Should not work.'})
+        self.assertEqual(resp.status_code, 200)  # form re-renders with an error
+        self.assertFalse(LeaveExceptionGrant.objects.filter(employee=self.emp).exists())
+
+    def test_deduction_reflected_on_leave_summary(self):
+        self.client.post(self._url(leave_type=self.lt.pk, year=2026), data={
+            'leave_type': self.lt.pk, 'year': 2026, 'new_total_days': '40', 'reason': 'New-hire policy cap.'})
+        resp = self.client.get(reverse('hr:leave_summary', args=[self.emp.pk]) + '?year=2026')
+        # New effective total is primary; the struck-through standard 45.0
+        # and a red "reduced" badge (absolute value, no sign — the icon and
+        # color already convey direction) show the adjustment.
+        self.assertContains(resp, '<div class="fw-semibold">40.0</div>')
+        self.assertContains(resp, 'text-decoration-line-through')
+        self.assertContains(resp, 'bg-danger-subtle')
+        self.assertContains(resp, 'bi-arrow-down-short')
 
 
 class BalanceHoldSettingsViewTests(TestCase):
@@ -696,12 +783,23 @@ class EmployeeDashboardExceptionDisplayTests(TestCase):
 
     def test_leave_summary_shows_baseline_and_exception_separately(self):
         resp = self.client.get(reverse('hr:leave_summary', args=[self.emp.pk]) + '?year=2026')
-        self.assertContains(resp, '45')  # baseline anchor
-        self.assertContains(resp, '+ 5 exception days granted')
+        self.assertContains(resp, '<div class="fw-semibold">50.0</div>')  # effective total (45 + 5)
+        self.assertContains(resp, 'text-decoration-line-through')  # struck-through standard 45.0
+        self.assertContains(resp, 'bg-success-subtle')
+        self.assertContains(resp, '+5')
 
     def test_grant_exception_days_link_visible_for_override_access(self):
-        resp = self.client.get(reverse('hr:leave_summary', args=[self.emp.pk]))
-        self.assertContains(resp, 'Add Exception Days')
+        # The balance-adjustment entry point is a per-row action in the
+        # breakdown table (pre-filled to that row's leave type/year), not a
+        # single generic header button — mirrors the Entitlements page.
+        resp = self.client.get(reverse('hr:leave_summary', args=[self.emp.pk]) + '?year=2026')
+        expected_url = f"{reverse('hr:grant_exception_days', args=[self.emp.pk])}?leave_type={self.lt.pk}&year=2026"
+        self.assertContains(resp, expected_url)
+        self.assertContains(resp, 'Adjust')
+
+    def test_no_standalone_adjust_button_in_header(self):
+        resp = self.client.get(reverse('hr:leave_summary', args=[self.emp.pk]) + '?year=2026')
+        self.assertNotContains(resp, 'Add Exception Days')
 
 
 class LeaveSummaryAndRecordCreateNavigationTests(TestCase):
@@ -788,9 +886,15 @@ class MyProfileExceptionDisplayTests(TestCase):
         LeaveExceptionGrant.objects.create(employee=self.emp, leave_type=self.lt, year=year, days=Decimal('1'), reason='x')
 
     def test_my_profile_shows_the_granted_day(self):
+        # My Profile shows only the clean effective total by default — the
+        # standard-vs-adjusted breakdown is tucked behind an info icon
+        # (tooltip) instead of always-visible, unlike the HR-facing pages.
         self.client.force_login(self.user)
         resp = self.client.get(reverse('hr:my_profile'))
-        self.assertContains(resp, '+ 1 exception day(s) granted')
+        self.assertContains(resp, '46.0')  # effective total (45 + 1) in the per-type row
+        self.assertContains(resp, 'bi-info-circle')
+        self.assertContains(resp, 'data-bs-toggle="tooltip"')
+        self.assertNotContains(resp, 'text-decoration-line-through')
         self.assertEqual(resp.context['leave_total_exception'], Decimal('1'))
 
 
@@ -6683,6 +6787,43 @@ class LeaveQueueHistoryCollapseTests(TestCase):
         resp = self.client.get(reverse('hr:leave_request_list'))
         self.assertContains(resp, '<span class="badge bg-secondary ms-1">1</span>')
 
+    def test_history_defaults_to_newest_decided_first(self):
+        older = self._decided_request(1)
+        older.decided_at = timezone.now() - timedelta(days=5)
+        older.save(update_fields=['decided_at'])
+        newer = self._decided_request(3)
+        newer.decided_at = timezone.now()
+        newer.save(update_fields=['decided_at'])
+        self.client.login(username='lqhc_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        ids = [r.pk for r in resp.context['decided_requests']]
+        self.assertEqual(ids, [newer.pk, older.pk])
+        self.assertEqual(resp.context['current_history_sort'], 'newest')
+
+    def test_history_sort_oldest_reverses_the_order(self):
+        older = self._decided_request(1)
+        older.decided_at = timezone.now() - timedelta(days=5)
+        older.save(update_fields=['decided_at'])
+        newer = self._decided_request(3)
+        newer.decided_at = timezone.now()
+        newer.save(update_fields=['decided_at'])
+        self.client.login(username='lqhc_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'), {'history_sort': 'oldest'})
+        ids = [r.pk for r in resp.context['decided_requests']]
+        self.assertEqual(ids, [older.pk, newer.pk])
+        self.assertEqual(resp.context['current_history_sort'], 'oldest')
+
+    def test_history_sort_form_round_trips_the_history_tab(self):
+        # The sort control is a plain GET form — without a tab=history
+        # hidden field, submitting it would silently drop the page back to
+        # the default Pending tab instead of staying on History.
+        self.client.login(username='lqhc_super', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        content = resp.content.decode()
+        sort_form_start = content.index('name="history_sort"')
+        preceding = content[:sort_form_start]
+        self.assertIn('<input type="hidden" name="tab" value="history">', preceding[-400:])
+
 
 class TeamExceptionsHistoryCollapseTests(TestCase):
     """Same collapsible-History treatment on Team Exceptions, verified
@@ -6718,6 +6859,52 @@ class TeamExceptionsHistoryCollapseTests(TestCase):
         self.client.login(username='tehc_mgr', password='testpass123')
         resp = self.client.get(reverse('hr:team_exceptions'))
         self.assertContains(resp, '<span class="badge bg-secondary ms-1">3</span>')
+
+    def test_history_defaults_to_newest_decided_first(self):
+        older = _submit_aex(
+            employee=self.report, event_date=_date(2026, 7, 18), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+        decide_attendance_exception(older, self.manager_user, 'approved')
+        older.decided_at = timezone.now() - timedelta(days=5)
+        older.save(update_fields=['decided_at'])
+        newer = _submit_aex(
+            employee=self.report, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+        decide_attendance_exception(newer, self.manager_user, 'approved')
+        newer.decided_at = timezone.now()
+        newer.save(update_fields=['decided_at'])
+        self.client.login(username='tehc_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'))
+        ids = [e.pk for e in resp.context['decided_exceptions']]
+        self.assertEqual(ids, [newer.pk, older.pk])
+        self.assertEqual(resp.context['current_history_sort'], 'newest')
+
+    def test_history_sort_oldest_reverses_the_order(self):
+        older = _submit_aex(
+            employee=self.report, event_date=_date(2026, 7, 18), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+        decide_attendance_exception(older, self.manager_user, 'approved')
+        older.decided_at = timezone.now() - timedelta(days=5)
+        older.save(update_fields=['decided_at'])
+        newer = _submit_aex(
+            employee=self.report, event_date=_date(2026, 7, 20), event_start_time=_time(9, 0),
+            reason_category='site_visit', created_by=self.creator)
+        decide_attendance_exception(newer, self.manager_user, 'approved')
+        newer.decided_at = timezone.now()
+        newer.save(update_fields=['decided_at'])
+        self.client.login(username='tehc_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'), {'history_sort': 'oldest'})
+        ids = [e.pk for e in resp.context['decided_exceptions']]
+        self.assertEqual(ids, [older.pk, newer.pk])
+        self.assertEqual(resp.context['current_history_sort'], 'oldest')
+
+    def test_history_sort_reload_keeps_the_panel_expanded(self):
+        # The sort control lives inside the collapsed-by-default History
+        # card — without re-opening on reload, changing the sort would
+        # visually hide the very list that just got resorted.
+        self.client.login(username='tehc_mgr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'), {'history_sort': 'oldest'})
+        self.assertIn('<div class="collapse show" id="exceptionHistoryCollapse">', resp.content.decode())
 
     def test_overridden_attribution_still_renders_inside_collapsed_history(self):
         # History only ever holds already-decided (approved/rejected) rows
@@ -7053,11 +7240,54 @@ class EditLeaveRequestServiceTests(TestCase):
         with self.assertRaises(ValueError):
             edit_leave_request(self.req, other, leave_type=self.lt, start_date=date(2026, 8, 3), end_date=date(2026, 8, 4))
 
-    def test_cannot_edit_once_a_decision_is_recorded(self):
+    def test_editing_after_a_decision_resets_it_to_pending(self):
+        # Editing after a decision is recorded is now allowed (the whole
+        # pending window, same as cancel) — but the substance changed, so
+        # the stale decision is reset rather than silently kept.
         from hr.leave_approval_services import edit_leave_request
         approver = make_user('edlr-approver', password='x')
         LeaveDashboardAccess.objects.create(user=approver, is_active=True)
-        LeaveRequestApproval.objects.create(leave_request=self.req, approver=approver, decision='approved')
+        approval = LeaveRequestApproval.objects.create(
+            leave_request=self.req, approver=approver, decision='approved',
+            comment='looks fine', decided_at=timezone.now())
+        updated = edit_leave_request(
+            self.req, self.user, leave_type=self.lt, start_date=date(2026, 8, 3), end_date=date(2026, 8, 4))
+        self.assertEqual(updated.status, 'pending')
+        approval.refresh_from_db()
+        self.assertEqual(approval.decision, 'pending')
+        self.assertEqual(approval.comment, '')
+        self.assertIsNone(approval.decided_at)
+
+    def test_editing_after_a_decision_notifies_the_approver(self):
+        from hr.leave_approval_services import edit_leave_request
+        approver_user = make_user('edlr-notify-approver', password='x')
+        LeaveDashboardAccess.objects.create(user=approver_user, is_active=True)
+        LeaveRequestApproval.objects.create(leave_request=self.req, approver=approver_user, decision='approved')
+        from notifications.models import Notification
+        edit_leave_request(
+            self.req, self.user, leave_type=self.lt, start_date=date(2026, 8, 3), end_date=date(2026, 8, 4))
+        self.assertTrue(
+            Notification.objects.filter(recipient=approver_user, verb__icontains='edited a leave request').exists())
+
+    def test_edit_with_no_prior_decision_leaves_approvals_untouched(self):
+        # No decision was ever recorded, so there's nothing to reset —
+        # confirms the reset path doesn't fire needlessly.
+        from hr.leave_approval_services import edit_leave_request
+        approver = make_user('edlr-untouched-approver', password='x')
+        LeaveDashboardAccess.objects.create(user=approver, is_active=True)
+        approval = LeaveRequestApproval.objects.create(
+            leave_request=self.req, approver=approver, decision='pending')
+        edit_leave_request(
+            self.req, self.user, leave_type=self.lt, start_date=date(2026, 8, 3), end_date=date(2026, 8, 4))
+        approval.refresh_from_db()
+        self.assertEqual(approval.decision, 'pending')
+
+    def test_cannot_edit_a_fully_finalized_request(self):
+        # A fully approved/disapproved request is a different mechanism
+        # entirely (Revoke) — edit still only applies to the pending window.
+        from hr.leave_approval_services import edit_leave_request
+        self.req.status = 'approved'
+        self.req.save(update_fields=['status'])
         with self.assertRaises(ValueError):
             edit_leave_request(self.req, self.user, leave_type=self.lt, start_date=date(2026, 8, 3), end_date=date(2026, 8, 4))
 
@@ -7452,12 +7682,29 @@ class MyProfileLeaveEditCancelUITests(TestCase):
         self.assertContains(resp, f'edit_leave_request_{self.req.pk}')
         self.assertContains(resp, f'cancel_leave_request_{self.req.pk}')
 
-    def test_no_edit_button_once_decided_but_cancel_remains(self):
+    def test_edit_button_and_reset_warning_still_show_once_decided(self):
         approver = make_user('mpled_approver', password='x')
         LeaveRequestApproval.objects.create(leave_request=self.req, approver=approver, decision='approved')
         resp = self.client.get(reverse('hr:my_profile'))
-        self.assertNotContains(resp, f'edit_leave_request_{self.req.pk}')
+        self.assertContains(resp, f'edit_leave_request_{self.req.pk}')
         self.assertContains(resp, f'cancel_leave_request_{self.req.pk}')
+        self.assertContains(resp, 'mpled_approver')
+        self.assertContains(resp, 'saving changes')
+
+    def test_editing_a_decided_request_resets_the_decision(self):
+        approver_user = make_user('mpled_reset_approver', password='x')
+        LeaveDashboardAccess.objects.create(user=approver_user, is_active=True)
+        approval = LeaveRequestApproval.objects.create(
+            leave_request=self.req, approver=approver_user, decision='approved')
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'edit_leave_request', 'request_id': self.req.pk,
+            'leave_type': self.lt.pk, 'start_date': '2026-08-05', 'end_date': '2026-08-06',
+        })
+        self.assertEqual(resp.status_code, 302)
+        approval.refresh_from_db()
+        self.assertEqual(approval.decision, 'pending')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'pending')
 
     def test_post_edit_updates_request(self):
         resp = self.client.post(reverse('hr:my_profile'), {
@@ -7647,13 +7894,14 @@ class MyProfileCancelLeaveRequestUITests(TestCase):
         resp = self.client.get(reverse('hr:my_profile'))
         self.assertContains(resp, f'cancel_leave_request_{self.req.pk}')
 
-    def test_edit_button_disappears_once_a_decision_is_recorded(self):
-        # Edit and Cancel are no longer the same window: Edit closes the
-        # moment an approver decides, but Cancel (this whole class) stays
-        # open right through the rest of the pending window.
+    def test_edit_button_also_stays_available_once_a_decision_is_recorded(self):
+        # Edit and Cancel share the same window: both stay open right
+        # through the rest of the pending window. Editing a decided
+        # request resets that decision (see edit_leave_request) rather
+        # than being blocked outright.
         record_approver_decision(self.req, self.approver1, 'approved')
         resp = self.client.get(reverse('hr:my_profile'))
-        self.assertNotContains(resp, f'edit_leave_request_{self.req.pk}')
+        self.assertContains(resp, f'edit_leave_request_{self.req.pk}')
 
     def test_post_cancel_marks_request_cancelled_and_keeps_the_row(self):
         record_approver_decision(self.req, self.approver1, 'approved')
@@ -7995,6 +8243,26 @@ class LeaveQueueMyLoggedRequestsUITests(TestCase):
         resp = self.client.get(resp.url)
         self.assertContains(resp, f'id="editLogged{self.req.pk}"')
 
+    def test_edit_button_and_reset_warning_still_show_once_decided(self):
+        record_approver_decision(self.req, self.approver, 'approved')
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        self.assertContains(resp, f'edit_leave_request_{self.req.pk}')
+        self.assertContains(resp, 'lqmlr_approver')
+        self.assertContains(resp, 'saving changes')
+
+    def test_editing_a_decided_logged_request_resets_the_decision(self):
+        record_approver_decision(self.req, self.approver, 'approved')
+        approval = self.req.approvals.get(approver=self.approver)
+        resp = self.client.post(reverse('hr:leave_request_list'), {
+            'action': 'edit_leave_request', 'request_id': self.req.pk,
+            'leave_type': self.lt.pk, 'start_date': '2026-04-05', 'end_date': '2026-04-06',
+        })
+        self.assertEqual(resp.status_code, 302)
+        approval.refresh_from_db()
+        self.assertEqual(approval.decision, 'pending')
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.status, 'pending')
+
     def test_post_cancel_marks_cancelled(self):
         resp = self.client.post(reverse('hr:leave_request_list'), {
             'action': 'cancel_leave_request', 'request_id': self.req.pk,
@@ -8054,10 +8322,10 @@ class LeaveQueueMyLoggedRequestsUITests(TestCase):
         self.req.refresh_from_db()
         self.assertFalse(self.req.document)
 
-    def test_edit_closes_once_a_decision_is_recorded_but_cancel_remains(self):
+    def test_edit_and_cancel_both_stay_available_once_a_decision_is_recorded(self):
         record_approver_decision(self.req, self.approver, 'approved')
         resp = self.client.get(reverse('hr:leave_request_list'))
-        self.assertNotContains(resp, f'edit_leave_request_{self.req.pk}')
+        self.assertContains(resp, f'edit_leave_request_{self.req.pk}')
         self.assertContains(resp, f'cancel_leave_request_{self.req.pk}')
 
     def test_other_user_cannot_edit_or_cancel_someone_elses_logged_request(self):
