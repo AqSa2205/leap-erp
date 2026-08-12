@@ -20,7 +20,7 @@ from .models import PrequalLibraryItem, PrequalSubmission
 def _can_use_prequal(user):
     return bool(getattr(user, 'is_authenticated', False) and (
         user.is_super_admin_user or user.is_admin_user or user.is_manager_user
-        or user.is_erp_admin_user
+        or user.is_erp_admin_user or user.is_sales_rep_user
         or getattr(user, 'is_proposal_team_user', False)))
 
 
@@ -35,7 +35,8 @@ def _visible_submissions(user):
     # ERP Admin manages the Administration section company-wide — every submission.
     if user.is_super_admin_user or user.is_erp_admin_user:
         return qs
-    if user.is_admin_user or user.is_manager_user or getattr(user, 'is_proposal_team_user', False):
+    if (user.is_admin_user or user.is_manager_user or user.is_sales_rep_user
+            or getattr(user, 'is_proposal_team_user', False)):
         return qs.filter(Q(created_by=user) | Q(project__region=user.region)).distinct()
     return qs.filter(created_by=user)
 

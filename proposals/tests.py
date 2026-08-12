@@ -428,6 +428,31 @@ class PrequalificationTests(TestCase):
         self.assertEqual(r.status_code, 302)
         self.assertFalse(PrequalSubmission.objects.filter(pk=new.pk).exists())
 
+    def test_sales_and_proposal_team_can_use_prequal(self):
+        """Sales reps and proposal-team members can open and create
+        prequalifications (they do not manage the shared library)."""
+        from django.urls import reverse
+        from proposals.models import PrequalSubmission
+        for role_name, uname in ((Role.SALES_REP, 'sales_pq'),
+                                  (Role.PROPOSAL_REP, 'prop_pq')):
+            role, _ = Role.objects.get_or_create(name=role_name)
+            u = User.objects.create_user(uname, password='pw', role=role)
+            self.client.force_login(u)
+            # Can open the list.
+            self.assertEqual(
+                self.client.get(reverse('proposals:prequal_list')).status_code, 200,
+                f'{role_name} should reach the prequal list')
+            # Can create a submission.
+            r = self.client.post(reverse('proposals:prequal_create'),
+                                  {'title': f'By {role_name}'})
+            self.assertEqual(r.status_code, 302)
+            self.assertTrue(
+                PrequalSubmission.objects.filter(title=f'By {role_name}', created_by=u).exists())
+            # But NOT the admin-only library management.
+            self.assertEqual(
+                self.client.get(reverse('proposals:prequal_library')).status_code, 302,
+                f'{role_name} should not manage the library')
+
 
 class AIProposalAccessTests(TestCase):
     """The AI department can create a technical proposal and link it to an

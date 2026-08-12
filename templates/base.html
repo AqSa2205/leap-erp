@@ -1097,7 +1097,7 @@
                 </div>
             </li>
 
-            {% if user.is_super_admin_user or user.is_admin_user or user.is_manager_user or user.is_proposal_team_user or user.is_erp_admin_user %}
+            {% if user.is_super_admin_user or user.is_admin_user or user.is_manager_user or user.is_proposal_team_user or user.is_erp_admin_user or user.is_sales_rep_user %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'proposals' and 'prequal' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'proposals:prequal_list' %}" data-title="Prequalification">
                     <i class="bi bi-file-earmark-check"></i> <span>Prequalification</span>
