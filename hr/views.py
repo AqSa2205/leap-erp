@@ -4,7 +4,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_POST
 from django.contrib import messages
-from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView, FormView
+from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView, FormView, TemplateView
 from django.urls import reverse_lazy, reverse
 from django.db.models import Q, Count, Sum
 from django.db.models import ProtectedError
@@ -16,7 +16,7 @@ from datetime import datetime, date, timedelta
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-from .models import Employee, Asset, AssetAssignment, Vehicle, VehicleDocument, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay, WFHRecord, LeaveRequest, AttendanceException
+from .models import Employee, Asset, AssetAssignment, Vehicle, VehicleDocument, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay, WFHRecord, LeaveRequest, AttendanceException, LeaveRevokeRequest, AttendanceExceptionRevokeRequest
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm, AssetIssueForm, AssetReturnForm,
@@ -60,8 +60,8 @@ class HRScopedAccessMixin(LoginRequiredMixin, UserPassesTestMixin):
 
 def is_designated_approver(user):
     """True if `user` currently holds active approval authority for leave
-    requests — an active LeaveDashboardAccess grant (managed on the Org
-    Chart page's 'Leave Dashboard Access' tab). This — not a username check
+    requests — an active LeaveDashboardAccess grant (managed on the Leave
+    Access page, sidebar Leave -> Leave Access). This — not a username check
     — is what makes Aamna Khan and Ali Sultan (or whoever holds these rows)
     able to actually approve/reject. Note this is NOT the same as being a
     Super Admin: Super Admin status alone grants viewing, never approval
@@ -76,7 +76,7 @@ def has_override_access(user):
     """Access gate for the Super Admin 'override' escape hatch on leave
     requests (force-approve/disapprove when the real approver is
     unavailable) — configured via OverrideAccessSettings, managed from the
-    Org Chart page's 'Leave Dashboard Access' tab. Exactly one mode is
+    Leave Access page (sidebar Leave -> Leave Access). Exactly one mode is
     authoritative: by default (MODE_ALL_SUPER_ADMINS) every Super Admin has
     it, matching the original hardcoded behavior; narrowed to
     MODE_SPECIFIC_ROLES or MODE_SPECIFIC_EMPLOYEES, only that hand-picked
@@ -333,6 +333,61 @@ def my_profile(request):
         form = LeaveRequestForm(fixed_employee=emp) if emp else LeaveRequestForm()
     context['leave_request_form'] = form
 
+    is_edit_leave_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'edit_leave_request')
+    if is_edit_leave_post:
+        from hr.leave_approval_services import edit_leave_request
+        target = LeaveRequest.objects.filter(pk=request.POST.get('request_id')).first()
+        if target is None or target.created_by_id != request.user.id:
+            return HttpResponse('You did not submit this request.', status=403)
+        edit_form = LeaveRequestForm(
+            request.POST, request.FILES, fixed_employee=target.employee, exclude_request_id=target.pk,
+            initial={'document': target.document})
+        if edit_form.is_valid():
+            try:
+                edit_leave_request(
+                    target, request.user, leave_type=edit_form.cleaned_data['leave_type'],
+                    start_date=edit_form.cleaned_data['start_date'], end_date=edit_form.cleaned_data['end_date'],
+                    employee_reason=edit_form.cleaned_data['employee_reason'],
+                    document=edit_form.cleaned_data['document'])
+                messages.success(request, 'Leave request updated.')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+        else:
+            messages.error(request, 'Could not update the request — please check the form.')
+        # opened_leave tells the page which row's edit panel to re-expand
+        # after the reload, so the employee actually sees the change they
+        # just made instead of it collapsing back to hidden.
+        return redirect(f"{reverse('hr:my_profile')}?opened_leave={target.pk}")
+
+    is_cancel_leave_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'cancel_leave_request')
+    if is_cancel_leave_post:
+        from hr.leave_approval_services import cancel_leave_request
+        target = LeaveRequest.objects.filter(pk=request.POST.get('request_id')).first()
+        if target is None or target.created_by_id != request.user.id:
+            return HttpResponse('You did not submit this request.', status=403)
+        try:
+            cancel_leave_request(target, request.user, request.POST.get('reason', ''))
+            messages.success(request, 'Leave request cancelled.')
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        return redirect('hr:my_profile')
+
+    is_request_revoke_leave_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'request_leave_revoke')
+    if is_request_revoke_leave_post:
+        from hr.leave_approval_services import request_leave_revoke
+        target = LeaveRequest.objects.filter(pk=request.POST.get('request_id')).first()
+        if target is None or not (target.employee.user_id and target.employee.user_id == request.user.id):
+            return HttpResponse('This is not your leave request.', status=403)
+        try:
+            request_leave_revoke(target, request.user, request.POST.get('reason', ''))
+            messages.success(request, 'Revoke requested — it will not take effect until reviewed.')
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        return redirect('hr:my_profile')
+
     is_attendance_exception_post = (
         emp and request.method == 'POST' and request.POST.get('action') == 'submit_attendance_exception')
     if is_attendance_exception_post:
@@ -355,6 +410,57 @@ def my_profile(request):
     else:
         exception_form = AttendanceExceptionForm()
     context['attendance_exception_form'] = exception_form
+
+    is_edit_exception_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'edit_attendance_exception')
+    if is_edit_exception_post:
+        from hr.attendance_exception_services import edit_attendance_exception
+        target = AttendanceException.objects.filter(pk=request.POST.get('request_id')).first()
+        if target is None or target.created_by_id != request.user.id:
+            return HttpResponse('You did not submit this request.', status=403)
+        edit_exc_form = AttendanceExceptionForm(request.POST)
+        if edit_exc_form.is_valid():
+            try:
+                edit_attendance_exception(
+                    target, request.user, event_date=edit_exc_form.cleaned_data['event_date'],
+                    event_start_time=edit_exc_form.cleaned_data['event_start_time'],
+                    reason_category=edit_exc_form.cleaned_data['reason_category'],
+                    custom_reason=edit_exc_form.cleaned_data['custom_reason'],
+                    employee_comment=edit_exc_form.cleaned_data['employee_comment'])
+                messages.success(request, 'Attendance exception updated.')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+        else:
+            messages.error(request, 'Could not update the exception — please check the form.')
+        return redirect('hr:my_profile')
+
+    is_delete_exception_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'delete_attendance_exception')
+    if is_delete_exception_post:
+        from hr.attendance_exception_services import delete_attendance_exception
+        target = AttendanceException.objects.filter(pk=request.POST.get('request_id')).first()
+        if target is None or target.created_by_id != request.user.id:
+            return HttpResponse('You did not submit this request.', status=403)
+        try:
+            delete_attendance_exception(target, request.user)
+            messages.success(request, 'Attendance exception deleted.')
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        return redirect('hr:my_profile')
+
+    is_request_revoke_exception_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'request_attendance_exception_revoke')
+    if is_request_revoke_exception_post:
+        from hr.attendance_exception_services import request_attendance_exception_revoke
+        target = AttendanceException.objects.filter(pk=request.POST.get('request_id')).first()
+        if target is None or not (target.employee.user_id and target.employee.user_id == request.user.id):
+            return HttpResponse('This is not your attendance exception.', status=403)
+        try:
+            request_attendance_exception_revoke(target, request.user, request.POST.get('reason', ''))
+            messages.success(request, 'Revoke requested — it will not take effect until reviewed.')
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        return redirect('hr:my_profile')
 
     if emp:
         today = timezone.localtime(timezone.now()).date()
@@ -394,8 +500,32 @@ def my_profile(request):
             # prefetch cache rather than a second queryset, so this doesn't
             # cost an extra query per row.
             r.visible_notes = [n for n in r.notes.all() if not n.is_internal]
+            # Edit spans the whole pending window, same as Cancel below —
+            # editing after a decision resets that decision (see
+            # edit_leave_request), so decided_approvers drives the "this
+            # will reset X's decision" warning in the edit form.
+            r.can_edit = bool(r.created_by_id == request.user.id and r.status == 'pending')
+            r.decided_approvers = [
+                a.approver.get_full_name() or a.approver.username
+                for a in r.approvals.all() if a.decision != 'pending']
+            # Cancel spans the whole pending window — before any decision
+            # this is a same-day change of mind (no reason required); once
+            # an approver has decided, it still works but requires a
+            # reason and notifies them. Either way it's never a hard
+            # delete: the row stays visible as 'Cancelled' in History.
+            r.can_cancel = bool(r.created_by_id == request.user.id and r.status == 'pending')
+            r.can_request_revoke = bool(
+                r.employee.user_id == request.user.id and r.status == 'approved'
+                and not r.revoke_requests.filter(status='pending').exists())
+            r.pending_revoke_request = r.revoke_requests.filter(status='pending').first()
         # This employee's own attendance exceptions, newest event first.
-        context['my_attendance_exceptions'] = emp.attendance_exceptions.order_by('-event_date')[:10]
+        context['my_attendance_exceptions'] = list(emp.attendance_exceptions.order_by('-event_date')[:10])
+        for e in context['my_attendance_exceptions']:
+            e.can_edit_delete = bool(e.created_by_id == request.user.id and e.status == 'pending')
+            e.can_request_revoke = bool(
+                e.employee.user_id == request.user.id and e.status == 'approved'
+                and not e.revoke_requests.filter(status='pending').exists())
+            e.pending_revoke_request = e.revoke_requests.filter(status='pending').first()
         # Attendance summary for the current month.
         # Attendance for the selected month (defaults to current month; user can
         # navigate Prev/Next via ?date=YYYY-MM-DD in the query string).
@@ -452,6 +582,13 @@ def my_profile(request):
                             employee_id__in=[r.pk for r in direct_reports],
                             created_by=request.user, logged_by_manager=True)
                         .select_related('leave_type').order_by('employee_id', '-created_at')):
+                # created_by == request.user is already guaranteed by the
+                # queryset filter above, so only the status check is needed
+                # here (unlike the top-level leave_requests list, which
+                # mixes self-submitted and manager-logged rows and needs
+                # the full creator check). Cancel spans the whole pending
+                # window (see the top-level loop above for why).
+                req.can_cancel = bool(req.status == 'pending')
                 in_behalf_by_employee[req.employee_id].append(req)
             for r in direct_reports:
                 r.in_behalf_requests = in_behalf_by_employee.get(r.pk, [])
@@ -682,9 +819,14 @@ class EmployeeUpdateView(AdminRequiredMixin, UpdateView):
 
 
 class EmployeeGrantExceptionDaysView(SuperAdminRequiredMixin, FormView):
-    """HR action: '+N Exception Days' on an employee's profile — creates one
-    audited LeaveExceptionGrant row. Gated by the same override-access
-    permission as the balance-override escape hatch on Leave Requests."""
+    """HR action: adjust an employee's balance for one leave type/year —
+    creates one audited LeaveExceptionGrant row (positive or negative,
+    derived from the new-total-vs-current diff; see ExceptionGrantForm).
+    Gated by the same override-access permission as the balance-override
+    escape hatch on Leave Requests. Reachable from an employee's own Leave
+    Summary page, or from the Entitlements page's per-leave-type breakdown
+    (which pre-fills leave_type/year via query params, since that page
+    already shows the exact row being adjusted)."""
     form_class = ExceptionGrantForm
     template_name = 'hr/exception_grant_form.html'
 
@@ -695,20 +837,65 @@ class EmployeeGrantExceptionDaysView(SuperAdminRequiredMixin, FormView):
         self.employee = get_object_or_404(Employee, pk=kwargs['pk'])
         return super().dispatch(request, *args, **kwargs)
 
+    def _prefilled_leave_type_and_year(self):
+        """Only trusted when BOTH arrive together from a per-row Adjust
+        link — a lone leave_type or lone year isn't enough to safely lock
+        the fields (the other one would default silently)."""
+        leave_type_id = self.request.GET.get('leave_type')
+        year = self.request.GET.get('year')
+        if leave_type_id and leave_type_id.isdigit() and year and year.isdigit():
+            leave_type = LeaveType.objects.filter(pk=leave_type_id).first()
+            if leave_type:
+                return leave_type, int(year)
+        return None, None
+
+    def _current_total(self, leave_type, year):
+        entitlement = LeaveEntitlement.objects.filter(
+            employee=self.employee, leave_type=leave_type, year=year).first()
+        if entitlement:
+            return entitlement.effective_entitled_days
+        return leave_type.default_days_for(self.employee.work_location)
+
     def get_initial(self):
-        return {'year': timezone.now().year}
+        initial = {'year': timezone.now().year}
+        leave_type, year = self._prefilled_leave_type_and_year()
+        if leave_type:
+            initial['leave_type'] = leave_type.pk
+            initial['year'] = year
+            initial['new_total_days'] = self._current_total(leave_type, year)
+        return initial
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx['employee'] = self.employee
+        leave_type, year = self._prefilled_leave_type_and_year()
+        ctx['locked_leave_type'] = leave_type
+        ctx['locked_year'] = year
+        if leave_type:
+            ctx['current_total_days'] = self._current_total(leave_type, year)
         return ctx
 
     def form_valid(self, form):
         from hr.leave_approval_services import grant_exception_days
+        leave_type = form.cleaned_data['leave_type']
+        year = form.cleaned_data['year']
+        new_total = form.cleaned_data['new_total_days']
+        current_total = self._current_total(leave_type, year)
+        delta = new_total - current_total
+        if delta == 0:
+            messages.info(
+                self.request,
+                f'{self.employee.full_name} already has {new_total} day(s) for {leave_type.name} in {year} '
+                '— no change made.')
+            return redirect('hr:leave_summary', pk=self.employee.pk)
         grant_exception_days(
-            employee=self.employee, leave_type=form.cleaned_data['leave_type'], year=form.cleaned_data['year'],
-            days=form.cleaned_data['days'], granted_by=self.request.user, reason=form.cleaned_data['reason'])
-        messages.success(self.request, f'Granted {form.cleaned_data["days"]} exception day(s) to {self.employee.full_name}.')
+            employee=self.employee, leave_type=leave_type, year=year,
+            days=delta, granted_by=self.request.user, reason=form.cleaned_data['reason'])
+        verb = 'Granted' if delta > 0 else 'Deducted'
+        messages.success(
+            self.request,
+            f'{verb} {abs(delta)} day(s) — {self.employee.full_name} now has {new_total} total day(s) '
+            f'for {leave_type.name} in {year}.')
         return redirect('hr:leave_summary', pk=self.employee.pk)
 
 
@@ -2126,7 +2313,7 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
         # reach individual detail pages via a notification link. Mirrors the same
         # widening already applied to LeaveRequestDetailView. can_view_leave_dashboard
         # also grants access to anyone with an active LeaveDashboardAccess record,
-        # managed by Super Admins from the Org Chart page's access tab.
+        # managed by Super Admins from the Leave Access page.
         return can_view_leave_dashboard(self.request.user)
 
     def get_queryset(self):
@@ -2140,13 +2327,107 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
+        history_sort = self.request.GET.get('history_sort')
+        history_order = 'decided_at' if history_sort == 'oldest' else '-decided_at'
         ctx['decided_requests'] = (
             LeaveRequest.objects.exclude(status='pending')
             .select_related('employee', 'leave_type', 'overridden_by')
             .prefetch_related('approvals__approver')
-            .order_by('-decided_at')[:50])
+            .order_by(history_order)[:50])
+        ctx['current_history_sort'] = 'oldest' if history_sort == 'oldest' else 'newest'
         ctx['current_sort'] = self.request.GET.get('sort') or 'submitted'
+        ctx['can_revoke'] = has_override_access(self.request.user)
+        ctx['pending_leave_revoke_requests'] = (
+            LeaveRevokeRequest.objects.filter(status='pending')
+            .select_related('leave_request__employee', 'leave_request__leave_type', 'requested_by')
+            .order_by('created_at'))
+        # Everything the VIEWER has personally logged for someone else —
+        # not scoped to direct reports, so this is where an HR/Super Admin
+        # user (who can log a request for any employee company-wide via
+        # "Log Request" above, and may have no employee_profile of their
+        # own to check My Profile with) finds and edits/cancels what they
+        # logged. Scoped purely to created_by=self.request.user, matching
+        # exactly what edit_leave_request/cancel_leave_request check.
+        my_logged_requests = list(
+            LeaveRequest.objects.filter(created_by=self.request.user)
+            .select_related('employee', 'leave_type').prefetch_related('approvals__approver')
+            .order_by('-created_at')[:20])
+        for req in my_logged_requests:
+            # Edit spans the whole pending window, same as Cancel — editing
+            # after a decision resets that decision (see edit_leave_request),
+            # so decided_approvers drives the "this will reset X's decision"
+            # warning in the edit form.
+            req.can_edit = bool(req.status == 'pending')
+            req.decided_approvers = [
+                a.approver.get_full_name() or a.approver.username
+                for a in req.approvals.all() if a.decision != 'pending']
+            req.can_cancel = bool(req.status == 'pending')
+        ctx['my_logged_requests'] = my_logged_requests
         return ctx
+
+    def post(self, request, *args, **kwargs):
+        from django.http import Http404
+        from hr.leave_approval_services import (
+            revoke_leave_request, decide_leave_revoke_request, edit_leave_request, cancel_leave_request,
+        )
+        action = request.POST.get('action')
+        if action == 'edit_leave_request':
+            from .forms import LeaveRequestForm
+            target = LeaveRequest.objects.filter(pk=request.POST.get('request_id')).first()
+            if target is None or target.created_by_id != request.user.id:
+                return HttpResponse('You did not submit this request.', status=403)
+            edit_form = LeaveRequestForm(
+                request.POST, request.FILES, fixed_employee=target.employee, exclude_request_id=target.pk,
+                initial={'document': target.document})
+            if edit_form.is_valid():
+                try:
+                    edit_leave_request(
+                        target, request.user, leave_type=edit_form.cleaned_data['leave_type'],
+                        start_date=edit_form.cleaned_data['start_date'], end_date=edit_form.cleaned_data['end_date'],
+                        employee_reason=edit_form.cleaned_data['employee_reason'],
+                        document=edit_form.cleaned_data['document'])
+                    messages.success(request, 'Leave request updated.')
+                except ValueError as exc:
+                    messages.error(request, str(exc))
+            else:
+                messages.error(request, 'Could not update the request — please check the form.')
+            # opened_leave + tab=logged tell the page which row's edit panel
+            # to re-expand, and which tab to switch to, after the reload —
+            # so the change is actually visible instead of collapsing back
+            # to hidden on a tab the user isn't looking at.
+            return redirect(f"{reverse('hr:leave_request_list')}?opened_leave={target.pk}&tab=logged")
+        elif action == 'cancel_leave_request':
+            target = LeaveRequest.objects.filter(pk=request.POST.get('request_id')).first()
+            if target is None or target.created_by_id != request.user.id:
+                return HttpResponse('You did not submit this request.', status=403)
+            try:
+                cancel_leave_request(target, request.user, request.POST.get('reason', ''))
+                messages.success(request, 'Leave request cancelled.')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+        elif action == 'revoke':
+            if not has_override_access(request.user):
+                return HttpResponse('You do not have override access to revoke this request.', status=403)
+            target = LeaveRequest.objects.filter(pk=request.POST.get('request_id')).first()
+            if target is None:
+                raise Http404('No such leave request.')
+            try:
+                revoke_leave_request(target, request.user, request.POST.get('reason', ''))
+                messages.success(request, 'Leave request revoked.')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+        elif action == 'decide_revoke_request':
+            revoke_req = LeaveRevokeRequest.objects.filter(pk=request.POST.get('revoke_request_id')).first()
+            if revoke_req is None:
+                raise Http404('No such revoke request.')
+            try:
+                decide_leave_revoke_request(
+                    revoke_req, request.user, request.POST.get('decision'),
+                    decision_note=request.POST.get('decision_note', ''))
+                messages.success(request, 'Revoke request decided.')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+        return redirect('hr:leave_request_list')
 
 
 class LeaveRequestCreateView(HRScopedAccessMixin, FormView):
@@ -2195,9 +2476,24 @@ class LeaveRequestCreateView(HRScopedAccessMixin, FormView):
         # A plain direct manager (no Role, no LeaveDashboardAccess/override
         # access) can submit here but cannot view the Leave Requests queue —
         # that's a separate, more restrictive page. The template's Back/
-        # Cancel links, and this view's own success redirect, must not
-        # point them at a page they'll immediately get a 403 on.
+        # Cancel links must not point them at a page they'll immediately
+        # get a 403 on.
         ctx['can_view_queue'] = can_view_leave_dashboard(self.request.user)
+        # This view has multiple entry points (Leave Summary's "Add Leave",
+        # the sidebar, Attendance Matrix, My Profile's "My Team"). Only
+        # Leave Summary passes back=leave_summary&employee=<id>, so the
+        # Back/Cancel links can return there instead of defaulting to the
+        # queue/profile fallback below.
+        employee_id = self.request.GET.get('employee')
+        if self.request.GET.get('back') == 'leave_summary' and employee_id and employee_id.isdigit():
+            ctx['back_url'] = reverse('hr:leave_summary', kwargs={'pk': employee_id})
+            ctx['back_label'] = 'Back to Leave Summary'
+        elif ctx['can_view_queue']:
+            ctx['back_url'] = reverse('hr:leave_request_list')
+            ctx['back_label'] = 'Back to Queue'
+        else:
+            ctx['back_url'] = reverse('hr:my_profile')
+            ctx['back_label'] = 'Back to My Profile'
         return ctx
 
     def _success_redirect(self):
@@ -2346,7 +2642,8 @@ def entitlement_year(request):
 
     return render(request, 'hr/entitlement_year.html',
                   {'year': year, 'groups': list(groups.values()),
-                   'entitlement_count': entitlements.count()})
+                   'entitlement_count': entitlements.count(),
+                   'can_adjust_balance': has_override_access(request.user)})
 
 
 class AttendanceHistoryView(HRScopedAccessMixin, DetailView):
@@ -2910,11 +3207,10 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
         # Whether they're the *specific* pending approver for *this* request is enforced
         # per-action in post() (see the 'decide' branch) — this is just page access.
         # can_view_leave_dashboard also grants access to anyone with an active
-        # LeaveDashboardAccess record, managed from the Org Chart page's access tab.
+        # LeaveDashboardAccess record, managed from the Leave Access page.
         return can_view_leave_dashboard(self.request.user)
 
     def get_context_data(self, **kwargs):
-        from hr.leave_approval_services import DECISION_EDIT_WINDOW
         ctx = super().get_context_data(**kwargs)
         # A user must never be able to act on their own leave request —
         # decide, edit a decision, add a note, or override — regardless of
@@ -2927,11 +3223,21 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
         ctx['my_approval'] = my_approval if not ctx['is_own_request'] else None
         ctx['visible_notes'] = self.object.notes.filter(is_internal=False) if not self.request.user.is_super_admin_user \
             else self.object.notes.all()
+        # No fixed time limit — a decision stays editable for as long as the
+        # overall request is still pending (see
+        # hr.leave_approval_services._reconcile: finalizing requires every
+        # approver to agree, so 'pending' here also covers a split decision
+        # awaiting resolution, not just an outstanding vote).
         ctx['can_edit_decision'] = bool(
             my_approval and my_approval.decision in ('approved', 'disapproved')
-            and self.object.status == 'pending'
-            and my_approval.decided_at is not None
-            and timezone.now() - my_approval.decided_at <= DECISION_EDIT_WINDOW)
+            and self.object.status == 'pending')
+        # A genuine conflict: every approver has decided, but not
+        # unanimously — the request stays pending until one of them changes
+        # their vote. Surfaced so the page can explain why it hasn't
+        # finalized instead of leaving that a mystery.
+        ctx['has_conflicting_decisions'] = bool(
+            self.object.status == 'pending' and self.object.approvals.exists()
+            and not self.object.approvals.filter(decision='pending').exists())
         if self.object.exceeds_balance:
             ctx['entitlement'] = LeaveEntitlement.objects.filter(
                 employee=self.object.employee, leave_type=self.object.leave_type,
@@ -2966,6 +3272,16 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
                 override_finalize(self.object, request.user, request.POST.get('decision'),
                                   request.POST.get('reason', ''))
                 messages.success(request, 'Request finalized via override.')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+
+        elif action == 'revoke':
+            if not has_override_access(request.user):
+                return HttpResponse('You do not have override access to revoke this request.', status=403)
+            from hr.leave_approval_services import revoke_leave_request
+            try:
+                revoke_leave_request(self.object, request.user, request.POST.get('reason', ''))
+                messages.success(request, 'Leave request revoked.')
             except ValueError as exc:
                 messages.error(request, str(exc))
 
@@ -3069,10 +3385,13 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         # only genuinely human-decided outcomes (approved/rejected) — expired
         # requests stay in the active queue above until a human actually
         # decides them.
+        history_sort = self.request.GET.get('history_sort')
+        history_order = 'decided_at' if history_sort == 'oldest' else '-decided_at'
+        ctx['current_history_sort'] = 'oldest' if history_sort == 'oldest' else 'newest'
         decided = list(
-            self._tab_queryset(tab, user, emp).filter(status__in=('approved', 'rejected'))
+            self._tab_queryset(tab, user, emp).filter(status__in=('approved', 'rejected', 'revoked'))
             .select_related('employee', 'employee__main_manager', 'main_manager', 'decided_by', 'overridden_by')
-            .order_by('-decided_at')[:50])
+            .order_by(history_order)[:50])
 
         # Precompute per-row action visibility here (rather than re-deriving
         # the hierarchy/HR logic in the template): 'can_decide' is the normal
@@ -3123,13 +3442,29 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         # HR/Super-Admin — "Direct Reports"/"Secondary Reports" are always
         # shown (even empty) for everyone who can reach this page.
         ctx['show_all_tab'] = is_hr
+        ctx['can_revoke'] = has_override_access(user)
+        ctx['pending_exception_revoke_requests'] = (
+            AttendanceExceptionRevokeRequest.objects.filter(
+                status='pending', attendance_exception__in=self._tab_queryset(tab, user, emp))
+            .select_related('attendance_exception__employee', 'requested_by')
+            .order_by('created_at'))
         # Per-tab pending counts for the tab labels — always all three
         # (regardless of which tab is currently selected), so switching tabs
         # doesn't need a second request to know what the other tabs hold.
-        ctx['direct_tab_count'] = self._tab_queryset('direct', user, emp).filter(status__in=('pending', 'expired')).count()
-        ctx['secondary_tab_count'] = self._tab_queryset('secondary', user, emp).filter(status__in=('pending', 'expired')).count()
+        # Each count folds in pending revoke requests too, not just plain
+        # pending/expired exceptions — a revoke request needs a decision
+        # exactly as much as a new request does, so a tab reading "0" while
+        # a revoke sits there awaiting review would be misleading.
+        def _tab_count(tab_name):
+            base = self._tab_queryset(tab_name, user, emp)
+            return (
+                base.filter(status__in=('pending', 'expired')).count()
+                + AttendanceExceptionRevokeRequest.objects.filter(
+                    status='pending', attendance_exception__in=base).count())
+        ctx['direct_tab_count'] = _tab_count('direct')
+        ctx['secondary_tab_count'] = _tab_count('secondary')
         if ctx['show_all_tab']:
-            ctx['all_tab_count'] = self._tab_queryset('all', user, emp).filter(status__in=('pending', 'expired')).count()
+            ctx['all_tab_count'] = _tab_count('all')
         return ctx
 
     def post(self, request, *args, **kwargs):
@@ -3173,12 +3508,191 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
             except ValueError as e:
                 messages.error(request, str(e))
 
+        elif action == 'revoke_direct':
+            if not has_override_access(request.user):
+                return HttpResponse('You do not have override access to revoke this request.', status=403)
+            if exc is None:
+                raise Http404('No such attendance exception.')
+            from hr.attendance_exception_services import revoke_attendance_exception
+            try:
+                revoke_attendance_exception(exc, request.user, request.POST.get('reason', ''))
+                messages.success(request, 'Attendance exception revoked.')
+            except ValueError as e:
+                messages.error(request, str(e))
+
+        elif action == 'decide_revoke_request':
+            from hr.attendance_exception_services import decide_attendance_exception_revoke_request
+            revoke_req = AttendanceExceptionRevokeRequest.objects.filter(
+                pk=request.POST.get('revoke_request_id')).first()
+            if revoke_req is None:
+                raise Http404('No such revoke request.')
+            try:
+                decide_attendance_exception_revoke_request(
+                    revoke_req, request.user, request.POST.get('decision'),
+                    decision_note=request.POST.get('decision_note', ''))
+                messages.success(request, 'Revoke request decided.')
+            except ValueError as e:
+                messages.error(request, str(e))
+
         # Preserve whatever tab the manager was viewing when they acted.
         tab = request.POST.get('tab', '')
         url = reverse('hr:team_exceptions')
         if tab:
             url = f'{url}?tab={tab}'
         return redirect(url)
+
+
+class LeaveAccessView(SuperAdminRequiredMixin, TemplateView):
+    """Super-Admin-only page (linked from the sidebar's Leave section) for
+    the Leave Request workflow's permission surface: who can view the Leave
+    Request dashboard and approve requests (LeaveDashboardAccess), who can
+    force-approve/disapprove when the real approver is unavailable
+    (OverrideAccessSettings/Role/Employee), and the balance-hold settings
+    for over-balance submissions. Previously the Org Chart page's second
+    tab — Org Chart itself is purely about the reporting hierarchy now."""
+    template_name = 'hr/leave_access.html'
+
+    def get_context_data(self, **kwargs):
+        from django.db.models import Q
+        from accounts.models import User, Role
+        from .models import LeaveDashboardAccess, OverrideAccessSettings, OverrideAccessRole, OverrideAccessEmployee
+        ctx = super().get_context_data(**kwargs)
+
+        ctx['access_grants'] = (
+            LeaveDashboardAccess.objects.filter(is_active=True)
+            .select_related('user', 'granted_by').order_by('user__username'))
+
+        access_search = (self.request.GET.get('access_search') or '').strip()
+        ctx['access_search'] = access_search
+        access_results = None
+        if access_search:
+            granted_user_ids = set(
+                LeaveDashboardAccess.objects.filter(is_active=True).values_list('user_id', flat=True))
+            access_results = (
+                Employee.objects.filter(is_active=True, user__isnull=False)
+                .filter(
+                    Q(full_name__icontains=access_search)
+                    | Q(user__username__icontains=access_search)
+                    | Q(user__email__icontains=access_search))
+                .exclude(user_id__in=granted_user_ids)
+                .select_related('user').order_by('full_name')[:25])
+        ctx['access_results'] = access_results
+
+        # ── Override Access (who can use the leave-request override escape
+        # hatch) — lives on this same page since it's specifically about
+        # Leave Request access, not a general-purpose setting. ──
+        override_settings = OverrideAccessSettings.get_solo()
+        ctx['override_settings'] = override_settings
+        ctx['override_mode_choices'] = OverrideAccessSettings.MODE_CHOICES
+        ctx['current_super_admins'] = User.objects.filter(
+            role__name='super_admin', is_active=True).order_by('username')
+        ctx['override_roles'] = Role.objects.all().order_by('name')
+        ctx['override_role_ids'] = set(
+            OverrideAccessRole.objects.values_list('role_id', flat=True))
+        ctx['override_employees'] = (
+            OverrideAccessEmployee.objects.select_related('user', 'added_by').order_by('user__username'))
+
+        override_emp_search = (self.request.GET.get('override_emp_search') or '').strip()
+        ctx['override_emp_search'] = override_emp_search
+        override_emp_results = None
+        if override_emp_search:
+            granted_override_user_ids = set(
+                OverrideAccessEmployee.objects.values_list('user_id', flat=True))
+            override_emp_results = (
+                Employee.objects.filter(is_active=True, user__isnull=False)
+                .filter(
+                    Q(full_name__icontains=override_emp_search)
+                    | Q(user__username__icontains=override_emp_search)
+                    | Q(user__email__icontains=override_emp_search))
+                .exclude(user_id__in=granted_override_user_ids)
+                .select_related('user').order_by('full_name')[:25])
+        ctx['override_emp_results'] = override_emp_results
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        from accounts.models import Role
+        from .models import LeaveDashboardAccess, OverrideAccessSettings, OverrideAccessRole, OverrideAccessEmployee
+        access_url = reverse('hr:leave_access')
+
+        grant_employee_id = request.POST.get('grant_dashboard_access')
+        if grant_employee_id:
+            grant_employee = get_object_or_404(Employee, pk=grant_employee_id)
+            if not grant_employee.user_id:
+                messages.error(request, f'{grant_employee.full_name} has no linked user account.')
+            else:
+                LeaveDashboardAccess.objects.update_or_create(
+                    user=grant_employee.user,
+                    defaults={'is_active': True, 'granted_by': request.user})
+                messages.success(
+                    request,
+                    f'Granted {grant_employee.full_name} access to the Leave Request dashboard '
+                    'and approval authority on new leave requests.')
+            return redirect(access_url)
+
+        revoke_user_id = request.POST.get('revoke_dashboard_access')
+        if revoke_user_id:
+            grant = get_object_or_404(LeaveDashboardAccess, user_id=revoke_user_id, is_active=True)
+            display_name = grant.user.get_full_name() or grant.user.username
+            grant.delete()
+            messages.success(
+                request,
+                f'Revoked {display_name}\'s Leave Request dashboard access and approval authority.')
+            return redirect(access_url)
+
+        override_mode = request.POST.get('set_override_mode')
+        if override_mode:
+            if override_mode not in dict(OverrideAccessSettings.MODE_CHOICES):
+                messages.error(request, 'Not a valid override access mode.')
+                return redirect(access_url)
+            config = OverrideAccessSettings.get_solo()
+            config.mode = override_mode
+            config.updated_by = request.user
+            config.save(update_fields=['mode', 'updated_by', 'updated_at'])
+            messages.success(
+                request, f'Override access mode set to "{config.get_mode_display()}".')
+            return redirect(access_url)
+
+        if 'set_balance_hold' in request.POST:
+            config = OverrideAccessSettings.get_solo()
+            config.allow_site_balance_hold = bool(request.POST.get('allow_site_balance_hold'))
+            config.allow_office_balance_hold = bool(request.POST.get('allow_office_balance_hold'))
+            config.updated_by = request.user
+            config.save(update_fields=['allow_site_balance_hold', 'allow_office_balance_hold', 'updated_by', 'updated_at'])
+            messages.success(request, 'Balance-hold settings updated.')
+            return redirect(access_url)
+
+        toggle_role_id = request.POST.get('toggle_override_role')
+        if toggle_role_id:
+            role = get_object_or_404(Role, pk=toggle_role_id)
+            existing = OverrideAccessRole.objects.filter(role=role).first()
+            if existing:
+                existing.delete()
+                messages.success(request, f'Removed override access for the {role.get_name_display()} role.')
+            else:
+                OverrideAccessRole.objects.create(role=role)
+                messages.success(request, f'Granted override access to the {role.get_name_display()} role.')
+            return redirect(access_url)
+
+        grant_override_employee_id = request.POST.get('grant_override_employee')
+        if grant_override_employee_id:
+            grant_employee = get_object_or_404(Employee, pk=grant_override_employee_id)
+            if not grant_employee.user_id:
+                messages.error(request, f'{grant_employee.full_name} has no linked user account.')
+            else:
+                OverrideAccessEmployee.objects.update_or_create(
+                    user=grant_employee.user, defaults={'added_by': request.user})
+                messages.success(request, f'Granted {grant_employee.full_name} override access.')
+            return redirect(access_url)
+
+        revoke_override_employee_id = request.POST.get('revoke_override_employee')
+        if revoke_override_employee_id:
+            grant = get_object_or_404(OverrideAccessEmployee, user_id=revoke_override_employee_id)
+            display_name = grant.user.get_full_name() or grant.user.username
+            grant.delete()
+            messages.success(request, f'Revoked {display_name}\'s override access.')
+            return redirect(access_url)
+
+        return redirect(access_url)
 
 
 class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
@@ -3203,24 +3717,6 @@ class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         u = self.request.user
         return bool(u.is_super_admin_user or u.is_erp_admin_user)
 
-    def _can_config_access(self):
-        """Who may open/change the Leave Dashboard Access tab (a permission-
-        granting surface). Super Admin only — deliberately NOT ERP Admin."""
-        return self.request.user.is_super_admin_user
-
-    VALID_TABS = ('hierarchy', 'access')
-
-    def _resolve_tab(self):
-        """?tab=hierarchy|access, defaulting to 'hierarchy'. The 'access' tab is
-        a permission-granting surface, so a user without config-access rights is
-        silently downgraded to 'hierarchy' (mirrors TeamExceptionsView's 'all')."""
-        requested = self.request.GET.get('tab')
-        if requested not in self.VALID_TABS:
-            return 'hierarchy'
-        if requested == 'access' and not self._can_config_access():
-            return 'hierarchy'
-        return requested
-
     def get_queryset(self):
         qs = Employee.objects.filter(is_active=True).select_related('main_manager').order_by('full_name')
         # Team-scoped roles only ever see their own reports in the table.
@@ -3231,62 +3727,8 @@ class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         return qs
 
     def get_context_data(self, **kwargs):
-        from django.db.models import Q
-        from accounts.models import User, Role
-        from .models import LeaveDashboardAccess, OverrideAccessSettings, OverrideAccessRole, OverrideAccessEmployee
         ctx = super().get_context_data(**kwargs)
         ctx['search'] = self.request.GET.get('search', '')
-        ctx['tab'] = self._resolve_tab()
-
-        ctx['access_grants'] = (
-            LeaveDashboardAccess.objects.filter(is_active=True)
-            .select_related('user', 'granted_by').order_by('user__username'))
-
-        access_search = (self.request.GET.get('access_search') or '').strip()
-        ctx['access_search'] = access_search
-        access_results = None
-        if ctx['tab'] == 'access' and access_search:
-            granted_user_ids = set(
-                LeaveDashboardAccess.objects.filter(is_active=True).values_list('user_id', flat=True))
-            access_results = (
-                Employee.objects.filter(is_active=True, user__isnull=False)
-                .filter(
-                    Q(full_name__icontains=access_search)
-                    | Q(user__username__icontains=access_search)
-                    | Q(user__email__icontains=access_search))
-                .exclude(user_id__in=granted_user_ids)
-                .select_related('user').order_by('full_name')[:25])
-        ctx['access_results'] = access_results
-
-        # ── Override Access (who can use the leave-request override escape
-        # hatch) — lives inside this same tab since it's specifically about
-        # Leave Request access, not a general-purpose setting. ──
-        override_settings = OverrideAccessSettings.get_solo()
-        ctx['override_settings'] = override_settings
-        ctx['override_mode_choices'] = OverrideAccessSettings.MODE_CHOICES
-        ctx['current_super_admins'] = User.objects.filter(
-            role__name='super_admin', is_active=True).order_by('username')
-        ctx['override_roles'] = Role.objects.all().order_by('name')
-        ctx['override_role_ids'] = set(
-            OverrideAccessRole.objects.values_list('role_id', flat=True))
-        ctx['override_employees'] = (
-            OverrideAccessEmployee.objects.select_related('user', 'added_by').order_by('user__username'))
-
-        override_emp_search = (self.request.GET.get('override_emp_search') or '').strip()
-        ctx['override_emp_search'] = override_emp_search
-        override_emp_results = None
-        if ctx['tab'] == 'access' and override_emp_search:
-            granted_override_user_ids = set(
-                OverrideAccessEmployee.objects.values_list('user_id', flat=True))
-            override_emp_results = (
-                Employee.objects.filter(is_active=True, user__isnull=False)
-                .filter(
-                    Q(full_name__icontains=override_emp_search)
-                    | Q(user__username__icontains=override_emp_search)
-                    | Q(user__email__icontains=override_emp_search))
-                .exclude(user_id__in=granted_override_user_ids)
-                .select_related('user').order_by('full_name')[:25])
-        ctx['override_emp_results'] = override_emp_results
 
         forms_by_employee = {}
         for emp in ctx['employees']:
@@ -3323,109 +3765,12 @@ class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
                 Employee.objects.filter(pk=emp.pk, is_active=True) if emp
                 else Employee.objects.none())
         ctx['can_manage_org'] = self._can_manage()
-        ctx['can_config_access'] = self._can_config_access()
         return ctx
 
     def post(self, request, *args, **kwargs):
-        from accounts.models import Role
-        from .models import LeaveDashboardAccess, OverrideAccessSettings, OverrideAccessRole, OverrideAccessEmployee
-        access_tab_url = f"{reverse('hr:org_chart')}?tab=access"
-
         # Team-scoped roles have a read-only org chart — no mutations at all.
         if not self._can_manage():
             raise PermissionDenied
-        # The Leave Dashboard Access / Override actions are a permission-granting
-        # surface: Super Admin only, even for ERP Admin (who can still edit the
-        # hierarchy below). Any of these POST keys implies an access-tab action.
-        _access_keys = (
-            'grant_dashboard_access', 'revoke_dashboard_access', 'set_override_mode',
-            'toggle_override_role', 'grant_override_employee', 'revoke_override_employee',
-            'set_balance_hold',
-        )
-        if any(request.POST.get(k) for k in _access_keys) and not self._can_config_access():
-            raise PermissionDenied
-
-        # Leave Dashboard Access tab actions — handled first and returned early,
-        # since they key off a user/employee distinct from the hierarchy actions
-        # below (which always require an `employee_id`).
-        grant_employee_id = request.POST.get('grant_dashboard_access')
-        if grant_employee_id:
-            grant_employee = get_object_or_404(Employee, pk=grant_employee_id)
-            if not grant_employee.user_id:
-                messages.error(request, f'{grant_employee.full_name} has no linked user account.')
-            else:
-                LeaveDashboardAccess.objects.update_or_create(
-                    user=grant_employee.user,
-                    defaults={'is_active': True, 'granted_by': request.user})
-                messages.success(
-                    request,
-                    f'Granted {grant_employee.full_name} access to the Leave Request dashboard '
-                    'and approval authority on new leave requests.')
-            return redirect(access_tab_url)
-
-        revoke_user_id = request.POST.get('revoke_dashboard_access')
-        if revoke_user_id:
-            grant = get_object_or_404(LeaveDashboardAccess, user_id=revoke_user_id, is_active=True)
-            display_name = grant.user.get_full_name() or grant.user.username
-            grant.delete()
-            messages.success(
-                request,
-                f'Revoked {display_name}\'s Leave Request dashboard access and approval authority.')
-            return redirect(access_tab_url)
-
-        # ── Override Access actions ──
-        override_mode = request.POST.get('set_override_mode')
-        if override_mode:
-            if override_mode not in dict(OverrideAccessSettings.MODE_CHOICES):
-                messages.error(request, 'Not a valid override access mode.')
-                return redirect(access_tab_url)
-            config = OverrideAccessSettings.get_solo()
-            config.mode = override_mode
-            config.updated_by = request.user
-            config.save(update_fields=['mode', 'updated_by', 'updated_at'])
-            messages.success(
-                request, f'Override access mode set to "{config.get_mode_display()}".')
-            return redirect(access_tab_url)
-
-        if 'set_balance_hold' in request.POST:
-            config = OverrideAccessSettings.get_solo()
-            config.allow_site_balance_hold = bool(request.POST.get('allow_site_balance_hold'))
-            config.allow_office_balance_hold = bool(request.POST.get('allow_office_balance_hold'))
-            config.updated_by = request.user
-            config.save(update_fields=['allow_site_balance_hold', 'allow_office_balance_hold', 'updated_by', 'updated_at'])
-            messages.success(request, 'Balance-hold settings updated.')
-            return redirect(access_tab_url)
-
-        toggle_role_id = request.POST.get('toggle_override_role')
-        if toggle_role_id:
-            role = get_object_or_404(Role, pk=toggle_role_id)
-            existing = OverrideAccessRole.objects.filter(role=role).first()
-            if existing:
-                existing.delete()
-                messages.success(request, f'Removed override access for the {role.get_name_display()} role.')
-            else:
-                OverrideAccessRole.objects.create(role=role)
-                messages.success(request, f'Granted override access to the {role.get_name_display()} role.')
-            return redirect(access_tab_url)
-
-        grant_override_employee_id = request.POST.get('grant_override_employee')
-        if grant_override_employee_id:
-            grant_employee = get_object_or_404(Employee, pk=grant_override_employee_id)
-            if not grant_employee.user_id:
-                messages.error(request, f'{grant_employee.full_name} has no linked user account.')
-            else:
-                OverrideAccessEmployee.objects.update_or_create(
-                    user=grant_employee.user, defaults={'added_by': request.user})
-                messages.success(request, f'Granted {grant_employee.full_name} override access.')
-            return redirect(access_tab_url)
-
-        revoke_override_employee_id = request.POST.get('revoke_override_employee')
-        if revoke_override_employee_id:
-            grant = get_object_or_404(OverrideAccessEmployee, user_id=revoke_override_employee_id)
-            display_name = grant.user.get_full_name() or grant.user.username
-            grant.delete()
-            messages.success(request, f'Revoked {display_name}\'s override access.')
-            return redirect(access_tab_url)
 
         employee = get_object_or_404(Employee, pk=request.POST.get('employee_id'))
         # Every successful action redirects with a `#row-<pk>` fragment so

@@ -102,7 +102,7 @@
             Total remaining: <strong>{{ leave_total_remaining }}</strong> of {{ leave_total_entitled }} days
             <span class="text-muted">(accrued leave only — Annual; conditional leave shown below isn't counted in this total)</span>
             {% if leave_total_exception %}
-            <br><span class="text-muted">+ {{ leave_total_exception }} exception day(s) granted — {{ leave_total_remaining|add:leave_total_exception }} truly available</span>
+            <br><span class="text-muted">Exception adjustment: {% if leave_total_exception > 0 %}+{% endif %}{{ leave_total_exception }} day(s) — {{ leave_total_remaining|add:leave_total_exception }} truly available</span>
             {% endif %}
           </p>
           <table class="table table-sm mb-0">
@@ -116,16 +116,13 @@
                     <span class="badge bg-light text-muted border ms-1">Conditional</span>
                     {% endif %}
                 </td>
-                <td class="text-end">{{ ent.entitled_days }}</td>
+                <td class="text-end">
+                    {% include 'hr/_exception_adjustment_icon.html' with standard_days=ent.entitled_days exception_days=ent.exception_days %}
+                    {{ ent.effective_entitled_days }}
+                </td>
                 <td class="text-end">{{ ent.taken_days }}</td>
-                <td class="text-end fw-semibold">{{ ent.remaining_days }}</td>
+                <td class="text-end fw-semibold">{{ ent.effective_remaining_days }}</td>
               </tr>
-              {% if ent.exception_days %}
-              <tr class="table-light">
-                <td colspan="2" class="ps-4 text-muted small">+ {{ ent.exception_days }} exception days granted</td>
-                <td class="text-end text-muted small" colspan="2">{{ ent.effective_remaining_days }} available</td>
-              </tr>
-              {% endif %}
               {% endfor %}
             </tbody>
           </table>
@@ -186,7 +183,7 @@
             <div class="collapse" id="myLeaveRequestsCollapse">
             <div style="max-height: 360px; overflow-y: auto;">
             <table class="table table-sm mb-0">
-              <thead class="table-light"><tr><th>Type</th><th>Dates</th><th>Status</th></tr></thead>
+              <thead class="table-light"><tr><th>Type</th><th>Dates</th><th>Status</th><th></th></tr></thead>
               <tbody>
                 {% for r in leave_requests %}
                 <tr>
@@ -198,48 +195,186 @@
                       {{ r.created_by.get_full_name|default:r.created_by.username }}
                     </div>
                     {% endif %}
-                  </td>
-                  <td>{{ r.start_date }} – {{ r.end_date }}</td>
-                  <td>
-                    {% if r.status == 'approved' %}
-                      <span class="badge bg-success">Approved</span>
-                      {% if r.decided_by_display %}<div class="small text-muted">{{ r.decided_by_display }}</div>{% endif %}
-                    {% elif r.status == 'disapproved' %}
-                      <span class="badge bg-danger">Disapproved</span>
-                      {% if r.decided_by_display %}<div class="small text-muted">{{ r.decided_by_display }}</div>{% endif %}
-                      {% if r.salary_deduction_applicable %}
-                      <button type="button" class="btn btn-sm btn-link text-danger p-0" data-bs-toggle="collapse" data-bs-target="#salaryDeduction{{ r.pk }}">
-                        <i class="bi bi-exclamation-triangle"></i> Salary deduction
-                      </button>
-                      <div class="collapse" id="salaryDeduction{{ r.pk }}">
-                        <div class="small text-danger">Taking this leave will result in a salary deduction.</div>
-                      </div>
-                      {% endif %}
-                    {% else %}
-                      <span class="badge bg-warning text-dark">Pending</span>
-                      <div class="small text-muted">
-                        {% with waiting=r.pending_approvers %}
-                          {% if waiting %}Waiting on {% for a in waiting %}{{ a.get_full_name|default:a.username }}{% if not forloop.last %}, {% endif %}{% endfor %}
-                          {% else %}Waiting on a Super Admin to review (no other eligible approver is assigned){% endif %}
-                        {% endwith %}
-                      </div>
-                    {% endif %}
-                    {% if r.visible_notes %}
-                    <button type="button" class="btn btn-sm btn-link p-0 mt-1" data-bs-toggle="collapse" data-bs-target="#leaveNotes{{ r.pk }}">
-                      <i class="bi bi-chat-left-text"></i> {{ r.visible_notes|length }} message{{ r.visible_notes|length|pluralize }} from HR
-                    </button>
-                    <div class="collapse mt-1" id="leaveNotes{{ r.pk }}">
-                      {% for n in r.visible_notes %}
-                      <div class="small border-start ps-2 mb-1">
-                        <strong>{% if n.author %}{{ n.author.get_full_name|default:n.author.username }}{% else %}—{% endif %}</strong>
-                        <span class="text-muted">{{ n.created_at|date:'d M Y, H:i' }}</span>
-                        <div>{{ n.note }}</div>
-                      </div>
-                      {% endfor %}
+                    {% if r.is_backdated %}
+                    <div class="small text-muted" data-bs-toggle="tooltip" title="This leave started before it was submitted">
+                      <i class="bi bi-clock-history"></i> Backdated
                     </div>
                     {% endif %}
                   </td>
+                  <td>{{ r.start_date }} – {{ r.end_date }}</td>
+                  <td>
+                    <div class="d-flex flex-column gap-2 py-1">
+                      {% if r.status == 'approved' %}<span class="badge bg-success align-self-start">Approved</span>
+                      {% elif r.status == 'disapproved' %}<span class="badge bg-danger align-self-start">Disapproved</span>
+                      {% elif r.status == 'revoked' %}<span class="badge bg-secondary align-self-start">Revoked</span>
+                      {% elif r.status == 'cancelled' %}<span class="badge bg-secondary align-self-start">Cancelled</span>
+                      {% else %}<span class="badge bg-warning text-dark align-self-start">Pending</span>{% endif %}
+
+                      {% if r.status == 'approved' or r.status == 'disapproved' %}
+                        {% if r.decided_by_display %}
+                        <div class="small text-muted d-flex align-items-center gap-1">
+                          <i class="bi bi-person"></i> {{ r.decided_by_display }}
+                        </div>
+                        {% endif %}
+                      {% elif r.status == 'revoked' %}
+                        <div class="small text-muted d-flex align-items-center gap-1">
+                          <i class="bi bi-person"></i>
+                          {% if r.revoked_by %}{{ r.revoked_by.get_full_name|default:r.revoked_by.username }}{% endif %}
+                          {% if r.revoked_at %}· {{ r.revoked_at|date:'d M Y' }}{% endif %}
+                        </div>
+                        {% if r.revoke_reason %}<div class="small text-muted fst-italic">"{{ r.revoke_reason }}"</div>{% endif %}
+                      {% elif r.status == 'cancelled' %}
+                        <div class="small text-muted d-flex align-items-center gap-1">
+                          <i class="bi bi-person"></i> You
+                          {% if r.cancelled_at %}· {{ r.cancelled_at|date:'d M Y' }}{% endif %}
+                        </div>
+                        {% if r.cancel_reason %}<div class="small text-muted fst-italic">"{{ r.cancel_reason }}"</div>{% endif %}
+                      {% else %}
+                        <div class="small text-muted">
+                          {% with waiting=r.pending_approvers %}
+                            {% if waiting %}Waiting on {% for a in waiting %}{{ a.get_full_name|default:a.username }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                            {% else %}Waiting on a Super Admin to review (no other eligible approver is assigned){% endif %}
+                          {% endwith %}
+                        </div>
+                        {% if r.can_cancel %}
+                        {% if not r.can_edit %}
+                        <div class="small text-muted d-flex align-items-center gap-1">
+                          <i class="bi bi-exclamation-circle"></i> An approver already decided — cancelling now will still show in History.
+                        </div>
+                        {% endif %}
+                        <div>
+                          <button type="button" class="btn btn-sm btn-outline-warning" data-bs-toggle="collapse" data-bs-target="#cancelLeave{{ r.pk }}" id="cancel_leave_request_{{ r.pk }}">
+                            Cancel Request
+                          </button>
+                        </div>
+                        <div class="collapse" id="cancelLeave{{ r.pk }}">
+                          <form method="post" class="border rounded p-2 mt-1">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="cancel_leave_request">
+                            <input type="hidden" name="request_id" value="{{ r.pk }}">
+                            {% if r.can_edit %}
+                            <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Reason (optional)"></textarea>
+                            {% else %}
+                            <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Why are you cancelling? — required" required></textarea>
+                            {% endif %}
+                            <button type="submit" class="btn btn-sm btn-outline-warning" onclick="return confirm('Cancel this leave request?');">Confirm Cancel</button>
+                          </form>
+                        </div>
+                        {% endif %}
+                      {% endif %}
+
+                      {% if r.status == 'disapproved' and r.salary_deduction_applicable %}
+                      <div class="small d-inline-flex align-items-center gap-1 px-2 py-1 rounded bg-danger-subtle text-danger-emphasis align-self-start">
+                        <i class="bi bi-exclamation-triangle-fill"></i> Taking this leave will result in a salary deduction.
+                      </div>
+                      {% endif %}
+
+                      {% if r.status == 'approved' and r.pending_revoke_request %}
+                      <div class="small text-muted d-flex align-items-center gap-1">
+                        <i class="bi bi-hourglass-split"></i> Revoke requested — awaiting review
+                      </div>
+                      {% endif %}
+
+                      {% if r.visible_notes or r.can_request_revoke %}
+                      <div class="d-flex flex-wrap gap-1">
+                        {% if r.visible_notes %}
+                        <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#leaveNotes{{ r.pk }}">
+                          <i class="bi bi-chat-left-text"></i> {{ r.visible_notes|length }} message{{ r.visible_notes|length|pluralize }} from HR
+                        </button>
+                        {% endif %}
+                        {% if r.can_request_revoke %}
+                        <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="collapse" data-bs-target="#requestRevoke{{ r.pk }}" id="request_revoke_leave_{{ r.pk }}">
+                          Request Revoke
+                        </button>
+                        {% endif %}
+                      </div>
+                      {% endif %}
+
+                      {% if r.visible_notes %}
+                      <div class="collapse" id="leaveNotes{{ r.pk }}">
+                        {% for n in r.visible_notes %}
+                        <div class="small border-start ps-2 mb-1">
+                          <strong>{% if n.author %}{{ n.author.get_full_name|default:n.author.username }}{% else %}—{% endif %}</strong>
+                          <span class="text-muted">{{ n.created_at|date:'d M Y, H:i' }}</span>
+                          <div>{{ n.note }}</div>
+                        </div>
+                        {% endfor %}
+                      </div>
+                      {% endif %}
+
+                      {% if r.can_request_revoke %}
+                      <div class="collapse" id="requestRevoke{{ r.pk }}">
+                        <form method="post" class="border rounded p-2">
+                          {% csrf_token %}
+                          <input type="hidden" name="action" value="request_leave_revoke">
+                          <input type="hidden" name="request_id" value="{{ r.pk }}">
+                          <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Why does this leave need to be revoked? — required" required></textarea>
+                          <button type="submit" class="btn btn-sm btn-outline-danger">Submit Revoke Request</button>
+                        </form>
+                      </div>
+                      {% endif %}
+                    </div>
+                  </td>
+                  <td class="text-end">
+                    {% if r.can_edit %}
+                    <button type="button" class="btn btn-sm btn-outline-secondary py-0" data-bs-toggle="collapse" data-bs-target="#editLeave{{ r.pk }}" id="edit_leave_request_{{ r.pk }}">
+                      <i class="bi bi-pencil"></i>
+                    </button>
+                    {% endif %}
+                  </td>
                 </tr>
+                {% if r.can_edit %}
+                <tr class="collapse" id="editLeave{{ r.pk }}">
+                  <td colspan="4">
+                    <form method="post" enctype="multipart/form-data" class="border rounded p-2">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="edit_leave_request">
+                      <input type="hidden" name="request_id" value="{{ r.pk }}">
+                      {% if r.decided_approvers %}
+                      <div class="small text-warning-emphasis bg-warning-subtle border border-warning-subtle rounded p-2 mb-2">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        {{ r.decided_approvers|join:", " }} already decided on this request — saving changes
+                        will reset that decision and send it back for review.
+                      </div>
+                      {% endif %}
+                      <div class="row g-2">
+                        <div class="col-md-3">
+                          <label class="form-label small">Start</label>
+                          <input type="date" name="start_date" class="form-control form-control-sm" value="{{ r.start_date|date:'Y-m-d' }}" required>
+                        </div>
+                        <div class="col-md-3">
+                          <label class="form-label small">End</label>
+                          <input type="date" name="end_date" class="form-control form-control-sm" value="{{ r.end_date|date:'Y-m-d' }}" required>
+                        </div>
+                        <div class="col-md-6">
+                          <label class="form-label small">Reason</label>
+                          <input type="text" name="employee_reason" class="form-control form-control-sm" value="{{ r.employee_reason }}">
+                        </div>
+                        <div class="col-md-6">
+                          <label class="form-label small">Document</label>
+                          {% if r.document %}
+                          <div class="small mb-1 d-flex align-items-center gap-1" data-doc-attached="{{ r.pk }}">
+                            <span>Attached: <a href="{{ r.document.url }}" target="_blank">{{ r.document_filename }}</a></span>
+                            <button type="button" class="btn btn-sm btn-link text-danger p-0" title="Remove this document"
+                                    onclick="return docQueueRemoval(this, '{{ r.pk }}');">
+                              <i class="bi bi-x-circle"></i>
+                            </button>
+                          </div>
+                          <div class="small mb-1 text-danger d-none" data-doc-pending="{{ r.pk }}">
+                            <i class="bi bi-exclamation-circle"></i> Will be removed when you click Save Changes.
+                            <button type="button" class="btn btn-sm btn-link p-0" onclick="return docUndoRemoval(this, '{{ r.pk }}');">Undo</button>
+                          </div>
+                          <input type="hidden" name="document-clear" value="" data-doc-clear-flag="{{ r.pk }}">
+                          {% endif %}
+                          <input type="file" name="document" class="form-control form-control-sm">
+                        </div>
+                      </div>
+                      <input type="hidden" name="leave_type" value="{{ r.leave_type_id }}">
+                      <button type="submit" class="btn btn-sm btn-primary mt-2">Save Changes</button>
+                    </form>
+                  </td>
+                </tr>
+                {% endif %}
                 {% endfor %}
               </tbody>
             </table>
@@ -359,24 +494,117 @@
           <div class="collapse" id="myExceptionsCollapse">
           <div style="max-height: 360px; overflow-y: auto;">
           <table class="table table-sm mb-0">
-            <thead class="table-light"><tr><th>Date</th><th>Reason</th><th>Status</th></tr></thead>
+            <thead class="table-light"><tr><th>Date</th><th>Reason</th><th>Status</th><th></th></tr></thead>
             <tbody>
               {% for e in my_attendance_exceptions %}
               <tr>
                 <td>{{ e.event_date }} {{ e.event_start_time|time:"H:i" }}</td>
-                <td>{{ e.get_reason_category_display }}{% if e.reason_category == 'other' %} — {{ e.custom_reason }}{% endif %}</td>
                 <td>
-                  {% if e.status == 'approved' %}<span class="badge bg-success">Approved</span>
-                  {% elif e.status == 'rejected' %}<span class="badge bg-danger">Rejected</span>
-                  {% elif e.status == 'expired' %}<span class="badge bg-secondary">Expired</span>
-                  {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
-                  {% if e.is_overridden %}
-                    <span class="badge bg-info text-dark ms-1">
-                      {% if e.overridden_by %}Overridden by {{ e.overridden_by.get_full_name|default:e.overridden_by.username }}{% else %}Overridden{% endif %}
-                    </span>
+                  {{ e.get_reason_category_display }}{% if e.reason_category == 'other' %} — {{ e.custom_reason }}{% endif %}
+                  {% if e.is_backdated %}
+                  <div class="small text-muted" data-bs-toggle="tooltip" title="This event happened before the exception was submitted">
+                    <i class="bi bi-clock-history"></i> Backdated
+                  </div>
+                  {% endif %}
+                </td>
+                <td>
+                  <div class="d-flex flex-column gap-2 py-1">
+                    {% if e.status == 'approved' %}<span class="badge bg-success align-self-start">Approved</span>
+                    {% elif e.status == 'revoked' %}<span class="badge bg-secondary align-self-start">Revoked</span>
+                    {% elif e.status == 'rejected' %}<span class="badge bg-danger align-self-start">Rejected</span>
+                    {% elif e.status == 'expired' %}<span class="badge bg-secondary align-self-start">Expired</span>
+                    {% else %}<span class="badge bg-warning text-dark align-self-start">Pending</span>{% endif %}
+
+                    {% if e.is_overridden %}
+                    <div class="small text-muted d-flex align-items-center gap-1">
+                      <i class="bi bi-shield-check"></i>
+                      Overridden{% if e.overridden_by %} by {{ e.overridden_by.get_full_name|default:e.overridden_by.username }}{% endif %}
+                    </div>
+                    {% endif %}
+
+                    {% if e.status == 'revoked' %}
+                    <div class="small text-muted d-flex align-items-center gap-1">
+                      <i class="bi bi-person"></i>
+                      {% if e.revoked_by %}{{ e.revoked_by.get_full_name|default:e.revoked_by.username }}{% endif %}
+                      {% if e.revoked_at %}· {{ e.revoked_at|date:'d M Y' }}{% endif %}
+                    </div>
+                    {% if e.revoke_reason %}<div class="small text-muted fst-italic">"{{ e.revoke_reason }}"</div>{% endif %}
+                    {% endif %}
+
+                    {% if e.status == 'approved' and e.pending_revoke_request %}
+                    <div class="small text-muted d-flex align-items-center gap-1">
+                      <i class="bi bi-hourglass-split"></i> Revoke requested — awaiting review
+                    </div>
+                    {% endif %}
+
+                    {% if e.status == 'approved' and e.can_request_revoke %}
+                    <div>
+                      <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="collapse" data-bs-target="#requestRevokeExc{{ e.pk }}" id="request_revoke_exception_{{ e.pk }}">
+                        Request Revoke
+                      </button>
+                    </div>
+                    <div class="collapse" id="requestRevokeExc{{ e.pk }}">
+                      <form method="post" class="border rounded p-2">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="request_attendance_exception_revoke">
+                        <input type="hidden" name="request_id" value="{{ e.pk }}">
+                        <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Why does this need to be revoked? — required" required></textarea>
+                        <button type="submit" class="btn btn-sm btn-outline-danger">Submit Revoke Request</button>
+                      </form>
+                    </div>
+                    {% endif %}
+                  </div>
+                </td>
+                <td class="text-end">
+                  {% if e.can_edit_delete %}
+                  <button type="button" class="btn btn-sm btn-outline-secondary py-0" data-bs-toggle="collapse" data-bs-target="#editException{{ e.pk }}" id="edit_attendance_exception_{{ e.pk }}">
+                    <i class="bi bi-pencil"></i>
+                  </button>
+                  <form method="post" class="d-inline" onsubmit="return confirm('Delete this attendance exception?');">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="delete_attendance_exception">
+                    <input type="hidden" name="request_id" value="{{ e.pk }}">
+                    <button type="submit" class="btn btn-sm btn-outline-danger py-0" id="delete_attendance_exception_{{ e.pk }}">
+                      <i class="bi bi-trash"></i>
+                    </button>
+                  </form>
                   {% endif %}
                 </td>
               </tr>
+              {% if e.can_edit_delete %}
+              <tr class="collapse" id="editException{{ e.pk }}">
+                <td colspan="4">
+                  <form method="post" class="border rounded p-2">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="edit_attendance_exception">
+                    <input type="hidden" name="request_id" value="{{ e.pk }}">
+                    <div class="row g-2">
+                      <div class="col-md-4">
+                        <label class="form-label small">Event Date</label>
+                        <input type="date" name="event_date" class="form-control form-control-sm" value="{{ e.event_date|date:'Y-m-d' }}" required>
+                      </div>
+                      <div class="col-md-4">
+                        <label class="form-label small">Event Start Time</label>
+                        <input type="time" name="event_start_time" class="form-control form-control-sm" value="{{ e.event_start_time|time:'H:i' }}" required>
+                      </div>
+                      <div class="col-md-4">
+                        <label class="form-label small">Reason</label>
+                        <select name="reason_category" class="form-select form-select-sm">
+                          {% for value, label in e.REASON_CHOICES %}
+                          <option value="{{ value }}" {% if e.reason_category == value %}selected{% endif %}>{{ label }}</option>
+                          {% endfor %}
+                        </select>
+                      </div>
+                    </div>
+                    <div class="mt-2">
+                      <label class="form-label small">Custom Reason (only used if "Other" is selected)</label>
+                      <input type="text" name="custom_reason" class="form-control form-control-sm" value="{{ e.custom_reason }}">
+                    </div>
+                    <button type="submit" class="btn btn-sm btn-primary mt-2">Save Changes</button>
+                  </form>
+                </td>
+              </tr>
+              {% endif %}
               {% endfor %}
             </tbody>
           </table>
@@ -472,33 +700,17 @@
               <div class="small text-muted mt-1">
                 {% for req in r.in_behalf_requests %}
                 {% if forloop.counter <= 2 %}
-                <div>
-                  Your request:
-                  {% if req.status == 'approved' %}<span class="badge bg-success">Approved</span>
-                  {% elif req.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
-                  {% elif req.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
-                  {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
-                  {% if req.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
-                  {{ req.leave_type.name }}, {{ req.start_date }}–{{ req.end_date }}
-                </div>
+                {% include 'hr/_in_behalf_request_line.html' %}
                 {% endif %}
                 {% endfor %}
                 {% if r.in_behalf_requests|length > 2 %}
                 <button type="button" class="btn btn-sm btn-link px-0 py-0 text-decoration-none" data-bs-toggle="collapse" data-bs-target="#inBehalf{{ r.pk }}">
-                  +{{ r.in_behalf_requests|length|add:"-2" }} more request(s) you logged for {{ r.full_name }}
+                  +{{ r.in_behalf_requests|length|add:"-2" }} more request(s) you logged
                 </button>
                 <div class="collapse" id="inBehalf{{ r.pk }}">
                   {% for req in r.in_behalf_requests %}
                   {% if forloop.counter > 2 %}
-                  <div>
-                    Your request:
-                    {% if req.status == 'approved' %}<span class="badge bg-success">Approved</span>
-                    {% elif req.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
-                    {% elif req.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
-                    {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
-                    {% if req.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
-                    {{ req.leave_type.name }}, {{ req.start_date }}–{{ req.end_date }}
-                  </div>
+                  {% include 'hr/_in_behalf_request_line.html' %}
                   {% endif %}
                   {% endfor %}
                 </div>
@@ -518,7 +730,6 @@
             <i class="bi bi-diagram-3 me-1"></i>+{{ downstream_reports|length }} more further down your reporting chain
           </button>
           <div class="collapse mt-1" id="downstreamReports">
-            <div class="text-muted small mb-1">Full downstream chain (below your direct reports)</div>
             <ul class="list-group list-group-flush small mb-2" style="max-height: 180px; overflow-y: auto;">
               {% for r in downstream_reports %}
               <li class="list-group-item px-0 py-1">{{ r.full_name }}</li>
@@ -560,6 +771,50 @@
     }
     reasonSelect.addEventListener('change', toggleCustomReason);
     toggleCustomReason();
+})();
+
+// Document removal on an Edit form is deferred, not immediate: clicking
+// the X only confirms and queues it (toggling a hidden document-clear
+// flag + the visible state) — nothing is submitted until the user
+// clicks Save Changes for the whole form, same as any other field here.
+function docQueueRemoval(btn, pk) {
+    if (!confirm('Remove this document? It will be deleted when you click Save Changes.')) return false;
+    var form = btn.closest('form');
+    form.querySelector('[data-doc-attached="' + pk + '"]').classList.add('d-none');
+    form.querySelector('[data-doc-pending="' + pk + '"]').classList.remove('d-none');
+    form.querySelector('[data-doc-clear-flag="' + pk + '"]').value = 'on';
+    form.querySelector('input[type=file][name=document]').value = '';
+    return false;
+}
+function docUndoRemoval(btn, pk) {
+    var form = btn.closest('form');
+    form.querySelector('[data-doc-attached="' + pk + '"]').classList.remove('d-none');
+    form.querySelector('[data-doc-pending="' + pk + '"]').classList.add('d-none');
+    form.querySelector('[data-doc-clear-flag="' + pk + '"]').value = '';
+    return false;
+}
+document.querySelectorAll('input[type="file"][name="document"]').forEach(function (fileInput) {
+    fileInput.addEventListener('change', function () {
+        if (!fileInput.files.length) return;
+        var form = fileInput.closest('form');
+        var clearFlag = form.querySelector('[data-doc-clear-flag]');
+        // Picking a new file after queuing a removal cancels the removal —
+        // the upload already says what should happen to the document.
+        if (clearFlag && clearFlag.value === 'on') docUndoRemoval(fileInput, clearFlag.dataset.docClearFlag);
+    });
+});
+
+(function () {
+    // After a successful Edit save, the page reloads (see the
+    // ?opened_leave= redirect) — re-expand that specific row's panel and
+    // scroll to it, so the change is actually visible instead of the
+    // panel just collapsing back to hidden.
+    var openedLeave = new URLSearchParams(window.location.search).get('opened_leave');
+    if (!openedLeave) return;
+    var row = document.getElementById('editLeave' + openedLeave);
+    if (!row) return;
+    row.classList.add('show');
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
 })();
 </script>
 {% endblock %}

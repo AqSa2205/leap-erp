@@ -9,16 +9,22 @@ Two entry points:
 
 Both funnel through _finalize, which is the single place that creates the
 balance-deducting LeaveRecord or sets the salary-deduction flag.
-"""
-from datetime import timedelta
 
+Reconciliation requires UNANIMOUS agreement in either direction: the request
+only finalizes once every designated approver has decided AND all of their
+decisions agree (all-approved -> approved, all-disapproved -> disapproved).
+A split decision (some approve, some disapprove) leaves the request pending
+indefinitely rather than fail-fast finalizing on the first disapproval —
+each approver can keep changing their own decision (see
+edit_approver_decision) for as long as the request stays pending; there is
+no fixed time limit, only whichever happens first: unanimous agreement, or
+someone changing their mind to match the others.
+"""
 from django.db import transaction
 from django.utils import timezone
 
-from hr.models import LeaveRecord
+from hr.models import LeaveRecord, LeaveRequest, LeaveRevokeRequest
 from notifications.services import notify_users
-
-DECISION_EDIT_WINDOW = timedelta(hours=24)
 
 
 def record_approver_decision(leave_request, approver_user, decision, comment=''):
@@ -63,25 +69,18 @@ def record_approver_decision(leave_request, approver_user, decision, comment='')
 
         _reconcile(leave_request)
     leave_request.refresh_from_db()
-    if leave_request.status == 'pending':
-        remaining = leave_request.pending_approvers()
-        if remaining:
-            notify_users(
-                recipients=remaining,
-                verb=f'{approver_user.get_full_name() or approver_user.username} decided on a leave request awaiting your review',
-                actor=approver_user,
-                description=f'{leave_request.employee.full_name} — {leave_request.leave_type.name} '
-                            f'({leave_request.start_date} to {leave_request.end_date})',
-            )
+    _notify_after_reconcile(leave_request, actor=approver_user)
     return leave_request
 
 
 def edit_approver_decision(leave_request, approver_user, new_decision, edit_note):
-    """Let an approver change their own already-recorded decision within the
-    24-hour edit window, while the request is still pending (see _finalize —
-    once finalized, decisions lock; there's no reversal of a created
-    LeaveRecord or a salary-deduction flag). Requires a note explaining why,
-    which is recorded as a visible LeaveRequestNote."""
+    """Let an approver change their own already-recorded decision for as
+    long as the overall request is still pending (see _finalize — once
+    finalized, decisions lock; there's no reversal of a created LeaveRecord
+    or a salary-deduction flag). No fixed time limit — the request stays
+    pending, and therefore editable, until every approver agrees one way or
+    the other. Requires a note explaining why, which is recorded as a
+    visible LeaveRequestNote."""
     from hr.models import LeaveRequestNote
 
     if new_decision not in ('approved', 'disapproved'):
@@ -99,8 +98,6 @@ def edit_approver_decision(leave_request, approver_user, new_decision, edit_note
         raise ValueError(f"{approver_user} is not a designated approver for this request.")
     if approval.decision not in ('approved', 'disapproved'):
         raise ValueError('No prior decision to edit.')
-    if approval.decided_at is None or timezone.now() - approval.decided_at > DECISION_EDIT_WINDOW:
-        raise ValueError('The 24-hour edit window for this decision has passed.')
 
     old_decision = approval.decision
     if old_decision == new_decision:
@@ -118,7 +115,43 @@ def edit_approver_decision(leave_request, approver_user, new_decision, edit_note
             note=f'Changed decision from {old_decision} to {new_decision}: {edit_note.strip()}',
         )
         _reconcile(leave_request)
+    leave_request.refresh_from_db()
+    _notify_after_reconcile(leave_request, actor=approver_user)
     return leave_request
+
+
+def _notify_after_reconcile(leave_request, actor):
+    """Shared post-decision notification logic for record_approver_decision
+    and edit_approver_decision — called after _reconcile, once the request's
+    current status reflects the just-recorded/edited decision. Only ever
+    notifies while the request is still 'pending' (a finalized request's own
+    approve/disapprove notification is sent separately, from _finalize)."""
+    if leave_request.status != 'pending':
+        return
+    remaining = leave_request.pending_approvers()
+    if remaining:
+        notify_users(
+            recipients=remaining,
+            verb=f'{actor.get_full_name() or actor.username} decided on a leave request awaiting your review',
+            actor=actor,
+            description=f'{leave_request.employee.full_name} — {leave_request.leave_type.name} '
+                        f'({leave_request.start_date} to {leave_request.end_date})',
+        )
+        return
+    # Every approver has now decided, but they disagree — nobody
+    # auto-finalizes a split decision. Notify the OTHER already-decided
+    # approver(s) that there's a conflict to resolve, since they'd
+    # otherwise have no way to know their vote is being contested.
+    others = [
+        a.approver for a in leave_request.approvals.exclude(approver=actor).exclude(decision='pending')]
+    if others:
+        notify_users(
+            recipients=others,
+            verb=f'{actor.get_full_name() or actor.username} disagreed on a leave request — please reconsider your decision',
+            actor=actor,
+            description=f'{leave_request.employee.full_name} — {leave_request.leave_type.name} '
+                        f'({leave_request.start_date} to {leave_request.end_date})',
+        )
 
 
 def override_finalize(leave_request, superadmin_user, decision, reason):
@@ -140,14 +173,19 @@ def override_finalize(leave_request, superadmin_user, decision, reason):
 
 
 def _reconcile(leave_request):
-    """Re-derive overall status from the individual approval rows."""
+    """Re-derive overall status from the individual approval rows. Finalizes
+    only once every approver has decided AND all decisions agree — see the
+    module docstring for why a split decision does not fail-fast finalize."""
     leave_request.refresh_from_db()
     decisions = list(leave_request.approvals.values_list('decision', flat=True))
-    if any(d == 'disapproved' for d in decisions):
-        _finalize(leave_request, 'disapproved')
-    elif decisions and all(d == 'approved' for d in decisions):
+    if not decisions or any(d == 'pending' for d in decisions):
+        return  # still waiting on at least one approver
+    if all(d == 'approved' for d in decisions):
         _finalize(leave_request, 'approved')
-    # else: still pending, nothing to do.
+    elif all(d == 'disapproved' for d in decisions):
+        _finalize(leave_request, 'disapproved')
+    # else: split decision — stays pending, unresolved until someone changes
+    # their vote to match consensus.
 
 
 def _finalize(leave_request, status):
@@ -252,3 +290,215 @@ def grant_exception_days(*, employee, leave_type, year, days, granted_by, reason
     return LeaveExceptionGrant.objects.create(
         employee=employee, leave_type=leave_type, year=year, days=days,
         granted_by=granted_by, reason=reason.strip())
+
+
+def edit_leave_request(leave_request, editing_user, *, leave_type, start_date, end_date,
+                       employee_reason='', document=None):
+    """The creator edits their own still-pending request in place — the
+    entire pending window, same as cancel_leave_request, not just the
+    undecided portion of it. Re-runs the exact same balance/overlap
+    validation a fresh submission would (via exclude_request_id, so the
+    request doesn't collide with its own unmodified row) — an edit is not
+    exempt from the rules that applied to the original submission, and
+    could newly become exceeds_balance if the new dates push it over the
+    balance-hold threshold, exactly like any other submission.
+
+    document has three meaningful states, matching Django's
+    ClearableFileInput contract (pass the form's initial=current document
+    so 'leave unchanged' round-trips correctly instead of colliding with
+    'clear'):
+    - None: no instruction — leave the existing document untouched.
+    - False: the form's Clear checkbox was ticked — remove it.
+    - an UploadedFile (and different from the current one): replace it.
+    Either removal or replacement deletes the old stored file rather than
+    just dropping the reference, so nothing orphaned accumulates in storage.
+
+    If any approver had already recorded a decision, editing resets every
+    approval on this request back to 'pending' — the substance of the
+    request just changed, so an existing decision was made on information
+    that's no longer accurate and can't be trusted to still apply. This is
+    the same "update like a new request" behavior a cancel+resubmit would
+    produce, just in place. Whoever's decision got reset is notified, same
+    as cancel_leave_request already notifies decided approvers."""
+    from hr.leave_services import validate_leave_submission
+
+    if leave_request.created_by_id != editing_user.id:
+        raise ValueError('Only the person who submitted this request can edit it.')
+    leave_request.refresh_from_db()
+    if leave_request.status != 'pending':
+        raise ValueError('This request has already been decided and can no longer be edited.')
+
+    with transaction.atomic():
+        decided_approvals = list(
+            leave_request.approvals.exclude(decision='pending').select_related('approver'))
+        exceeds_balance = validate_leave_submission(
+            leave_request.employee, leave_type, start_date, end_date, lock=True,
+            exclude_request_id=leave_request.pk)
+        leave_request.leave_type = leave_type
+        leave_request.start_date = start_date
+        leave_request.end_date = end_date
+        leave_request.employee_reason = employee_reason
+        if document is False:
+            if leave_request.document:
+                leave_request.document.delete(save=False)
+            leave_request.document = None
+        elif document not in (None, leave_request.document):
+            if leave_request.document:
+                leave_request.document.delete(save=False)
+            leave_request.document = document
+        leave_request.exceeds_balance = exceeds_balance
+        leave_request.days = leave_request.computed_days()
+        leave_request.save(update_fields=[
+            'leave_type', 'start_date', 'end_date', 'employee_reason', 'document',
+            'exceeds_balance', 'days', 'updated_at'])
+        if decided_approvals:
+            leave_request.approvals.exclude(decision='pending').update(
+                decision='pending', comment='', decided_at=None)
+
+    if decided_approvals:
+        notify_users(
+            recipients=[a.approver for a in decided_approvals],
+            verb=f'{leave_request.employee.full_name} edited a leave request you had decided on',
+            actor=editing_user, description='The request was changed and needs a fresh decision.')
+    return leave_request
+
+
+def cancel_leave_request(leave_request, cancelling_user, reason=''):
+    """The creator withdraws their own still-pending request — covers the
+    entire pending window, whether or not any approver has decided yet.
+    Unlike a hard delete, this is NEVER destructive: the row stays with
+    status='cancelled' so it's always visible in History, on both the
+    employee's own My Profile and the approver's queue, instead of
+    silently vanishing depending on exactly when the employee acted.
+
+    A reason is only required once at least one approver has already
+    recorded a decision — they spent effort deciding and deserve an
+    explanation; before that, nothing has happened yet, so demanding one
+    would just be friction for a same-day mistake."""
+    if leave_request.created_by_id != cancelling_user.id:
+        raise ValueError('Only the person who submitted this request can cancel it.')
+    leave_request.refresh_from_db()
+    if leave_request.status != 'pending':
+        raise ValueError('This request has already been decided and can no longer be cancelled.')
+    decided_approvals = list(leave_request.approvals.exclude(decision='pending').select_related('approver'))
+    if decided_approvals and not (reason or '').strip():
+        raise ValueError('A reason is required to cancel a request an approver has already decided on.')
+
+    leave_request.status = 'cancelled'
+    leave_request.cancelled_at = timezone.now()
+    leave_request.cancel_reason = (reason or '').strip()
+    leave_request.save(update_fields=['status', 'cancelled_at', 'cancel_reason'])
+
+    if decided_approvals:
+        notify_users(
+            recipients=[a.approver for a in decided_approvals],
+            verb=f'{leave_request.employee.full_name} cancelled a leave request you had decided on',
+            actor=cancelling_user, description=leave_request.cancel_reason)
+    return leave_request
+
+
+def revoke_leave_request(leave_request, revoking_user, reason):
+    """Direct revoke by someone with override access — does NOT check
+    has_override_access itself (that's the caller's/view's job, same
+    separation of concerns as override_finalize). Deletes the linked
+    LeaveRecord so taken_days/remaining_days recompute live; the
+    LeaveRequest row stays, re-labeled status='revoked'."""
+    if leave_request.employee.user_id and leave_request.employee.user_id == revoking_user.id:
+        raise ValueError('You cannot revoke your own leave request.')
+    if not reason or not reason.strip():
+        raise ValueError('A revoke requires a written reason.')
+    leave_request.refresh_from_db()
+    if leave_request.status != 'approved':
+        raise ValueError(f'This request is {leave_request.status}; only an approved request can be revoked.')
+
+    with transaction.atomic():
+        current = LeaveRequest.objects.select_for_update().get(pk=leave_request.pk)
+        if current.status != 'approved':
+            raise ValueError(f'This request is {current.status}; only an approved request can be revoked.')
+        if current.leave_record_id:
+            LeaveRecord.objects.filter(pk=current.leave_record_id).delete()
+        current.status = 'revoked'
+        current.revoked_by = revoking_user
+        current.revoked_at = timezone.now()
+        current.revoke_reason = reason.strip()
+        current.leave_record = None
+        current.save(update_fields=['status', 'revoked_by', 'revoked_at', 'revoke_reason', 'leave_record'])
+        # Auto-close any pending employee-initiated revoke request for the
+        # same leave rather than leaving it dangling — a direct revoke by
+        # someone with override access always wins immediately.
+        LeaveRevokeRequest.objects.filter(leave_request=current, status='pending').update(
+            status='approved', decided_by=revoking_user, decided_at=timezone.now(),
+            decision_note='Applied via a direct revoke before this request was reviewed.')
+    if leave_request.employee.user_id:
+        notify_users(
+            recipients=[leave_request.employee.user],
+            verb=f'Your approved {leave_request.leave_type.name} leave was revoked',
+            actor=revoking_user, description=reason.strip())
+    leave_request.refresh_from_db()
+    return leave_request
+
+
+def request_leave_revoke(leave_request, requesting_user, reason):
+    """The employee themselves requests to void their own approved leave.
+    HR/Super Admin use revoke_leave_request (direct) instead of this queue —
+    requested_by is always the employee, never a manager acting on their
+    behalf, even for a request the manager originally logged."""
+    if not (leave_request.employee.user_id and leave_request.employee.user_id == requesting_user.id):
+        raise ValueError('Only the employee themselves can request a revoke of their own leave.')
+    if not reason or not reason.strip():
+        raise ValueError('A reason is required to request a revoke.')
+    leave_request.refresh_from_db()
+    if leave_request.status != 'approved':
+        raise ValueError(f'This request is {leave_request.status}; only an approved request can have its revoke requested.')
+    if LeaveRevokeRequest.objects.filter(leave_request=leave_request, status='pending').exists():
+        raise ValueError('A revoke request for this leave is already pending review.')
+
+    revoke_request = LeaveRevokeRequest.objects.create(
+        leave_request=leave_request, requested_by=requesting_user, reason=reason.strip())
+
+    from django.contrib.auth import get_user_model
+    from accounts.models import Role
+    from hr.models import LeaveDashboardAccess
+    User = get_user_model()
+    recipients = set(g.user for g in LeaveDashboardAccess.objects.filter(is_active=True))
+    recipients |= set(User.objects.filter(role__name=Role.SUPER_ADMIN))
+    if recipients:
+        notify_users(
+            recipients=list(recipients),
+            verb=f'{leave_request.employee.full_name} requested to revoke an approved leave',
+            actor=requesting_user, description=reason.strip())
+    return revoke_request
+
+
+def decide_leave_revoke_request(revoke_request, deciding_user, decision, decision_note=''):
+    """HR/Super Admin (the same roster that decides normal leave requests)
+    approves or rejects an employee's revoke request. Approving applies the
+    exact same mechanic as a direct revoke (revoke_leave_request) —
+    reusing it keeps the LeaveRecord-deletion/notification logic in one
+    place."""
+    if decision not in ('approved', 'rejected'):
+        raise ValueError(f"decision must be 'approved' or 'rejected', got {decision!r}")
+    revoke_request.refresh_from_db()
+    if revoke_request.status != 'pending':
+        raise ValueError(f'This revoke request is already {revoke_request.status}.')
+    leave_request = revoke_request.leave_request
+    if leave_request.employee.user_id and leave_request.employee.user_id == deciding_user.id:
+        raise ValueError('You cannot decide a revoke request on your own leave.')
+    if decision == 'rejected' and not (decision_note or '').strip():
+        raise ValueError('Rejecting a revoke request requires a note explaining why.')
+
+    with transaction.atomic():
+        revoke_request.status = decision
+        revoke_request.decided_by = deciding_user
+        revoke_request.decided_at = timezone.now()
+        revoke_request.decision_note = decision_note.strip()
+        revoke_request.save(update_fields=['status', 'decided_by', 'decided_at', 'decision_note'])
+        if decision == 'approved':
+            revoke_leave_request(leave_request, deciding_user, revoke_request.reason)
+        else:
+            if leave_request.employee.user_id:
+                notify_users(
+                    recipients=[leave_request.employee.user],
+                    verb=f'Your revoke request for a {leave_request.leave_type.name} leave was rejected',
+                    actor=deciding_user, description=decision_note.strip())
+    return revoke_request

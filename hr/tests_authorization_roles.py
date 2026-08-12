@@ -250,17 +250,19 @@ class OrgChartScopeTests(TestCase):
         # The template-comment guidance must NOT leak into the page as text.
         self.assertNotIn('vertical threshold', body)
 
-    def test_erp_admin_can_manage_but_not_config_access(self):
+    def test_erp_admin_can_manage_hierarchy_but_not_leave_access(self):
         u = _user('erp', 'erp_admin')
         self.client.force_login(u)
         resp = self.client.get(reverse('hr:org_chart'))
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.context['can_manage_org'])
-        self.assertFalse(resp.context['can_config_access'])
-        # Leave Dashboard Access actions are Super-Admin only -> 403 for ERP Admin.
-        blocked = self.client.post(reverse('hr:org_chart'),
-                                   data={'grant_dashboard_access': self.report.pk})
+        # Leave Dashboard Access is its own Super-Admin-only page (not part
+        # of Org Chart) -> whole-page 403 for ERP Admin, both GET and POST.
+        blocked = self.client.get(reverse('hr:leave_access'))
         self.assertEqual(blocked.status_code, 403)
+        blocked_post = self.client.post(reverse('hr:leave_access'),
+                                        data={'grant_dashboard_access': self.report.pk})
+        self.assertEqual(blocked_post.status_code, 403)
         # Hierarchy assignment IS allowed for ERP Admin (redirects on save).
         ok = self.client.post(reverse('hr:org_chart'),
                               data={'employee_id': self.report.pk, 'main_manager': '',
