@@ -20,18 +20,20 @@ from .models import PrequalLibraryItem, PrequalSubmission
 def _can_use_prequal(user):
     return bool(getattr(user, 'is_authenticated', False) and (
         user.is_super_admin_user or user.is_admin_user or user.is_manager_user
+        or user.is_erp_admin_user
         or getattr(user, 'is_proposal_team_user', False)))
 
 
 def _can_manage_library(user):
     return bool(getattr(user, 'is_authenticated', False) and (
-        user.is_super_admin_user or user.is_admin_user
+        user.is_super_admin_user or user.is_admin_user or user.is_erp_admin_user
         or getattr(user, 'is_proposal_head_user', False)))
 
 
 def _visible_submissions(user):
     qs = PrequalSubmission.objects.select_related('project', 'created_by')
-    if user.is_super_admin_user:
+    # ERP Admin manages the Administration section company-wide — every submission.
+    if user.is_super_admin_user or user.is_erp_admin_user:
         return qs
     if user.is_admin_user or user.is_manager_user or getattr(user, 'is_proposal_team_user', False):
         return qs.filter(Q(created_by=user) | Q(project__region=user.region)).distinct()
@@ -269,6 +271,7 @@ def _resolve_project(raw):
 
 def _project_choices(user):
     qs = Project.objects.select_related('region').order_by('-id')
-    if not user.is_super_admin_user and getattr(user, 'region_id', None):
+    company_wide = user.is_super_admin_user or user.is_erp_admin_user
+    if not company_wide and getattr(user, 'region_id', None):
         qs = qs.filter(region_id=user.region_id)
     return qs[:500]

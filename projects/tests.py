@@ -653,3 +653,64 @@ class ProjectSoftDeleteTests(TestCase):
         self.client.post(reverse('projects:restore', kwargs={'pk': self.project.pk}))
         self.project.refresh_from_db()
         self.assertTrue(self.project.is_deleted)   # still deleted
+
+
+class MilestoneDeadlineTests(TestCase):
+    def setUp(self):
+        self.region = Region.objects.create(code='LNA', name='Leap Arabia', is_active=True)
+        self.status = ProjectStatus.objects.create(name='Open', category='open', is_active=True)
+
+    def _project(self, name, **deadlines):
+        return Project.objects.create(
+            project_name=name, proposal_reference=f'LNA-TEST-{name}',
+            region=self.region, status=self.status, **deadlines)
+
+    def test_no_deadlines_gives_no_status(self):
+        p = self._project('NoDeadlines')
+        self.assertEqual(p.milestone_overall_status, '')
+
+    def test_overdue_milestone_gives_red(self):
+        from datetime import date, timedelta
+        p = self._project('Overdue', bom_started_deadline=date.today() - timedelta(days=3))
+        self.assertEqual(p.milestone_overall_status, 'danger')
+
+    def test_deadline_not_yet_passed_gives_orange(self):
+        from datetime import date, timedelta
+        p = self._project('InProgress', bom_started_deadline=date.today() + timedelta(days=3))
+        self.assertEqual(p.milestone_overall_status, 'warning')
+
+    def test_finalised_sheet_gives_green(self):
+        from django.utils import timezone
+        from datetime import timedelta
+        p = self._project('Finalised')
+        sheet = CostingSheet.objects.create(
+            project=p, title='t', margin=20, discount_rate=0, shipping_rate=5,
+            customs_rate=5, finances_rate=2, installation_rate=3,
+            output_currency='SAR', default_supplier_currency='SAR',
+            scope_of_work_total=0, status='draft', workflow_stage='finalized',
+            finalized_at=timezone.now() - timedelta(days=1))
+        p.cycle_sheet = sheet
+        self.assertEqual(p.milestone_overall_status, 'success')
+
+    def test_milestone_display_rows_shows_variance(self):
+        from django.utils import timezone
+        from datetime import date, timedelta
+        today = timezone.now()
+        p = self._project('Variance', bom_started_deadline=date.today() - timedelta(days=5))
+        sheet = CostingSheet.objects.create(
+            project=p, title='t', margin=20, discount_rate=0, shipping_rate=5,
+            customs_rate=5, finances_rate=2, installation_rate=3,
+            output_currency='SAR', default_supplier_currency='SAR',
+            scope_of_work_total=0, status='draft', workflow_stage='bom_in_progress',
+            bom_started_at=today - timedelta(days=7))
+        p.cycle_sheet = sheet
+        rows = p.milestone_display_rows
+        bom_row = next(r for r in rows if r['label'] == 'BOM started')
+        self.assertEqual(bom_row['variance_display'], '+2d')
+
+    def test_milestone_display_rows_no_sheet_shows_dashes(self):
+        p = self._project('NoSheet')
+        rows = p.milestone_display_rows
+        self.assertEqual(len(rows), 4)
+        for r in rows:
+            self.assertIsNone(r['variance_display'])

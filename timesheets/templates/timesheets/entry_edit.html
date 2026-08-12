@@ -1,0 +1,92 @@
+{% extends 'base.html' %}
+{% block title %}Edit Entry — My Timesheet{% endblock %}
+{% block page_title %}Edit Entry{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-7">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h1 class="h3 mb-1">Edit Entry</h1>
+                    <p class="text-muted mb-0">Update this timesheet entry.</p>
+                </div>
+                <a href="{% url 'timesheets:my_timesheet' %}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> My Timesheet</a>
+            </div>
+
+            <div class="card">
+                <div class="card-body">
+                    <form method="post">
+                        {% csrf_token %}
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Date</label>
+                                {{ form.date }}
+                                {% if form.date.errors %}<div class="text-danger small mt-1">{{ form.date.errors.0 }}</div>{% endif %}
+                            </div>
+                            <div class="col-md-8 mb-3">
+                                <label class="form-label d-block">Type</label>
+                                <div class="btn-group mb-2" role="group">
+                                    <input type="radio" class="btn-check" name="entry_type" id="entry_type_activity"
+                                           value="activity" {% if form.entry_type.value != 'project' %}checked{% endif %}>
+                                    <label class="btn btn-outline-primary btn-sm" for="entry_type_activity">Internal Activity</label>
+
+                                    <input type="radio" class="btn-check" name="entry_type" id="entry_type_project"
+                                           value="project" {% if form.entry_type.value == 'project' %}checked{% endif %}>
+                                    <label class="btn btn-outline-primary btn-sm" for="entry_type_project">Client Project</label>
+                                </div>
+
+                                <div id="activity-code-field" class="{% if form.entry_type.value == 'project' %}d-none{% endif %}">
+                                    {{ form.activity_code }}
+                                    {% if form.activity_code.errors %}<div class="text-danger small mt-1">{{ form.activity_code.errors.0 }}</div>{% endif %}
+                                </div>
+                                <div id="project-field" class="{% if form.entry_type.value != 'project' %}d-none{% endif %}">
+                                    {{ form.project }}
+                                    {% if form.project.errors %}<div class="text-danger small mt-1">{{ form.project.errors.0 }}</div>{% endif %}
+                                </div>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Hours</label>
+                                {{ form.hours }}
+                                {% if form.hours.errors %}<div class="text-danger small mt-1">{{ form.hours.errors.0 }}</div>{% endif %}
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Task description</label>
+                            {{ form.task_description }}
+                            {% if form.task_description.errors %}<div class="text-danger small mt-1">{{ form.task_description.errors.0 }}</div>{% endif %}
+                        </div>
+                        {% if form.non_field_errors %}
+                        <div class="alert alert-danger">{% for e in form.non_field_errors %}<p class="mb-0">{{ e }}</p>{% endfor %}</div>
+                        {% endif %}
+                        <div class="d-flex justify-content-end gap-2 border-top pt-3">
+                            <a href="{% url 'timesheets:my_timesheet' %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> Save changes</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var activityRadio = document.getElementById('entry_type_activity');
+    var projectRadio = document.getElementById('entry_type_project');
+    var activityField = document.getElementById('activity-code-field');
+    var projectField = document.getElementById('project-field');
+    if (!activityRadio || !projectRadio) return;
+
+    function sync() {
+        if (projectRadio.checked) {
+            activityField.classList.add('d-none');
+            projectField.classList.remove('d-none');
+        } else {
+            projectField.classList.add('d-none');
+            activityField.classList.remove('d-none');
+        }
+    }
+    activityRadio.addEventListener('change', sync);
+    projectRadio.addEventListener('change', sync);
+});
+</script>
+{% endblock %}

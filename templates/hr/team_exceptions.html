@@ -161,6 +161,11 @@
             <td class="small">
               {{ exc.get_reason_category_display }}
               {% if exc.status == 'expired' %}<span class="badge bg-secondary ms-1">Expired</span>{% endif %}
+              {% if exc.is_backdated %}
+              <span class="badge bg-light text-dark border ms-1" data-bs-toggle="tooltip" title="This event happened before the exception was submitted">
+                <i class="bi bi-clock-history"></i> Backdated
+              </span>
+              {% endif %}
               {% if exc.reason_category == 'other' and exc.custom_reason %}<div class="text-muted">{{ exc.custom_reason }}</div>{% endif %}
               {% if exc.employee_comment %}<div class="text-muted fst-italic">"{{ exc.employee_comment }}"</div>{% endif %}
             </td>
@@ -224,35 +229,109 @@
     </div>
   </div>
 
+  {% if pending_exception_revoke_requests %}
+  <div class="card mb-4 border-warning">
+    <div class="card-header d-flex justify-content-between align-items-center bg-warning-subtle">
+      <h5 class="mb-0"><i class="bi bi-arrow-counterclockwise"></i> Pending Revoke Requests
+        <span class="badge bg-warning text-dark ms-2">{{ pending_exception_revoke_requests|length }}</span></h5>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+      <table class="table table-sm mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Employee</th><th>Event</th><th>Requested By</th><th>Reason</th>
+            <th style="min-width:220px;">
+              Decide
+              <i class="bi bi-info-circle text-muted ms-1" data-bs-toggle="tooltip" data-bs-placement="top"
+                 title="Approving un-excuses the day — this cannot be undone. Rejecting leaves the approved exception unchanged."></i>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for rr in pending_exception_revoke_requests %}
+          <tr>
+            <td>{{ rr.attendance_exception.employee.full_name }}</td>
+            <td class="small">{{ rr.attendance_exception.event_date }} {{ rr.attendance_exception.event_start_time|time:"H:i" }}</td>
+            <td class="small text-muted">{{ rr.requested_by.get_full_name|default:rr.requested_by.username }}</td>
+            <td class="small">{{ rr.reason }}</td>
+            <td>
+              <form method="post" class="d-flex flex-column gap-1">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="decide_revoke_request">
+                <input type="hidden" name="revoke_request_id" value="{{ rr.pk }}">
+                <input type="hidden" name="tab" value="{{ tab }}">
+                <textarea name="decision_note" class="form-control form-control-sm" rows="1" placeholder="Note (required if rejecting)"></textarea>
+                <div class="d-flex gap-1">
+                  <button type="submit" name="decision" value="approved" class="btn btn-sm btn-warning" onclick="return confirm('Approve revoking this exception?');">Approve Revoke</button>
+                  <button type="submit" name="decision" value="rejected" class="btn btn-sm btn-outline-secondary" onclick="return confirm('Reject this revoke request?');">Reject</button>
+                </div>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center" style="cursor:pointer;"
-         data-bs-toggle="collapse" data-bs-target="#exceptionHistoryCollapse" role="button" aria-expanded="false">
+         data-bs-toggle="collapse" data-bs-target="#exceptionHistoryCollapse"
+         role="button" aria-expanded="{% if request.GET.history_sort %}true{% else %}false{% endif %}">
       <h5 class="mb-0">
         <i class="bi bi-clock-history"></i> History
         <span class="badge bg-secondary ms-1">{{ decided_exceptions|length }}</span>
       </h5>
       <i class="bi bi-chevron-down"></i>
     </div>
-    <div class="collapse" id="exceptionHistoryCollapse">
+    <div class="collapse{% if request.GET.history_sort %} show{% endif %}" id="exceptionHistoryCollapse">
     <div class="card-body p-0">
+      <div class="d-flex justify-content-end p-2">
+        <form method="get" class="d-flex align-items-center gap-2 mb-0">
+          <input type="hidden" name="tab" value="{{ tab }}">
+          <label class="small text-muted mb-0">Sort by</label>
+          <select name="history_sort" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
+            <option value="newest" {% if current_history_sort == 'newest' %}selected{% endif %}>Decided (newest first)</option>
+            <option value="oldest" {% if current_history_sort == 'oldest' %}selected{% endif %}>Decided (oldest first)</option>
+          </select>
+        </form>
+      </div>
       <div class="table-responsive" style="max-height: 480px; overflow-y: auto;">
       <table class="table table-sm mb-0">
         <thead class="table-light"><tr><th>Employee</th><th>Manager</th><th>Event</th><th>Status</th><th>Decided At</th></tr></thead>
         <tbody>
           {% for exc in decided_exceptions %}
           <tr>
-            <td>{{ exc.employee.full_name }}</td>
+            <td>
+              {{ exc.employee.full_name }}
+              {% if exc.is_backdated %}
+              <div class="small text-muted" data-bs-toggle="tooltip" title="This event happened before the exception was submitted">
+                <i class="bi bi-clock-history"></i> Backdated
+              </div>
+              {% endif %}
+            </td>
             <td class="small text-muted">{{ exc.employee.main_manager.full_name|default:"—" }}</td>
             <td class="small">{{ exc.event_date }} {{ exc.event_start_time|time:"H:i" }}</td>
             <td>
               {% if exc.status == 'approved' %}<span class="badge bg-success">Approved</span>
               {% elif exc.status == 'rejected' %}<span class="badge bg-danger">Rejected</span>
               {% elif exc.status == 'expired' %}<span class="badge bg-secondary">Expired</span>
+              {% elif exc.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
               {% else %}<span class="badge bg-warning text-dark">{{ exc.get_status_display }}</span>{% endif %}
               {% if exc.is_overridden %}
                 <span class="badge bg-info text-dark ms-1">
                   Overridden{% if exc.overridden_by %} by {{ exc.overridden_by.get_full_name|default:exc.overridden_by.username }}{% endif %}
                 </span>
+              {% endif %}
+              {% if exc.status == 'revoked' %}
+                <div class="small text-muted">
+                  {% if exc.revoked_by %}by {{ exc.revoked_by.get_full_name|default:exc.revoked_by.username }}{% endif %}
+                  {% if exc.revoked_at %} on {{ exc.revoked_at|date:'d M Y' }}{% endif %}
+                </div>
+                {% if exc.revoke_reason %}<div class="small text-muted fst-italic">"{{ exc.revoke_reason }}"</div>{% endif %}
               {% endif %}
               {% if exc.can_override %}
               <button type="button" class="btn btn-sm btn-outline-warning ms-1" data-bs-toggle="collapse" data-bs-target="#override_{{ exc.pk }}">
@@ -269,6 +348,21 @@
                     <button type="submit" name="decision" value="approved" class="btn btn-sm btn-outline-success">Override — Approve</button>
                     <button type="submit" name="decision" value="rejected" class="btn btn-sm btn-outline-danger">Override — Reject</button>
                   </div>
+                </form>
+              </div>
+              {% endif %}
+              {% if exc.status == 'approved' and can_revoke %}
+              <button type="button" class="btn btn-sm btn-outline-danger ms-1" data-bs-toggle="collapse" data-bs-target="#revoke_{{ exc.pk }}" id="revoke_exception_{{ exc.pk }}">
+                Revoke
+              </button>
+              <div class="collapse mt-2" id="revoke_{{ exc.pk }}">
+                <form method="post" class="border rounded p-2" onsubmit="return confirm('Revoke this attendance exception?');">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="revoke_direct">
+                  <input type="hidden" name="exc_id" value="{{ exc.pk }}">
+                  <input type="hidden" name="tab" value="{{ tab }}">
+                  <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Revoke reason — required" required></textarea>
+                  <button type="submit" class="btn btn-sm btn-outline-danger">Confirm Revoke</button>
                 </form>
               </div>
               {% endif %}

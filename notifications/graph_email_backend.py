@@ -9,8 +9,11 @@ mailbox login, so they are unaffected by that policy.
 
 Drop-in replacement: every existing send_mail()/EmailMultiAlternatives call
 in the codebase is unchanged — only settings.EMAIL_BACKEND points here.
+File attachments on EmailMessage are mapped to Graph fileAttachment objects.
 """
+import base64
 import logging
+from email.mime.base import MIMEBase
 from email.utils import parseaddr
 
 import requests
@@ -81,7 +84,7 @@ class MicrosoftGraphEmailBackend(BaseEmailBackend):
                     'Content-Type': 'application/json',
                 },
                 json=payload,
-                timeout=15,
+                timeout=60,
             )
             if resp.status_code not in (200, 202):
                 raise RuntimeError(f'Graph sendMail failed ({resp.status_code}): {resp.text}')
@@ -115,25 +118,40 @@ class MicrosoftGraphEmailBackend(BaseEmailBackend):
         if message.bcc:
             graph_message['bccRecipients'] = [
                 {'emailAddress': {'address': _address_only(addr)}} for addr in message.bcc]
-        if message.attachments:
-            import base64
-            attachments = []
-            for att in message.attachments:
-                if isinstance(att, tuple):
-                    filename, content, mimetype = (att + (None, None))[:3]
-                else:
-                    filename, content, mimetype = att.get_filename(), att.get_payload(decode=True), att.get_content_type()
-                if isinstance(content, str):
-                    content = content.encode('utf-8')
-                attachments.append({
-                    '@odata.type': '#microsoft.graph.fileAttachment',
-                    'name': filename or 'attachment',
-                    'contentType': mimetype or 'application/octet-stream',
-                    'contentBytes': base64.b64encode(content).decode('ascii'),
-                })
+        reply_to = getattr(message, 'reply_to', None) or []
+        if reply_to:
+            graph_message['replyTo'] = [
+                {'emailAddress': {'address': _address_only(addr)}} for addr in reply_to]
+
+        attachments = _graph_attachments(message)
+        if attachments:
             graph_message['attachments'] = attachments
 
         return {'message': graph_message, 'saveToSentItems': 'false'}
+
+
+def _graph_attachments(message):
+    """Map Django EmailMessage.attachments to Graph fileAttachment dicts."""
+    result = []
+    for item in getattr(message, 'attachments', []) or []:
+        if isinstance(item, MIMEBase):
+            payload = item.get_payload(decode=True) or b''
+            filename = item.get_filename() or 'attachment'
+            content_type = item.get_content_type() or 'application/octet-stream'
+        else:
+            # Django stores attach() as (filename, content, mimetype)
+            filename, content, content_type = item[0], item[1], item[2] if len(item) > 2 else 'application/octet-stream'
+            if isinstance(content, str):
+                content = content.encode('utf-8')
+            payload = content or b''
+            content_type = content_type or 'application/octet-stream'
+        result.append({
+            '@odata.type': '#microsoft.graph.fileAttachment',
+            'name': filename,
+            'contentType': content_type,
+            'contentBytes': base64.b64encode(payload).decode('ascii'),
+        })
+    return result
 
 
 def _address_only(formatted_address):

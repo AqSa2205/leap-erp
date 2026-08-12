@@ -1,5 +1,101 @@
 {% extends 'base.html' %}
 {% block title %}Leave Approval Queue{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Leave Approval Queue tabs — same treatment as Team Exceptions'
+       per-tab accent colors (see team_exceptions.html): Bootstrap's stock
+       nav-tabs render every inactive tab in the same link-blue, so they
+       read as generic hyperlinks rather than distinct destinations.
+       Selectors chain the specific tab class alongside .active so they
+       out-specificity `.nav-tabs .nav-link.active` regardless of load
+       order.
+         - Pending (default/primary view, needs a decision) -> amber
+         - Requests You've Logged (what you personally logged)  -> blue
+         - History (the settled record)                        -> slate navy */
+    .leave-queue-tabs .nav-link {
+        font-weight: 500;
+        color: #495057;
+        border: 1px solid transparent;
+        transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+    }
+
+    .leave-queue-tabs .nav-link.lq-tab-pending:hover:not(.active) {
+        color: #b45309;
+        background-color: rgba(180, 83, 9, 0.08);
+    }
+    .leave-queue-tabs .nav-link.lq-tab-pending.active {
+        color: #212529;
+        background-color: #ffc107;
+        border-color: #ffc107;
+    }
+    /* The count badge stays amber while the tab itself is still neutral
+       (unselected) — once the tab's own background turns amber on
+       selection, a same-color badge on top of it loses contrast, so it
+       switches to the same neutral gray the other two tabs' badges use. */
+    .leave-queue-tabs .nav-link.lq-tab-pending.active .badge {
+        /* Bootstrap 5's .bg-warning/.text-dark utilities set their own
+           color with !important, so a normal-weight override here would
+           lose regardless of selector specificity — match its weight. */
+        background-color: #6c757d !important;
+        color: #fff !important;
+    }
+
+    .leave-queue-tabs .nav-link.lq-tab-logged:hover:not(.active) {
+        color: #1d4ed8;
+        background-color: rgba(29, 78, 216, 0.08);
+    }
+    .leave-queue-tabs .nav-link.lq-tab-logged.active {
+        color: #fff;
+        background-color: #1d4ed8;
+        border-color: #1d4ed8;
+    }
+
+    .leave-queue-tabs .nav-link.lq-tab-history:hover:not(.active) {
+        color: #1e293b;
+        background-color: rgba(30, 41, 59, 0.08);
+    }
+    .leave-queue-tabs .nav-link.lq-tab-history.active {
+        color: #fff;
+        background-color: #1e293b;
+        border-color: #1e293b;
+    }
+
+    [data-theme="dark"] .leave-queue-tabs { border-bottom-color: #333; }
+    [data-theme="dark"] .leave-queue-tabs .nav-link { color: #ccc; }
+
+    [data-theme="dark"] .leave-queue-tabs .nav-link.lq-tab-pending:hover:not(.active) {
+        color: #fbbf24;
+        background-color: rgba(180, 83, 9, 0.2);
+    }
+    [data-theme="dark"] .leave-queue-tabs .nav-link.lq-tab-pending.active {
+        color: #212529;
+        background-color: #ffc107;
+        border-color: #ffc107;
+    }
+
+    [data-theme="dark"] .leave-queue-tabs .nav-link.lq-tab-logged:hover:not(.active) {
+        color: #60a5fa;
+        background-color: rgba(29, 78, 216, 0.2);
+    }
+    [data-theme="dark"] .leave-queue-tabs .nav-link.lq-tab-logged.active {
+        color: #fff;
+        background-color: #1d4ed8;
+        border-color: #1d4ed8;
+    }
+
+    [data-theme="dark"] .leave-queue-tabs .nav-link.lq-tab-history:hover:not(.active) {
+        color: #94a3b8;
+        background-color: rgba(51, 65, 85, 0.3);
+    }
+    [data-theme="dark"] .leave-queue-tabs .nav-link.lq-tab-history.active {
+        color: #fff;
+        background-color: #334155;
+        border-color: #334155;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container-fluid">
   <div class="d-flex justify-content-between align-items-center mb-4">
@@ -7,66 +103,249 @@
     <a href="{% url 'hr:leave_request_create' %}" class="btn btn-primary"><i class="bi bi-plus-lg"></i> Log Request</a>
   </div>
 
-  <div class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center">
-      <h5 class="mb-0"><i class="bi bi-hourglass-split"></i> Pending
-        <span class="badge bg-warning text-dark ms-2">{{ pending_requests|length }}</span></h5>
-      <form method="get" class="d-flex align-items-center gap-2 mb-0">
-        <label class="small text-muted mb-0">Sort by</label>
-        <select name="sort" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
-          <option value="submitted" {% if current_sort == 'submitted' %}selected{% endif %}>Submission date (oldest first)</option>
-          <option value="submitted_newest" {% if current_sort == 'submitted_newest' %}selected{% endif %}>Submission date (newest first)</option>
-          <option value="vacation_date" {% if current_sort == 'vacation_date' %}selected{% endif %}>Vacation date</option>
-        </select>
-      </form>
+  {% if pending_leave_revoke_requests %}
+  <div class="card mb-4 border-warning">
+    <div class="card-header d-flex justify-content-between align-items-center bg-warning-subtle">
+      <h5 class="mb-0"><i class="bi bi-arrow-counterclockwise"></i> Pending Revoke Requests
+        <span class="badge bg-warning text-dark ms-2">{{ pending_leave_revoke_requests|length }}</span></h5>
     </div>
     <div class="card-body p-0">
-      {% if pending_requests %}
-      <table class="table table-hover align-middle mb-0">
-        <thead class="table-light"><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Days</th><th>Waiting On</th><th></th></tr></thead>
-        <tbody>
-          {% for r in pending_requests %}
-          {% url 'hr:leave_request_detail' r.pk as detail_url %}
+      <table class="table table-sm mb-0">
+        <thead class="table-light">
           <tr>
-            <td><a href="{{ detail_url }}">{{ r.employee.full_name }}</a>
-              {% if r.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
-              {% if r.logged_by_manager %}
-              <span class="badge bg-light text-dark border" title="This employee's manager logged this request on their behalf">
-                <i class="bi bi-person-badge"></i> By {{ r.created_by.get_full_name|default:r.created_by.username }} (manager)
-              </span>
-              {% endif %}
+            <th>Employee</th><th>Leave</th><th>Requested By</th><th>Reason</th>
+            <th style="min-width:220px;">
+              Decide
+              <i class="bi bi-info-circle text-muted ms-1" data-bs-toggle="tooltip" data-bs-placement="top"
+                 title="Approving deletes the day-deduction and frees the balance — this cannot be undone. Rejecting leaves the approved leave unchanged."></i>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for rr in pending_leave_revoke_requests %}
+          <tr>
+            <td>{{ rr.leave_request.employee.full_name }}</td>
+            <td>{{ rr.leave_request.leave_type.name }}, {{ rr.leave_request.start_date }}–{{ rr.leave_request.end_date }}</td>
+            <td class="small text-muted">{{ rr.requested_by.get_full_name|default:rr.requested_by.username }}</td>
+            <td class="small">{{ rr.reason }}</td>
+            <td>
+              <form method="post" class="d-flex flex-column gap-1">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="decide_revoke_request">
+                <input type="hidden" name="revoke_request_id" value="{{ rr.pk }}">
+                <textarea name="decision_note" class="form-control form-control-sm" rows="1" placeholder="Note (required if rejecting)"></textarea>
+                <div class="d-flex gap-1">
+                  <button type="submit" name="decision" value="approved" class="btn btn-sm btn-warning" onclick="return confirm('Approve revoking this leave?');">Approve Revoke</button>
+                  <button type="submit" name="decision" value="rejected" class="btn btn-sm btn-outline-secondary" onclick="return confirm('Reject this revoke request?');">Reject</button>
+                </div>
+              </form>
             </td>
-            <td>{{ r.leave_type.name }}</td>
-            <td>{{ r.start_date }} – {{ r.end_date }}</td>
-            <td>{{ r.days }}</td>
-            <td class="text-muted small">
-              {% with waiting=r.pending_approvers %}
-                {% if waiting %}{% for a in waiting %}{{ a.get_full_name|default:a.username }}{% if not forloop.last %}, {% endif %}{% endfor %}
-                {% else %}<span class="text-danger">No eligible approver — requires override</span>{% endif %}
-              {% endwith %}
-            </td>
-            <td><a href="{{ detail_url }}" class="btn btn-sm btn-outline-primary">Review</a></td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
-      {% else %}
-      <p class="text-muted p-3 mb-0">No pending requests.</p>
-      {% endif %}
     </div>
   </div>
+  {% endif %}
 
-  <div class="card">
-    <div class="card-header d-flex justify-content-between align-items-center" style="cursor:pointer;"
-         data-bs-toggle="collapse" data-bs-target="#leaveHistoryCollapse" role="button" aria-expanded="false">
-      <h5 class="mb-0">
+  <ul class="nav nav-tabs mb-3 leave-queue-tabs" role="tablist">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link lq-tab-pending active" id="pendingTab-tab" data-bs-toggle="tab" data-bs-target="#pendingTab"
+              type="button" role="tab" aria-controls="pendingTab" aria-selected="true">
+        <i class="bi bi-hourglass-split"></i> Pending
+        <span class="badge bg-warning text-dark ms-1">{{ pending_requests|length }}</span>
+      </button>
+    </li>
+    {% if my_logged_requests %}
+    <li class="nav-item" role="presentation">
+      <button class="nav-link lq-tab-logged" id="myLoggedTab-tab" data-bs-toggle="tab" data-bs-target="#myLoggedTab"
+              type="button" role="tab" aria-controls="myLoggedTab" aria-selected="false">
+        <i class="bi bi-journal-text"></i> Requests You've Logged
+        <span class="badge bg-secondary ms-1">{{ my_logged_requests|length }}</span>
+      </button>
+    </li>
+    {% endif %}
+    <li class="nav-item" role="presentation">
+      <button class="nav-link lq-tab-history" id="historyTab-tab" data-bs-toggle="tab" data-bs-target="#historyTab"
+              type="button" role="tab" aria-controls="historyTab" aria-selected="false">
         <i class="bi bi-clock-history"></i> History
         <span class="badge bg-secondary ms-1">{{ decided_requests|length }}</span>
-      </h5>
-      <i class="bi bi-chevron-down"></i>
-    </div>
-    <div class="collapse" id="leaveHistoryCollapse">
-      <div class="card-body p-0">
+      </button>
+    </li>
+  </ul>
+
+  <div class="card">
+    <div class="tab-content">
+
+      <div class="tab-pane fade show active" id="pendingTab" role="tabpanel" aria-labelledby="pendingTab-tab">
+        <div class="d-flex justify-content-end p-2">
+          <form method="get" class="d-flex align-items-center gap-2 mb-0">
+            <label class="small text-muted mb-0">Sort by</label>
+            <select name="sort" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
+              <option value="submitted" {% if current_sort == 'submitted' %}selected{% endif %}>Submission date (oldest first)</option>
+              <option value="submitted_newest" {% if current_sort == 'submitted_newest' %}selected{% endif %}>Submission date (newest first)</option>
+              <option value="vacation_date" {% if current_sort == 'vacation_date' %}selected{% endif %}>Vacation date</option>
+            </select>
+          </form>
+        </div>
+        {% if pending_requests %}
+        <table class="table table-hover align-middle mb-0">
+          <thead class="table-light"><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Days</th><th>Waiting On</th><th></th></tr></thead>
+          <tbody>
+            {% for r in pending_requests %}
+            {% url 'hr:leave_request_detail' r.pk as detail_url %}
+            <tr>
+              <td><a href="{{ detail_url }}">{{ r.employee.full_name }}</a>
+                {% if r.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
+                {% if r.logged_by_manager %}
+                <span class="badge bg-light text-dark border" title="This employee's manager logged this request on their behalf">
+                  <i class="bi bi-person-badge"></i> By {{ r.created_by.get_full_name|default:r.created_by.username }} (manager)
+                </span>
+                {% endif %}
+                {% if r.is_backdated %}
+                <span class="badge bg-light text-dark border" data-bs-toggle="tooltip" title="This leave started before it was submitted">
+                  <i class="bi bi-clock-history"></i> Backdated
+                </span>
+                {% endif %}
+              </td>
+              <td>{{ r.leave_type.name }}</td>
+              <td>{{ r.start_date }} – {{ r.end_date }}</td>
+              <td>{{ r.days }}</td>
+              <td class="text-muted small">
+                {% with waiting=r.pending_approvers %}
+                  {% if waiting %}{% for a in waiting %}{{ a.get_full_name|default:a.username }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                  {% else %}<span class="text-danger">No eligible approver — requires override</span>{% endif %}
+                {% endwith %}
+              </td>
+              <td><a href="{{ detail_url }}" class="btn btn-sm btn-outline-primary">Review</a></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted p-3 mb-0">No pending requests.</p>
+        {% endif %}
+      </div>
+
+      {% if my_logged_requests %}
+      <div class="tab-pane fade" id="myLoggedTab" role="tabpanel" aria-labelledby="myLoggedTab-tab">
+        <table class="table table-sm mb-0">
+          <thead class="table-light"><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            {% for r in my_logged_requests %}
+            <tr>
+              <td>
+                {{ r.employee.full_name }}
+                {% if r.is_backdated %}
+                <div class="small text-muted" data-bs-toggle="tooltip" title="This leave started before it was submitted">
+                  <i class="bi bi-clock-history"></i> Backdated
+                </div>
+                {% endif %}
+              </td>
+              <td>{{ r.leave_type.name }}</td>
+              <td>{{ r.start_date }} – {{ r.end_date }}</td>
+              <td>
+                {% if r.status == 'approved' %}<span class="badge bg-success">Approved</span>
+                {% elif r.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
+                {% elif r.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
+                {% elif r.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
+                {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if r.can_edit %}
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0" data-bs-toggle="collapse" data-bs-target="#editLogged{{ r.pk }}" id="edit_leave_request_{{ r.pk }}">
+                  <i class="bi bi-pencil"></i>
+                </button>
+                {% endif %}
+                {% if r.can_cancel %}
+                <button type="button" class="btn btn-sm btn-outline-warning py-0" data-bs-toggle="collapse" data-bs-target="#cancelLogged{{ r.pk }}" id="cancel_leave_request_{{ r.pk }}">
+                  Cancel
+                </button>
+                {% endif %}
+              </td>
+            </tr>
+            {% if r.can_edit %}
+            <tr class="collapse" id="editLogged{{ r.pk }}">
+              <td colspan="5">
+                <form method="post" enctype="multipart/form-data" class="border rounded p-2">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="edit_leave_request">
+                  <input type="hidden" name="request_id" value="{{ r.pk }}">
+                  <input type="hidden" name="leave_type" value="{{ r.leave_type_id }}">
+                  {% if r.decided_approvers %}
+                  <div class="small text-warning-emphasis bg-warning-subtle border border-warning-subtle rounded p-2 mb-2">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    {{ r.decided_approvers|join:", " }} already decided on this request — saving changes
+                    will reset that decision and send it back for review.
+                  </div>
+                  {% endif %}
+                  <div class="row g-2">
+                    <div class="col-md-3">
+                      <label class="form-label small">Start</label>
+                      <input type="date" name="start_date" class="form-control form-control-sm" value="{{ r.start_date|date:'Y-m-d' }}" required>
+                    </div>
+                    <div class="col-md-3">
+                      <label class="form-label small">End</label>
+                      <input type="date" name="end_date" class="form-control form-control-sm" value="{{ r.end_date|date:'Y-m-d' }}" required>
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label small">Reason</label>
+                      <input type="text" name="employee_reason" class="form-control form-control-sm" value="{{ r.employee_reason }}">
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label small">Document</label>
+                      {% if r.document %}
+                      <div class="small mb-1 d-flex align-items-center gap-1" data-doc-attached="{{ r.pk }}">
+                        <span>Attached: <a href="{{ r.document.url }}" target="_blank">{{ r.document_filename }}</a></span>
+                        <button type="button" class="btn btn-sm btn-link text-danger p-0" title="Remove this document"
+                                onclick="return docQueueRemoval(this, '{{ r.pk }}');">
+                          <i class="bi bi-x-circle"></i>
+                        </button>
+                      </div>
+                      <div class="small mb-1 text-danger d-none" data-doc-pending="{{ r.pk }}">
+                        <i class="bi bi-exclamation-circle"></i> Will be removed when you click Save Changes.
+                        <button type="button" class="btn btn-sm btn-link p-0" onclick="return docUndoRemoval(this, '{{ r.pk }}');">Undo</button>
+                      </div>
+                      <input type="hidden" name="document-clear" value="" data-doc-clear-flag="{{ r.pk }}">
+                      {% endif %}
+                      <input type="file" name="document" class="form-control form-control-sm">
+                    </div>
+                  </div>
+                  <button type="submit" class="btn btn-sm btn-primary mt-2">Save Changes</button>
+                </form>
+              </td>
+            </tr>
+            {% endif %}
+            {% if r.can_cancel %}
+            <tr class="collapse" id="cancelLogged{{ r.pk }}">
+              <td colspan="5">
+                <form method="post" class="border rounded p-2">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="cancel_leave_request">
+                  <input type="hidden" name="request_id" value="{{ r.pk }}">
+                  <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Reason (required if an approver already decided)"></textarea>
+                  <button type="submit" class="btn btn-sm btn-outline-warning" onclick="return confirm('Cancel this leave request?');">Confirm Cancel</button>
+                </form>
+              </td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      <div class="tab-pane fade" id="historyTab" role="tabpanel" aria-labelledby="historyTab-tab">
+        <div class="d-flex justify-content-end p-2">
+          <form method="get" class="d-flex align-items-center gap-2 mb-0">
+            <input type="hidden" name="tab" value="history">
+            <label class="small text-muted mb-0">Sort by</label>
+            <select name="history_sort" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
+              <option value="newest" {% if current_history_sort == 'newest' %}selected{% endif %}>Decided (newest first)</option>
+              <option value="oldest" {% if current_history_sort == 'oldest' %}selected{% endif %}>Decided (oldest first)</option>
+            </select>
+          </form>
+        </div>
         <div style="max-height: 480px; overflow-y: auto;">
         <table class="table table-sm mb-0">
           <thead class="table-light"><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Status</th><th></th></tr></thead>
@@ -74,15 +353,52 @@
             {% for r in decided_requests %}
             {% url 'hr:leave_request_detail' r.pk as detail_url %}
             <tr>
-              <td>{{ r.employee.full_name }}</td>
+              <td>
+                {{ r.employee.full_name }}
+                {% if r.is_backdated %}
+                <div class="small text-muted" data-bs-toggle="tooltip" title="This leave started before it was submitted">
+                  <i class="bi bi-clock-history"></i> Backdated
+                </div>
+                {% endif %}
+              </td>
               <td>{{ r.leave_type.name }}</td>
               <td>{{ r.start_date }} – {{ r.end_date }}</td>
               <td>
                 {% if r.status == 'approved' %}<span class="badge bg-success">Approved</span>
                 {% elif r.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
+                {% elif r.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
+                {% elif r.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
                 {% else %}<span class="badge bg-secondary">{{ r.get_status_display }}</span>{% endif %}
                 {% if r.is_overridden %}<span class="badge bg-info text-dark ms-1">Overridden</span>{% endif %}
-                {% if r.decided_by_display %}<div class="small text-muted">{{ r.decided_by_display }}</div>{% endif %}
+                {% if r.status == 'revoked' %}
+                  <div class="small text-muted">
+                    {% if r.revoked_by %}by {{ r.revoked_by.get_full_name|default:r.revoked_by.username }}{% endif %}
+                    {% if r.revoked_at %} on {{ r.revoked_at|date:'d M Y' }}{% endif %}
+                  </div>
+                  {% if r.revoke_reason %}<div class="small text-muted fst-italic">"{{ r.revoke_reason }}"</div>{% endif %}
+                {% elif r.status == 'cancelled' %}
+                  <div class="small text-muted">
+                    by {{ r.employee.full_name }}
+                    {% if r.cancelled_at %} on {{ r.cancelled_at|date:'d M Y' }}{% endif %}
+                  </div>
+                  {% if r.cancel_reason %}<div class="small text-muted fst-italic">"{{ r.cancel_reason }}"</div>{% endif %}
+                {% elif r.decided_by_display %}<div class="small text-muted">{{ r.decided_by_display }}</div>{% endif %}
+                {% if r.status == 'approved' and can_revoke %}
+                <div class="mt-1">
+                  <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="collapse" data-bs-target="#revoke_{{ r.pk }}" id="revoke_leave_{{ r.pk }}">
+                    Revoke
+                  </button>
+                  <div class="collapse mt-2" id="revoke_{{ r.pk }}">
+                    <form method="post" class="border rounded p-2">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="revoke">
+                      <input type="hidden" name="request_id" value="{{ r.pk }}">
+                      <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Revoke reason — required" required></textarea>
+                      <button type="submit" class="btn btn-sm btn-outline-danger">Confirm Revoke</button>
+                    </form>
+                  </div>
+                </div>
+                {% endif %}
               </td>
               <td><a href="{{ detail_url }}" class="btn btn-sm btn-outline-secondary">View</a></td>
             </tr>
@@ -93,7 +409,66 @@
         </table>
         </div>
       </div>
+
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Document removal on an Edit form is deferred, not immediate: clicking
+// the X only confirms and queues it (toggling a hidden document-clear
+// flag + the visible state) — nothing is submitted until the user
+// clicks Save Changes for the whole form, same as any other field here.
+function docQueueRemoval(btn, pk) {
+    if (!confirm('Remove this document? It will be deleted when you click Save Changes.')) return false;
+    var form = btn.closest('form');
+    form.querySelector('[data-doc-attached="' + pk + '"]').classList.add('d-none');
+    form.querySelector('[data-doc-pending="' + pk + '"]').classList.remove('d-none');
+    form.querySelector('[data-doc-clear-flag="' + pk + '"]').value = 'on';
+    form.querySelector('input[type=file][name=document]').value = '';
+    return false;
+}
+function docUndoRemoval(btn, pk) {
+    var form = btn.closest('form');
+    form.querySelector('[data-doc-attached="' + pk + '"]').classList.remove('d-none');
+    form.querySelector('[data-doc-pending="' + pk + '"]').classList.add('d-none');
+    form.querySelector('[data-doc-clear-flag="' + pk + '"]').value = '';
+    return false;
+}
+document.querySelectorAll('input[type="file"][name="document"]').forEach(function (fileInput) {
+    fileInput.addEventListener('change', function () {
+        if (!fileInput.files.length) return;
+        var form = fileInput.closest('form');
+        var clearFlag = form.querySelector('[data-doc-clear-flag]');
+        // Picking a new file after queuing a removal cancels the removal —
+        // the upload already says what should happen to the document.
+        if (clearFlag && clearFlag.value === 'on') docUndoRemoval(fileInput, clearFlag.dataset.docClearFlag);
+    });
+});
+
+(function () {
+    // Two reasons the page reloads and needs to land back on a specific
+    // tab instead of the default Pending one: an Edit save (?opened_leave=
+    // &tab=logged — also re-expands and scrolls to the saved row), or the
+    // History tab's own Sort by control (?tab=history) submitting a plain
+    // GET that would otherwise silently drop back to Pending.
+    var params = new URLSearchParams(window.location.search);
+    var tab = params.get('tab');
+    if (tab === 'logged') {
+        var loggedTabButton = document.getElementById('myLoggedTab-tab');
+        if (loggedTabButton) new bootstrap.Tab(loggedTabButton).show();
+    } else if (tab === 'history') {
+        var historyTabButton = document.getElementById('historyTab-tab');
+        if (historyTabButton) new bootstrap.Tab(historyTabButton).show();
+    }
+    var openedLeave = params.get('opened_leave');
+    if (!openedLeave) return;
+    var row = document.getElementById('editLogged' + openedLeave);
+    if (!row) return;
+    row.classList.add('show');
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+})();
+</script>
 {% endblock %}

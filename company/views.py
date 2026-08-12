@@ -11,7 +11,7 @@ from .models import CompanyDocument
 
 def _is_company_admin(user):
     return user.is_authenticated and (
-        user.is_super_admin_user or user.is_admin_user)
+        user.is_super_admin_user or user.is_admin_user or user.is_erp_admin_user)
 
 
 class CompanyDocumentListView(LoginRequiredMixin, UserPassesTestMixin, ListView):

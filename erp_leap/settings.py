@@ -99,6 +99,8 @@ INSTALLED_APPS = [
     "company",
     "finance",
     "attendance",
+    "timesheets",
+    "engineer_calendar",
 ]
 
 # ── Wi-Fi automatic attendance ────────────────────────────────────────────────

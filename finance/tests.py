@@ -7,6 +7,7 @@ from django.urls import reverse
 from accounts.models import User, Role
 from projects.models import Project, ProjectStatus, Region
 from costing.models import CostingSheet, CostingSection, CostingLineItem
+from procurement.models import PurchaseOrder, PurchaseOrderItem
 from finance.models import ProjectFinance, PaymentMilestone
 
 
@@ -144,3 +145,85 @@ class FinanceScheduleTests(TestCase):
         self.assertEqual(pf.approved_margin, 'M1')
         self.assertEqual(pf.po_value, Decimal('166.67'))
         self.assertRedirects(r, reverse('finance:schedule', kwargs={'project_pk': self.project.pk}))
+
+
+class CashOutflowBySystemTests(TestCase):
+    """The 'By System' tab on the cash-outflow page — every PO on the project,
+    grouped by PurchaseOrderItem.system then PO, summed (qty×rate) + 15% VAT."""
+
+    def setUp(self):
+        self.sa, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.region = Region.objects.create(name='Arabia')
+        self.user = User.objects.create_user('fin', password='pw', role=self.sa, region=self.region)
+        self.client.force_login(self.user)
+        self.won = ProjectStatus.objects.create(name='Won', category='won')
+        self.project = Project.objects.create(
+            project_name='P1', status=self.won, region=self.region)
+
+    def _po(self, number, vendor='V'):
+        return PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number=number, vendor_name=vendor,
+            po_issued_by='X', project=self.project)
+
+    def _item(self, po, system, qty, rate):
+        return PurchaseOrderItem.objects.create(
+            purchase_order=po, description='d', system=system,
+            quantity=Decimal(qty), rate_per_unit=Decimal(rate))
+
+    def _url(self):
+        return reverse('finance:cash_outflow', kwargs={'project_pk': self.project.pk})
+
+    def test_groups_by_system_then_po_with_vat(self):
+        po1, po2 = self._po('PO-1'), self._po('PO-2')
+        # CCTV: two items in PO-1 (200 + 100 = 300) and one in PO-2 (200)
+        self._item(po1, 'CCTV', '2', '100')
+        self._item(po1, 'CCTV', '1', '100')
+        self._item(po2, 'CCTV', '1', '200')
+        # UPS: one item in PO-2 (500)
+        self._item(po2, 'UPS', '1', '500')
+
+        r = self.client.get(self._url())
+        self.assertEqual(r.status_code, 200)
+        by_system = {s['system']: s for s in r.context['by_system']}
+
+        cctv = by_system['CCTV']
+        self.assertEqual(cctv['po_count'], 2)              # PO-1 and PO-2 both list CCTV
+        by_po = {p['po_number']: p for p in cctv['pos']}
+        self.assertEqual(by_po['PO-1']['item_count'], 2)
+        self.assertEqual(by_po['PO-1']['amount'], Decimal('300.00'))
+        self.assertEqual(by_po['PO-1']['vat'], Decimal('45.00'))
+        self.assertEqual(by_po['PO-1']['total'], Decimal('345.00'))
+        self.assertEqual(by_po['PO-2']['amount'], Decimal('200.00'))
+        # CCTV subtotal = 500 amount + 75 VAT = 575
+        self.assertEqual(cctv['amount'], Decimal('500.00'))
+        self.assertEqual(cctv['vat'], Decimal('75.00'))
+        self.assertEqual(cctv['total'], Decimal('575.00'))
+
+        # Grand total across systems = 1000 + 150 VAT = 1150
+        self.assertEqual(r.context['by_system_total']['amount'], Decimal('1000.00'))
+        self.assertEqual(r.context['by_system_total']['vat'], Decimal('150.00'))
+        self.assertEqual(r.context['by_system_total']['total'], Decimal('1150.00'))
+
+    def test_blank_system_grouped_as_unassigned(self):
+        self._item(self._po('PO-9'), '', '1', '100')
+        r = self.client.get(self._url())
+        self.assertIn('— Unassigned —', [s['system'] for s in r.context['by_system']])
+
+    def test_only_this_projects_pos_counted(self):
+        other = Project.objects.create(
+            project_name='P2', status=self.won, region=self.region,
+            proposal_reference='REF-P2')
+        other_po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-OTHER', vendor_name='V',
+            po_issued_by='X', project=other)
+        self._item(other_po, 'CCTV', '1', '999')
+        self._item(self._po('PO-1'), 'CCTV', '1', '100')
+        r = self.client.get(self._url())
+        by_system = {s['system']: s for s in r.context['by_system']}
+        self.assertEqual(by_system['CCTV']['amount'], Decimal('100.00'))  # 999 excluded
+
+    def test_non_finance_blocked(self):
+        sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        sales = User.objects.create_user('s', password='pw', role=sales_role, region=self.region)
+        self.client.force_login(sales)
+        self.assertEqual(self.client.get(self._url()).status_code, 302)
