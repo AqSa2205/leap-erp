@@ -546,10 +546,17 @@ def my_profile(request):
         working_days = set(WorkingDay.objects.filter(
             is_active=True, date__range=(month_start, month_end)).values_list('date', flat=True))
         daily_attendance = []
+        daily_attendance = []
+        from hr.models import LateQuery
+        queries_by_record = {
+            q.attendance_record_id: q for q in LateQuery.objects.filter(
+                employee=emp, attendance_record__in=month_records)
+        }
         d = month_start
         while d <= month_end:
             rec = records_by_date.get(d)
             is_weekend = d.weekday() in weekend_days and d not in working_days
+            existing_query = queries_by_record.get(rec.pk) if rec else None
             daily_attendance.append({
                 'date': d,
                 'status': rec.status if rec else '',
@@ -557,10 +564,17 @@ def my_profile(request):
                 'is_weekend': is_weekend,
                 'check_in': rec.check_in if rec else None,
                 'check_out': rec.check_out if rec else None,
+                'late_query': existing_query,
             })
             d += timedelta(days=1)
         context['daily_attendance'] = daily_attendance
         context['attendance_prev_month'] = (month_start - timedelta(days=1)).replace(day=1)
+        if emp.user_id:
+            from notifications.models import Notification
+            context['my_late_emails'] = Notification.objects.filter(
+                recipient=emp.user, verb__icontains='was late 3 times').order_by('-created_at')[:20]
+        context['my_late_queries'] = LateQuery.objects.filter(
+            employee=emp).select_related('attendance_record').order_by('-created_at')[:20]
         next_month_first = (month_end + timedelta(days=1))
         context['attendance_next_month'] = next_month_first
         context['recent_leaves'] = emp.leave_records.select_related(
@@ -687,8 +701,44 @@ def build_attendance_pdf(emp, month_start, month_end):
     return buffer
 
 
+@login_required
+@require_POST
+def raise_late_query(request):
+    from hr.models import AttendanceRecord, LateQuery
+    emp = getattr(request.user, 'employee_profile', None)
+    if emp is None:
+        messages.error(request, 'Your account is not linked to an employee record.')
+        return redirect('hr:my_profile')
+    record_id = request.POST.get('attendance_record_id')
+    message_text = (request.POST.get('message') or '').strip()
+    rec = AttendanceRecord.objects.filter(pk=record_id, employee=emp, status='late').first()
+    if rec is None:
+        messages.error(request, 'That attendance record could not be found.')
+        return redirect('hr:my_profile')
+    redirect_url = reverse('hr:my_profile') + '?date=' + rec.date.replace(day=1).strftime('%Y-%m-%d')
+    if not message_text:
+        messages.error(request, 'Please explain why you believe this Late mark is incorrect.')
+        return redirect(redirect_url)
+    if LateQuery.objects.filter(attendance_record=rec).exists():
+        messages.error(request, 'A query has already been raised for this day.')
+        return redirect(redirect_url)
+    LateQuery.objects.create(employee=emp, attendance_record=rec, message=message_text)
+    from notifications.services import notify_users
+    from accounts.models import User
+    admins = User.objects.filter(is_active=True)
+    hr_admins = [u for u in admins if (u.is_super_admin_user or u.is_admin_user or u.is_erp_admin_user) and u.pk != emp.user_id]
+    notify_users(
+        recipients=hr_admins,
+        verb=emp.full_name + ' raised a query about a Late mark on ' + rec.date.strftime('%d %b %Y'),
+        description=message_text, level='info',
+        target_url=reverse('hr:team_exceptions') + '?tab=late_queries',
+    )
+    messages.success(request, 'Your query has been submitted to HR.')
+    return redirect(redirect_url)
+
+
+@login_required
 def my_attendance_export_pdf(request):
-    from hr.attendance_matrix import period_range
 
     emp = getattr(request.user, 'employee_profile', None)
     if emp is None:
@@ -3324,7 +3374,7 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
     def test_func(self):
         return can_view_team_exceptions(self.request.user)
 
-    VALID_TABS = ('direct', 'secondary', 'all')
+    VALID_TABS = ('direct', 'secondary', 'all', 'late_queries')
 
     def _resolve_tab(self):
         """?tab=direct|secondary|all, defaulting to 'direct' if absent or
@@ -3336,7 +3386,7 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         requested = self.request.GET.get('tab')
         if requested not in self.VALID_TABS:
             return 'direct'
-        if requested == 'all' and not is_hr:
+        if requested in ('all', 'late_queries') and not is_hr:
             return 'direct'
         return requested
 
@@ -3373,6 +3423,9 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         user = self.request.user
         emp = getattr(user, 'employee_profile', None)
         tab = self._resolve_tab()
+        if tab == 'late_queries':
+            from hr.models import AttendanceException
+            return AttendanceException.objects.none()
         # 'pending' AND 'expired' both belong in the active/actionable queue —
         # an auto-expired-by-cron request was never actually decided by a
         # human, so it must stay visible and actionable here, not silently
@@ -3473,6 +3526,17 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
         ctx['secondary_tab_count'] = _tab_count('secondary')
         if ctx['show_all_tab']:
             ctx['all_tab_count'] = _tab_count('all')
+        from hr.models import LateQuery
+        from notifications.models import Notification
+        if tab == 'late_queries':
+            ctx['pending_late_queries'] = LateQuery.objects.filter(
+                status='pending').select_related('employee', 'attendance_record').order_by('-created_at')
+            ctx['decided_late_queries'] = LateQuery.objects.filter(
+                status__in=('approved', 'rejected')).select_related(
+                    'employee', 'attendance_record', 'decided_by').order_by('-decided_at')[:50]
+            ctx['late_email_notifications'] = Notification.objects.filter(
+                verb__icontains='was late 3 times').select_related('recipient').order_by('-created_at')[:50]
+        ctx['late_queries_tab_count'] = LateQuery.objects.filter(status='pending').count() if is_hr else 0
         return ctx
 
     def post(self, request, *args, **kwargs):
@@ -3542,6 +3606,34 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
             except ValueError as e:
                 messages.error(request, str(e))
 
+        elif action == 'decide_late_query':
+            from hr.models import LateQuery
+            if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+                raise Http404('No such query.')
+            query = LateQuery.objects.filter(pk=request.POST.get('query_id'), status='pending').first()
+            if query is None:
+                raise Http404('No such query.')
+            decision = request.POST.get('decision')
+            if decision not in ('approved', 'rejected'):
+                messages.error(request, 'Invalid decision.')
+            else:
+                query.status = decision
+                query.decision_note = request.POST.get('comment', '')
+                query.decided_by = request.user
+                query.decided_at = timezone.now()
+                query.save()
+                if decision == 'approved':
+                    from hr.attendance_services import regenerate_attendance_record
+                    regenerate_attendance_record(query.employee, query.attendance_record.date)
+                if query.employee.user_id:
+                    from notifications.services import create_notification
+                    create_notification(
+                        recipient=query.employee.user,
+                        verb=f'Your late-mark query for {query.attendance_record.date:%d %b %Y} was {decision}',
+                        actor=request.user, description=query.decision_note, level='info',
+                        target_url=reverse('hr:my_profile'),
+                    )
+                messages.success(request, 'Query decision recorded.')
         # Preserve whatever tab the manager was viewing when they acted.
         tab = request.POST.get('tab', '')
         url = reverse('hr:team_exceptions')

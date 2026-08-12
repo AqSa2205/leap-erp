@@ -24,7 +24,7 @@ def derive_status(employee, d, check_in, check_out=None):
     approved attendance exception > late/present > absent.
     """
     from hr.models import (LeaveRecord, Holiday, AttendanceSettings, WorkingDay, WFHRecord,
-                            AttendanceException)
+                            AttendanceException, LateQuery)
     if LeaveRecord.objects.filter(employee=employee, start_date__lte=d, end_date__gte=d).exists():
         return 'leave', None
     if Holiday.objects.filter(date=d, is_active=True).exists():
@@ -42,8 +42,30 @@ def derive_status(employee, d, check_in, check_out=None):
     # parameter needs to be threaded through this function's signature.
     if AttendanceException.objects.filter(employee=employee, event_date=d, status='approved').exists():
         return 'present', _hours_between(check_in, check_out)
+    # An approved LateQuery means the employee successfully challenged this
+    # exact day as an incorrect Late mark - same "excuse the day" outcome
+    # as an approved AttendanceException.
+    if LateQuery.objects.filter(
+            employee=employee, attendance_record__date=d, status='approved').exists():
+        return 'present', _hours_between(check_in, check_out)
     if check_in:
         if check_in > settings.expected_in_by:
             return 'late', _hours_between(check_in, check_out)
         return 'present', _hours_between(check_in, check_out)
     return 'absent', None
+
+
+def regenerate_attendance_record(employee, d):
+    # Re-derives and saves the AttendanceRecord for one employee/date - used
+    # to auto-correct a day the moment an AttendanceException or LateQuery
+    # is approved for it, so an already-saved Late/Absent record does not
+    # sit wrong indefinitely.
+    from hr.models import AttendanceRecord
+    rec = AttendanceRecord.objects.filter(employee=employee, date=d).first()
+    check_in = rec.check_in if rec else None
+    check_out = rec.check_out if rec else None
+    status, hours = derive_status(employee, d, check_in, check_out)
+    AttendanceRecord.objects.update_or_create(
+        employee=employee, date=d,
+        defaults={'check_in': check_in, 'check_out': check_out,
+                  'status': status, 'hours_worked': hours})
