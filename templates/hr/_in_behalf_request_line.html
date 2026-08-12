@@ -1,0 +1,24 @@
+              <div>
+                Logged by you:
+                {% if req.status == 'approved' %}<span class="badge bg-success">Approved</span>
+                {% elif req.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
+                {% elif req.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
+                {% elif req.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
+                {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
+                {% if req.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
+                {{ req.leave_type.name }}, {{ req.start_date }}–{{ req.end_date }}
+                {% if req.can_cancel %}
+                <button type="button" class="btn btn-sm btn-link text-warning p-0 ms-1" data-bs-toggle="collapse" data-bs-target="#cancelInBehalf{{ req.pk }}" id="cancel_leave_request_{{ req.pk }}">
+                  Cancel
+                </button>
+                <div class="collapse mt-1" id="cancelInBehalf{{ req.pk }}">
+                  <form method="post" class="border rounded p-2">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="cancel_leave_request">
+                    <input type="hidden" name="request_id" value="{{ req.pk }}">
+                    <textarea name="reason" class="form-control form-control-sm mb-1" rows="2" placeholder="Reason (required if an approver already decided)"></textarea>
+                    <button type="submit" class="btn btn-sm btn-outline-warning" onclick="return confirm('Cancel this leave request?');">Confirm Cancel</button>
+                  </form>
+                </div>
+                {% endif %}
+              </div>

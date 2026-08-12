@@ -1,7 +1,7 @@
 """Leave entitlement generation and submission validation."""
 
 
-def validate_leave_submission(employee, leave_type, start_date, end_date, lock=False):
+def validate_leave_submission(employee, leave_type, start_date, end_date, lock=False, exclude_request_id=None):
     """Raises ValueError if this leave submission is invalid:
     - no entitlement set up for this employee/type/year,
     - it would exceed the effective remaining balance (standard baseline +
@@ -26,7 +26,12 @@ def validate_leave_submission(employee, leave_type, start_date, end_date, lock=F
     (select_for_update) for the rest of the caller's transaction — the
     caller MUST be inside transaction.atomic() and must create the
     LeaveRequest before that transaction commits, or concurrent submissions
-    for the same employee/type/year can still race past each other."""
+    for the same employee/type/year can still race past each other.
+
+    `exclude_request_id`, when set, excludes that LeaveRequest's own pk from
+    both the pending-balance sum and the overlap check — required when
+    re-validating an in-place EDIT of an already-pending request, which
+    would otherwise collide with its own unmodified row."""
     from decimal import Decimal
     from .models import LeaveEntitlement, LeaveRequest, LeaveRecord, OverrideAccessSettings
 
@@ -41,10 +46,11 @@ def validate_leave_submission(employee, leave_type, start_date, end_date, lock=F
             f'for {employee.full_name}; contact HR before submitting this request.')
 
     requested_days = Decimal((end_date - start_date).days + 1)
-    pending_days = sum(
-        (r.days or Decimal('0') for r in LeaveRequest.objects.filter(
-            employee=employee, leave_type=leave_type, status='pending', start_date__year=start_date.year)),
-        Decimal('0'))
+    pending_qs = LeaveRequest.objects.filter(
+        employee=employee, leave_type=leave_type, status='pending', start_date__year=start_date.year)
+    if exclude_request_id is not None:
+        pending_qs = pending_qs.exclude(pk=exclude_request_id)
+    pending_days = sum((r.days or Decimal('0') for r in pending_qs), Decimal('0'))
     available_days = entitlement.effective_remaining_days - pending_days
 
     exceeds_balance = False
@@ -64,9 +70,11 @@ def validate_leave_submission(employee, leave_type, start_date, end_date, lock=F
                 f'{leave_type.name} remain for {employee.full_name} in {start_date.year}. '
                 'Reduce the date range or contact HR.')
 
-    if LeaveRequest.objects.filter(
-            employee=employee, status='pending',
-            start_date__lte=end_date, end_date__gte=start_date).exists():
+    overlap_qs = LeaveRequest.objects.filter(
+        employee=employee, status='pending', start_date__lte=end_date, end_date__gte=start_date)
+    if exclude_request_id is not None:
+        overlap_qs = overlap_qs.exclude(pk=exclude_request_id)
+    if overlap_qs.exists():
         raise ValueError(
             'This date range overlaps with another leave request you already have pending '
             '(regardless of leave type — you cannot be on two leaves at once).')

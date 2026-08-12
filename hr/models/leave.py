@@ -264,6 +264,7 @@ class LeaveRequest(models.Model):
         ('approved', 'Approved'),
         ('disapproved', 'Disapproved'),
         ('cancelled', 'Cancelled'),
+        ('revoked', 'Revoked'),
     ]
 
     employee = models.ForeignKey('hr.Employee', on_delete=models.CASCADE, related_name='leave_requests')
@@ -282,6 +283,12 @@ class LeaveRequest(models.Model):
                    'holding is enabled. Requires a Super Admin override to approve.')
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
                                    related_name='leave_requests_created')
+    logged_by_manager = models.BooleanField(
+        default=False,
+        help_text="True if created_by was the employee's direct main_manager at the time this request "
+                  'was submitted (not the employee themselves, not HR). Captured at submission time — '
+                  "deliberately not live-recomputed, so it stays accurate even if the employee's manager "
+                  'changes later.')
     leave_record = models.OneToOneField(LeaveRecord, on_delete=models.SET_NULL, null=True, blank=True,
                                         related_name='source_request')
     salary_deduction_applicable = models.BooleanField(default=False)
@@ -290,6 +297,12 @@ class LeaveRequest(models.Model):
     overridden_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
                                       related_name='leave_requests_overridden')
     override_reason = models.TextField(blank=True)
+    revoked_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name='leave_requests_revoked')
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoke_reason = models.TextField(blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancel_reason = models.TextField(blank=True)
     decided_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -324,6 +337,19 @@ class LeaveRequest(models.Model):
         """Users whose decision is still outstanding (used for the employee-facing
         'Pending — waiting on X' message)."""
         return [a.approver for a in self.approvals.filter(decision='pending')]
+
+    @property
+    def is_backdated(self):
+        """True if this request's leave already started before it was even
+        submitted — after-the-fact documentation of an absence rather than
+        a normal advance request. Surfaced as a badge so nobody mistakes
+        it for a live upcoming leave."""
+        return bool(self.start_date and self.created_at and self.start_date < self.created_at.date())
+
+    @property
+    def document_filename(self):
+        import os
+        return os.path.basename(self.document.name) if self.document else ''
 
     @property
     def decided_by_display(self):
@@ -373,6 +399,39 @@ class LeaveRequestApproval(models.Model):
 
     def __str__(self):
         return f"{self.approver} -> {self.decision} on request #{self.leave_request_id}"
+
+
+class LeaveRevokeRequest(models.Model):
+    """An employee's request to void their own already-approved leave (e.g.
+    a project emergency means they can no longer take it) — decided by the
+    same roster that decides normal leave requests (LeaveDashboardAccess +
+    Super Admins), NOT by the employee's manager specifically. Distinct from
+    a Super Admin's direct revoke (see LeaveRequest.revoked_by/revoked_at/
+    revoke_reason) — this model exists only to track the request-and-review
+    step; applying the revoke itself still goes through the same mechanism
+    (see hr.leave_approval_services.revoke_leave_request)."""
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
+    leave_request = models.ForeignKey(LeaveRequest, on_delete=models.CASCADE, related_name='revoke_requests')
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='+')
+    reason = models.TextField()
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    decided_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name='+')
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.TextField(
+        blank=True, help_text='Required when rejecting; optional when approving (the reason already explains why).')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"Revoke request for leave request #{self.leave_request_id} ({self.status})"
 
 
 class LeaveRequestNote(models.Model):

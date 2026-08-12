@@ -1,28 +1,50 @@
 {% extends 'base.html' %}
-{% block title %}Add Exception Days{% endblock %}
+{% block title %}Adjust Balance — {{ employee.full_name }}{% endblock %}
 {% block content %}
 <div class="container-fluid">
   <div class="row justify-content-center">
     <div class="col-lg-6">
       <div class="d-flex justify-content-between align-items-center mb-4">
-        <h1 class="h3 mb-0">Add Exception Days — {{ employee.full_name }}</h1>
+        <h1 class="h3 mb-0">Adjust Balance — {{ employee.full_name }}</h1>
         <a href="{% url 'hr:leave_summary' employee.pk %}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Back to Leave Summary</a>
       </div>
       <div class="card"><div class="card-body">
         <form method="post" novalidate>
           {% csrf_token %}
           {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+
+          {% if locked_leave_type %}
+          <input type="hidden" name="leave_type" value="{{ locked_leave_type.pk }}">
+          <input type="hidden" name="year" value="{{ locked_year }}">
+          <div class="mb-3">
+            <label class="form-label">Adjusting</label>
+            <div class="form-control-plaintext border rounded px-2 py-1 bg-light">
+              {{ locked_leave_type.name }} — {{ locked_year }}
+              <span class="text-muted small">(currently {{ current_total_days }} total day{{ current_total_days|pluralize }})</span>
+            </div>
+          </div>
+          {% else %}
           <div class="mb-3"><label class="form-label">Leave Type *</label>{{ form.leave_type }}
             {% if form.leave_type.errors %}<div class="invalid-feedback d-block">{{ form.leave_type.errors.0 }}</div>{% endif %}</div>
           <div class="mb-3"><label class="form-label">Year *</label>{{ form.year }}
             {% if form.year.errors %}<div class="invalid-feedback d-block">{{ form.year.errors.0 }}</div>{% endif %}</div>
-          <div class="mb-3"><label class="form-label">Extra Days *</label>{{ form.days }}
-            {% if form.days.errors %}<div class="invalid-feedback d-block">{{ form.days.errors.0 }}</div>{% endif %}</div>
+          {% endif %}
+
+          <div class="mb-1">
+            <label class="form-label">{{ form.new_total_days.label }} *</label>
+            {{ form.new_total_days }}
+            {% if form.new_total_days.errors %}<div class="invalid-feedback d-block">{{ form.new_total_days.errors.0 }}</div>{% endif %}
+          </div>
+          <p class="text-muted small mb-3">
+            Enter the total number of days {{ employee.full_name }} should have{% if locked_leave_type %} for {{ locked_leave_type.name }} in {{ locked_year }}{% endif %} —
+            a lower number reduces their balance, a higher number adds to it.
+          </p>
+
           <div class="mb-4"><label class="form-label">Reason *</label>{{ form.reason }}
             {% if form.reason.errors %}<div class="invalid-feedback d-block">{{ form.reason.errors.0 }}</div>{% endif %}</div>
           <div class="d-flex justify-content-end gap-2 border-top pt-3">
             <a href="{% url 'hr:leave_summary' employee.pk %}" class="btn btn-outline-secondary">Cancel</a>
-            <button type="submit" class="btn btn-primary"><i class="bi bi-plus-lg"></i> Grant Days</button>
+            <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> Save</button>
           </div>
         </form>
       </div></div>

@@ -1,0 +1,14 @@
+{% if exception_days %}
+<div class="small mt-1 d-flex align-items-center justify-content-end gap-1">
+    <span class="text-decoration-line-through text-muted" title="Standard entitlement before adjustment">{{ standard_days }}</span>
+    {% if exception_days > 0 %}
+    <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle" title="Days added to the standard entitlement">
+        <i class="bi bi-arrow-up-short"></i>+{{ exception_days }}
+    </span>
+    {% else %}
+    <span class="badge bg-danger-subtle text-danger-emphasis border border-danger-subtle" title="Days reduced from the standard entitlement">
+        <i class="bi bi-arrow-down-short"></i>{{ exception_days|cut:"-" }}
+    </span>
+    {% endif %}
+</div>
+{% endif %}

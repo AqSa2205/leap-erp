@@ -12,7 +12,7 @@ status and derives the day's AttendanceRecord outcome.
 from django.db import transaction
 from django.utils import timezone
 
-from hr.models import AttendanceException, AttendanceRecord
+from hr.models import AttendanceException, AttendanceExceptionRevokeRequest, AttendanceRecord
 from notifications.services import notify_users
 
 
@@ -184,7 +184,7 @@ def _apply_attendance_outcome(exc):
         # check-in time when an approved exception exists for that day; this
         # upsert just marks the day as excused/present at decision time.
         new_status = 'present'
-    elif exc.status in ('rejected', 'expired'):
+    elif exc.status in ('rejected', 'expired', 'revoked'):
         new_status = 'absent'
     else:  # pending — no-op
         return
@@ -268,3 +268,141 @@ def send_pending_start_reminders():
         exc.save(update_fields=['reminder_sent_at'])
         count += 1
     return count
+
+
+def edit_attendance_exception(exc, editing_user, *, event_date, event_start_time, reason_category,
+                              custom_reason='', employee_comment=''):
+    """The creator edits their own still-pending, undecided exception in
+    place. Assumes the caller (the view, via AttendanceExceptionForm) has
+    already validated the fields — same trust level as
+    submit_attendance_exception, which also doesn't re-validate
+    reason_category/custom_reason itself."""
+    if exc.created_by_id != editing_user.id:
+        raise ValueError('Only the person who submitted this request can edit it.')
+    exc.refresh_from_db()
+    if exc.status != 'pending':
+        raise ValueError('This request has already been decided and can no longer be edited.')
+    if AttendanceException.objects.filter(
+            employee=exc.employee, event_date=event_date, event_start_time=event_start_time,
+            status__in=('pending', 'expired')).exclude(pk=exc.pk).exists():
+        raise ValueError(
+            'An attendance exception for this exact event has already been submitted and is still awaiting a decision.')
+
+    exc.event_date = event_date
+    exc.event_start_time = event_start_time
+    exc.reason_category = reason_category
+    exc.custom_reason = custom_reason
+    exc.employee_comment = employee_comment
+    exc.save(update_fields=[
+        'event_date', 'event_start_time', 'reason_category', 'custom_reason', 'employee_comment', 'updated_at'])
+    return exc
+
+
+def delete_attendance_exception(exc, deleting_user):
+    """The creator withdraws their own still-pending, undecided exception."""
+    if exc.created_by_id != deleting_user.id:
+        raise ValueError('Only the person who submitted this request can delete it.')
+    exc.refresh_from_db()
+    if exc.status != 'pending':
+        raise ValueError('This request has already been decided and can no longer be deleted.')
+    exc.delete()
+
+
+def revoke_attendance_exception(exc, revoking_user, reason):
+    """Direct revoke by someone with override access or upstream hierarchy
+    authority — does NOT check who is allowed to call it (caller's job, same
+    separation of concerns as override_attendance_exception). No linked
+    record to delete; the read path (_apply_attendance_outcome) already
+    treats 'revoked' as not-excused."""
+    if exc.employee.user_id and exc.employee.user_id == revoking_user.id:
+        raise ValueError('You cannot revoke your own attendance exception.')
+    if not reason or not reason.strip():
+        raise ValueError('A revoke requires a written reason.')
+    exc.refresh_from_db()
+    if exc.status != 'approved':
+        raise ValueError(f'This request is {exc.status}; only an approved request can be revoked.')
+
+    with transaction.atomic():
+        locked = AttendanceException.objects.select_for_update().get(pk=exc.pk)
+        if locked.status != 'approved':
+            raise ValueError(f'This request is {locked.status}; only an approved request can be revoked.')
+        locked.status = 'revoked'
+        locked.revoked_by = revoking_user
+        locked.revoked_at = timezone.now()
+        locked.revoke_reason = reason.strip()
+        locked.save()
+        _apply_attendance_outcome(locked)
+        AttendanceExceptionRevokeRequest.objects.filter(attendance_exception=locked, status='pending').update(
+            status='approved', decided_by=revoking_user, decided_at=timezone.now(),
+            decision_note='Applied via a direct revoke before this request was reviewed.')
+
+    for field in ('status', 'revoked_by', 'revoked_by_id', 'revoked_at', 'revoke_reason'):
+        if hasattr(locked, field):
+            setattr(exc, field, getattr(locked, field))
+    if exc.employee.user_id:
+        notify_users(
+            recipients=[exc.employee.user],
+            verb=f'Your approved attendance exception for {exc.event_date} was revoked',
+            actor=revoking_user, description=reason.strip())
+    return exc
+
+
+def request_attendance_exception_revoke(exc, requesting_user, reason):
+    """The employee themselves requests to void their own approved
+    exception."""
+    if not (exc.employee.user_id and exc.employee.user_id == requesting_user.id):
+        raise ValueError('Only the employee themselves can request a revoke of their own attendance exception.')
+    if not reason or not reason.strip():
+        raise ValueError('A reason is required to request a revoke.')
+    exc.refresh_from_db()
+    if exc.status != 'approved':
+        raise ValueError(f'This request is {exc.status}; only an approved request can have its revoke requested.')
+    if AttendanceExceptionRevokeRequest.objects.filter(attendance_exception=exc, status='pending').exists():
+        raise ValueError('A revoke request for this exception is already pending review.')
+
+    revoke_request = AttendanceExceptionRevokeRequest.objects.create(
+        attendance_exception=exc, requested_by=requesting_user, reason=reason.strip())
+    if exc.main_manager and exc.main_manager.user_id:
+        notify_users(
+            recipients=[exc.main_manager.user],
+            verb=f'{exc.employee.full_name} requested to revoke an approved attendance exception',
+            actor=requesting_user, description=reason.strip())
+    return revoke_request
+
+
+def decide_attendance_exception_revoke_request(revoke_request, deciding_user, decision, decision_note=''):
+    """The assigned manager, or an override-access/upstream-hierarchy
+    holder, approves or rejects an employee's revoke request — mirrors
+    can_decide_attendance_exception's eligibility (imported locally to
+    avoid a module-load-time circular import between this services module
+    and hr.views, matching this file's existing local-import style)."""
+    from hr.views import can_decide_attendance_exception
+
+    if decision not in ('approved', 'rejected'):
+        raise ValueError(f"decision must be 'approved' or 'rejected', got {decision!r}")
+    revoke_request.refresh_from_db()
+    if revoke_request.status != 'pending':
+        raise ValueError(f'This revoke request is already {revoke_request.status}.')
+    exc = revoke_request.attendance_exception
+    if exc.employee.user_id and exc.employee.user_id == deciding_user.id:
+        raise ValueError('You cannot decide a revoke request on your own attendance exception.')
+    if not can_decide_attendance_exception(deciding_user, exc):
+        raise ValueError('You are not authorized to decide this revoke request.')
+    if decision == 'rejected' and not (decision_note or '').strip():
+        raise ValueError('Rejecting a revoke request requires a note explaining why.')
+
+    with transaction.atomic():
+        revoke_request.status = decision
+        revoke_request.decided_by = deciding_user
+        revoke_request.decided_at = timezone.now()
+        revoke_request.decision_note = decision_note.strip()
+        revoke_request.save(update_fields=['status', 'decided_by', 'decided_at', 'decision_note'])
+        if decision == 'approved':
+            revoke_attendance_exception(exc, deciding_user, revoke_request.reason)
+        else:
+            if exc.employee.user_id:
+                notify_users(
+                    recipients=[exc.employee.user],
+                    verb='Your revoke request for an attendance exception was rejected',
+                    actor=deciding_user, description=decision_note.strip())
+    return revoke_request
