@@ -1,0 +1,244 @@
+{% extends 'base.html' %}
+{% block title %}My Timesheet{% endblock %}
+{% block page_title %}My Timesheet{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <div>
+            <h1 class="h3 mb-1"><i class="bi bi-clock-history"></i> My Timesheet</h1>
+            <p class="text-muted mb-0">Log your daily hours here instead of the Excel sheet.</p>
+        </div>
+        {% if employee %}
+       <a href="{% url 'timesheets:export' %}?year={{ year }}&month={{ month }}" target="_blank" rel="noopener" class="btn btn-outline-primary">
+            <i class="bi bi-file-earmark-excel"></i> Export as Excel
+        </a>
+        {% endif %}
+    </div>
+    {% if employee %}
+    <div class="d-flex align-items-center gap-2 mb-4">
+        <a href="?year={{ prev_year }}&month={{ prev_month }}" class="btn btn-outline-secondary btn-sm">&laquo; Prev</a>
+        <strong>{{ month_name }} {{ year }}</strong>
+        <a href="?year={{ next_year }}&month={{ next_month }}" class="btn btn-outline-secondary btn-sm">Next &raquo;</a>
+    </div>
+    {% endif %}
+    
+    {% if pending_request %}
+    <div class="alert alert-warning d-flex justify-content-between align-items-center">
+        <div>
+            <strong><i class="bi bi-bell"></i> HR has requested your timesheet</strong>
+            for {{ pending_request.month }}/{{ pending_request.year }}.
+        </div>
+        <a href="{% url 'timesheets:send_to_hr' pending_request.pk %}" class="btn btn-warning btn-sm">
+            Send to HR
+        </a>
+    </div>
+    {% endif %}
+    {% if show_autogen_banner %}
+    <div class="alert alert-info">
+        <i class="bi bi-info-circle me-1"></i>
+        The code <strong>COS_0009</strong> is used as default when a task auto-starts or auto-ends. Please edit the Activity code on that entry if the work was actually something else (e.g. onsite work).
+    </div>
+    {% endif %}
+
+    {% if employee %}
+    <div class="card mb-4">
+        <div class="card-header bg-white"><strong>Add entry</strong></div>
+        <div class="card-body">
+            <form method="post">
+                {% csrf_token %}
+                <div class="row">
+                    <div class="col-md-3 mb-3">
+                        <label class="form-label">Date</label>
+                        <div class="input-group">
+                            <button type="button" class="btn btn-outline-secondary" id="date-prev">
+                                <i class="bi bi-chevron-left"></i>
+                            </button>
+                            {{ form.date }}
+                            <button type="button" class="btn btn-outline-secondary" id="date-next">
+                                <i class="bi bi-chevron-right"></i>
+                            </button>
+                        </div>
+                        {% if form.date.errors %}<div class="text-danger small mt-1">{{ form.date.errors.0 }}</div>{% endif %}
+                    </div>
+                    <div class="col-md-5 mb-3">
+                        <label class="form-label d-block">Type</label>
+                        <div class="btn-group mb-2" role="group">
+                            <input type="radio" class="btn-check" name="entry_type" id="entry_type_activity"
+                                   value="activity" {% if form.entry_type.value != 'project' %}checked{% endif %}>
+                            <label class="btn btn-outline-primary btn-sm" for="entry_type_activity">Internal Activity</label>
+
+                            <input type="radio" class="btn-check" name="entry_type" id="entry_type_project"
+                                   value="project" {% if form.entry_type.value == 'project' %}checked{% endif %}>
+                            <label class="btn btn-outline-primary btn-sm" for="entry_type_project">Client Project</label>
+                        </div>
+
+                        <div id="activity-code-field" class="{% if form.entry_type.value == 'project' %}d-none{% endif %}">
+                            {{ form.activity_code }}
+                            {% if form.activity_code.errors %}<div class="text-danger small mt-1">{{ form.activity_code.errors.0 }}</div>{% endif %}
+                        </div>
+                        <div id="project-field" class="{% if form.entry_type.value != 'project' %}d-none{% endif %}">
+                            {{ form.project }}
+                            {% if form.project.errors %}<div class="text-danger small mt-1">{{ form.project.errors.0 }}</div>{% endif %}
+                        </div>
+                    </div>
+                    <div class="col-md-2 mb-3">
+                        <label class="form-label">Hours</label>
+                        {{ form.hours }}
+                        {% if form.hours.errors %}<div class="text-danger small mt-1">{{ form.hours.errors.0 }}</div>{% endif %}
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label">Task description</label>
+                        {{ form.task_description }}
+                        {% if form.task_description.errors %}<div class="text-danger small mt-1">{{ form.task_description.errors.0 }}</div>{% endif %}
+                    </div>
+                </div>
+                {% if form.non_field_errors %}
+                <div class="alert alert-danger">{% for e in form.non_field_errors %}<p class="mb-0">{{ e }}</p>{% endfor %}</div>
+                {% endif %}
+                <button type="submit" class="btn btn-primary"><i class="bi bi-plus-lg"></i> Add entry</button>
+            </form>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="card">
+        <div class="card-header bg-white"><strong>Your entries</strong></div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0 align-middle">
+                    <thead class="table-light">
+                        <tr><th>Date</th><th>Task</th><th>Activity code</th><th>Hours</th><th>Status</th><th>Actions</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for group in grouped_entries %}
+                        <tr class="group-summary-row" {% if group.is_multi %}style="cursor:pointer;" data-target="group-detail-{{ forloop.counter }}"{% endif %}>
+                            <td>{{ group.date }}</td>
+                            <td>
+                                {% if group.is_multi %}<i class="bi bi-chevron-right me-1 group-chevron"></i>{% endif %}
+                                {{ group.combined_description }}
+                            </td>
+                            <td>{{ group.combined_codes }}</td>
+                            <td>{{ group.combined_hours }}</td>
+                            <td>
+                                {% if group.locked %}<span class="badge bg-success">Submitted</span>
+                                {% else %}<span class="badge bg-secondary">Draft</span>{% endif %}
+                            </td>
+                            <td>
+                                {% if not group.is_multi %}
+                                    {% with entry=group.entries.0 %}
+                                    {% if entry.status == 'draft' %}
+                                    <a href="{% url 'timesheets:entry_edit' entry.pk %}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-pencil"></i></a>
+                                    <form method="post" action="{% url 'timesheets:entry_delete' entry.pk %}" class="d-inline" onsubmit="return confirm('Delete this entry?');">
+                                        {% csrf_token %}
+                                        <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                                    </form>
+                                    {% else %}
+                                    <span class="text-muted small">Locked</span>
+                                    {% endif %}
+                                    {% endwith %}
+                                {% else %}
+                                <span class="text-muted small">Click row to expand</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% if group.is_multi %}
+                        <tr class="group-detail-row d-none" id="group-detail-{{ forloop.counter }}">
+                            <td></td>
+                            <td colspan="5" class="p-0">
+                                <table class="table table-sm mb-0">
+                                    <tbody>
+                                    {% for entry in group.entries %}
+                                    <tr>
+                                        <td style="width:55%">{{ entry.task_description }}</td>
+                                        <td style="width:15%">{% if entry.project %}{{ entry.project.proposal_reference }}{% else %}{{ entry.activity_code.code }}{% endif %}</td>
+                                        <td style="width:10%">{{ entry.hours }}</td>
+                                        <td style="width:10%">
+                                            {% if entry.status == 'draft' %}<span class="badge bg-secondary">Draft</span>
+                                            {% else %}<span class="badge bg-success">Submitted</span>{% endif %}
+                                        </td>
+                                        <td style="width:10%">
+                                            {% if entry.status == 'draft' %}
+                                            <a href="{% url 'timesheets:entry_edit' entry.pk %}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-pencil"></i></a>
+                                            <form method="post" action="{% url 'timesheets:entry_delete' entry.pk %}" class="d-inline" onsubmit="return confirm('Delete this entry?');">
+                                                {% csrf_token %}
+                                                <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                                            </form>
+                                            {% else %}
+                                            <span class="text-muted small">Locked</span>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                    </tbody>
+                                </table>
+                            </td>
+                        </tr>
+                        {% endif %}
+                        {% empty %}
+                        <tr><td colspan="6" class="text-center text-muted py-4">No entries yet.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var dateInput = document.querySelector('input[name="date"]');
+    if (!dateInput) return;
+
+    function shiftDate(days) {
+        if (!dateInput.value) return;
+        var d = new Date(dateInput.value + 'T00:00:00');
+        d.setDate(d.getDate() + days);
+        var yyyy = d.getFullYear();
+        var mm = String(d.getMonth() + 1).padStart(2, '0');
+        var dd = String(d.getDate()).padStart(2, '0');
+        dateInput.value = yyyy + '-' + mm + '-' + dd;
+    }
+
+    document.getElementById('date-prev').addEventListener('click', function () { shiftDate(-1); });
+    document.getElementById('date-next').addEventListener('click', function () { shiftDate(1); });
+});
+
+document.addEventListener('click', function (e) {
+    var row = e.target.closest('.group-summary-row');
+    if (!row) return;
+    var targetId = row.getAttribute('data-target');
+    if (!targetId) return;  // single-entry rows have no target, nothing to toggle
+    var detail = document.getElementById(targetId);
+    if (!detail) return;
+    detail.classList.toggle('d-none');
+    var chevron = row.querySelector('.group-chevron');
+    if (chevron) {
+        chevron.classList.toggle('bi-chevron-right');
+        chevron.classList.toggle('bi-chevron-down');
+    }
+});
+</script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    function wireEntryTypeToggle(root) {
+        var activityRadio = root.querySelector('#entry_type_activity, [id^="entry_type_activity"]');
+        var projectRadio = root.querySelector('#entry_type_project, [id^="entry_type_project"]');
+        var activityField = root.querySelector('#activity-code-field, [id^="activity-code-field"]');
+        var projectField = root.querySelector('#project-field, [id^="project-field"]');
+        if (!activityRadio || !projectRadio || !activityField || !projectField) return;
+
+        function sync() {
+            if (projectRadio.checked) {
+                activityField.classList.add('d-none');
+                projectField.classList.remove('d-none');
+            } else {
+                projectField.classList.add('d-none');
+                activityField.classList.remove('d-none');
+            }
+        }
+        activityRadio.addEventListener('change', sync);
+        projectRadio.addEventListener('change', sync);
+    }
+    wireEntryTypeToggle(document);
+});
+</script>
+{% endblock %}

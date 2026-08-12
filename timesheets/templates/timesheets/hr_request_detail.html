@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+{% block title %}Timesheet Request Detail{% endblock %}
+{% block page_title %}Timesheet Request — {{ ts_request.month }}/{{ ts_request.year }}{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1"><i class="bi bi-envelope-paper"></i> {{ ts_request.month }}/{{ ts_request.year }}</h1>
+            <p class="text-muted mb-0">{{ sent_count }} of {{ total_count }} employees have sent their timesheet.</p>
+        </div>
+        <a href="{% url 'timesheets:hr_request' %}" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-left"></i> Back
+        </a>
+    </div>
+
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0 align-middle">
+                    <thead class="table-light">
+                        <tr><th>Employee</th><th>Status</th><th>Sent at</th><th>Actions</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for row in rows %}
+                        <tr>
+                            <td>{{ row.employee.full_name }}</td>
+                            <td>
+                                {% if row.acked %}
+                                <span class="badge bg-success">Sent</span>
+                                {% else %}
+                                <span class="badge bg-warning text-dark">Pending</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ row.ack.acknowledged_at|default:"—" }}</td>
+                            <td>
+                                {% if not row.acked %}
+                                <form method="post" class="d-inline">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="employee_id" value="{{ row.employee.pk }}">
+                                    <button type="submit" class="btn btn-sm btn-outline-warning">
+                                        <i class="bi bi-bell"></i> Remind
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="4" class="text-center text-muted py-4">No eligible employees found.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
