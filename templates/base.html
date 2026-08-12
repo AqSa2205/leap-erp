@@ -1348,6 +1348,11 @@
                     <i class="bi bi-speedometer2"></i> <span>HR Dashboard</span>
                 </a>
             </li>
+            <li class="nav-item">
+                <a class="nav-link {% if 'employee' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:employee_list' %}" data-title="Employees">
+                    <i class="bi bi-people-fill"></i> <span>Employees</span>
+                </a>
+            </li>
             {% if user|can:'timesheets.review' %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'hr_request' %}active{% endif %}" href="{% url 'timesheets:hr_request' %}" data-title="Request Timesheets">

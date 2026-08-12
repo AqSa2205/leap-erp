@@ -466,10 +466,20 @@ def calendar_grid(request):
     # anyone since deactivated who still has calendar data for this exact
     # month, so a past month never quietly shows fewer people on screen
     # than what the Excel export for that same month contains.
+    location = request.GET.get('location')
+    if location != 'site':
+        location = 'office'
+
     month_cells = CalendarCell.objects.filter(date__year=year, date__month=month)
     employees = Employee.objects.filter(
         Q(is_active=True) | Q(pk__in=month_cells.values_list('employee_id', flat=True))
     ).distinct()
+    if location == 'site':
+        employees = employees.filter(work_location='site')
+    else:
+        # 'office' toggle also catches blank work_location, so nobody
+        # silently disappears just because their profile isn't filled in.
+        employees = employees.exclude(work_location='site')
 
     cells = CalendarCell.objects.filter(
         date__year=year, date__month=month
@@ -506,6 +516,7 @@ def calendar_grid(request):
         'prev_month': prev_month,
         'next_year': next_year,
         'next_month': next_month,
+        'location': location,
     }
     return render(request, 'engineer_calendar/calendar_grid.html', context)
 

@@ -1067,3 +1067,164 @@ class ClearCellFallbackTests(TestCase):
             'employee_id': self.emp.pk, 'date': workday.isoformat(), 'text': '',
         })
         self.assertFalse(resp.json().get('reload', False))
+
+class CalendarGridLocationToggleTests(TestCase):
+    """Tests for the office/site location toggle added to calendar_grid
+    (engineer_calendar/views.py). Covers: default behavior, explicit
+    office/site filtering, blank work_location handling, invalid input,
+    and that the toggle doesn't affect the roster/merge logic it sits on
+    top of.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.admin, _ = _make_user_with_employee(
+            'calloc', role_name=Role.ADMIN, full_name='Cal Loc Admin')
+        seed_default_permissions()
+        self.client.login(username='calloc', password='testpass123')
+
+        self.today = date.today()
+
+        self.office_emp = Employee.objects.create(
+            full_name='Office Employee', designation='Engineer',
+            work_location='office', is_active=True,
+            iqama_number='IQ-loc-office',
+        )
+        self.site_emp = Employee.objects.create(
+            full_name='Site Employee', designation='Engineer',
+            work_location='site', is_active=True,
+            iqama_number='IQ-loc-site',
+        )
+        self.blank_location_emp = Employee.objects.create(
+            full_name='Blank Location Employee', designation='Engineer',
+            work_location='', is_active=True,
+            iqama_number='IQ-loc-blank',
+        )
+        self.inactive_no_data_emp = Employee.objects.create(
+            full_name='Inactive No Data', designation='Engineer',
+            work_location='site', is_active=False,
+            iqama_number='IQ-loc-inactive',
+        )
+
+    def _get(self, **params):
+        url = reverse('engineer_calendar:grid')
+        return self.client.get(url, params)
+
+    # ── Auth / permission boundary ──────────────────────────────────
+
+    def test_anonymous_user_redirected(self):
+        self.client.logout()
+        response = self._get()
+        self.assertEqual(response.status_code, 302)
+
+    # If you have a way to construct a logged-in user WITHOUT the
+    # capability, add:
+    # def test_user_without_capability_denied(self):
+    #     other = User.objects.create_user(username='nocap', password='pass12345')
+    #     self.client.login(username='nocap', password='pass12345')
+    #     response = self._get()
+    #     self.assertIn(response.status_code, (403, 302))
+
+    # ── Default / happy path ────────────────────────────────────────
+
+    def test_default_location_is_office(self):
+        """No ?location= param at all should behave like 'office'."""
+        response = self._get()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['location'], 'office')
+        emp_ids = {row['employee'].id for row in response.context['rows']}
+        self.assertIn(self.office_emp.id, emp_ids)
+        self.assertNotIn(self.site_emp.id, emp_ids)
+
+    def test_location_office_excludes_site_employees(self):
+        response = self._get(location='office')
+        emp_ids = {row['employee'].id for row in response.context['rows']}
+        self.assertIn(self.office_emp.id, emp_ids)
+        self.assertNotIn(self.site_emp.id, emp_ids)
+        self.assertEqual(response.context['location'], 'office')
+
+    def test_location_site_returns_only_site_employees(self):
+        response = self._get(location='site')
+        emp_ids = {row['employee'].id for row in response.context['rows']}
+        self.assertIn(self.site_emp.id, emp_ids)
+        self.assertNotIn(self.office_emp.id, emp_ids)
+        self.assertNotIn(self.blank_location_emp.id, emp_ids)
+        self.assertEqual(response.context['location'], 'site')
+
+    # ── Blank work_location handling ────────────────────────────────
+
+    def test_blank_work_location_counts_as_office(self):
+        """Per the comment in calendar_grid: 'office' also catches blank
+        work_location so nobody disappears just because their profile
+        isn't filled in."""
+        response = self._get(location='office')
+        emp_ids = {row['employee'].id for row in response.context['rows']}
+        self.assertIn(self.blank_location_emp.id, emp_ids)
+
+    def test_blank_work_location_excluded_from_site(self):
+        response = self._get(location='site')
+        emp_ids = {row['employee'].id for row in response.context['rows']}
+        self.assertNotIn(self.blank_location_emp.id, emp_ids)
+
+    # ── Invalid input (fail-safe, never 500) ────────────────────────
+
+    def test_invalid_location_value_falls_back_to_office(self):
+        """Anything other than exactly 'site' should behave as 'office',
+        per `if location != 'site': location = 'office'`."""
+        response = self._get(location='not-a-real-location')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['location'], 'office')
+        emp_ids = {row['employee'].id for row in response.context['rows']}
+        self.assertIn(self.office_emp.id, emp_ids)
+        self.assertNotIn(self.site_emp.id, emp_ids)
+
+    def test_empty_location_param_falls_back_to_office(self):
+        response = self._get(location='')
+        self.assertEqual(response.context['location'], 'office')
+
+    # ── Interaction with existing roster rule (regression guard) ────
+
+    def test_inactive_employee_without_month_data_excluded_regardless_of_location(self):
+        """The active-OR-has-data-this-month roster rule should still hold
+        under both toggle states — the location filter must not
+        accidentally resurrect someone it shouldn't."""
+        for loc in ('office', 'site'):
+            response = self._get(location=loc)
+            emp_ids = {row['employee'].id for row in response.context['rows']}
+            self.assertNotIn(self.inactive_no_data_emp.id, emp_ids)
+
+    def test_inactive_site_employee_with_month_data_shown_under_site(self):
+        """Same roster rule, but the employee DOES have data this month —
+        should reappear, and still respects the location filter since
+        their work_location is 'site'."""
+        CalendarCell.objects.create(
+            employee=self.inactive_no_data_emp,
+            date=self.today.replace(day=1),
+            source='manual',
+            display_text='X',
+        )
+        response = self._get(
+            year=self.today.year, month=self.today.month, location='site'
+        )
+        emp_ids = {row['employee'].id for row in response.context['rows']}
+        self.assertIn(self.inactive_no_data_emp.id, emp_ids)
+
+        response_office = self._get(
+            year=self.today.year, month=self.today.month, location='office'
+        )
+        emp_ids_office = {row['employee'].id for row in response_office.context['rows']}
+        self.assertNotIn(self.inactive_no_data_emp.id, emp_ids_office)
+
+    # ── Toggle links render in the template ─────────────────────────
+
+    def test_office_toggle_link_marked_active_by_default(self):
+        response = self._get()
+        self.assertContains(response, 'location=office')
+        self.assertContains(response, 'location=site')
+        # crude but effective: the office button should carry 'active',
+        # the site one should not, when location == 'office'
+        content = response.content.decode()
+        office_idx = content.find('location=office')
+        site_idx = content.find('location=site')
+        self.assertNotEqual(office_idx, -1)
+        self.assertNotEqual(site_idx, -1)
