@@ -201,6 +201,19 @@ class Project(models.Model):
 
     # Dates
     submission_deadline = models.DateField(null=True, blank=True)
+    submission_deadline = models.DateField(null=True, blank=True)
+    bom_started_deadline = models.DateField(
+        null=True, blank=True,
+        help_text='Planned date for BOM to start. Used to show early/late variance.')
+    handed_over_deadline = models.DateField(
+        null=True, blank=True,
+        help_text='Planned date to hand the BOM to sales.')
+    costing_started_deadline = models.DateField(
+        null=True, blank=True,
+        help_text='Planned date for sales to start costing.')
+    finalized_deadline = models.DateField(
+        null=True, blank=True,
+        help_text='Planned date to finalise the sheet.')
     estimated_po_date = models.DateField(null=True, blank=True)
 
     # Relationships
@@ -366,6 +379,79 @@ class Project(models.Model):
         self.deleted_by = user if (user and user.is_authenticated) else None
         self.save(update_fields=['is_deleted', 'deleted_at', 'deleted_by', 'updated_at'])
 
+
+    def _milestone_variance(self, deadline, actual_datetime):
+        # Positive = ahead of schedule (finished before the deadline).
+        # Negative = behind schedule (finished after the deadline).
+        # None = not enough data yet (missing deadline or not reached).
+        if not deadline or not actual_datetime:
+            return None
+        actual_date = actual_datetime.date() if hasattr(actual_datetime, 'date') else actual_datetime
+        return (deadline - actual_date).days
+
+    @property
+    def milestone_display_rows(self):
+        # One combined row per milestone - date, who did it, and the +/- day
+        # variance versus this project's deadline - ready for the template to
+        # loop through directly with no separate lookup needed.
+        from django.utils import timezone
+        sheet = getattr(self, 'cycle_sheet', None)
+        base_rows = sheet.milestone_rows() if sheet else [
+            {'label': lbl, 'date': '\u2014', 'person': None} for lbl in
+            ('BOM started', 'Handed to sales', 'Costing started', 'Finalised')
+        ]
+        deadlines = {
+            'BOM started': self.bom_started_deadline,
+            'Handed to sales': self.handed_over_deadline,
+            'Costing started': self.costing_started_deadline,
+            'Finalised': self.finalized_deadline,
+        }
+        actuals = {
+            'BOM started': getattr(sheet, 'bom_started_at', None),
+            'Handed to sales': getattr(sheet, 'handed_over_at', None),
+            'Costing started': getattr(sheet, 'costing_started_at', None),
+            'Finalised': getattr(sheet, 'finalized_at', None),
+        }
+        out = []
+        for row in base_rows:
+            label = row['label']
+            variance = self._milestone_variance(deadlines.get(label), actuals.get(label))
+            variance_display = None
+            if variance is not None:
+                variance_display = f'+{variance}d' if variance >= 0 else f'{variance}d'
+            out.append({
+                'label': label,
+                'date': row['date'],
+                'person': row['person'],
+                'variance_display': variance_display,
+                'variance_class': 'text-success' if (variance or 0) >= 0 else 'text-danger',
+            })
+        return out
+    @property
+    def milestone_overall_status(self):
+        # 'success' (green) = Finalised is done.
+        # 'danger' (red) = today is already past a milestone's deadline and
+        #   that milestone still hasn't happened.
+        # 'warning' (orange) = still in progress, nothing overdue yet.
+        # '' = not enough data to judge (no deadlines set at all).
+        from django.utils import timezone
+        sheet = getattr(self, 'cycle_sheet', None)
+        if sheet and getattr(sheet, 'finalized_at', None):
+            return 'success'
+        today = timezone.now().date()
+        pairs = [
+            (self.bom_started_deadline, getattr(sheet, 'bom_started_at', None)),
+            (self.handed_over_deadline, getattr(sheet, 'handed_over_at', None)),
+            (self.costing_started_deadline, getattr(sheet, 'costing_started_at', None)),
+            (self.finalized_deadline, getattr(sheet, 'finalized_at', None)),
+        ]
+        any_deadline_set = any(dl for dl, _ in pairs)
+        if not any_deadline_set:
+            return ''
+        for deadline, actual in pairs:
+            if deadline and not actual and today > deadline:
+                return 'danger'
+        return 'warning'
     def restore(self):
         """Bring a soft-deleted project back, relationships intact."""
         self.is_deleted = False
