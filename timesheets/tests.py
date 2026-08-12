@@ -891,9 +891,13 @@ class HRRequestDetailQueryCountTests(TestCase):
     def test_request_detail_query_count_does_not_scale_with_employee_count(self):
         client = Client()
         client.login(username='queryhr', password='testpass123')
-        with self.assertNumQueries(17):  # adjust once if your baseline differs; the
+        with self.assertNumQueries(20):  # adjust once if your baseline differs; the
                                           # point is this number staying FLAT as
-                                          # employee count grows, not its exact value
+                                          # employee count grows, not its exact value.
+                                          # 17 -> 20: the global HR pending-counts
+                                          # context processor gained 3 fixed COUNT
+                                          # queries (attendance-exception revoke) that
+                                          # run on every page; still flat per employee.
             client.get(reverse('timesheets:hr_request_detail', args=[self.ts_request.pk]))
 
 
