@@ -62,6 +62,12 @@ CAPABILITIES = [
                'Enter KPI values & targets', enforced=True, order=2),
     Capability('kpis.activity', 'Department KPIs', 'activity',
                'View team activity review', enforced=True, order=3),
+
+    *_module('timesheets', 'Timesheets'),
+    Capability('timesheets.review', 'Timesheets', 'review',
+               'Review & reopen employee timesheets (HR)', enforced=True, order=2),       
+
+    *_module('engineer_calendar', 'Engineer Calendar'),    
 ]
 
 
@@ -146,13 +152,13 @@ class CapabilityRequiredMixin:
 # seeded for super_admin alone. Granular caps (enforced=False) stay OFF.
 # Note: finance already has `pipeline` here (the earlier "deliberate change"),
 # which is now subsumed by the match-today baseline.
-_OPEN_TO_ALL = {'dashboard', 'pipeline', 'costing', 'procurement', 'po', 'dn'}
+_OPEN_TO_ALL = {'dashboard', 'pipeline', 'costing', 'procurement', 'po', 'dn','timesheets'}
 DEFAULT_MODULE_ACCESS = {
     # Department KPIs: restricted to super_admin only (the whole KPI section —
     # dashboard, by-person, and data entry). Super admin can widen later from
     # the permission grid if management wants dept heads to see it.
-    'super_admin':     _OPEN_TO_ALL | {'settings', 'devtracking', 'kpis'},
-    'admin':           _OPEN_TO_ALL | {'devtracking'},
+    'super_admin':     _OPEN_TO_ALL | {'settings', 'devtracking', 'kpis','engineer_calendar'},
+    'admin':           _OPEN_TO_ALL | {'devtracking','engineer_calendar'},
     'manager':         set(_OPEN_TO_ALL),
     'sales_rep':       set(_OPEN_TO_ALL),
     'procurement_mgr': set(_OPEN_TO_ALL),
@@ -192,8 +198,8 @@ DEFAULT_MODULE_ACCESS = {
 # granular (User.has_capability checks the exact codename), so these are real,
 # independently-toggleable capabilities.
 DEFAULT_CODENAME_GRANTS = {
-    'super_admin':  {'devtracking.admin', 'devtracking.mywork', 'kpis.manage', 'kpis.activity'},
-    'admin':        {'devtracking.admin', 'devtracking.mywork'},
+    'super_admin':  {'devtracking.admin', 'devtracking.mywork', 'kpis.manage', 'kpis.activity','timesheets.review'},
+    'admin':        {'devtracking.admin', 'devtracking.mywork','timesheets.review'},
     'developer':    {'devtracking.mywork'},
     'ai_head':            {'devtracking.admin', 'devtracking.mywork'},
     'ai_intern':          {'devtracking.mywork'},
