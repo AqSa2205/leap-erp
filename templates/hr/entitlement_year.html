@@ -80,7 +80,6 @@
                         <th style="width:2.5rem;"></th>
                         <th>Employee</th>
                         <th class="text-end">Entitled</th>
-                        <th class="text-end">Exception</th>
                         <th class="text-end">Taken</th>
                         <th class="text-end">Remaining</th>
                     </tr>
@@ -103,9 +102,9 @@
                             <div class="text-muted small">{{ g.employee.designation }}</div>
                             {% endif %}
                         </td>
-                        <td class="text-end">{{ g.total_entitled }}</td>
-                        <td class="text-end {% if g.total_exception %}text-muted{% endif %}">
-                            {% if g.total_exception %}+{{ g.total_exception }}{% else %}—{% endif %}
+                        <td class="text-end">
+                            {{ g.total_entitled|add:g.total_exception }}
+                            {% include 'hr/_exception_adjustment_badge.html' with standard_days=g.total_entitled exception_days=g.total_exception %}
                         </td>
                         <td class="text-end">{{ g.total_taken }}</td>
                         <td class="text-end {% if g.total_remaining < 0 %}text-danger fw-bold{% endif %}">
@@ -114,15 +113,15 @@
                     </tr>
                     <tr class="collapse" id="emp-{{ g.employee.pk }}">
                         <td></td>
-                        <td colspan="5" class="p-0">
+                        <td colspan="4" class="p-0">
                             <table class="table table-sm mb-0">
                                 <thead class="table-light">
                                     <tr>
                                         <th>Leave Type</th>
                                         <th class="text-end">Entitled</th>
-                                        <th class="text-end">Exception</th>
                                         <th class="text-end">Taken</th>
                                         <th class="text-end">Remaining</th>
+                                        {% if can_adjust_balance %}<th></th>{% endif %}
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -134,14 +133,22 @@
                                             <span class="badge bg-light text-muted border ms-1" title="Conditional leave — not included in the summary totals above">Conditional</span>
                                             {% endif %}
                                         </td>
-                                        <td class="text-end">{{ row.entitled }}</td>
-                                        <td class="text-end {% if row.exception %}text-muted{% endif %}">
-                                            {% if row.exception %}+{{ row.exception }}{% else %}—{% endif %}
+                                        <td class="text-end">
+                                            {{ row.entitled|add:row.exception }}
+                                            {% include 'hr/_exception_adjustment_badge.html' with standard_days=row.entitled exception_days=row.exception %}
                                         </td>
                                         <td class="text-end">{{ row.taken }}</td>
                                         <td class="text-end {% if row.remaining < 0 %}text-danger fw-bold{% endif %}">
                                             {{ row.remaining }}
                                         </td>
+                                        {% if can_adjust_balance %}
+                                        <td class="text-end">
+                                            <a href="{% url 'hr:grant_exception_days' pk=g.employee.pk %}?leave_type={{ row.leave_type.pk }}&year={{ year }}"
+                                               class="btn btn-sm btn-outline-primary py-0" title="Adjust this employee's balance for this leave type">
+                                                <i class="bi bi-sliders"></i> Adjust
+                                            </a>
+                                        </td>
+                                        {% endif %}
                                     </tr>
                                     {% endfor %}
                                 </tbody>

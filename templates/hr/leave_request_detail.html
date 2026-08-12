@@ -34,23 +34,60 @@
       </div>
       {% endif %}
 
+      {% if has_conflicting_decisions %}
+      <div class="alert alert-warning d-flex align-items-start gap-2">
+        <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+        <div>
+          <strong>Approvers disagree on this request.</strong> Every approver has decided, but not unanimously, so
+          it's still pending — one of them needs to change their decision below for this to finalize.
+        </div>
+      </div>
+      {% endif %}
+
       <div class="card mb-4">
         <div class="card-body">
-          <p class="mb-1"><strong>Dates:</strong> {{ leave_request.start_date }} – {{ leave_request.end_date }} ({{ leave_request.days }} days)</p>
+          <p class="mb-1"><strong>Dates:</strong> {{ leave_request.start_date }} – {{ leave_request.end_date }} ({{ leave_request.days }} days)
+            {% if leave_request.is_backdated %}
+            <span class="badge bg-light text-dark border ms-1" data-bs-toggle="tooltip" title="This leave started before it was submitted">
+              <i class="bi bi-clock-history"></i> Backdated
+            </span>
+            {% endif %}
+          </p>
           <p class="mb-1"><strong>Reason:</strong> {{ leave_request.employee_reason|default:"—" }}</p>
           <p class="mb-1"><strong>Status:</strong>
             {% if leave_request.status == 'approved' %}<span class="badge bg-success">Approved</span>
             {% elif leave_request.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>
+            {% elif leave_request.status == 'revoked' %}<span class="badge bg-secondary">Revoked</span>
+            {% elif leave_request.status == 'cancelled' %}<span class="badge bg-secondary">Cancelled</span>
             {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
             {% if leave_request.is_overridden %}
               <span class="badge bg-info text-dark">
                 Overridden{% if leave_request.overridden_by %} by {{ leave_request.overridden_by.get_full_name|default:leave_request.overridden_by.username }}{% endif %}
               </span>
             {% endif %}
-            {% if leave_request.decided_by_display %}<div class="small text-muted mt-1">{{ leave_request.decided_by_display }}</div>{% endif %}
+            {% if leave_request.logged_by_manager %}
+              <span class="badge bg-light text-dark border">
+                <i class="bi bi-person-badge"></i> Logged on behalf of {{ leave_request.employee.full_name }} by their
+                manager, {{ leave_request.created_by.get_full_name|default:leave_request.created_by.username }}
+              </span>
+            {% endif %}
+            {% if leave_request.status == 'revoked' %}
+              <div class="small text-muted mt-1">
+                Revoked
+                {% if leave_request.revoked_by %}by {{ leave_request.revoked_by.get_full_name|default:leave_request.revoked_by.username }}{% endif %}
+                {% if leave_request.revoked_at %} on {{ leave_request.revoked_at|date:'d M Y, H:i' }}{% endif %}
+                {% if leave_request.revoke_reason %} — "{{ leave_request.revoke_reason }}"{% endif %}
+              </div>
+            {% elif leave_request.status == 'cancelled' %}
+              <div class="small text-muted mt-1">
+                Cancelled by {{ leave_request.employee.full_name }}
+                {% if leave_request.cancelled_at %} on {{ leave_request.cancelled_at|date:'d M Y, H:i' }}{% endif %}
+                {% if leave_request.cancel_reason %} — "{{ leave_request.cancel_reason }}"{% endif %}
+              </div>
+            {% elif leave_request.decided_by_display %}<div class="small text-muted mt-1">{{ leave_request.decided_by_display }}</div>{% endif %}
           </p>
           {% if leave_request.status == 'disapproved' and leave_request.salary_deduction_applicable %}
-          <p class="text-danger mb-1"><i class="bi bi-exclamation-triangle"></i> Disapproved — Salary Deduction Applicable
+          <p class="text-danger mb-1"><i class="bi bi-exclamation-triangle"></i> Taking this leave will result in a salary deduction.
             {% if leave_request.salary_deduction_note %}<br><small>{{ leave_request.salary_deduction_note }}</small>{% endif %}
           </p>
           {% endif %}
@@ -83,6 +120,7 @@
             {% csrf_token %}
             <input type="hidden" name="action" value="decide">
             <div class="mb-2">
+              <label class="form-label small fw-semibold mb-1">1. Choose a decision</label><br>
               <div class="form-check form-check-inline">
                 <input class="form-check-input" type="radio" name="decision" value="approved" id="decision_approved" required>
                 <label class="form-check-label text-success" for="decision_approved">Approve</label>
@@ -91,10 +129,16 @@
                 <input class="form-check-input" type="radio" name="decision" value="disapproved" id="decision_disapproved">
                 <label class="form-check-label text-danger" for="decision_disapproved">Disapprove</label>
               </div>
-              <div class="form-text">Pick a decision, then confirm — you can change your selection before submitting.</div>
+              <div class="form-text">You can change your selection any time before submitting.</div>
             </div>
-            <div class="mb-2"><textarea name="comment" class="form-control" rows="2" placeholder="Optional comment"></textarea></div>
-            <button type="submit" class="btn btn-primary btn-sm">Submit Decision</button>
+            <div class="mb-2">
+              <label class="form-label small fw-semibold mb-1">2. Add a message for the employee (optional)</label>
+              <textarea name="comment" class="form-control" rows="2" placeholder="They'll see this on their My Profile page"></textarea>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+              <span class="fw-semibold small">3.</span>
+              <button type="submit" class="btn btn-primary btn-sm">Submit Decision</button>
+            </div>
           </form>
           {% elif can_edit_decision %}
           <form method="post" class="border-top pt-3 mt-3">
@@ -102,9 +146,10 @@
             <input type="hidden" name="action" value="decide">
             <p class="small text-muted mb-2">
               You decided <strong>{{ my_approval.get_decision_display }}</strong> on {{ my_approval.decided_at }}.
-              You can change this within 24 hours of your original decision.
+              You can change this any time until every approver has decided.
             </p>
             <div class="mb-2">
+              <label class="form-label small fw-semibold mb-1">1. Choose a decision</label><br>
               <div class="form-check form-check-inline">
                 <input class="form-check-input" type="radio" name="decision" value="approved" id="edit_decision_approved"
                        {% if my_approval.decision == 'approved' %}checked{% endif %} required>
@@ -117,10 +162,13 @@
               </div>
             </div>
             <div class="mb-2">
-              <label class="form-label small">Note explaining the change (required)</label>
-              <textarea name="edit_note" class="form-control" rows="2" placeholder="Why are you changing your decision?" required></textarea>
+              <label class="form-label small fw-semibold mb-1">2. Note explaining the change (required)</label>
+              <textarea name="edit_note" class="form-control" rows="2" placeholder="Why are you changing your decision? — the employee will see this" required></textarea>
             </div>
-            <button type="submit" class="btn btn-outline-primary btn-sm">Update Decision</button>
+            <div class="d-flex align-items-center gap-2">
+              <span class="fw-semibold small">3.</span>
+              <button type="submit" class="btn btn-outline-primary btn-sm">Update Decision</button>
+            </div>
           </form>
           {% endif %}
 
@@ -136,33 +184,16 @@
             <button type="submit" name="decision" value="disapproved" class="btn btn-outline-danger btn-sm">Override — Disapprove</button>
           </form>
           {% endif %}
-        </div>
-      </div>
 
-      <div class="card">
-        <div class="card-header"><h5 class="mb-0">Notes</h5></div>
-        <div class="card-body">
-          {% for n in visible_notes %}
-          <div class="mb-2 {% if n.is_internal %}bg-light p-2 rounded{% endif %}">
-            <strong>{% if n.author %}{{ n.author.get_full_name|default:n.author.username }}{% else %}—{% endif %}</strong>
-            {% if n.is_internal %}<span class="badge bg-secondary">Internal</span>{% endif %}
-            <div class="small text-muted">{{ n.created_at }}</div>
-            <div>{{ n.note }}</div>
-          </div>
-          {% empty %}
-          <p class="text-muted mb-0">No notes yet.</p>
-          {% endfor %}
-
-          {% if my_approval %}
-          <form method="post" class="border-top pt-3 mt-3">
+          {% if can_override and leave_request.status == 'approved' %}
+          <form method="post" class="border-top pt-3 mt-3" onsubmit="return confirm('Revoke this leave request?');">
             {% csrf_token %}
-            <input type="hidden" name="action" value="add_note">
-            <div class="mb-2"><textarea name="note" class="form-control" rows="2" placeholder="Add a note the employee can see" required></textarea></div>
-            <div class="form-check mb-2">
-              <input type="checkbox" name="is_internal" value="1" class="form-check-input" id="internalNote">
-              <label class="form-check-label small" for="internalNote">Internal only (hidden from employee)</label>
+            <input type="hidden" name="action" value="revoke">
+            <div class="mb-2">
+              <label class="form-label small">Revoke this approved leave</label>
+              <textarea name="reason" class="form-control" rows="2" placeholder="Reason — required" required></textarea>
             </div>
-            <button type="submit" class="btn btn-sm btn-primary">Add Note</button>
+            <button type="submit" class="btn btn-outline-danger btn-sm">Revoke</button>
           </form>
           {% endif %}
         </div>

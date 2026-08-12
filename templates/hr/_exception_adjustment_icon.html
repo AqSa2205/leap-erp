@@ -1,0 +1,4 @@
+{% if exception_days %}
+<i class="bi bi-info-circle text-muted me-1" style="cursor: help;" data-bs-toggle="tooltip" data-bs-placement="top"
+   title="Standard entitlement: {{ standard_days }} day(s) — {% if exception_days > 0 %}adjusted up by {{ exception_days }}{% else %}adjusted down by {{ exception_days|cut:'-' }}{% endif %} day(s)"></i>
+{% endif %}
