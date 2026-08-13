@@ -490,6 +490,7 @@ def my_profile(request):
         context['leave_total_remaining'] = sum((e.remaining_days for e in accumulative), Decimal('0'))
         context['leave_total_exception'] = sum((e.exception_days for e in accumulative), Decimal('0'))
         # This employee's own leave requests (pending/approved/disapproved), newest first.
+        context['active_leave_types'] = LeaveType.objects.filter(is_active=True).order_by('name')
         context['leave_requests'] = list(
             emp.leave_requests.select_related('leave_type', 'overridden_by')
             .prefetch_related('approvals__approver', 'notes__author')
@@ -2371,6 +2372,7 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
                 for a in req.approvals.all() if a.decision != 'pending']
             req.can_cancel = bool(req.status == 'pending')
         ctx['my_logged_requests'] = my_logged_requests
+        ctx['active_leave_types'] = LeaveType.objects.filter(is_active=True).order_by('name')
         return ctx
 
     def post(self, request, *args, **kwargs):

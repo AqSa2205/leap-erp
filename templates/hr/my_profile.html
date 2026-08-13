@@ -343,11 +343,19 @@
                       </div>
                       {% endif %}
                       <div class="row g-2">
-                        <div class="col-md-3">
+                        <div class="col-md-4">
+                          <label class="form-label small">Leave Type</label>
+                          <select name="leave_type" class="form-select form-select-sm">
+                            {% for lt in active_leave_types %}
+                            <option value="{{ lt.pk }}" {% if lt.pk == r.leave_type_id %}selected{% endif %}>{{ lt.name }}</option>
+                            {% endfor %}
+                          </select>
+                        </div>
+                        <div class="col-md-4">
                           <label class="form-label small">Start</label>
                           <input type="date" name="start_date" class="form-control form-control-sm" value="{{ r.start_date|date:'Y-m-d' }}" required>
                         </div>
-                        <div class="col-md-3">
+                        <div class="col-md-4">
                           <label class="form-label small">End</label>
                           <input type="date" name="end_date" class="form-control form-control-sm" value="{{ r.end_date|date:'Y-m-d' }}" required>
                         </div>
@@ -374,7 +382,6 @@
                           <input type="file" name="document" class="form-control form-control-sm">
                         </div>
                       </div>
-                      <input type="hidden" name="leave_type" value="{{ r.leave_type_id }}">
                       <button type="submit" class="btn btn-sm btn-primary mt-2">Save Changes</button>
                     </form>
                   </td>

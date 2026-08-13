@@ -7240,6 +7240,32 @@ class EditLeaveRequestServiceTests(TestCase):
         with self.assertRaises(ValueError):
             edit_leave_request(self.req, other, leave_type=self.lt, start_date=date(2026, 8, 3), end_date=date(2026, 8, 4))
 
+    def test_edit_can_change_the_leave_type(self):
+        from hr.leave_approval_services import edit_leave_request
+        annual, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': Decimal('30')})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=annual, year=2026, entitled_days=Decimal('30'))
+        updated = edit_leave_request(
+            self.req, self.user, leave_type=annual, start_date=date(2026, 8, 3), end_date=date(2026, 8, 4))
+        self.assertEqual(updated.leave_type, annual)
+
+    def test_changing_leave_type_alone_resets_a_prior_decision(self):
+        # Substance changed (different type = different balance/policy),
+        # so a type-only edit must reset a recorded decision exactly like
+        # a date change does.
+        from hr.leave_approval_services import edit_leave_request
+        annual, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': Decimal('30')})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=annual, year=2026, entitled_days=Decimal('30'))
+        approver = make_user('edlr-type-approver', password='x')
+        LeaveDashboardAccess.objects.create(user=approver, is_active=True)
+        approval = LeaveRequestApproval.objects.create(
+            leave_request=self.req, approver=approver, decision='approved')
+        edit_leave_request(
+            self.req, self.user, leave_type=annual, start_date=self.req.start_date, end_date=self.req.end_date)
+        approval.refresh_from_db()
+        self.assertEqual(approval.decision, 'pending')
+
     def test_editing_after_a_decision_resets_it_to_pending(self):
         # Editing after a decision is recorded is now allowed (the whole
         # pending window, same as cancel) — but the substance changed, so
@@ -7681,6 +7707,12 @@ class MyProfileLeaveEditCancelUITests(TestCase):
         resp = self.client.get(reverse('hr:my_profile'))
         self.assertContains(resp, f'edit_leave_request_{self.req.pk}')
         self.assertContains(resp, f'cancel_leave_request_{self.req.pk}')
+
+    def test_edit_form_leave_type_is_a_real_dropdown_not_hidden(self):
+        resp = self.client.get(reverse('hr:my_profile'))
+        content = resp.content.decode()
+        self.assertIn('<select name="leave_type"', content)
+        self.assertNotIn(f'<input type="hidden" name="leave_type" value="{self.lt.pk}">', content)
 
     def test_edit_button_and_reset_warning_still_show_once_decided(self):
         approver = make_user('mpled_approver', password='x')
@@ -8223,6 +8255,26 @@ class LeaveQueueMyLoggedRequestsUITests(TestCase):
         resp = self.client.get(reverse('hr:leave_request_list'))
         self.assertContains(resp, f'edit_leave_request_{self.req.pk}')
         self.assertContains(resp, f'cancel_leave_request_{self.req.pk}')
+
+    def test_edit_form_leave_type_is_a_real_dropdown_not_hidden(self):
+        resp = self.client.get(reverse('hr:leave_request_list'))
+        content = resp.content.decode()
+        self.assertIn('<select name="leave_type"', content)
+        self.assertNotIn(f'<input type="hidden" name="leave_type" value="{self.lt.pk}">', content)
+
+    def test_post_edit_can_change_the_leave_type(self):
+        # self.req/self.lt are already 'annual' (see setUp) — use a
+        # genuinely different type to prove the switch actually happens.
+        marriage, _ = LeaveType.objects.get_or_create(code='marriage', defaults={
+            'name': 'Marriage', 'default_annual_days': 5, 'is_accumulative': False})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=marriage, year=2026, entitled_days=5)
+        resp = self.client.post(reverse('hr:leave_request_list'), {
+            'action': 'edit_leave_request', 'request_id': self.req.pk,
+            'leave_type': marriage.pk, 'start_date': '2026-04-01', 'end_date': '2026-04-02',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.leave_type, marriage)
 
     def test_post_edit_updates_the_request(self):
         resp = self.client.post(reverse('hr:leave_request_list'), {
