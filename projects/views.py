@@ -316,7 +316,9 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
                     'icon':     'bi-check2-circle',
                     'color':    '#212529',
                     'title':    'Costing finalized',
-                    'subtitle': f'{sheet.title} · Grand total {sheet.grand_total:.2f} {sheet.output_currency}',
+                    # The proposal team must not see costing figures — drop the grand total.
+                    'subtitle': (sheet.title if self.request.user.is_proposal_team_user
+                                 else f'{sheet.title} · Grand total {sheet.grand_total:.2f} {sheet.output_currency}'),
                     'actor':    _actor_name(getattr(sheet, 'finalized_by', None)),
                     'url':      reverse_lazy('costing:detail', kwargs={'pk': sheet.pk}),
                 })

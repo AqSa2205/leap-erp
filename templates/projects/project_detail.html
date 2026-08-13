@@ -194,7 +194,7 @@
                                         <span class="wf-status present"></span>
                                         <span class="wf-label">Costing</span>
                                     </div>
-                                    <div class="wf-sub">{{ sheet.get_workflow_stage_display }} · Grand Total {{ sheet.grand_total|floatformat:2 }} {{ sheet.output_currency }}</div>
+                                    <div class="wf-sub">{{ sheet.get_workflow_stage_display }}{% if not user.is_proposal_team_user %} · Grand Total {{ sheet.grand_total|floatformat:2 }} {{ sheet.output_currency }}{% endif %}</div>
                                 </a>
                                 <a href="{% url 'costing:detail' sheet.pk %}" class="btn btn-outline-secondary wf-action ms-2">
                                     <i class="bi bi-calculator"></i> Open
@@ -560,6 +560,7 @@
                         {% endif %}
                     </h5>
                 </div>
+                {% if not user.is_proposal_team_user %}
                 <div class="mb-3">
                     <small class="text-muted d-block">
                         {% if sales_value_source == 'actual' %}Actual Sales
@@ -593,6 +594,7 @@
                     </div>
                     {% endif %}
                 </div>
+                {% endif %}
                 {% if project.minimum_achievement %}
                 <div>
                     <small class="text-muted d-block">Minimum Achievement</small>

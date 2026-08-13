@@ -251,6 +251,71 @@ class DetailCanEditContextTests(TestCase):
         self.assertTrue(resp.context['can_edit'])
 
 
+class ProposalTeamPricingHiddenTests(TestCase):
+    """The proposal team must never receive costing FIGURES — not just hidden by
+    CSS, but absent from the page source. Sales sees them; proposal gets a
+    figure-free BOM (descriptions/quantities only)."""
+
+    FIGURE = '987654'  # a distinctive base unit cost, unlikely to collide
+
+    def setUp(self):
+        from decimal import Decimal
+        from accounts.models import Role, User
+        from projects.models import Region, ProjectStatus, Project
+        from costing.models import CostingSheet, CostingSection, CostingLineItem
+        self.region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.project = Project.objects.create(project_name='P', proposal_reference='REF-PH',
+                                              status=self.status, region=self.region)
+
+        def mkuser(username, role_name):
+            role, _ = Role.objects.get_or_create(name=role_name)
+            u = User.objects.create_user(username, password='x')
+            u.role = role; u.region = self.region; u.save()
+            return u
+        self.proposal = mkuser('pr2', Role.PROPOSAL_REP)
+        self.sales = mkuser('sr2', Role.SALES_REP)
+
+        self.sheet = CostingSheet.objects.create(
+            title='S', project=self.project, created_by=self.sales,
+            margin=Decimal('40'), workflow_stage='finalized')
+        self.sec = CostingSection.objects.create(
+            costing_sheet=self.sheet, section_number='1', title='CCTV', order=0)
+        CostingLineItem.objects.create(
+            section=self.sec, item_number='1', description='Camera', quantity=Decimal('1'),
+            base_unit_cost=Decimal(self.FIGURE), supplier_currency='SAR', margin=Decimal('40'))
+
+    def _detail(self, user):
+        self.client.force_login(user)
+        return self.client.get(reverse('costing:detail', kwargs={'pk': self.sheet.pk}))
+
+    def _rows(self, user):
+        # Line-item rows lazy-load via this AJAX fragment — the real figure surface.
+        self.client.force_login(user)
+        return self.client.get(reverse('costing:section_items', kwargs={'pk': self.sec.pk}))
+
+    def test_sales_sees_totals_and_row_figures(self):
+        detail = self._detail(self.sales)
+        self.assertTrue(detail.context['can_see_pricing'])
+        self.assertContains(detail, 'GRAND TOTAL')      # totals row present inline
+        rows = self._rows(self.sales)
+        self.assertContains(rows, self.FIGURE)          # base unit cost in the AJAX rows
+
+    def test_proposal_team_gets_no_figures_anywhere(self):
+        detail = self._detail(self.proposal)
+        self.assertFalse(detail.context['can_see_pricing'])
+        self.assertNotContains(detail, 'GRAND TOTAL')   # no totals row at all
+        rows = self._rows(self.proposal)
+        self.assertNotContains(rows, self.FIGURE)        # cost absent from AJAX source
+        self.assertContains(rows, 'Camera')              # BOM item still visible
+
+    def test_list_hides_margin_column_from_proposal(self):
+        self.client.force_login(self.proposal)
+        resp = self.client.get(reverse('costing:list'))
+        self.assertFalse(resp.context['can_see_pricing'])
+        self.assertNotContains(resp, '<th>Margin</th>')
+
+
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
 class RevisionDedupTests(TestCase):
     """Re-exporting an unchanged sheet must not create a duplicate revision
