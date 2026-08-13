@@ -769,6 +769,21 @@ class HeldRequestDisplayTests(TestCase):
         resp = self.client.get(reverse('hr:leave_request_list'))
         self.assertNotContains(resp, 'Exceeds balance')
 
+    def test_my_profile_shows_exceeds_balance_badge(self):
+        # The badge already existed on the Leave Queue and detail pages,
+        # and on the Direct Reports card's in-behalf lines, but was never
+        # rendered on the employee's own top-level leave requests table.
+        from hr.leave_approval_services import submit_leave_request
+        emp_user = _login_user('hrd-emp')
+        self.emp.user = emp_user
+        self.emp.save(update_fields=['user'])
+        submit_leave_request(employee=self.emp, leave_type=self.lt, start_date=date(2026, 1, 1),
+                              end_date=date(2026, 2, 15), created_by=self.hr_user)
+        self.client.logout()
+        self.client.login(username='hrd-emp', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'Exceeds balance')
+
 
 class EmployeeDashboardExceptionDisplayTests(TestCase):
     def setUp(self):

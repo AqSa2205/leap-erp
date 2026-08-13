@@ -214,6 +214,7 @@
                       {% elif r.status == 'revoked' %}<span class="badge bg-secondary align-self-start">Revoked</span>
                       {% elif r.status == 'cancelled' %}<span class="badge bg-secondary align-self-start">Cancelled</span>
                       {% else %}<span class="badge bg-warning text-dark align-self-start">Pending</span>{% endif %}
+                      {% if r.exceeds_balance %}<span class="badge align-self-start" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
 
                       {% if r.status == 'approved' or r.status == 'disapproved' %}
                         {% if r.decided_by_display %}
