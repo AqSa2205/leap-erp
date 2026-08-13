@@ -323,31 +323,34 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
                     'url':      reverse_lazy('costing:detail', kwargs={'pk': sheet.pk}),
                 })
 
-        # Commercial Proposal PDF exports
-        from costing.models import CostingSheetRevision as _Rev
-        for rev in _Rev.objects.filter(sheet__in=costing_sheets, export_format='pdf').select_related('created_by', 'sheet'):
-            events.append({
-                'when':     rev.created_at,
-                'icon':     'bi-file-earmark-pdf',
-                'color':    '#C41E3A',
-                'title':    f'Commercial Proposal {rev.revision_label} exported',
-                'subtitle': rev.change_summary or rev.sheet.title,
-                'actor':    _actor_name(rev.created_by),
-                'url':      rev.file.url if rev.file else reverse_lazy('costing:detail', kwargs={'pk': rev.sheet_id}),
-            })
+        # Commercial Proposal PDF exports + vendor quotes link straight to the
+        # priced PDF / supplier cost documents, so they must never appear in the
+        # proposal team's activity feed (they work from the BOM only).
+        if not self.request.user.is_proposal_team_user:
+            from costing.models import CostingSheetRevision as _Rev
+            for rev in _Rev.objects.filter(sheet__in=costing_sheets, export_format='pdf').select_related('created_by', 'sheet'):
+                events.append({
+                    'when':     rev.created_at,
+                    'icon':     'bi-file-earmark-pdf',
+                    'color':    '#C41E3A',
+                    'title':    f'Commercial Proposal {rev.revision_label} exported',
+                    'subtitle': rev.change_summary or rev.sheet.title,
+                    'actor':    _actor_name(rev.created_by),
+                    'url':      rev.file.url if rev.file else reverse_lazy('costing:detail', kwargs={'pk': rev.sheet_id}),
+                })
 
-        # Vendor quotes uploaded
-        from costing.models import VendorQuote as _VQ
-        for vq in _VQ.objects.filter(sheet__in=costing_sheets).select_related('uploaded_by', 'sheet'):
-            events.append({
-                'when':     vq.uploaded_at,
-                'icon':     'bi-receipt',
-                'color':    '#6f42c1',
-                'title':    f'Vendor quote from {vq.vendor_name}',
-                'subtitle': f'{vq.quote_reference or "no ref"} · {vq.sheet.title}',
-                'actor':    _actor_name(vq.uploaded_by),
-                'url':      reverse_lazy('costing:detail', kwargs={'pk': vq.sheet_id}),
-            })
+            # Vendor quotes uploaded
+            from costing.models import VendorQuote as _VQ
+            for vq in _VQ.objects.filter(sheet__in=costing_sheets).select_related('uploaded_by', 'sheet'):
+                events.append({
+                    'when':     vq.uploaded_at,
+                    'icon':     'bi-receipt',
+                    'color':    '#6f42c1',
+                    'title':    f'Vendor quote from {vq.vendor_name}',
+                    'subtitle': f'{vq.quote_reference or "no ref"} · {vq.sheet.title}',
+                    'actor':    _actor_name(vq.uploaded_by),
+                    'url':      reverse_lazy('costing:detail', kwargs={'pk': vq.sheet_id}),
+                })
 
         # Technical proposals
         for tp in tech_proposals:
