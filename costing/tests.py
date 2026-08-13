@@ -315,6 +315,15 @@ class ProposalTeamPricingHiddenTests(TestCase):
         self.assertFalse(resp.context['can_see_pricing'])
         self.assertNotContains(resp, '<th>Margin</th>')
 
+    def test_project_detail_hides_financial_panel_from_proposal(self):
+        url = reverse('projects:detail', kwargs={'pk': self.project.pk})
+        # Sales sees the Financial panel (Weighted Value only lives in that card).
+        self.client.force_login(self.sales)
+        self.assertContains(self.client.get(url), 'Weighted Value')
+        # Proposal team does not.
+        self.client.force_login(self.proposal)
+        self.assertNotContains(self.client.get(url), 'Weighted Value')
+
 
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
 class RevisionDedupTests(TestCase):
