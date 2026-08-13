@@ -1074,21 +1074,26 @@
                             </div>
                             <div class="collapse {% if request.resolver_match.app_name == 'costing' and request.GET.view != 'bom' %}show{% endif %}" id="proposalsCommercial">
                                 <ul class="nav flex-column ms-3">
+                                    {# Vendor Quotes + Commercial Proposal expose pricing/cost documents — hidden from the proposal team (they keep Costing for the BOM). #}
+                                    {% if not user.is_proposal_team_user %}
                                     <li class="nav-item">
                                         <a class="nav-link py-1 {% if request.resolver_match.url_name == 'vendor_quote_list' %}active{% endif %}" href="{% url 'costing:vendor_quote_list' %}">
                                             <i class="bi bi-receipt"></i> <span>Vendor Quotes</span>
                                         </a>
                                     </li>
+                                    {% endif %}
                                     <li class="nav-item">
                                         <a class="nav-link py-1 {% if request.resolver_match.app_name == 'costing' and request.GET.view != 'bom' and request.resolver_match.url_name != 'vendor_quote_list' and request.resolver_match.url_name != 'commercial_proposal_list' %}active{% endif %}" href="{% url 'costing:list' %}">
                                             <i class="bi bi-calculator"></i> <span>Costing</span>
                                         </a>
                                     </li>
+                                    {% if not user.is_proposal_team_user %}
                                     <li class="nav-item">
                                         <a class="nav-link py-1 {% if request.resolver_match.url_name == 'commercial_proposal_list' %}active{% endif %}" href="{% url 'costing:commercial_proposal_list' %}">
                                             <i class="bi bi-file-earmark-pdf"></i> <span>Commercial Proposal</span>
                                         </a>
                                     </li>
+                                    {% endif %}
                                 </ul>
                             </div>
                         </li>

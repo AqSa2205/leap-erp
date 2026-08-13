@@ -2663,6 +2663,11 @@ def commercial_proposal_pdf_list(request):
     """
     from .models import CostingSheetRevision
     user = request.user
+    # Commercial Proposal PDFs are the fully-priced proposal documents — the
+    # proposal team must never access them (they work from the BOM only).
+    if not _user_can_see_pricing(user):
+        messages.error(request, 'Commercial Proposals include pricing and are not available to the proposal team.')
+        return redirect('costing:list')
     qs = CostingSheetRevision.objects.filter(export_format='pdf').select_related(
         'sheet', 'sheet__project', 'created_by',
     )
@@ -2670,9 +2675,6 @@ def commercial_proposal_pdf_list(request):
         from django.db.models import Q as _Q
         if user.is_admin_user or user.is_manager_user:
             qs = qs.filter(_Q(sheet__created_by=user) | _Q(sheet__project__region=user.region))
-        elif getattr(user, 'is_proposal_team_user', False):
-            # Proposal team sees every sheet (same as CostingPermissionMixin)
-            pass
         else:
             qs = qs.filter(sheet__created_by=user)
 

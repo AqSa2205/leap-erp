@@ -1111,7 +1111,8 @@
     </div>
 </div>
 
-<!-- Revisions -->
+<!-- Revisions — saved priced PDF/Excel exports; hidden entirely from the proposal team -->
+{% if can_see_pricing %}
 <div class="card mt-3 bom-pricing-only">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>
@@ -1218,6 +1219,7 @@
         </div>
     </div>
 </div>
+{% endif %}
 
 <!-- PDF Terms & Conditions Selection -->
 <div class="card mt-3 bom-pricing-only">
