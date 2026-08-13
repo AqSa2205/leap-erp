@@ -516,8 +516,7 @@
 
     <!-- Side Panel -->
     <div class="col-lg-4">
-        {# Financial panel — all value/cost figures; hidden from procurement and,
-           per policy, the proposal team (they work from the BOM only). #}
+        {# Financial panel — all value/cost figures; hidden from procurement and the proposal team (they work from the BOM only). #}
         {% if not user.is_procurement_user and not user.is_proposal_team_user %}
         <div class="card mb-4">
             <div class="card-header" style="background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%); color: #fff;">

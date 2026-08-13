@@ -319,10 +319,24 @@ class ProposalTeamPricingHiddenTests(TestCase):
         url = reverse('projects:detail', kwargs={'pk': self.project.pk})
         # Sales sees the Financial panel (Weighted Value only lives in that card).
         self.client.force_login(self.sales)
-        self.assertContains(self.client.get(url), 'Weighted Value')
+        sales_resp = self.client.get(url)
+        self.assertContains(sales_resp, 'Weighted Value')
         # Proposal team does not.
         self.client.force_login(self.proposal)
-        self.assertNotContains(self.client.get(url), 'Weighted Value')
+        prop_resp = self.client.get(url)
+        self.assertNotContains(prop_resp, 'Weighted Value')
+        # Django template comments must never render as literal text (a multi-line
+        # {# #} silently does — guard against that regression).
+        for resp in (sales_resp, prop_resp):
+            self.assertNotContains(resp, '{#')
+            self.assertNotContains(resp, 'work from the BOM only')
+
+    def test_costing_detail_template_comments_do_not_render(self):
+        self.client.force_login(self.proposal)
+        resp = self.client.get(reverse('costing:detail', kwargs={'pk': self.sheet.pk}))
+        self.assertNotContains(resp, '{#')
+        rows = self.client.get(reverse('costing:section_items', kwargs={'pk': self.sec.pk}))
+        self.assertNotContains(rows, '{#')
 
 
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
