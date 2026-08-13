@@ -7714,6 +7714,34 @@ class MyProfileLeaveEditCancelUITests(TestCase):
         self.assertIn('<select name="leave_type"', content)
         self.assertNotIn(f'<input type="hidden" name="leave_type" value="{self.lt.pk}">', content)
 
+    def test_failed_edit_shows_the_real_reason_and_keeps_the_attempted_type(self):
+        # Regression: a failed edit (e.g. switching to a leave type that
+        # requires a document, with none attached) used to show only a
+        # generic "check the form" message and silently revert the
+        # reopened dropdown back to the pre-edit type — indistinguishable
+        # from the edit having been thrown away. It must now show the
+        # real per-field reason and keep showing what was attempted.
+        sick, _ = LeaveType.objects.get_or_create(
+            code='sick', defaults={'name': 'Sick', 'default_annual_days': 15})
+        sick.requires_medical_certificate = True
+        sick.save()
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=sick, year=2026, entitled_days=15)
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'edit_leave_request', 'request_id': self.req.pk,
+            'leave_type': sick.pk, 'start_date': '2026-08-01', 'end_date': '2026-08-02',
+            'employee_reason': '',
+        }, follow=True)
+        self.assertContains(resp, 'A medical certificate/document is required for Sick leave.')
+        self.assertNotContains(resp, 'Could not update the request — please check the form.')
+        content = resp.content.decode()
+        idx = content.find(f'id="editLeave{self.req.pk}"')
+        self.assertGreater(idx, -1)
+        row_html = content[idx:idx + 1500]
+        self.assertIn(f'value="{sick.pk}" selected', row_html)
+        # The request itself must be untouched — the failed edit never applied.
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.leave_type, self.lt)
+
     def test_edit_button_and_reset_warning_still_show_once_decided(self):
         approver = make_user('mpled_approver', password='x')
         LeaveRequestApproval.objects.create(leave_request=self.req, approver=approver, decision='approved')
@@ -8261,6 +8289,26 @@ class LeaveQueueMyLoggedRequestsUITests(TestCase):
         content = resp.content.decode()
         self.assertIn('<select name="leave_type"', content)
         self.assertNotIn(f'<input type="hidden" name="leave_type" value="{self.lt.pk}">', content)
+
+    def test_failed_edit_shows_the_real_reason_and_keeps_the_attempted_type(self):
+        sick, _ = LeaveType.objects.get_or_create(
+            code='sick', defaults={'name': 'Sick', 'default_annual_days': 15})
+        sick.requires_medical_certificate = True
+        sick.save()
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=sick, year=2026, entitled_days=15)
+        resp = self.client.post(reverse('hr:leave_request_list'), {
+            'action': 'edit_leave_request', 'request_id': self.req.pk,
+            'leave_type': sick.pk, 'start_date': '2026-04-01', 'end_date': '2026-04-02',
+        }, follow=True)
+        self.assertContains(resp, 'A medical certificate/document is required for Sick leave.')
+        self.assertNotContains(resp, 'Could not update the request — please check the form.')
+        content = resp.content.decode()
+        idx = content.find(f'id="editLogged{self.req.pk}"')
+        self.assertGreater(idx, -1)
+        row_html = content[idx:idx + 1500]
+        self.assertIn(f'value="{sick.pk}" selected', row_html)
+        self.req.refresh_from_db()
+        self.assertEqual(self.req.leave_type, self.lt)
 
     def test_post_edit_can_change_the_leave_type(self):
         # self.req/self.lt are already 'annual' (see setUp) — use a

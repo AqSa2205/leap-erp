@@ -293,6 +293,31 @@ def hr_dashboard(request):
     return render(request, 'hr/dashboard.html', context)
 
 
+def _edit_leave_retry_redirect(request, base_url_name, target, edit_form, extra_params=None):
+    """A failed leave-request edit (POST-redirect-GET) used to redirect
+    with only a generic 'check the form' flash message, discarding both
+    the real per-field reason AND whatever the employee had just typed —
+    the reopened panel silently reverted to the pre-edit values, which
+    read as the edit having been thrown away. This carries the actual
+    field errors and the attempted values back as query params so the
+    calling view's context-building can restore them onto the matching
+    row (see my_profile/LeaveRequestListView) instead of losing them."""
+    from urllib.parse import urlencode
+    error_text = ' '.join(str(e) for errs in edit_form.errors.values() for e in errs)
+    messages.error(request, f'Could not update the request: {error_text}')
+    params = {
+        'opened_leave': target.pk,
+        'edit_error': error_text,
+        'retry_leave_type': request.POST.get('leave_type', ''),
+        'retry_start_date': request.POST.get('start_date', ''),
+        'retry_end_date': request.POST.get('end_date', ''),
+        'retry_reason': request.POST.get('employee_reason', ''),
+    }
+    if extra_params:
+        params.update(extra_params)
+    return redirect(f"{reverse(base_url_name)}?{urlencode(params)}")
+
+
 @login_required
 def my_profile(request):
     """Self-service portal: the logged-in user's own HR record — attendance,
@@ -353,11 +378,13 @@ def my_profile(request):
                 messages.success(request, 'Leave request updated.')
             except ValueError as exc:
                 messages.error(request, str(exc))
+                # opened_leave tells the page which row's edit panel to
+                # re-expand after the reload, so the employee actually
+                # sees the change they just made instead of it collapsing
+                # back to hidden.
+                return redirect(f"{reverse('hr:my_profile')}?opened_leave={target.pk}")
         else:
-            messages.error(request, 'Could not update the request — please check the form.')
-        # opened_leave tells the page which row's edit panel to re-expand
-        # after the reload, so the employee actually sees the change they
-        # just made instead of it collapsing back to hidden.
+            return _edit_leave_retry_redirect(request, 'hr:my_profile', target, edit_form)
         return redirect(f"{reverse('hr:my_profile')}?opened_leave={target.pk}")
 
     is_cancel_leave_post = (
@@ -495,6 +522,15 @@ def my_profile(request):
             emp.leave_requests.select_related('leave_type', 'overridden_by')
             .prefetch_related('approvals__approver', 'notes__author')
             .order_by('-created_at')[:10])
+        # A failed edit (POST-redirect-GET) must not silently discard what
+        # the employee just typed, nor hide WHY it failed behind a generic
+        # message — the redirect below carries both back as query params;
+        # this reconstructs them onto the one matching row so its (still
+        # expanded) edit form shows the attempted values and the real
+        # per-field error instead of reverting to the pre-edit state.
+        from django.utils.dateparse import parse_date
+        retry_target = request.GET.get('opened_leave')
+        retry_error = request.GET.get('edit_error')
         for r in context['leave_requests']:
             # Only employee-facing notes (is_internal=False) — internal HR
             # notes must never leak here. Filtered in Python against the
@@ -509,6 +545,19 @@ def my_profile(request):
             r.decided_approvers = [
                 a.approver.get_full_name() or a.approver.username
                 for a in r.approvals.all() if a.decision != 'pending']
+            r.retry_leave_type_id = r.leave_type_id
+            r.retry_start_date = r.start_date
+            r.retry_end_date = r.end_date
+            r.retry_reason = r.employee_reason
+            r.edit_error = None
+            if retry_error and retry_target == str(r.pk):
+                r.edit_error = retry_error
+                retry_lt = request.GET.get('retry_leave_type')
+                if retry_lt and retry_lt.isdigit():
+                    r.retry_leave_type_id = int(retry_lt)
+                r.retry_start_date = parse_date(request.GET.get('retry_start_date') or '') or r.start_date
+                r.retry_end_date = parse_date(request.GET.get('retry_end_date') or '') or r.end_date
+                r.retry_reason = request.GET.get('retry_reason', r.employee_reason)
             # Cancel spans the whole pending window — before any decision
             # this is a same-day change of mind (no reason required); once
             # an approver has decided, it still works but requires a
@@ -2361,6 +2410,12 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
             LeaveRequest.objects.filter(created_by=self.request.user)
             .select_related('employee', 'leave_type').prefetch_related('approvals__approver')
             .order_by('-created_at')[:20])
+        # See _edit_leave_retry_redirect: a failed edit carries its real
+        # error and attempted values back as query params instead of
+        # silently reverting the reopened form to the pre-edit state.
+        from django.utils.dateparse import parse_date
+        retry_target = self.request.GET.get('opened_leave')
+        retry_error = self.request.GET.get('edit_error')
         for req in my_logged_requests:
             # Edit spans the whole pending window, same as Cancel — editing
             # after a decision resets that decision (see edit_leave_request),
@@ -2371,6 +2426,19 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
                 a.approver.get_full_name() or a.approver.username
                 for a in req.approvals.all() if a.decision != 'pending']
             req.can_cancel = bool(req.status == 'pending')
+            req.retry_leave_type_id = req.leave_type_id
+            req.retry_start_date = req.start_date
+            req.retry_end_date = req.end_date
+            req.retry_reason = req.employee_reason
+            req.edit_error = None
+            if retry_error and retry_target == str(req.pk):
+                req.edit_error = retry_error
+                retry_lt = self.request.GET.get('retry_leave_type')
+                if retry_lt and retry_lt.isdigit():
+                    req.retry_leave_type_id = int(retry_lt)
+                req.retry_start_date = parse_date(self.request.GET.get('retry_start_date') or '') or req.start_date
+                req.retry_end_date = parse_date(self.request.GET.get('retry_end_date') or '') or req.end_date
+                req.retry_reason = self.request.GET.get('retry_reason', req.employee_reason)
         ctx['my_logged_requests'] = my_logged_requests
         ctx['active_leave_types'] = LeaveType.objects.filter(is_active=True).order_by('name')
         return ctx
@@ -2399,8 +2467,10 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
                     messages.success(request, 'Leave request updated.')
                 except ValueError as exc:
                     messages.error(request, str(exc))
+                    return redirect(f"{reverse('hr:leave_request_list')}?opened_leave={target.pk}&tab=logged")
             else:
-                messages.error(request, 'Could not update the request — please check the form.')
+                return _edit_leave_retry_redirect(
+                    request, 'hr:leave_request_list', target, edit_form, extra_params={'tab': 'logged'})
             # opened_leave + tab=logged tell the page which row's edit panel
             # to re-expand, and which tab to switch to, after the reload —
             # so the change is actually visible instead of collapsing back
