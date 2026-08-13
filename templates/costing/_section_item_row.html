@@ -25,8 +25,9 @@
             {% endfor %}
         </select>
     </td>
-    <td class="num bom-pricing-only" data-computed="final_unit_price">{{ item.final_unit_price|mul:conversion_rate|floatformat:2|intcomma }}</td>
-    <td class="num fw-bold bom-pricing-only" data-computed="final_total_price">{{ item.final_total_price|mul:conversion_rate|floatformat:2|intcomma }}</td>
+    {# Pricing/cost figures are gated server-side (can_see_pricing): cells stay for table alignment but carry no value for the proposal team, so no figure reaches the page source. #}
+    <td class="num bom-pricing-only" data-computed="final_unit_price">{% if can_see_pricing %}{{ item.final_unit_price|mul:conversion_rate|floatformat:2|intcomma }}{% endif %}</td>
+    <td class="num fw-bold bom-pricing-only" data-computed="final_total_price">{% if can_see_pricing %}{{ item.final_total_price|mul:conversion_rate|floatformat:2|intcomma }}{% endif %}</td>
     <td class="cost-col">
         <select class="currency-select" data-item-id="{{ item.pk }}">
             {% for rate in exchange_rates %}
@@ -36,38 +37,38 @@
     </td>
     <td class="cost-col num">
         <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="base_unit_cost"
-               value="{{ item.base_unit_cost }}" step="0.01" min="0">
+               value="{% if can_see_pricing %}{{ item.base_unit_cost }}{% endif %}" step="0.01" min="0">
     </td>
     <td class="cost-col num">
         <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="discount_pct"
-               value="{{ item.display_discount_pct|floatformat:2 }}" step="1" min="0">
+               value="{% if can_see_pricing %}{{ item.display_discount_pct|floatformat:2 }}{% endif %}" step="1" min="0">
     </td>
-    <td class="cost-col num" data-computed="unit_cost">{{ item.unit_cost|floatformat:2|intcomma }}</td>
-    <td class="cost-col num" data-computed="total_cost">{{ item.total_cost|floatformat:2|intcomma }}</td>
+    <td class="cost-col num" data-computed="unit_cost">{% if can_see_pricing %}{{ item.unit_cost|floatformat:2|intcomma }}{% endif %}</td>
+    <td class="cost-col num" data-computed="total_cost">{% if can_see_pricing %}{{ item.total_cost|floatformat:2|intcomma }}{% endif %}</td>
     <td class="cost-col num">
         <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="margin"
-               value="{{ item.display_margin|floatformat:2 }}" step="1" min="0" max="99">
+               value="{% if can_see_pricing %}{{ item.display_margin|floatformat:2 }}{% endif %}" step="1" min="0" max="99">
     </td>
-    <td class="cost-col num" data-computed="base_unit_price">{{ item.base_unit_price|mul:conversion_rate|floatformat:2|intcomma }}</td>
-    <td class="cost-col num" data-computed="base_total_price">{{ item.base_total_price|mul:conversion_rate|floatformat:2|intcomma }}</td>
+    <td class="cost-col num" data-computed="base_unit_price">{% if can_see_pricing %}{{ item.base_unit_price|mul:conversion_rate|floatformat:2|intcomma }}{% endif %}</td>
+    <td class="cost-col num" data-computed="base_total_price">{% if can_see_pricing %}{{ item.base_total_price|mul:conversion_rate|floatformat:2|intcomma }}{% endif %}</td>
     <td class="cost-col num">
         <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="shipping_pct"
-               value="{{ item.display_shipping_pct|floatformat:2 }}" step="1" min="0">
+               value="{% if can_see_pricing %}{{ item.display_shipping_pct|floatformat:2 }}{% endif %}" step="1" min="0">
     </td>
     <td class="cost-col num">
         <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="customs_pct"
-               value="{{ item.display_customs_pct|floatformat:2 }}" step="1" min="0">
+               value="{% if can_see_pricing %}{{ item.display_customs_pct|floatformat:2 }}{% endif %}" step="1" min="0">
     </td>
     <td class="cost-col num">
         <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="finances_pct"
-               value="{{ item.display_finances_pct|floatformat:2 }}" step="1" min="0">
+               value="{% if can_see_pricing %}{{ item.display_finances_pct|floatformat:2 }}{% endif %}" step="1" min="0">
     </td>
     <td class="cost-col num">
         <input type="number" class="cost-edit" data-item-id="{{ item.pk }}" data-field="installation_pct"
-               value="{{ item.display_installation_pct|floatformat:2 }}" step="1" min="0">
+               value="{% if can_see_pricing %}{{ item.display_installation_pct|floatformat:2 }}{% endif %}" step="1" min="0">
     </td>
-    <td class="cost-col num" data-computed="final_unit_price">{{ item.final_unit_price|mul:conversion_rate|floatformat:2|intcomma }}</td>
-    <td class="cost-col num fw-bold" data-computed="final_total_price">{{ item.final_total_price|mul:conversion_rate|floatformat:2|intcomma }}</td>
+    <td class="cost-col num" data-computed="final_unit_price">{% if can_see_pricing %}{{ item.final_unit_price|mul:conversion_rate|floatformat:2|intcomma }}{% endif %}</td>
+    <td class="cost-col num fw-bold" data-computed="final_total_price">{% if can_see_pricing %}{{ item.final_total_price|mul:conversion_rate|floatformat:2|intcomma }}{% endif %}</td>
     <td class="text-center">
         <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1 insert-row-btn" data-item-id="{{ item.pk }}" title="Insert row below"><i class="bi bi-plus-lg"></i></button>
         <a href="{% url 'costing:item_delete' item.pk %}" class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"><i class="bi bi-trash"></i></a>

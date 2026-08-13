@@ -148,7 +148,7 @@
                         <th>Costing started</th>
                         <th>Finalised</th>
                         <th title="Working days from pipeline created to Sales finalised (weekends excluded)">Duration</th>
-                        <th>Margin</th>
+                        {% if can_see_pricing %}<th>Margin</th>{% endif %}
                         <th>Currency</th>
                         <th>Worked On By</th>
                         <th>Updated</th>
@@ -185,7 +185,7 @@
                         </td>
                         {% endfor %}
                         <td class="fw-semibold">{{ sheet.total_cycle_display }}</td>
-                        <td>{{ sheet.margin }}%</td>
+                        {% if can_see_pricing %}<td>{{ sheet.margin }}%</td>{% endif %}
                         <td>{{ sheet.output_currency }}</td>
                         <td>
                             {% if sheet.created_by %}{{ sheet.created_by.get_full_name|default:sheet.created_by.username }}{% else %}-{% endif %}
