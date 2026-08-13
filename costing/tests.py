@@ -338,6 +338,15 @@ class ProposalTeamPricingHiddenTests(TestCase):
         rows = self.client.get(reverse('costing:section_items', kwargs={'pk': self.sec.pk}))
         self.assertNotContains(rows, '{#')
 
+    def test_commercial_proposal_pdf_list_blocked_for_proposal(self):
+        # The Commercial Proposal list is the fully-priced proposal PDFs — the
+        # proposal team must be redirected out, sales gets in.
+        url = reverse('costing:commercial_proposal_list')
+        self.client.force_login(self.sales)
+        self.assertEqual(self.client.get(url).status_code, 200)
+        self.client.force_login(self.proposal)
+        self.assertEqual(self.client.get(url).status_code, 302)
+
 
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
 class RevisionDedupTests(TestCase):
