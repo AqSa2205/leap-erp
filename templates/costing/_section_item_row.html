@@ -25,9 +25,7 @@
             {% endfor %}
         </select>
     </td>
-    {# All pricing/cost figures below are gated server-side: for the proposal team
-       (can_see_pricing is False) the cells stay for table alignment but carry no
-       value, so no figure is ever emitted to the page source. #}
+    {# Pricing/cost figures are gated server-side (can_see_pricing): cells stay for table alignment but carry no value for the proposal team, so no figure reaches the page source. #}
     <td class="num bom-pricing-only" data-computed="final_unit_price">{% if can_see_pricing %}{{ item.final_unit_price|mul:conversion_rate|floatformat:2|intcomma }}{% endif %}</td>
     <td class="num fw-bold bom-pricing-only" data-computed="final_total_price">{% if can_see_pricing %}{{ item.final_total_price|mul:conversion_rate|floatformat:2|intcomma }}{% endif %}</td>
     <td class="cost-col">
