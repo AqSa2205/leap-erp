@@ -3588,6 +3588,50 @@ class MyProfileLeaveRequestTests(TestCase):
         self.assertEqual(req.created_by, self.user)
         self.assertEqual(req.status, 'pending')
 
+    def test_edit_keeps_inactive_leave_type_no_silent_switch(self):
+        # A pending request whose type was later deactivated must still show +
+        # keep that type on edit, not silently switch to another active type.
+        req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage,
+            start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 2),
+            created_by=self.user, status='pending')
+        self.marriage.is_active = False
+        self.marriage.save(update_fields=['is_active'])
+        self.client.login(username='profile_user', password='testpass123')
+        # The edit dropdown still includes the (now-inactive) current type.
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertIn(self.marriage, list(resp.context['active_leave_types']))
+        # Editing (keeping the inactive type) keeps it — no silent switch.
+        self.client.post(reverse('hr:my_profile'), {
+            'action': 'edit_leave_request', 'request_id': req.pk,
+            'leave_type': self.marriage.pk,
+            'start_date': '2026-08-01', 'end_date': '2026-08-02',
+            'employee_reason': 'updated'})
+        req.refresh_from_db()
+        self.assertEqual(req.leave_type_id, self.marriage.pk)
+        self.assertEqual(req.employee_reason, 'updated')
+
+    def test_service_level_edit_failure_preserves_values_inline(self):
+        # A ValueError from edit_leave_request (form passed, locked re-check
+        # failed) must carry the attempted values + real error back, not revert.
+        from unittest.mock import patch
+        req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.annual,
+            start_date=_date(2026, 8, 1), end_date=_date(2026, 8, 2),
+            created_by=self.user, status='pending')
+        self.client.login(username='profile_user', password='testpass123')
+        with patch('hr.leave_approval_services.edit_leave_request',
+                   side_effect=ValueError('Balance exceeded')):
+            resp = self.client.post(reverse('hr:my_profile'), {
+                'action': 'edit_leave_request', 'request_id': req.pk,
+                'leave_type': self.annual.pk,
+                'start_date': '2026-08-01', 'end_date': '2026-08-05',
+                'employee_reason': 'longer'})
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('edit_error=', resp.url)                 # real reason carried
+        self.assertIn('retry_end_date=2026-08-05', resp.url)   # attempted value kept
+        self.assertIn(f'opened_leave={req.pk}', resp.url)
+
     def test_request_exceeding_balance_is_rejected_with_visible_error(self):
         # Marriage entitlement is 3 days (setUp); this request spans 10 days.
         self.client.login(username='profile_user', password='testpass123')

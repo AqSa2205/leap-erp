@@ -53,9 +53,10 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         existing = Employee.objects.filter(iqama_number__startswith=TAG_PREFIX)
-        if existing.exists():
+        removed = existing.count()  # count BEFORE delete — afterwards it's always 0
+        if removed:
             existing.delete()
-            self.stdout.write(f'Removed {existing.count()} existing demo employee(s).')
+            self.stdout.write(f'Removed {removed} existing demo employee(s).')
         User.objects.filter(username__in=DEMO_USERNAMES).delete()
 
         if options['wipe']:
