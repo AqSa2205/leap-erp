@@ -13,6 +13,7 @@ from .models import (
     TechnicalProposal, ProposalBoilerplate,
     PrequalificationDocument, PQDAttachment,
     ProposalSection, SectionHeading, EngineeringDocument,
+    SectionHeadingTemplate,
 )
 from .forms import (
     ProposalMetadataForm, ProposalContentForm, EngineeringDocumentFormSet,
@@ -287,11 +288,13 @@ class ProposalEditContentView(LoginRequiredMixin, UserPassesTestMixin, View):
         return _can_edit_proposal(self.request.user, self.get_object())
 
     def _context(self, obj, section_fs, eng_fs):
+        headings = SectionHeading.objects.filter(is_active=True)
         return {
             'object': obj,
             'section_formset': section_fs,
             'eng_formset': eng_fs,
-            'headings': SectionHeading.objects.filter(is_active=True),
+            'headings': headings,
+            'headings_map': {h.name: h.pk for h in headings},
         }
 
     def get(self, request, pk):
@@ -430,6 +433,29 @@ def ajax_load_boilerplate(request, pk):
         'section': boilerplate.section,
         'name': boilerplate.name,
     })
+
+
+@login_required
+def ajax_load_heading_template(request, pk):
+    """Return a department's pre-composed content for a given heading, to
+    load into a section's editor. New, standalone endpoint — does not touch
+    ajax_load_boilerplate or any existing flow."""
+    proposal = get_object_or_404(TechnicalProposal, pk=pk)
+    if not _can_edit_proposal(request.user, proposal):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    heading_id = request.GET.get('heading_id')
+    department = request.GET.get('department')
+    if not heading_id or not department:
+        return JsonResponse({'error': 'heading_id and department are required'}, status=400)
+
+    tmpl = SectionHeadingTemplate.objects.filter(
+        heading_id=heading_id, department=department).first()
+    if not tmpl or not tmpl.content:
+        return JsonResponse(
+            {'error': f'No {department} template for this heading yet.'}, status=404)
+
+    return JsonResponse({'content': tmpl.content})
 
 
 # ─── DOCX Export ──────────────────────────────────────────────

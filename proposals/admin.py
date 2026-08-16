@@ -1,8 +1,11 @@
 from django.contrib import admin
+from tinymce.widgets import TinyMCE
+from django import forms
 from .models import (
     TechnicalProposal, EngineeringDocument, ProposalBoilerplate,
     SectionHeading, ProposalSection,
     PrequalLibraryItem, PrequalSubmission,
+    SectionHeadingTemplate,
 )
 
 
@@ -58,3 +61,32 @@ class TechnicalProposalAdmin(admin.ModelAdmin):
 class ProposalBoilerplateAdmin(admin.ModelAdmin):
     list_display = ['name', 'section', 'created_at']
     list_filter = ['section']
+
+
+class SectionHeadingTemplateForm(forms.ModelForm):
+    class Meta:
+        model = SectionHeadingTemplate
+        fields = '__all__'
+        widgets = {'content': TinyMCE(attrs={'cols': 100, 'rows': 25}, mce_attrs={
+            'plugins': 'code table lists image link',
+            'toolbar': 'undo redo | blocks | bold italic underline | '
+                       'bullist numlist | table | image | code',
+            'menubar': False,
+            # Match the main proposal editor: keep image/link URLs
+            # root-relative, don't rewrite them relative to this admin
+            # page's own (nested) URL.
+            'relative_urls': False,
+            'remove_script_host': True,
+            'document_base_url': '/',
+        })}
+
+
+@admin.register(SectionHeadingTemplate)
+class SectionHeadingTemplateAdmin(admin.ModelAdmin):
+    """Where the AI/Telecom/Procurement template content is authored per
+    heading. This is the admin screen your manager/team lead uses to paste
+    in each department's composed section content (with images)."""
+    form = SectionHeadingTemplateForm
+    list_display = ['heading', 'department', 'updated_at']
+    list_filter = ['department', 'heading']
+    search_fields = ['heading__name']
