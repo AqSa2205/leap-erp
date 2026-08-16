@@ -288,13 +288,25 @@ class ProposalEditContentView(LoginRequiredMixin, UserPassesTestMixin, View):
         return _can_edit_proposal(self.request.user, self.get_object())
 
     def _context(self, obj, section_fs, eng_fs):
-        headings = SectionHeading.objects.filter(is_active=True)
+        # Generic headings: the original shared library, unaffected by the
+        # AI/Telecom/Procurement feature — exactly what was there before.
+        headings = SectionHeading.objects.filter(
+            is_active=True, dept_templates__isnull=True).distinct()
+
+        # Department-specific headings: only ones that have a composed
+        # template for that department. One group per department, so the
+        # template can show/hide the right group under the toggle.
+        dept_headings = {}
+        for dept_code, _label in SectionHeadingTemplate.DEPARTMENT_CHOICES:
+            dept_headings[dept_code] = SectionHeading.objects.filter(
+                is_active=True, dept_templates__department=dept_code).distinct()
+
         return {
             'object': obj,
             'section_formset': section_fs,
             'eng_formset': eng_fs,
             'headings': headings,
-            'headings_map': {h.name: h.pk for h in headings},
+            'dept_headings': dept_headings,
         }
 
     def get(self, request, pk):
@@ -323,7 +335,13 @@ class ProposalEditContentView(LoginRequiredMixin, UserPassesTestMixin, View):
 def add_proposal_section(request, pk):
     """Add one or more sections to a proposal at once — any number of checked
     library headings (each pre-fills its default content) plus an optional typed
-    custom heading. Returns to the editor."""
+    custom heading. Returns to the editor.
+
+    Optional 'department' POST field (ai/telecom/procurement): when set, any
+    checked heading that has a SectionHeadingTemplate for that department
+    pre-fills with that composed content instead of the heading's generic
+    default_content. Left blank (or omitted) behaves exactly as before.
+    """
     proposal = get_object_or_404(TechnicalProposal, pk=pk)
     if not _can_edit_proposal(request.user, proposal):
         messages.error(request, 'Permission denied.')
@@ -339,6 +357,11 @@ def add_proposal_section(request, pk):
         messages.error(request, 'Pick at least one heading, or type a custom one.')
         return redirect('proposals:content', pk=pk)
 
+    department = (request.POST.get('department') or '').strip()
+    valid_departments = {code for code, _label in SectionHeadingTemplate.DEPARTMENT_CHOICES}
+    if department not in valid_departments:
+        department = ''
+
     next_order = (proposal.sections.aggregate(m=Max('order'))['m'] or 0) + 1
     is_super = request.user.is_super_admin_user
     for heading in chosen:
@@ -348,10 +371,18 @@ def add_proposal_section(request, pk):
         if lib is None and is_super:
             lib_order = (SectionHeading.objects.aggregate(m=Max('order'))['m'] or 0) + 1
             lib = SectionHeading.objects.create(name=heading, order=lib_order)
+
+        content = lib.default_content if lib else ''
+        if lib and department:
+            dept_tmpl = SectionHeadingTemplate.objects.filter(
+                heading=lib, department=department).first()
+            if dept_tmpl and dept_tmpl.content:
+                content = dept_tmpl.content
+
         ProposalSection.objects.create(
             proposal=proposal,
             heading=lib.name if lib else heading,
-            content=(lib.default_content if lib else ''),
+            content=content,
             order=next_order)
         next_order += 1
 
