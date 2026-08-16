@@ -54,4 +54,7 @@ urlpatterns = [
     path('boilerplate/<int:pk>/edit/', views.BoilerplateUpdateView.as_view(), name='boilerplate_edit'),
     path('boilerplate/<int:pk>/delete/', views.BoilerplateDeleteView.as_view(), name='boilerplate_delete'),
     path('boilerplate/<int:pk>/content/', login_required(views.ajax_load_boilerplate), name='boilerplate_content'),
+
+    # Department section templates (AI / Telecom / Procurement)
+    path('<int:pk>/load-heading-template/', login_required(views.ajax_load_heading_template), name='load_heading_template'),
 ]

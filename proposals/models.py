@@ -370,3 +370,32 @@ class PrequalSubmission(models.Model):
     def selected_in_order(self):
         """Selected library items that have a PDF, in library (heading) order."""
         return self.selected_items.filter(is_active=True, pdf__isnull=False).exclude(pdf='').order_by('order', 'heading')
+
+
+class SectionHeadingTemplate(models.Model):
+    """A department-specific, ready-to-load version of a section heading's
+    content (rich text + images). Lets the editor pre-fill a section with a
+    fully composed template instead of the single generic default_content.
+    Does not replace or modify SectionHeading.default_content in any way —
+    that fallback keeps working exactly as before for anyone who ignores this.
+    """
+    DEPARTMENT_CHOICES = [
+        ('ai', 'AI'),
+        ('telecom', 'Telecom'),
+        ('procurement', 'Procurement'),
+    ]
+
+    heading = models.ForeignKey(
+        SectionHeading, on_delete=models.CASCADE, related_name='dept_templates')
+    department = models.CharField(max_length=20, choices=DEPARTMENT_CHOICES)
+    content = models.TextField(
+        blank=True, help_text='Rich HTML content, same format as a proposal section.')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('heading', 'department')
+        ordering = ['heading__order', 'department']
+
+    def __str__(self):
+        return f'{self.heading.name} — {self.get_department_display()}'

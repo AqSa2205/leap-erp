@@ -41,6 +41,7 @@
 <datalist id="section-heading-options">
     {% for h in headings %}<option value="{{ h.name }}"></option>{% endfor %}
 </datalist>
+{{ headings_map|json_script:"headings-map-data" }}
 
 <!-- Add sections (its own form — tick any number, posts once, redirects back) -->
 <form method="post" action="{% url 'proposals:add_section' object.pk %}" class="card mb-3">
@@ -104,6 +105,14 @@
                     <div class="flex-grow-1" style="min-width:240px">
                         {{ sform.heading }}
                     </div>
+                    <select class="form-select form-select-sm dept-template-select" style="width:auto"
+                            data-content-id="{{ sform.content.id_for_label }}"
+                            data-heading-input-id="{{ sform.heading.id_for_label }}">
+                        <option value="">Load template…</option>
+                        <option value="ai">AI</option>
+                        <option value="telecom">Telecom</option>
+                        <option value="procurement">Procurement</option>
+                    </select>
                     <div class="form-check mb-0 ms-auto">
                         {{ sform.DELETE }}
                         <label class="form-check-label small text-danger" for="{{ sform.DELETE.id_for_label }}">Remove</label>
@@ -286,6 +295,54 @@ document.addEventListener('DOMContentLoaded', function() {
         function sync() { block.classList.toggle('to-delete', box.checked); }
         box.addEventListener('change', sync);
         sync();
+    });
+
+    // ─── Department section templates (AI / Telecom / Procurement) ──
+    var HEADING_MAP = JSON.parse(document.getElementById('headings-map-data').textContent);
+    document.querySelectorAll('.dept-template-select').forEach(function(sel) {
+        sel.addEventListener('change', function() {
+            var department = sel.value;
+            if (!department) return;
+
+            var headingInput = document.getElementById(sel.dataset.headingInputId);
+            var headingName = (headingInput.value || '').trim();
+            var headingId = HEADING_MAP[headingName];
+
+            if (!headingId) {
+                alert('This heading isn\'t in the shared library, so it has no ' +
+                      department + ' template. Pick a heading from the suggestions list first.');
+                sel.value = '';
+                return;
+            }
+
+            var editor = tinymce.get(sel.dataset.contentId);
+            if (editor && editor.getContent({ format: 'text' }).trim() !== '') {
+                if (!confirm('This section already has content. Replace it with the ' + department + ' template?')) {
+                    sel.value = '';
+                    return;
+                }
+            }
+
+            fetch("{% url 'proposals:load_heading_template' object.pk %}?heading_id=" + headingId + "&department=" + department)
+                .then(function(r) { return r.json().then(function(data) { return { ok: r.ok, data: data }; }); })
+                .then(function(res) {
+                    if (!res.ok) {
+                        alert(res.data.error || 'Could not load that template.');
+                        sel.value = '';
+                        return;
+                    }
+                    if (editor) {
+                        editor.setContent(res.data.content);
+                    } else {
+                        document.getElementById(sel.dataset.contentId).value = res.data.content;
+                    }
+                    sel.value = '';
+                })
+                .catch(function() {
+                    alert('Network error loading the template.');
+                    sel.value = '';
+                });
+        });
     });
 });
 </script>
