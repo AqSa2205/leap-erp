@@ -413,7 +413,7 @@
                                         {% if item.is_overridden %}
                                         <span class="badge bg-warning text-dark ms-1" data-edited-badge="{{ item.template.pk }}">Edited for this PO</span>
                                         {% endif %}
-                                        <br><small class="text-muted">{{ item.content|truncatewords:15 }}</small>
+                                        <br><small class="text-muted" data-term-preview="{{ item.template.pk }}">{{ item.content|truncatewords_html:15|safe }}</small>
                                     </label>
                                     {% comment %}
                                     Per-PO wording. Saved to POTermOverride, never back to the
@@ -429,17 +429,22 @@
                                         </button>
                                         <div class="po-term-editor mt-1" data-term-editor="{{ item.template.pk }}" style="display:none;">
                                             <textarea class="form-control form-control-sm po-term-text"
-                                                      name="term_content_{{ item.template.pk }}"
+                                                      name="term_content_{{ item.template.pk }}" id="po-term-text-{{ item.template.pk }}"
                                                       data-term-text="{{ item.template.pk }}"
                                                       data-original="{{ item.template.content }}"
                                                       rows="5">{{ item.content }}</textarea>
                                             <div class="d-flex justify-content-between align-items-center mt-1">
                                                 <small class="text-muted">Applies to this PO only.</small>
+                                                <div>
+                                                    <button type="button" class="btn btn-sm btn-success py-0 me-1 po-term-save"
+                                                            data-term-save="{{ item.template.pk }}">
+                                                        Save
+                                                    </button>
                                                 <button type="button" class="btn btn-sm btn-outline-secondary py-0 po-term-reset"
                                                         data-term-reset="{{ item.template.pk }}">
                                                     Reset to template
                                                 </button>
-                                            </div>
+                                                </div>
                                         </div>
                                     </div>
                                 </div>
@@ -510,7 +515,7 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label fw-bold">Content</label>
-                        <textarea name="content" class="form-control" rows="6" required placeholder="One item per line — they'll be numbered/lettered in the PDF."></textarea>
+                        <textarea name="content" id="quickAddContent" class="form-control" rows="6" placeholder="One item per line - they'll be numbered/lettered in the PDF."></textarea>
                     </div>
                     <div id="quickAddTermsError" class="alert alert-danger d-none mb-0"></div>
                 </div>
@@ -696,6 +701,21 @@ document.addEventListener('DOMContentLoaded', function() {
     const errBox = document.getElementById('quickAddTermsError');
     const modalEl = document.getElementById('quickAddTermsModal');
 
+    modalEl.addEventListener('shown.bs.modal', function () {
+        if (window.tinymce && !tinymce.get('quickAddContent')) {
+            tinymce.init({
+                selector: '#quickAddContent',
+                height: 250,
+                menubar: false,
+                branding: false,
+                promotion: false,
+                plugins: 'lists',
+                toolbar: 'undo redo | fontsize forecolor backcolor | bold italic underline | bullist numlist | alignleft aligncenter alignright | removeformat',
+                font_size_formats: '8pt 9pt 10pt 11pt 12pt 14pt 16pt 18pt 24pt',
+            });
+        }
+    });
+
     // Category order matches CATEGORY_CHOICES so new sections insert in the
     // right place when the category didn't yet exist on this page.
     const CATEGORY_ORDER = ['terms_and_conditions', 'exclusions', 'payment_terms', 'conclusion'];
@@ -771,6 +791,15 @@ document.addEventListener('DOMContentLoaded', function() {
         const submitBtn = form.querySelector('button[type="submit"]');
         submitBtn.disabled = true;
         try {
+            if (window.tinymce && tinymce.get('quickAddContent')) { tinymce.get('quickAddContent').save(); }
+            var contentField = form.querySelector('[name="content"]');
+            var contentText = contentField.value.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+            if (!contentText) {
+                errBox.textContent = 'Content is required.';
+                errBox.classList.remove('d-none');
+                submitBtn.disabled = false;
+                return;
+            }
             const fd = new FormData(form);
             const resp = await fetch(form.action, {
                 method: 'POST',
@@ -785,6 +814,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             insertTemplateCheckbox(data);
             form.reset();
+            if (window.tinymce && tinymce.get('quickAddContent')) { tinymce.get('quickAddContent').setContent(''); }
             bootstrap.Modal.getInstance(modalEl).hide();
         } catch (err) {
             errBox.textContent = 'Network error — please try again.';
@@ -816,7 +846,53 @@ document.addEventListener('DOMContentLoaded', function() {
         var toggle = e.target.closest('.po-term-edit-toggle');
         if (toggle) {
             var ed = editorFor(toggle.dataset.termToggle);
-            if (ed) ed.style.display = (ed.style.display === 'none') ? '' : 'none';
+            if (ed) {
+                var wasHidden = ed.style.display === 'none';
+                ed.style.display = wasHidden ? '' : 'none';
+                if (wasHidden) {
+                    var ta = textFor(toggle.dataset.termToggle);
+                    if (ta && window.tinymce && !tinymce.get(ta.id)) {
+                        tinymce.init({
+                            selector: '#' + ta.id,
+                            height: 250,
+                            menubar: false,
+                            branding: false,
+                            promotion: false,
+                            plugins: 'lists',
+                            toolbar: 'undo redo | fontsize forecolor backcolor | bold italic underline | bullist numlist | alignleft aligncenter alignright | removeformat',
+                            font_size_formats: '8pt 9pt 10pt 11pt 12pt 14pt 16pt 18pt 24pt',
+                            setup: function (editor) {
+                                editor.on('input change keyup', function () {
+                                    editor.save();
+                                    editor.getElement().dispatchEvent(new Event('input', { bubbles: true }));
+                                });
+                            },
+                        });
+                    }
+                }
+            }
+            return;
+        }
+        var save = e.target.closest('.po-term-save');
+        if (save) {
+            var saveId = save.dataset.termSave;
+            var ta2 = textFor(saveId);
+            if (ta2) {
+                var ed2 = window.tinymce ? tinymce.get(ta2.id) : null;
+                if (ed2) { ed2.save(); }
+                var preview = document.querySelector('[data-term-preview="' + saveId + '"]');
+                if (preview && ed2) { preview.innerHTML = ed2.getContent(); }
+                var ed2wrap = editorFor(saveId);
+                if (ed2wrap) { ed2wrap.style.display = 'none'; }
+                save.textContent = 'Saved';
+                save.classList.remove('btn-success');
+                save.classList.add('btn-outline-success');
+                setTimeout(function () {
+                    save.textContent = 'Save';
+                    save.classList.add('btn-success');
+                    save.classList.remove('btn-outline-success');
+                }, 1500);
+            }
             return;
         }
         var reset = e.target.closest('.po-term-reset');
@@ -824,6 +900,8 @@ document.addEventListener('DOMContentLoaded', function() {
             var ta = textFor(reset.dataset.termReset);
             if (ta) {
                 ta.value = ta.dataset.original;
+                var ed = window.tinymce ? tinymce.get(ta.id) : null;
+                if (ed) { ed.setContent(ta.dataset.original); }
                 ta.dispatchEvent(new Event('input'));
             }
         }
@@ -886,5 +964,29 @@ document.addEventListener('DOMContentLoaded', function() {
         save();
     });
 })();
+</script>
+
+<!-- TinyMCE for Terms & Conditions - font size and color controls -->
+{% load static %}
+<script src="{% static 'tinymce/tinymce.min.js' %}"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    tinymce.init({
+        selector: 'textarea.tinymce-editor',
+        height: 300,
+        menubar: false,
+        branding: false,
+        promotion: false,
+        plugins: 'lists',
+        toolbar: 'undo redo | fontsize forecolor backcolor | bold italic underline | bullist numlist | alignleft aligncenter alignright | removeformat',
+        font_size_formats: '8pt 9pt 10pt 11pt 12pt 14pt 16pt 18pt 24pt',
+        setup: function (editor) {
+            editor.on('input change keyup', function () {
+                editor.save();
+                editor.getElement().dispatchEvent(new Event('input', { bubbles: true }));
+            });
+        },
+    });
+});
 </script>
 {% endblock %}

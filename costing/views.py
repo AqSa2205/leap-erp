@@ -1497,9 +1497,11 @@ def ajax_create_terms_template(request):
         name=name, category=category, content=content, usage=usage,
         created_by=request.user,
     )
-    preview = ' '.join(template.content.split()[:15])
-    if len(template.content.split()) > 15:
-        preview += '…'
+    from django.utils.html import strip_tags
+    plain_content = strip_tags(template.content)
+    preview = ' '.join(plain_content.split()[:15])
+    if len(plain_content.split()) > 15:
+        preview += '...'
     return JsonResponse({
         'pk': template.pk,
         'name': template.name,
@@ -3493,6 +3495,7 @@ def costing_export_pdf(request, pk):
     """Export a professional PDF summary matching the commercial offer format"""
     try:
         from reportlab.lib import colors
+        from procurement.views import _tinymce_html_to_reportlab_lines, _reportlab_style_for_line
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import mm
@@ -4057,8 +4060,8 @@ def costing_export_pdf(request, pk):
         elements.append(Paragraph('Terms &amp; Conditions:', section_hdr_style))
         for tmpl in tc_templates:
             elements.append(Paragraph(f'<b>{tmpl.name}</b>', sub_hdr_style))
-            for line in [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]:
-                elements.append(Paragraph(line, body_style))
+            for line, max_pt in _tinymce_html_to_reportlab_lines(tmpl.content):
+                elements.append(Paragraph(line, _reportlab_style_for_line(body_style, max_pt)))
         if tc_legacy and not tc_templates:
             for line in [l.strip() for l in tc_legacy.splitlines() if l.strip()]:
                 elements.append(Paragraph(line, body_style))
@@ -4077,9 +4080,9 @@ def costing_export_pdf(request, pk):
         letters = list(string.ascii_lowercase)
         idx = 0
         for tmpl in excl_templates:
-            for line in [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]:
+            for line, max_pt in _tinymce_html_to_reportlab_lines(tmpl.content):
                 letter = letters[idx] if idx < len(letters) else str(idx + 1)
-                elements.append(Paragraph(f'{letter}. {line}', body_style))
+                elements.append(Paragraph(f'{letter}. {line}', _reportlab_style_for_line(body_style, max_pt)))
                 idx += 1
         if excl_legacy and not excl_templates:
             for line in [l.strip() for l in excl_legacy.splitlines() if l.strip()]:
@@ -4094,8 +4097,8 @@ def costing_export_pdf(request, pk):
     if pt_templates or pt_legacy:
         elements.append(Paragraph('Payment Terms:', section_hdr_style))
         for tmpl in pt_templates:
-            for line in [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]:
-                elements.append(Paragraph(line, body_style))
+            for line, max_pt in _tinymce_html_to_reportlab_lines(tmpl.content):
+                elements.append(Paragraph(line, _reportlab_style_for_line(body_style, max_pt)))
         if pt_legacy and not pt_templates:
             for line in [l.strip() for l in pt_legacy.splitlines() if l.strip()]:
                 elements.append(Paragraph(line, body_style))
@@ -4107,8 +4110,8 @@ def costing_export_pdf(request, pk):
     if conc_templates or conc_legacy:
         elements.append(Paragraph('Conclusion', section_hdr_style))
         for tmpl in conc_templates:
-            for line in [l.strip() for l in tmpl.content.strip().splitlines() if l.strip()]:
-                elements.append(Paragraph(line, body_style))
+            for line, max_pt in _tinymce_html_to_reportlab_lines(tmpl.content):
+                elements.append(Paragraph(line, _reportlab_style_for_line(body_style, max_pt)))
         if conc_legacy and not conc_templates:
             for line in [l.strip() for l in conc_legacy.splitlines() if l.strip()]:
                 elements.append(Paragraph(line, body_style))

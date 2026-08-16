@@ -102,6 +102,7 @@ class TermsTemplateForm(forms.ModelForm):
             else:
                 field.widget.attrs['class'] = 'form-control'
 
+        self.fields['content'].widget.attrs['class'] += ' tinymce-editor'
 
 class ClientRemarkTemplateForm(forms.ModelForm):
     class Meta:

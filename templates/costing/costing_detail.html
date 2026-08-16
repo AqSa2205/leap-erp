@@ -1243,7 +1243,7 @@
                            {% if item.selected %}checked{% endif %}>
                     <label class="form-check-label" for="term-{{ item.template.pk }}">
                         <strong>{{ item.template.name }}</strong>
-                        <br><small class="text-muted">{{ item.template.content|truncatewords:15 }}</small>
+                        <br><small class="text-muted">{{ item.template.content|truncatewords_html:15|safe }}</small>
                     </label>
                 </div>
             </div>

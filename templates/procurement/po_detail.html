@@ -412,7 +412,7 @@
                 <h6 class="text-muted text-uppercase fw-bold mb-3" style="font-size:0.78rem; letter-spacing:0.5px;">
                     <i class="bi bi-file-earmark-text me-1"></i> PO Notes
                 </h6>
-                <div style="font-size:0.9rem; line-height:1.7;">{{ po.terms_and_conditions|linebreaks }}</div>
+                <div style="font-size:0.9rem; line-height:1.7;">{{ po.terms_and_conditions|safe }}</div>
             </div>
             {% endif %}
 
@@ -447,7 +447,7 @@
                                     {% if item.is_overridden %}
                                     <span class="badge bg-warning text-dark ms-1" title="This PO uses edited wording — the shared template is unchanged">Edited for this PO</span>
                                     {% endif %}
-                                    <br><small class="text-muted">{{ item.content|truncatewords:15 }}</small>
+                                    <br><small class="text-muted">{{ item.content|truncatewords_html:15|safe }}</small>
                                 </label>
                             </div>
                         </div>

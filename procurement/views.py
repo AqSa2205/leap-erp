@@ -1447,10 +1447,161 @@ def po_export_excel(request, pk):
 
 # ─── PDF Export ───────────────────────────────────────────────
 
+def _tinymce_html_to_reportlab_lines(html):
+    # Converts TinyMCE-produced HTML into a list of (markup, max_pt) tuples,
+    # one per block (paragraph/list item). markup is ReportLab Paragraph-
+    # markup text; max_pt is the largest inline font-size (in points) used
+    # within that line, or None if no explicit size was set - callers use
+    # this to give large lines enough leading/line-height so they don't
+    # collide with the paragraph that follows (a fixed base leading is too
+    # tight for a much larger inline font-size override).
+    #
+    # Only handles the specific inline styles our TinyMCE toolbar can
+    # actually produce - font-size, text color, background color
+    # (highlight), bold, italic, underline, plus <ul>/<ol> lists. Each
+    # flushed line is self-contained: any inline tags still open at a
+    # <br>/<p> boundary are closed before the line ends and reopened for
+    # whatever text follows, so every line is valid on its own.
+    import re
+    from html.parser import HTMLParser
+    from xml.sax.saxutils import escape as xml_escape
+
+    font_size_re = re.compile(r'font-size:\s*([\d.]+)pt')
+    font_color_re = re.compile(r'(?<!background-)color:\s*(#[0-9a-fA-F]{6})')
+    back_color_re = re.compile(r'background-color:\s*(#[0-9a-fA-F]{6})')
+
+    class Converter(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.lines = []  # list of (markup, max_pt)
+            self.current = []
+            self.open_tags = []  # list of (open_markup, close_markup, size_pt) currently open
+            self.current_max_pt = None
+            self.list_stack = []
+            self.list_counters = []
+
+        def flush_current(self, prefix=''):
+            closers = ''.join(close for _, close, _ in reversed(self.open_tags))
+            text = (''.join(self.current) + closers).strip()
+            if text:
+                self.lines.append((prefix + text, self.current_max_pt))
+            openers = ''.join(open_ for open_, _, _ in self.open_tags)
+            self.current = [openers] if openers else []
+            self.current_max_pt = max(
+                (pt for _, _, pt in self.open_tags if pt), default=None)
+
+        def _note_size(self, pt):
+            if pt and (self.current_max_pt is None or pt > self.current_max_pt):
+                self.current_max_pt = pt
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if tag in ('p', 'div', 'br'):
+                self.flush_current()
+            elif tag in ('ul', 'ol'):
+                self.list_stack.append(tag)
+                self.list_counters.append(0)
+            elif tag == 'li':
+                self.flush_current()
+            elif tag in ('strong', 'b'):
+                self.current.append('<b>')
+                self.open_tags.append(('<b>', '</b>', None))
+            elif tag in ('em', 'i'):
+                self.current.append('<i>')
+                self.open_tags.append(('<i>', '</i>', None))
+            elif tag == 'u':
+                self.current.append('<u>')
+                self.open_tags.append(('<u>', '</u>', None))
+            elif tag == 'span':
+                style = attrs.get('style', '')
+                open_markup = ''
+                close_markup = ''
+                size_pt = None
+                size_match = font_size_re.search(style)
+                color_match = font_color_re.search(style)
+                back_match = back_color_re.search(style)
+                if size_match or color_match or back_match:
+                    font_attrs = ''
+                    if size_match:
+                        size_pt = int(float(size_match.group(1)))
+                        font_attrs += ' size="%d"' % size_pt
+                        self._note_size(size_pt)
+                    if color_match:
+                        font_attrs += ' color="%s"' % color_match.group(1)
+                    if back_match:
+                        font_attrs += ' backColor="%s"' % back_match.group(1)
+                    open_markup += '<font%s>' % font_attrs
+                    close_markup = '</font>' + close_markup
+                if 'text-decoration: underline' in style or 'text-decoration:underline' in style:
+                    open_markup += '<u>'
+                    close_markup = '</u>' + close_markup
+                if open_markup:
+                    self.current.append(open_markup)
+                    self.open_tags.append((open_markup, close_markup, size_pt))
+                else:
+                    self.open_tags.append(('', '', None))
+            else:
+                self.open_tags.append(('', '', None))
+
+        def handle_endtag(self, tag):
+            if tag in ('p', 'div'):
+                self.flush_current()
+            elif tag in ('ul', 'ol'):
+                if self.list_stack:
+                    self.list_stack.pop()
+                    self.list_counters.pop()
+            elif tag == 'li':
+                if self.list_stack and self.list_stack[-1] == 'ol':
+                    self.list_counters[-1] += 1
+                    prefix = '%d. ' % self.list_counters[-1]
+                else:
+                    prefix = '- '
+                self.flush_current(prefix=prefix)
+            elif tag in ('strong', 'b', 'em', 'i', 'u', 'span'):
+                if self.open_tags:
+                    _, close, _ = self.open_tags.pop()
+                    if close:
+                        self.current.append(close)
+
+        def handle_data(self, data):
+            self.current.append(xml_escape(data))
+
+    parser = Converter()
+    parser.feed(html or '')
+    parser.open_tags = []  # don't auto-reopen on the final flush
+    parser.current_max_pt = None
+    parser.flush_current()
+    return parser.lines
+
+
+def _reportlab_style_for_line(base_style, max_pt):
+    # Returns base_style unchanged if the line has no inline font-size
+    # override larger than the base, otherwise a cloned style sized up so
+    # the line has enough leading to not collide with what follows.
+    if not max_pt or max_pt <= base_style.fontSize:
+        return base_style
+    from reportlab.lib.styles import ParagraphStyle
+    return ParagraphStyle(
+        base_style.name + '_big%d' % max_pt, parent=base_style,
+        fontSize=max_pt, leading=int(max_pt * 1.25))
+
+
+def _reportlab_style_for_line(base_style, max_pt):
+    # Returns base_style unchanged if the line has no inline font-size
+    # override larger than the base, otherwise a cloned style sized up so
+    # the line has enough leading to not collide with what follows.
+    if not max_pt or max_pt <= base_style.fontSize:
+        return base_style
+    from reportlab.lib.styles import ParagraphStyle
+    return ParagraphStyle(
+        base_style.name + '_big%d' % max_pt, parent=base_style,
+        fontSize=max_pt, leading=int(max_pt * 1.25))
+
+
 @login_required
 def po_export_pdf(request, pk, unpriced=False):
-    """Export a Purchase Order to PDF matching the original format.
 
+    """Export a Purchase Order to PDF matching the original format.
     When ``unpriced`` is True, all commercial figures are omitted — the
     Rate/Unit and Total columns, the totals block, and the amount-in-words
     line — producing a scope-only copy safe to share without revealing pricing.
@@ -1459,7 +1610,7 @@ def po_export_pdf(request, pk, unpriced=False):
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, KeepTogether
     from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
     from reportlab.pdfgen.canvas import Canvas
     from io import BytesIO
@@ -1704,7 +1855,7 @@ def po_export_pdf(request, pk, unpriced=False):
             ('TOPPADDING', (0, 0), (-1, total_row_idx), 2),
             ('BOTTOMPADDING', (0, 0), (-1, total_row_idx), 2),
         ]))
-        elements.append(totals_table)
+        elements.append(KeepTogether(totals_table))
 
     # ── Approvals — rendered progressively as each stage is signed.
     # Order: SCM → PM → COO → CEO. CEO is omitted entirely for POs under
@@ -1804,13 +1955,13 @@ def po_export_pdf(request, pk, unpriced=False):
         for tmpl in selected_terms:
             elements.append(Paragraph(f'<b>{_xml_escape(tmpl.name)}</b>', sub_hdr_style))
             _content = term_text.get(tmpl.pk, tmpl.content)
-            for line in [l.strip() for l in _content.splitlines() if l.strip()]:
-                elements.append(Paragraph(_xml_escape(line), tc_style))
+            for line, max_pt in _tinymce_html_to_reportlab_lines(_content):
+                elements.append(Paragraph(line, _reportlab_style_for_line(tc_style, max_pt)))
             elements.append(Spacer(1, 1*mm))
 
         if legacy_tc:
-            for line in [l.strip() for l in legacy_tc.split('\n') if l.strip()]:
-                elements.append(Paragraph(_xml_escape(line), tc_style))
+            for line, max_pt in _tinymce_html_to_reportlab_lines(legacy_tc):
+                elements.append(Paragraph(line, _reportlab_style_for_line(tc_style, max_pt)))
             elements.append(Spacer(1, 1*mm))
 
     try:
