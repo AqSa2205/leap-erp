@@ -31,6 +31,11 @@
         <code class="ms-2">{{ object.proposal_reference }}</code>
     </div>
     <div class="d-flex align-items-center gap-2">
+        <div class="btn-group btn-group-sm" role="group" aria-label="Department template toggle" id="deptToggle">
+            <button type="button" class="btn btn-outline-primary dept-toggle-btn" data-dept="ai">AI</button>
+            <button type="button" class="btn btn-outline-primary dept-toggle-btn" data-dept="telecom">Telecom</button>
+            <button type="button" class="btn btn-outline-primary dept-toggle-btn" data-dept="procurement">Procurement</button>
+        </div>
         <a href="{% url 'proposals:export_docx' object.pk %}" class="btn btn-success btn-sm">
             <i class="bi bi-file-earmark-word me-1"></i> Export DOCX
         </a>
@@ -40,8 +45,8 @@
 <!-- Heading library for the datalist (shared by Add Section and per-row heading inputs) -->
 <datalist id="section-heading-options">
     {% for h in headings %}<option value="{{ h.name }}"></option>{% endfor %}
+    {% for dept, dept_hs in dept_headings.items %}{% for h in dept_hs %}<option value="{{ h.name }}"></option>{% endfor %}{% endfor %}
 </datalist>
-{{ headings_map|json_script:"headings-map-data" }}
 
 <!-- Add sections (its own form — tick any number, posts once, redirects back) -->
 <form method="post" action="{% url 'proposals:add_section' object.pk %}" class="card mb-3">
@@ -58,6 +63,7 @@
         </div>
     </div>
     <div class="card-body py-3">
+        <input type="hidden" name="department" id="sectDepartmentField" value="">
         {% if headings %}
         <div class="row g-1 mb-2">
             {% for h in headings %}
@@ -74,6 +80,27 @@
         {% else %}
         <p class="text-muted small mb-2">No headings in the library yet — add some in the admin, or type a custom one below.</p>
         {% endif %}
+
+        {% for dept, dept_hs in dept_headings.items %}
+        {% if dept_hs %}
+        <div class="dept-heading-panel" data-dept="{{ dept }}" style="display:none">
+            <div class="small text-muted mb-1">{{ dept|upper }} sections:</div>
+            <div class="row g-1 mb-2">
+                {% for h in dept_hs %}
+                <div class="col-lg-3 col-md-4 col-sm-6">
+                    <div class="form-check">
+                        <input class="form-check-input sect-pick" type="checkbox" name="heading"
+                               value="{{ h.name }}" id="pick-{{ dept }}-{{ h.pk }}">
+                        <label class="form-check-label" for="pick-{{ dept }}-{{ h.pk }}">{{ h.name }}</label>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            <hr class="my-2">
+        </div>
+        {% endif %}
+        {% endfor %}
+
         <div class="d-flex flex-wrap gap-2 align-items-center">
             <label class="small text-muted mb-0">Custom heading:</label>
             <input type="text" name="custom_heading" class="form-control form-control-sm"
@@ -105,14 +132,6 @@
                     <div class="flex-grow-1" style="min-width:240px">
                         {{ sform.heading }}
                     </div>
-                    <select class="form-select form-select-sm dept-template-select" style="width:auto"
-                            data-content-id="{{ sform.content.id_for_label }}"
-                            data-heading-input-id="{{ sform.heading.id_for_label }}">
-                        <option value="">Load template…</option>
-                        <option value="ai">AI</option>
-                        <option value="telecom">Telecom</option>
-                        <option value="procurement">Procurement</option>
-                    </select>
                     <div class="form-check mb-0 ms-auto">
                         {{ sform.DELETE }}
                         <label class="form-check-label small text-danger" for="{{ sform.DELETE.id_for_label }}">Remove</label>
@@ -297,51 +316,35 @@ document.addEventListener('DOMContentLoaded', function() {
         sync();
     });
 
-    // ─── Department section templates (AI / Telecom / Procurement) ──
-    var HEADING_MAP = JSON.parse(document.getElementById('headings-map-data').textContent);
-    document.querySelectorAll('.dept-template-select').forEach(function(sel) {
-        sel.addEventListener('change', function() {
-            var department = sel.value;
-            if (!department) return;
+    // ─── Department toggle (AI / Telecom / Procurement) ──────────
+    var deptField = document.getElementById('sectDepartmentField');
+    document.querySelectorAll('.dept-toggle-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var wasActive = btn.classList.contains('active');
 
-            var headingInput = document.getElementById(sel.dataset.headingInputId);
-            var headingName = (headingInput.value || '').trim();
-            var headingId = HEADING_MAP[headingName];
+            // Reset all buttons, hide all panels, uncheck anything inside
+            // hidden panels so a stale checked box can't sneak into the
+            // submit after the toggle moves away from it.
+            document.querySelectorAll('.dept-toggle-btn').forEach(function(b) {
+                b.classList.remove('active', 'btn-primary');
+                b.classList.add('btn-outline-primary');
+            });
+            document.querySelectorAll('.dept-heading-panel').forEach(function(panel) {
+                panel.style.display = 'none';
+                panel.querySelectorAll('.sect-pick').forEach(function(cb) { cb.checked = false; });
+            });
 
-            if (!headingId) {
-                alert('This heading isn\'t in the shared library, so it has no ' +
-                      department + ' template. Pick a heading from the suggestions list first.');
-                sel.value = '';
+            if (wasActive) {
+                deptField.value = '';
                 return;
             }
 
-            var editor = tinymce.get(sel.dataset.contentId);
-            if (editor && editor.getContent({ format: 'text' }).trim() !== '') {
-                if (!confirm('This section already has content. Replace it with the ' + department + ' template?')) {
-                    sel.value = '';
-                    return;
-                }
-            }
+            btn.classList.add('active', 'btn-primary');
+            btn.classList.remove('btn-outline-primary');
+            deptField.value = btn.dataset.dept;
 
-            fetch("{% url 'proposals:load_heading_template' object.pk %}?heading_id=" + headingId + "&department=" + department)
-                .then(function(r) { return r.json().then(function(data) { return { ok: r.ok, data: data }; }); })
-                .then(function(res) {
-                    if (!res.ok) {
-                        alert(res.data.error || 'Could not load that template.');
-                        sel.value = '';
-                        return;
-                    }
-                    if (editor) {
-                        editor.setContent(res.data.content);
-                    } else {
-                        document.getElementById(sel.dataset.contentId).value = res.data.content;
-                    }
-                    sel.value = '';
-                })
-                .catch(function() {
-                    alert('Network error loading the template.');
-                    sel.value = '';
-                });
+            var panel = document.querySelector('.dept-heading-panel[data-dept="' + btn.dataset.dept + '"]');
+            if (panel) panel.style.display = '';
         });
     });
 });
