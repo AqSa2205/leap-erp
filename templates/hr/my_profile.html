@@ -91,7 +91,7 @@
                     {% elif day.status == 'leave' %}<span class="badge bg-secondary">Leave</span>
                     {% elif day.status == 'holiday' %}<span class="badge bg-success">Holiday</span>
                     {% elif day.status == 'late' %}<span class="badge bg-warning text-dark">Late</span>
-                    {% if day.late_query %}
+                    {% if day.late_query and day.late_query.status != 'rejected' %}
                       <span class="badge bg-light text-dark border ms-1" title="{{ day.late_query.message }}">
                         Query: {{ day.late_query.get_status_display }}
                       </span>
@@ -108,7 +108,7 @@
           </div>
           {% endif %}
           {% for day in daily_attendance %}
-          {% if day.status == 'late' and not day.late_query %}
+          {% if day.can_raise_query %}
           <div class="modal fade" id="queryModal{{ day.record.pk }}" tabindex="-1">
             <div class="modal-dialog">
               <div class="modal-content">

@@ -113,7 +113,7 @@ class AttendanceRecord(models.Model):
         from accounts.models import User
         emp = self.employee
         month_label = month_start.strftime('%B %Y')
-        employee_verb = 'was late 3 times this month'
+        employee_verb = 'You were late 3 times this month'
         employee_description = 'You were late thrice this month. An email has been sent to you.'
         hr_verb = f'{emp.full_name} was late 3 times this month'
         hr_description = f'{emp.full_name} was late 3 times this month. An email has been sent.'
