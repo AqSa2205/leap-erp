@@ -81,10 +81,10 @@
     <button type="button" class="btn btn-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#fillRangeModal">
       <i class="bi bi-calendar-range"></i> Fill Date Range
     </button>
-    <a href="{% url 'engineer_calendar:export_excel' %}?year={{ year }}&month={{ month }}" class="btn btn-outline-success btn-sm">
+    <a href="{% url 'engineer_calendar:export_excel' %}?year={{ year }}&month={{ month }}&location={{ location }}" class="btn btn-outline-success btn-sm">
       <i class="bi bi-file-earmark-excel"></i> Export to Excel
     </a>
-    <a href="{% url 'engineer_calendar:download_all_zip' %}" class="btn btn-outline-success btn-sm">
+    <a href="{% url 'engineer_calendar:download_all_zip' %}?location={{ location }}" class="btn btn-outline-success btn-sm">
       <i class="bi bi-file-earmark-zip"></i> Download All Months
     </a>
   </div>

@@ -57,6 +57,22 @@ def _adjacent_month(year, month, delta):
     return year, month
 
 
+def _normalize_location(value):
+    """Same fail-safe rule everywhere the location toggle is read: anything
+    other than exactly 'site' is treated as 'office'."""
+    return 'site' if value == 'site' else 'office'
+
+
+def _filter_employees_by_location(employees, location):
+    """Shared by the on-screen grid and every export path so they can
+    never drift apart on who counts as 'office' vs 'site'."""
+    if location == 'site':
+        return employees.filter(work_location='site')
+    # 'office' also catches blank work_location, so nobody silently
+    # disappears just because their profile isn't filled in.
+    return employees.exclude(work_location='site')
+
+
 def _clear_merge_span(employee, start_date, end_date):
     """Clear merge markers on every cell in [start_date, end_date]."""
     CalendarCell.objects.filter(
@@ -113,10 +129,14 @@ def _build_day_cells(emp_cells, year, month, days_in_month):
     return day_cells
 
 
-def _build_calendar_workbook(year, month):
+def _build_calendar_workbook(year, month, location=None):
     """Build one month's Engineer Calendar workbook. Pulled out of
     export_excel so the zip download can reuse it for many months without
-    duplicating any of the styling/merge logic."""
+    duplicating any of the styling/merge logic.
+
+    location=None keeps the full roster; export_excel and
+    download_all_months_zip always pass the toggle value so the export
+    matches whatever's currently on screen."""
     days_in_month = calendar.monthrange(year, month)[1]
 
     cells = CalendarCell.objects.filter(date__year=year, date__month=month).select_related('employee')
@@ -128,6 +148,8 @@ def _build_calendar_workbook(year, month):
     employees = Employee.objects.filter(
         Q(is_active=True) | Q(pk__in=cells.values_list('employee_id', flat=True))
     ).distinct()
+    if location is not None:
+        employees = _filter_employees_by_location(employees, location)
     cell_map = {}
     for cell in cells:
         cell_map.setdefault(cell.employee_id, {})[cell.date.day] = cell
@@ -271,7 +293,8 @@ def _build_calendar_workbook(year, month):
 @require_capability('engineer_calendar.access')
 def export_excel(request):
     year, month = _resolve_year_month(request)
-    wb, filename = _build_calendar_workbook(year, month)
+    location = _normalize_location(request.GET.get('location'))
+    wb, filename = _build_calendar_workbook(year, month, location=location)
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
@@ -293,10 +316,12 @@ def download_all_months_zip(request):
         messages.error(request, 'There is no calendar data to download yet.')
         return redirect('engineer_calendar:grid')
 
+    location = _normalize_location(request.GET.get('location'))
+
     buf = BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         for yr, mo in months:
-            month_wb, month_filename = _build_calendar_workbook(yr, mo)
+            month_wb, month_filename = _build_calendar_workbook(yr, mo, location=location)
             month_buf = BytesIO()
             month_wb.save(month_buf)
             zf.writestr(month_filename, month_buf.getvalue())
@@ -466,20 +491,13 @@ def calendar_grid(request):
     # anyone since deactivated who still has calendar data for this exact
     # month, so a past month never quietly shows fewer people on screen
     # than what the Excel export for that same month contains.
-    location = request.GET.get('location')
-    if location != 'site':
-        location = 'office'
+    location = _normalize_location(request.GET.get('location'))
 
     month_cells = CalendarCell.objects.filter(date__year=year, date__month=month)
     employees = Employee.objects.filter(
         Q(is_active=True) | Q(pk__in=month_cells.values_list('employee_id', flat=True))
     ).distinct()
-    if location == 'site':
-        employees = employees.filter(work_location='site')
-    else:
-        # 'office' toggle also catches blank work_location, so nobody
-        # silently disappears just because their profile isn't filled in.
-        employees = employees.exclude(work_location='site')
+    employees = _filter_employees_by_location(employees, location)
 
     cells = CalendarCell.objects.filter(
         date__year=year, date__month=month

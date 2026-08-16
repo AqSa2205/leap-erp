@@ -6,6 +6,7 @@ explicit assertion so a future regression (IDOR-ish capability leak, silent
 display_text bug, CSRF bypass, merge split) fails loudly.
 """
 import json
+import re
 import zipfile
 from datetime import date, timedelta
 from decimal import Decimal
@@ -1219,12 +1220,75 @@ class CalendarGridLocationToggleTests(TestCase):
 
     def test_office_toggle_link_marked_active_by_default(self):
         response = self._get()
+        content = response.content.decode()
         self.assertContains(response, 'location=office')
         self.assertContains(response, 'location=site')
-        # crude but effective: the office button should carry 'active',
-        # the site one should not, when location == 'office'
-        content = response.content.decode()
-        office_idx = content.find('location=office')
-        site_idx = content.find('location=site')
-        self.assertNotEqual(office_idx, -1)
-        self.assertNotEqual(site_idx, -1)
+
+        # Extract each toggle anchor tag specifically, so an inverted
+        # {% if %} would actually fail this test instead of just passing
+        # because both substrings happen to appear somewhere on the page.
+        office_tag = re.search(
+            r'<a href="[^"]*location=office[^"]*" class="btn btn-outline-primary[^"]*">', content)
+        site_tag = re.search(
+            r'<a href="[^"]*location=site[^"]*" class="btn btn-outline-primary[^"]*">', content)
+        self.assertIsNotNone(office_tag)
+        self.assertIsNotNone(site_tag)
+        self.assertIn('active', office_tag.group(0))
+        self.assertNotIn('active', site_tag.group(0))
+
+
+
+class ExportExcelLocationFilterTests(TestCase):
+    """Regression guard for the review comment: the Excel export and the
+    all-months zip must respect the same location filter as the on-screen
+    grid, so what HR downloads always matches what they were looking at."""
+
+    def setUp(self):
+        self.client = Client()
+        self.admin, _ = _make_user_with_employee(
+            'calexploc', role_name=Role.ADMIN, full_name='Cal Export Loc Admin')
+        seed_default_permissions()
+        self.client.login(username='calexploc', password='testpass123')
+
+        today = date.today()
+        self.office_emp = Employee.objects.create(
+            full_name='Export Office Emp', designation='Engineer',
+            work_location='office', is_active=True, iqama_number='IQ-exp-office')
+        self.site_emp = Employee.objects.create(
+            full_name='Export Site Emp', designation='Engineer',
+            work_location='site', is_active=True, iqama_number='IQ-exp-site')
+        for emp in (self.office_emp, self.site_emp):
+            CalendarCell.objects.create(
+                employee=emp, date=date(today.year, today.month, 1),
+                display_text='X', source=CalendarCell.SOURCE_MANUAL)
+
+    def _names_in_export(self, location=None):
+        url = reverse('engineer_calendar:export_excel')
+        if location is not None:
+            url += f'?location={location}'
+        resp = self.client.get(url)
+        wb = load_workbook(BytesIO(resp.content))
+        ws = wb.active
+        return [str(v) for row in ws.iter_rows(values_only=True) for v in row if v is not None]
+
+    def test_export_defaults_to_office_like_the_grid(self):
+        values = self._names_in_export()
+        self.assertTrue(any('Export Office Emp' in v for v in values))
+        self.assertFalse(any('Export Site Emp' in v for v in values))
+
+    def test_export_site_matches_grid_site_toggle(self):
+        values = self._names_in_export(location='site')
+        self.assertTrue(any('Export Site Emp' in v for v in values))
+        self.assertFalse(any('Export Office Emp' in v for v in values))
+
+    def test_all_months_zip_respects_location(self):
+        url = reverse('engineer_calendar:download_all_zip') + '?location=site'
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        zf = zipfile.ZipFile(BytesIO(resp.content))
+        month_file = zf.namelist()[0]
+        wb = load_workbook(BytesIO(zf.read(month_file)))
+        ws = wb.active
+        values = [str(v) for row in ws.iter_rows(values_only=True) for v in row if v is not None]
+        self.assertTrue(any('Export Site Emp' in v for v in values))
+        self.assertFalse(any('Export Office Emp' in v for v in values))
