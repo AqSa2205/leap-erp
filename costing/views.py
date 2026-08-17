@@ -85,6 +85,21 @@ def _user_can_view_sheet(user, sheet):
     return False
 
 
+def _user_can_see_pricing(user):
+    """Whether costing FIGURES (costs, prices, margins, totals) may be shown.
+
+    The proposal team works from the BOM only and must never have access to any
+    pricing — not just visually, but not present in the page source either. This
+    single predicate gates every figure server-side so nothing is emitted to a
+    proposal-team browser. (Procurement no longer reaches the sheet at all, but
+    is kept here as defence-in-depth.)
+    """
+    if not getattr(user, 'is_authenticated', False):
+        return False
+    return not (getattr(user, 'is_proposal_team_user', False)
+                or getattr(user, 'is_procurement_user', False))
+
+
 def _user_can_view_margin_analysis(user, sheet):
     """Margin analysis exposes cost & profit and drives finance approval, so it
     is restricted to the finance team and super admin only."""
@@ -472,6 +487,7 @@ class CostingListView(CapabilityRequiredMixin, CostingPermissionMixin, ListView)
         from projects.models import Region, ProjectStatus
         from accounts.models import User
         context = super().get_context_data(**kwargs)
+        context['can_see_pricing'] = _user_can_see_pricing(self.request.user)
         context['filter_form'] = CostingFilterForm(self.request.GET)
         context['total_count'] = self.get_queryset().count()
         context['workflow_stage_choices'] = CostingSheet.WORKFLOW_STAGE_CHOICES
@@ -1115,6 +1131,7 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
 
         context['can_edit'] = _user_can_edit_sheet(self.request.user, sheet)
         context['edit_lock_reason'] = _edit_lock_reason(self.request.user, sheet)
+        context['can_see_pricing'] = _user_can_see_pricing(self.request.user)
 
         return context
 
@@ -1759,6 +1776,7 @@ def ajax_section_items(request, pk):
         'exchange_rates': exchange_rates,
         'conversion_rate': conversion_rate,
         'output_currency': sheet.output_currency,
+        'can_see_pricing': _user_can_see_pricing(request.user),
     }, request=request)
     return HttpResponse(html)
 
@@ -2064,6 +2082,7 @@ def ajax_paste_line_items(request, pk):
             'exchange_rates': exchange_rates,
             'output_currency': sheet.output_currency,
             'conversion_rate': conversion_rate,
+            'can_see_pricing': _user_can_see_pricing(request.user),
         }))
 
     return JsonResponse({
@@ -2253,6 +2272,7 @@ def ajax_add_line_item(request, pk):
         'exchange_rates': exchange_rates,
         'output_currency': sheet.output_currency,
         'conversion_rate': conversion_rate,
+        'can_see_pricing': _user_can_see_pricing(request.user),
     })
     return JsonResponse({'ok': True, 'html': html, 'item_pk': item.pk})
 
@@ -2309,6 +2329,7 @@ def ajax_insert_line_item_after(request, pk):
         'exchange_rates': exchange_rates,
         'output_currency': sheet.output_currency,
         'conversion_rate': conversion_rate,
+        'can_see_pricing': _user_can_see_pricing(request.user),
     })
     return JsonResponse({
         'ok': True, 'html': html, 'item_pk': item.pk, 'renumbered': renumbered,
@@ -2642,6 +2663,11 @@ def commercial_proposal_pdf_list(request):
     """
     from .models import CostingSheetRevision
     user = request.user
+    # Commercial Proposal PDFs are the fully-priced proposal documents — the
+    # proposal team must never access them (they work from the BOM only).
+    if not _user_can_see_pricing(user):
+        messages.error(request, 'Commercial Proposals include pricing and are not available to the proposal team.')
+        return redirect('costing:list')
     qs = CostingSheetRevision.objects.filter(export_format='pdf').select_related(
         'sheet', 'sheet__project', 'created_by',
     )
@@ -2649,9 +2675,6 @@ def commercial_proposal_pdf_list(request):
         from django.db.models import Q as _Q
         if user.is_admin_user or user.is_manager_user:
             qs = qs.filter(_Q(sheet__created_by=user) | _Q(sheet__project__region=user.region))
-        elif getattr(user, 'is_proposal_team_user', False):
-            # Proposal team sees every sheet (same as CostingPermissionMixin)
-            pass
         else:
             qs = qs.filter(sheet__created_by=user)
 

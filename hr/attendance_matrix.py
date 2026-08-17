@@ -57,6 +57,7 @@ def build_matrix(employees, start, end, with_weekend_dates=False):
     [{'employee', 'cells': [{'date','status','leave_record_id','locked'}]}].
     Batched: ~5 queries regardless of grid size."""
     from hr.models import AttendanceRecord, LeaveRecord, Holiday, AttendanceSettings, WorkingDay, WFHRecord
+    from hr.models import AttendanceException
 
     days = []
     d = start
@@ -88,6 +89,13 @@ def build_matrix(employees, start, end, with_weekend_dates=False):
         dd = max(wr.start_date, start); last = min(wr.end_date, end)
         while dd <= last:
             wfh_cells.add((wr.employee_id, dd)); dd += timedelta(days=1)
+
+    exceptions_lookup = {
+        (e.employee_id, e.event_date): (e.custom_reason.strip() or e.get_reason_category_display())
+        for e in AttendanceException.objects.filter(
+            employee_id__in=emp_ids, status='approved',
+            event_date__range=(start, end))
+    }
 
     holidays = set(Holiday.objects.filter(
         is_active=True, date__range=(start, end)).values_list('date', flat=True))
@@ -123,6 +131,7 @@ def build_matrix(employees, start, end, with_weekend_dates=False):
                 'leave_record_id': leave_pk,
                 'locked': status in ('weekend', 'holiday'),
                 'check_in': check_in, 'check_out': check_out,
+                'exception_reason': exceptions_lookup.get(key),
             })
         rows.append({'employee': emp, 'cells': cells})
     if with_weekend_dates:

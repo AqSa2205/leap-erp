@@ -1074,21 +1074,26 @@
                             </div>
                             <div class="collapse {% if request.resolver_match.app_name == 'costing' and request.GET.view != 'bom' %}show{% endif %}" id="proposalsCommercial">
                                 <ul class="nav flex-column ms-3">
+                                    {# Vendor Quotes + Commercial Proposal expose pricing/cost documents — hidden from the proposal team (they keep Costing for the BOM). #}
+                                    {% if not user.is_proposal_team_user %}
                                     <li class="nav-item">
                                         <a class="nav-link py-1 {% if request.resolver_match.url_name == 'vendor_quote_list' %}active{% endif %}" href="{% url 'costing:vendor_quote_list' %}">
                                             <i class="bi bi-receipt"></i> <span>Vendor Quotes</span>
                                         </a>
                                     </li>
+                                    {% endif %}
                                     <li class="nav-item">
                                         <a class="nav-link py-1 {% if request.resolver_match.app_name == 'costing' and request.GET.view != 'bom' and request.resolver_match.url_name != 'vendor_quote_list' and request.resolver_match.url_name != 'commercial_proposal_list' %}active{% endif %}" href="{% url 'costing:list' %}">
                                             <i class="bi bi-calculator"></i> <span>Costing</span>
                                         </a>
                                     </li>
+                                    {% if not user.is_proposal_team_user %}
                                     <li class="nav-item">
                                         <a class="nav-link py-1 {% if request.resolver_match.url_name == 'commercial_proposal_list' %}active{% endif %}" href="{% url 'costing:commercial_proposal_list' %}">
                                             <i class="bi bi-file-earmark-pdf"></i> <span>Commercial Proposal</span>
                                         </a>
                                     </li>
+                                    {% endif %}
                                 </ul>
                             </div>
                         </li>
@@ -1097,7 +1102,7 @@
                 </div>
             </li>
 
-            {% if user.is_super_admin_user or user.is_admin_user or user.is_manager_user or user.is_proposal_team_user or user.is_erp_admin_user %}
+            {% if user.is_super_admin_user or user.is_admin_user or user.is_manager_user or user.is_proposal_team_user or user.is_erp_admin_user or user.is_sales_rep_user %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'proposals' and 'prequal' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'proposals:prequal_list' %}" data-title="Prequalification">
                     <i class="bi bi-file-earmark-check"></i> <span>Prequalification</span>
@@ -1341,6 +1346,11 @@
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'hr_dashboard' %}active{% endif %}" href="{% url 'hr:hr_dashboard' %}" data-title="HR Dashboard">
                     <i class="bi bi-speedometer2"></i> <span>HR Dashboard</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name and 'employee' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:employee_list' %}" data-title="Employees">
+                    <i class="bi bi-people-fill"></i> <span>Employees</span>
                 </a>
             </li>
             {% if user|can:'timesheets.review' %}

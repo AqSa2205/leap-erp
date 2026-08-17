@@ -61,7 +61,6 @@ def derive_status(employee, d, check_in, check_out=None, approved_late_query_emp
         return 'present', _hours_between(check_in, check_out)
     return 'absent', None
 
-
 def regenerate_attendance_record(employee, d):
     # Re-derives and saves the AttendanceRecord for one employee/date - used
     # to auto-correct a day the moment an AttendanceException or LateQuery
@@ -76,3 +75,4 @@ def regenerate_attendance_record(employee, d):
         employee=employee, date=d,
         defaults={'check_in': check_in, 'check_out': check_out,
                   'status': status, 'hours_worked': hours})
+    return status, hours

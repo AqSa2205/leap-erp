@@ -293,6 +293,59 @@ def hr_dashboard(request):
     return render(request, 'hr/dashboard.html', context)
 
 
+def _edit_leave_retry_redirect(request, base_url_name, target, edit_form, extra_params=None, error_text=None):
+    """A failed leave-request edit (POST-redirect-GET) used to redirect
+    with only a generic 'check the form' flash message, discarding both
+    the real per-field reason AND whatever the employee had just typed —
+    the reopened panel silently reverted to the pre-edit values, which
+    read as the edit having been thrown away. This carries the actual
+    field errors and the attempted values back as query params so the
+    calling view's context-building can restore them onto the matching
+    row (see my_profile/LeaveRequestListView) instead of losing them.
+
+    Pass ``error_text`` to surface a service-level failure (a ValueError from
+    edit_leave_request that the form itself didn't catch — balance/overlap/
+    concurrent decision) with the same value-preserving behaviour. The message
+    is shown inline on the row only, not also as a top-of-page flash, to avoid
+    the user reading the same error twice."""
+    from urllib.parse import urlencode
+    if error_text is None:
+        error_text = ' '.join(str(e) for errs in edit_form.errors.values() for e in errs)
+    params = {
+        'opened_leave': target.pk,
+        'edit_error': error_text,
+        'retry_leave_type': request.POST.get('leave_type', ''),
+        'retry_start_date': request.POST.get('start_date', ''),
+        'retry_end_date': request.POST.get('end_date', ''),
+        'retry_reason': request.POST.get('employee_reason', ''),
+    }
+    if extra_params:
+        params.update(extra_params)
+    return redirect(f"{reverse(base_url_name)}?{urlencode(params)}")
+
+
+def _apply_leave_edit_retry(request, r):
+    """Read side of _edit_leave_retry_redirect: restore a failed edit's attempted
+    values + inline error onto row `r`. Defaults to the row's stored values, and
+    overrides them from the retry_* query params only for the row whose edit
+    actually failed (matched by opened_leave). Shared by my_profile and
+    LeaveRequestListView so the two copies can't drift."""
+    from django.utils.dateparse import parse_date
+    r.retry_leave_type_id = r.leave_type_id
+    r.retry_start_date = r.start_date
+    r.retry_end_date = r.end_date
+    r.retry_reason = r.employee_reason
+    r.edit_error = None
+    if request.GET.get('edit_error') and request.GET.get('opened_leave') == str(r.pk):
+        r.edit_error = request.GET.get('edit_error')
+        retry_lt = request.GET.get('retry_leave_type')
+        if retry_lt and retry_lt.isdigit():
+            r.retry_leave_type_id = int(retry_lt)
+        r.retry_start_date = parse_date(request.GET.get('retry_start_date') or '') or r.start_date
+        r.retry_end_date = parse_date(request.GET.get('retry_end_date') or '') or r.end_date
+        r.retry_reason = request.GET.get('retry_reason', r.employee_reason)
+
+
 @login_required
 def my_profile(request):
     """Self-service portal: the logged-in user's own HR record — attendance,
@@ -301,7 +354,7 @@ def my_profile(request):
     from decimal import Decimal
     from django.db.models import Q
     from django.utils import timezone
-    from .models import AttendanceRecord, Asset, Vehicle
+    from .models import AttendanceRecord, Asset, Vehicle, AttendanceException
     from .forms import LeaveRequestForm
 
     emp = getattr(request.user, 'employee_profile', None)
@@ -342,7 +395,7 @@ def my_profile(request):
             return HttpResponse('You did not submit this request.', status=403)
         edit_form = LeaveRequestForm(
             request.POST, request.FILES, fixed_employee=target.employee, exclude_request_id=target.pk,
-            initial={'document': target.document})
+            allow_leave_type=target.leave_type, initial={'document': target.document})
         if edit_form.is_valid():
             try:
                 edit_leave_request(
@@ -352,12 +405,13 @@ def my_profile(request):
                     document=edit_form.cleaned_data['document'])
                 messages.success(request, 'Leave request updated.')
             except ValueError as exc:
-                messages.error(request, str(exc))
+                # Service-level failure (balance/overlap/concurrent decision) —
+                # preserve the attempted values and surface the real reason
+                # inline, same as a form-invalid edit, instead of reverting.
+                return _edit_leave_retry_redirect(
+                    request, 'hr:my_profile', target, edit_form, error_text=str(exc))
         else:
-            messages.error(request, 'Could not update the request — please check the form.')
-        # opened_leave tells the page which row's edit panel to re-expand
-        # after the reload, so the employee actually sees the change they
-        # just made instead of it collapsing back to hidden.
+            return _edit_leave_retry_redirect(request, 'hr:my_profile', target, edit_form)
         return redirect(f"{reverse('hr:my_profile')}?opened_leave={target.pk}")
 
     is_cancel_leave_post = (
@@ -494,6 +548,11 @@ def my_profile(request):
             emp.leave_requests.select_related('leave_type', 'overridden_by')
             .prefetch_related('approvals__approver', 'notes__author')
             .order_by('-created_at')[:10])
+        # Include any (now-inactive) leave type still attached to a shown request
+        # so the edit dropdown never silently switches it to another type.
+        _used_lt_ids = {r.leave_type_id for r in context['leave_requests']}
+        context['active_leave_types'] = LeaveType.objects.filter(
+            Q(is_active=True) | Q(pk__in=_used_lt_ids)).order_by('name')
         for r in context['leave_requests']:
             # Only employee-facing notes (is_internal=False) — internal HR
             # notes must never leak here. Filtered in Python against the
@@ -508,6 +567,9 @@ def my_profile(request):
             r.decided_approvers = [
                 a.approver.get_full_name() or a.approver.username
                 for a in r.approvals.all() if a.decision != 'pending']
+            # Restore a failed edit's attempted values + inline error (shared
+            # with LeaveRequestListView so the logic can't drift).
+            _apply_leave_edit_retry(request, r)
             # Cancel spans the whole pending window — before any decision
             # this is a same-day change of mind (no reason required); once
             # an approver has decided, it still works but requires a
@@ -545,6 +607,11 @@ def my_profile(request):
         weekend_days = AttendanceSettings.load().weekend_day_set()
         working_days = set(WorkingDay.objects.filter(
             is_active=True, date__range=(month_start, month_end)).values_list('date', flat=True))
+        exceptions_by_date = {
+            e.event_date: e for e in AttendanceException.objects.filter(
+                employee=emp, status='approved',
+                event_date__gte=month_start, event_date__lte=month_end)
+        }
         daily_attendance = []
         from hr.models import LateQuery
         queries_by_record = {
@@ -559,6 +626,10 @@ def my_profile(request):
             can_raise_query = bool(
                 rec and rec.status == 'late'
                 and (existing_query is None or existing_query.status == 'rejected'))
+            exc = exceptions_by_date.get(d)
+            exception_reason = None
+            if exc:
+                exception_reason = exc.custom_reason.strip() or exc.get_reason_category_display()
             daily_attendance.append({
                 'date': d,
                 'status': rec.status if rec else '',
@@ -568,6 +639,7 @@ def my_profile(request):
                 'check_out': rec.check_out if rec else None,
                 'late_query': existing_query,
                 'can_raise_query': can_raise_query,
+                'exception_reason': exception_reason,
             })
             d += timedelta(days=1)
         context['daily_attendance'] = daily_attendance
@@ -638,7 +710,7 @@ def build_attendance_pdf(emp, month_start, month_end):
     # do with it (download, or attach to an email).
     from reportlab.lib.pagesizes import A4
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
-    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib import colors
     from hr.models import AttendanceRecord, AttendanceSettings, WorkingDay
     import io
@@ -649,7 +721,12 @@ def build_attendance_pdf(emp, month_start, month_end):
     weekend_days = AttendanceSettings.load().weekend_day_set()
     working_days = set(WorkingDay.objects.filter(
         is_active=True, date__range=(month_start, month_end)).values_list('date', flat=True))
-
+    from hr.models import AttendanceException
+    exceptions_by_date = {
+        e.event_date: e for e in AttendanceException.objects.filter(
+            employee=emp, status='approved',
+            event_date__gte=month_start, event_date__lte=month_end)
+    }
     COLOR_PRESENT = colors.HexColor('#C6E0B4')
     COLOR_ABSENT = colors.HexColor('#F4B6C2')
     COLOR_WFH = colors.HexColor('#BDD7EE')
@@ -670,8 +747,9 @@ def build_attendance_pdf(emp, month_start, month_end):
     doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=24, rightMargin=24, topMargin=24, bottomMargin=18)
     styles = getSampleStyleSheet()
     elements = [Paragraph(f'{emp.full_name} - Attendance ({month_start.strftime("%B %Y")})', styles['Title'])]
+    reason_style = ParagraphStyle('reason', parent=styles['Normal'], fontSize=8, leading=10)
 
-    data = [['Date', 'Day', 'Status', 'Check In', 'Check Out']]
+    data = [['Date', 'Day', 'Status', 'Check In', 'Check Out', 'Reason']]
     bg_commands = []
     d = month_start
     row_idx = 1
@@ -682,14 +760,20 @@ def build_attendance_pdf(emp, month_start, month_end):
         label = status.title() if status else ('Weekend' if is_weekend else '-')
         check_in = rec.check_in.strftime('%H:%M') if rec and rec.check_in else ''
         check_out = rec.check_out.strftime('%H:%M') if rec and rec.check_out else ''
-        data.append([d.strftime('%d %b %Y'), d.strftime('%A'), label, check_in, check_out])
+        exc = exceptions_by_date.get(d)
+        reason = ''
+        if exc:
+            from xml.sax.saxutils import escape as _xml_escape
+            raw_reason = exc.custom_reason.strip() or exc.get_reason_category_display()
+            reason = Paragraph(_xml_escape(raw_reason), reason_style) if raw_reason else ''
+        data.append([d.strftime('%d %b %Y'), d.strftime('%A'), label, check_in, check_out, reason])
         color = color_for(status, is_weekend)
         if color is not None:
             bg_commands.append(('BACKGROUND', (0, row_idx), (-1, row_idx), color))
         row_idx += 1
         d += timedelta(days=1)
 
-    table = Table(data, colWidths=[100, 90, 90, 70, 70], repeatRows=1)
+    table = Table(data, colWidths=[85, 75, 65, 55, 55, 110], repeatRows=1)
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F4E79')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -2426,7 +2510,15 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
                 a.approver.get_full_name() or a.approver.username
                 for a in req.approvals.all() if a.decision != 'pending']
             req.can_cancel = bool(req.status == 'pending')
+            # Restore a failed edit's attempted values + inline error (shared
+            # with my_profile via _apply_leave_edit_retry).
+            _apply_leave_edit_retry(self.request, req)
         ctx['my_logged_requests'] = my_logged_requests
+        # Include any (now-inactive) leave type still on a shown request so the
+        # edit dropdown never silently switches it to another type.
+        _used_lt_ids = {req.leave_type_id for req in my_logged_requests}
+        ctx['active_leave_types'] = LeaveType.objects.filter(
+            Q(is_active=True) | Q(pk__in=_used_lt_ids)).order_by('name')
         return ctx
 
     def post(self, request, *args, **kwargs):
@@ -2442,7 +2534,7 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
                 return HttpResponse('You did not submit this request.', status=403)
             edit_form = LeaveRequestForm(
                 request.POST, request.FILES, fixed_employee=target.employee, exclude_request_id=target.pk,
-                initial={'document': target.document})
+                allow_leave_type=target.leave_type, initial={'document': target.document})
             if edit_form.is_valid():
                 try:
                     edit_leave_request(
@@ -2452,9 +2544,14 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
                         document=edit_form.cleaned_data['document'])
                     messages.success(request, 'Leave request updated.')
                 except ValueError as exc:
-                    messages.error(request, str(exc))
+                    # Service-level failure — preserve values + show the reason
+                    # inline on the row, same as a form-invalid edit.
+                    return _edit_leave_retry_redirect(
+                        request, 'hr:leave_request_list', target, edit_form,
+                        extra_params={'tab': 'logged'}, error_text=str(exc))
             else:
-                messages.error(request, 'Could not update the request — please check the form.')
+                return _edit_leave_retry_redirect(
+                    request, 'hr:leave_request_list', target, edit_form, extra_params={'tab': 'logged'})
             # opened_leave + tab=logged tell the page which row's edit panel
             # to re-expand, and which tab to switch to, after the reload —
             # so the change is actually visible instead of collapsing back
@@ -2996,7 +3093,10 @@ def attendance_matrix_export_excel(request):
             # Stack the check-in (and check-out) time beneath the status letter,
             # e.g. "P" over "09:12-17:30". Non-present days keep just the letter.
             times = cell_time_lines(cell_data)
-            value = label if not times else f'{label}\n{"-".join(times)}'
+            display_lines = ['-'.join(times)] if times else []
+            if cell_data.get('exception_reason'):
+                display_lines.append(cell_data['exception_reason'])
+            value = label if not display_lines else f'{label}\n' + '\n'.join(display_lines)
             c = ws.cell(row=row, column=col, value=value)
             c.border = thin_border
             c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
@@ -3111,8 +3211,11 @@ def attendance_matrix_export_pdf(request):
             label = status_labels.get(c['status'], c['status'])
             times = cell_time_lines(c)
             # Stack the status letter over the check-in/out times, each on its
-            # own line, so a full month still fits the page width.
-            row_data.append(Paragraph('<br/>'.join([label] + times), cell_style) if times else label)
+            display_lines = list(times)
+            if c.get('exception_reason'):
+                from xml.sax.saxutils import escape as _xml_escape
+                display_lines.append(_xml_escape(c['exception_reason']))
+            row_data.append(Paragraph('<br/>'.join([label] + display_lines), cell_style) if display_lines else label)
             # Only emit a BACKGROUND for cells that actually have a fill colour;
             # blank/unrecorded days return None (no fill). Emitting a None colour
             # here would crash reportlab at render (setFillColor(None)).

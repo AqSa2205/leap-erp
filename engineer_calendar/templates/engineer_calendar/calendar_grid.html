@@ -65,9 +65,13 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div class="d-flex align-items-center gap-2">
-    <a href="?year={{ prev_year }}&month={{ prev_month }}" class="btn btn-outline-secondary btn-sm">&laquo; Prev</a>
+    <a href="?year={{ prev_year }}&month={{ prev_month }}&location={{ location }}" class="btn btn-outline-secondary btn-sm">&laquo; Prev</a>
     <h4 class="mb-0">{{ month_name }} {{ year }} — Engineer Calendar</h4>
-    <a href="?year={{ next_year }}&month={{ next_month }}" class="btn btn-outline-secondary btn-sm">Next &raquo;</a>
+    <a href="?year={{ next_year }}&month={{ next_month }}&location={{ location }}" class="btn btn-outline-secondary btn-sm">Next &raquo;</a>
+    <div class="btn-group btn-group-sm ms-2" role="group" aria-label="Office or Site toggle">
+      <a href="?year={{ year }}&month={{ month }}&location=office" class="btn btn-outline-primary {% if location == 'office' %}active{% endif %}">Office</a>
+      <a href="?year={{ year }}&month={{ month }}&location=site" class="btn btn-outline-primary {% if location == 'site' %}active{% endif %}">Site</a>
+    </div>
   </div>
   <div>
     <form method="post" action="{% url 'engineer_calendar:generate_draft' %}" class="d-inline">
@@ -77,10 +81,10 @@
     <button type="button" class="btn btn-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#fillRangeModal">
       <i class="bi bi-calendar-range"></i> Fill Date Range
     </button>
-    <a href="{% url 'engineer_calendar:export_excel' %}?year={{ year }}&month={{ month }}" class="btn btn-outline-success btn-sm">
+    <a href="{% url 'engineer_calendar:export_excel' %}?year={{ year }}&month={{ month }}&location={{ location }}" class="btn btn-outline-success btn-sm">
       <i class="bi bi-file-earmark-excel"></i> Export to Excel
     </a>
-    <a href="{% url 'engineer_calendar:download_all_zip' %}" class="btn btn-outline-success btn-sm">
+    <a href="{% url 'engineer_calendar:download_all_zip' %}?location={{ location }}" class="btn btn-outline-success btn-sm">
       <i class="bi bi-file-earmark-zip"></i> Download All Months
     </a>
   </div>

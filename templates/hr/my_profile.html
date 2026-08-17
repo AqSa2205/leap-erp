@@ -100,6 +100,7 @@
                     {% endif %}
                     {% else %}<span class="text-muted">-</span>{% endif %}
                     {% if day.check_in %}<span class="text-muted small ms-1">{{ day.check_in|time:"H:i" }}{% if day.check_out %}-{{ day.check_out|time:"H:i" }}{% endif %}</span>{% endif %}
+                    {% if day.exception_reason %}<div class="badge bg-info text-dark mt-1" title="Approved attendance exception"><i class="bi bi-shield-check"></i> {{ day.exception_reason }}</div>{% endif %}
                   </td>
                 </tr>
                 {% endfor %}
@@ -265,6 +266,7 @@
                       {% elif r.status == 'revoked' %}<span class="badge bg-secondary align-self-start">Revoked</span>
                       {% elif r.status == 'cancelled' %}<span class="badge bg-secondary align-self-start">Cancelled</span>
                       {% else %}<span class="badge bg-warning text-dark align-self-start">Pending</span>{% endif %}
+                      {% if r.exceeds_balance %}<span class="badge align-self-start" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
 
                       {% if r.status == 'approved' or r.status == 'disapproved' %}
                         {% if r.decided_by_display %}
@@ -386,7 +388,11 @@
                       {% csrf_token %}
                       <input type="hidden" name="action" value="edit_leave_request">
                       <input type="hidden" name="request_id" value="{{ r.pk }}">
-                      {% if r.decided_approvers %}
+                      {% if r.edit_error %}
+                      <div class="small text-danger-emphasis bg-danger-subtle border border-danger-subtle rounded p-2 mb-2">
+                        <i class="bi bi-x-circle"></i> {{ r.edit_error }}
+                      </div>
+                      {% elif r.decided_approvers %}
                       <div class="small text-warning-emphasis bg-warning-subtle border border-warning-subtle rounded p-2 mb-2">
                         <i class="bi bi-exclamation-triangle"></i>
                         {{ r.decided_approvers|join:", " }} already decided on this request — saving changes
@@ -394,17 +400,25 @@
                       </div>
                       {% endif %}
                       <div class="row g-2">
-                        <div class="col-md-3">
-                          <label class="form-label small">Start</label>
-                          <input type="date" name="start_date" class="form-control form-control-sm" value="{{ r.start_date|date:'Y-m-d' }}" required>
+                        <div class="col-md-4">
+                          <label class="form-label small">Leave Type</label>
+                          <select name="leave_type" class="form-select form-select-sm">
+                            {% for lt in active_leave_types %}
+                            <option value="{{ lt.pk }}" {% if lt.pk == r.retry_leave_type_id %}selected{% endif %}>{{ lt.name }}</option>
+                            {% endfor %}
+                          </select>
                         </div>
-                        <div class="col-md-3">
+                        <div class="col-md-4">
+                          <label class="form-label small">Start</label>
+                          <input type="date" name="start_date" class="form-control form-control-sm" value="{{ r.retry_start_date|date:'Y-m-d' }}" required>
+                        </div>
+                        <div class="col-md-4">
                           <label class="form-label small">End</label>
-                          <input type="date" name="end_date" class="form-control form-control-sm" value="{{ r.end_date|date:'Y-m-d' }}" required>
+                          <input type="date" name="end_date" class="form-control form-control-sm" value="{{ r.retry_end_date|date:'Y-m-d' }}" required>
                         </div>
                         <div class="col-md-6">
                           <label class="form-label small">Reason</label>
-                          <input type="text" name="employee_reason" class="form-control form-control-sm" value="{{ r.employee_reason }}">
+                          <input type="text" name="employee_reason" class="form-control form-control-sm" value="{{ r.retry_reason }}">
                         </div>
                         <div class="col-md-6">
                           <label class="form-label small">Document</label>
@@ -425,7 +439,6 @@
                           <input type="file" name="document" class="form-control form-control-sm">
                         </div>
                       </div>
-                      <input type="hidden" name="leave_type" value="{{ r.leave_type_id }}">
                       <button type="submit" class="btn btn-sm btn-primary mt-2">Save Changes</button>
                     </form>
                   </td>

@@ -33,9 +33,11 @@
     .grand-total-row { background: var(--leap-red); color: #fff; font-weight: 700; }
     .cost-col { background-color: #d0d0d0 !important; }
     .cost-hdr { background-color: #495057 !important; color: #fff !important; }
-    {% if user.is_proposal_team_user or user.is_procurement_user %}
+    {% if not can_see_pricing %}
     /* BOM view (no pricing) — proposal team always; procurement when they
-       come in to copy items into a PO. */
+       come in to copy items into a PO. Figures are also stripped server-side
+       (see the {% templatetag openblock %} if can_see_pricing {% templatetag closeblock %} guards throughout), so this
+       CSS is only defence-in-depth for the columns that remain in the layout. */
     .cost-col, .cost-hdr { display: none !important; }
     .section-rates-row { display: none !important; }
     .toggle-section-rates { display: none !important; }
@@ -382,6 +384,7 @@
                     {% endif %}
                 </table>
             </div>
+            {% if can_see_pricing %}
             <div class="col-lg-5 col-md-4 text-center bom-pricing-only">
                 {% if can_edit %}
                 <div class="d-flex justify-content-center gap-2 flex-wrap align-items-end">
@@ -432,6 +435,7 @@
                 </div>
                 {% endif %}
             </div>
+            {% endif %}
             <div class="col-lg-2 col-md-3 d-flex flex-column align-items-center bom-pricing-only">
                 <div class="mb-1" style="font-size:0.72rem; font-weight:700; color:#212529;">Exchange Rates (ref. USD)</div>
                 <table class="rate-box table table-sm table-bordered border-dark mb-0" style="font-size:0.72rem; width:170px;">
@@ -517,6 +521,7 @@
 </div>
 
 <!-- Totals Summary Strip -->
+{% if can_see_pricing %}
 <div class="card mb-3 bom-pricing-only">
     <div class="card-body py-2">
         <div class="d-flex justify-content-center gap-3 flex-wrap">
@@ -585,6 +590,7 @@
         {% endif %}
     </div>
 </div>
+{% endif %}
 
 <!-- Add Section Button + Expand/Collapse -->
 <div class="mb-2 d-flex justify-content-between align-items-center">
@@ -661,7 +667,7 @@
                                 <i class="bi bi-sliders2"></i>
                             </button>
                         </td>
-                        <td class="num fw-bold">{{ section.subtotal|mul:conversion_rate|floatformat:2|intcomma }}</td>
+                        <td class="num fw-bold">{% if can_see_pricing %}{{ section.subtotal|mul:conversion_rate|floatformat:2|intcomma }}{% endif %}</td>
                         <td class="text-center" onclick="event.stopPropagation();">
                             {% if can_edit %}
                             <a href="{% url 'costing:item_create' section.pk %}" class="btn btn-sm btn-outline-primary py-0 px-1" title="Add Item"><i class="bi bi-plus"></i></a>
@@ -753,7 +759,7 @@
                 </tbody>
                 {% endfor %}
 
-                {% if sections %}
+                {% if sections and can_see_pricing %}
                 <tbody>
                     <tr class="grand-total-row">
                         <td colspan="8" class="text-end">GRAND TOTAL ({{ sheet.output_currency }})</td>
@@ -777,7 +783,8 @@
     </div>
 </div>
 
-<!-- Services / Scope of Work (A.2) -->
+<!-- Services / Scope of Work (A.2) — pricing surface, hidden entirely from the proposal team -->
+{% if can_see_pricing %}
 <div class="card mt-3 bom-pricing-only">
     <div class="card-header d-flex justify-content-between align-items-center" style="background:#F1DCDB;">
         <span><i class="bi bi-hammer me-2"></i> <strong>A.2 — Services</strong></span>
@@ -832,6 +839,7 @@
         </table>
     </div>
 </div>
+{% endif %}
 
 <!-- Add SOW Item Modal -->
 <div class="modal fade" id="addSowModal" tabindex="-1">
@@ -953,6 +961,9 @@
                 </thead>
                 <tbody>
                     {% for log in change_log %}
+                    {# Pricing-field changes expose cost/price values, so they are #}
+                    {# never shown to the proposal team (they still see BOM edits). #}
+                    {% if can_see_pricing or not log.is_pricing_change %}
                     <tr>
                         <td class="small">{{ log.created_at|date:"d M Y H:i" }}</td>
                         <td class="small">{% if log.actor %}{{ log.actor.get_full_name|default:log.actor.username }}{% else %}—{% endif %}</td>
@@ -974,6 +985,7 @@
                             {% if log.is_pricing_change %}<span class="badge bg-warning text-dark ms-1" style="font-size:0.6rem;">pricing</span>{% endif %}
                         </td>
                     </tr>
+                    {% endif %}
                     {% empty %}
                     <tr>
                         <td colspan="6" class="text-center text-muted py-3 small">
@@ -987,7 +999,8 @@
     </div>
 </div>
 
-<!-- Vendor Quotes -->
+<!-- Vendor Quotes — supplier cost documents, hidden entirely from the proposal team -->
+{% if can_see_pricing %}
 <div class="card mt-3 bom-pricing-only">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>
@@ -1045,6 +1058,7 @@
         </div>
     </div>
 </div>
+{% endif %}
 
 <!-- Upload Vendor Quote Modal -->
 <div class="modal fade" id="uploadVendorQuoteModal" tabindex="-1">
@@ -1097,7 +1111,8 @@
     </div>
 </div>
 
-<!-- Revisions -->
+<!-- Revisions — saved priced PDF/Excel exports; hidden entirely from the proposal team -->
+{% if can_see_pricing %}
 <div class="card mt-3 bom-pricing-only">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>
@@ -1204,6 +1219,7 @@
         </div>
     </div>
 </div>
+{% endif %}
 
 <!-- PDF Terms & Conditions Selection -->
 <div class="card mt-3 bom-pricing-only">
