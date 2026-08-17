@@ -354,7 +354,7 @@ def my_profile(request):
     from decimal import Decimal
     from django.db.models import Q
     from django.utils import timezone
-    from .models import AttendanceRecord, Asset, Vehicle
+    from .models import AttendanceRecord, Asset, Vehicle, AttendanceException
     from .forms import LeaveRequestForm
 
     emp = getattr(request.user, 'employee_profile', None)
@@ -607,11 +607,20 @@ def my_profile(request):
         weekend_days = AttendanceSettings.load().weekend_day_set()
         working_days = set(WorkingDay.objects.filter(
             is_active=True, date__range=(month_start, month_end)).values_list('date', flat=True))
+        exceptions_by_date = {
+            e.event_date: e for e in AttendanceException.objects.filter(
+                employee=emp, status='approved',
+                event_date__gte=month_start, event_date__lte=month_end)
+        }
         daily_attendance = []
         d = month_start
         while d <= month_end:
             rec = records_by_date.get(d)
             is_weekend = d.weekday() in weekend_days and d not in working_days
+            exc = exceptions_by_date.get(d)
+            exception_reason = None
+            if exc:
+                exception_reason = exc.custom_reason.strip() or exc.get_reason_category_display()
             daily_attendance.append({
                 'date': d,
                 'status': rec.status if rec else '',
@@ -619,6 +628,7 @@ def my_profile(request):
                 'is_weekend': is_weekend,
                 'check_in': rec.check_in if rec else None,
                 'check_out': rec.check_out if rec else None,
+                'exception_reason': exception_reason,
             })
             d += timedelta(days=1)
         context['daily_attendance'] = daily_attendance
@@ -683,7 +693,7 @@ def build_attendance_pdf(emp, month_start, month_end):
     # do with it (download, or attach to an email).
     from reportlab.lib.pagesizes import A4
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
-    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib import colors
     from hr.models import AttendanceRecord, AttendanceSettings, WorkingDay
     import io
@@ -694,7 +704,12 @@ def build_attendance_pdf(emp, month_start, month_end):
     weekend_days = AttendanceSettings.load().weekend_day_set()
     working_days = set(WorkingDay.objects.filter(
         is_active=True, date__range=(month_start, month_end)).values_list('date', flat=True))
-
+    from hr.models import AttendanceException
+    exceptions_by_date = {
+        e.event_date: e for e in AttendanceException.objects.filter(
+            employee=emp, status='approved',
+            event_date__gte=month_start, event_date__lte=month_end)
+    }
     COLOR_PRESENT = colors.HexColor('#C6E0B4')
     COLOR_ABSENT = colors.HexColor('#F4B6C2')
     COLOR_WFH = colors.HexColor('#BDD7EE')
@@ -715,8 +730,9 @@ def build_attendance_pdf(emp, month_start, month_end):
     doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=24, rightMargin=24, topMargin=24, bottomMargin=18)
     styles = getSampleStyleSheet()
     elements = [Paragraph(f'{emp.full_name} - Attendance ({month_start.strftime("%B %Y")})', styles['Title'])]
+    reason_style = ParagraphStyle('reason', parent=styles['Normal'], fontSize=8, leading=10)
 
-    data = [['Date', 'Day', 'Status', 'Check In', 'Check Out']]
+    data = [['Date', 'Day', 'Status', 'Check In', 'Check Out', 'Reason']]
     bg_commands = []
     d = month_start
     row_idx = 1
@@ -727,14 +743,20 @@ def build_attendance_pdf(emp, month_start, month_end):
         label = status.title() if status else ('Weekend' if is_weekend else '-')
         check_in = rec.check_in.strftime('%H:%M') if rec and rec.check_in else ''
         check_out = rec.check_out.strftime('%H:%M') if rec and rec.check_out else ''
-        data.append([d.strftime('%d %b %Y'), d.strftime('%A'), label, check_in, check_out])
+        exc = exceptions_by_date.get(d)
+        reason = ''
+        if exc:
+            from xml.sax.saxutils import escape as _xml_escape
+            raw_reason = exc.custom_reason.strip() or exc.get_reason_category_display()
+            reason = Paragraph(_xml_escape(raw_reason), reason_style) if raw_reason else ''
+        data.append([d.strftime('%d %b %Y'), d.strftime('%A'), label, check_in, check_out, reason])
         color = color_for(status, is_weekend)
         if color is not None:
             bg_commands.append(('BACKGROUND', (0, row_idx), (-1, row_idx), color))
         row_idx += 1
         d += timedelta(days=1)
 
-    table = Table(data, colWidths=[100, 90, 90, 70, 70], repeatRows=1)
+    table = Table(data, colWidths=[85, 75, 65, 55, 55, 110], repeatRows=1)
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F4E79')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -3009,7 +3031,10 @@ def attendance_matrix_export_excel(request):
             # Stack the check-in (and check-out) time beneath the status letter,
             # e.g. "P" over "09:12-17:30". Non-present days keep just the letter.
             times = cell_time_lines(cell_data)
-            value = label if not times else f'{label}\n{"-".join(times)}'
+            display_lines = ['-'.join(times)] if times else []
+            if cell_data.get('exception_reason'):
+                display_lines.append(cell_data['exception_reason'])
+            value = label if not display_lines else f'{label}\n' + '\n'.join(display_lines)
             c = ws.cell(row=row, column=col, value=value)
             c.border = thin_border
             c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
@@ -3124,8 +3149,11 @@ def attendance_matrix_export_pdf(request):
             label = status_labels.get(c['status'], c['status'])
             times = cell_time_lines(c)
             # Stack the status letter over the check-in/out times, each on its
-            # own line, so a full month still fits the page width.
-            row_data.append(Paragraph('<br/>'.join([label] + times), cell_style) if times else label)
+            display_lines = list(times)
+            if c.get('exception_reason'):
+                from xml.sax.saxutils import escape as _xml_escape
+                display_lines.append(_xml_escape(c['exception_reason']))
+            row_data.append(Paragraph('<br/>'.join([label] + display_lines), cell_style) if display_lines else label)
             # Only emit a BACKGROUND for cells that actually have a fill colour;
             # blank/unrecorded days return None (no fill). Emitting a None colour
             # here would crash reportlab at render (setFillColor(None)).

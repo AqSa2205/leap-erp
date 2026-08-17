@@ -47,3 +47,19 @@ def derive_status(employee, d, check_in, check_out=None):
             return 'late', _hours_between(check_in, check_out)
         return 'present', _hours_between(check_in, check_out)
     return 'absent', None
+
+def regenerate_attendance_record(employee, d):
+    # Re-derives and saves the AttendanceRecord for one employee/date - the
+    # single-record version of the admin 'Regenerate' action, used to auto-
+    # correct a day the moment an attendance exception is approved for it,
+    # so an already-saved Late/Absent record doesn't sit wrong indefinitely.
+    from hr.models import AttendanceRecord
+    rec = AttendanceRecord.objects.filter(employee=employee, date=d).first()
+    check_in = rec.check_in if rec else None
+    check_out = rec.check_out if rec else None
+    status, hours = derive_status(employee, d, check_in, check_out)
+    AttendanceRecord.objects.update_or_create(
+        employee=employee, date=d,
+        defaults={'check_in': check_in, 'check_out': check_out,
+                  'status': status, 'hours_worked': hours})
+    return status, hours

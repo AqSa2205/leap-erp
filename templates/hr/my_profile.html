@@ -94,6 +94,7 @@
                     {% elif day.is_weekend %}<span class="badge" style="background-color:#D9D2E9; color:#000;">Weekend</span>
                     {% else %}<span class="text-muted">-</span>{% endif %}
                     {% if day.check_in %}<span class="text-muted small ms-1">{{ day.check_in|time:"H:i" }}{% if day.check_out %}-{{ day.check_out|time:"H:i" }}{% endif %}</span>{% endif %}
+                    {% if day.exception_reason %}<div class="badge bg-info text-dark mt-1" title="Approved attendance exception"><i class="bi bi-shield-check"></i> {{ day.exception_reason }}</div>{% endif %}
                   </td>
                 </tr>
                 {% endfor %}

@@ -3916,6 +3916,25 @@ class AttendanceExceptionServiceTests(TestCase):
         self.today = _timezone.now().date()
         self.in_window_time = _time(0, 1)
 
+
+    def test_approving_exception_flips_already_saved_late_record_to_present(self):
+        AttendanceRecord.objects.create(
+            employee=self.emp, date=self.today, status='late', check_in=_time(9, 30))
+        exc = self._submit()
+        decide_attendance_exception(exc, self.manager_user, 'approved', 'Confirmed')
+        rec = AttendanceRecord.objects.get(employee=self.emp, date=self.today)
+        self.assertEqual(rec.status, 'present')
+
+    def test_build_matrix_surfaces_the_exception_reason(self):
+        from hr.attendance_matrix import build_matrix
+        AttendanceRecord.objects.create(
+            employee=self.emp, date=self.today, status='late', check_in=_time(9, 30))
+        exc = self._submit(custom_reason='Client site walkthrough')
+        decide_attendance_exception(exc, self.manager_user, 'approved', 'Confirmed')
+        days, rows = build_matrix([self.emp], self.today, self.today)
+        cell = rows[0]['cells'][0]
+        self.assertEqual(cell['status'], 'present')
+        self.assertEqual(cell['exception_reason'], 'Client site walkthrough')
     def _submit(self, **overrides):
         defaults = dict(
             employee=self.emp, event_date=self.today, event_start_time=self.in_window_time,
