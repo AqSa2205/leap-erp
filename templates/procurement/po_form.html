@@ -387,9 +387,36 @@
                 <div class="card mb-4">
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <h5 class="mb-0"><i class="bi bi-file-text"></i> PDF Terms &amp; Conditions</h5>
-                        <button type="button" class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#quickAddTermsModal">
-                            <i class="bi bi-plus-lg me-1"></i> Quick Add
-                        </button>
+                        <div class="d-flex align-items-center gap-2">
+                            <label for="poTermsHeadingFontSize" class="mb-0 small text-muted d-none d-sm-inline">Headings:</label>
+                            {% with hpt=form.instance.terms_heading_font_pt|default:8 %}
+                            <select id="poTermsHeadingFontSize" name="terms_heading_font_pt" class="form-select form-select-sm" style="width:auto;"
+                                    title="Font size of the bold term-name headings in the PDF">
+                                <option value="8" {% if hpt == 8 %}selected{% endif %}>8 pt</option>
+                                <option value="9" {% if hpt == 9 %}selected{% endif %}>9 pt</option>
+                                <option value="10" {% if hpt == 10 %}selected{% endif %}>10 pt</option>
+                                <option value="11" {% if hpt == 11 %}selected{% endif %}>11 pt</option>
+                                <option value="12" {% if hpt == 12 %}selected{% endif %}>12 pt</option>
+                                <option value="14" {% if hpt == 14 %}selected{% endif %}>14 pt</option>
+                                <option value="16" {% if hpt == 16 %}selected{% endif %}>16 pt</option>
+                            </select>
+                            {% endwith %}
+                            <label for="poTermsBulkFontSize" class="mb-0 small text-muted d-none d-sm-inline">Body:</label>
+                            <select id="poTermsBulkFontSize" class="form-select form-select-sm" style="width:auto;"
+                                    title="Apply one font size to the text of every ticked term at once">
+                                <option value="">Font size…</option>
+                                <option value="8pt">8 pt</option>
+                                <option value="9pt">9 pt (default)</option>
+                                <option value="10pt">10 pt</option>
+                                <option value="11pt">11 pt</option>
+                                <option value="12pt">12 pt</option>
+                                <option value="14pt">14 pt</option>
+                            </select>
+                            <span id="poTermsBulkFontMsg" class="small text-success" style="display:none;"></span>
+                            <button type="button" class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#quickAddTermsModal">
+                                <i class="bi bi-plus-lg me-1"></i> Quick Add
+                            </button>
+                        </div>
                     </div>
                     <div class="card-body" id="poTermsCardBody">
                         {# Records the order terms are ticked, so the PDF/Excel print
@@ -963,6 +990,86 @@ document.addEventListener('DOMContentLoaded', function() {
         if (cb.checked) { if (i === -1) order.push(id); }
         else if (i !== -1) { order.splice(i, 1); }
         save();
+    });
+})();
+
+// ─── Bulk font size for all selected terms ───
+// One control that resizes the text of every ticked term at once, so the whole
+// T&C block prints at a single consistent size. Writes a uniform inline
+// font-size into each block (stripping any existing per-run sizes first); the
+// PO PDF reads inline font-size, so every printed line follows this size.
+(function () {
+    var sizer = document.getElementById('poTermsBulkFontSize');
+    if (!sizer) return;
+    var msg = document.getElementById('poTermsBulkFontMsg');
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+    function wrapChildrenInSizedSpan(el, size) {
+        if (!el.firstChild) return;
+        var span = document.createElement('span');
+        span.style.fontSize = size;
+        while (el.firstChild) span.appendChild(el.firstChild);
+        el.appendChild(span);
+    }
+    // Returns HTML with every line's text set to `size`, uniformly.
+    function setUniformFontSize(html, size) {
+        html = html || '';
+        // Legacy plain-text terms (no markup): make each line its own paragraph
+        // so the line breaks survive the round-trip through the DOM.
+        if (html.indexOf('<') === -1) {
+            html = html.split(/\r?\n/).map(function (l) {
+                l = l.trim();
+                return l ? '<p>' + escapeHtml(l) + '</p>' : '';
+            }).filter(Boolean).join('');
+        }
+        var tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        // Clear any existing font-size so the new size is truly uniform.
+        tmp.querySelectorAll('[style]').forEach(function (el) {
+            el.style.removeProperty('font-size');
+            if (!el.getAttribute('style')) el.removeAttribute('style');
+        });
+        var blocks = tmp.querySelectorAll('p, li');
+        if (blocks.length) {
+            blocks.forEach(function (b) { wrapChildrenInSizedSpan(b, size); });
+        } else {
+            wrapChildrenInSizedSpan(tmp, size);
+        }
+        return tmp.innerHTML;
+    }
+    function flash(text, cls) {
+        if (!msg) return;
+        msg.className = 'small ' + cls;
+        msg.textContent = text;
+        msg.style.display = '';
+        setTimeout(function () { msg.style.display = 'none'; }, 2500);
+    }
+
+    sizer.addEventListener('change', function () {
+        var size = this.value;
+        this.selectedIndex = 0;  // reset back to the "Font size…" placeholder
+        if (!size) return;
+        var checks = document.querySelectorAll('input[name="selected_terms"]:checked');
+        if (!checks.length) { flash('Tick a term first', 'text-danger'); return; }
+        var n = 0;
+        checks.forEach(function (cb) {
+            var id = cb.value;
+            var ta = document.querySelector('[data-term-text="' + id + '"]');
+            if (!ta) return;
+            var ed = window.tinymce ? tinymce.get(ta.id) : null;
+            var newHtml = setUniformFontSize(ed ? ed.getContent() : ta.value, size);
+            if (ed) { ed.setContent(newHtml); ed.save(); }
+            else { ta.value = newHtml; }
+            var preview = document.querySelector('[data-term-preview="' + id + '"]');
+            if (preview) { preview.innerHTML = newHtml; }
+            ta.dispatchEvent(new Event('input', { bubbles: true }));  // fires "Edited for this PO"
+            n++;
+        });
+        flash('Applied ' + size + ' to ' + n + ' term' + (n === 1 ? '' : 's'), 'text-success');
     });
 })();
 </script>
