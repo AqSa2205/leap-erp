@@ -115,7 +115,7 @@ class AttendanceException(models.Model):
     @property
     def is_backdated(self):
         """True if the event this excuses already happened before the
-        exception was even submitted — after-the-fact documentation
+        exception was even submitted - after-the-fact documentation
         rather than a normal same-day report. Surfaced as a badge so
         nobody mistakes it for a live, still-open case."""
         return bool(self.event_date and self.created_at and self.event_date < self.created_at.date())
@@ -123,7 +123,7 @@ class AttendanceException(models.Model):
 
 class AttendanceExceptionRevokeRequest(models.Model):
     """Employee-requested revoke of their own already-approved attendance
-    exception — same shape and purpose as hr.models.leave.LeaveRevokeRequest,
+    exception - same shape and purpose as hr.models.leave.LeaveRevokeRequest,
     kept as a separate model rather than a shared generic-relation one: the
     two source models differ enough (multi- vs single-approver, linked
     LeaveRecord vs none) that a shared model would need nearly as much
@@ -149,3 +149,35 @@ class AttendanceExceptionRevokeRequest(models.Model):
 
     def __str__(self):
         return f"Revoke request for exception #{self.attendance_exception_id} ({self.status})"
+
+
+class LateQuery(models.Model):
+    """An employee's challenge to a specific day they were marked Late,
+    claiming it was incorrect. Reviewed by HR/manager; an approved query
+    flips that day's AttendanceRecord to Present (via
+    regenerate_attendance_record), same correction path as an approved
+    AttendanceException. The employee's monthly attendance PDF is generated
+    fresh on demand whenever HR views the query - not stored here."""
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+    employee = models.ForeignKey('hr.Employee', on_delete=models.CASCADE, related_name='late_queries')
+    attendance_record = models.ForeignKey(
+        'hr.AttendanceRecord', on_delete=models.CASCADE, related_name='late_queries')
+    message = models.TextField(help_text='Why the employee believes this Late mark is incorrect.')
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    decision_note = models.TextField(blank=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    decided_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['status', 'created_at'])]
+
+    def __str__(self):
+        return f"{self.employee.full_name} query for {self.attendance_record.date} ({self.status})"
