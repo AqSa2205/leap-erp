@@ -31,6 +31,20 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label fw-bold">Content</label>
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <label for="termsBulkFontSize" class="mb-0 small text-muted">Set font size for all text:</label>
+                            <select id="termsBulkFontSize" class="form-select form-select-sm" style="width:auto;"
+                                    title="Apply one font size to the whole term at once">
+                                <option value="">Font size…</option>
+                                <option value="8pt">8 pt</option>
+                                <option value="9pt">9 pt (default)</option>
+                                <option value="10pt">10 pt</option>
+                                <option value="11pt">11 pt</option>
+                                <option value="12pt">12 pt</option>
+                                <option value="14pt">14 pt</option>
+                            </select>
+                            <span id="termsBulkFontMsg" class="small text-success" style="display:none;"></span>
+                        </div>
                         {{ form.content }}
                         {% if form.content.errors %}<div class="text-danger small">{{ form.content.errors.0 }}</div>{% endif %}
                         <small class="text-muted">Enter each item on a new line.</small>
@@ -63,5 +77,70 @@ document.addEventListener('DOMContentLoaded', function() {
         font_size_formats: '8pt 9pt 10pt 11pt 12pt 14pt 16pt 18pt 24pt',
     });
 });
+
+// ─── Bulk font size for the whole term ───
+// Resizes every line of the term content to one size in a single action, so
+// the term prints at a consistent size wherever it's used (matches the sizer
+// on the PO form). Writes a uniform inline font-size, stripping any existing
+// per-run sizes first.
+(function () {
+    var sizer = document.getElementById('termsBulkFontSize');
+    if (!sizer) return;
+    var msg = document.getElementById('termsBulkFontMsg');
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+    function wrapChildrenInSizedSpan(el, size) {
+        if (!el.firstChild) return;
+        var span = document.createElement('span');
+        span.style.fontSize = size;
+        while (el.firstChild) span.appendChild(el.firstChild);
+        el.appendChild(span);
+    }
+    function setUniformFontSize(html, size) {
+        html = html || '';
+        if (html.indexOf('<') === -1) {
+            html = html.split(/\r?\n/).map(function (l) {
+                l = l.trim();
+                return l ? '<p>' + escapeHtml(l) + '</p>' : '';
+            }).filter(Boolean).join('');
+        }
+        var tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        tmp.querySelectorAll('[style]').forEach(function (el) {
+            el.style.removeProperty('font-size');
+            if (!el.getAttribute('style')) el.removeAttribute('style');
+        });
+        var blocks = tmp.querySelectorAll('p, li');
+        if (blocks.length) {
+            blocks.forEach(function (b) { wrapChildrenInSizedSpan(b, size); });
+        } else {
+            wrapChildrenInSizedSpan(tmp, size);
+        }
+        return tmp.innerHTML;
+    }
+
+    sizer.addEventListener('change', function () {
+        var size = this.value;
+        this.selectedIndex = 0;
+        if (!size) return;
+        var editors = (window.tinymce && tinymce.editors) ? tinymce.editors : [];
+        if (!editors.length) return;
+        editors.forEach(function (ed) {
+            var newHtml = setUniformFontSize(ed.getContent(), size);
+            ed.setContent(newHtml);
+            ed.save();
+        });
+        if (msg) {
+            msg.className = 'small text-success';
+            msg.textContent = 'Applied ' + size + ' to all text';
+            msg.style.display = '';
+            setTimeout(function () { msg.style.display = 'none'; }, 2500);
+        }
+    });
+})();
 </script>
 {% endblock %}

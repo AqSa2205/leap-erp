@@ -490,7 +490,13 @@ def _apply_po_terms(po, post):
     ordered = _ordered_selected_term_ids(post)
     po.selected_terms.set(ordered)
     po.terms_order = ','.join(str(i) for i in ordered)
-    po.save(update_fields=['terms_order'])
+    # Heading size for the term-name headers in the PDF (clamped 6–24pt).
+    try:
+        hp = int(post.get('terms_heading_font_pt', '') or 8)
+    except (TypeError, ValueError):
+        hp = 8
+    po.terms_heading_font_pt = max(6, min(hp, 24))
+    po.save(update_fields=['terms_order', 'terms_heading_font_pt'])
 
 
 def _save_po_term_overrides(po, post_data, user=None):
@@ -1950,7 +1956,8 @@ def po_export_pdf(request, pk, unpriced=False):
         ))
         elements.append(Spacer(1, 2*mm))
 
-        sub_hdr_style = ParagraphStyle('TCSubHdr', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8, leading=10, spaceAfter=1)
+        _hdr_pt = po.terms_heading_font_pt or 8
+        sub_hdr_style = ParagraphStyle('TCSubHdr', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=_hdr_pt, leading=_hdr_pt + 2, spaceAfter=1)
 
         # Content-based: each line is printed exactly as the user typed it — no
         # auto numbering. Terms still appear in the order the user selected them

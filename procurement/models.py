@@ -154,6 +154,12 @@ class PurchaseOrder(models.Model):
     # (Django's .add() uses a set internally), so print order lives here.
     terms_order = models.CharField(max_length=500, blank=True, default='')
 
+    # Font size (pt) for the bold term-name headings in the PO PDF. One size
+    # for every heading on this PO; the body text carries its own inline sizes
+    # (set per-term via the terms editor). Default 8 keeps existing PDFs
+    # unchanged.
+    terms_heading_font_pt = models.PositiveSmallIntegerField(default=8)
+
     # Approval workflow — sequential SCM → PM → COO → CEO. CEO is only
     # required when total_value crosses CEO_APPROVAL_THRESHOLD. Each stage
     # carries a timestamp + approver FK so the PO detail page can show a
