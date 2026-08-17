@@ -1,0 +1,276 @@
+{% extends 'base.html' %}
+{% block title %}Asset Handover{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-1">
+    <h1 class="h3 mb-0">{{ handover.item }}</h1>
+    <span class="badge
+      {% if handover.status == 'active' %}bg-success
+      {% elif handover.status == 'returned' %}bg-secondary
+      {% elif handover.status == 'pending_authorization' or handover.status == 'pending_receipt' %}bg-warning text-dark
+      {% else %}bg-info text-dark{% endif %}">
+      {{ handover.get_status_display }}
+    </span>
+  </div>
+  <p class="text-muted mb-4">Handover to {{ handover.employee.full_name }}</p>
+
+  <div class="card mb-4">
+    <div class="card-body">
+      <div class="d-flex gap-3 py-2 border-bottom">
+        <i class="bi bi-check-circle-fill text-success"></i>
+        <div>
+          <div>Issued by {{ handover.issued_by.get_full_name|default:handover.issued_by.username }}</div>
+          <div class="text-muted small">{{ handover.issued_at|date:"d M Y, g:i A" }}</div>
+        </div>
+      </div>
+
+      <div class="d-flex gap-3 py-2 border-bottom">
+        {% if handover.authorized_at %}
+        <i class="bi bi-check-circle-fill text-success"></i>
+        <div>
+          <div>Authorized by {{ handover.authorizer.get_full_name|default:handover.authorizer.username }}</div>
+          <div class="text-muted small">{{ handover.authorized_at|date:"d M Y, g:i A" }}</div>
+        </div>
+        {% elif can_authorize %}
+        <i class="bi bi-hourglass-split text-warning"></i>
+        <div class="flex-grow-1">
+          <div>Awaiting your authorization</div>
+          <button type="button" class="btn btn-sm btn-primary mt-2" data-bs-toggle="modal" data-bs-target="#signModal" data-action="authorize">Authorize and sign</button>
+        </div>
+        {% else %}
+        <i class="bi bi-hourglass-split text-warning"></i>
+        <div class="text-muted">Awaiting authorization from {{ handover.authorizer.get_full_name|default:handover.authorizer.username }}</div>
+        {% endif %}
+      </div>
+
+      <div class="d-flex gap-3 py-2 border-bottom">
+        {% if handover.received_at %}
+        <i class="bi bi-check-circle-fill text-success"></i>
+        <div>
+          <div>Received by {{ handover.employee.full_name }}</div>
+          <div class="text-muted small">{{ handover.received_at|date:"d M Y, g:i A" }}</div>
+        </div>
+        {% elif can_receive %}
+        <i class="bi bi-hourglass-split text-warning"></i>
+        <div class="flex-grow-1">
+          <div>Awaiting your signature</div>
+          <button type="button" class="btn btn-sm btn-primary mt-2" data-bs-toggle="modal" data-bs-target="#signModal" data-action="receive">Sign and receive</button>
+        </div>
+        {% else %}
+        <i class="bi bi-circle text-muted"></i>
+        <div class="text-muted">Awaiting receipt from {{ handover.employee.full_name }}</div>
+        {% endif %}
+      </div>
+
+    </div>
+  </div>
+
+  {% if handover.status == 'active' or handover.status == 'pending_return_confirmation' or handover.returned_at %}
+  <div class="card mb-4">
+    <div class="card-header"><h5 class="mb-0">Asset Return</h5></div>
+    <div class="card-body">
+      <p class="mb-3"><strong>Remarks upon Return:</strong> {{ handover.return_remarks|default:"-" }}</p>
+      <div class="row">
+        <div class="col-md-6 border-end">
+          <p class="mb-1"><strong>Returned By:</strong> {{ handover.employee.full_name|default:"-" }}</p>
+          <p class="mb-2"><strong>Date:</strong> {{ handover.returned_at|date:"d M Y"|default:"-" }}</p>
+          <p class="mb-1"><strong>Signature:</strong></p>
+          {% if handover.returned_signature %}
+          <img src="{{ handover.returned_signature.url }}" alt="signature" style="max-height:60px;">
+          {% elif can_acknowledge_return %}
+          <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#signModal" data-action="acknowledge_return">Sign to confirm return</button>
+          {% else %}
+          <div class="border rounded" style="height:60px;"></div>
+          {% endif %}
+        </div>
+        <div class="col-md-6">
+          <p class="mb-1"><strong>Received By:</strong> {% if handover.return_received_by %}{{ handover.return_received_by.get_full_name|default:handover.return_received_by.username }}{% else %}-{% endif %}</p>
+          <p class="mb-2"><strong>Date:</strong> {{ handover.return_received_at|date:"d M Y"|default:"-" }}</p>
+          <p class="mb-1"><strong>Signature:</strong></p>
+          {% if handover.return_received_signature %}
+          <img src="{{ handover.return_received_signature.url }}" alt="signature" style="max-height:60px;">
+          {% elif can_initiate_return %}
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#signModal" data-action="return">Return Asset</button>
+          {% else %}
+          <div class="border rounded" style="height:60px;"></div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% endif %}
+
+  {% if handover.accessories or handover.software_installed %}
+  <div class="card mb-4">
+    <div class="card-body">
+      {% if handover.accessories %}<p class="mb-2"><strong>Accessories:</strong> {{ handover.accessories }}</p>{% endif %}
+      {% if handover.software_installed %}<p class="mb-0"><strong>Software installed:</strong> {{ handover.software_installed }}</p>{% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="d-flex justify-content-end">
+    <a href="{% url 'hr:asset_handover_export_pdf' handover.pk %}" class="btn btn-outline-secondary"><i class="bi bi-download me-1"></i>Export PDF</a>
+  </div>
+</div>
+
+<div class="modal fade" id="signModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" id="signForm" enctype="multipart/form-data">
+        {% csrf_token %}
+        <div class="modal-header">
+          <h5 class="modal-title" id="signModalTitle">Sign</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <ul class="nav nav-tabs mb-3" role="tablist">
+            <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#dSignDrawTab" type="button">Draw signature</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#dSignUploadTab" type="button">Upload image</button></li>
+          </ul>
+          <div class="tab-content">
+            <div class="tab-pane fade show active" id="dSignDrawTab" role="tabpanel">
+              <div class="border rounded bg-white" style="touch-action: none;">
+                <canvas id="dSignCanvas" width="700" height="220" style="width:100%; height:220px; cursor:crosshair; display:block;"></canvas>
+              </div>
+              <div class="d-flex justify-content-end mt-2">
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="dSignClearBtn"><i class="bi bi-eraser me-1"></i>Clear</button>
+              </div>
+            </div>
+            <div class="tab-pane fade" id="dSignUploadTab" role="tabpanel">
+              <input type="file" class="form-control" name="signature_file" id="dSignFileInput" accept="image/*">
+              <img id="dSignFilePreview" class="img-fluid border rounded mt-3 d-none" style="max-height:200px;">
+            </div>
+          </div>
+          <div id="returnRemarksWrap" class="mt-3 d-none">
+            <label class="form-label">Remarks (optional)</label>
+            <textarea name="return_remarks" class="form-control" rows="2"></textarea>
+          </div>
+          <div id="dSignError" class="alert alert-danger d-none mt-3 mb-0"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="dSignSubmitBtn">Sign</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+    var actionUrls = {
+        authorize: "{% url 'hr:asset_handover_authorize' handover.pk %}",
+        receive: "{% url 'hr:asset_handover_receive' handover.pk %}",
+        return: "{% url 'hr:asset_handover_initiate_return' handover.pk %}",
+        acknowledge_return: "{% url 'hr:asset_handover_acknowledge_return' handover.pk %}"
+    };
+    var actionTitles = {
+        authorize: 'Authorize and sign',
+        receive: 'Sign and receive',
+        return: 'Return Asset',
+        acknowledge_return: 'Sign to confirm return'
+    };
+
+    var signModalEl = document.getElementById('signModal');
+    var signForm = document.getElementById('signForm');
+    var signModalTitle = document.getElementById('signModalTitle');
+    var returnRemarksWrap = document.getElementById('returnRemarksWrap');
+
+    document.querySelectorAll('[data-bs-target="#signModal"]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var action = this.dataset.action;
+            signForm.action = actionUrls[action];
+            signModalTitle.textContent = actionTitles[action];
+            returnRemarksWrap.classList.toggle('d-none', action !== 'return');
+        });
+    });
+    signModalEl.addEventListener('shown.bs.modal', setupCanvas);
+
+    var signCanvas = document.getElementById('dSignCanvas');
+    var signClearBtn = document.getElementById('dSignClearBtn');
+    var signFileInput = document.getElementById('dSignFileInput');
+    var signFilePreview = document.getElementById('dSignFilePreview');
+    var signErrorBox = document.getElementById('dSignError');
+    var canvasCtx = null;
+    var drawing = false;
+    var canvasHasInk = false;
+
+    function setupCanvas() {
+        var rect = signCanvas.getBoundingClientRect();
+        var ratio = window.devicePixelRatio || 1;
+        signCanvas.width = Math.floor(rect.width * ratio);
+        signCanvas.height = Math.floor(rect.height * ratio);
+        canvasCtx = signCanvas.getContext('2d');
+        canvasCtx.scale(ratio, ratio);
+        canvasCtx.fillStyle = '#ffffff';
+        canvasCtx.fillRect(0, 0, rect.width, rect.height);
+        canvasCtx.lineWidth = 2.2;
+        canvasCtx.lineCap = 'round';
+        canvasCtx.lineJoin = 'round';
+        canvasCtx.strokeStyle = '#1a1a1a';
+        canvasHasInk = false;
+    }
+
+    function getPoint(ev) {
+        var rect = signCanvas.getBoundingClientRect();
+        var t = ev.touches ? ev.touches[0] : ev;
+        return { x: t.clientX - rect.left, y: t.clientY - rect.top };
+    }
+    function startDraw(ev) { ev.preventDefault(); drawing = true; var p = getPoint(ev); canvasCtx.beginPath(); canvasCtx.moveTo(p.x, p.y); }
+    function moveDraw(ev) { if (!drawing) return; ev.preventDefault(); var p = getPoint(ev); canvasCtx.lineTo(p.x, p.y); canvasCtx.stroke(); canvasHasInk = true; }
+    function endDraw() { drawing = false; }
+
+    signCanvas.addEventListener('mousedown', startDraw);
+    signCanvas.addEventListener('mousemove', moveDraw);
+    signCanvas.addEventListener('mouseup', endDraw);
+    signCanvas.addEventListener('mouseleave', endDraw);
+    signCanvas.addEventListener('touchstart', startDraw, { passive: false });
+    signCanvas.addEventListener('touchmove', moveDraw, { passive: false });
+    signCanvas.addEventListener('touchend', endDraw);
+    if (signClearBtn) signClearBtn.addEventListener('click', setupCanvas);
+
+    if (signFileInput) signFileInput.addEventListener('change', function () {
+        var f = this.files && this.files[0];
+        if (!f) return;
+        var reader = new FileReader();
+        reader.onload = function (e) {
+            signFilePreview.src = e.target.result;
+            signFilePreview.classList.remove('d-none');
+        };
+        reader.readAsDataURL(f);
+    });
+
+    signForm.addEventListener('submit', function (ev) {
+        var uploadTabActive = document.getElementById('dSignUploadTab').classList.contains('active');
+        var file = signFileInput.files && signFileInput.files[0];
+        signErrorBox.classList.add('d-none');
+
+        if (uploadTabActive) {
+            if (!file) {
+                ev.preventDefault();
+                signErrorBox.textContent = 'Pick a signature image first.';
+                signErrorBox.classList.remove('d-none');
+                return;
+            }
+        } else {
+            if (!canvasHasInk) {
+                ev.preventDefault();
+                signErrorBox.textContent = 'Draw your signature on the pad first.';
+                signErrorBox.classList.remove('d-none');
+                return;
+            }
+            var hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = 'signature_data';
+            hidden.value = signCanvas.toDataURL('image/png');
+            this.appendChild(hidden);
+        }
+    });
+})();
+</script>
+{% endblock %}

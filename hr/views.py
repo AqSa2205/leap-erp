@@ -699,6 +699,9 @@ def my_profile(request):
             veh_q |= Q(driver_name__iexact=emp.full_name)
         context['vehicles'] = (
             Vehicle.objects.filter(veh_q) if veh_q else Vehicle.objects.none())
+        from hr.models import AssetHandover
+        context['asset_handovers'] = AssetHandover.objects.filter(
+            employee=emp).select_related('asset', 'vehicle').order_by('-created_at')[:20]
     return render(request, 'hr/my_profile.html', context)
 
 
@@ -4009,3 +4012,427 @@ class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
                 for e in errors:
                     messages.error(request, f'{employee.full_name}: {e}')
         return redirect('hr:org_chart')
+
+
+@login_required
+def asset_handover_create(request):
+    """HR creates and signs a new handover in one step."""
+    from hr.models import Asset, Vehicle, Employee
+    from hr.asset_handover_services import create_asset_handover, get_default_authorizer
+    from procurement.views import _read_and_validate_signature
+    from accounts.models import User, Role
+    from django.core.files.base import ContentFile
+
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+        messages.error(request, 'You do not have access to create asset handovers.')
+        return redirect('hr:hr_dashboard')
+
+    if request.method == 'POST':
+        item_kind = request.POST.get('item_kind')
+        item_id = request.POST.get('item_id')
+        employee = Employee.objects.filter(pk=request.POST.get('employee_id')).first()
+        authorizer = User.objects.filter(pk=request.POST.get('authorizer_id'), role__name=Role.SUPER_ADMIN).first()
+        item = None
+        if item_kind == 'asset':
+            item = Asset.objects.filter(pk=item_id).first()
+        elif item_kind == 'vehicle':
+            item = Vehicle.objects.filter(pk=item_id).first()
+
+        if not (item and employee and authorizer):
+            messages.error(request, 'Please select a valid item, employee, and authorizer.')
+            return redirect('hr:asset_handover_create')
+
+        png_bytes, error_response = _read_and_validate_signature(request)
+        if error_response is not None:
+            messages.error(request, 'Signature could not be saved. Please try again.')
+            return redirect('hr:asset_handover_create')
+
+        handover = create_asset_handover(
+            employee=employee, item=item, issued_by=request.user,
+            issued_signature=ContentFile(png_bytes, name='issued.png'),
+            authorizer=authorizer,
+            accessories=request.POST.get('accessories', ''),
+            software_installed=request.POST.get('software_installed', ''),
+            remember_authorizer=request.POST.get('remember_authorizer') == 'on',
+        )
+        messages.success(request, 'Handover created and sent for authorization.')
+        return redirect('hr:asset_handover_detail', pk=handover.pk)
+    preselected_item_kind = request.GET.get('item_kind', 'asset')
+    preselected_item_id = request.GET.get('item_id', '')
+    default_accessories = ''
+    default_software_installed = ''
+    if preselected_item_kind == 'asset' and preselected_item_id:
+        preselected_asset = Asset.objects.filter(pk=preselected_item_id).first()
+        if preselected_asset:
+            default_accessories = preselected_asset.accessories
+            default_software_installed = preselected_asset.software_installed
+
+
+    context = {
+        'assets': Asset.objects.filter(is_decommissioned=False).order_by('asset_name'),
+        'vehicles': Vehicle.objects.all().order_by('plate_number'),
+        'employees': Employee.objects.all().order_by('full_name'),
+        'super_admins': User.objects.filter(is_active=True, role__name=Role.SUPER_ADMIN).order_by('username'),
+        'default_authorizer': get_default_authorizer(request.user),
+        'preselected_item_kind': preselected_item_kind,
+        'preselected_item_id': preselected_item_id,
+        'default_accessories': default_accessories,
+        'default_software_installed': default_software_installed,
+    }
+    return render(request, 'hr/asset_handover_create.html', context)
+
+
+@login_required
+def asset_handover_detail(request, pk):
+    from hr.models import AssetHandover
+    handover = get_object_or_404(AssetHandover, pk=pk)
+    is_hr = bool(request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user)
+    is_employee = bool(handover.employee.user_id and handover.employee.user_id == request.user.id)
+    is_authorizer = bool(handover.authorizer_id and handover.authorizer_id == request.user.id)
+    if not (is_hr or is_employee or is_authorizer):
+        messages.error(request, 'You do not have access to this handover.')
+        return redirect('hr:hr_dashboard')
+    context = {
+        'handover': handover,
+        'can_authorize': is_authorizer and handover.status == 'pending_authorization',
+        'can_receive': is_employee and handover.status == 'pending_receipt',
+        'can_initiate_return': is_hr and handover.status == 'active',
+        'can_acknowledge_return': is_employee and handover.status == 'pending_return_confirmation',
+    }
+    return render(request, 'hr/asset_handover_detail.html', context)
+
+@login_required
+@require_POST
+def asset_handover_authorize(request, pk):
+    from hr.models import AssetHandover
+    from hr.asset_handover_services import authorize_handover
+    from procurement.views import _read_and_validate_signature
+    from django.core.files.base import ContentFile
+
+    handover = get_object_or_404(AssetHandover, pk=pk)
+    if handover.authorizer_id != request.user.id or not request.user.is_super_admin_user:
+        messages.error(request, 'You are not the assigned authorizer for this handover.')
+        return redirect('hr:asset_handover_detail', pk=pk)
+
+    png_bytes, error_response = _read_and_validate_signature(request)
+    if error_response is not None:
+        messages.error(request, 'Signature could not be saved. Please try again.')
+        return redirect('hr:asset_handover_detail', pk=pk)
+
+    try:
+        authorize_handover(handover, request.user, ContentFile(png_bytes, name='authorized.png'))
+        messages.success(request, 'Handover authorized and signed.')
+    except ValueError as e:
+        messages.error(request, str(e))
+    return redirect('hr:asset_handover_detail', pk=pk)
+
+
+@login_required
+@require_POST
+def asset_handover_receive(request, pk):
+    from hr.models import AssetHandover
+    from hr.asset_handover_services import receive_handover
+    from procurement.views import _read_and_validate_signature
+    from django.core.files.base import ContentFile
+
+    handover = get_object_or_404(AssetHandover, pk=pk)
+    if not (handover.employee.user_id and handover.employee.user_id == request.user.id):
+        messages.error(request, 'You are not the recipient of this handover.')
+        return redirect('hr:asset_handover_detail', pk=pk)
+
+    png_bytes, error_response = _read_and_validate_signature(request)
+    if error_response is not None:
+        messages.error(request, 'Signature could not be saved. Please try again.')
+        return redirect('hr:asset_handover_detail', pk=pk)
+
+    try:
+        receive_handover(handover, ContentFile(png_bytes, name='received.png'))
+        messages.success(request, 'Handover received and signed. The asset is now registered to you.')
+    except ValueError as e:
+        messages.error(request, str(e))
+    return redirect('hr:asset_handover_detail', pk=pk)
+
+
+@login_required
+@require_POST
+def asset_handover_initiate_return(request, pk):
+    from hr.models import AssetHandover
+    from hr.asset_handover_services import initiate_return
+    from procurement.views import _read_and_validate_signature
+    from django.core.files.base import ContentFile
+
+    handover = get_object_or_404(AssetHandover, pk=pk)
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+        messages.error(request, 'You do not have access to start a return.')
+        return redirect('hr:asset_handover_detail', pk=pk)
+
+    png_bytes, error_response = _read_and_validate_signature(request)
+    if error_response is not None:
+        messages.error(request, 'Signature could not be saved. Please try again.')
+        return redirect('hr:asset_handover_detail', pk=pk)
+
+    try:
+        initiate_return(handover, request.user, ContentFile(png_bytes, name='return_received.png'),
+                         remarks=request.POST.get('return_remarks', ''))
+        messages.success(request, 'Return request sent. Waiting on the employee to confirm.')
+    except ValueError as e:
+        messages.error(request, str(e))
+    return redirect('hr:asset_handover_detail', pk=pk)
+
+
+@login_required
+@require_POST
+def asset_handover_acknowledge_return(request, pk):
+    from hr.models import AssetHandover
+    from hr.asset_handover_services import acknowledge_return
+    from procurement.views import _read_and_validate_signature
+    from django.core.files.base import ContentFile
+
+    handover = get_object_or_404(AssetHandover, pk=pk)
+    if not (handover.employee.user_id and handover.employee.user_id == request.user.id):
+        messages.error(request, 'You are not the current holder of this item.')
+        return redirect('hr:asset_handover_detail', pk=pk)
+
+    png_bytes, error_response = _read_and_validate_signature(request)
+    if error_response is not None:
+        messages.error(request, 'Signature could not be saved. Please try again.')
+        return redirect('hr:asset_handover_detail', pk=pk)
+
+    try:
+        acknowledge_return(handover, ContentFile(png_bytes, name='returned.png'))
+        messages.success(request, 'Return confirmed. Custody released.')
+    except ValueError as e:
+        messages.error(request, str(e))
+    return redirect('hr:asset_handover_detail', pk=pk)
+
+
+@login_required
+def asset_handover_list(request):
+    """HR dashboard: every asset/vehicle's current owner and, if a new
+    handover is already in progress for it, the next owner too."""
+    from hr.models import AssetHandover
+
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+        messages.error(request, 'You do not have access to this page.')
+        return redirect('hr:hr_dashboard')
+
+    active = AssetHandover.objects.filter(status='active').select_related(
+        'asset', 'vehicle', 'employee')
+    in_progress = AssetHandover.objects.filter(
+        status__in=('pending_authorization', 'pending_receipt', 'pending_return_receipt')
+    ).select_related('asset', 'vehicle', 'employee')
+
+    rows = {}
+    for h in active:
+        key = ('asset', h.asset_id) if h.asset_id else ('vehicle', h.vehicle_id)
+        rows[key] = {'item': h.item, 'current_owner': h.employee, 'next_owner': None, 'status': 'Active', 'handover': h}
+    for h in in_progress:
+        key = ('asset', h.asset_id) if h.asset_id else ('vehicle', h.vehicle_id)
+        if key in rows:
+            rows[key]['next_owner'] = h.employee
+            rows[key]['status'] = 'Transfer pending' if h.status != 'pending_return_receipt' else 'Return pending'
+        else:
+            rows[key] = {'item': h.item, 'current_owner': None, 'next_owner': h.employee,
+                          'status': 'Pending', 'handover': h}
+
+    context = {'rows': list(rows.values())}
+    return render(request, 'hr/asset_handover_list.html', context)
+
+
+@login_required
+def asset_active_handover_redirect(request, item_id):
+    from hr.models import AssetHandover
+    item_kind = request.GET.get('item_kind', 'asset')
+    if item_kind == 'vehicle':
+        filter_kwargs = {'vehicle_id': item_id}
+        fallback_url = 'hr:vehicle_detail'
+    else:
+        filter_kwargs = {'asset_id': item_id}
+        fallback_url = 'hr:asset_detail'
+    handover = AssetHandover.objects.filter(
+        status='active', **filter_kwargs).order_by('-created_at').first()
+    if handover is None:
+        messages.error(request, 'No active handover found.')
+        return redirect(fallback_url, pk=item_id)
+    return redirect('hr:asset_handover_detail', pk=handover.pk)
+
+
+@login_required
+def asset_handover_export_pdf(request, pk):
+    from hr.models import AssetHandover
+    handover = get_object_or_404(AssetHandover, pk=pk)
+    is_hr = bool(request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user)
+    is_employee = bool(handover.employee.user_id and handover.employee.user_id == request.user.id)
+    is_authorizer = bool(handover.authorizer_id and handover.authorizer_id == request.user.id)
+    if not (is_hr or is_employee or is_authorizer):
+        messages.error(request, 'You do not have access to this handover.')
+        return redirect('hr:hr_dashboard')
+
+    import io
+    from io import BytesIO as _BytesIO
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer,
+                                     Image as RLImage)
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from xml.sax.saxutils import escape as _xml_escape
+    from django.contrib.staticfiles.finders import find as find_static
+
+    BRAND_RED = colors.HexColor('#C41E3A')
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=24, rightMargin=24, topMargin=24, bottomMargin=18)
+    styles = getSampleStyleSheet()
+    label_style = ParagraphStyle('label', parent=styles['Normal'], fontSize=9, textColor=colors.HexColor('#555555'))
+    value_style = ParagraphStyle('value', parent=styles['Normal'], fontSize=10)
+    section_style = ParagraphStyle('section', parent=styles['Normal'], fontSize=11, spaceBefore=6, spaceAfter=4, alignment=1)
+    note_style = ParagraphStyle('note', parent=styles['Normal'], fontSize=7.5, textColor=colors.HexColor('#555555'))
+
+    elements = []
+
+    # ── Header: title/form-number on the left, company logo on the right ──
+    logo_path = find_static('images/leap_logo.jpg')
+    if logo_path:
+        elements.append(RLImage(logo_path, width=55*mm, height=16.6*mm, hAlign='CENTER'))
+        elements.append(Spacer(1, 3*mm))
+    title_style_center = ParagraphStyle('titleCenter', parent=styles['Title'], alignment=1)
+    label_style_center = ParagraphStyle('labelCenter', parent=label_style, alignment=1)
+    elements.append(Paragraph('Asset Handover Form', title_style_center))
+    elements.append(Paragraph('LNA_ADM/007', label_style_center))
+    elements.append(Spacer(1, 4*mm))
+
+    item = handover.item
+    if handover.asset_id:
+        item_rows = [
+            ['Item Type', item.asset_type or '-', 'Model', item.model or '-'],
+            ['Serial No.', item.serial_number or '-', 'Part Number', item.part_number or '-'],
+            ['Tag Number', item.tag_number or '-', 'Quantity', str(item.quantity)],
+            ['Item Description', item.item_description or '-', '', ''],
+        ]
+    else:
+        item_rows = [
+            ['Plate Number', item.plate_number, 'Vehicle Model', item.vehicle_model or '-'],
+            ['Maker', item.vehicle_maker or '-', '', ''],
+        ]
+    item_rows.append(['Assigned To', handover.employee.full_name, 'Designation', handover.employee.designation or '-'])
+
+    item_table = Table(item_rows, colWidths=[35*mm, 55*mm, 35*mm, 55*mm])
+    item_table.setStyle(TableStyle([
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTNAME', (2, 0), (2, -1), 'Helvetica-Bold'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    elements.append(item_table)
+    elements.append(Spacer(1, 4*mm))
+
+    if handover.accessories:
+        elements.append(Paragraph(f'<b>Accessories:</b> {_xml_escape(handover.accessories)}', value_style))
+    if handover.software_installed:
+        elements.append(Paragraph(f'<b>Software Installed:</b> {_xml_escape(handover.software_installed)}', value_style))
+    elements.append(Spacer(1, 4*mm))
+
+    def _sig_image(field, max_w=45*mm, max_h=16*mm):
+        if not field:
+            return ''
+        try:
+            field.open('rb')
+            data = field.read()
+            field.close()
+            return RLImage(_BytesIO(data), width=max_w, height=max_h, kind='proportional')
+        except Exception:
+            return ''
+
+    elements.append(Paragraph('<u><b>HANDOVER</b></u>', section_style))
+    handover_rows = [
+        ['Issued By', 'Authorized By', 'Received By'],
+        [
+            handover.issued_by.get_full_name() or handover.issued_by.username if handover.issued_by_id else '-',
+            handover.authorizer.get_full_name() or handover.authorizer.username if handover.authorizer_id else '-',
+            handover.employee.full_name,
+        ],
+        [
+            handover.issued_at.strftime('%d %b %Y') if handover.issued_at else '-',
+            handover.authorized_at.strftime('%d %b %Y') if handover.authorized_at else '-',
+            handover.received_at.strftime('%d %b %Y') if handover.received_at else '-',
+        ],
+        [
+            _sig_image(handover.issued_signature),
+            _sig_image(handover.authorized_signature),
+            _sig_image(handover.received_signature),
+        ],
+    ]
+    handover_table = Table(handover_rows, colWidths=[60*mm, 60*mm, 60*mm], rowHeights=[None, None, None, 20*mm])
+    handover_table.setStyle(TableStyle([
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('BACKGROUND', (0, 0), (-1, 0), BRAND_RED),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    elements.append(handover_table)
+
+    if handover.status in ('pending_return_confirmation', 'returned'):
+        elements.append(Spacer(1, 6*mm))
+        elements.append(Paragraph('<u><b>ASSET RETURN</b></u>', section_style))
+        if handover.return_remarks:
+            elements.append(Paragraph(
+                f'<b>Remarks upon Return:</b> {_xml_escape(handover.return_remarks)}', value_style))
+            elements.append(Spacer(1, 2*mm))
+        return_rows = [
+            ['Returned By', 'Received By'],
+            [
+                handover.employee.full_name,
+                (handover.return_received_by.get_full_name() or handover.return_received_by.username)
+                if handover.return_received_by_id else '-',
+            ],
+            [
+                handover.returned_at.strftime('%d %b %Y') if handover.returned_at else '-',
+                handover.return_received_at.strftime('%d %b %Y') if handover.return_received_at else '-',
+            ],
+            [
+                _sig_image(handover.returned_signature),
+                _sig_image(handover.return_received_signature),
+            ],
+        ]
+        return_table = Table(return_rows, colWidths=[90*mm, 90*mm], rowHeights=[None, None, None, 20*mm])
+        return_table.setStyle(TableStyle([
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('BACKGROUND', (0, 0), (-1, 0), BRAND_RED),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        elements.append(return_table)
+
+    # ── Footer note ──
+    elements.append(Spacer(1, 8*mm))
+    note_text = (
+        "NOTE: Please be aware that it is your responsibility to take good care of the company's "
+        "property whilst you are using it, whether on your premises or outstationed. This particularly "
+        "applies to engineers taking Notebook and Laptops on service assignments.<br/>"
+        "If any of the company's property is damaged due to negligence, misuse, mishandling, etc and "
+        "requires repair or replacement, the company reserves the right to charge all or part of the "
+        "cost to the concerned individual. You are not allowed to install or change or delete any of "
+        "the software in the computer. If however the need arises, please refer to the concerned person."
+    )
+    elements.append(Paragraph(note_text, note_style))
+
+    doc.build(elements)
+    buffer.seek(0)
+    filename = f'asset_handover_{handover.pk}.pdf'
+    response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response

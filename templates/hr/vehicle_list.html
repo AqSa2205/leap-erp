@@ -84,6 +84,7 @@
                     <div class="btn-group btn-group-sm">
                         <a href="{% url 'hr:vehicle_detail' v.pk %}" class="btn btn-outline-primary" title="View"><i class="bi bi-eye"></i></a>
                         <a href="{% url 'hr:vehicle_update' v.pk %}" class="btn btn-outline-secondary" title="Edit"><i class="bi bi-pencil"></i></a>
+                        <a href="{% url 'hr:asset_handover_create' %}?item_kind=vehicle&item_id={{ v.pk }}" class="btn btn-outline-success" title="Create Handover"><i class="bi bi-file-earmark-check"></i></a>
                     </div>
                 </div>
             </div>

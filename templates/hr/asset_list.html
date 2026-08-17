@@ -196,6 +196,9 @@
                                         <i class="bi bi-eye"></i>
                                     </a>
                                     {% if can_manage_assets %}
+                                    <a href="{% url 'hr:asset_handover_create' %}?item_kind=asset&item_id={{ asset.pk }}" class="btn btn-sm btn-outline-success" title="Create Handover">
+                                        <i class="bi bi-file-earmark-check"></i>
+                                    </a>
                                     <a href="{% url 'hr:asset_update' asset.pk %}" class="btn btn-sm btn-outline-secondary" title="Edit">
                                         <i class="bi bi-pencil"></i>
                                     </a>

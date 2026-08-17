@@ -8737,3 +8737,310 @@ class LateQueryTests(TestCase):
         self.assertEqual(q.status, 'approved')
         self.assertEqual(self.rec.status, 'present')
         self.assertTrue(Notification.objects.filter(recipient=self.user, verb__icontains='query').exists())
+
+
+# ─── Asset Handover: auth-boundary and edge-case coverage ─────────────────
+
+def _png_data_url():
+    import base64 as _b64
+    import io as _io
+    from PIL import Image as _Image
+    buf = _io.BytesIO()
+    _Image.new('RGBA', (8, 8), (0, 0, 0, 0)).save(buf, 'PNG')
+    return 'data:image/png;base64,' + _b64.b64encode(buf.getvalue()).decode()
+
+
+def _sig_file(name='sig.png'):
+    import base64
+    from django.core.files.base import ContentFile
+    b64 = _png_data_url().split(',', 1)[1]
+    return ContentFile(base64.b64decode(b64), name=name)
+
+
+class AssetHandoverAuthBoundaryTests(TestCase):
+    """Only the right person can act at each stage: the designated authorizer
+    (not just any super admin) authorizes, only the recipient employee
+    receives/acknowledges return, only HR initiates a return, and nobody
+    outside the three parties (HR/employee/authorizer) can even view the
+    handover or its PDF."""
+
+    def setUp(self):
+        from hr.models import Asset, Vehicle, AssetHandover
+        from hr.asset_handover_services import create_asset_handover
+        self.hr_user = _make_role_user('ahb-hr', Role.SUPER_ADMIN)
+        self.authorizer = _make_role_user('ahb-auth', Role.SUPER_ADMIN)
+        self.other_admin = _make_role_user('ahb-other-admin', Role.SUPER_ADMIN)
+
+        self.emp = make_employee(iqama='AHB-1', name='Handover Employee')
+        self.emp_user = _login_user('ahb-emp')
+        self.emp.user = self.emp_user
+        self.emp.save(update_fields=['user'])
+
+        self.other_emp = make_employee(iqama='AHB-2', name='Bystander Employee')
+        self.other_emp_user = _login_user('ahb-other-emp')
+        self.other_emp.user = self.other_emp_user
+        self.other_emp.save(update_fields=['user'])
+
+        self.asset = Asset.objects.create(asset_name='Boundary Laptop', quantity=1)
+
+        self.handover = create_asset_handover(
+            employee=self.emp, item=self.asset, issued_by=self.hr_user,
+            issued_signature=_sig_file('issued.png'), authorizer=self.authorizer,
+        )
+
+    # ── authorize: must be the designated authorizer AND a super admin ──
+    def test_wrong_super_admin_cannot_authorize(self):
+        self.client.login(username='ahb-other-admin', password='testpass123')
+        resp = self.client.post(
+            reverse('hr:asset_handover_authorize', args=[self.handover.pk]),
+            {'signature_data': _png_data_url()})
+        self.assertRedirects(resp, reverse('hr:asset_handover_detail', args=[self.handover.pk]))
+        self.handover.refresh_from_db()
+        self.assertEqual(self.handover.status, 'pending_authorization')
+
+    def test_employee_cannot_authorize_own_handover(self):
+        self.client.login(username='ahb-emp', password='testpass123')
+        resp = self.client.post(
+            reverse('hr:asset_handover_authorize', args=[self.handover.pk]),
+            {'signature_data': _png_data_url()})
+        self.assertRedirects(resp, reverse('hr:asset_handover_detail', args=[self.handover.pk]))
+        self.handover.refresh_from_db()
+        self.assertEqual(self.handover.status, 'pending_authorization')
+
+    def test_designated_authorizer_can_authorize(self):
+        self.client.login(username='ahb-auth', password='testpass123')
+        self.client.post(
+            reverse('hr:asset_handover_authorize', args=[self.handover.pk]),
+            {'signature_data': _png_data_url()})
+        self.handover.refresh_from_db()
+        self.assertEqual(self.handover.status, 'pending_receipt')
+
+    # ── receive: only the recipient employee ──
+    def test_other_employee_cannot_receive(self):
+        self.client.login(username='ahb-auth', password='testpass123')
+        self.client.post(reverse('hr:asset_handover_authorize', args=[self.handover.pk]),
+                          {'signature_data': _png_data_url()})
+        self.client.login(username='ahb-other-emp', password='testpass123')
+        resp = self.client.post(
+            reverse('hr:asset_handover_receive', args=[self.handover.pk]),
+            {'signature_data': _png_data_url()})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, reverse('hr:asset_handover_detail', args=[self.handover.pk]))
+        self.handover.refresh_from_db()
+        self.assertEqual(self.handover.status, 'pending_receipt')
+
+    def test_hr_user_cannot_receive_on_employees_behalf(self):
+        self.client.login(username='ahb-auth', password='testpass123')
+        self.client.post(reverse('hr:asset_handover_authorize', args=[self.handover.pk]),
+                          {'signature_data': _png_data_url()})
+        self.client.login(username='ahb-hr', password='testpass123')
+        resp = self.client.post(
+            reverse('hr:asset_handover_receive', args=[self.handover.pk]),
+            {'signature_data': _png_data_url()})
+        self.assertRedirects(resp, reverse('hr:asset_handover_detail', args=[self.handover.pk]))
+        self.handover.refresh_from_db()
+        self.assertEqual(self.handover.status, 'pending_receipt')
+
+    # ── initiate_return: HR-tier only ──
+    def test_plain_employee_cannot_initiate_return(self):
+        self._advance_to_active()
+        self.client.login(username='ahb-emp', password='testpass123')
+        resp = self.client.post(
+            reverse('hr:asset_handover_initiate_return', args=[self.handover.pk]),
+            {'signature_data': _png_data_url()})
+        self.assertRedirects(resp, reverse('hr:asset_handover_detail', args=[self.handover.pk]))
+        self.handover.refresh_from_db()
+        self.assertEqual(self.handover.status, 'active')
+
+    def test_hr_can_initiate_return(self):
+        self._advance_to_active()
+        self.client.login(username='ahb-hr', password='testpass123')
+        self.client.post(
+            reverse('hr:asset_handover_initiate_return', args=[self.handover.pk]),
+            {'signature_data': _png_data_url()})
+        self.handover.refresh_from_db()
+        self.assertEqual(self.handover.status, 'pending_return_confirmation')
+
+    # ── acknowledge_return: only the recipient employee ──
+    def test_other_employee_cannot_acknowledge_return(self):
+        self._advance_to_pending_return()
+        self.client.login(username='ahb-other-emp', password='testpass123')
+        resp = self.client.post(
+            reverse('hr:asset_handover_acknowledge_return', args=[self.handover.pk]),
+            {'signature_data': _png_data_url()})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, reverse('hr:asset_handover_detail', args=[self.handover.pk]))
+        self.handover.refresh_from_db()
+        self.assertEqual(self.handover.status, 'pending_return_confirmation')
+
+    def test_hr_cannot_acknowledge_return_on_employees_behalf(self):
+        self._advance_to_pending_return()
+        self.client.login(username='ahb-hr', password='testpass123')
+        resp = self.client.post(
+            reverse('hr:asset_handover_acknowledge_return', args=[self.handover.pk]),
+            {'signature_data': _png_data_url()})
+        self.assertRedirects(resp, reverse('hr:asset_handover_detail', args=[self.handover.pk]))
+        self.handover.refresh_from_db()
+        self.assertEqual(self.handover.status, 'pending_return_confirmation')
+
+    def test_employee_can_acknowledge_own_return(self):
+        self._advance_to_pending_return()
+        self.client.login(username='ahb-emp', password='testpass123')
+        self.client.post(
+            reverse('hr:asset_handover_acknowledge_return', args=[self.handover.pk]),
+            {'signature_data': _png_data_url()})
+        self.handover.refresh_from_db()
+        self.assertEqual(self.handover.status, 'returned')
+
+    # ── view/PDF access: only the three parties ──
+    def test_unrelated_user_cannot_view_detail(self):
+        self.client.login(username='ahb-other-emp', password='testpass123')
+        resp = self.client.get(reverse('hr:asset_handover_detail', args=[self.handover.pk]))
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, reverse('hr:hr_dashboard'))
+
+    def test_unrelated_user_cannot_export_pdf(self):
+        self.client.login(username='ahb-other-emp', password='testpass123')
+        resp = self.client.get(reverse('hr:asset_handover_export_pdf', args=[self.handover.pk]))
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, reverse('hr:hr_dashboard'))
+
+    def test_authorizer_can_view_detail(self):
+        self.client.login(username='ahb-auth', password='testpass123')
+        resp = self.client.get(reverse('hr:asset_handover_detail', args=[self.handover.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_recipient_employee_can_export_pdf(self):
+        self.client.login(username='ahb-emp', password='testpass123')
+        resp = self.client.get(reverse('hr:asset_handover_export_pdf', args=[self.handover.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+
+    # ── helpers ──
+    def _advance_to_active(self):
+        self.client.login(username='ahb-auth', password='testpass123')
+        self.client.post(reverse('hr:asset_handover_authorize', args=[self.handover.pk]),
+                          {'signature_data': _png_data_url()})
+        self.client.login(username='ahb-emp', password='testpass123')
+        self.client.post(reverse('hr:asset_handover_receive', args=[self.handover.pk]),
+                          {'signature_data': _png_data_url()})
+        self.handover.refresh_from_db()
+
+    def _advance_to_pending_return(self):
+        self._advance_to_active()
+        self.client.login(username='ahb-hr', password='testpass123')
+        self.client.post(reverse('hr:asset_handover_initiate_return', args=[self.handover.pk]),
+                          {'signature_data': _png_data_url()})
+        self.handover.refresh_from_db()
+
+
+class AssetHandoverEdgeCaseTests(TestCase):
+    """Race guards (acting twice, acting out of order) fail cleanly with a
+    message rather than corrupting state or crashing, and item_kind
+    routing/lookup behaves correctly for both assets and vehicles."""
+
+    def setUp(self):
+        from hr.models import Asset, Vehicle
+        from hr.asset_handover_services import create_asset_handover
+        self.hr_user = _make_role_user('ahe-hr', Role.SUPER_ADMIN)
+        self.authorizer = _make_role_user('ahe-auth', Role.SUPER_ADMIN)
+        self.emp = make_employee(iqama='AHE-1', name='Edge Case Employee')
+        self.emp_user = _login_user('ahe-emp')
+        self.emp.user = self.emp_user
+        self.emp.save(update_fields=['user'])
+
+        self.asset = Asset.objects.create(asset_name='Edge Laptop', quantity=1)
+        self.vehicle = Vehicle.objects.create(plate_number='AHE-9999')
+
+        self.handover = create_asset_handover(
+            employee=self.emp, item=self.asset, issued_by=self.hr_user,
+            issued_signature=_sig_file('issued.png'), authorizer=self.authorizer,
+        )
+
+    def test_cannot_authorize_twice(self):
+        self.client.login(username='ahe-auth', password='testpass123')
+        url = reverse('hr:asset_handover_authorize', args=[self.handover.pk])
+        self.client.post(url, {'signature_data': _png_data_url()})
+        self.handover.refresh_from_db()
+        self.assertEqual(self.handover.status, 'pending_receipt')
+        # Second authorize attempt: status has moved on, so the service's
+        # own allowed_statuses guard should reject it without crashing.
+        self.client.post(url, {'signature_data': _png_data_url()})
+        self.handover.refresh_from_db()
+        self.assertEqual(self.handover.status, 'pending_receipt')
+
+    def test_cannot_receive_before_authorized(self):
+        self.client.login(username='ahe-emp', password='testpass123')
+        resp = self.client.post(
+            reverse('hr:asset_handover_receive', args=[self.handover.pk]),
+            {'signature_data': _png_data_url()})
+        self.assertRedirects(resp, reverse('hr:asset_handover_detail', args=[self.handover.pk]))
+        self.handover.refresh_from_db()
+        self.assertEqual(self.handover.status, 'pending_authorization')
+
+    def test_cannot_initiate_return_before_active(self):
+        # Still pending_authorization at this point.
+        self.client.login(username='ahe-hr', password='testpass123')
+        resp = self.client.post(
+            reverse('hr:asset_handover_initiate_return', args=[self.handover.pk]),
+            {'signature_data': _png_data_url()})
+        self.handover.refresh_from_db()
+        self.assertEqual(self.handover.status, 'pending_authorization')
+
+    def test_cannot_acknowledge_return_before_initiated(self):
+        self.client.login(username='ahe-emp', password='testpass123')
+        resp = self.client.post(
+            reverse('hr:asset_handover_acknowledge_return', args=[self.handover.pk]),
+            {'signature_data': _png_data_url()})
+        self.handover.refresh_from_db()
+        self.assertEqual(self.handover.status, 'pending_authorization')
+
+    def test_nonexistent_handover_404s(self):
+        self.client.login(username='ahe-hr', password='testpass123')
+        resp = self.client.get(reverse('hr:asset_handover_detail', args=[999999]))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_active_handover_redirect_finds_asset(self):
+        self.client.login(username='ahe-auth', password='testpass123')
+        self.client.post(reverse('hr:asset_handover_authorize', args=[self.handover.pk]),
+                          {'signature_data': _png_data_url()})
+        self.client.login(username='ahe-emp', password='testpass123')
+        self.client.post(reverse('hr:asset_handover_receive', args=[self.handover.pk]),
+                          {'signature_data': _png_data_url()})
+        self.client.login(username='ahe-hr', password='testpass123')
+        resp = self.client.get(reverse('hr:asset_active_handover_redirect', args=[self.asset.pk]))
+        self.assertRedirects(resp, reverse('hr:asset_handover_detail', args=[self.handover.pk]))
+
+    def test_active_handover_redirect_no_active_handover_redirects_to_asset(self):
+        # No handover exists yet for this vehicle.
+        self.client.login(username='ahe-hr', password='testpass123')
+        resp = self.client.get(
+            reverse('hr:asset_active_handover_redirect', args=[self.vehicle.pk]) + '?item_kind=vehicle')
+        self.assertRedirects(resp, reverse('hr:vehicle_detail', args=[self.vehicle.pk]))
+
+    def test_active_handover_redirect_item_kind_vehicle_does_not_match_asset(self):
+        # An active handover exists for self.asset, but with item_kind=vehicle
+        # the same numeric pk must not accidentally match it.
+        self.client.login(username='ahe-auth', password='testpass123')
+        self.client.post(reverse('hr:asset_handover_authorize', args=[self.handover.pk]),
+                          {'signature_data': _png_data_url()})
+        self.client.login(username='ahe-emp', password='testpass123')
+        self.client.post(reverse('hr:asset_handover_receive', args=[self.handover.pk]),
+                          {'signature_data': _png_data_url()})
+        self.client.login(username='ahe-hr', password='testpass123')
+        resp = self.client.get(
+            reverse('hr:asset_active_handover_redirect', args=[self.asset.pk]) + '?item_kind=vehicle')
+        self.assertRedirects(resp, reverse('hr:vehicle_detail', args=[self.asset.pk]))
+
+    def test_vehicle_handover_item_property_returns_vehicle(self):
+        from hr.asset_handover_services import create_asset_handover
+        vh = create_asset_handover(
+            employee=self.emp, item=self.vehicle, issued_by=self.hr_user,
+            issued_signature=_sig_file('v_issued.png'), authorizer=self.authorizer,
+        )
+        self.assertEqual(vh.item, self.vehicle)
+        self.assertIsNone(vh.asset)
+
+    def test_asset_handover_item_property_returns_asset(self):
+        self.assertEqual(self.handover.item, self.asset)
+        self.assertIsNone(self.handover.vehicle)

@@ -12,6 +12,12 @@ class Asset(models.Model):
     asset_type = models.CharField(max_length=50, blank=True, verbose_name='Asset Type')
     serial_number = models.CharField(max_length=255, blank=True, verbose_name='Serial No.')
     specifications = models.CharField(max_length=255, blank=True, verbose_name='Specifications')
+    model = models.CharField(max_length=255, blank=True, verbose_name='Model')
+    part_number = models.CharField(max_length=100, blank=True, verbose_name='Part Number')
+    tag_number = models.CharField(max_length=100, blank=True, verbose_name='Tag Number')
+    item_description = models.TextField(blank=True, verbose_name='Item Description')
+    accessories = models.TextField(blank=True, verbose_name='Accessories')
+    software_installed = models.TextField(blank=True, verbose_name='Software Installed')
     invoice_number = models.CharField(max_length=100, blank=True, verbose_name='Invoice Number')
     employee_name = models.CharField(max_length=255, blank=True, verbose_name='Employee Name')
     department = models.CharField(max_length=100, blank=True, verbose_name='Department')
@@ -245,6 +251,11 @@ class Vehicle(models.Model):
             self.insurance_status == 'expired' or
             self.vehicle_status != 'valid'
         )
+
+    @property
+    def active_handover(self):
+        """The currently-active AssetHandover for this vehicle, or None."""
+        return self.handovers.filter(status='active').first()
 
 
 class VehicleDocument(models.Model):

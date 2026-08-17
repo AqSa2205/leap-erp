@@ -30,11 +30,11 @@
                         <i class="bi bi-arrow-left"></i> Back
                     </a>
                     {% if asset.active_assignment %}
-                    <a href="{% url 'hr:asset_return' asset.pk %}" class="btn btn-warning me-2">
+                    <a href="{% url 'hr:asset_active_handover_redirect' asset.pk %}" class="btn btn-warning me-2">
                         <i class="bi bi-arrow-return-left"></i> Return Asset
                     </a>
                     {% else %}
-                    <a href="{% url 'hr:asset_issue' asset.pk %}" class="btn btn-success me-2">
+                    <a href="{% url 'hr:asset_handover_create' %}?item_kind=asset&item_id={{ asset.pk }}" class="btn btn-success me-2">
                         <i class="bi bi-person-plus"></i> Issue to Employee
                     </a>
                     {% endif %}
@@ -174,13 +174,13 @@
                                 {% endif %}
                             </div>
                             <div class="d-flex justify-content-end">
-                                <a href="{% url 'hr:asset_return' asset.pk %}" class="btn btn-warning">
-                                    <i class="bi bi-arrow-return-left"></i> Record Return
+                                <a href="{% url 'hr:asset_active_handover_redirect' asset.pk %}" class="btn btn-warning">
+                                    <i class="bi bi-arrow-return-left"></i> Return Asset
                                 </a>
                             </div>
                             {% else %}
                             <p class="text-muted mb-3">This asset is not currently assigned to anyone.</p>
-                            <a href="{% url 'hr:asset_issue' asset.pk %}" class="btn btn-success">
+                            <a href="{% url 'hr:asset_handover_create' %}?item_kind=asset&item_id={{ asset.pk }}" class="btn btn-success">
                                 <i class="bi bi-person-plus"></i> Issue to Employee
                             </a>
                             {% endif %}

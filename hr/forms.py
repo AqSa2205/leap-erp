@@ -209,6 +209,8 @@ class AssetForm(forms.ModelForm):
         model = Asset
         fields = [
             'asset_name', 'asset_type', 'serial_number', 'specifications',
+            'model', 'part_number', 'tag_number', 'item_description',
+            'accessories', 'software_installed',
             'invoice_number', 'employee_name', 'department', 'designation',
             'handover_date', 'handover_by', 'condition', 'return_date',
             'return_to', 'quantity', 'purchase_date', 'price',
@@ -220,6 +222,12 @@ class AssetForm(forms.ModelForm):
             'asset_type': forms.TextInput(attrs={'class': 'form-control', 'list': 'asset-type-list', 'placeholder': 'e.g. Laptop, Monitor'}),
             'serial_number': forms.TextInput(attrs={'class': 'form-control'}),
             'specifications': forms.TextInput(attrs={'class': 'form-control'}),
+            'model': forms.TextInput(attrs={'class': 'form-control'}),
+            'part_number': forms.TextInput(attrs={'class': 'form-control'}),
+            'tag_number': forms.TextInput(attrs={'class': 'form-control'}),
+            'item_description': forms.Textarea(attrs={'class': 'form-control', 'rows': 2}),
+            'accessories': forms.Textarea(attrs={'class': 'form-control', 'rows': 2}),
+            'software_installed': forms.Textarea(attrs={'class': 'form-control', 'rows': 2}),
             'invoice_number': forms.TextInput(attrs={'class': 'form-control'}),
             'employee_name': forms.TextInput(attrs={'class': 'form-control'}),
             'department': forms.TextInput(attrs={'class': 'form-control'}),
