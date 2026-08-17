@@ -401,7 +401,7 @@
                         <h6 class="text-muted mb-2 terms-category-heading" data-category="{{ first.template.category }}">{{ category_label }}</h6>
                         <div class="row mb-3 terms-category-row" data-category="{{ first.template.category }}">
                             {% for item in items_list %}
-                            <div class="col-md-6 col-lg-4 mb-2">
+                            <div class="col-12 mb-2">
                                 <div class="form-check">
                                     <input class="form-check-input po-term-check" type="checkbox"
                                            name="selected_terms"
@@ -428,7 +428,7 @@
                                                 data-term-toggle="{{ item.template.pk }}">
                                             <i class="bi bi-pencil-square me-1"></i>Edit text for this PO
                                         </button>
-                                        <div class="po-term-editor mt-1" data-term-editor="{{ item.template.pk }}" style="display:none;">
+                                        <div class="po-term-editor mt-1" data-term-editor="{{ item.template.pk }}" style="display:none; max-width:720px;">
                                             <textarea class="form-control form-control-sm po-term-text"
                                                       name="term_content_{{ item.template.pk }}" id="po-term-text-{{ item.template.pk }}"
                                                       data-term-text="{{ item.template.pk }}"
@@ -771,7 +771,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function insertTemplateCheckbox(t) {
         const row = getOrCreateCategorySection(t.category, t.category_label);
         const col = document.createElement('div');
-        col.className = 'col-md-6 col-lg-4 mb-2';
+        col.className = 'col-12 mb-2';
         col.innerHTML = `
             <div class="form-check">
                 <input class="form-check-input" type="checkbox" name="selected_terms"
