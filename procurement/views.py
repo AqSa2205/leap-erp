@@ -1936,7 +1936,6 @@ def po_export_pdf(request, pk, unpriced=False):
     # can never split them apart.
     if totals_sig_flow:
         elements.append(KeepTogether(totals_sig_flow))
-        elements.append(Spacer(1, 4*mm))
 
     # ── Terms & Conditions ──
     from costing.models import TermsTemplate as _TermsTemplate
@@ -1946,8 +1945,14 @@ def po_export_pdf(request, pk, unpriced=False):
     selected_terms = [e['template'] for e in resolved]
     term_text = {e['template'].pk: e['content'] for e in resolved}
     legacy_tc = (po.terms_and_conditions or '').strip()
+    has_terms = bool(selected_terms or legacy_tc)
 
-    if selected_terms or legacy_tc:
+    # No spacer after the totals block: nothing follows it in the no-terms case
+    # (a trailing spacer that lands at the page bottom spills over into a blank
+    # last page), and in the terms case the PageBreak below supplies the gap. A
+    # spacer between the totals block and that PageBreak is exactly what turns
+    # the following page blank, so it must not be emitted here.
+    if has_terms:
         # Terms & Conditions always begin on their own fresh page.
         elements.append(PageBreak())
         elements.append(Paragraph(
