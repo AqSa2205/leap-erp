@@ -7,6 +7,7 @@ urlpatterns = [
     path('', views.hr_dashboard, name='hr_dashboard'),
     path('my-profile/', views.my_profile, name='my_profile'),
     path('my-profile/attendance/export/pdf/', views.my_attendance_export_pdf, name='my_attendance_export_pdf'),
+    path('my-profile/late-query/raise/', views.raise_late_query, name='raise_late_query'),
     path('employees/', views.EmployeeListView.as_view(), name='employee_list'),
     path('create/', views.EmployeeCreateView.as_view(), name='employee_create'),
     path('import/', views.employee_import, name='employee_import'),

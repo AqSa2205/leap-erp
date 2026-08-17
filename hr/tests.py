@@ -3916,6 +3916,25 @@ class AttendanceExceptionServiceTests(TestCase):
         self.today = _timezone.now().date()
         self.in_window_time = _time(0, 1)
 
+
+    def test_approving_exception_flips_already_saved_late_record_to_present(self):
+        AttendanceRecord.objects.create(
+            employee=self.emp, date=self.today, status='late', check_in=_time(9, 30))
+        exc = self._submit()
+        decide_attendance_exception(exc, self.manager_user, 'approved', 'Confirmed')
+        rec = AttendanceRecord.objects.get(employee=self.emp, date=self.today)
+        self.assertEqual(rec.status, 'present')
+
+    def test_build_matrix_surfaces_the_exception_reason(self):
+        from hr.attendance_matrix import build_matrix
+        AttendanceRecord.objects.create(
+            employee=self.emp, date=self.today, status='late', check_in=_time(9, 30))
+        exc = self._submit(custom_reason='Client site walkthrough')
+        decide_attendance_exception(exc, self.manager_user, 'approved', 'Confirmed')
+        days, rows = build_matrix([self.emp], self.today, self.today)
+        cell = rows[0]['cells'][0]
+        self.assertEqual(cell['status'], 'present')
+        self.assertEqual(cell['exception_reason'], 'Client site walkthrough')
     def _submit(self, **overrides):
         defaults = dict(
             employee=self.emp, event_date=self.today, event_start_time=self.in_window_time,
@@ -8676,3 +8695,45 @@ class LateThresholdTests(TransactionTestCase):
             filename, content, mimetype = sent.attachments[0]
             self.assertEqual(mimetype, 'application/pdf')
             self.assertGreater(len(content), 0)
+class LateQueryTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user('lq_emp', password='x', email='lq_emp@leap.com')
+        self.emp = make_employee(iqama='IQ-LQ', name='Late Query Tester')
+        self.emp.user = self.user
+        self.emp.save()
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.admin = User.objects.create_user('lq_admin', password='x', role=role)
+        self.rec = AttendanceRecord.objects.create(
+            employee=self.emp, date=_date(2026, 8, 10), status='late')
+
+    def test_raise_query_creates_pending_query_and_notifies_hr(self):
+        from hr.models import LateQuery
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse('hr:raise_late_query'), {
+            'attendance_record_id': self.rec.pk, 'message': 'I was on approved leave, this is wrong.'})
+        self.assertEqual(resp.status_code, 302)
+        q = LateQuery.objects.get(employee=self.emp, attendance_record=self.rec)
+        self.assertEqual(q.status, 'pending')
+        self.assertTrue(Notification.objects.filter(recipient=self.admin, verb__icontains='raised a query').exists())
+
+    def test_cannot_raise_second_query_for_same_record(self):
+        from hr.models import LateQuery
+        LateQuery.objects.create(employee=self.emp, attendance_record=self.rec, message='first')
+        self.client.force_login(self.user)
+        self.client.post(reverse('hr:raise_late_query'), {
+            'attendance_record_id': self.rec.pk, 'message': 'second attempt'})
+        self.assertEqual(LateQuery.objects.filter(attendance_record=self.rec).count(), 1)
+
+    def test_hr_approval_flips_record_to_present_and_notifies_employee(self):
+        from hr.models import LateQuery
+        q = LateQuery.objects.create(employee=self.emp, attendance_record=self.rec, message='wrong mark')
+        self.client.force_login(self.admin)
+        resp = self.client.post(reverse('hr:team_exceptions'), {
+            'action': 'decide_late_query', 'query_id': q.pk, 'decision': 'approved',
+            'comment': 'Confirmed with manager', 'tab': 'late_queries'})
+        self.assertEqual(resp.status_code, 302)
+        q.refresh_from_db()
+        self.rec.refresh_from_db()
+        self.assertEqual(q.status, 'approved')
+        self.assertEqual(self.rec.status, 'present')
+        self.assertTrue(Notification.objects.filter(recipient=self.user, verb__icontains='query').exists())

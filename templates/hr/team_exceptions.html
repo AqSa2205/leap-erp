@@ -135,8 +135,14 @@
       <a class="nav-link team-exc-tab-all {% if tab == 'all' %}active{% endif %}" href="?tab=all">All Organization Requests{% if all_tab_count %} <span class="nav-badge-count">{{ all_tab_count }}</span>{% endif %}</a>
     </li>
     {% endif %}
+    {% if is_hr_viewer %}
+    <li class="nav-item">
+      <a class="nav-link {% if tab == 'late_queries' %}active{% endif %}" href="?tab=late_queries">Late Queries{% if late_queries_tab_count %} <span class="nav-badge-count">{{ late_queries_tab_count }}</span>{% endif %}</a>
+    </li>
+    {% endif %}
   </ul>
 
+  {% if tab != 'late_queries' %}
   <div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
       <h5 class="mb-0"><i class="bi bi-hourglass-split"></i> Pending
@@ -381,12 +387,102 @@
     </div>
   </div>
 </div>
+  {% endif %}
+
+  {% if tab == 'late_queries' %}
+  <div class="card mb-4">
+    <div class="card-header"><h5 class="mb-0"><i class="bi bi-question-circle"></i> Pending Late Queries <span class="badge bg-warning text-dark ms-2">{{ pending_late_queries|length }}</span></h5></div>
+    <div class="card-body p-0">
+      {% if pending_late_queries %}
+      <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead class="table-light"><tr><th>Employee</th><th>Date</th><th>Message</th><th>Raised</th><th>Decision</th></tr></thead>
+        <tbody>
+          {% for q in pending_late_queries %}
+          <tr>
+            <td>{{ q.employee.full_name }}</td>
+            <td>{{ q.attendance_record.date|date:"d M Y" }}</td>
+            <td>{{ q.message }}</td>
+            <td>{{ q.created_at|date:"d M Y H:i" }}</td>
+            <td>
+              <form method="post" class="d-inline">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="decide_late_query">
+                <input type="hidden" name="query_id" value="{{ q.pk }}">
+                <input type="hidden" name="tab" value="late_queries">
+                <button type="submit" name="decision" value="approved" class="btn btn-sm btn-success">Approve</button>
+                <button type="submit" name="decision" value="rejected" class="btn btn-sm btn-outline-danger">Reject</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% else %}
+      <p class="text-muted text-center py-4 mb-0">No pending queries.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header"><h5 class="mb-0"><i class="bi bi-clock-history"></i> Decided Queries</h5></div>
+    <div class="card-body p-0">
+      {% if decided_late_queries %}
+      <div class="table-responsive">
+      <table class="table table-sm mb-0">
+        <thead class="table-light"><tr><th>Employee</th><th>Date</th><th>Status</th><th>Decided by</th></tr></thead>
+        <tbody>
+          {% for q in decided_late_queries %}
+          <tr>
+            <td>{{ q.employee.full_name }}</td>
+            <td>{{ q.attendance_record.date|date:"d M Y" }}</td>
+            <td>{{ q.get_status_display }}</td>
+            <td>{{ q.decided_by.get_full_name|default:q.decided_by.username }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% else %}
+      <p class="text-muted text-center py-4 mb-0">No decided queries yet.</p>
+      {% endif %}
+    </div>
+  </div>
+  <div class="card mb-4">
+    <div class="card-header"><h5 class="mb-0"><i class="bi bi-envelope"></i> 3-Lates Email Recipients</h5></div>
+    <div class="card-body p-0">
+      {% if late_email_notifications %}
+      <div class="table-responsive">
+      <table class="table table-sm mb-0">
+        <thead class="table-light"><tr><th>Recipient</th><th>Details</th><th>Sent</th></tr></thead>
+        <tbody>
+          {% for n in late_email_notifications %}
+          <tr>
+            <td>{{ n.recipient.get_full_name|default:n.recipient.username }}</td>
+            <td>{{ n.verb }}</td>
+            <td>{{ n.created_at|date:"d M Y H:i" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% else %}
+      <p class="text-muted text-center py-4 mb-0">No 3-lates emails sent yet.</p>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
 (function () {
-    var URGENT_THRESHOLD_MS = 4 * 60 * 60 * 1000; // 4 hours — matches spec's suggested urgency cutoff
+    var URGENT_THRESHOLD_MS = 4 * 60 * 60 * 1000; // 4 hours - matches spec's suggested urgency cutoff
 
     function formatRemaining(ms) {
         var overdue = ms < 0;
@@ -407,12 +503,6 @@
             var eventStart = eventStartAttr ? new Date(eventStartAttr).getTime() : NaN;
 
             if (!isNaN(eventStart) && now < eventStart) {
-                // The event hasn't started yet. A request can legitimately be
-                // submitted up to 7 days early, so "time left until
-                // decision_deadline" here could read as up to ~8 days —
-                // misleading, since the real 24h decision window only opens
-                // at event start. Show a static, non-urgent "Starts <date>"
-                // instead of a ticking countdown.
                 el.textContent = el.getAttribute('data-event-start-label') || 'Not started yet';
                 el.classList.remove('text-danger');
                 el.classList.remove('text-warning');
@@ -437,8 +527,6 @@
     }
 
     tick();
-    // 30s refresh: the display granularity is minutes, so a per-second tick
-    // would just churn the DOM for no visible benefit.
     setInterval(tick, 30000);
 })();
 </script>
