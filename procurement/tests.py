@@ -939,3 +939,45 @@ class POEditSignatureTests(TestCase):
         # ...a different procurement manager (can view the PO) does not.
         self.client.force_login(self.other_pm)
         self.assertNotIn(edit_url, self.client.get(detail).content.decode())
+
+
+class TermsSanitizeTests(TestCase):
+    """Rich-text Terms & Conditions guards: user HTML is sanitised (no stored
+    XSS), allowed formatting survives, and legacy plain text keeps its line
+    breaks in both the web render and the PDF converter."""
+
+    def test_render_terms_strips_scripts_and_handlers(self):
+        from procurement.templatetags.terms_extras import render_terms
+        out = str(render_terms('<p>ok</p><script>alert(1)</script><img src=x onerror=alert(2)>'))
+        self.assertNotIn('<script', out.lower())
+        self.assertNotIn('onerror', out.lower())
+        self.assertIn('ok', out)
+
+    def test_render_terms_keeps_allowed_formatting(self):
+        from procurement.templatetags.terms_extras import render_terms
+        out = str(render_terms('<span style="color:#ff0000;font-size:14pt">Red</span>'))
+        self.assertIn('color', out)
+        self.assertIn('14pt', out)
+
+    def test_render_terms_linebreaks_legacy_plain_text(self):
+        from procurement.templatetags.terms_extras import render_terms
+        out = str(render_terms('Line one\nLine two'))
+        self.assertIn('<br', out)
+
+    def test_terms_preview_strips_all_tags(self):
+        from procurement.templatetags.terms_extras import terms_preview
+        out = str(terms_preview('<b>Bold</b> <script>x</script> text', 15))
+        self.assertNotIn('<', out)
+        self.assertIn('Bold', out)
+
+    def test_pdf_converter_splits_legacy_plain_text_lines(self):
+        from procurement.views import _tinymce_html_to_reportlab_lines
+        lines = _tinymce_html_to_reportlab_lines('1. Payment 30 days\n2. Delivery FOB')
+        self.assertEqual(len(lines), 2)  # not one run-on line
+
+    def test_pdf_converter_escapes_amp_and_drops_scripts(self):
+        from procurement.views import _tinymce_html_to_reportlab_lines
+        lines = _tinymce_html_to_reportlab_lines('<p>Safe &amp; sound <script>bad</script></p>')
+        joined = ' '.join(m for m, _ in lines)
+        self.assertNotIn('<script', joined.lower())
+        self.assertIn('&amp;', joined)
