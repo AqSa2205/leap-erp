@@ -1,5 +1,6 @@
 {% extends 'base.html' %}
 {% load humanize costing_tags %}
+{% load terms_extras %}
 
 {% block title %}{{ sheet.title }} - BOM{% endblock %}
 {% block page_title %}{% if user.is_proposal_team_user or user.is_procurement_user %}Bill of Material{% else %}Bill of Material - Commercial{% endif %}{% endblock %}
@@ -1243,7 +1244,7 @@
                            {% if item.selected %}checked{% endif %}>
                     <label class="form-check-label" for="term-{{ item.template.pk }}">
                         <strong>{{ item.template.name }}</strong>
-                        <br><small class="text-muted">{{ item.template.content|truncatewords_html:15|safe }}</small>
+                        <br><small class="text-muted">{{ item.template.content|terms_preview:15 }}</small>
                     </label>
                 </div>
             </div>

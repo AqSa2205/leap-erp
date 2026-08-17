@@ -1466,6 +1466,13 @@ def _tinymce_html_to_reportlab_lines(html):
     from html.parser import HTMLParser
     from xml.sax.saxutils import escape as xml_escape
 
+    # Legacy terms are pre-TinyMCE plain text (newline-delimited). The HTML
+    # parser below only breaks on block tags, so a bare '\n' would collapse the
+    # whole thing into one run-on line — handle plain text explicitly instead.
+    if html and '<' not in html:
+        return [(xml_escape(line.strip()), None)
+                for line in html.splitlines() if line.strip()]
+
     font_size_re = re.compile(r'font-size:\s*([\d.]+)pt')
     font_color_re = re.compile(r'(?<!background-)color:\s*(#[0-9a-fA-F]{6})')
     back_color_re = re.compile(r'background-color:\s*(#[0-9a-fA-F]{6})')
@@ -1572,18 +1579,6 @@ def _tinymce_html_to_reportlab_lines(html):
     parser.current_max_pt = None
     parser.flush_current()
     return parser.lines
-
-
-def _reportlab_style_for_line(base_style, max_pt):
-    # Returns base_style unchanged if the line has no inline font-size
-    # override larger than the base, otherwise a cloned style sized up so
-    # the line has enough leading to not collide with what follows.
-    if not max_pt or max_pt <= base_style.fontSize:
-        return base_style
-    from reportlab.lib.styles import ParagraphStyle
-    return ParagraphStyle(
-        base_style.name + '_big%d' % max_pt, parent=base_style,
-        fontSize=max_pt, leading=int(max_pt * 1.25))
 
 
 def _reportlab_style_for_line(base_style, max_pt):

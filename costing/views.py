@@ -1486,6 +1486,12 @@ def ajax_create_terms_template(request):
     usage = (request.POST.get('usage') or 'both').strip()
     if not name or not category or not content:
         return JsonResponse({'error': 'name, category, and content are all required.'}, status=400)
+    # A TinyMCE "empty" value can be markup like <p>&nbsp;</p> that strips to no
+    # visible text — reject those so the library doesn't fill with blank terms.
+    import html as _html_mod
+    from django.utils.html import strip_tags as _strip_tags
+    if not _html_mod.unescape(_strip_tags(content)).replace(' ', '').strip():
+        return JsonResponse({'error': 'The term content cannot be empty.'}, status=400)
     if category not in dict(TermsTemplate.CATEGORY_CHOICES):
         return JsonResponse({'error': 'Invalid category.'}, status=400)
     if usage not in dict(TermsTemplate.USAGE_CHOICES):
