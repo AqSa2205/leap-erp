@@ -46,4 +46,22 @@
         </div>
     </div>
 </div>
+
+<!-- TinyMCE for term content - font size and color controls -->
+{% load static %}
+<script src="{% static 'tinymce/tinymce.min.js' %}"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    tinymce.init({
+        selector: 'textarea.tinymce-editor',
+        height: 250,
+        menubar: false,
+        branding: false,
+        promotion: false,
+        plugins: 'lists',
+        toolbar: 'undo redo | fontsize forecolor backcolor | bold italic underline | bullist numlist | alignleft aligncenter alignright | removeformat',
+        font_size_formats: '8pt 9pt 10pt 11pt 12pt 14pt 16pt 18pt 24pt',
+    });
+});
+</script>
 {% endblock %}

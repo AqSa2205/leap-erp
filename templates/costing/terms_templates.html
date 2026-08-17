@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load terms_extras %}
 
 {% block title %}Terms & Conditions Templates - Leap Networks ERP{% endblock %}
 {% block page_title %}Terms & Conditions Templates{% endblock %}
@@ -51,7 +52,7 @@
                                     {% elif tmpl.usage == 'procurement' %}<span class="badge bg-warning text-dark">Procurement</span>
                                     {% else %}<span class="badge bg-light text-dark border">Both</span>{% endif %}
                                 </td>
-                                <td class="text-muted" style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ tmpl.content|truncatewords:20 }}</td>
+                                <td class="text-muted" style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ tmpl.content|terms_preview:20 }}</td>
                                 <td>{{ tmpl.created_at|date:"d M Y" }}</td>
                                 <td>
                                     <a href="{% url 'costing:terms_template_edit' tmpl.pk %}" class="btn btn-sm btn-outline-secondary">
@@ -133,4 +134,22 @@
     </a>
     {% endif %}
 </div>
+
+<!-- TinyMCE for term content - font size and color controls -->
+{% load static %}
+<script src="{% static 'tinymce/tinymce.min.js' %}"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    tinymce.init({
+        selector: 'textarea.tinymce-editor',
+        height: 250,
+        menubar: false,
+        branding: false,
+        promotion: false,
+        plugins: 'lists',
+        toolbar: 'undo redo | fontsize forecolor backcolor | bold italic underline | bullist numlist | alignleft aligncenter alignright | removeformat',
+        font_size_formats: '8pt 9pt 10pt 11pt 12pt 14pt 16pt 18pt 24pt',
+    });
+});
+</script>
 {% endblock %}
