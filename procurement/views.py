@@ -1633,7 +1633,9 @@ def po_export_pdf(request, pk, unpriced=False):
     value_style = ParagraphStyle('Value', parent=styles['Normal'], fontSize=9, fontName='Helvetica-Bold')
     normal_style = ParagraphStyle('Norm', parent=styles['Normal'], fontSize=8)
     small_style = ParagraphStyle('Small', parent=styles['Normal'], fontSize=7)
-    tc_style = ParagraphStyle('TC', parent=styles['Normal'], fontSize=7, leading=9)
+    # Match the Costing PDF's terms size (9pt) — procurement terms were 7pt,
+    # which rendered noticeably shrunk next to the sales-side documents.
+    tc_style = ParagraphStyle('TC', parent=styles['Normal'], fontSize=9, leading=12)
     right_style = ParagraphStyle('Right', parent=styles['Normal'], fontSize=8, alignment=TA_RIGHT)
     right_bold = ParagraphStyle('RightBold', parent=styles['Normal'], fontSize=8, alignment=TA_RIGHT, fontName='Helvetica-Bold')
     # Qty is a count, not a money column — centred so it scans cleanly and
@@ -1808,6 +1810,9 @@ def po_export_pdf(request, pk, unpriced=False):
     elements.append(item_table)
     elements.append(Spacer(1, 4*mm))
 
+    # Totals + signature are kept together (one KeepTogether below) so a page
+    # break never splits the price box away from the approval/signature block.
+    totals_sig_flow = []
     # ── Totals ── (omitted entirely on unpriced copies)
     if not unpriced:
         totals_data = [
@@ -1850,7 +1855,7 @@ def po_export_pdf(request, pk, unpriced=False):
             ('TOPPADDING', (0, 0), (-1, total_row_idx), 2),
             ('BOTTOMPADDING', (0, 0), (-1, total_row_idx), 2),
         ]))
-        elements.append(KeepTogether(totals_table))
+        totals_sig_flow.append(totals_table)
 
     # ── Approvals — rendered progressively as each stage is signed.
     # Order: SCM → PM → COO → CEO. CEO is omitted entirely for POs under
@@ -1859,7 +1864,7 @@ def po_export_pdf(request, pk, unpriced=False):
     # block at all when the PO has not been signed yet).
     from xml.sax.saxutils import escape as _xml_escape
 
-    elements.append(Spacer(1, 8*mm))
+    totals_sig_flow.append(Spacer(1, 8*mm))
     approvals = po.approved_stages
     if approvals:
         from reportlab.platypus import Image as RLImage
@@ -1919,7 +1924,12 @@ def po_export_pdf(request, pk, unpriced=False):
             ('RIGHTPADDING', (0, 0), (-1, -1), 2),
             ('LINEBELOW', (0, -1), (-1, -1), 1, colors.HexColor('#C41E3A')),
         ]))
-        elements.append(approval_table)
+        totals_sig_flow.append(approval_table)
+
+    # Emit the price box + signature as one keep-together unit so a page break
+    # can never split them apart.
+    if totals_sig_flow:
+        elements.append(KeepTogether(totals_sig_flow))
         elements.append(Spacer(1, 4*mm))
 
     # ── Terms & Conditions ──
