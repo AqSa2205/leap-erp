@@ -17,14 +17,14 @@ def _hours_between(check_in, check_out):
     return Decimal(round(delta.total_seconds() / 3600, 2))
 
 
-def derive_status(employee, d, check_in, check_out=None):
+def derive_status(employee, d, check_in, check_out=None, approved_late_query_employee_ids=None):
     """Return (status, hours_worked).
 
     Precedence: leave > holiday > weekend(unless WorkingDay) > wfh >
     approved attendance exception > late/present > absent.
     """
     from hr.models import (LeaveRecord, Holiday, AttendanceSettings, WorkingDay, WFHRecord,
-                            AttendanceException)
+                            AttendanceException, LateQuery)
     if LeaveRecord.objects.filter(employee=employee, start_date__lte=d, end_date__gte=d).exists():
         return 'leave', None
     if Holiday.objects.filter(date=d, is_active=True).exists():
@@ -42,6 +42,19 @@ def derive_status(employee, d, check_in, check_out=None):
     # parameter needs to be threaded through this function's signature.
     if AttendanceException.objects.filter(employee=employee, event_date=d, status='approved').exists():
         return 'present', _hours_between(check_in, check_out)
+    # An approved LateQuery means the employee successfully challenged this
+    # exact day as an incorrect Late mark - same "excuse the day" outcome
+    # as an approved AttendanceException. Bulk callers (grid/matrix
+    # regeneration over many employees on one date) can pass a prefetched
+    # set of employee ids to avoid one extra query per row; single-record
+    # callers leave it None and get the old per-call query.
+    if approved_late_query_employee_ids is not None:
+        has_approved_late_query = employee.pk in approved_late_query_employee_ids
+    else:
+        has_approved_late_query = LateQuery.objects.filter(
+            employee=employee, attendance_record__date=d, status='approved').exists()
+    if has_approved_late_query:
+        return 'present', _hours_between(check_in, check_out)
     if check_in:
         if check_in > settings.expected_in_by:
             return 'late', _hours_between(check_in, check_out)
@@ -49,10 +62,10 @@ def derive_status(employee, d, check_in, check_out=None):
     return 'absent', None
 
 def regenerate_attendance_record(employee, d):
-    # Re-derives and saves the AttendanceRecord for one employee/date - the
-    # single-record version of the admin 'Regenerate' action, used to auto-
-    # correct a day the moment an attendance exception is approved for it,
-    # so an already-saved Late/Absent record doesn't sit wrong indefinitely.
+    # Re-derives and saves the AttendanceRecord for one employee/date - used
+    # to auto-correct a day the moment an AttendanceException or LateQuery
+    # is approved for it, so an already-saved Late/Absent record does not
+    # sit wrong indefinitely.
     from hr.models import AttendanceRecord
     rec = AttendanceRecord.objects.filter(employee=employee, date=d).first()
     check_in = rec.check_in if rec else None

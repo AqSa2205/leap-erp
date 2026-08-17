@@ -91,7 +91,13 @@
                     {% elif day.status == 'leave' %}<span class="badge bg-secondary">Leave</span>
                     {% elif day.status == 'holiday' %}<span class="badge bg-success">Holiday</span>
                     {% elif day.status == 'late' %}<span class="badge bg-warning text-dark">Late</span>
-                    {% elif day.is_weekend %}<span class="badge" style="background-color:#D9D2E9; color:#000;">Weekend</span>
+                    {% if day.late_query and day.late_query.status != 'rejected' %}
+                      <span class="badge bg-light text-dark border ms-1" title="{{ day.late_query.message }}">
+                        Query: {{ day.late_query.get_status_display }}
+                      </span>
+                    {% else %}
+                      <button type="button" class="btn btn-link btn-sm p-0 ms-1" data-bs-toggle="modal" data-bs-target="#queryModal{{ day.record.pk }}">Raise Query</button>
+                    {% endif %}
                     {% else %}<span class="text-muted">-</span>{% endif %}
                     {% if day.check_in %}<span class="text-muted small ms-1">{{ day.check_in|time:"H:i" }}{% if day.check_out %}-{{ day.check_out|time:"H:i" }}{% endif %}</span>{% endif %}
                     {% if day.exception_reason %}<div class="badge bg-info text-dark mt-1" title="Approved attendance exception"><i class="bi bi-shield-check"></i> {{ day.exception_reason }}</div>{% endif %}
@@ -101,6 +107,51 @@
               </tbody>
             </table>
           </div>
+          {% endif %}
+          {% for day in daily_attendance %}
+          {% if day.can_raise_query %}
+          <div class="modal fade" id="queryModal{{ day.record.pk }}" tabindex="-1">
+            <div class="modal-dialog">
+              <div class="modal-content">
+                <form method="post" action="{% url 'hr:raise_late_query' %}">
+                  {% csrf_token %}
+                  <input type="hidden" name="attendance_record_id" value="{{ day.record.pk }}">
+                  <div class="modal-header">
+                    <h5 class="modal-title">Raise Query - {{ day.date|date:"D, d M Y" }}</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                  </div>
+                  <div class="modal-body">
+                    <label class="form-label small">Why do you believe this Late mark is incorrect?</label>
+                    <textarea name="message" class="form-control" rows="3" required></textarea>
+                  </div>
+                  <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary btn-sm">Submit Query</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+          {% endif %}
+          {% endfor %}
+          {% if my_late_emails or my_late_queries %}
+          <div class="fw-semibold small mb-2 mt-3"><i class="bi bi-envelope-exclamation me-1"></i> My Late Records</div>
+          {% if my_late_emails %}
+          <p class="text-muted small mb-1">Late-notice emails received:</p>
+          <ul class="small mb-2 ps-3">
+            {% for n in my_late_emails %}
+            <li>{{ n.created_at|date:"d M Y" }} - {{ n.verb }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          {% if my_late_queries %}
+          <p class="text-muted small mb-1">Queries I have raised:</p>
+          <ul class="small mb-2 ps-3">
+            {% for q in my_late_queries %}
+            <li>{{ q.attendance_record.date|date:"d M Y" }} - {{ q.get_status_display }}{% if q.decision_note %} ({{ q.decision_note }}){% endif %}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
           {% endif %}
           <div class="fw-semibold small mb-2"><i class="bi bi-calendar2-check me-1"></i> Leave Balance ({{ attendance_month|date:"Y" }})</div>
           {% if entitlements %}
