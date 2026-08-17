@@ -555,12 +555,20 @@ class LeaveRequestForm(forms.Form):
         required=False, widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 3}))
     document = forms.FileField(required=False, widget=forms.ClearableFileInput(attrs={'class': 'form-control'}))
 
-    def __init__(self, *args, fixed_employee=None, exclude_request_id=None, **kwargs):
+    def __init__(self, *args, fixed_employee=None, exclude_request_id=None,
+                 allow_leave_type=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.fixed_employee = fixed_employee
         self.exclude_request_id = exclude_request_id
         if fixed_employee is not None:
             del self.fields['employee']
+        # When editing a request whose leave type was later deactivated, keep
+        # that exact type selectable so an unrelated date edit can't silently
+        # switch it to a different (active) type.
+        if allow_leave_type is not None:
+            from django.db.models import Q
+            self.fields['leave_type'].queryset = LeaveType.objects.filter(
+                Q(is_active=True) | Q(pk=allow_leave_type.pk)).order_by('name')
 
     def clean(self):
         cleaned = super().clean()
