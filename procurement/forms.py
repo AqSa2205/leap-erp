@@ -24,7 +24,7 @@ class PurchaseOrderForm(forms.ModelForm):
         ]
         widgets = {
             'po_date': forms.DateInput(attrs={'type': 'date'}),
-            'terms_and_conditions': forms.Textarea(attrs={'rows': 8}),
+            'terms_and_conditions': forms.Textarea(attrs={'rows': 8, 'class': 'tinymce-editor'}),
             'payment_terms_text': forms.Textarea(attrs={'rows': 3, 'placeholder': 'e.g. 30% Advance\n70% upon Delivery'}),
             'discount_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '100', 'placeholder': 'e.g. 5 for 5%'}),
             'vat_rate': forms.NumberInput(attrs={'step': '0.01', 'min': '0', 'max': '100', 'placeholder': 'e.g. 15 for 15%'}),
