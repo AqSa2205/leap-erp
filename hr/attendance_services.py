@@ -62,4 +62,4 @@ def regenerate_attendance_record(employee, d):
         employee=employee, date=d,
         defaults={'check_in': check_in, 'check_out': check_out,
                   'status': status, 'hours_worked': hours})
-    return 'absent', None
+    return status, hours

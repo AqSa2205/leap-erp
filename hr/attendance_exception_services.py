@@ -82,10 +82,6 @@ def decide_attendance_exception(exc, deciding_user, decision, note=''):
         race_message=lambda current_status: f'This request is already {current_status}.',
     )
 
-    if decision == 'approved':
-        from hr.attendance_services import regenerate_attendance_record
-        regenerate_attendance_record(exc.employee, exc.event_date)
-
     if exc.employee.user_id:
         notify_users(
             recipients=[exc.employee.user],
@@ -127,10 +123,6 @@ def override_attendance_exception(exc, overriding_user, decision, reason):
         exc, allowed_statuses={'pending', 'expired'}, apply=apply,
         race_message=lambda current_status: f'This request is already {current_status} and cannot be overridden.',
     )
-
-    if decision == 'approved':
-        from hr.attendance_services import regenerate_attendance_record
-        regenerate_attendance_record(exc.employee, exc.event_date)
 
     if exc.employee.user_id:
         notify_users(
