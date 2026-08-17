@@ -17,7 +17,7 @@ def _hours_between(check_in, check_out):
     return Decimal(round(delta.total_seconds() / 3600, 2))
 
 
-def derive_status(employee, d, check_in, check_out=None):
+def derive_status(employee, d, check_in, check_out=None, approved_late_query_employee_ids=None):
     """Return (status, hours_worked).
 
     Precedence: leave > holiday > weekend(unless WorkingDay) > wfh >
@@ -44,9 +44,16 @@ def derive_status(employee, d, check_in, check_out=None):
         return 'present', _hours_between(check_in, check_out)
     # An approved LateQuery means the employee successfully challenged this
     # exact day as an incorrect Late mark - same "excuse the day" outcome
-    # as an approved AttendanceException.
-    if LateQuery.objects.filter(
-            employee=employee, attendance_record__date=d, status='approved').exists():
+    # as an approved AttendanceException. Bulk callers (grid/matrix
+    # regeneration over many employees on one date) can pass a prefetched
+    # set of employee ids to avoid one extra query per row; single-record
+    # callers leave it None and get the old per-call query.
+    if approved_late_query_employee_ids is not None:
+        has_approved_late_query = employee.pk in approved_late_query_employee_ids
+    else:
+        has_approved_late_query = LateQuery.objects.filter(
+            employee=employee, attendance_record__date=d, status='approved').exists()
+    if has_approved_late_query:
         return 'present', _hours_between(check_in, check_out)
     if check_in:
         if check_in > settings.expected_in_by:

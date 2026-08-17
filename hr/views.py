@@ -546,17 +546,19 @@ def my_profile(request):
         working_days = set(WorkingDay.objects.filter(
             is_active=True, date__range=(month_start, month_end)).values_list('date', flat=True))
         daily_attendance = []
-        daily_attendance = []
         from hr.models import LateQuery
         queries_by_record = {
             q.attendance_record_id: q for q in LateQuery.objects.filter(
-                employee=emp, attendance_record__in=month_records)
+                employee=emp, attendance_record__in=month_records).order_by('created_at')
         }
         d = month_start
         while d <= month_end:
             rec = records_by_date.get(d)
             is_weekend = d.weekday() in weekend_days and d not in working_days
             existing_query = queries_by_record.get(rec.pk) if rec else None
+            can_raise_query = bool(
+                rec and rec.status == 'late'
+                and (existing_query is None or existing_query.status == 'rejected'))
             daily_attendance.append({
                 'date': d,
                 'status': rec.status if rec else '',
@@ -565,6 +567,7 @@ def my_profile(request):
                 'check_in': rec.check_in if rec else None,
                 'check_out': rec.check_out if rec else None,
                 'late_query': existing_query,
+                'can_raise_query': can_raise_query,
             })
             d += timedelta(days=1)
         context['daily_attendance'] = daily_attendance
@@ -572,7 +575,7 @@ def my_profile(request):
         if emp.user_id:
             from notifications.models import Notification
             context['my_late_emails'] = Notification.objects.filter(
-                recipient=emp.user, verb__icontains='was late 3 times').order_by('-created_at')[:20]
+                recipient=emp.user, verb='You were late 3 times this month').order_by('-created_at')[:20]
         context['my_late_queries'] = LateQuery.objects.filter(
             employee=emp).select_related('attendance_record').order_by('-created_at')[:20]
         next_month_first = (month_end + timedelta(days=1))
@@ -711,6 +714,9 @@ def raise_late_query(request):
         return redirect('hr:my_profile')
     record_id = request.POST.get('attendance_record_id')
     message_text = (request.POST.get('message') or '').strip()
+    if not record_id or not str(record_id).isdigit():
+        messages.error(request, 'That attendance record could not be found.')
+        return redirect('hr:my_profile')
     rec = AttendanceRecord.objects.filter(pk=record_id, employee=emp, status='late').first()
     if rec is None:
         messages.error(request, 'That attendance record could not be found.')
@@ -719,7 +725,7 @@ def raise_late_query(request):
     if not message_text:
         messages.error(request, 'Please explain why you believe this Late mark is incorrect.')
         return redirect(redirect_url)
-    if LateQuery.objects.filter(attendance_record=rec).exists():
+    if LateQuery.objects.filter(attendance_record=rec).exclude(status='rejected').exists():
         messages.error(request, 'A query has already been raised for this day.')
         return redirect(redirect_url)
     LateQuery.objects.create(employee=emp, attendance_record=rec, message=message_text)
@@ -2772,6 +2778,9 @@ def attendance_grid(request):
         location = 'office'
         emp_qs = emp_qs.exclude(work_location='site')
     employees = list(emp_qs.order_by('full_name'))
+    from hr.models import LateQuery
+    approved_late_query_employee_ids = set(LateQuery.objects.filter(
+        attendance_record__date=day, status='approved').values_list('employee_id', flat=True))
 
     if request.method == 'POST':
         for emp in employees:
@@ -2788,7 +2797,7 @@ def attendance_grid(request):
             else:
                 # Only delete single-day records; never touch multi-day WFH.
                 WFHRecord.objects.filter(employee=emp, start_date=day, end_date=day).delete()
-            status, hours = derive_status(emp, day, ci_t, co_t)
+            status, hours = derive_status(emp, day, ci_t, co_t, approved_late_query_employee_ids)
             AttendanceRecord.objects.update_or_create(
                 employee=emp, date=day,
                 defaults={'check_in': ci_t, 'check_out': co_t, 'status': status,
@@ -2801,7 +2810,7 @@ def attendance_grid(request):
     for emp in employees:
         rec = existing.get(emp.pk)
         preview_status, _ph = derive_status(emp, day, rec.check_in if rec else None,
-                                            rec.check_out if rec else None)
+                                            rec.check_out if rec else None, approved_late_query_employee_ids)
         locked = preview_status in ('leave', 'holiday', 'weekend')
         is_wfh = WFHRecord.objects.filter(employee=emp, start_date=day, end_date=day).exists()
         rows.append({'employee': emp, 'record': rec,
@@ -2839,9 +2848,12 @@ def attendance_regenerate(request):
         messages.error(request, 'Admin access required.')
         return redirect('hr:hr_dashboard')
     day = _parse_date(request.POST.get('date'))
+    from hr.models import LateQuery
+    approved_late_query_employee_ids = set(LateQuery.objects.filter(
+        attendance_record__date=day, status='approved').values_list('employee_id', flat=True))
     n = 0
     for rec in AttendanceRecord.objects.filter(date=day).select_related('employee'):
-        status, hours = derive_status(rec.employee, day, rec.check_in, rec.check_out)
+        status, hours = derive_status(rec.employee, day, rec.check_in, rec.check_out, approved_late_query_employee_ids)
         AttendanceRecord.objects.filter(pk=rec.pk).update(status=status, hours_worked=hours)
         n += 1
     messages.success(request, f'Regenerated {n} record(s) for {day:%Y-%m-%d}.')
@@ -3535,7 +3547,7 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
                 status__in=('approved', 'rejected')).select_related(
                     'employee', 'attendance_record', 'decided_by').order_by('-decided_at')[:50]
             ctx['late_email_notifications'] = Notification.objects.filter(
-                verb__icontains='was late 3 times').select_related('recipient').order_by('-created_at')[:50]
+                verb='You were late 3 times this month').select_related('recipient').order_by('-created_at')[:50]
         ctx['late_queries_tab_count'] = LateQuery.objects.filter(status='pending').count() if is_hr else 0
         return ctx
 
@@ -3610,7 +3622,10 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
             from hr.models import LateQuery
             if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
                 raise Http404('No such query.')
-            query = LateQuery.objects.filter(pk=request.POST.get('query_id'), status='pending').first()
+            query_id = request.POST.get('query_id')
+            if not query_id or not str(query_id).isdigit():
+                raise Http404('No such query.')
+            query = LateQuery.objects.filter(pk=query_id, status='pending').first()
             if query is None:
                 raise Http404('No such query.')
             decision = request.POST.get('decision')
