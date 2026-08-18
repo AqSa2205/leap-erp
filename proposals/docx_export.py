@@ -29,6 +29,17 @@ XML_SPACE = '{http://www.w3.org/XML/1998/namespace}space'
 BODY_LEFT_INDENT_TWIPS = 709
 BODY_CONTENT_WIDTH_TWIPS = 8831
 
+# Pasted images render at a fixed size (2:1) rather than whatever size they
+# were pasted at, so a huge screenshot doesn't blow out the page. 320x160px
+# at 96 DPI is ~3.33in wide, comfortably inside the ~6.13in usable column
+# above (BODY_CONTENT_WIDTH_TWIPS) — the original 600x300px (~6.25in) was
+# actually WIDER than that column, so images were overflowing past the
+# right margin / the sidebar border, same class of bug as the tables.
+IMAGE_WIDTH_EMU = 320 * 9525   # ~3.33in
+IMAGE_HEIGHT_EMU = 160 * 9525  # ~1.67in
+
+IMAGE_DISCLAIMER_TEXT = 'This image is for representation purposes only'
+
 # Detect rich-text HTML (from TinyMCE / Word paste) regardless of tag
 # attributes. Matches opening/closing tags of known HTML elements with a word
 # boundary, so a stray "<" in plain text won't false-positive.
@@ -545,6 +556,8 @@ def _html_to_elements(html_content, pPr_template, rPr_template, image_registry):
                     img_para = self._build_image_paragraph(self._figure_img, '')
                     if img_para is not None:
                         self.elements.append(img_para)
+                        self.elements.append(
+                            self._build_caption_paragraph(IMAGE_DISCLAIMER_TEXT))
                     self._figure_img = None
             elif tag == 'ul':
                 self._in_list = True
@@ -587,9 +600,11 @@ def _html_to_elements(html_content, pPr_template, rPr_template, image_registry):
                     )
                     if img_para is not None:
                         self.elements.append(img_para)
-                    if self._figure_caption:
-                        cap_para = self._build_caption_paragraph(self._figure_caption)
-                        self.elements.append(cap_para)
+                        if self._figure_caption:
+                            cap_para = self._build_caption_paragraph(self._figure_caption)
+                            self.elements.append(cap_para)
+                        self.elements.append(
+                            self._build_caption_paragraph(IMAGE_DISCLAIMER_TEXT))
                 self._in_figure = False
                 self._figure_img = None
                 self._figure_caption = ''
@@ -644,9 +659,8 @@ def _html_to_elements(html_content, pPr_template, rPr_template, image_registry):
             # we actually inject images into the zip
             rid_placeholder = f'__LEAP_IMG_{idx}__'
 
-            # Force 600 x 300 pixel display size (9525 EMU per pixel at 96 DPI)
-            cx = 600 * 9525   # 5,715,000 EMU ~ 15.9 cm
-            cy = 300 * 9525   # 2,857,500 EMU ~ 7.9 cm
+            cx = IMAGE_WIDTH_EMU
+            cy = IMAGE_HEIGHT_EMU
 
             pic_id = idx + 100  # start at 100 to avoid clashing with template pic ids
             alt = img_info.get('alt') or alt_caption or f'Picture {pic_id}'
