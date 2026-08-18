@@ -35,6 +35,42 @@ class ProposalDocxExportTests(TestCase):
     def _doc_xml(self, proposal):
         return self._part_xml(proposal)
 
+    def test_image_renders_at_the_reduced_display_size(self):
+        # document.xml also contains the cover page's own logo image (its
+        # own unrelated wp:extent) — so check our generated image's size is
+        # PRESENT among all extents, not that it's the first one found.
+        from lxml import etree
+        from proposals.docx_export import IMAGE_WIDTH_EMU, IMAGE_HEIGHT_EMU
+        WP_NS = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
+        p = self._proposal()
+        self._section(p, 'Diagram', '<img src="test.png" alt="Diagram">')
+        xml = self._doc_xml(p)
+        root = etree.fromstring(xml.encode('utf-8'))
+        extents = {(e.get('cx'), e.get('cy')) for e in root.findall(f'.//{{{WP_NS}}}extent')}
+        self.assertIn((str(IMAGE_WIDTH_EMU), str(IMAGE_HEIGHT_EMU)), extents)
+        # The old, larger forced size (600x300px) must be gone.
+        self.assertNotIn((str(600 * 9525), str(300 * 9525)), extents)
+
+    def test_bare_image_gets_representation_disclaimer_caption(self):
+        p = self._proposal()
+        self._section(p, 'Diagram', '<img src="test.png" alt="Diagram">')
+        xml = self._doc_xml(p)
+        self.assertIn('This image is for representation purposes only', xml)
+
+    def test_figure_image_keeps_custom_caption_and_still_gets_disclaimer(self):
+        p = self._proposal()
+        html = ('<figure><img src="test.png" alt="Diagram">'
+                '<figcaption>Figure 1: Network Topology</figcaption></figure>')
+        self._section(p, 'Diagram', html)
+        xml = self._doc_xml(p)
+        self.assertIn('Figure 1: Network Topology', xml)
+        self.assertIn('This image is for representation purposes only', xml)
+        # Custom caption immediately follows the image; the disclaimer
+        # follows that — not a replacement, an addition.
+        self.assertLess(
+            xml.index('Figure 1: Network Topology'),
+            xml.index('This image is for representation purposes only'))
+
     def test_word_pasted_html_is_rendered_not_dumped_raw(self):
         p = self._proposal()
         html = (
@@ -732,6 +768,25 @@ class DeptTemplateSeedMigrationTests(TestCase):
         before = SectionHeadingTemplate.objects.count()
         mod.seed(real_apps, None)
         self.assertEqual(SectionHeadingTemplate.objects.count(), before)
+
+    def test_no_seeded_row_contains_escaped_raw_html(self):
+        # Regression guard: the "Thermal Camera" row was once authored by
+        # accidentally pasting raw HTML source into the rich-text editor,
+        # which TinyMCE then escaped as literal text (&lt;p&gt; ... &lt;/p&gt;)
+        # instead of rendering it — every row should be real rendered
+        # content, never an escaped source dump.
+        offenders = [
+            f'{t.department}/{t.heading.name}'
+            for t in SectionHeadingTemplate.objects.select_related('heading')
+            if '&lt;' in t.content or '&gt;' in t.content
+        ]
+        self.assertEqual(offenders, [])
+
+    def test_thermal_camera_content_is_the_corrected_version(self):
+        tmpl = SectionHeadingTemplate.objects.get(
+            heading__name='Thermal Camera', department='procurement')
+        self.assertIn('Sarix', tmpl.content)
+        self.assertNotIn('&lt;p&gt;', tmpl.content)
 
 
 class SectionHeadingTemplateModelTests(TestCase):
