@@ -31,6 +31,7 @@
                         <div class="col-md-6">
                             <label class="form-label fw-bold">Project (Optional)</label>
                             {{ form.project }}
+                            <small class="text-muted">Picking a project fills in the reference and client name below (you can still edit them).</small>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label fw-bold">Proposal Reference</label>
@@ -45,6 +46,7 @@
                             {{ form.client_name }}
                             {% if form.client_name.errors %}<div class="text-danger small">{{ form.client_name.errors.0 }}</div>{% endif %}
                         </div>
+
                         <div class="col-md-6">
                             <label class="form-label fw-bold">Document Type</label>
                             {{ form.document_type }}
@@ -108,4 +110,33 @@
         </div>
     </div>
 </div>
+
+{{ project_autofill_map|json_script:"project-autofill-data" }}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var PROJECT_MAP = JSON.parse(document.getElementById('project-autofill-data').textContent);
+    var projectSelect = document.getElementById('{{ form.project.id_for_label }}');
+    var refField = document.getElementById('{{ form.proposal_reference.id_for_label }}');
+    var clientField = document.getElementById('{{ form.client_name.id_for_label }}');
+    if (!projectSelect) return;
+
+    // Track what WE last put in these fields, so we can tell "still what we
+    // autofilled" (safe to overwrite on the next project change) apart from
+    // "the user typed something else on purpose" (leave it alone).
+    var lastAutofilled = { reference: refField ? refField.value : '', client: clientField ? clientField.value : '' };
+
+    projectSelect.addEventListener('change', function() {
+        var data = PROJECT_MAP[projectSelect.value];
+        if (!data) return;
+        if (refField && data.reference && refField.value.trim() === lastAutofilled.reference.trim()) {
+            refField.value = data.reference;
+            lastAutofilled.reference = data.reference;
+        }
+        if (clientField && data.client && clientField.value.trim() === lastAutofilled.client.trim()) {
+            clientField.value = data.client;
+            lastAutofilled.client = data.client;
+        }
+    });
+});
+</script>
 {% endblock %}

@@ -136,6 +136,17 @@ class ProposalListView(ProposalPermissionMixin, ListView):
         return context
 
 
+def _project_autofill_map():
+    """{project_id: {reference, client}} for the New/Edit Proposal form's
+    JS to fill in Proposal Reference and Client Name when a project is
+    picked. Purely additive — nothing reads this today."""
+    from projects.models import Project
+    return {
+        p.pk: {'reference': p.proposal_reference, 'client': p.customer}
+        for p in Project.objects.all()
+    }
+
+
 class ProposalCreateView(LoginRequiredMixin, CreateView):
     model = TechnicalProposal
     form_class = ProposalMetadataForm
@@ -145,6 +156,11 @@ class ProposalCreateView(LoginRequiredMixin, CreateView):
         kwargs = super().get_form_kwargs()
         kwargs['user'] = self.request.user
         return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['project_autofill_map'] = _project_autofill_map()
+        return context
 
     def form_valid(self, form):
         form.instance.created_by = self.request.user
@@ -185,6 +201,11 @@ class ProposalUpdateView(ProposalPermissionMixin, UpdateView):
         kwargs = super().get_form_kwargs()
         kwargs['user'] = self.request.user
         return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['project_autofill_map'] = _project_autofill_map()
+        return context
 
     def form_valid(self, form):
         messages.success(self.request, 'Proposal updated successfully.')

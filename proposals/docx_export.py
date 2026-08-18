@@ -140,6 +140,39 @@ def _replace_in_paragraph_runs(para, replacements):
 
 # ── Cover page replacement ───────────────────────────────────
 
+def _replace_company_references(body, proposal):
+    """Replace every mention of the company name/acronym across the WHOLE
+    document body (not just the cover page) — the Confidentiality Notice,
+    Company Overview intro, and end-of-document Confidentiality section all
+    say the right entity for the proposal's region, not just the cover.
+    For Global proposals this is a no-op (replacement values equal the
+    original template text)."""
+    paragraphs = body.findall(f'{{{WNS}}}p')
+
+    by_region = {
+        'LNUK': {
+            'Leap Networks Global Ltd (LNG)': 'Leap Networks Global Ltd (LNG)',
+            'Leap Networks Global Ltd.': 'Leap Networks Global Ltd.',
+            'LNG': 'LNG',
+        },
+        'LNKSA': {
+            'Leap Networks Global Ltd (LNG)': 'Leap Networks Arabia (LNA)',
+            'Leap Networks Global Ltd.': 'Leap Networks Arabia.',
+            'LNG': 'LNA',
+        },
+    }
+    replacements = by_region.get(proposal.region_entity, by_region['LNUK'])
+
+    # Longest match first, so the full "...(LNG)" phrase is replaced whole
+    # rather than partially consumed by the bare "LNG" replacement first.
+    sorted_replacements = dict(
+        sorted(replacements.items(), key=lambda x: len(x[0]), reverse=True)
+    )
+
+    for p in paragraphs:
+        _replace_in_paragraph_runs(p, sorted_replacements)
+
+
 def _replace_cover_page(body, proposal):
     """
     Replace cover page text in the first ~25 paragraphs.
@@ -958,7 +991,11 @@ def generate_proposal_docx(proposal):
 
     # Company entity in the header — changes with the region (LNUK -> Global,
     # LNKSA -> Arabia, LNIRL -> Ireland).
-    textbox_replacements['LEAP Networks Global Ltd.'] = proposal.get_company_name()
+    # NOTE: the template's actual text here is "LEAP NETWORKS Global Ltd."
+    # (all-caps "NETWORKS") across two separate runs — not the mixed-case
+    # "LEAP Networks..." the key used to say, which is why this silently
+    # never matched before, regardless of region.
+    textbox_replacements['LEAP NETWORKS Global Ltd.'] = proposal.get_company_name()
 
     # ── Exact-match replacements (initials — only when the entire
     #    text box content equals the placeholder) ──────────────
@@ -1008,6 +1045,7 @@ def generate_proposal_docx(proposal):
                 _strip_highlights(root)
                 body = root.find(f'.//{{{WNS}}}body')
                 _replace_cover_page(body, proposal)
+                _replace_company_references(body, proposal)
                 _replace_textboxes_in_part(root, textbox_replacements,
                                            exact_replacements)
                 data = etree.tostring(root, xml_declaration=True,
