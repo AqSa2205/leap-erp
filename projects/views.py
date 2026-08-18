@@ -10,10 +10,13 @@ from django.views.generic import ListView, DetailView, CreateView, UpdateView, D
 from django.urls import reverse, reverse_lazy
 from django.db.models import Q, Sum, Count
 from django.core.paginator import Paginator
+from django.core.files.base import ContentFile
+from django.utils import timezone
 import openpyxl
 
-from .models import Project, Region, ProjectStatus, ProjectHistory, Document, ProjectRevision
+from .models import Project, Region, ProjectStatus, ProjectHistory, Document, ProjectRevision, PipelineEmail
 from .forms import ProjectForm, ProjectFilterForm, DocumentForm, DocumentFilterForm
+from .email_parsing import parse_eml_file, EmailParseError
 from notifications.services import notify_users
 from accounts.permissions import CapabilityRequiredMixin
 
@@ -378,6 +381,13 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
         # Sort newest first
         events.sort(key=lambda e: e['when'] or project.created_at, reverse=True)
         context['timeline'] = events
+
+        # ── Pipeline email linking ("Add Emails" / "Delink") ──────────────
+        # Purely additive: doesn't touch any of the context keys above.
+        context['active_linked_email'] = project.linked_emails.filter(is_active=True).first()
+        context['email_documents'] = project.documents.filter(source_pipeline_email__isnull=False)
+        context['other_documents'] = project.documents.filter(source_pipeline_email__isnull=True)
+
         return context
 
 
@@ -1201,6 +1211,112 @@ def add_project_document(request, pk):
         'project': project,
         'title': f'Add Document to {project.project_name}'
     })
+
+
+def _delink_active_pipeline_email(project, user):
+    """Mark the project's currently active linked email (if any) as
+    delinked. This NEVER deletes the PipelineEmail row or any Document it
+    created — it only flips is_active off, so the email drops out of the
+    'currently linked' widget while its documents stay exactly where they
+    are under Project Documents."""
+    active = project.linked_emails.filter(is_active=True).first()
+    if active:
+        active.is_active = False
+        active.delinked_by = user
+        active.delinked_at = timezone.now()
+        active.save(update_fields=['is_active', 'delinked_by', 'delinked_at'])
+    return active
+
+
+@login_required
+def link_pipeline_email(request, pk):
+    """Attach an email (.eml file) to a commercial pipeline entry. Its PDF
+    attachments become regular Document rows tagged with source_pipeline_email
+    (see projects/models.py) so they show up under Project Documents.
+
+    If an email is already linked, adding a new one automatically delinks
+    the old one first — this matches "add a new email, removing the one
+    before" — but the old email's documents are never touched or removed."""
+    project = get_object_or_404(Project, pk=pk)
+
+    if request.method == 'POST':
+        uploaded_file = request.FILES.get('email_file')
+        if not uploaded_file:
+            messages.error(request, 'Please choose an email (.eml) file to upload.')
+            return redirect('projects:detail', pk=pk)
+
+        try:
+            parsed = parse_eml_file(uploaded_file)
+        except EmailParseError as exc:
+            messages.error(request, f'Could not read that email file: {exc}')
+            return redirect('projects:detail', pk=pk)
+
+        _delink_active_pipeline_email(project, request.user)
+
+        uploaded_file.seek(0)
+        pipeline_email = PipelineEmail.objects.create(
+            project=project,
+            subject=parsed['subject'],
+            sender_name=parsed['sender_name'],
+            sender_email=parsed['sender_email'],
+            recipients=parsed['recipients'],
+            sent_at=parsed['sent_at'],
+            body_text=parsed['body_text'],
+            raw_file=uploaded_file,
+            raw_filename=uploaded_file.name,
+            is_active=True,
+            linked_by=request.user,
+        )
+
+        created_count = 0
+        for attachment in parsed['attachments']:
+            document = Document(
+                project=project,
+                document_type='vendor_quotation',
+                name=attachment['filename'],
+                uploaded_by=request.user,
+                source_pipeline_email=pipeline_email,
+            )
+            document.file.save(
+                attachment['filename'],
+                ContentFile(attachment['content']),
+                save=False,
+            )
+            document.save()
+            created_count += 1
+
+        if created_count:
+            messages.success(
+                request,
+                f'Email "{pipeline_email.subject or "(no subject)"}" linked — '
+                f'{created_count} PDF document(s) added to Project Documents.'
+            )
+        else:
+            messages.success(
+                request,
+                f'Email "{pipeline_email.subject or "(no subject)"}" linked. '
+                f'No PDF attachments were found inside it.'
+            )
+        return redirect('projects:detail', pk=pk)
+
+    return render(request, 'projects/pipeline_email_form.html', {
+        'project': project,
+        'active_email': project.linked_emails.filter(is_active=True).first(),
+    })
+
+
+@login_required
+@require_POST
+def delink_pipeline_email(request, pk):
+    """Remove the currently linked email from a pipeline entry. The
+    Documents it created are NEVER deleted — only the email link itself."""
+    project = get_object_or_404(Project, pk=pk)
+    delinked = _delink_active_pipeline_email(project, request.user)
+    if delinked:
+        messages.success(request, 'Email delinked. Its documents remain under Project Documents.')
+    else:
+        messages.info(request, 'There is no linked email to remove.')
+    return redirect('projects:detail', pk=pk)
 
 
 # ─── Commercial Pipeline Revisions ───────────────────────────

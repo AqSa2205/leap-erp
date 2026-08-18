@@ -707,6 +707,19 @@ class Document(models.Model):
     uploaded_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Set only when this Document was auto-created from a PDF found inside a
+    # linked email (see PipelineEmail below). Left null for every regular,
+    # manually-uploaded document, so nothing about existing documents changes.
+    # Used purely to group these under an "Email Documents" sub-heading on
+    # the Project Documents widget.
+    source_pipeline_email = models.ForeignKey(
+        'projects.PipelineEmail',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_documents',
+    )
+
     class Meta:
         ordering = ['-uploaded_at']
 
@@ -734,3 +747,65 @@ class Document(models.Model):
                 return f"{size:.1f} {unit}"
             size /= 1024
         return f"{size:.1f} TB"
+
+def pipeline_email_upload_path(instance, filename):
+    """Generate upload path for the raw linked email file (.eml)."""
+    return f'pipeline_emails/{instance.project_id}/{filename}'
+
+
+class PipelineEmail(models.Model):
+    """An email manually linked to a commercial-pipeline entry by the sales
+    team, e.g. a vendor quote thread relevant to the deal. Its PDF attachments
+    are turned into real Document rows (see Document.source_pipeline_email
+    above) so they show up under Project Documents like any other document.
+
+    Only one PipelineEmail per project is normally "active" (is_active=True)
+    — that's the one shown as "currently linked" on the pipeline entry's
+    detail page. When it's delinked, is_active is set to False, but the row
+    is kept for history (never deleted), and the Documents it created are
+    completely untouched — they stay visible under Project Documents forever,
+    regardless of the email's link status. See delink logic in views.py.
+    """
+
+    project = models.ForeignKey(
+        'projects.Project',
+        on_delete=models.CASCADE,
+        related_name='linked_emails',
+    )
+
+    # Outlook-style headers, pulled straight from the uploaded .eml file.
+    subject = models.CharField(max_length=500, blank=True)
+    sender_name = models.CharField(max_length=255, blank=True)
+    sender_email = models.EmailField(blank=True)
+    recipients = models.CharField(
+        max_length=1000, blank=True, help_text="The email's 'To' line, as-is."
+    )
+    sent_at = models.DateTimeField(null=True, blank=True)
+    body_text = models.TextField(blank=True)
+
+    # The original email file, kept so it can always be opened/downloaded.
+    raw_file = models.FileField(upload_to=pipeline_email_upload_path)
+    raw_filename = models.CharField(max_length=255, blank=True)
+
+    is_active = models.BooleanField(
+        default=True,
+        help_text='Whether this is the email currently shown on the pipeline entry.',
+    )
+
+    linked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='pipeline_emails_linked',
+    )
+    linked_at = models.DateTimeField(auto_now_add=True)
+
+    delinked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='pipeline_emails_delinked',
+    )
+    delinked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-linked_at']
+
+    def __str__(self):
+        return f'{self.subject or "(no subject)"} — {self.project}'

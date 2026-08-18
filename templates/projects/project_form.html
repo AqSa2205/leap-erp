@@ -235,6 +235,16 @@
                 <a href="{% url 'projects:list' %}" class="btn btn-secondary">
                     <i class="bi bi-x-lg me-1"></i>Cancel
                 </a>
+                {% if object %}
+                <a href="{% url 'projects:link_pipeline_email' object.pk %}" class="btn btn-outline-dark">
+                    <i class="bi bi-envelope-paper me-1"></i>Add Emails
+                </a>
+                {% else %}
+                <button type="button" class="btn btn-outline-dark" disabled
+                        title="Save the pipeline entry first, then you can link emails to it">
+                    <i class="bi bi-envelope-paper me-1"></i>Add Emails
+                </button>
+                {% endif %}
             </div>
         </form>
     </div>

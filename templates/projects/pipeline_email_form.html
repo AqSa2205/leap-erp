@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+
+{% block title %}Add Emails - {{ project.project_name }} - Leap Networks ERP{% endblock %}
+{% block page_title %}Add Emails{% endblock %}
+
+{% block extra_css %}
+<style>
+    .form-card {
+        border-radius: 12px;
+        border: none;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        overflow: hidden;
+    }
+    .form-card .card-header {
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+        color: #fff;
+        padding: 1rem 1.25rem;
+    }
+    .form-card .card-header h5 {
+        color: #fff;
+    }
+    .upload-area {
+        border: 2px dashed #dee2e6;
+        border-radius: 12px;
+        padding: 2rem;
+        text-align: center;
+        background: #f8f9fa;
+        transition: all 0.3s ease;
+    }
+    .upload-area:hover {
+        border-color: #C41E3A;
+        background: rgba(196, 30, 58, 0.05);
+    }
+    .upload-area i {
+        font-size: 3rem;
+        color: #C41E3A;
+        margin-bottom: 1rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card form-card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="bi bi-envelope-paper me-2"></i>Add Emails to {{ project.project_name }}
+                </h5>
+            </div>
+            <div class="card-body p-4">
+
+                {% if active_email %}
+                <div class="alert alert-warning">
+                    <i class="bi bi-info-circle me-1"></i>
+                    An email ("{{ active_email.subject|default:"(no subject)" }}") is already linked to this
+                    pipeline entry. Uploading a new one below will replace it as the linked email —
+                    but the documents already added from it will stay under Project Documents.
+                </div>
+                {% endif %}
+
+                <form method="post" enctype="multipart/form-data">
+                    {% csrf_token %}
+
+                    <div class="upload-area mb-3">
+                        <i class="bi bi-cloud-arrow-up d-block"></i>
+                        <p class="mb-2">Choose the email file to link (.eml)</p>
+                        <small class="text-muted">
+                            Exported from Outlook via drag-out to desktop, or File &rarr; Save As &rarr;
+                            "Outlook Message Format". Subject, sender, date, message, and any PDF
+                            attachments will be pulled in automatically.
+                        </small>
+                        <div class="mt-3">
+                            <input type="file" name="email_file" accept=".eml" class="form-control" required>
+                        </div>
+                    </div>
+
+                    <div class="d-flex justify-content-between pt-3 border-top">
+                        <a href="{% url 'projects:detail' project.pk %}" class="btn btn-outline-secondary">
+                            <i class="bi bi-arrow-left me-1"></i>Cancel
+                        </a>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-envelope-paper me-1"></i>Link Email
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

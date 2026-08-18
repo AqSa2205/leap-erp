@@ -16,6 +16,8 @@ urlpatterns = [
     path('<int:pk>/restore/', views.project_restore, name='restore'),
     path('import/', views.ProjectImportView.as_view(), name='import_projects'),
     path('<int:pk>/add-document/', views.add_project_document, name='add_document'),
+    path('<int:pk>/link-email/', views.link_pipeline_email, name='link_pipeline_email'),
+    path('<int:pk>/delink-email/', views.delink_pipeline_email, name='delink_pipeline_email'),
     path('next-reference/', views.next_lna_reference_preview, name='next_reference_preview'),
 
     # Revisions
