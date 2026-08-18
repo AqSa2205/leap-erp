@@ -18,6 +18,17 @@ PIC_NS = 'http://schemas.openxmlformats.org/drawingml/2006/picture'
 REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 XML_SPACE = '{http://www.w3.org/XML/1998/namespace}space'
 
+# The template's body paragraphs are indented 709 twips from the left margin
+# to clear the vertical "PROJECT DEP / DESCRIPTION / DATE / REV" sidebar
+# labels that float in the header on every page (see word/header1.xml).
+# Content we generate (paragraphs AND tables) must match that indent or it
+# collides with the sidebar. Page is A4 (pgSz w=11906) with pgMar
+# left=1350, right=1016, so the usable text column is 9540 twips wide;
+# after the same left indent, that leaves 8831 twips for a table to span
+# from the indent to the right margin, same as body text does.
+BODY_LEFT_INDENT_TWIPS = 709
+BODY_CONTENT_WIDTH_TWIPS = 8831
+
 # Detect rich-text HTML (from TinyMCE / Word paste) regardless of tag
 # attributes. Matches opening/closing tags of known HTML elements with a word
 # boundary, so a stray "<" in plain text won't false-positive.
@@ -153,11 +164,16 @@ def _replace_company_references(body, proposal):
         'LNUK': {
             'Leap Networks Global Ltd (LNG)': 'Leap Networks Global Ltd (LNG)',
             'Leap Networks Global Ltd.': 'Leap Networks Global Ltd.',
+            # Cover page "Prepared by:" block — same company name, but typed
+            # in the template with "LEAP NETWORKS" in caps (a different run
+            # than the header/body mentions above), so it needs its own key.
+            'LEAP NETWORKS Global Ltd.': 'LEAP NETWORKS Global Ltd.',
             'LNG': 'LNG',
         },
         'LNKSA': {
             'Leap Networks Global Ltd (LNG)': 'Leap Networks Arabia (LNA)',
             'Leap Networks Global Ltd.': 'Leap Networks Arabia.',
+            'LEAP NETWORKS Global Ltd.': 'LEAP NETWORKS Arabia.',
             'LNG': 'LNA',
         },
     }
@@ -261,7 +277,7 @@ def _make_default_pPr():
     spacing.set(f'{{{WNS}}}line', '276')
     spacing.set(f'{{{WNS}}}lineRule', 'auto')
     ind = etree.SubElement(pPr, f'{{{WNS}}}ind')
-    ind.set(f'{{{WNS}}}left', '709')
+    ind.set(f'{{{WNS}}}left', str(BODY_LEFT_INDENT_TWIPS))
     jc = etree.SubElement(pPr, f'{{{WNS}}}jc')
     jc.set(f'{{{WNS}}}val', 'both')
     return pPr
@@ -705,8 +721,16 @@ def _html_to_elements(html_content, pPr_template, rPr_template, image_registry):
             tblStyle = etree.SubElement(tblPr, f'{{{WNS}}}tblStyle')
             tblStyle.set(f'{{{WNS}}}val', 'TableGrid')
             tblW = etree.SubElement(tblPr, f'{{{WNS}}}tblW')
-            tblW.set(f'{{{WNS}}}w', '5000')
-            tblW.set(f'{{{WNS}}}type', 'pct')
+            tblW.set(f'{{{WNS}}}w', str(BODY_CONTENT_WIDTH_TWIPS))
+            tblW.set(f'{{{WNS}}}type', 'dxa')
+            jc = etree.SubElement(tblPr, f'{{{WNS}}}jc')
+            jc.set(f'{{{WNS}}}val', 'center')
+            # Match the body paragraph indent so the table starts where the
+            # surrounding text does, clear of the sidebar labels, instead of
+            # flush against the page margin underneath them.
+            tblInd = etree.SubElement(tblPr, f'{{{WNS}}}tblInd')
+            tblInd.set(f'{{{WNS}}}w', str(BODY_LEFT_INDENT_TWIPS))
+            tblInd.set(f'{{{WNS}}}type', 'dxa')
             # Borders
             tblBorders = etree.SubElement(tblPr, f'{{{WNS}}}tblBorders')
             for bname in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
@@ -989,13 +1013,14 @@ def generate_proposal_docx(proposal):
     # Region
     textbox_replacements['UNITED KINGDOM'] = proposal.get_region_display_name().upper()
 
-    # Company entity in the header — changes with the region (LNUK -> Global,
-    # LNKSA -> Arabia, LNIRL -> Ireland).
-    # NOTE: the template's actual text here is "LEAP NETWORKS Global Ltd."
-    # (all-caps "NETWORKS") across two separate runs — not the mixed-case
-    # "LEAP Networks..." the key used to say, which is why this silently
-    # never matched before, regardless of region.
-    textbox_replacements['LEAP NETWORKS Global Ltd.'] = proposal.get_company_name()
+    # Company entity in the header textbox (top of every page) — changes with
+    # the region (LNUK -> Global, LNKSA -> Arabia). The header textbox's
+    # actual runs read "LEAP Networks Global Lt" + "d" + "." (mixed-case
+    # "Networks") — confirmed against the template XML. This is a DIFFERENT
+    # run/casing than the cover page's "Prepared by:" block (handled in
+    # _replace_company_references above), which is genuinely all-caps
+    # "LEAP NETWORKS" in the template — don't conflate the two.
+    textbox_replacements['LEAP Networks Global Ltd.'] = proposal.get_company_name()
 
     # ── Exact-match replacements (initials — only when the entire
     #    text box content equals the placeholder) ──────────────
