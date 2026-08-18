@@ -136,14 +136,14 @@ class ProposalListView(ProposalPermissionMixin, ListView):
         return context
 
 
-def _project_autofill_map():
+def _project_autofill_map(project_queryset):
     """{project_id: {reference, client}} for the New/Edit Proposal form's
     JS to fill in Proposal Reference and Client Name when a project is
-    picked. Purely additive — nothing reads this today."""
-    from projects.models import Project
+    picked. Built from the form's OWN (already region-scoped) project
+    queryset, so it never shows more than the dropdown itself does."""
     return {
         p.pk: {'reference': p.proposal_reference, 'client': p.customer}
-        for p in Project.objects.all()
+        for p in project_queryset
     }
 
 
@@ -159,7 +159,8 @@ class ProposalCreateView(LoginRequiredMixin, CreateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['project_autofill_map'] = _project_autofill_map()
+        context['project_autofill_map'] = _project_autofill_map(
+            context['form'].fields['project'].queryset)
         return context
 
     def form_valid(self, form):
@@ -204,7 +205,8 @@ class ProposalUpdateView(ProposalPermissionMixin, UpdateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['project_autofill_map'] = _project_autofill_map()
+        context['project_autofill_map'] = _project_autofill_map(
+            context['form'].fields['project'].queryset)
         return context
 
     def form_valid(self, form):
