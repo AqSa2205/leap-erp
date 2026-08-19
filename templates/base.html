@@ -1211,6 +1211,21 @@
         </ul>
         {% endif %}
 
+        {# ─── ACCOUNTING (finance team + super admin) ─── #}
+        {# Its own top-level section, not nested under Finance: `finance` plans   #}
+        {# project cash flow, `accounting` holds the GL structure everything is   #}
+        {# coded against. Separate apps, separate lifecycles, separate nav.       #}
+        {% if user.is_super_admin_user or user.is_finance_team_user %}
+        <div class="nav-section" data-section="accounting"><span>Accounting</span><i class="bi bi-chevron-down section-chevron"></i></div>
+        <ul class="nav flex-column nav-section-items" data-section-items="accounting">
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'accounting' %}active{% endif %}" href="{% url 'accounting:chart' %}" data-title="Accounting — Chart of Accounts">
+                    <i class="bi bi-diagram-3"></i> <span>Chart of Accounts</span>
+                </a>
+            </li>
+        </ul>
+        {% endif %}
+
         {# ─── DEPARTMENT KPIs (management + department heads) ─── #}
         {% if user|can:'kpis.access' %}
         <div class="nav-section" data-section="kpis"><span>Department KPIs</span><i class="bi bi-chevron-down section-chevron"></i></div>

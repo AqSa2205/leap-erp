@@ -28,6 +28,7 @@ urlpatterns = [
     path('kpis/', include('kpis.urls')),
     path('company/', include('company.urls')),
     path('finance/', include('finance.urls')),
+    path('accounting/', include('accounting.urls')),
     path('api/attendance/', include('attendance.urls')),
     path('attendance/', include('attendance.ui_urls')),
     path('drafts/', include('drafts.urls')),
