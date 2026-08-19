@@ -107,9 +107,14 @@
                         <strong>{% if children %}Accounts beneath this one{% else %}Sibling accounts{% endif %}</strong>
                         <span class="coa-count">{% if children %}{{ children|length }}{% else %}{{ siblings|length }}{% endif %}</span>
                     </span>
-                    <a href="{% url 'accounting:chart' %}" class="btn btn-sm btn-outline-secondary">
-                        <i class="bi bi-list-ul me-1"></i>Full chart
-                    </a>
+                    <span class="d-flex gap-2">
+                        <a href="{% url 'accounting:account_ledger' account.code %}" class="btn btn-sm btn-primary">
+                            <i class="bi bi-journal-text me-1"></i>View ledger
+                        </a>
+                        <a href="{% url 'accounting:chart' %}" class="btn btn-sm btn-outline-secondary">
+                            <i class="bi bi-list-ul me-1"></i>Full chart
+                        </a>
+                    </span>
                 </div>
                 <div class="card-body p-0">
                     <table class="table table-hover coa-table mb-0">

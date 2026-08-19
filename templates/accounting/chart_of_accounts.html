@@ -125,6 +125,7 @@
                                     <th>Account</th>
                                     <th style="width:9rem;">Internal Type</th>
                                     <th style="width:9rem;">Class</th>
+                                    <th style="width:3rem;"><span class="visually-hidden">Ledger</span></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -164,10 +165,16 @@
                                         {% endif %}
                                     </td>
                                     <td class="small text-muted">{{ account.account_class }}</td>
+                                    <td class="text-end">
+                                        <a href="{% url 'accounting:account_ledger' account.code %}"
+                                           class="btn btn-sm btn-outline-secondary py-0 px-1"
+                                           title="Ledger for {{ account.name }}"
+                                           aria-label="Ledger for {{ account.name }}"><i class="bi bi-journal-text"></i></a>
+                                    </td>
                                 </tr>
                                 {% empty %}
                                 <tr>
-                                    <td colspan="4" class="text-center text-muted py-5">
+                                    <td colspan="5" class="text-center text-muted py-5">
                                         {% if is_filtered %}
                                         No accounts match this filter.
                                         <a href="{% url 'accounting:chart' %}" class="ms-1">Clear filters</a>

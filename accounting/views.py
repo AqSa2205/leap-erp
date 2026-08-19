@@ -1,9 +1,14 @@
+from datetime import datetime
+from decimal import Decimal
+
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
-from django.db.models import Q
+from django.db.models import Q, Sum
 from django.shortcuts import get_object_or_404, render
 
-from .models import Account, build_tree, subtree_counts
+from .models import (
+    Account, Voucher, VoucherLine, build_tree, descendant_ids, subtree_counts,
+)
 
 
 def _can_view_accounting(user):
@@ -116,4 +121,85 @@ def account_detail(request, code):
         'children': children,
         'siblings': siblings,
         'counts': counts.get(account.pk, {'direct': 0, 'total': 0, 'postable': 0}),
+    })
+
+
+def _parse_date(value):
+    """Accept an ISO date from the filter form, ignoring anything unparseable
+    rather than 500-ing on a hand-edited query string."""
+    try:
+        return datetime.strptime(value, '%Y-%m-%d').date() if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+@login_required
+def account_ledger(request, code):
+    """Every transaction against one account, with a running balance.
+
+    This is what turns the chart from a directory of names into an accounting
+    system. A heading has no postings of its own, so opening it shows the
+    combined ledger of every account beneath it.
+
+    Only POSTED vouchers count by default — a draft has not been checked for
+    balance, so including it silently would make the running balance wrong.
+    Drafts can be shown deliberately via ?drafts=1.
+    """
+    if not _can_view_accounting(request.user):
+        raise PermissionDenied
+
+    account = get_object_or_404(Account, code=code)
+    account_ids = descendant_ids(account)
+    is_rollup = len(account_ids) > 1
+
+    date_from = _parse_date(request.GET.get('from'))
+    date_to = _parse_date(request.GET.get('to'))
+    include_drafts = request.GET.get('drafts') == '1'
+
+    lines = (VoucherLine.objects
+             .filter(account_id__in=account_ids)
+             .select_related('voucher', 'account', 'partner', 'project'))
+    if not include_drafts:
+        lines = lines.filter(voucher__status=Voucher.STATUS_POSTED)
+
+    # Opening balance is everything BEFORE the window — without it a filtered
+    # ledger would start from zero and every running balance below would be
+    # wrong.
+    opening_debit = opening_credit = Decimal('0')
+    if date_from:
+        prior = lines.filter(voucher__date__lt=date_from).aggregate(
+            d=Sum('debit'), c=Sum('credit'))
+        opening_debit = prior['d'] or Decimal('0')
+        opening_credit = prior['c'] or Decimal('0')
+        lines = lines.filter(voucher__date__gte=date_from)
+    if date_to:
+        lines = lines.filter(voucher__date__lte=date_to)
+
+    lines = lines.order_by('voucher__date', 'voucher_id', 'order', 'id')
+
+    opening = account.signed_balance(opening_debit, opening_credit)
+    running = opening
+    rows, period_debit, period_credit = [], Decimal('0'), Decimal('0')
+    for line in lines:
+        movement = (line.debit - line.credit)
+        if account.natural_side == 'credit':
+            movement = -movement
+        running += movement
+        period_debit += line.debit
+        period_credit += line.credit
+        rows.append({'line': line, 'balance': running})
+
+    return render(request, 'accounting/account_ledger.html', {
+        'account': account,
+        'rows': rows,
+        'is_rollup': is_rollup,
+        'rollup_count': len(account_ids),
+        'opening': opening,
+        'closing': running,
+        'period_debit': period_debit,
+        'period_credit': period_credit,
+        'date_from': request.GET.get('from', ''),
+        'date_to': request.GET.get('to', ''),
+        'include_drafts': include_drafts,
+        'is_filtered': bool(date_from or date_to or include_drafts),
     })

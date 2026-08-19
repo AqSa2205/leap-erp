@@ -121,6 +121,48 @@ class Account(models.Model):
         return self.CLASS_LABELS.get(self.code[:1], '')
 
     @property
+    def natural_side(self):
+        """Which side this account normally carries a balance on.
+
+        Assets, cost of sale, expenses and Zakat build up on the debit side;
+        liabilities, equity and revenue on the credit side. The ledger uses
+        this so a balance reads as a positive number the way finance expects,
+        instead of every revenue account showing as negative.
+        """
+        return 'debit' if self.code[:1] in ('1', '4', '5', '6') else 'credit'
+
+    def signed_balance(self, debit_total, credit_total):
+        """Balance in this account's natural direction."""
+        if self.natural_side == 'debit':
+            return debit_total - credit_total
+        return credit_total - debit_total
+
+
+def descendant_ids(root, accounts=None):
+    """Every account id at or beneath `root`, including `root` itself.
+
+    A heading carries no postings of its own, so its ledger is the combined
+    ledger of everything filed under it. Walks an in-memory children map so a
+    deep branch costs one query rather than one per level, and the visited set
+    keeps a malformed import from looping forever.
+    """
+    if accounts is None:
+        accounts = Account.objects.all()
+    children = {}
+    for account in accounts:
+        children.setdefault(account.parent_id, []).append(account.pk)
+
+    collected, queue, guard = {root.pk}, [root.pk], 0
+    while queue and guard < 10000:
+        current = queue.pop()
+        for child_pk in children.get(current, ()):
+            if child_pk not in collected:
+                collected.add(child_pk)
+                queue.append(child_pk)
+        guard += 1
+    return collected
+
+    @property
     def depth(self):
         """Nesting level, 0 for a top-level class. Walks `parent`, so callers
         rendering many rows should use `build_tree()` instead of this."""
@@ -404,6 +446,47 @@ class VoucherLine(models.Model):
                 f'{self.account.code} {self.account.name} is a heading and cannot be posted to.')
 
 
+class AccountingSettings(models.Model):
+    """Singleton holding the control accounts a document posts against.
+
+    An invoice knows its revenue accounts line by line, but the receivable and
+    the output tax it also hits are company-wide choices, not per-document
+    ones. Keeping them configurable means the posting rules never hardcode a
+    code from one particular chart.
+    """
+
+    default_receivable_account = models.ForeignKey(
+        Account, on_delete=models.PROTECT, null=True, blank=True, related_name='+',
+        help_text='Debited by a customer invoice when the partner has no own AR account.')
+    default_payable_account = models.ForeignKey(
+        Account, on_delete=models.PROTECT, null=True, blank=True, related_name='+',
+        help_text='Credited by a vendor bill when the partner has no own AP account.')
+    output_tax_account = models.ForeignKey(
+        Account, on_delete=models.PROTECT, null=True, blank=True, related_name='+',
+        help_text='VAT charged on sales.')
+    input_tax_account = models.ForeignKey(
+        Account, on_delete=models.PROTECT, null=True, blank=True, related_name='+',
+        help_text='VAT paid on purchases.')
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Accounting settings'
+        verbose_name_plural = 'Accounting settings'
+
+    def __str__(self):
+        return 'Accounting settings'
+
+    def save(self, *args, **kwargs):
+        self.pk = 1                      # singleton — always the same row
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
 class DocumentQuerySet(models.QuerySet):
     def invoices(self):
         return self.filter(kind=Document.KIND_INVOICE)
@@ -478,6 +561,14 @@ class Document(models.Model):
     zoho_id = models.CharField(max_length=64, blank=True, db_index=True)
     source = models.CharField(max_length=20, default='manual')
 
+    # The double-entry this document produced, if it produced one. Documents
+    # mirrored from Zoho deliberately leave this empty — Zoho already recorded
+    # the entry and it arrives through the journal import, so generating one
+    # here as well would count the same invoice twice.
+    voucher = models.OneToOneField(
+        'Voucher', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='document')
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='accounting_documents')
@@ -514,6 +605,113 @@ class Document(models.Model):
         """Sum of the line amounts — compared against `total` to surface an
         import that didn't add up, rather than quietly trusting either."""
         return sum((line.amount for line in self.lines.all()), Decimal('0'))
+
+    @property
+    def is_invoice(self):
+        return self.kind == self.KIND_INVOICE
+
+    def control_account(self):
+        """Receivable for an invoice, payable for a bill.
+
+        The partner's own account wins so a chart that gives each customer its
+        own GL code keeps working; otherwise the company-wide control account
+        from AccountingSettings is used.
+        """
+        cfg = AccountingSettings.load()
+        if self.is_invoice:
+            return self.partner.receivable_account or cfg.default_receivable_account
+        return self.partner.payable_account or cfg.default_payable_account
+
+    def tax_account(self):
+        cfg = AccountingSettings.load()
+        return cfg.output_tax_account if self.is_invoice else cfg.input_tax_account
+
+    def build_voucher(self, created_by=None):
+        """Create the double-entry voucher this document represents.
+
+        Invoice:  Dr receivable (total)      Cr revenue (per line) + Cr output tax
+        Bill:     Dr expense (per line) + Dr input tax    Cr payable (total)
+
+        Refuses rather than guesses. A document whose lines and tax don't reach
+        its stored total is an import that didn't add up, and forcing it to
+        balance would bury the discrepancy in the ledger — which is precisely
+        where it would do the most damage.
+        """
+        if self.source == 'zoho':
+            raise ValidationError(
+                'This document came from Zoho, which already recorded the entry. '
+                'Import the Zoho journal export instead of posting it again here.')
+        if self.voucher_id:
+            raise ValidationError(f'{self} has already been posted as {self.voucher}.')
+
+        lines = [line for line in self.lines.all() if line.account_id]
+        if not lines:
+            raise ValidationError('Add at least one line with an account before posting.')
+
+        control = self.control_account()
+        if control is None:
+            side = 'receivable' if self.is_invoice else 'payable'
+            raise ValidationError(
+                f'No {side} account set for {self.partner}, and no company default '
+                f'configured in Accounting settings.')
+
+        tax = self.tax_total or Decimal('0')
+        tax_account = self.tax_account()
+        if tax and tax_account is None:
+            raise ValidationError(
+                'This document carries tax but no tax account is configured in '
+                'Accounting settings.')
+
+        expected = sum((line.amount for line in lines), Decimal('0')) + tax
+        if expected != (self.total or Decimal('0')):
+            raise ValidationError(
+                f'{self} does not add up: lines + tax = {expected} but the '
+                f'document total is {self.total}. Fix the figures before posting.')
+
+        voucher = Voucher.objects.create(
+            voucher_type=Voucher.TYPE_JV,
+            number=f'{"INV" if self.is_invoice else "BILL"}/{self.number}',
+            date=self.date,
+            narration=f'{self.get_kind_display()} {self.number} — {self.partner}',
+            partner=self.partner,
+            project=self.project,
+            currency=self.currency,
+            source=self.source,
+            created_by=created_by,
+        )
+
+        order = 0
+        # Control account carries the gross figure; the detail sits opposite.
+        VoucherLine.objects.create(
+            voucher=voucher, account=control, partner=self.partner,
+            description=f'{self.partner}',
+            debit=self.total if self.is_invoice else Decimal('0'),
+            credit=Decimal('0') if self.is_invoice else self.total,
+            order=order)
+        for line in lines:
+            order += 1
+            VoucherLine.objects.create(
+                voucher=voucher, account=line.account, partner=self.partner,
+                project=line.project or self.project,
+                description=line.description[:255],
+                debit=Decimal('0') if self.is_invoice else line.amount,
+                credit=line.amount if self.is_invoice else Decimal('0'),
+                order=order)
+        if tax:
+            order += 1
+            VoucherLine.objects.create(
+                voucher=voucher, account=tax_account, partner=self.partner,
+                description='VAT',
+                debit=Decimal('0') if self.is_invoice else tax,
+                credit=tax if self.is_invoice else Decimal('0'),
+                order=order)
+
+        voucher.post()
+        self.voucher = voucher
+        if self.status == self.STATUS_DRAFT:
+            self.status = self.STATUS_OPEN
+        self.save(update_fields=['voucher', 'status', 'updated_at'])
+        return voucher
 
 
 class DocumentLine(models.Model):

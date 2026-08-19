@@ -483,6 +483,415 @@ class DocumentTests(TestCase):
         self.assertEqual([d.number for d in Document.objects.outstanding()], ['INV-001'])
 
 
+class AccountLedgerTests(TestCase):
+    """Every transaction against an account, with a running balance."""
+
+    def setUp(self):
+        self.assets = Account.objects.create(code='1000000', name='Assets', internal_type='View')
+        self.banks = Account.objects.create(code='1120000', name='Cash at Banks',
+                                            internal_type='View', parent=self.assets)
+        self.alinma = Account.objects.create(code='1120001', name='ALINMA Bank',
+                                             internal_type='Liquidity', parent=self.banks)
+        self.sab = Account.objects.create(code='1120002', name='SAB SAR Bank',
+                                          internal_type='Liquidity', parent=self.banks)
+        rev = Account.objects.create(code='3000000', name='Revenues', internal_type='View')
+        self.income = Account.objects.create(code='3000101', name='Sales - Projects',
+                                             internal_type='Regular', parent=rev)
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('sa', password='x')
+        self.user.role = role
+        self.user.save()
+        self.client.force_login(self.user)
+
+    def _voucher(self, number, day, status=Voucher.STATUS_POSTED):
+        return Voucher.objects.create(
+            voucher_type=Voucher.TYPE_RV, number=number,
+            date=datetime.date(2026, 8, day), status=status)
+
+    def _pair(self, voucher, debit_account, credit_account, amount):
+        VoucherLine.objects.create(voucher=voucher, account=debit_account,
+                                   debit=Decimal(amount), order=0)
+        VoucherLine.objects.create(voucher=voucher, account=credit_account,
+                                   credit=Decimal(amount), order=1)
+
+    def _ledger(self, code, **params):
+        return self.client.get(reverse('accounting:account_ledger', args=[code]), params)
+
+    def test_running_balance_accumulates(self):
+        self._pair(self._voucher('RV-1', 1), self.alinma, self.income, '1000')
+        self._pair(self._voucher('RV-2', 2), self.alinma, self.income, '250')
+        resp = self._ledger('1120001')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([r['balance'] for r in resp.context['rows']],
+                         [Decimal('1000'), Decimal('1250')])
+        self.assertEqual(resp.context['closing'], Decimal('1250'))
+
+    def test_credit_account_balance_reads_positive(self):
+        """Revenue is credit-natured, so its balance must not show negative."""
+        self._pair(self._voucher('RV-1', 1), self.alinma, self.income, '1000')
+        resp = self._ledger('3000101')
+        self.assertEqual(resp.context['closing'], Decimal('1000'))
+
+    def test_debit_account_reduced_by_a_credit(self):
+        v = self._voucher('RV-1', 1)
+        self._pair(v, self.alinma, self.income, '1000')
+        v2 = self._voucher('RV-2', 2)
+        self._pair(v2, self.income, self.alinma, '400')   # money back out of the bank
+        resp = self._ledger('1120001')
+        self.assertEqual(resp.context['closing'], Decimal('600'))
+
+    def test_drafts_excluded_by_default(self):
+        self._pair(self._voucher('RV-1', 1), self.alinma, self.income, '1000')
+        self._pair(self._voucher('RV-D', 2, Voucher.STATUS_DRAFT), self.alinma,
+                   self.income, '9999')
+        resp = self._ledger('1120001')
+        self.assertEqual(len(resp.context['rows']), 1)
+        self.assertEqual(resp.context['closing'], Decimal('1000'))
+
+    def test_drafts_included_on_request(self):
+        self._pair(self._voucher('RV-1', 1), self.alinma, self.income, '1000')
+        self._pair(self._voucher('RV-D', 2, Voucher.STATUS_DRAFT), self.alinma,
+                   self.income, '500')
+        resp = self._ledger('1120001', drafts='1')
+        self.assertEqual(len(resp.context['rows']), 2)
+        self.assertEqual(resp.context['closing'], Decimal('1500'))
+        self.assertTrue(resp.context['include_drafts'])
+
+    def test_opening_balance_carries_prior_activity(self):
+        """A filtered ledger must not start from zero."""
+        self._pair(self._voucher('RV-1', 1), self.alinma, self.income, '1000')
+        self._pair(self._voucher('RV-2', 15), self.alinma, self.income, '500')
+        resp = self._ledger('1120001', **{'from': '2026-08-10'})
+        self.assertEqual(resp.context['opening'], Decimal('1000'))
+        self.assertEqual(len(resp.context['rows']), 1)
+        self.assertEqual(resp.context['closing'], Decimal('1500'))
+
+    def test_date_to_excludes_later_activity(self):
+        self._pair(self._voucher('RV-1', 1), self.alinma, self.income, '1000')
+        self._pair(self._voucher('RV-2', 20), self.alinma, self.income, '500')
+        resp = self._ledger('1120001', to='2026-08-10')
+        self.assertEqual(len(resp.context['rows']), 1)
+        self.assertEqual(resp.context['closing'], Decimal('1000'))
+
+    def test_heading_rolls_up_its_children(self):
+        self._pair(self._voucher('RV-1', 1), self.alinma, self.income, '1000')
+        self._pair(self._voucher('RV-2', 2), self.sab, self.income, '250')
+        resp = self._ledger('1120000')          # Cash at Banks — a View heading
+        self.assertTrue(resp.context['is_rollup'])
+        self.assertEqual(len(resp.context['rows']), 2)
+        self.assertEqual(resp.context['closing'], Decimal('1250'))
+
+    def test_leaf_is_not_a_rollup(self):
+        resp = self._ledger('1120001')
+        self.assertFalse(resp.context['is_rollup'])
+
+    def test_period_totals(self):
+        self._pair(self._voucher('RV-1', 1), self.alinma, self.income, '1000')
+        self._pair(self._voucher('RV-2', 2), self.income, self.alinma, '300')
+        resp = self._ledger('1120001')
+        self.assertEqual(resp.context['period_debit'], Decimal('1000'))
+        self.assertEqual(resp.context['period_credit'], Decimal('300'))
+
+    def test_empty_ledger_renders(self):
+        resp = self._ledger('1120001')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context['rows'], [])
+        self.assertEqual(resp.context['closing'], Decimal('0'))
+
+    def test_bad_date_is_ignored_not_a_500(self):
+        self._pair(self._voucher('RV-1', 1), self.alinma, self.income, '1000')
+        resp = self._ledger('1120001', **{'from': 'not-a-date'})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context['closing'], Decimal('1000'))
+
+    def test_unknown_account_404s(self):
+        self.assertEqual(self._ledger('9999999').status_code, 404)
+
+    def test_requires_finance_or_super_admin(self):
+        role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        rep = User.objects.create_user('rep2', password='x')
+        rep.role = role
+        rep.save()
+        self.client.force_login(rep)
+        self.assertEqual(self._ledger('1120001').status_code, 403)
+
+    def test_natural_side_by_class(self):
+        self.assertEqual(self.alinma.natural_side, 'debit')    # 1 assets
+        self.assertEqual(self.income.natural_side, 'credit')   # 3 revenue
+        self.assertEqual(
+            Account(code='4100001', name='x').natural_side, 'debit')   # cost of sale
+        self.assertEqual(
+            Account(code='2120001', name='x').natural_side, 'credit')  # liability
+
+
+class DocumentPostingTests(TestCase):
+    """Posting a document produces the double-entry that puts it in the ledger."""
+
+    def setUp(self):
+        from accounting.models import AccountingSettings
+        assets = Account.objects.create(code='1000000', name='Assets', internal_type='View')
+        self.ar = Account.objects.create(code='1140000', name='Accounts Receivable',
+                                         internal_type='Receivable', parent=assets)
+        self.vat_out = Account.objects.create(code='2180001', name='Output VAT',
+                                              internal_type='Regular', parent=assets)
+        self.vat_in = Account.objects.create(code='1300001', name='VAT Input',
+                                             internal_type='Regular', parent=assets)
+        self.ap = Account.objects.create(code='2120000', name='Accounts Payable',
+                                         internal_type='Payable', parent=assets)
+        self.income = Account.objects.create(code='3000101', name='Sales - Projects',
+                                             internal_type='Regular', parent=assets)
+        self.cogs = Account.objects.create(code='4100006', name='Local Procurement',
+                                           internal_type='Regular', parent=assets)
+        cfg = AccountingSettings.load()
+        cfg.default_receivable_account = self.ar
+        cfg.default_payable_account = self.ap
+        cfg.output_tax_account = self.vat_out
+        cfg.input_tax_account = self.vat_in
+        cfg.save()
+        self.customer = Partner.objects.create(name='Saudi Aramco', kind=Partner.KIND_CUSTOMER)
+        self.vendor = Partner.objects.create(name='Al Ghad', kind=Partner.KIND_VENDOR)
+
+    def _invoice(self, source='manual', subtotal='100000', tax='15000', total='115000'):
+        doc = Document.objects.create(
+            kind=Document.KIND_INVOICE, number='INV-001', partner=self.customer,
+            date=datetime.date(2026, 8, 1), source=source,
+            subtotal=Decimal(subtotal), tax_total=Decimal(tax), total=Decimal(total))
+        DocumentLine.objects.create(document=doc, description='Phase 1',
+                                    account=self.income, amount=Decimal(subtotal))
+        return doc
+
+    def _bill(self):
+        doc = Document.objects.create(
+            kind=Document.KIND_BILL, number='BILL-001', partner=self.vendor,
+            date=datetime.date(2026, 8, 2), subtotal=Decimal('20000'),
+            tax_total=Decimal('3000'), total=Decimal('23000'))
+        DocumentLine.objects.create(document=doc, description='Cable',
+                                    account=self.cogs, amount=Decimal('20000'))
+        return doc
+
+    def test_invoice_posts_debit_receivable_credit_revenue_and_tax(self):
+        v = self._invoice().build_voucher()
+        self.assertTrue(v.is_balanced)
+        self.assertEqual(v.voucher_type, Voucher.TYPE_JV)
+        by_account = {l.account.code: (l.debit, l.credit) for l in v.lines.all()}
+        self.assertEqual(by_account['1140000'], (Decimal('115000'), Decimal('0')))
+        self.assertEqual(by_account['3000101'], (Decimal('0'), Decimal('100000')))
+        self.assertEqual(by_account['2180001'], (Decimal('0'), Decimal('15000')))
+
+    def test_bill_posts_debit_expense_and_input_tax_credit_payable(self):
+        v = self._bill().build_voucher()
+        self.assertTrue(v.is_balanced)
+        by_account = {l.account.code: (l.debit, l.credit) for l in v.lines.all()}
+        self.assertEqual(by_account['4100006'], (Decimal('20000'), Decimal('0')))
+        self.assertEqual(by_account['1300001'], (Decimal('3000'), Decimal('0')))
+        self.assertEqual(by_account['2120000'], (Decimal('0'), Decimal('23000')))
+
+    def test_posted_voucher_is_linked_and_document_opened(self):
+        doc = self._invoice()
+        v = doc.build_voucher()
+        doc.refresh_from_db()
+        self.assertEqual(doc.voucher_id, v.pk)
+        self.assertEqual(doc.status, Document.STATUS_OPEN)
+        self.assertEqual(v.status, Voucher.STATUS_POSTED)
+
+    # ── the double-count guard ───────────────────────────────────────────
+
+    def test_zoho_sourced_document_refuses_to_post(self):
+        """Zoho already recorded the entry; its journal export supplies it."""
+        doc = self._invoice(source='zoho')
+        with self.assertRaises(ValidationError):
+            doc.build_voucher()
+        self.assertIsNone(doc.voucher_id)
+
+    def test_cannot_post_the_same_document_twice(self):
+        doc = self._invoice()
+        doc.build_voucher()
+        with self.assertRaises(ValidationError):
+            doc.build_voucher()
+        self.assertEqual(Voucher.objects.count(), 1)
+
+    # ── refusing to guess ────────────────────────────────────────────────
+
+    def test_refuses_when_lines_and_tax_do_not_reach_the_total(self):
+        doc = self._invoice(subtotal='90000', tax='15000', total='115000')
+        with self.assertRaises(ValidationError):
+            doc.build_voucher()
+        self.assertEqual(Voucher.objects.count(), 0)
+
+    def test_refuses_without_a_control_account(self):
+        from accounting.models import AccountingSettings
+        cfg = AccountingSettings.load()
+        cfg.default_receivable_account = None
+        cfg.save()
+        with self.assertRaises(ValidationError):
+            self._invoice().build_voucher()
+
+    def test_refuses_with_tax_but_no_tax_account(self):
+        from accounting.models import AccountingSettings
+        cfg = AccountingSettings.load()
+        cfg.output_tax_account = None
+        cfg.save()
+        with self.assertRaises(ValidationError):
+            self._invoice().build_voucher()
+
+    def test_refuses_a_document_with_no_coded_lines(self):
+        doc = Document.objects.create(
+            kind=Document.KIND_INVOICE, number='INV-EMPTY', partner=self.customer,
+            date=datetime.date(2026, 8, 1), total=Decimal('100'))
+        with self.assertRaises(ValidationError):
+            doc.build_voucher()
+
+    def test_partner_account_wins_over_the_company_default(self):
+        own = Account.objects.create(code='1140001', name='Saudi Aramco',
+                                     internal_type='Receivable',
+                                     parent=Account.objects.get(code='1000000'))
+        self.customer.receivable_account = own
+        self.customer.save()
+        v = self._invoice().build_voucher()
+        codes = {l.account.code for l in v.lines.all()}
+        self.assertIn('1140001', codes)
+        self.assertNotIn('1140000', codes)
+
+    def test_zero_tax_document_posts_without_a_tax_line(self):
+        doc = self._invoice(subtotal='100000', tax='0', total='100000')
+        v = doc.build_voucher()
+        self.assertTrue(v.is_balanced)
+        self.assertEqual(v.lines.count(), 2)
+
+    def test_posted_document_appears_in_the_account_ledger(self):
+        """The whole point — an invoice must show against its revenue account."""
+        self._invoice().build_voucher()
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        user = User.objects.create_user('sa_led', password='x')
+        user.role = role
+        user.save()
+        self.client.force_login(user)
+        resp = self.client.get(reverse('accounting:account_ledger', args=['3000101']))
+        self.assertEqual(len(resp.context['rows']), 1)
+        self.assertEqual(resp.context['closing'], Decimal('100000'))
+
+
+class ZohoJournalImportTests(TestCase):
+    """Importing Zoho's journal export as JV vouchers."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        root = Account.objects.create(code='1000000', name='Assets', internal_type='View')
+        self.bank = Account.objects.create(code='1120001', name='ALINMA Bank',
+                                           internal_type='Liquidity', parent=root)
+        self.cogs = Account.objects.create(code='4100006', name='Local Procurement',
+                                           internal_type='Regular', parent=root)
+        self.heading = root
+
+    def _write_csv(self, rows, headers=None):
+        import csv as _csv
+        path = str(Path(self.dir) / 'journals.csv')
+        headers = headers or ['Journal Date', 'Journal Number', 'Account Code',
+                              'Account', 'Description', 'Contact Name', 'Debit', 'Credit']
+        with open(path, 'w', newline='', encoding='utf-8') as f:
+            w = _csv.writer(f)
+            w.writerow(headers)
+            for r in rows:
+                w.writerow(r)
+        return path
+
+    def _run(self, path, *args):
+        out = StringIO()
+        call_command('import_zoho_journals', path, *args, stdout=out)
+        return out.getvalue()
+
+    def _balanced_rows(self, number='JN-001', amount='5000'):
+        return [
+            ['2026-08-01', number, '4100006', 'Local Procurement', 'Cable', 'Al Ghad', amount, ''],
+            ['2026-08-01', number, '1120001', 'ALINMA Bank', 'Cable', 'Al Ghad', '', amount],
+        ]
+
+    def test_imports_a_balanced_journal(self):
+        self._run(self._write_csv(self._balanced_rows()))
+        v = Voucher.objects.get(number='JN-001')
+        self.assertEqual(v.voucher_type, Voucher.TYPE_JV)
+        self.assertEqual(v.source, 'zoho')
+        self.assertEqual(v.lines.count(), 2)
+        self.assertTrue(v.is_balanced)
+
+    def test_lands_as_draft_unless_post_is_given(self):
+        self._run(self._write_csv(self._balanced_rows()))
+        self.assertEqual(Voucher.objects.get(number='JN-001').status, Voucher.STATUS_DRAFT)
+        self._run(self._write_csv(self._balanced_rows()), '--post')
+        self.assertEqual(Voucher.objects.get(number='JN-001').status, Voucher.STATUS_POSTED)
+
+    def test_reimport_updates_rather_than_duplicating(self):
+        path = self._write_csv(self._balanced_rows())
+        self._run(path)
+        self._run(self._write_csv(self._balanced_rows(amount='7000')))
+        self.assertEqual(Voucher.objects.filter(number='JN-001').count(), 1)
+        v = Voucher.objects.get(number='JN-001')
+        self.assertEqual(v.lines.count(), 2)          # not 4
+        self.assertEqual(v.total_debit, Decimal('7000'))
+
+    def test_unbalanced_journal_is_skipped_with_a_warning(self):
+        rows = [
+            ['2026-08-01', 'JN-BAD', '4100006', 'Local Procurement', 'x', '', '5000', ''],
+            ['2026-08-01', 'JN-BAD', '1120001', 'ALINMA Bank', 'x', '', '', '4000'],
+        ]
+        out = self._run(self._write_csv(rows))
+        self.assertIn('does not balance', out)
+        self.assertFalse(Voucher.objects.filter(number='JN-BAD').exists())
+
+    def test_unknown_account_line_is_reported_not_fatal(self):
+        rows = self._balanced_rows() + [
+            ['2026-08-02', 'JN-002', '9999999', 'Nope', 'x', '', '10', ''],
+        ]
+        out = self._run(self._write_csv(rows))
+        self.assertIn('unknown account', out)
+        self.assertTrue(Voucher.objects.filter(number='JN-001').exists())
+
+    def test_heading_account_line_is_refused(self):
+        rows = [
+            ['2026-08-01', 'JN-H', '1000000', 'Assets', 'x', '', '10', ''],
+            ['2026-08-01', 'JN-H', '1120001', 'ALINMA Bank', 'x', '', '', '10'],
+        ]
+        out = self._run(self._write_csv(rows))
+        self.assertIn('is a heading', out)
+
+    def test_partner_is_created_from_the_contact_column(self):
+        self._run(self._write_csv(self._balanced_rows()))
+        self.assertTrue(Partner.objects.filter(name='Al Ghad').exists())
+
+    def test_headers_match_case_and_spacing_insensitively(self):
+        path = self._write_csv(
+            self._balanced_rows(),
+            headers=['JOURNAL  DATE', 'journal_number', 'GL Code', 'Ledger Name',
+                     'Notes', 'Customer Name', 'DEBIT AMOUNT', 'credit amount'])
+        self._run(path)
+        self.assertTrue(Voucher.objects.filter(number='JN-001').exists())
+
+    def test_missing_required_column_lists_the_headers_it_saw(self):
+        path = self._write_csv([], headers=['Something', 'Else'])
+        with self.assertRaises(CommandError) as ctx:
+            self._run(path)
+        self.assertIn('Headers in the file', str(ctx.exception))
+
+    def test_dry_run_writes_nothing(self):
+        out = self._run(self._write_csv(self._balanced_rows()), '--dry-run')
+        self.assertIn('Dry run', out)
+        self.assertEqual(Voucher.objects.count(), 0)
+
+    def test_missing_file_raises(self):
+        with self.assertRaises(CommandError):
+            self._run(str(Path(self.dir) / 'nope.csv'))
+
+    def test_imported_journal_reaches_the_account_ledger(self):
+        self._run(self._write_csv(self._balanced_rows()), '--post')
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        user = User.objects.create_user('sa_zj', password='x')
+        user.role = role
+        user.save()
+        self.client.force_login(user)
+        resp = self.client.get(reverse('accounting:account_ledger', args=['4100006']))
+        self.assertEqual(resp.context['closing'], Decimal('5000'))
+
+
 class PartnerTests(TestCase):
 
     def test_kind_flags(self):
