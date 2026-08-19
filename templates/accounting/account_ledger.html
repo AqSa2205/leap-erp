@@ -1,0 +1,182 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Ledger — {{ account.code }} {{ account.name }}{% endblock %}
+{% block page_title %}Account Ledger{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'accounting:chart' %}">Chart of Accounts</a>
+    <span class="crumb-sep">›</span>
+    <a href="{% url 'accounting:account_detail' account.code %}">{{ account.name }}</a>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">Ledger</span>
+</nav>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .led-hero { background: linear-gradient(135deg, #5b3fa0 0%, #402c73 100%); color:#fff; border:none; border-radius:14px; }
+    .led-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .led-table td, .led-table th { vertical-align: middle; }
+    .led-table thead th { font-size:0.74rem; text-transform:uppercase; letter-spacing:0.3px; color:#402c73; border-bottom:2px solid #5b3fa0; }
+    /* Money columns line up only with tabular figures. */
+    .num { text-align:right; font-variant-numeric: tabular-nums;
+           font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+           font-size:0.86rem; white-space:nowrap; }
+    .led-stat { font-size:1.35rem; font-weight:600; line-height:1; font-variant-numeric: tabular-nums; }
+    .led-open, .led-close { background:#faf9fd; font-weight:600; }
+    .led-close { border-top:2px solid #5b3fa0; }
+    .neg { color:#b4453a; }
+    [data-theme="dark"] .led-open, [data-theme="dark"] .led-close { background:#252525; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-xxl-11">
+
+            <div class="card led-hero mb-4">
+                <div class="card-body p-4 d-flex justify-content-between align-items-center flex-wrap gap-3">
+                    <div>
+                        <div class="led-code opacity-75">{{ account.code }}</div>
+                        <h1 class="h4 mb-1 text-white">{{ account.name }}</h1>
+                        <div class="small opacity-75">
+                            {{ account.account_class }} · normally a {{ account.natural_side }} balance
+                            {% if is_rollup %}
+                            · <span title="This is a heading, so the ledger combines every account beneath it">rolled up from {{ rollup_count }} accounts</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="d-flex gap-4 text-center">
+                        <div>
+                            <div class="led-stat">{{ opening|floatformat:2|intcomma }}</div>
+                            <div class="small opacity-75">Opening</div>
+                        </div>
+                        <div>
+                            <div class="led-stat">{{ period_debit|floatformat:2|intcomma }}</div>
+                            <div class="small opacity-75">Debits</div>
+                        </div>
+                        <div>
+                            <div class="led-stat">{{ period_credit|floatformat:2|intcomma }}</div>
+                            <div class="small opacity-75">Credits</div>
+                        </div>
+                        <div>
+                            <div class="led-stat">{{ closing|floatformat:2|intcomma }}</div>
+                            <div class="small opacity-75">Closing</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header bg-white py-3">
+                    <form method="get" class="row g-2 align-items-end">
+                        <div class="col-auto">
+                            <label for="ledFrom" class="form-label small text-muted mb-1">From</label>
+                            <input type="date" id="ledFrom" name="from" value="{{ date_from }}" class="form-control form-control-sm">
+                        </div>
+                        <div class="col-auto">
+                            <label for="ledTo" class="form-label small text-muted mb-1">To</label>
+                            <input type="date" id="ledTo" name="to" value="{{ date_to }}" class="form-control form-control-sm">
+                        </div>
+                        <div class="col-auto">
+                            <div class="form-check mb-1">
+                                <input class="form-check-input" type="checkbox" value="1" name="drafts"
+                                       id="ledDrafts" {% if include_drafts %}checked{% endif %}>
+                                <label class="form-check-label small" for="ledDrafts">Include drafts</label>
+                            </div>
+                        </div>
+                        <div class="col-auto">
+                            <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+                        </div>
+                        {% if is_filtered %}
+                        <div class="col-auto">
+                            <a href="{% url 'accounting:account_ledger' account.code %}" class="btn btn-sm btn-outline-secondary">Clear</a>
+                        </div>
+                        {% endif %}
+                        <div class="col text-end">
+                            <a href="{% url 'accounting:account_detail' account.code %}" class="btn btn-sm btn-outline-secondary">
+                                <i class="bi bi-diagram-3 me-1"></i>Account
+                            </a>
+                        </div>
+                    </form>
+                    {% if include_drafts %}
+                    <div class="small mt-2" style="color:#b4453a">
+                        <i class="bi bi-exclamation-triangle me-1"></i>Draft vouchers are included. Drafts are not checked for balance, so this running balance is provisional.
+                    </div>
+                    {% endif %}
+                </div>
+
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover led-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th style="width:7rem;">Date</th>
+                                    <th style="width:8rem;">Voucher</th>
+                                    {% if is_rollup %}<th style="width:8rem;">Account</th>{% endif %}
+                                    <th>Narration</th>
+                                    <th style="width:9rem;">Partner</th>
+                                    <th class="num" style="width:8rem;">Debit</th>
+                                    <th class="num" style="width:8rem;">Credit</th>
+                                    <th class="num" style="width:9rem;">Balance</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr class="led-open">
+                                    <td colspan="{% if is_rollup %}6{% else %}5{% endif %}">Opening balance{% if date_from %} at {{ date_from }}{% endif %}</td>
+                                    <td class="num"></td>
+                                    <td class="num {% if opening < 0 %}neg{% endif %}">{{ opening|floatformat:2|intcomma }}</td>
+                                </tr>
+                                {% for row in rows %}
+                                <tr>
+                                    <td class="small">{{ row.line.voucher.date|date:"Y-m-d" }}</td>
+                                    <td>
+                                        <span class="led-code small">{{ row.line.voucher }}</span>
+                                        {% if row.line.voucher.status != 'posted' %}
+                                        <span class="badge bg-warning-subtle text-warning-emphasis ms-1">Draft</span>
+                                        {% endif %}
+                                    </td>
+                                    {% if is_rollup %}
+                                    <td class="led-code small">{{ row.line.account.code }}</td>
+                                    {% endif %}
+                                    <td class="small">{{ row.line.description|default:row.line.voucher.narration|truncatechars:70 }}</td>
+                                    <td class="small text-muted">{{ row.line.partner.name|default:"—"|truncatechars:22 }}</td>
+                                    <td class="num">{% if row.line.debit %}{{ row.line.debit|floatformat:2|intcomma }}{% endif %}</td>
+                                    <td class="num">{% if row.line.credit %}{{ row.line.credit|floatformat:2|intcomma }}{% endif %}</td>
+                                    <td class="num {% if row.balance < 0 %}neg{% endif %}">{{ row.balance|floatformat:2|intcomma }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="{% if is_rollup %}8{% else %}7{% endif %}" class="text-center text-muted py-5">
+                                        {% if is_filtered %}
+                                        No transactions in this range.
+                                        {% else %}
+                                        <i class="bi bi-journal-text d-block mb-2" style="font-size:1.8rem;"></i>
+                                        No transactions against this account yet.
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                                <tr class="led-close">
+                                    <td colspan="{% if is_rollup %}5{% else %}4{% endif %}">Closing balance{% if date_to %} at {{ date_to }}{% endif %}</td>
+                                    <td class="num">{{ period_debit|floatformat:2|intcomma }}</td>
+                                    <td class="num">{{ period_credit|floatformat:2|intcomma }}</td>
+                                    <td class="num {% if closing < 0 %}neg{% endif %}">{{ closing|floatformat:2|intcomma }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card-footer bg-white small text-muted py-2">
+                    {{ rows|length }} transaction{{ rows|length|pluralize }}.
+                    Balance shown in the account's natural direction ({{ account.natural_side }}), so a normal balance reads positive.
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+{% endblock %}

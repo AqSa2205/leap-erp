@@ -1,8 +1,23 @@
 from django.contrib import admin
 
 from .models import (
-    Account, Document, DocumentLine, Partner, Voucher, VoucherLine,
+    Account, AccountingSettings, Document, DocumentLine, Partner, Voucher,
+    VoucherLine,
 )
+
+
+@admin.register(AccountingSettings)
+class AccountingSettingsAdmin(admin.ModelAdmin):
+    """Singleton — the control accounts documents post against."""
+    raw_id_fields = ('default_receivable_account', 'default_payable_account',
+                     'output_tax_account', 'input_tax_account')
+
+    def has_add_permission(self, request):
+        # One row only; edit the existing one rather than creating a second.
+        return not AccountingSettings.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(Account)
