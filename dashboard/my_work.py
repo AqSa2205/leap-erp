@@ -63,9 +63,15 @@ def my_work(request):
         # Sheets waiting for the sales team to pick up
         ready_qs = CostingSheet.objects.filter(workflow_stage='ready_for_costing')
         if not user.is_super_admin_user:
-            ready_qs = ready_qs.filter(
-                Q(created_by=user) | Q(project__region=user.region)
-            )
+            if getattr(user, 'is_sales_rep_user', False):
+                # Owned projects, plus sheets the rep created themselves — a
+                # sheet's project is nullable, so dropping created_by would
+                # hide a rep's own work from their My Work list.
+                ready_qs = ready_qs.filter(Q(project__owner=user) | Q(created_by=user))
+            else:
+                ready_qs = ready_qs.filter(
+                    Q(created_by=user) | Q(project__region=user.region)
+                )
         for sheet in ready_qs.select_related('project', 'handed_over_by').order_by('-handed_over_at')[:10]:
             ho = sheet.handed_over_by
             action_items.append({
@@ -80,9 +86,12 @@ def my_work(request):
         # Sheets the sales team is mid-way through
         mid_qs = CostingSheet.objects.filter(workflow_stage='costing_in_progress')
         if not user.is_super_admin_user:
-            mid_qs = mid_qs.filter(
-                Q(created_by=user) | Q(project__region=user.region)
-            )
+            if getattr(user, 'is_sales_rep_user', False):
+                mid_qs = mid_qs.filter(Q(project__owner=user) | Q(created_by=user))   # reps: owned or self-created
+            else:
+                mid_qs = mid_qs.filter(
+                    Q(created_by=user) | Q(project__region=user.region)
+                )
         for sheet in mid_qs.select_related('project').order_by('-updated_at')[:5]:
             action_items.append({
                 'title':    f'Finalize: {sheet.title}',
@@ -220,9 +229,14 @@ def my_work(request):
             actor_team='proposal',
         ).select_related('sheet', 'actor').order_by('-created_at')
         if not user.is_super_admin_user:
-            log_qs = log_qs.filter(
-                Q(sheet__created_by=user) | Q(sheet__project__region=user.region)
-            )
+            if getattr(user, 'is_sales_rep_user', False):
+                log_qs = log_qs.filter(
+                    Q(sheet__project__owner=user) | Q(sheet__created_by=user)
+                )   # reps: owned or self-created
+            else:
+                log_qs = log_qs.filter(
+                    Q(sheet__created_by=user) | Q(sheet__project__region=user.region)
+                )
         for entry in log_qs[:10]:
             act = entry.actor
             pricing_changes.append({

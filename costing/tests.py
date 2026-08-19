@@ -102,6 +102,8 @@ class StrictGateTests(TestCase):
         self.proposal = mkuser('pr', Role.PROPOSAL_REP)
         self.sales = mkuser('sr', Role.SALES_REP)
         self.finance = mkuser('fr', Role.FINANCE_REP)
+        self.project.owner = self.sales
+        self.project.save(update_fields=['owner'])
 
     def _sheet(self, stage, strict=True):
         from costing.models import CostingSheet
@@ -131,12 +133,16 @@ class StrictGateTests(TestCase):
         self.assertTrue(self._can(self.sales, s))
         self.assertFalse(self._can(self.proposal, s))
 
-    def test_costing_stage_sales_out_of_region_blocked(self):
-        from projects.models import Region
-        other = Region.objects.create(name='UK', code='UK', currency='GBP')
-        self.sales.region = other; self.sales.save()
+    def test_costing_stage_non_owner_sales_blocked(self):
+        # Owner-scoping: a sales rep who does NOT own the project cannot edit it,
+        # even in the same region (region is no longer the gate for reps).
+        from accounts.models import Role, User
+        other_rep = User.objects.create_user('sr_other', password='x')
+        other_rep.role = Role.objects.get_or_create(name=Role.SALES_REP)[0]
+        other_rep.region = self.region; other_rep.save()
         s = self._sheet('costing_in_progress')
-        self.assertFalse(self._can(self.sales, s))
+        self.assertTrue(self._can(self.sales, s))      # owner can edit
+        self.assertFalse(self._can(other_rep, s))      # non-owner rep blocked
 
     def test_finalized_stage_sales_only(self):
         s = self._sheet('finalized')
@@ -187,6 +193,8 @@ class BarrierEndpointTests(TestCase):
 
         self.proposal = mkuser('pr', Role.PROPOSAL_REP)
         self.sales = mkuser('sr', Role.SALES_REP)
+        self.project.owner = self.sales
+        self.project.save(update_fields=['owner'])
 
     def _sheet(self, stage):
         return CostingSheet.objects.create(
@@ -234,6 +242,9 @@ class DetailCanEditContextTests(TestCase):
             return u
         self.proposal = mkuser('pr', Role.PROPOSAL_REP)
         self.sales = mkuser('sr', Role.SALES_REP)
+        # Sales reps are owner-scoped now — the rep owns the project under test.
+        self.project.owner = self.sales
+        self.project.save(update_fields=['owner'])
 
     def _sheet(self, stage):
         from costing.models import CostingSheet
@@ -275,6 +286,9 @@ class ProposalTeamPricingHiddenTests(TestCase):
             return u
         self.proposal = mkuser('pr2', Role.PROPOSAL_REP)
         self.sales = mkuser('sr2', Role.SALES_REP)
+        # The sales rep owns the project so they can see it under owner-scoping.
+        self.project.owner = self.sales
+        self.project.save(update_fields=['owner'])
 
         self.sheet = CostingSheet.objects.create(
             title='S', project=self.project, created_by=self.sales,
@@ -346,6 +360,161 @@ class ProposalTeamPricingHiddenTests(TestCase):
         self.assertEqual(self.client.get(url).status_code, 200)
         self.client.force_login(self.proposal)
         self.assertEqual(self.client.get(url).status_code, 302)
+
+
+class SalesRepOwnerScopeTests(TestCase):
+    """A sales rep sees only costing sheets / projects they OWN — not the whole
+    region. Managers keep region-wide visibility. Ownership isolates from
+    created_by: sheets here are created by the manager, so only Project.owner
+    grants a rep visibility."""
+
+    def setUp(self):
+        from accounts.models import Role, User
+        from projects.models import Region, ProjectStatus, Project
+        from costing.models import CostingSheet
+        self.region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+
+        def mkuser(username, role_name):
+            role, _ = Role.objects.get_or_create(name=role_name)
+            u = User.objects.create_user(username, password='x')
+            u.role = role; u.region = self.region; u.save()
+            return u
+        self.rep_a = mkuser('rep_a', Role.SALES_REP)
+        self.rep_b = mkuser('rep_b', Role.SALES_REP)
+        self.manager = mkuser('mgr', Role.MANAGER)
+        from accounts.permissions import seed_default_permissions
+        seed_default_permissions()  # grant costing.access etc. to these roles
+
+        self.proj_a = Project.objects.create(
+            project_name='A', proposal_reference='REF-A', status=self.status,
+            region=self.region, owner=self.rep_a)
+        self.proj_b = Project.objects.create(
+            project_name='B', proposal_reference='REF-B', status=self.status,
+            region=self.region, owner=self.rep_b)
+        # created_by = manager, so a rep can only reach a sheet via Project.owner.
+        self.sheet_a = CostingSheet.objects.create(title='SA', project=self.proj_a, created_by=self.manager)
+        self.sheet_b = CostingSheet.objects.create(title='SB', project=self.proj_b, created_by=self.manager)
+
+    def test_rep_costing_list_shows_only_owned(self):
+        self.client.force_login(self.rep_a)
+        sheets = list(self.client.get(reverse('costing:list')).context['sheets'])
+        self.assertIn(self.sheet_a, sheets)
+        self.assertNotIn(self.sheet_b, sheets)
+
+    def test_rep_costing_detail_owned_ok_other_404(self):
+        self.client.force_login(self.rep_a)
+        self.assertEqual(self.client.get(reverse('costing:detail', kwargs={'pk': self.sheet_a.pk})).status_code, 200)
+        self.assertEqual(self.client.get(reverse('costing:detail', kwargs={'pk': self.sheet_b.pk})).status_code, 404)
+
+    def test_rep_pipeline_shows_only_owned(self):
+        self.client.force_login(self.rep_a)
+        projects = list(self.client.get(reverse('projects:list')).context['object_list'])
+        self.assertIn(self.proj_a, projects)
+        self.assertNotIn(self.proj_b, projects)
+
+    def test_manager_still_sees_region(self):
+        self.client.force_login(self.manager)
+        sheets = list(self.client.get(reverse('costing:list')).context['sheets'])
+        self.assertIn(self.sheet_a, sheets)
+        self.assertIn(self.sheet_b, sheets)
+
+    # ── Owner-scoping must not swallow a rep's OWN work ──────────────────
+    # `CostingSheet.project` is nullable (the form sets project.required =
+    # False), so an owner-only rule alone loses every sheet a rep creates
+    # before picking a project.
+
+    def _projectless_sheet(self, owner):
+        from costing.models import CostingSheet
+        return CostingSheet.objects.create(title='No project yet', project=None,
+                                           created_by=owner)
+
+    def test_rep_sees_own_projectless_sheet_in_list(self):
+        sheet = self._projectless_sheet(self.rep_a)
+        self.client.force_login(self.rep_a)
+        self.assertIn(sheet, list(self.client.get(reverse('costing:list')).context['sheets']))
+
+    def test_rep_can_open_own_projectless_sheet(self):
+        """Regression: the create flow redirects here, so a 404 stranded it."""
+        sheet = self._projectless_sheet(self.rep_a)
+        self.client.force_login(self.rep_a)
+        self.assertEqual(
+            self.client.get(reverse('costing:detail', kwargs={'pk': sheet.pk})).status_code, 200)
+
+    def test_rep_can_edit_own_projectless_bom(self):
+        from costing.views import _user_can_edit_sheet
+        sheet = self._projectless_sheet(self.rep_a)
+        self.assertTrue(_user_can_edit_sheet(self.rep_a, sheet))
+
+    def test_rep_sees_sheet_they_created_on_another_reps_project(self):
+        from costing.models import CostingSheet
+        sheet = CostingSheet.objects.create(title='SB2', project=self.proj_b,
+                                            created_by=self.rep_a)
+        self.client.force_login(self.rep_a)
+        self.assertIn(sheet, list(self.client.get(reverse('costing:list')).context['sheets']))
+
+    def test_other_reps_sheet_still_hidden(self):
+        """The scoping rule itself must still hold after the creator fallback."""
+        self._projectless_sheet(self.rep_b)
+        self.client.force_login(self.rep_a)
+        sheets = list(self.client.get(reverse('costing:list')).context['sheets'])
+        self.assertNotIn(self.sheet_b, sheets)
+        self.assertEqual([s for s in sheets if s.created_by_id == self.rep_b.id], [])
+
+    # ── Blast radius: every non-rep role must be untouched ───────────────
+
+    def test_manager_still_sees_sheets_they_do_not_own(self):
+        """Owner-scoping is rep-only — managers keep region-wide visibility."""
+        self.client.force_login(self.manager)
+        sheets = list(self.client.get(reverse('costing:list')).context['sheets'])
+        self.assertIn(self.sheet_a, sheets)   # owned by rep_a
+        self.assertIn(self.sheet_b, sheets)   # owned by rep_b
+
+    def test_admin_and_super_admin_visibility_unchanged(self):
+        from accounts.models import Role, User
+        from costing.views import costing_scoped_queryset
+
+        def mk(username, role_name, region=None):
+            role, _ = Role.objects.get_or_create(name=role_name)
+            u = User.objects.create_user(username, password='x')
+            u.role = role
+            u.region = region
+            u.save()
+            return u
+
+        admin = mk('adm2', Role.ADMIN, self.region)
+        # Admin: region-wide, regardless of who owns the project.
+        admin_sheets = set(costing_scoped_queryset(admin))
+        self.assertIn(self.sheet_a, admin_sheets)
+        self.assertIn(self.sheet_b, admin_sheets)
+        # Super admin: everything, including a project-less sheet.
+        from costing.models import CostingSheet
+        orphan = CostingSheet.objects.create(title='orphan', project=None,
+                                             created_by=self.rep_b)
+        sa = mk('sa2', Role.SUPER_ADMIN)
+        self.assertEqual(set(costing_scoped_queryset(sa)),
+                         set(CostingSheet.objects.all()))
+        self.assertIn(orphan, set(costing_scoped_queryset(sa)))
+
+    def test_manager_edit_rights_unchanged_by_ownership(self):
+        """A manager's edit rights come from region, not from Project.owner."""
+        from costing.views import _user_can_edit_sheet
+        self.sheet_b.workflow_stage = 'costing_in_progress'
+        self.sheet_b.save(update_fields=['workflow_stage'])
+        self.assertTrue(_user_can_edit_sheet(self.manager, self.sheet_b))
+
+    def test_rep_cannot_price_owned_project_outside_their_region(self):
+        """Ownership alone shouldn't grant pricing rights across regions."""
+        from projects.models import Region, Project
+        from costing.models import CostingSheet
+        from costing.views import _user_can_edit_sheet
+        other = Region.objects.create(name='UK', code='UK', currency='GBP')
+        proj = Project.objects.create(project_name='X', proposal_reference='REF-X',
+                                      status=self.status, region=other, owner=self.rep_a)
+        sheet = CostingSheet.objects.create(title='SX', project=proj,
+                                            created_by=self.manager,
+                                            workflow_stage='costing_in_progress')
+        self.assertFalse(_user_can_edit_sheet(self.rep_a, sheet))
 
 
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
@@ -737,6 +906,8 @@ class CommercialPipelineTests(TestCase):
         self.superadmin = mkuser('sa', Role.SUPER_ADMIN)
         self.proposal = mkuser('pr', Role.PROPOSAL_REP)
         self.sales = mkuser('sr', Role.SALES_REP)
+        self.project.owner = self.sales
+        self.project.save(update_fields=['owner'])
 
     def _sheet(self, stage='bom_not_started'):
         return CostingSheet.objects.create(

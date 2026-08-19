@@ -23,14 +23,16 @@ class ProjectRegionFilterTests(TestCase):
 
         from accounts.models import Role
         from accounts.permissions import seed_default_permissions
-        sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        # Region filtering now applies to region-scoped roles (manager/admin);
+        # sales reps are owner-scoped and tested separately.
+        region_role, _ = Role.objects.get_or_create(name=Role.MANAGER)
         seed_default_permissions()
 
         self.user_no_region = User.objects.create_user(
-            username='noregion', password='testpass123', region=None, role=sales_role,
+            username='noregion', password='testpass123', region=None, role=region_role,
         )
         self.user_lna = User.objects.create_user(
-            username='lnauser', password='testpass123', region=self.region_lna, role=sales_role,
+            username='lnauser', password='testpass123', region=self.region_lna, role=region_role,
         )
 
         self.project = Project.objects.create(
@@ -220,8 +222,9 @@ class PipelineValueSummaryTests(TestCase):
 
 
 class PipelineVisibilityTests(TestCase):
-    """Sales + proposal teams see their whole region's pipeline (view), but can
-    only edit projects they own. Creating a project notifies the region team."""
+    """Sales reps see only the projects they OWN (view + edit). The proposal
+    team still sees the whole region's pipeline. Creating a project notifies
+    the region team."""
 
     def setUp(self):
         self.lna = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
@@ -251,39 +254,42 @@ class PipelineVisibilityTests(TestCase):
             project_name='UK P', proposal_reference='UK-1',
             status=self.status, region=self.uk, owner=self.admin)
 
-    def test_sales_sees_region_pipeline_not_other_region(self):
+    def test_sales_rep_sees_only_owned_not_region(self):
+        own = Project.objects.create(
+            project_name='Sales Own', proposal_reference='LNA-SOWN',
+            status=self.status, region=self.lna, owner=self.sales)
         self.client.force_login(self.sales)
         ids = {p.pk for p in self.client.get(reverse('projects:list')).context['projects']}
-        self.assertIn(self.lna_proj.pk, ids)        # region project visible now
-        self.assertNotIn(self.uk_proj.pk, ids)      # other region stays hidden
+        self.assertIn(own.pk, ids)                  # their own project
+        self.assertNotIn(self.lna_proj.pk, ids)     # region project (owned by admin) hidden
+        self.assertNotIn(self.uk_proj.pk, ids)      # other region hidden
 
     def test_proposal_sees_region_pipeline(self):
         self.client.force_login(self.proposal)
         ids = {p.pk for p in self.client.get(reverse('projects:list')).context['projects']}
         self.assertIn(self.lna_proj.pk, ids)
 
-    def test_sales_can_view_region_project_detail(self):
+    def test_sales_cannot_view_unowned_project_detail(self):
         self.client.force_login(self.sales)
         r = self.client.get(reverse('projects:detail', kwargs={'pk': self.lna_proj.pk}))
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.status_code, 404)  # owned by admin, not this rep
 
     def test_sales_cannot_edit_unowned_project(self):
         self.client.force_login(self.sales)
         r = self.client.get(reverse('projects:edit', kwargs={'pk': self.lna_proj.pk}))
         self.assertEqual(r.status_code, 404)  # not in the owner-scoped edit queryset
 
-    def test_detail_shows_edit_button_when_allowed(self):
+    def test_detail_shows_edit_button_for_owner(self):
         edit_url = reverse('projects:edit', kwargs={'pk': self.lna_proj.pk})
         # Admin owns / can edit the region project → Edit button present.
         self.client.force_login(self.admin)
         r = self.client.get(reverse('projects:detail', kwargs={'pk': self.lna_proj.pk}))
         self.assertTrue(r.context['can_edit'])
         self.assertContains(r, edit_url)
-        # Sales rep can view but doesn't own it → no Edit button.
+        # Sales rep doesn't own it → can't even open it.
         self.client.force_login(self.sales)
         r = self.client.get(reverse('projects:detail', kwargs={'pk': self.lna_proj.pk}))
-        self.assertFalse(r.context['can_edit'])
-        self.assertNotContains(r, edit_url)
+        self.assertEqual(r.status_code, 404)
 
     def test_sales_can_edit_own_project(self):
         own = Project.objects.create(
@@ -316,18 +322,34 @@ class PipelineVisibilityTests(TestCase):
         self.assertEqual(sheet.workflow_stage, 'bom_not_started')
         self.assertEqual(sheet.created_by, self.admin)
 
-    def test_create_notifies_region_sales_and_proposal(self):
+    def _create_and_get_recipients(self, ref):
         from notifications.models import Notification
-        self.client.force_login(self.admin)
-        resp = self.client.post(reverse('projects:create'), self._create_post('LNA-NEW'))
+        resp = self.client.post(reverse('projects:create'), self._create_post(ref))
         self.assertEqual(resp.status_code, 302)  # created -> redirect
         # LNA reference is auto-generated, so look the project up by name.
         proj = Project.objects.get(project_name='New Pipeline')
-        recips = set(Notification.objects.filter(target_object_id=proj.pk)
-                     .values_list('recipient__username', flat=True))
-        self.assertIn('sales', recips)     # region sales notified
-        self.assertIn('prop', recips)      # region proposal notified
-        self.assertNotIn('adm', recips)    # actor not self-notified
+        return proj, set(Notification.objects.filter(target_object_id=proj.pk)
+                         .values_list('recipient__username', flat=True))
+
+    def test_create_notifies_proposal_but_not_unowning_reps(self):
+        """Reps who don't own the project would land on a 404, so they are
+        deliberately left out of the region-wide notice."""
+        self.client.force_login(self.admin)
+        proj, recips = self._create_and_get_recipients('LNA-NEW')
+        self.assertEqual(proj.owner_id, self.admin.pk)
+        self.assertIn('prop', recips)       # region proposal notified
+        self.assertNotIn('sales', recips)   # non-owning rep would get a 404
+        self.assertNotIn('adm', recips)     # actor not self-notified
+
+    def test_create_notifies_the_owning_rep(self):
+        """The one rep who CAN open the project still gets told about it."""
+        self.client.force_login(self.sales)
+        proj, recips = self._create_and_get_recipients('LNA-NEW2')
+        self.assertEqual(proj.owner_id, self.sales.pk)
+        # Owner is the actor here, so they aren't self-notified; the guard is
+        # that creating a project no longer notifies the *other* reps.
+        self.assertNotIn('sales', recips)
+        self.assertIn('prop', recips)
 
 
 class LnaReferenceTests(TestCase):
