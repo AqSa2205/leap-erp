@@ -72,10 +72,15 @@ def _user_can_view_sheet(user, sheet):
     # Proposal team sees every sheet as a BOM (no pricing) regardless of region
     if getattr(user, 'is_proposal_team_user', False):
         return True
-    # Sales team (incl. sales reps) sees sheets in their region — matches the
-    # region-scoped costing list and lets them work the BOM/costing stages.
-    if getattr(user, 'is_sales_team_user', False):
-        return bool(sheet.project and sheet.project.region_id == user.region_id)
+    # Sales reps see ONLY sheets for projects they own (plus any sheet they
+    # personally created, granted above). Managers/admins were handled above
+    # with region scope.
+    if getattr(user, 'is_sales_rep_user', False):
+        return bool(sheet.project and sheet.project.owner_id == user.id)
+    # No `is_sales_team_user` branch here on purpose: that flag is
+    # rep|manager|admin|super_admin and every one of those is already answered
+    # above, so a branch here would be unreachable — and would read as a live
+    # rule that silently does nothing.
     # Finance team can view sheets in their region — needed for budgeting
     # review and ongoing finance reference.
     if getattr(user, 'is_finance_team_user', False):
@@ -196,12 +201,26 @@ def _record_costing_change(sheet, actor, *, scope, scope_label, field, before, a
     # Notify the opposite team. Resolve recipients via role flags.
     try:
         if team == 'proposal':
+            # Managers/admins keep region-wide notice. Sales reps only get it
+            # when they own the project or created the sheet — anyone else
+            # would follow the link into a 404 under owner-only scoping.
+            project_region_id = sheet.project.region_id if sheet.project_id else None
+            project_owner_id = sheet.project.owner_id if sheet.project_id else None
             recipients = User.objects.filter(
+                # Outer gate unchanged: only the sales side hears about a
+                # proposal-team edit. Keeping it means a proposal-team creator
+                # is not notified about their own team's change.
                 role__name__in=['sales_rep', 'manager', 'admin', 'super_admin'],
             ).filter(
-                Q(pk=sheet.created_by_id) |
-                Q(region_id=sheet.project.region_id if sheet.project_id else None) |
-                Q(role__name='super_admin')
+                # manager/admin keep region-wide reach, super_admin keeps all,
+                # created_by is unchanged. The only narrowing is that a plain
+                # region match no longer pulls in every rep — a rep now needs
+                # to own the project or have created the sheet, otherwise the
+                # link 404s for them.
+                Q(role__name__in=['manager', 'admin'], region_id=project_region_id)
+                | Q(role__name='super_admin')
+                | Q(pk=sheet.created_by_id)
+                | Q(pk=project_owner_id)
             ).distinct()
             opposite = 'Sales'
         elif team == 'sales':
@@ -253,15 +272,31 @@ def _strict_stage_edit(user, sheet, stage):
     app (sheet.project.region == user.region).
     """
     region_ok = bool(sheet.project and sheet.project.region_id == user.region_id)
+    owner_ok = bool(sheet.project and sheet.project.owner_id == user.id)
+    # A sheet's project is nullable (CostingSheetForm sets project.required =
+    # False), so owner_ok is False for a sheet that simply has no project yet.
+    # Without the creator fallback a rep could not edit a BOM they had just
+    # created themselves — matches _user_can_view_sheet, which grants the
+    # creator access unconditionally.
+    creator_ok = sheet.created_by_id == user.id
+    is_rep = getattr(user, 'is_sales_rep_user', False)
     if stage in ('bom_not_started', 'bom_in_progress'):
-        # BOM stage: proposal team OR sales team (which includes admins/managers)
-        # can start and build the BOM. (Pricing is still field-gated elsewhere.)
-        return bool(getattr(user, 'is_proposal_team_user', False)
-                    or getattr(user, 'is_sales_team_user', False))
+        # BOM stage: proposal team OR sales team can build the BOM. Sales reps
+        # are limited to projects they own; managers/admins are unchanged.
+        if getattr(user, 'is_proposal_team_user', False):
+            return True
+        if is_rep:
+            return owner_ok or creator_ok
+        return bool(getattr(user, 'is_sales_team_user', False))
     if stage == 'ready_for_costing':
         # Handoff checkpoint — locked until Sales clicks "Start costing".
         return False
     if stage in ('costing_in_progress', 'finalized'):
+        if is_rep:
+            # Region still bounds an owned project here, mirroring the sales
+            # branch below: being assigned an out-of-region project should not
+            # silently hand over pricing rights.
+            return (owner_ok and region_ok) or creator_ok
         return bool(getattr(user, 'is_sales_team_user', False) and region_ok)
     return False
 
@@ -365,9 +400,13 @@ def costing_scoped_queryset(user):
             Q(project__region=user.region)
         )
     elif getattr(user, 'is_sales_rep_user', False):
-        # Sales reps see all sheets in their region — they need visibility
-        # of BOM-stage sheets from the proposal team so they can cost them.
-        return queryset.filter(project__region=user.region)
+        # Sales reps see ONLY costing sheets for projects they own — not the
+        # whole region. (Managers/admins above keep region-wide visibility.)
+        # The created_by term is required, not a convenience: `project` is
+        # nullable, so without it a rep's own project-less sheet would be
+        # invisible here while _user_can_view_sheet still granted access —
+        # the create flow would redirect straight into a 404.
+        return queryset.filter(Q(project__owner=user) | Q(created_by=user))
     elif getattr(user, 'is_finance_team_user', False):
         # Finance team sees every sheet in their region — they need
         # the full pricing breakdown to budget.
