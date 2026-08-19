@@ -1,0 +1,169 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}{{ account.code }} {{ account.name }} — Chart of Accounts{% endblock %}
+{% block page_title %}{{ account.name }}{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <a href="{% url 'accounting:chart' %}">Chart of Accounts</a>
+    {% for node in ancestors %}
+    <span class="crumb-sep">›</span>
+    <a href="{% url 'accounting:account_detail' node.code %}">{{ node.name }}</a>
+    {% endfor %}
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">{{ account.code }}</span>
+</nav>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .coa-hero { background: linear-gradient(135deg, #5b3fa0 0%, #402c73 100%); color:#fff; border:none; border-radius:14px; }
+    .coa-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .coa-table td, .coa-table th { vertical-align: middle; }
+    .coa-table thead th { font-size:0.74rem; text-transform:uppercase; letter-spacing:0.3px; color:#402c73; border-bottom:2px solid #5b3fa0; }
+    .coa-stat { font-size:1.4rem; font-weight:600; line-height:1; }
+    .coa-count { display:inline-block; margin-left:0.5rem; padding:0 0.4rem; border-radius:10px;
+                 background:#ece7f6; color:#402c73; font-size:0.7rem; font-weight:600; }
+    [data-theme="dark"] .coa-count { background:#3a3357; color:#c5b6ec; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-xxl-10">
+
+            <div class="card coa-hero mb-4">
+                <div class="card-body p-4 d-flex justify-content-between align-items-center flex-wrap gap-3">
+                    <div>
+                        <div class="coa-code opacity-75">{{ account.code }}</div>
+                        <h1 class="h3 mb-1 text-white">{{ account.name }}</h1>
+                        <div class="small opacity-75">
+                            {{ account.account_class }} ·
+                            {% if account.is_postable %}Postable — journal lines may hit this account{% else %}Heading — groups other accounts, never posted to{% endif %}
+                        </div>
+                    </div>
+                    <div class="d-flex gap-4 text-center">
+                        <div>
+                            <div class="coa-stat">{{ counts.direct|intcomma }}</div>
+                            <div class="small opacity-75">Directly below</div>
+                        </div>
+                        <div>
+                            <div class="coa-stat">{{ counts.total|intcomma }}</div>
+                            <div class="small opacity-75">All below</div>
+                        </div>
+                        <div>
+                            <div class="coa-stat">{{ counts.postable|intcomma }}</div>
+                            <div class="small opacity-75">Postable below</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-3">
+                <div class="col-md-4">
+                    <div class="card h-100">
+                        <div class="card-body">
+                            <div class="text-muted small text-uppercase mb-1">Internal type</div>
+                            <div class="fs-5">{{ account.internal_type }}</div>
+                            <div class="small text-muted mt-1">{{ account.get_internal_type_display }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card h-100">
+                        <div class="card-body">
+                            <div class="text-muted small text-uppercase mb-1">Parent</div>
+                            {% if account.parent %}
+                            <a href="{% url 'accounting:account_detail' account.parent.code %}" class="fs-6 text-decoration-none">
+                                <span class="coa-code">{{ account.parent.code }}</span> {{ account.parent.name }}
+                            </a>
+                            {% else %}
+                            <div class="fs-6 text-muted">Top-level class</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card h-100">
+                        <div class="card-body">
+                            <div class="text-muted small text-uppercase mb-1">Status</div>
+                            <div class="fs-6">
+                                {% if account.is_active %}<span class="badge bg-success-subtle text-success-emphasis">Active</span>
+                                {% else %}<span class="badge bg-secondary">Inactive</span>{% endif %}
+                            </div>
+                            {% if account.source_row %}
+                            <div class="small text-muted mt-1">Workbook row {{ account.source_row }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center py-2">
+                    <span>
+                        <i class="bi bi-diagram-3 me-1" style="color:#5b3fa0"></i>
+                        <strong>{% if children %}Accounts beneath this one{% else %}Sibling accounts{% endif %}</strong>
+                        <span class="coa-count">{% if children %}{{ children|length }}{% else %}{{ siblings|length }}{% endif %}</span>
+                    </span>
+                    <a href="{% url 'accounting:chart' %}" class="btn btn-sm btn-outline-secondary">
+                        <i class="bi bi-list-ul me-1"></i>Full chart
+                    </a>
+                </div>
+                <div class="card-body p-0">
+                    <table class="table table-hover coa-table mb-0">
+                        <thead>
+                            <tr>
+                                <th style="width:9rem;">Code</th>
+                                <th>Account</th>
+                                <th style="width:9rem;">Internal Type</th>
+                                <th style="width:10rem;">Beneath</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for child in children %}
+                            <tr>
+                                <td class="coa-code">{{ child.code }}</td>
+                                <td>
+                                    {% if not child.is_postable %}<i class="bi bi-folder2 me-1" style="color:#5b3fa0"></i>{% endif %}
+                                    <a href="{% url 'accounting:account_detail' child.code %}" class="text-decoration-none">{{ child.name }}</a>
+                                    {% if not child.is_active %}<span class="badge bg-secondary ms-2">Inactive</span>{% endif %}
+                                </td>
+                                <td><span class="badge bg-light text-dark border">{{ child.internal_type }}</span></td>
+                                <td class="small text-muted">
+                                    {% if child.counts.total %}{{ child.counts.total }} account{{ child.counts.total|pluralize }} ·
+                                        {{ child.counts.postable }} postable{% else %}—{% endif %}
+                                </td>
+                            </tr>
+                            {% empty %}
+                            {% for sib in siblings %}
+                            <tr>
+                                <td class="coa-code">{{ sib.code }}</td>
+                                <td>
+                                    <a href="{% url 'accounting:account_detail' sib.code %}" class="text-decoration-none">{{ sib.name }}</a>
+                                </td>
+                                <td><span class="badge bg-light text-dark border">{{ sib.internal_type }}</span></td>
+                                <td class="small text-muted">—</td>
+                            </tr>
+                            {% empty %}
+                            <tr><td colspan="4" class="text-center text-muted py-4">
+                                This account stands alone — nothing is filed beneath it.
+                            </td></tr>
+                            {% endfor %}
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% if not children and siblings %}
+                <div class="card-footer bg-white small text-muted py-2">
+                    {{ account.name }} is a postable account, so nothing sits beneath it —
+                    these are the other accounts under {{ account.parent.name }}.
+                </div>
+                {% endif %}
+            </div>
+
+        </div>
+    </div>
+</div>
+{% endblock %}

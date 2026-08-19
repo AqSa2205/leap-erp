@@ -98,6 +98,9 @@ INSTALLED_APPS = [
     "kpis",
     "company",
     "finance",
+    # Chart of Accounts / GL master. Named `accounting` because `accounts` is
+    # the authentication app (custom User model, roles, permission grid).
+    "accounting",
     "attendance",
     "timesheets",
     "engineer_calendar",
