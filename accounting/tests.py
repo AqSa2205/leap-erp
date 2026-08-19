@@ -892,6 +892,101 @@ class ZohoJournalImportTests(TestCase):
         self.assertEqual(resp.context['closing'], Decimal('5000'))
 
 
+class AccountingAccessTests(TestCase):
+    """Accounting is the finance team's, plus super admin — everywhere.
+
+    Covers all three surfaces: the app's own pages, the sidebar entry, and
+    Django admin (which sits outside the view gate entirely).
+    """
+
+    FINANCE_ROLES = [Role.FINANCE_HEAD, Role.FINANCE_MANAGER, Role.FINANCE_REP]
+    OTHER_ROLES = [Role.SALES_REP, Role.MANAGER, Role.ADMIN, Role.PROPOSAL_HEAD,
+                   Role.PROPOSAL_REP, Role.PROCUREMENT_MGR, Role.DEVELOPER]
+
+    def setUp(self):
+        root = Account.objects.create(code='1000000', name='Assets', internal_type='View')
+        Account.objects.create(code='1120001', name='ALINMA Bank',
+                               internal_type='Liquidity', parent=root)
+
+    def _user(self, role_name, username, staff=False):
+        role, _ = Role.objects.get_or_create(name=role_name)
+        user = User.objects.create_user(username, password='x')
+        user.role = role
+        user.is_staff = staff
+        user.save()
+        # Baseline capability grants, so a role can reach the pages it is
+        # normally allowed to — otherwise dashboard:index redirects and the
+        # sidebar assertions have nothing to inspect.
+        from accounts.permissions import seed_default_permissions
+        seed_default_permissions()
+        return user
+
+    def _pages(self):
+        return [
+            reverse('accounting:chart'),
+            reverse('accounting:account_detail', args=['1000000']),
+            reverse('accounting:account_ledger', args=['1120001']),
+        ]
+
+    def test_finance_roles_and_super_admin_get_in(self):
+        for i, role_name in enumerate(self.FINANCE_ROLES + [Role.SUPER_ADMIN]):
+            self.client.force_login(self._user(role_name, f'ok{i}'))
+            for url in self._pages():
+                self.assertEqual(self.client.get(url).status_code, 200,
+                                 f'{role_name} should reach {url}')
+
+    def test_every_other_role_is_refused(self):
+        for i, role_name in enumerate(self.OTHER_ROLES):
+            self.client.force_login(self._user(role_name, f'no{i}'))
+            for url in self._pages():
+                self.assertEqual(self.client.get(url).status_code, 403,
+                                 f'{role_name} must not reach {url}')
+
+    def test_sidebar_entry_only_shows_for_finance_and_super_admin(self):
+        finance = self._user(Role.FINANCE_REP, 'navfin')
+        self.client.force_login(finance)
+        self.assertContains(self.client.get(reverse('accounting:chart')),
+                            'data-section="accounting"')
+        # A role that cannot open the page must not be offered the link.
+        sales = self._user(Role.SALES_REP, 'navsales')
+        self.client.force_login(sales)
+        self.assertNotContains(self.client.get(reverse('dashboard:index')),
+                               'data-section="accounting"')
+
+    # ── Django admin sits outside the view gate ──────────────────────────
+
+    def test_admin_refuses_a_staff_user_who_is_not_finance(self):
+        """Granting is_staff for an unrelated reason must not hand over the books."""
+        from accounting.admin import can_use_accounting
+        staff_sales = self._user(Role.SALES_REP, 'staffsales', staff=True)
+        self.assertFalse(can_use_accounting(staff_sales))
+
+    def test_admin_allows_finance_and_super_admin(self):
+        from accounting.admin import can_use_accounting
+        for i, role_name in enumerate(self.FINANCE_ROLES + [Role.SUPER_ADMIN]):
+            self.assertTrue(can_use_accounting(self._user(role_name, f'adm{i}', staff=True)))
+
+    def test_django_superuser_keeps_the_escape_hatch(self):
+        from accounting.admin import can_use_accounting
+        su = User.objects.create_superuser('root', 'root@example.com', 'x')
+        self.assertTrue(can_use_accounting(su))
+
+    def test_every_accounting_admin_carries_the_gate(self):
+        """A model registered without FinanceOnlyAdmin would leak silently."""
+        from django.contrib import admin as dj_admin
+        from accounting.admin import FinanceOnlyAdmin
+        from accounting.models import (
+            Account, AccountingSettings, Document, Partner, Voucher,
+        )
+        for model in (Account, AccountingSettings, Document, Partner, Voucher):
+            self.assertIsInstance(dj_admin.site._registry[model], FinanceOnlyAdmin,
+                                  f'{model.__name__} admin is not finance-gated')
+
+    def test_anonymous_is_sent_to_login(self):
+        for url in self._pages():
+            self.assertEqual(self.client.get(url).status_code, 302)
+
+
 class PartnerTests(TestCase):
 
     def test_kind_flags(self):
