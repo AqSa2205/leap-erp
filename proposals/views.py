@@ -140,11 +140,32 @@ def _project_autofill_map(project_queryset):
     """{project_id: {reference, client}} for the New/Edit Proposal form's
     JS to fill in Proposal Reference and Client Name when a project is
     picked. Built from the form's OWN (already region-scoped) project
-    queryset, so it never shows more than the dropdown itself does."""
-    return {
-        p.pk: {'reference': p.proposal_reference, 'client': p.customer}
-        for p in project_queryset
-    }
+    queryset, so it never shows more than the dropdown itself does.
+
+    Project.proposal_reference (max_length=255, e.g. "LNA 1234 - Some Long
+    Project Name") doesn't fit TechnicalProposal.proposal_reference
+    (max_length=50, unique) — autofilling the raw value would routinely
+    fail form validation on longer project names. Derive just the short
+    "LNA ####" form when possible; if the reference isn't a recognizable
+    LNA reference and is already short enough, use it as-is; otherwise
+    leave it out of the map entirely so the JS simply doesn't touch the
+    field, same as the reviewer's "leave this field for the user" fallback.
+    """
+    from projects.models import parse_lna_reference
+
+    result = {}
+    for p in project_queryset:
+        ref = p.proposal_reference or ''
+        parsed = parse_lna_reference(ref)
+        if parsed:
+            number, _revision = parsed
+            short_ref = f'LNA {number}'
+        elif len(ref) <= 50:
+            short_ref = ref
+        else:
+            short_ref = ''
+        result[p.pk] = {'reference': short_ref, 'client': p.customer}
+    return result
 
 
 class ProposalCreateView(LoginRequiredMixin, CreateView):
@@ -311,18 +332,27 @@ class ProposalEditContentView(LoginRequiredMixin, UserPassesTestMixin, View):
         return _can_edit_proposal(self.request.user, self.get_object())
 
     def _context(self, obj, section_fs, eng_fs):
-        # Generic headings: the original shared library, unaffected by the
-        # AI/Telecom/Procurement feature — exactly what was there before.
-        headings = SectionHeading.objects.filter(
-            is_active=True, dept_templates__isnull=True).distinct()
+        # Generic headings: every active heading, department-templated ones
+        # included. A heading with e.g. an AI template still has its own
+        # (possibly blank) default_content and should stay pickable outside
+        # the AI toggle too — excluding it here would permanently hide any
+        # heading name that happens to also carry a department template
+        # (and, since SectionHeading.name is unique, a heading a department
+        # template's seed data get_or_create's onto is removed from the
+        # generic list for EVERY proposal, not just AI ones).
+        headings = SectionHeading.objects.filter(is_active=True)
 
         # Department-specific headings: only ones that have a composed
         # template for that department. One group per department, so the
-        # template can show/hide the right group under the toggle.
+        # template can show/hide the right group under the toggle. This is
+        # additive to the generic list above, not a partition of it.
         dept_headings = {}
-        for dept_code, _label in SectionHeadingTemplate.DEPARTMENT_CHOICES:
-            dept_headings[dept_code] = SectionHeading.objects.filter(
-                is_active=True, dept_templates__department=dept_code).distinct()
+        for dept_code, dept_label in SectionHeadingTemplate.DEPARTMENT_CHOICES:
+            dept_headings[dept_code] = {
+                'label': dept_label,
+                'items': SectionHeading.objects.filter(
+                    is_active=True, dept_templates__department=dept_code).distinct(),
+            }
 
         return {
             'object': obj,
@@ -487,29 +517,6 @@ def ajax_load_boilerplate(request, pk):
         'section': boilerplate.section,
         'name': boilerplate.name,
     })
-
-
-@login_required
-def ajax_load_heading_template(request, pk):
-    """Return a department's pre-composed content for a given heading, to
-    load into a section's editor. New, standalone endpoint — does not touch
-    ajax_load_boilerplate or any existing flow."""
-    proposal = get_object_or_404(TechnicalProposal, pk=pk)
-    if not _can_edit_proposal(request.user, proposal):
-        return JsonResponse({'error': 'Permission denied'}, status=403)
-
-    heading_id = request.GET.get('heading_id')
-    department = request.GET.get('department')
-    if not heading_id or not department:
-        return JsonResponse({'error': 'heading_id and department are required'}, status=400)
-
-    tmpl = SectionHeadingTemplate.objects.filter(
-        heading_id=heading_id, department=department).first()
-    if not tmpl or not tmpl.content:
-        return JsonResponse(
-            {'error': f'No {department} template for this heading yet.'}, status=404)
-
-    return JsonResponse({'content': tmpl.content})
 
 
 # ─── DOCX Export ──────────────────────────────────────────────

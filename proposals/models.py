@@ -99,9 +99,16 @@ class TechnicalProposal(models.Model):
         'LNUK': 'LEAP Networks Global Ltd.',
         'LNKSA': 'LEAP Networks Arabia',
     }
+    COMPANY_ACRONYMS = {
+        'LNUK': 'LNG',
+        'LNKSA': 'LNA',
+    }
 
     def get_company_name(self):
         return self.COMPANY_NAMES.get(self.region_entity, 'LEAP Networks Global Ltd.')
+
+    def get_company_acronym(self):
+        return self.COMPANY_ACRONYMS.get(self.region_entity, 'LNG')
 
     SECTION_FIELDS = [
         ('covering_letter', 'Covering Letter'),
@@ -382,7 +389,10 @@ class SectionHeadingTemplate(models.Model):
     DEPARTMENT_CHOICES = [
         ('ai', 'AI'),
         ('telecom', 'Telecom'),
-        ('procurement', 'Procurement'),
+        # DB value stays 'procurement' (existing rows, URL params, etc. are
+        # unaffected) — only the display label changed to match the toggle
+        # button, which is labelled "Security" in the editor UI.
+        ('procurement', 'Security'),
     ]
 
     heading = models.ForeignKey(

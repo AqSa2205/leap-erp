@@ -122,8 +122,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Track what WE last put in these fields, so we can tell "still what we
     // autofilled" (safe to overwrite on the next project change) apart from
-    // "the user typed something else on purpose" (leave it alone).
-    var lastAutofilled = { reference: refField ? refField.value : '', client: clientField ? clientField.value : '' };
+    // "the user typed something else on purpose" (leave it alone). Starts
+    // empty — NOT the field's current value — so a saved value on the edit
+    // page (which we never wrote) is never mistaken for something we
+    // autofilled and silently overwritten on the first project change.
+    var lastAutofilled = { reference: '', client: '' };
 
     projectSelect.addEventListener('change', function() {
         var data = PROJECT_MAP[projectSelect.value];
