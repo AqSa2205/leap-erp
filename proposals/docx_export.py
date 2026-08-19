@@ -129,8 +129,12 @@ def _replace_textboxes_in_part(root, replacements, exact_replacements):
 
 def _replace_in_paragraph_runs(para, replacements):
     """
-    Join all w:t in a paragraph's runs, apply replacements,
-    put result in first w:t, clear the rest.
+    Apply substring replacements within a paragraph's runs, preserving each
+    run's own formatting (bold, color, etc). Tries each run independently
+    first — none of this file's replacement phrases are actually split
+    across runs in the template — and only falls back to joining every run
+    into the first one (which collapses the whole paragraph onto the first
+    run's formatting) if a phrase genuinely spans a run boundary.
     """
     runs = para.findall(f'{{{WNS}}}r')
     if not runs:
@@ -145,6 +149,22 @@ def _replace_in_paragraph_runs(para, replacements):
     if not t_elements:
         return
 
+    changed = False
+    for t in t_elements:
+        text = t.text or ''
+        new_text = text
+        for old, new in replacements.items():
+            new_text = new_text.replace(old, new)
+        if new_text != text:
+            t.text = new_text
+            t.set(XML_SPACE, 'preserve')
+            changed = True
+
+    if changed:
+        return
+
+    # No single run contained a full match, so the phrase must span a run
+    # boundary — fall back to the old join-and-collapse behavior.
     joined = ''.join((t.text or '') for t in t_elements)
     original = joined
 
@@ -168,27 +188,42 @@ def _replace_company_references(body, proposal):
     Company Overview intro, and end-of-document Confidentiality section all
     say the right entity for the proposal's region, not just the cover.
     For Global proposals this is a no-op (replacement values equal the
-    original template text)."""
-    paragraphs = body.findall(f'{{{WNS}}}p')
+    original template text).
 
-    by_region = {
-        'LNUK': {
-            'Leap Networks Global Ltd (LNG)': 'Leap Networks Global Ltd (LNG)',
-            'Leap Networks Global Ltd.': 'Leap Networks Global Ltd.',
-            # Cover page "Prepared by:" block — same company name, but typed
-            # in the template with "LEAP NETWORKS" in caps (a different run
-            # than the header/body mentions above), so it needs its own key.
-            'LEAP NETWORKS Global Ltd.': 'LEAP NETWORKS Global Ltd.',
-            'LNG': 'LNG',
-        },
-        'LNKSA': {
-            'Leap Networks Global Ltd (LNG)': 'Leap Networks Arabia (LNA)',
-            'Leap Networks Global Ltd.': 'Leap Networks Arabia.',
-            'LEAP NETWORKS Global Ltd.': 'LEAP NETWORKS Arabia.',
-            'LNG': 'LNA',
-        },
+    Every replacement value below is DERIVED from
+    TechnicalProposal.get_company_name()/get_company_acronym() — the same
+    single source of truth the header textbox replacement uses — instead of
+    a second hardcoded per-region map that could drift from it. The
+    transforms exactly reproduce the original literal strings (verified for
+    both LNUK and LNKSA); see the four target string shapes inline below.
+    """
+    # .iter(), not .findall() — findall only walks DIRECT children, so a
+    # paragraph inside a table cell (e.g. a company-name mention someone
+    # puts in a pasted table) would be silently skipped despite the
+    # docstring's claim of covering the whole body.
+    paragraphs = body.iter(f'{{{WNS}}}p')
+
+    company_name = proposal.get_company_name()      # e.g. 'LEAP Networks Arabia'
+    acronym = proposal.get_company_acronym()         # e.g. 'LNA'
+
+    # Body prose uses Title Case ("Leap"), not the header's all-caps "LEAP".
+    title_case = 'Leap' + company_name[4:]            # 'Leap Networks Arabia'
+    title_with_period = (title_case if title_case.endswith('.')
+                          else title_case + '.')       # 'Leap Networks Arabia.'
+    title_no_period = title_case.rstrip('.')           # 'Leap Networks Arabia'
+    # Cover page "Prepared by:" block uses all-caps "LEAP NETWORKS" instead.
+    networks_prefix = 'Leap Networks '
+    all_caps_networks = 'LEAP NETWORKS ' + title_with_period[len(networks_prefix):]
+
+    replacements = {
+        'Leap Networks Global Ltd (LNG)': f'{title_no_period} ({acronym})',
+        'Leap Networks Global Ltd.': title_with_period,
+        # Cover page "Prepared by:" block — same company name, but typed
+        # in the template with "LEAP NETWORKS" in caps (a different run
+        # than the header/body mentions above), so it needs its own key.
+        'LEAP NETWORKS Global Ltd.': all_caps_networks,
+        'LNG': acronym,
     }
-    replacements = by_region.get(proposal.region_entity, by_region['LNUK'])
 
     # Longest match first, so the full "...(LNG)" phrase is replaced whole
     # rather than partially consumed by the bare "LNG" replacement first.
@@ -737,11 +772,14 @@ def _html_to_elements(html_content, pPr_template, rPr_template, image_registry):
             tblW = etree.SubElement(tblPr, f'{{{WNS}}}tblW')
             tblW.set(f'{{{WNS}}}w', str(BODY_CONTENT_WIDTH_TWIPS))
             tblW.set(f'{{{WNS}}}type', 'dxa')
-            jc = etree.SubElement(tblPr, f'{{{WNS}}}jc')
-            jc.set(f'{{{WNS}}}val', 'center')
             # Match the body paragraph indent so the table starts where the
             # surrounding text does, clear of the sidebar labels, instead of
-            # flush against the page margin underneath them.
+            # flush against the page margin underneath them. NOTE: Word only
+            # honors w:tblInd on a LEFT-aligned table — w:jc="center" makes
+            # it center the table across the full column width instead and
+            # silently ignores tblInd, which put the table ~354 twips left
+            # of the intended 709 (i.e. right back under the sidebar). Leave
+            # w:jc unset (default is left) so the indent actually applies.
             tblInd = etree.SubElement(tblPr, f'{{{WNS}}}tblInd')
             tblInd.set(f'{{{WNS}}}w', str(BODY_LEFT_INDENT_TWIPS))
             tblInd.set(f'{{{WNS}}}type', 'dxa')
@@ -937,13 +975,17 @@ def _inject_images(modified_files, image_registry, all_names):
 
     # Map placeholder -> real rId so we can rewrite document.xml at the end
     rid_map = {}
+    missing_placeholders = []
 
     for idx, img in enumerate(image_registry):
         placeholder = f'__LEAP_IMG_{idx}__'
         ext, data = _read_image_bytes(img['src'])
         if data is None:
-            # Missing/unreadable — leave placeholder in document.xml (will error
-            # but easier to debug than mysterious broken image references)
+            # Missing/unreadable — an r:embed that doesn't resolve to a real
+            # relationship makes Word refuse to open the WHOLE document, not
+            # just show a broken-image icon. Strip the drawing run instead
+            # (see below) so one bad image degrades gracefully.
+            missing_placeholders.append(placeholder)
             continue
 
         if ext not in ext_to_ct:
@@ -972,8 +1014,9 @@ def _inject_images(modified_files, image_registry, all_names):
     if ct_root is not None:
         modified_files[ct_name] = etree.tostring(ct_root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
-    # Replace rId placeholders in document.xml with real ones
-    if rid_map:
+    # Replace rId placeholders in document.xml with real ones, and strip the
+    # whole drawing run for any image that couldn't be read.
+    if rid_map or missing_placeholders:
         doc_name = 'word/document.xml'
         doc_xml = modified_files.get(doc_name)
         if doc_xml is not None:
@@ -983,6 +1026,15 @@ def _inject_images(modified_files, image_registry, all_names):
                 doc_text = doc_xml
             for placeholder, real_rid in rid_map.items():
                 doc_text = doc_text.replace(placeholder, real_rid)
+            for placeholder in missing_placeholders:
+                # _build_image_paragraph always emits the placeholder inside
+                # exactly one self-contained <w:r>...<w:drawing>...</w:drawing>
+                # </w:r> — strip that whole run (non-greedy, so it stops at
+                # the FIRST </w:r>, not some later unrelated one).
+                doc_text = re.sub(
+                    r'<w:r>(?:(?!</w:r>).)*?' + re.escape(placeholder)
+                    + r'(?:(?!</w:r>).)*?</w:r>',
+                    '', doc_text, flags=re.DOTALL)
             modified_files[doc_name] = doc_text.encode('utf-8')
 
 

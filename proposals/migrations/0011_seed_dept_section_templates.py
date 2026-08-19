@@ -24,10 +24,20 @@ def _seed_images():
             continue
         for filename in os.listdir(dept_dir):
             key = f'proposal_templates/{dept}/{filename}'
-            if default_storage.exists(key):
-                continue
-            with open(os.path.join(dept_dir, filename), 'rb') as f:
-                default_storage.save(key, ContentFile(f.read()))
+            try:
+                if default_storage.exists(key):
+                    continue
+                with open(os.path.join(dept_dir, filename), 'rb') as f:
+                    default_storage.save(key, ContentFile(f.read()))
+            except Exception as exc:
+                # A transient storage/network blip on ONE image must not
+                # fail the whole migration — and therefore the deploy. The
+                # text content this migration seeds is far more important
+                # than any single image, and a missing image degrades
+                # gracefully at export time (docx_export._read_image_bytes)
+                # rather than corrupting the document.
+                print(f'  [0011_seed_dept_section_templates] WARNING: '
+                      f'failed to upload {key}: {exc}')
 
 
 def seed(apps, schema_editor):

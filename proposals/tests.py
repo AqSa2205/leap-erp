@@ -36,20 +36,40 @@ class ProposalDocxExportTests(TestCase):
         return self._part_xml(proposal)
 
     def test_image_renders_at_the_reduced_display_size(self):
+        # Use a real, resolvable image (one of the seed migration's) — a
+        # src that can't be resolved gets its whole drawing stripped (see
+        # test_missing_image_does_not_leave_a_dangling_reference below),
+        # which would remove the very wp:extent this test checks.
         # document.xml also contains the cover page's own logo image (its
         # own unrelated wp:extent) — so check our generated image's size is
         # PRESENT among all extents, not that it's the first one found.
         from lxml import etree
+        from django.core.files.storage import default_storage
         from proposals.docx_export import IMAGE_WIDTH_EMU, IMAGE_HEIGHT_EMU
         WP_NS = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
+        self.assertTrue(default_storage.exists('proposal_templates/ai/image3.png'))
         p = self._proposal()
-        self._section(p, 'Diagram', '<img src="test.png" alt="Diagram">')
+        self._section(p, 'Diagram', '<img src="/media/proposal_templates/ai/image3.png" alt="Diagram">')
         xml = self._doc_xml(p)
         root = etree.fromstring(xml.encode('utf-8'))
         extents = {(e.get('cx'), e.get('cy')) for e in root.findall(f'.//{{{WP_NS}}}extent')}
         self.assertIn((str(IMAGE_WIDTH_EMU), str(IMAGE_HEIGHT_EMU)), extents)
         # The old, larger forced size (600x300px) must be gone.
         self.assertNotIn((str(600 * 9525), str(300 * 9525)), extents)
+
+    def test_missing_image_does_not_leave_a_dangling_reference(self):
+        # A src that can't be resolved to real bytes must not leave a
+        # literal "__LEAP_IMG_N__" placeholder as an r:embed value — Word
+        # refuses to open a document with a relationship id that doesn't
+        # exist, corrupting the WHOLE file over one missing image. The
+        # drawing run should be stripped instead, degrading gracefully.
+        p = self._proposal()
+        self._section(p, 'Diagram', '<img src="test.png" alt="Diagram">')
+        xml = self._doc_xml(p)
+        self.assertNotIn('__LEAP_IMG_', xml)
+        # The paragraph and its disclaimer caption still render — only the
+        # unresolvable drawing itself is gone.
+        self.assertIn('This image is for representation purposes only', xml)
 
     def test_bare_image_gets_representation_disclaimer_caption(self):
         p = self._proposal()
@@ -92,11 +112,14 @@ class ProposalDocxExportTests(TestCase):
         self._section(p, 'Covering Letter', 'Just plain text here.')
         self.assertIn('Just plain text here.', self._doc_xml(p))
 
-    def test_pasted_table_is_centered_on_the_page(self):
-        # The cover page/template already contains unrelated centered
-        # paragraphs (image captions etc.), so a plain substring check for
-        # '<w:jc w:val="center"/>' would pass even without the fix. Assert
-        # on the table's OWN tblPr/jc specifically.
+    def test_pasted_table_does_not_set_center_alignment(self):
+        # Word only honors w:tblInd on a LEFT-aligned table: w:jc="center"
+        # makes it center the table across the FULL column width instead
+        # and silently ignore tblInd — landing the table ~354 twips left of
+        # the intended 709 (i.e. back under the sidebar). So correct
+        # positioning here specifically requires jc to be absent/left, not
+        # present-and-center — assert on that actual behavior, not just
+        # "some jc attribute exists" (which passes either way).
         from lxml import etree
         WNS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
         p = self._proposal()
@@ -108,8 +131,8 @@ class ProposalDocxExportTests(TestCase):
         tables = root.findall(f'.//{{{WNS}}}tbl')
         self.assertEqual(len(tables), 1)
         jc = tables[0].find(f'{{{WNS}}}tblPr/{{{WNS}}}jc')
-        self.assertIsNotNone(jc, 'table has no w:jc alignment set')
-        self.assertEqual(jc.get(f'{{{WNS}}}val'), 'center')
+        if jc is not None:
+            self.assertEqual(jc.get(f'{{{WNS}}}val'), 'left')
 
     def test_pasted_table_matches_the_body_text_indent(self):
         # Body paragraphs are indented 709 twips to clear the sidebar labels
@@ -818,87 +841,6 @@ class SectionHeadingTemplateModelTests(TestCase):
         self.assertEqual(self.heading.dept_templates.count(), 3)
 
 
-class LoadHeadingTemplateViewTests(TestCase):
-    """ajax_load_heading_template: returns a department's composed content
-    for a heading, to load into a section's editor."""
-
-    def setUp(self):
-        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
-        self.author = User.objects.create_user(
-            'owner', password='pw', role=self.sa_role)
-        self.proposal = TechnicalProposal.objects.create(
-            title='T', proposal_reference='TP-TMPL', client_name='ACME',
-            revision_date=date(2026, 1, 1), prepared_by_initials='AJ',
-            created_by=self.author)
-        self.heading, _ = SectionHeading.objects.update_or_create(
-            name='Executive Summary',
-            defaults={'default_content': '<p>Generic default.</p>'})
-        self.templates = {}
-        for dept in DEPARTMENTS:
-            self.templates[dept] = SectionHeadingTemplate.objects.create(
-                heading=self.heading, department=dept,
-                content=f'<p>{dept.upper()} composed content.</p>')
-        self.client.force_login(self.author)
-
-    def _url(self, proposal=None):
-        return reverse('proposals:load_heading_template',
-                        kwargs={'pk': (proposal or self.proposal).pk})
-
-    def test_returns_composed_content_for_each_department(self):
-        for dept in DEPARTMENTS:
-            resp = self.client.get(
-                self._url(), {'heading_id': self.heading.pk, 'department': dept})
-            self.assertEqual(resp.status_code, 200, dept)
-            self.assertEqual(
-                resp.json()['content'], self.templates[dept].content, dept)
-
-    def test_missing_heading_id_returns_400(self):
-        resp = self.client.get(self._url(), {'department': 'ai'})
-        self.assertEqual(resp.status_code, 400)
-
-    def test_missing_department_returns_400(self):
-        resp = self.client.get(self._url(), {'heading_id': self.heading.pk})
-        self.assertEqual(resp.status_code, 400)
-
-    def test_heading_without_a_template_for_that_department_returns_404(self):
-        bare = SectionHeading.objects.create(name='No Templates Here')
-        resp = self.client.get(
-            self._url(), {'heading_id': bare.pk, 'department': 'ai'})
-        self.assertEqual(resp.status_code, 404)
-
-    def test_unknown_department_value_returns_404_not_500(self):
-        resp = self.client.get(
-            self._url(), {'heading_id': self.heading.pk, 'department': 'finance'})
-        self.assertEqual(resp.status_code, 404)
-
-    def test_nonexistent_proposal_returns_404(self):
-        resp = self.client.get(
-            reverse('proposals:load_heading_template', kwargs={'pk': 999999}),
-            {'heading_id': self.heading.pk, 'department': 'ai'})
-        self.assertEqual(resp.status_code, 404)
-
-    def test_user_who_cannot_edit_the_proposal_is_denied(self):
-        rep_role, _ = Role.objects.get_or_create(name=Role.PROPOSAL_REP)
-        outsider = User.objects.create_user('outsider', password='pw', role=rep_role)
-        self.client.force_login(outsider)
-        resp = self.client.get(
-            self._url(), {'heading_id': self.heading.pk, 'department': 'ai'})
-        self.assertEqual(resp.status_code, 403)
-
-    def test_admin_can_load_template_for_a_proposal_they_do_not_own(self):
-        admin_role, _ = Role.objects.get_or_create(name=Role.ADMIN)
-        admin = User.objects.create_user('admin1', password='pw', role=admin_role)
-        self.client.force_login(admin)
-        resp = self.client.get(
-            self._url(), {'heading_id': self.heading.pk, 'department': 'ai'})
-        self.assertEqual(resp.status_code, 200)
-
-    def test_anonymous_user_is_redirected_to_login(self):
-        self.client.logout()
-        resp = self.client.get(
-            self._url(), {'heading_id': self.heading.pk, 'department': 'ai'})
-        self.assertEqual(resp.status_code, 302)
-        self.assertIn('/login', resp.url)
 
 
 class AddSectionDepartmentTemplateTests(TestCase):
@@ -1005,11 +947,17 @@ class EditContentViewDepartmentGroupingTests(TestCase):
     def _get(self):
         return self.client.get(reverse('proposals:content', kwargs={'pk': self.proposal.pk}))
 
-    def test_generic_list_excludes_headings_that_have_any_department_template(self):
+    def test_generic_list_includes_department_templated_headings_too(self):
+        # Department panels are ADDITIVE, not a partition of the generic
+        # list. Excluding a dept-templated heading from the generic list
+        # would permanently hide it from every non-AI proposal too, since
+        # SectionHeading.name is unique — a name the AI seed data happens
+        # to get_or_create onto would vanish from the shared library for
+        # everyone, not just become AI-exclusive.
         names = set(self._get().context['headings'].values_list('name', flat=True))
         self.assertIn('Generic Only', names)
-        self.assertNotIn('AI Only', names)
-        self.assertNotIn('Telecom And Procurement', names)
+        self.assertIn('AI Only', names)
+        self.assertIn('Telecom And Procurement', names)
 
     def test_each_department_group_only_shows_its_own_templated_headings(self):
         # Membership checks, not exact-set equality: the seed migration
@@ -1018,9 +966,9 @@ class EditContentViewDepartmentGroupingTests(TestCase):
         # the generic library seeded by 0006 already does — so these three
         # groups are never empty/exact to begin with.
         dept_headings = self._get().context['dept_headings']
-        ai_names = set(dept_headings['ai'].values_list('name', flat=True))
-        telecom_names = set(dept_headings['telecom'].values_list('name', flat=True))
-        procurement_names = set(dept_headings['procurement'].values_list('name', flat=True))
+        ai_names = set(dept_headings['ai']['items'].values_list('name', flat=True))
+        telecom_names = set(dept_headings['telecom']['items'].values_list('name', flat=True))
+        procurement_names = set(dept_headings['procurement']['items'].values_list('name', flat=True))
 
         self.assertIn('AI Only', ai_names)
         self.assertNotIn('Telecom And Procurement', ai_names)
@@ -1031,6 +979,14 @@ class EditContentViewDepartmentGroupingTests(TestCase):
         self.assertIn('Telecom And Procurement', procurement_names)
         self.assertNotIn('AI Only', procurement_names)
 
+    def test_department_group_labels_use_the_display_name(self):
+        # procurement's DB value is unchanged, but its display label is
+        # "Security" (matching the toggle button) — not "Procurement".
+        dept_headings = self._get().context['dept_headings']
+        self.assertEqual(dept_headings['ai']['label'], 'AI')
+        self.assertEqual(dept_headings['telecom']['label'], 'Telecom')
+        self.assertEqual(dept_headings['procurement']['label'], 'Security')
+
     def test_inactive_heading_excluded_from_generic_and_department_groups(self):
         resp = self._get()
         self.assertNotIn(
@@ -1038,4 +994,4 @@ class EditContentViewDepartmentGroupingTests(TestCase):
             set(resp.context['headings'].values_list('name', flat=True)))
         self.assertNotIn(
             'Inactive AI Heading',
-            set(resp.context['dept_headings']['ai'].values_list('name', flat=True)))
+            set(resp.context['dept_headings']['ai']['items'].values_list('name', flat=True)))

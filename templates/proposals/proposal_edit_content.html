@@ -45,7 +45,6 @@
 <!-- Heading library for the datalist (shared by Add Section and per-row heading inputs) -->
 <datalist id="section-heading-options">
     {% for h in headings %}<option value="{{ h.name }}"></option>{% endfor %}
-    {% for dept, dept_hs in dept_headings.items %}{% for h in dept_hs %}<option value="{{ h.name }}"></option>{% endfor %}{% endfor %}
 </datalist>
 
 <!-- Add sections (its own form — tick any number, posts once, redirects back) -->
@@ -82,11 +81,11 @@
         {% endif %}
 
         {% for dept, dept_hs in dept_headings.items %}
-        {% if dept_hs %}
+        {% if dept_hs.items %}
         <div class="dept-heading-panel" data-dept="{{ dept }}" style="display:none">
-            <div class="small text-muted mb-1">{{ dept|upper }} sections:</div>
+            <div class="small text-muted mb-1">{{ dept_hs.label }} sections:</div>
             <div class="row g-1 mb-2">
-                {% for h in dept_hs %}
+                {% for h in dept_hs.items %}
                 <div class="col-lg-3 col-md-4 col-sm-6">
                     <div class="form-check">
                         <input class="form-check-input sect-pick" type="checkbox" name="heading"
@@ -298,14 +297,21 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     // ─── Add-sections: select all / clear ──────────────────────
-    var picks = document.querySelectorAll('.sect-pick');
+    // Only the currently-visible checkboxes — .sect-pick also lives inside
+    // the hidden .dept-heading-panel toggles, and picking those up here
+    // would submit every department heading with no department set,
+    // creating a pile of empty sections.
+    function visiblePicks() {
+        return Array.from(document.querySelectorAll('.sect-pick'))
+            .filter(function(p) { return p.offsetParent !== null; });
+    }
     var selAll = document.getElementById('sectSelectAll');
     var clr = document.getElementById('sectClear');
     if (selAll) selAll.addEventListener('click', function() {
-        picks.forEach(function(p) { p.checked = true; });
+        visiblePicks().forEach(function(p) { p.checked = true; });
     });
     if (clr) clr.addEventListener('click', function() {
-        picks.forEach(function(p) { p.checked = false; });
+        visiblePicks().forEach(function(p) { p.checked = false; });
     });
 
     // ─── Dim a section row when its Remove box is ticked ────────
