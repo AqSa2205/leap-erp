@@ -19,6 +19,9 @@
             <a href="{% url 'hr:asset_import' %}" class="btn btn-outline-primary me-2">
                 <i class="bi bi-upload"></i> Import
             </a>
+            <a href="{% url 'hr:asset_handover_list' %}" class="btn btn-outline-secondary me-2">
+                <i class="bi bi-arrow-left-right"></i> Handovers
+            </a>
             <a href="{% url 'hr:asset_create' %}" class="btn btn-primary">
                 <i class="bi bi-plus-lg"></i> Add Asset
             </a>
@@ -171,7 +174,7 @@
                                 <span class="badge bg-warning text-dark ms-1" title="This serial is on another currently-assigned asset record">⚠ duplicate</span>
                                 {% endif %}
                             </td>
-                            <td>{{ asset.employee_name|default:"-" }}</td>
+                            <td>{{ asset.current_holder.full_name|default:"-" }}</td>
                             <td>
                                 {% if asset.condition %}
                                 <span class="badge {% if asset.condition == 'new' %}bg-success{% else %}bg-warning text-dark{% endif %}">

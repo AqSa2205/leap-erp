@@ -2263,18 +2263,28 @@ class MyProfilePortalTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, "isn't linked")
 
-    def test_portal_shows_assets_by_name_and_vehicles_by_driver_id(self):
-        from hr.models import Asset, Vehicle
-        # Asset linked via the denormalised employee_name (no AssetAssignment).
-        Asset.objects.create(asset_name='Dell Laptop', asset_type='Laptop',
-                             employee_name='Emp One')
-        # Vehicle linked via driver_id == iqama_number.
-        Vehicle.objects.create(plate_number='XYZ-9', vehicle_maker='Toyota',
-                              driver_id='IQ-001')
+    def test_portal_shows_assets_and_vehicles_via_active_handover(self):
+        from hr.models import Asset, Vehicle, AssetHandover
+        asset = Asset.objects.create(asset_name='Dell Laptop', asset_type='Laptop')
+        vehicle = Vehicle.objects.create(plate_number='XYZ-9', vehicle_maker='Toyota')
+        AssetHandover.objects.create(asset=asset, employee=self.emp, status='active')
+        AssetHandover.objects.create(vehicle=vehicle, employee=self.emp, status='active')
         self.client.force_login(self.user)
         r = self.client.get(reverse('hr:my_profile'))
-        self.assertContains(r, 'Dell Laptop')   # matched by employee_name
-        self.assertContains(r, 'XYZ-9')          # matched by driver_id == iqama
+        self.assertContains(r, 'Dell Laptop')
+        self.assertContains(r, 'XYZ-9')
+
+    def test_portal_ignores_legacy_employee_name_and_driver_id_without_handover(self):
+        from hr.models import Asset, Vehicle
+        # These have the legacy denormalised fields set, matching this
+        # employee, but no AssetHandover - AssetHandover is now the sole
+        # source of truth for custody, so neither should appear here.
+        Asset.objects.create(asset_name='Stale Laptop', employee_name='Emp One')
+        Vehicle.objects.create(plate_number='STALE-1', driver_id='IQ-001')
+        self.client.force_login(self.user)
+        r = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(r, 'Stale Laptop')
+        self.assertNotContains(r, 'STALE-1')
 
 
 class MyAttendanceExportPDFTests(TestCase):
@@ -6009,7 +6019,9 @@ class MyProfileCardOrderingTests(TestCase):
         self.client.login(username='ord_user', password='testpass123')
 
     def test_reporting_structure_renders_after_vehicles_when_vehicle_present(self):
-        Vehicle.objects.create(plate_number='ORD-9999', driver_id=self.emp.iqama_number)
+        vehicle = Vehicle.objects.create(plate_number='ORD-9999')
+        from hr.models import AssetHandover
+        AssetHandover.objects.create(vehicle=vehicle, employee=self.emp, status='active')
         resp = self.client.get(reverse('hr:my_profile'))
         self.assertEqual(resp.status_code, 200)
         content = resp.content.decode()

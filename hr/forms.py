@@ -409,52 +409,6 @@ class VehicleDocumentForm(forms.ModelForm):
         return cleaned
 
 
-class AssetIssueForm(forms.ModelForm):
-    """Issue an asset to an employee — creates a new active AssetAssignment."""
-
-    class Meta:
-        model = AssetAssignment
-        fields = ['employee', 'assigned_at', 'condition_out', 'handover_form', 'issue_notes']
-        widgets = {
-            'assigned_at': forms.DateInput(attrs={'type': 'date'}),
-            'issue_notes': forms.Textarea(attrs={'rows': 3, 'placeholder': 'Optional: serial-cross-check, accessories, etc.'}),
-        }
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields['employee'].queryset = Employee.objects.filter(is_active=True).order_by('full_name')
-        self.fields['employee'].empty_label = 'Select employee...'
-        for field in self.fields.values():
-            if isinstance(field.widget, forms.Select):
-                field.widget.attrs['class'] = 'form-select'
-            elif isinstance(field.widget, forms.FileInput):
-                field.widget.attrs['class'] = 'form-control'
-            else:
-                field.widget.attrs['class'] = 'form-control'
-
-
-class AssetReturnForm(forms.ModelForm):
-    """Close an active AssetAssignment by recording the return."""
-
-    class Meta:
-        model = AssetAssignment
-        fields = ['returned_at', 'condition_in', 'return_notes']
-        widgets = {
-            'returned_at': forms.DateInput(attrs={'type': 'date'}),
-            'return_notes': forms.Textarea(attrs={'rows': 3, 'placeholder': 'Optional: damage description, missing accessories, etc.'}),
-        }
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields['returned_at'].required = True
-        self.fields['condition_in'].required = True
-        for field in self.fields.values():
-            if isinstance(field.widget, forms.Select):
-                field.widget.attrs['class'] = 'form-select'
-            else:
-                field.widget.attrs['class'] = 'form-control'
-
-
 # ─── Leave Type & Holiday Forms ──────────────────────────────
 
 

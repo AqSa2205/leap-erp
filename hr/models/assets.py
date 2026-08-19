@@ -79,9 +79,17 @@ class Asset(models.Model):
         return self.assignments.filter(returned_at__isnull=True).select_related('employee').first()
 
     @property
+    def active_handover(self):
+        """The currently-active AssetHandover for this asset, or None. This
+        is the source of truth for current custody - active_assignment
+        (above) is the legacy AssetAssignment record, kept only for the
+        one-time migration and the duplicate-serial-number check below."""
+        return self.handovers.filter(status='active').select_related('employee').first()
+
+    @property
     def current_holder(self):
-        a = self.active_assignment
-        return a.employee if a else None
+        h = self.active_handover
+        return h.employee if h else None
 
     @property
     def duplicate_active_assignments(self):
