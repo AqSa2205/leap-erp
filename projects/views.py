@@ -35,15 +35,13 @@ class ProjectPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
                 region=user.region,
                 status__category='won',
             )
-        # Admin/manager, finance, and the sales + proposal teams all get a
-        # region-scoped *view* of the pipeline. Sales & proposal need it to see
-        # and pick up new projects in their region (pairs with the on-create
-        # notification); edit rights stay narrower (see ProjectUpdateView).
+        # Admin/manager, finance, and the proposal team get a region-scoped
+        # *view* of the pipeline. Sales REPS are deliberately excluded — they
+        # see only the projects they own (fall through to owner=user below).
         region_scoped = (
             user.is_admin_user
             or user.is_manager_user
             or getattr(user, 'is_finance_team_user', False)
-            or getattr(user, 'is_sales_rep_user', False)
             or getattr(user, 'is_proposal_team_user', False)
         )
 
@@ -613,12 +611,21 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
             workflow_stage='bom_not_started',
         )
 
+        # Sales REPS are not notified region-wide: under owner-only scoping
+        # projects:detail 404s for a rep who doesn't own the project, so a
+        # region-wide notice would send most of them to a dead link. The owning
+        # rep is added back explicitly below — they are the one rep who can
+        # open it.
         team_roles = [
-            Role.MANAGER, Role.SALES_REP, Role.PROPOSAL_HEAD, Role.PROPOSAL_REP,
+            Role.MANAGER, Role.PROPOSAL_HEAD, Role.PROPOSAL_REP,
         ]
         recipients = User.objects.filter(
-            role__name__in=team_roles, region=project.region, is_active=True
-        )
+            Q(role__name__in=team_roles, region=project.region)
+            # Only the OWNING rep, and only when they are a rep — every other
+            # role's reach is untouched by owner-scoping, so nothing is added
+            # back for them. notify_users() already drops the actor.
+            | Q(pk=project.owner_id, role__name=Role.SALES_REP)
+        ).filter(is_active=True).distinct()
         notify_users(
             recipients=recipients,
             verb='created a new pipeline project',
