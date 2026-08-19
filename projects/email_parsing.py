@@ -7,6 +7,7 @@ This module doesn't touch the database or any existing model; it just
 turns a raw uploaded file into a plain dict + list of attachments, ready
 for a view to turn into a PipelineEmail + Documents.
 """
+import mimetypes
 import re
 import email
 from email import policy
@@ -31,6 +32,7 @@ def parse_eml_file(file_obj):
             sender_name (str)
             sender_email (str)
             recipients (str)   -- raw "To" header, as-is
+            cc (str)           -- raw "Cc" header, as-is
             sent_at (datetime or None)
             body_text (str)    -- best-effort plain text of the message
             attachments (list of dict): each with
@@ -51,6 +53,7 @@ def parse_eml_file(file_obj):
 
     sender_name, sender_email = parseaddr(msg.get('From', '') or '')
     recipients = msg.get('To', '') or ''
+    cc = msg.get('Cc', '') or ''
 
     sent_at = None
     date_header = msg.get('Date')
@@ -61,13 +64,14 @@ def parse_eml_file(file_obj):
             sent_at = None
 
     body_text = _extract_body_text(msg)
-    attachments = _extract_pdf_attachments(msg)
+    attachments = _extract_attachments(msg)
 
     return {
         'subject': subject.strip(),
         'sender_name': sender_name.strip(),
         'sender_email': sender_email.strip(),
         'recipients': recipients.strip(),
+        'cc': cc.strip(),
         'sent_at': sent_at,
         'body_text': body_text,
         'attachments': attachments,
@@ -93,8 +97,9 @@ def _extract_body_text(msg):
     return ''
 
 
-def _extract_pdf_attachments(msg):
-    """Pull out every attachment that looks like a PDF."""
+def _extract_attachments(msg):
+    """Pull out every real attachment (any file type — PDF, Word, Excel,
+    etc.), skipping inline content like signature logos."""
     attachments = []
     try:
         parts = msg.iter_attachments()
@@ -105,13 +110,6 @@ def _extract_pdf_attachments(msg):
         filename = part.get_filename() or ''
         content_type = part.get_content_type() or ''
 
-        is_pdf = (
-            content_type == 'application/pdf'
-            or filename.lower().endswith('.pdf')
-        )
-        if not is_pdf:
-            continue
-
         try:
             content = part.get_content()
         except Exception:
@@ -121,12 +119,13 @@ def _extract_pdf_attachments(msg):
             content = content.encode('utf-8', errors='ignore')
 
         if not filename:
-            filename = f'attachment_{len(attachments) + 1}.pdf'
+            ext = mimetypes.guess_extension(content_type) or ''
+            filename = f'attachment_{len(attachments) + 1}{ext}'
 
         attachments.append({
             'filename': filename,
             'content': content,
-            'content_type': content_type or 'application/pdf',
+            'content_type': content_type or 'application/octet-stream',
         })
 
     return attachments

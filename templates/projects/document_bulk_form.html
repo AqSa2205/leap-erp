@@ -1,0 +1,151 @@
+{% extends 'base.html' %}
+
+{% block title %}Add Multiple Documents - {{ project.project_name }} - Leap Networks ERP{% endblock %}
+{% block page_title %}Add Multiple Documents{% endblock %}
+
+{% block extra_css %}
+<style>
+    .form-card {
+        border-radius: 12px;
+        border: none;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        overflow: hidden;
+    }
+    .form-card .card-header {
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+        color: #fff;
+        padding: 1rem 1.25rem;
+    }
+    .form-card .card-header h5 {
+        color: #fff;
+    }
+    .upload-area {
+        border: 2px dashed #dee2e6;
+        border-radius: 12px;
+        padding: 2rem;
+        text-align: center;
+        background: #f8f9fa;
+        transition: all 0.3s ease;
+    }
+    .upload-area:hover {
+        border-color: #C41E3A;
+        background: rgba(196, 30, 58, 0.05);
+    }
+    .upload-area i {
+        font-size: 3rem;
+        color: #C41E3A;
+        margin-bottom: 1rem;
+    }
+    #file-preview-list {
+        text-align: left;
+    }
+    #file-preview-list .file-preview-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.5rem 0.6rem;
+        border-bottom: 1px solid #eee;
+        font-size: 0.9rem;
+    }
+    #file-preview-list .file-preview-row .file-name {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    #file-preview-list .file-preview-row select {
+        flex: 0 0 auto;
+        width: auto;
+        min-width: 180px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card form-card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="bi bi-upload me-2"></i>Add Multiple Documents to {{ project.project_name }}
+                </h5>
+            </div>
+            <div class="card-body p-4">
+                <form method="post" enctype="multipart/form-data">
+                    {% csrf_token %}
+
+                    <div class="mb-4">
+                        <div class="upload-area mb-3">
+                            <i class="bi bi-cloud-arrow-up d-block"></i>
+                            <p class="mb-2">Choose all the files to upload — they'll all be added at once</p>
+                            <small class="text-muted">PDF, Excel, Word, images — any file type</small>
+                            <div class="mt-3">
+                                <input type="file" name="files" multiple required class="form-control">
+                            </div>
+                        </div>
+                        <div id="file-preview-list"></div>
+                        <div id="file-preview-hint" class="form-text" style="display: none;">
+                            Pick a document type for each file before uploading.
+                        </div>
+                    </div>
+
+                    {{ document_type_choices|json_script:"documentTypeChoices" }}
+
+                    <div class="d-flex justify-content-between pt-3 border-top">
+                        <a href="{% url 'projects:detail' project.pk %}" class="btn btn-outline-secondary">
+                            <i class="bi bi-arrow-left me-1"></i>Cancel
+                        </a>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-upload me-1"></i>Upload All
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const fileInput = document.querySelector('input[name="files"]');
+    const preview = document.getElementById('file-preview-list');
+    const previewHint = document.getElementById('file-preview-hint');
+    const documentTypeChoices = JSON.parse(document.getElementById('documentTypeChoices').textContent);
+
+    if (fileInput && preview) {
+        fileInput.addEventListener('change', function () {
+            preview.innerHTML = '';
+            const files = Array.from(this.files);
+            previewHint.style.display = files.length ? '' : 'none';
+
+            files.forEach(function (f, index) {
+                const row = document.createElement('div');
+                row.className = 'file-preview-row';
+
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'file-name';
+                nameSpan.innerHTML = '<i class="bi bi-file-earmark-check text-success me-1"></i>' +
+                    f.name + ' <span class="text-muted">(' + (f.size / 1024 / 1024).toFixed(2) + ' MB)</span>';
+
+                const select = document.createElement('select');
+                select.className = 'form-control form-control-sm';
+                select.name = 'document_type_' + index;
+                documentTypeChoices.forEach(function (choice) {
+                    const option = document.createElement('option');
+                    option.value = choice[0];
+                    option.textContent = choice[1];
+                    if (choice[0] === 'other') option.selected = true;
+                    select.appendChild(option);
+                });
+
+                row.appendChild(nameSpan);
+                row.appendChild(select);
+                preview.appendChild(row);
+            });
+        });
+    }
+</script>
+{% endblock %}

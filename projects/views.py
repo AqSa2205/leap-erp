@@ -1,13 +1,17 @@
+import io
+import json
 from decimal import Decimal, InvalidOperation
 
+from django.conf import settings
 from django.shortcuts import render, redirect, get_object_or_404
-from django.http import Http404
+from django.http import Http404, HttpResponse
 from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib import messages
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView, View
 from django.urls import reverse, reverse_lazy
+from django.utils.http import urlencode
 from django.db.models import Q, Sum, Count
 from django.core.paginator import Paginator
 from django.core.files.base import ContentFile
@@ -17,6 +21,7 @@ import openpyxl
 from .models import Project, Region, ProjectStatus, ProjectHistory, Document, ProjectRevision, PipelineEmail
 from .forms import ProjectForm, ProjectFilterForm, DocumentForm, DocumentFilterForm
 from .email_parsing import parse_eml_file, EmailParseError
+from . import graph_mail
 from notifications.services import notify_users
 from accounts.permissions import CapabilityRequiredMixin
 
@@ -578,10 +583,37 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
         kwargs['user'] = self.request.user
         return kwargs
 
+    def get_initial(self):
+        # Coming back from the live-inbox "Add Emails" flow (see
+        # link_pipeline_email_new) with a freshly picked email — re-fetch
+        # its summary so the hidden picked_email_json field (and therefore
+        # the "Email to be attached" section) is populated on this fresh
+        # GET. Only on GET: this form has no <form action>, so a real
+        # Create POST still carries the same ?picked_email=... — without
+        # this guard we'd hit Graph pointlessly (and unsafely) on every
+        # real submission too.
+        initial = super().get_initial()
+        if self.request.method == 'GET':
+            message_id = self.request.GET.get('picked_email')
+            if message_id:
+                try:
+                    summary = graph_mail.get_message_summary(
+                        settings.PIPELINE_EMAIL_MAILBOX, message_id)
+                    # Default type, same as the existing-project attach flow —
+                    # editable in the "Email to be attached" section, and
+                    # whatever's chosen there rides along in this same field.
+                    for attachment in summary['attachments']:
+                        attachment['document_type'] = 'vendor_quotation'
+                    initial['picked_email_json'] = json.dumps(summary)
+                except graph_mail.GraphMailError as exc:
+                    messages.warning(self.request, f'Could not load that email: {exc}')
+        return initial
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['exchange_rates_json'] = _exchange_rates_json()
         context.update(_lna_form_context(getattr(self, 'object', None)))
+        context['document_type_choices'] = Document.DOCUMENT_TYPE_CHOICES
         from drafts.models import FormDraft
         context['draft'] = FormDraft.objects.filter(
             user=self.request.user, form_key='project_create', object_id=None
@@ -649,6 +681,31 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
             level='info',
             send_email=True,
         )
+
+        # An email picked from the live inbox while filling out this form
+        # (see link_pipeline_email_new / ProjectForm.picked_email_json) is
+        # only materialized into a real PipelineEmail + Documents now that
+        # the project actually exists. The project/costing sheet/notification
+        # above are already committed by this point, so a failure here must
+        # never surface as an error on top of an otherwise-successful create.
+        picked_email_json = form.cleaned_data.get('picked_email_json')
+        if picked_email_json:
+            try:
+                picked = json.loads(picked_email_json)
+                attachment_types = {
+                    a['name']: a.get('document_type')
+                    for a in picked.get('attachments', [])
+                }
+                _attach_email_to_project(
+                    project, self.request.user, picked['id'],
+                    attachment_types=attachment_types)
+            except Exception:
+                messages.warning(
+                    self.request,
+                    'The project was created, but the picked email could not be attached '
+                    'automatically — you can attach it again from the project page.'
+                )
+
         return response
 
 
@@ -1213,6 +1270,43 @@ def add_project_document(request, pk):
     })
 
 
+@login_required
+def add_project_documents_bulk(request, pk):
+    """Upload several documents to a project in one go — same Document
+    model/fields as add_project_document, just one file input accepting
+    multiple files instead of uploading them one at a time. Each file gets
+    its own document type, picked in the preview list before upload, same
+    as if it had been uploaded individually via add_project_document."""
+    project = get_object_or_404(Project, pk=pk)
+
+    if request.method == 'POST':
+        uploaded_files = request.FILES.getlist('files')
+        if not uploaded_files:
+            messages.error(request, 'Please choose at least one file to upload.')
+            return redirect('projects:add_documents_bulk', pk=pk)
+
+        valid_types = dict(Document.DOCUMENT_TYPE_CHOICES)
+        for index, uploaded_file in enumerate(uploaded_files):
+            document_type = request.POST.get(f'document_type_{index}') or 'other'
+            if document_type not in valid_types:
+                document_type = 'other'
+            Document.objects.create(
+                project=project,
+                document_type=document_type,
+                name=uploaded_file.name,
+                uploaded_by=request.user,
+                file=uploaded_file,
+            )
+        messages.success(
+            request, f'{len(uploaded_files)} document(s) uploaded successfully.')
+        return redirect('projects:detail', pk=pk)
+
+    return render(request, 'projects/document_bulk_form.html', {
+        'project': project,
+        'document_type_choices': Document.DOCUMENT_TYPE_CHOICES,
+    })
+
+
 def _delink_active_pipeline_email(project, user):
     """Mark the project's currently active linked email (if any) as
     delinked. This NEVER deletes the PipelineEmail row or any Document it
@@ -1228,81 +1322,197 @@ def _delink_active_pipeline_email(project, user):
     return active
 
 
-@login_required
-def link_pipeline_email(request, pk):
-    """Attach an email (.eml file) to a commercial pipeline entry. Its PDF
-    attachments become regular Document rows tagged with source_pipeline_email
-    (see projects/models.py) so they show up under Project Documents.
+def _attach_email_to_project(project, user, message_id, attachment_types=None):
+    """Fetch one message from the live monitored inbox (Microsoft Graph —
+    see projects/graph_mail.py) and turn it into a PipelineEmail + Document
+    rows on `project`, tagged with source_pipeline_email (see
+    projects/models.py) so they show up under Project Documents.
+
+    attachment_types is an optional {filename: document_type} map (matched
+    by filename since that's the one thing consistent between Graph's
+    attachment listing, used to build the picker UI, and the attachments
+    email_parsing.parse_eml_file() finds by re-parsing the raw MIME here).
+    Anything missing/invalid falls back to 'vendor_quotation', matching this
+    feature's original default before per-document types existed.
 
     If an email is already linked, adding a new one automatically delinks
     the old one first — this matches "add a new email, removing the one
-    before" — but the old email's documents are never touched or removed."""
+    before" — but the old email's documents are never touched or removed.
+
+    Raises GraphMailError/EmailParseError on failure — callers decide how
+    to surface that. Returns (pipeline_email, created_document_count)."""
+    attachment_types = attachment_types or {}
+    valid_types = dict(Document.DOCUMENT_TYPE_CHOICES)
+
+    raw_bytes = graph_mail.fetch_raw_message_bytes(settings.PIPELINE_EMAIL_MAILBOX, message_id)
+    parsed = parse_eml_file(io.BytesIO(raw_bytes))
+
+    _delink_active_pipeline_email(project, user)
+
+    raw_filename = f"pipeline_email_{project.pk}_{timezone.now():%Y%m%d%H%M%S}.eml"
+    pipeline_email = PipelineEmail.objects.create(
+        project=project,
+        subject=parsed['subject'],
+        sender_name=parsed['sender_name'],
+        sender_email=parsed['sender_email'],
+        recipients=parsed['recipients'],
+        sent_at=parsed['sent_at'],
+        body_text=parsed['body_text'],
+        raw_file=ContentFile(raw_bytes, name=raw_filename),
+        raw_filename=raw_filename,
+        is_active=True,
+        linked_by=user,
+    )
+
+    created_count = 0
+    for attachment in parsed['attachments']:
+        document_type = attachment_types.get(attachment['filename']) or 'vendor_quotation'
+        if document_type not in valid_types:
+            document_type = 'vendor_quotation'
+        document = Document(
+            project=project,
+            document_type=document_type,
+            name=attachment['filename'],
+            uploaded_by=user,
+            source_pipeline_email=pipeline_email,
+        )
+        document.file.save(
+            attachment['filename'],
+            ContentFile(attachment['content']),
+            save=False,
+        )
+        document.save()
+        created_count += 1
+
+    return pipeline_email, created_count
+
+
+@login_required
+def link_pipeline_email(request, pk):
+    """Attach an email from the live monitored inbox to an existing
+    commercial pipeline entry — see _attach_email_to_project()."""
     project = get_object_or_404(Project, pk=pk)
 
     if request.method == 'POST':
-        uploaded_file = request.FILES.get('email_file')
-        if not uploaded_file:
-            messages.error(request, 'Please choose an email (.eml) file to upload.')
-            return redirect('projects:detail', pk=pk)
+        message_id = request.POST.get('message_id')
+        if not message_id:
+            messages.error(request, 'Please choose an email to attach.')
+            return redirect('projects:link_pipeline_email', pk=pk)
+
+        attachment_types = dict(zip(
+            request.POST.getlist('doc_filename'), request.POST.getlist('doc_type')))
 
         try:
-            parsed = parse_eml_file(uploaded_file)
-        except EmailParseError as exc:
-            messages.error(request, f'Could not read that email file: {exc}')
-            return redirect('projects:detail', pk=pk)
-
-        _delink_active_pipeline_email(project, request.user)
-
-        uploaded_file.seek(0)
-        pipeline_email = PipelineEmail.objects.create(
-            project=project,
-            subject=parsed['subject'],
-            sender_name=parsed['sender_name'],
-            sender_email=parsed['sender_email'],
-            recipients=parsed['recipients'],
-            sent_at=parsed['sent_at'],
-            body_text=parsed['body_text'],
-            raw_file=uploaded_file,
-            raw_filename=uploaded_file.name,
-            is_active=True,
-            linked_by=request.user,
-        )
-
-        created_count = 0
-        for attachment in parsed['attachments']:
-            document = Document(
-                project=project,
-                document_type='vendor_quotation',
-                name=attachment['filename'],
-                uploaded_by=request.user,
-                source_pipeline_email=pipeline_email,
-            )
-            document.file.save(
-                attachment['filename'],
-                ContentFile(attachment['content']),
-                save=False,
-            )
-            document.save()
-            created_count += 1
+            pipeline_email, created_count = _attach_email_to_project(
+                project, request.user, message_id, attachment_types=attachment_types)
+        except (graph_mail.GraphMailError, EmailParseError) as exc:
+            messages.error(request, f'Could not attach that email: {exc}')
+            return redirect('projects:link_pipeline_email', pk=pk)
 
         if created_count:
             messages.success(
                 request,
                 f'Email "{pipeline_email.subject or "(no subject)"}" linked — '
-                f'{created_count} PDF document(s) added to Project Documents.'
+                f'{created_count} document(s) added to Project Documents.'
             )
         else:
             messages.success(
                 request,
                 f'Email "{pipeline_email.subject or "(no subject)"}" linked. '
-                f'No PDF attachments were found inside it.'
+                f'No attachments were found inside it.'
             )
         return redirect('projects:detail', pk=pk)
+
+    inbox_messages = []
+    inbox_error = None
+    try:
+        inbox_messages = graph_mail.list_inbox_messages(settings.PIPELINE_EMAIL_MAILBOX)
+    except graph_mail.GraphMailError as exc:
+        inbox_error = str(exc)
+    _add_attachment_urls(inbox_messages, project.pk)
 
     return render(request, 'projects/pipeline_email_form.html', {
         'project': project,
         'active_email': project.linked_emails.filter(is_active=True).first(),
+        'inbox_messages': inbox_messages,
+        'inbox_error': inbox_error,
+        'document_type_choices': Document.DOCUMENT_TYPE_CHOICES,
     })
+
+
+def _add_attachment_urls(inbox_messages, project_pk):
+    """Precompute each attachment's open/preview URL onto its dict, so the
+    template doesn't need to branch on whether a project exists yet."""
+    url_name = 'projects:view_pipeline_inbox_attachment' if project_pk \
+        else 'projects:view_pipeline_inbox_attachment_new'
+    for msg in inbox_messages:
+        for att in msg['attachments']:
+            args = [project_pk, msg['id'], att['id']] if project_pk else [msg['id'], att['id']]
+            att['url'] = reverse(url_name, args=args)
+
+
+@login_required
+def link_pipeline_email_new(request):
+    """Same live inbox as link_pipeline_email, but for a pipeline entry
+    that doesn't exist yet (the "Add Emails" button on the create form).
+    Nothing is saved to the database here — picking an email just carries
+    its message_id back to the create form via a query param, where it
+    rides along in that form's own draft-autosave state (ProjectForm.
+    picked_email_json) until the entry is actually created."""
+    if request.method == 'POST':
+        message_id = request.POST.get('message_id')
+        if not message_id:
+            messages.error(request, 'Please choose an email.')
+            return redirect('projects:link_pipeline_email_new')
+        return redirect(reverse('projects:create') + '?' + urlencode({'picked_email': message_id}))
+
+    inbox_messages = []
+    inbox_error = None
+    try:
+        inbox_messages = graph_mail.list_inbox_messages(settings.PIPELINE_EMAIL_MAILBOX)
+    except graph_mail.GraphMailError as exc:
+        inbox_error = str(exc)
+    _add_attachment_urls(inbox_messages, None)
+
+    return render(request, 'projects/pipeline_email_form.html', {
+        'project': None,
+        'active_email': None,
+        'inbox_messages': inbox_messages,
+        'inbox_error': inbox_error,
+    })
+
+
+@login_required
+def view_pipeline_inbox_attachment(request, message_id, attachment_id, pk=None):
+    """Open/preview one attachment straight from the live inbox, before it's
+    attached to anything — read-only, nothing is saved. Works both for an
+    existing pipeline entry (pk given) and while creating a new one (pk
+    is None — see link_pipeline_email_new)."""
+    if pk is not None:
+        get_object_or_404(Project, pk=pk)
+    try:
+        filename, content_type, content = graph_mail.fetch_attachment_bytes(
+            settings.PIPELINE_EMAIL_MAILBOX, message_id, attachment_id)
+    except graph_mail.GraphMailError as exc:
+        messages.error(request, f'Could not open that document: {exc}')
+        if pk is not None:
+            return redirect('projects:link_pipeline_email', pk=pk)
+        return redirect('projects:link_pipeline_email_new')
+
+    response = HttpResponse(content, content_type=content_type)
+    response['Content-Disposition'] = (
+        f'inline; filename="{_safe_header_filename(filename)}"')
+    return response
+
+
+def _safe_header_filename(filename):
+    """Strip characters that would break out of the quoted filename or inject
+    a new header line. `filename` comes straight from Graph — untrusted,
+    external data — so this must fail closed rather than let a crafted
+    filename (e.g. containing '\\r\\n') reach HttpResponse and either crash
+    the request or smuggle an extra header."""
+    cleaned = (filename or '').replace('\r', '').replace('\n', '').replace('"', "'")
+    return cleaned or 'attachment'
 
 
 @login_required

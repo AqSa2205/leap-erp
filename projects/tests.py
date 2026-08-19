@@ -1,5 +1,9 @@
+import json
+from email.message import EmailMessage as StdEmailMessage
 from types import SimpleNamespace
+from unittest.mock import patch
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
@@ -10,6 +14,23 @@ from django.test import TestCase, Client
 from django.urls import reverse
 from accounts.models import User, Role
 from projects.models import Project, Region, ProjectStatus
+from projects import graph_mail
+
+
+def _make_eml_bytes(subject='Vendor Quote', sender='Vendor <vendor@example.com>',
+                     to='sales@leap-arabia.com', attachments=None):
+    """Build real raw MIME bytes for the email-linking tests, so
+    _attach_email_to_project exercises the actual parse_eml_file() code path
+    instead of a mocked-out parse result. attachments is a list of
+    (filename, content_bytes, maintype, subtype)."""
+    msg = StdEmailMessage()
+    msg['Subject'] = subject
+    msg['From'] = sender
+    msg['To'] = to
+    msg.set_content('Please find the attached document(s).')
+    for filename, content, maintype, subtype in (attachments or []):
+        msg.add_attachment(content, maintype=maintype, subtype=subtype, filename=filename)
+    return msg.as_bytes()
 
 
 class ProjectRegionFilterTests(TestCase):
@@ -884,3 +905,719 @@ class TemplateCommentSyntaxTests(TestCase):
         self.assertEqual(single, 'AB')
         spanning = Template('A{# first' + self.NEWLINE + 'second #}B').render(Context({}))
         self.assertIn('{#', spanning)          # the comment leaks into the output
+
+
+class AttachEmailToProjectHelperTests(TestCase):
+    """_attach_email_to_project() is the single place that turns a live-inbox
+    email into real PipelineEmail + Document rows (used by both the
+    existing-project attach flow and project creation). These tests exercise
+    it directly, with a real parsed .eml, so the per-attachment document-type
+    matching and the "delink keeps documents" invariant are proven against
+    the actual parsing code, not a mocked-out shortcut."""
+
+    def setUp(self):
+        from projects.models import Document, PipelineEmail
+        self.Document = Document
+        self.PipelineEmail = PipelineEmail
+        self.region = Region.objects.create(name='Test Region', code='TST')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.user = User.objects.create_user('attacher', password='x')
+        self.project = Project.objects.create(
+            project_name='Helper Target', proposal_reference='TST-HELP-1',
+            region=self.region, status=self.status)
+
+    def _attach(self, message_id='msg-1', attachments=None, attachment_types=None,
+                subject='Vendor Quote'):
+        from projects.views import _attach_email_to_project
+        raw = _make_eml_bytes(subject=subject, attachments=attachments or [])
+        with patch('projects.graph_mail.fetch_raw_message_bytes', return_value=raw):
+            return _attach_email_to_project(
+                self.project, self.user, message_id, attachment_types=attachment_types)
+
+    def test_creates_pipeline_email_and_document_with_default_type(self):
+        pipeline_email, created_count = self._attach(
+            subject='Q-100', attachments=[('quote.pdf', b'%PDF-fake', 'application', 'pdf')])
+        self.assertEqual(created_count, 1)
+        self.assertEqual(pipeline_email.subject, 'Q-100')
+        self.assertTrue(pipeline_email.is_active)
+        self.assertEqual(pipeline_email.linked_by, self.user)
+        doc = self.Document.objects.get(source_pipeline_email=pipeline_email)
+        self.assertEqual(doc.name, 'quote.pdf')
+        self.assertEqual(doc.document_type, 'vendor_quotation')  # documented default
+        self.assertEqual(doc.project, self.project)
+        self.assertEqual(doc.uploaded_by, self.user)
+
+    def test_per_attachment_type_applied_by_filename_match(self):
+        _, created_count = self._attach(
+            attachments=[
+                ('quote.pdf', b'%PDF-1', 'application', 'pdf'),
+                ('po.pdf', b'%PDF-2', 'application', 'pdf'),
+            ],
+            attachment_types={'quote.pdf': 'vendor_quotation', 'po.pdf': 'po_document'},
+        )
+        self.assertEqual(created_count, 2)
+        self.assertEqual(
+            self.Document.objects.get(name='quote.pdf').document_type, 'vendor_quotation')
+        self.assertEqual(
+            self.Document.objects.get(name='po.pdf').document_type, 'po_document')
+
+    def test_invalid_document_type_fails_closed_to_default(self):
+        """A document_type that isn't one of Document.DOCUMENT_TYPE_CHOICES
+        (e.g. a tampered form submission) must never be persisted verbatim —
+        it must fall back to the safe default, not crash and not store
+        arbitrary text into a choices field."""
+        self._attach(
+            attachments=[('quote.pdf', b'%PDF', 'application', 'pdf')],
+            attachment_types={'quote.pdf': '<script>alert(1)</script>'},
+        )
+        doc = self.Document.objects.get(name='quote.pdf')
+        self.assertEqual(doc.document_type, 'vendor_quotation')
+
+    def test_type_missing_from_map_falls_back_to_default(self):
+        self._attach(
+            attachments=[('quote.pdf', b'%PDF', 'application', 'pdf')],
+            attachment_types={},
+        )
+        self.assertEqual(
+            self.Document.objects.get(name='quote.pdf').document_type, 'vendor_quotation')
+
+    def test_email_with_no_attachments_creates_zero_documents(self):
+        pipeline_email, created_count = self._attach(attachments=[])
+        self.assertEqual(created_count, 0)
+        self.assertEqual(self.Document.objects.filter(project=self.project).count(), 0)
+        self.assertTrue(self.PipelineEmail.objects.filter(pk=pipeline_email.pk).exists())
+
+    def test_relinking_delinks_previous_email_but_never_touches_its_documents(self):
+        """The critical Commercial Pipeline invariant: attaching a new email
+        replaces which one is 'active', but every document already created
+        from the previous email must remain exactly as it was."""
+        first_email, _ = self._attach(
+            message_id='msg-1', subject='First',
+            attachments=[('first.pdf', b'%PDF-1', 'application', 'pdf')])
+        first_doc = self.Document.objects.get(name='first.pdf')
+
+        second_email, _ = self._attach(
+            message_id='msg-2', subject='Second',
+            attachments=[('second.pdf', b'%PDF-2', 'application', 'pdf')])
+
+        first_email.refresh_from_db()
+        second_email.refresh_from_db()
+        self.assertFalse(first_email.is_active)
+        self.assertIsNotNone(first_email.delinked_at)
+        self.assertTrue(second_email.is_active)
+
+        # First document: untouched — still exists, still on the project,
+        # still attributed to the (now inactive) first email.
+        first_doc.refresh_from_db()
+        self.assertEqual(first_doc.project, self.project)
+        self.assertEqual(first_doc.source_pipeline_email, first_email)
+        self.assertEqual(self.Document.objects.filter(project=self.project).count(), 2)
+
+    def test_graph_failure_creates_no_partial_rows(self):
+        """If the raw message can't be fetched, nothing must be written —
+        no orphan PipelineEmail with no attachments, no partial state."""
+        from projects.views import _attach_email_to_project
+        with patch('projects.graph_mail.fetch_raw_message_bytes',
+                   side_effect=graph_mail.GraphMailError('mailbox unreachable')):
+            with self.assertRaises(graph_mail.GraphMailError):
+                _attach_email_to_project(self.project, self.user, 'msg-x')
+        self.assertEqual(self.PipelineEmail.objects.filter(project=self.project).count(), 0)
+        self.assertEqual(self.Document.objects.filter(project=self.project).count(), 0)
+
+    def test_unparseable_email_creates_no_partial_rows(self):
+        from projects.email_parsing import EmailParseError
+        from projects.views import _attach_email_to_project
+        with patch('projects.graph_mail.fetch_raw_message_bytes', return_value=b''):
+            with self.assertRaises(EmailParseError):
+                _attach_email_to_project(self.project, self.user, 'msg-empty')
+        self.assertEqual(self.PipelineEmail.objects.filter(project=self.project).count(), 0)
+
+
+class LinkPipelineEmailExistingProjectViewTests(TestCase):
+    """The live-inbox 'Add Emails' flow for an already-saved pipeline entry."""
+
+    def setUp(self):
+        from projects.models import Document, PipelineEmail
+        self.Document = Document
+        self.PipelineEmail = PipelineEmail
+        self.region = Region.objects.create(name='Test Region', code='TST')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.user = User.objects.create_user('linker', password='pass12345')
+        self.project = Project.objects.create(
+            project_name='Linkable', proposal_reference='TST-LINK-1',
+            region=self.region, status=self.status, owner=self.user)
+        self.url = reverse('projects:link_pipeline_email', kwargs={'pk': self.project.pk})
+
+    def _inbox_message(self, message_id='m1', name='quote.pdf'):
+        return {
+            'id': message_id, 'subject': 'A vendor quote', 'sender_name': 'Vendor',
+            'sender_email': 'vendor@example.com', 'cc': '', 'received_at': '2026-08-01T09:00:00Z',
+            'body_preview': 'preview text',
+            'attachments': [
+                {'id': 'att-1', 'name': name, 'content_type': 'application/pdf', 'size': 10},
+            ],
+        }
+
+    # --- auth ---
+
+    def test_anonymous_get_redirected_to_login(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login', response.url)
+
+    def test_anonymous_post_redirected_to_login_and_creates_nothing(self):
+        response = self.client.post(self.url, {'message_id': 'm1'})
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login', response.url)
+        self.assertEqual(self.PipelineEmail.objects.count(), 0)
+
+    # --- GET / inbox listing ---
+
+    def test_get_renders_inbox_with_type_dropdown_per_attachment(self):
+        self.client.force_login(self.user)
+        with patch('projects.graph_mail.list_inbox_messages',
+                   return_value=[self._inbox_message()]):
+            response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'quote.pdf')
+        self.assertContains(response, 'name="doc_type"')
+        self.assertEqual(response.context['document_type_choices'], self.Document.DOCUMENT_TYPE_CHOICES)
+
+    def test_get_degrades_gracefully_when_graph_unreachable(self):
+        self.client.force_login(self.user)
+        with patch('projects.graph_mail.list_inbox_messages',
+                   side_effect=graph_mail.GraphMailError('no credentials configured')):
+            response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)  # never a 500
+        self.assertIn('no credentials configured', response.context['inbox_error'])
+
+    # --- POST / attach ---
+
+    def test_post_without_message_id_shows_error_and_creates_nothing(self):
+        self.client.force_login(self.user)
+        response = self.client.post(self.url, {})
+        self.assertRedirects(response, self.url)
+        self.assertEqual(self.PipelineEmail.objects.count(), 0)
+
+    def test_post_happy_path_creates_email_and_documents_with_chosen_types(self):
+        self.client.force_login(self.user)
+        raw = _make_eml_bytes(subject='Q-1', attachments=[
+            ('a.pdf', b'%PDF-A', 'application', 'pdf'),
+            ('b.xlsx', b'PK-fake', 'application', 'vnd.ms-excel'),
+        ])
+        with patch('projects.graph_mail.fetch_raw_message_bytes', return_value=raw):
+            response = self.client.post(self.url, {
+                'message_id': 'm1',
+                'doc_filename': ['a.pdf', 'b.xlsx'],
+                'doc_type': ['po_document', 'contract'],
+            })
+        self.assertRedirects(response, reverse('projects:detail', kwargs={'pk': self.project.pk}))
+        self.assertEqual(self.Document.objects.get(name='a.pdf').document_type, 'po_document')
+        self.assertEqual(self.Document.objects.get(name='b.xlsx').document_type, 'contract')
+
+    def test_post_invalid_doc_type_fails_closed(self):
+        self.client.force_login(self.user)
+        raw = _make_eml_bytes(attachments=[('a.pdf', b'%PDF-A', 'application', 'pdf')])
+        with patch('projects.graph_mail.fetch_raw_message_bytes', return_value=raw):
+            self.client.post(self.url, {
+                'message_id': 'm1', 'doc_filename': ['a.pdf'], 'doc_type': ['not-a-real-type'],
+            })
+        self.assertEqual(self.Document.objects.get(name='a.pdf').document_type, 'vendor_quotation')
+
+    def test_post_graph_failure_shows_error_and_creates_nothing(self):
+        self.client.force_login(self.user)
+        with patch('projects.graph_mail.fetch_raw_message_bytes',
+                   side_effect=graph_mail.GraphMailError('timeout')):
+            response = self.client.post(self.url, {'message_id': 'm1'})
+        self.assertRedirects(response, self.url)
+        self.assertEqual(self.PipelineEmail.objects.count(), 0)
+
+    def test_relink_via_view_keeps_previous_email_documents(self):
+        self.client.force_login(self.user)
+        raw1 = _make_eml_bytes(subject='First', attachments=[
+            ('first.pdf', b'%PDF-1', 'application', 'pdf')])
+        with patch('projects.graph_mail.fetch_raw_message_bytes', return_value=raw1):
+            self.client.post(self.url, {'message_id': 'm1'})
+
+        raw2 = _make_eml_bytes(subject='Second', attachments=[
+            ('second.pdf', b'%PDF-2', 'application', 'pdf')])
+        with patch('projects.graph_mail.fetch_raw_message_bytes', return_value=raw2):
+            self.client.post(self.url, {'message_id': 'm2'})
+
+        self.assertEqual(self.Document.objects.filter(project=self.project).count(), 2)
+        active = self.project.linked_emails.filter(is_active=True).first()
+        self.assertEqual(active.subject, 'Second')
+        self.assertFalse(self.PipelineEmail.objects.get(subject='First').is_active)
+
+    def test_csrf_enforced(self):
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(self.user)
+        response = csrf_client.post(self.url, {'message_id': 'm1'})
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(self.PipelineEmail.objects.count(), 0)
+
+
+class LinkPipelineEmailNewViewTests(TestCase):
+    """The 'Add Emails' flow while creating a brand-new pipeline entry.
+
+    This is the flow that was explicitly redesigned mid-project after an
+    earlier version wrongly auto-created a real Project row (and fired its
+    costing-sheet + team-notification side effects) the moment an email was
+    picked. These tests guard that regression directly: nothing here may
+    ever touch Project/PipelineEmail/Document."""
+
+    def setUp(self):
+        from projects.models import Document, PipelineEmail
+        self.Document = Document
+        self.PipelineEmail = PipelineEmail
+        self.user = User.objects.create_user('creator', password='pass12345')
+        self.url = reverse('projects:link_pipeline_email_new')
+
+    def _inbox_message(self):
+        return {
+            'id': 'm1', 'subject': 'A vendor quote', 'sender_name': 'Vendor',
+            'sender_email': 'vendor@example.com', 'cc': '', 'received_at': '2026-08-01T09:00:00Z',
+            'body_preview': 'preview text',
+            'attachments': [
+                {'id': 'att-1', 'name': 'quote.pdf', 'content_type': 'application/pdf', 'size': 10},
+            ],
+        }
+
+    def test_anonymous_redirected_to_login(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login', response.url)
+
+    def test_get_lists_inbox_and_creates_nothing(self):
+        self.client.force_login(self.user)
+        with patch('projects.graph_mail.list_inbox_messages',
+                   return_value=[self._inbox_message()]):
+            response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'quote.pdf')
+        # No per-document type dropdown here — there's no project yet to
+        # attach to; typing happens on the create form after the redirect.
+        self.assertNotContains(response, 'name="doc_type"')
+        self.assertEqual(Project.objects.count(), 0)
+
+    def test_post_without_message_id_redirects_with_error_and_creates_nothing(self):
+        self.client.force_login(self.user)
+        response = self.client.post(self.url, {})
+        self.assertRedirects(response, self.url)
+        self.assertEqual(Project.objects.count(), 0)
+
+    def test_post_happy_path_never_touches_the_database(self):
+        """The core regression guard: picking an email while creating a new
+        entry must be a pure redirect, never a database write."""
+        self.client.force_login(self.user)
+        response = self.client.post(self.url, {'message_id': 'special-id-123'})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(Project.objects.count(), 0)
+        self.assertEqual(self.PipelineEmail.objects.count(), 0)
+        self.assertEqual(self.Document.objects.count(), 0)
+
+    def test_post_redirect_round_trips_special_characters_in_message_id(self):
+        """Graph message IDs can contain '+' and '/'. An un-encoded '+' in a
+        query string decodes back as a space, corrupting the id — this
+        proves urlencode() is actually protecting the round trip."""
+        from urllib.parse import urlsplit, parse_qs
+        self.client.force_login(self.user)
+        tricky_id = 'AAMkAGI2+special/chars=='
+        response = self.client.post(self.url, {'message_id': tricky_id})
+        self.assertEqual(response.status_code, 302)
+        query = parse_qs(urlsplit(response.url).query)
+        self.assertEqual(query['picked_email'][0], tricky_id)
+
+    def test_csrf_enforced_creates_nothing(self):
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(self.user)
+        response = csrf_client.post(self.url, {'message_id': 'm1'})
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(Project.objects.count(), 0)
+
+
+class ViewPipelineInboxAttachmentTests(TestCase):
+    """Opening/previewing one attachment straight from the live inbox,
+    before it's attached to anything. Read-only, and must work both for an
+    existing project (pk given) and while creating a new one (pk=None)."""
+
+    def setUp(self):
+        self.region = Region.objects.create(name='Test Region', code='TST')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.user = User.objects.create_user('viewer', password='pass12345')
+        self.project = Project.objects.create(
+            project_name='Viewable', proposal_reference='TST-VIEW-1',
+            region=self.region, status=self.status)
+        self.url_with_pk = reverse('projects:view_pipeline_inbox_attachment', kwargs={
+            'pk': self.project.pk, 'message_id': 'm1', 'attachment_id': 'a1'})
+        self.url_without_pk = reverse('projects:view_pipeline_inbox_attachment_new', kwargs={
+            'message_id': 'm1', 'attachment_id': 'a1'})
+
+    def test_anonymous_redirected_to_login(self):
+        response = self.client.get(self.url_with_pk)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login', response.url)
+
+    def test_404_when_project_does_not_exist(self):
+        self.client.force_login(self.user)
+        url = reverse('projects:view_pipeline_inbox_attachment', kwargs={
+            'pk': 999999, 'message_id': 'm1', 'attachment_id': 'a1'})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_with_pk_returns_file_bytes(self):
+        self.client.force_login(self.user)
+        with patch('projects.graph_mail.fetch_attachment_bytes',
+                   return_value=('quote.pdf', 'application/pdf', b'%PDF-fake-bytes')):
+            response = self.client.get(self.url_with_pk)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b'%PDF-fake-bytes')
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+        self.assertIn('quote.pdf', response['Content-Disposition'])
+
+    def test_without_pk_works_with_no_project(self):
+        self.client.force_login(self.user)
+        with patch('projects.graph_mail.fetch_attachment_bytes',
+                   return_value=('quote.pdf', 'application/pdf', b'%PDF-fake-bytes')):
+            response = self.client.get(self.url_without_pk)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b'%PDF-fake-bytes')
+
+    def test_graph_failure_redirects_gracefully_with_pk(self):
+        self.client.force_login(self.user)
+        with patch('projects.graph_mail.fetch_attachment_bytes',
+                   side_effect=graph_mail.GraphMailError('gone')):
+            response = self.client.get(self.url_with_pk)
+        self.assertRedirects(
+            response, reverse('projects:link_pipeline_email', kwargs={'pk': self.project.pk}))
+
+    def test_graph_failure_redirects_gracefully_without_pk(self):
+        self.client.force_login(self.user)
+        with patch('projects.graph_mail.fetch_attachment_bytes',
+                   side_effect=graph_mail.GraphMailError('gone')):
+            response = self.client.get(self.url_without_pk)
+        self.assertRedirects(response, reverse('projects:link_pipeline_email_new'))
+
+    def test_malicious_filename_cannot_inject_a_header_or_crash_the_request(self):
+        """Regression test: the attachment filename comes straight from
+        Graph (untrusted, external data). A filename containing CRLF used
+        to reach HttpResponse unsanitised and raise an unhandled
+        BadHeaderError (a 500) — worse, it's the shape of a header-injection
+        attempt. This must now fail closed: 200, no crash, no injected
+        header line."""
+        self.client.force_login(self.user)
+        evil_filename = 'evil.pdf"\r\nX-Injected-Header: yes\r\n\r\n'
+        with patch('projects.graph_mail.fetch_attachment_bytes',
+                   return_value=(evil_filename, 'application/pdf', b'%PDF')):
+            response = self.client.get(self.url_with_pk)
+        self.assertEqual(response.status_code, 200)
+        header_value = response['Content-Disposition']
+        self.assertNotIn('\r', header_value)
+        self.assertNotIn('\n', header_value)
+        self.assertNotIn('X-Injected-Header', response.headers)
+
+
+class DelinkPipelineEmailViewTests(TestCase):
+    """Delinking an email must never remove the documents it created —
+    documented invariant of PipelineEmail (see projects/models.py)."""
+
+    def setUp(self):
+        from projects.models import Document, PipelineEmail
+        from django.core.files.base import ContentFile
+        self.Document = Document
+        self.region = Region.objects.create(name='Test Region', code='TST')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.user = User.objects.create_user('delinker', password='pass12345')
+        self.project = Project.objects.create(
+            project_name='Delinkable', proposal_reference='TST-DEL-1',
+            region=self.region, status=self.status, owner=self.user)
+        self.email = PipelineEmail.objects.create(
+            project=self.project, subject='Active email', is_active=True, linked_by=self.user)
+        self.doc = Document.objects.create(
+            project=self.project, document_type='vendor_quotation', name='kept.pdf',
+            uploaded_by=self.user, source_pipeline_email=self.email)
+        self.doc.file.save('kept.pdf', ContentFile(b'x'), save=True)
+        self.url = reverse('projects:delink_pipeline_email', kwargs={'pk': self.project.pk})
+
+    def test_anonymous_redirected_to_login(self):
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login', response.url)
+
+    def test_get_not_allowed(self):
+        self.client.force_login(self.user)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 405)
+
+    def test_post_with_no_active_email_shows_info_and_does_not_crash(self):
+        self.email.is_active = False
+        self.email.save(update_fields=['is_active'])
+        self.client.force_login(self.user)
+        response = self.client.post(self.url, follow=True)
+        self.assertEqual(response.status_code, 200)
+        msgs = [str(m) for m in response.context['messages']]
+        self.assertTrue(any('no linked email' in m.lower() for m in msgs))
+
+    def test_post_delinks_active_email_but_keeps_its_documents(self):
+        self.client.force_login(self.user)
+        response = self.client.post(self.url)
+        self.assertRedirects(response, reverse('projects:detail', kwargs={'pk': self.project.pk}))
+
+        self.email.refresh_from_db()
+        self.assertFalse(self.email.is_active)
+        self.assertEqual(self.email.delinked_by, self.user)
+        self.assertIsNotNone(self.email.delinked_at)
+
+        # The critical assertion: the document is completely untouched.
+        self.doc.refresh_from_db()
+        self.assertEqual(self.doc.project, self.project)
+        self.assertEqual(self.doc.source_pipeline_email, self.email)
+        self.assertTrue(self.Document.objects.filter(pk=self.doc.pk).exists())
+
+    def test_csrf_enforced(self):
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(self.user)
+        response = csrf_client.post(self.url)
+        self.assertEqual(response.status_code, 403)
+        self.email.refresh_from_db()
+        self.assertTrue(self.email.is_active)  # untouched
+
+
+class AddProjectDocumentsBulkViewTests(TestCase):
+    """Uploading several documents at once, each with its own document type
+    chosen in the preview list before upload."""
+
+    def setUp(self):
+        from projects.models import Document
+        self.Document = Document
+        self.region = Region.objects.create(name='Test Region', code='TST')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.user = User.objects.create_user('bulkuploader', password='pass12345')
+        self.project = Project.objects.create(
+            project_name='Bulk Target', proposal_reference='TST-BULK-1',
+            region=self.region, status=self.status, owner=self.user)
+        self.url = reverse('projects:add_documents_bulk', kwargs={'pk': self.project.pk})
+
+    def test_anonymous_redirected_to_login(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login', response.url)
+
+    def test_get_renders_with_document_type_choices(self):
+        self.client.force_login(self.user)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['document_type_choices'], self.Document.DOCUMENT_TYPE_CHOICES)
+
+    def test_post_no_files_shows_error_and_creates_nothing(self):
+        self.client.force_login(self.user)
+        response = self.client.post(self.url, {})
+        self.assertRedirects(response, self.url)
+        self.assertEqual(self.Document.objects.count(), 0)
+
+    def test_post_happy_path_creates_one_document_per_file_with_chosen_types(self):
+        self.client.force_login(self.user)
+        f1 = SimpleUploadedFile('one.pdf', b'%PDF-1', content_type='application/pdf')
+        f2 = SimpleUploadedFile('two.docx', b'PK-fake', content_type='application/msword')
+        response = self.client.post(self.url, {
+            'files': [f1, f2],
+            'document_type_0': 'po_document',
+            'document_type_1': 'contract',
+        })
+        self.assertRedirects(response, reverse('projects:detail', kwargs={'pk': self.project.pk}))
+        self.assertEqual(self.Document.objects.filter(project=self.project).count(), 2)
+        self.assertEqual(self.Document.objects.get(name='one.pdf').document_type, 'po_document')
+        self.assertEqual(self.Document.objects.get(name='two.docx').document_type, 'contract')
+
+    def test_post_invalid_type_fails_closed_to_other(self):
+        self.client.force_login(self.user)
+        f1 = SimpleUploadedFile('one.pdf', b'%PDF-1', content_type='application/pdf')
+        self.client.post(self.url, {'files': [f1], 'document_type_0': '<script>alert(1)</script>'})
+        self.assertEqual(self.Document.objects.get(name='one.pdf').document_type, 'other')
+
+    def test_post_missing_type_for_a_file_fails_closed_to_other(self):
+        self.client.force_login(self.user)
+        f1 = SimpleUploadedFile('one.pdf', b'%PDF-1', content_type='application/pdf')
+        self.client.post(self.url, {'files': [f1]})  # no document_type_0 at all
+        self.assertEqual(self.Document.objects.get(name='one.pdf').document_type, 'other')
+
+    def test_csrf_enforced_creates_nothing(self):
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(self.user)
+        f1 = SimpleUploadedFile('one.pdf', b'%PDF-1', content_type='application/pdf')
+        response = csrf_client.post(self.url, {'files': [f1], 'document_type_0': 'po_document'})
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(self.Document.objects.count(), 0)
+
+
+class ProjectCreateViewPickedEmailTests(TestCase):
+    """The deferred-materialization design: picking an email while creating
+    a new pipeline entry must never touch the database until the real
+    'Create' button is clicked, and the project/costing-sheet/notification
+    side effects that already fire on every real create must keep firing
+    unconditionally, whether or not the picked email attaches successfully.
+
+    This whole feature exists because an earlier version got this wrong —
+    it auto-created a real Project the moment an email was picked. These
+    tests guard that regression directly."""
+
+    def setUp(self):
+        from projects.models import Document, PipelineEmail
+        self.Document = Document
+        self.PipelineEmail = PipelineEmail
+        from accounts.permissions import seed_default_permissions
+        self.region = Region.objects.create(name='Test Region', code='TST')  # non-LNA
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        seed_default_permissions()
+        self.user = User.objects.create_user('pmcreator', password='pass12345')
+        self.user.role = role
+        self.user.region = self.region
+        self.user.save()
+        self.client.force_login(self.user)
+        self.url = reverse('projects:create')
+
+    def _post_data(self, ref, **over):
+        d = {
+            'project_name': 'New Pipeline', 'proposal_reference': ref,
+            'status': self.status.pk, 'region': self.region.pk, 'owner': '',
+            'estimated_value': '0', 'estimated_value_usd': '0',
+            'estimated_value_per_annum': '0', 'estimated_gp': '0',
+            'actual_sales': '0', 'success_quotient': '0',
+            'client_rfq_reference': '', 'po_number': '', 'customer': '',
+            'end_user': '', 'project_stage': '', 'year': '', 'po_award_quarter': '',
+            'contact_with': '', 'remarks': '', 'notes': '', 'portal_url': '',
+        }
+        d.update(over)
+        return d
+
+    def _picked_email_json(self, message_id='msg-9', document_type='po_document',
+                            filename='quote.pdf'):
+        return json.dumps({
+            'id': message_id, 'subject': 'Vendor Quote Msg', 'sender_name': 'Vendor',
+            'sender_email': 'vendor@example.com', 'cc': '', 'received_at': '2026-08-01T10:00:00Z',
+            'body_preview': 'preview',
+            'attachments': [{
+                'id': 'att-1', 'name': filename, 'content_type': 'application/pdf',
+                'size': 10, 'document_type': document_type,
+            }],
+        })
+
+    # --- GET must never create anything, must only fetch on GET ---
+
+    def test_get_without_picked_email_never_calls_graph(self):
+        with patch('projects.graph_mail.get_message_summary') as mock_summary:
+            response = self.client.get(self.url)
+        mock_summary.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+
+    def test_get_with_picked_email_populates_initial_and_creates_nothing(self):
+        """The core regression guard: merely landing on the create page with
+        ?picked_email=... (a GET) must never create a Project."""
+        summary = {
+            'id': 'msg-9', 'subject': 'Vendor Quote Msg', 'sender_name': 'Vendor',
+            'sender_email': 'vendor@example.com', 'cc': '', 'received_at': '2026-08-01T10:00:00Z',
+            'body_preview': 'preview',
+            'attachments': [{'id': 'att-1', 'name': 'quote.pdf',
+                              'content_type': 'application/pdf', 'size': 10}],
+        }
+        with patch('projects.graph_mail.get_message_summary', return_value=summary):
+            response = self.client.get(self.url, {'picked_email': 'msg-9'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Project.objects.count(), 0)
+        self.assertEqual(self.PipelineEmail.objects.count(), 0)
+
+        picked = json.loads(response.context['form'].initial['picked_email_json'])
+        self.assertEqual(picked['id'], 'msg-9')
+        self.assertEqual(picked['attachments'][0]['document_type'], 'vendor_quotation')
+
+        msgs = [str(m) for m in response.context['messages']]
+        self.assertFalse(any('created successfully' in m.lower() for m in msgs))
+
+    def test_get_with_picked_email_graph_failure_degrades_gracefully(self):
+        with patch('projects.graph_mail.get_message_summary',
+                   side_effect=graph_mail.GraphMailError('mailbox unreachable')):
+            response = self.client.get(self.url, {'picked_email': 'msg-9'})
+        self.assertEqual(response.status_code, 200)  # never a 500
+        self.assertEqual(Project.objects.count(), 0)
+        msgs = [str(m) for m in response.context['messages']]
+        self.assertTrue(any('could not load that email' in m.lower() for m in msgs))
+
+    # --- a real Create POST is unaffected when no email was picked ---
+
+    def test_post_real_create_without_picked_email_is_unaffected(self):
+        with patch('projects.graph_mail.fetch_raw_message_bytes') as mock_fetch:
+            response = self.client.post(self.url, self._post_data('TST-NOEMAIL-1'))
+        mock_fetch.assert_not_called()
+        self.assertEqual(response.status_code, 302)
+        project = Project.objects.get(project_name='New Pipeline')
+        self.assertTrue(CostingSheet.objects.filter(project=project).exists())
+        self.assertEqual(self.PipelineEmail.objects.filter(project=project).count(), 0)
+
+        response = self.client.get(response.url)
+        msgs = [str(m) for m in response.context['messages']]
+        self.assertEqual(sum('created successfully' in m.lower() for m in msgs), 1)
+
+    # --- POST with a picked email materializes it, on top of the existing behavior ---
+
+    def test_post_create_with_picked_email_materializes_email_and_document(self):
+        raw = _make_eml_bytes(subject='Vendor Quote Msg', attachments=[
+            ('quote.pdf', b'%PDF-fake', 'application', 'pdf')])
+        data = self._post_data('TST-WITHEMAIL-1',
+                                picked_email_json=self._picked_email_json())
+        with patch('projects.graph_mail.fetch_raw_message_bytes', return_value=raw) as mock_fetch:
+            response = self.client.post(self.url, data)
+        self.assertEqual(response.status_code, 302)
+        mock_fetch.assert_called_once()
+        self.assertEqual(mock_fetch.call_args[0][1], 'msg-9')  # picked['id'] passed through
+
+        project = Project.objects.get(project_name='New Pipeline')
+        # Existing, unconditional create side effects: unaffected.
+        self.assertTrue(CostingSheet.objects.filter(project=project).exists())
+        # New: the picked email is now a real row, with the chosen type applied.
+        pipeline_email = self.PipelineEmail.objects.get(project=project)
+        self.assertEqual(pipeline_email.subject, 'Vendor Quote Msg')
+        doc = self.Document.objects.get(project=project, source_pipeline_email=pipeline_email)
+        self.assertEqual(doc.name, 'quote.pdf')
+        self.assertEqual(doc.document_type, 'po_document')
+
+        response = self.client.get(response.url)
+        msgs = [str(m) for m in response.context['messages']]
+        self.assertEqual(sum('created successfully' in m.lower() for m in msgs), 1)
+        self.assertFalse(any('could not be attached' in m.lower() for m in msgs))
+
+    def test_post_create_graph_failure_still_creates_project_and_warns(self):
+        """The project/costing-sheet/notification are already durably
+        committed by the time the picked email is materialized — a Graph
+        failure at that point must degrade to a warning, never roll back
+        or 500 on top of an otherwise-successful create."""
+        data = self._post_data('TST-GRAPHFAIL-1', picked_email_json=self._picked_email_json())
+        before = Project.objects.count()
+        with patch('projects.graph_mail.fetch_raw_message_bytes',
+                   side_effect=graph_mail.GraphMailError('mailbox unreachable')):
+            response = self.client.post(self.url, data)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(Project.objects.count(), before + 1)
+        project = Project.objects.get(project_name='New Pipeline')
+        self.assertTrue(CostingSheet.objects.filter(project=project).exists())
+        self.assertEqual(self.PipelineEmail.objects.filter(project=project).count(), 0)
+
+        response = self.client.get(response.url)
+        msgs = [str(m) for m in response.context['messages']]
+        self.assertTrue(any('could not be attached' in m.lower() for m in msgs))
+
+    def test_post_create_with_malformed_picked_email_json_does_not_crash(self):
+        data = self._post_data('TST-MALFORMED-1', picked_email_json='not-valid-json{{{')
+        response = self.client.post(self.url, data)
+        self.assertEqual(response.status_code, 302)  # never a 500
+        project = Project.objects.get(project_name='New Pipeline')
+        self.assertTrue(CostingSheet.objects.filter(project=project).exists())
+
+    def test_post_create_with_picked_email_missing_id_does_not_crash(self):
+        data = self._post_data(
+            'TST-NOID-1', picked_email_json=json.dumps({'attachments': []}))
+        response = self.client.post(self.url, data)
+        self.assertEqual(response.status_code, 302)  # never a 500
+        project = Project.objects.get(project_name='New Pipeline')
+        self.assertTrue(CostingSheet.objects.filter(project=project).exists())
+        self.assertEqual(self.PipelineEmail.objects.filter(project=project).count(), 0)
