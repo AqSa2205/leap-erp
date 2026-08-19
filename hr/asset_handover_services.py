@@ -98,7 +98,7 @@ def _finalize_handover(handover, allowed_statuses, apply, race_message, post_sav
 
     for field in ('status', 'authorized_signature', 'authorized_at',
                   'received_signature', 'received_at',
-                  'returned_signature', 'returned_at',
+                  'return_remarks', 'returned_signature', 'returned_at',
                   'return_received_by', 'return_received_by_id',
                   'return_received_signature', 'return_received_at'):
         setattr(handover, field, getattr(locked, field))
