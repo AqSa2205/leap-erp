@@ -264,7 +264,11 @@ def _build_reset_email_html(user_name, reset_url, self_requested=False):
 
     <!-- Header -->
     <tr>
-        <td style="background:linear-gradient(135deg,#C41E3A,#a01830); padding:35px 40px; text-align:center;">
+        <!-- bgcolor is the Outlook fallback: it renders mail through Word,
+             which ignores CSS gradients, and without it this header loses its
+             background entirely and the white heading below becomes invisible.
+             Clients that do support the gradient paint over the flat colour. -->
+        <td bgcolor="#C41E3A" style="background:linear-gradient(135deg,#C41E3A,#a01830); padding:35px 40px; text-align:center;">
             <img src="https://leap-erp.onrender.com/static/images/leap_logo.jpg" alt="Leap Networks" style="max-width:180px; margin-bottom:15px;" />
             <h1 style="color:#ffffff; margin:0; font-size:22px; font-weight:700; letter-spacing:0.5px;">Password Reset</h1>
         </td>
