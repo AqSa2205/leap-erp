@@ -8702,7 +8702,13 @@ class LateThresholdTests(TransactionTestCase):
             _time.sleep(1)
             self.assertEqual(len(mail.outbox), 1)
             sent = mail.outbox[0]
-            self.assertIn('Late Tester', sent.body)
+            self.assertIn('Dear Employee', sent.body)
+            self.assertIn('three occasions', sent.body)
+            self.assertIn('attached', sent.body)
+            self.assertEqual(len(sent.alternatives), 1)
+            html_content, mimetype = sent.alternatives[0]
+            self.assertEqual(mimetype, 'text/html')
+            self.assertIn('Admin Team', html_content)
             self.assertEqual(len(sent.attachments), 1)
             filename, content, mimetype = sent.attachments[0]
             self.assertEqual(mimetype, 'application/pdf')

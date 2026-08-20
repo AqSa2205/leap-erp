@@ -139,7 +139,7 @@ class AttendanceRecord(models.Model):
         # network call to actually deliver it.
         import threading
         from django.conf import settings
-        from django.core.mail import EmailMessage
+        from django.core.mail import EmailMultiAlternatives
         from django.db import connections
         import logging
         logger = logging.getLogger(__name__)
@@ -154,15 +154,35 @@ class AttendanceRecord(models.Model):
             try:
                 from hr.views import build_attendance_pdf
                 buffer = build_attendance_pdf(emp, month_start, month_end)
-                msg = EmailMessage(
+                plain_body = (
+                    'Dear Employee,\n\n'
+                    'This is an automated notification regarding your attendance record.\n\n'
+                    'Our system indicates that you have recorded late arrivals on three occasions '
+                    'within the current cycle. In accordance with company policy, three late arrivals '
+                    'are counted as one day of absence. If you believe this notification is incorrect '
+                    'or wish to discuss your attendance record, please contact the HR Department.\n\n'
+                    'Your attendance PDF is attached.\n\n'
+                    'Kind regards,\n'
+                    'Admin Team\n\n'
+                    'Leap Networks Arabia\n'
+                    'P.O. Box \u2013 70005, Al-Khobar-31952, Kingdom of Saudi Arabia\n'
+                    'TEL: (+966) 13 8491867 X 108\n'
+                    'Web: www.leap-arabia.com\n\n'
+                    'Disclaimer: This email and its attachments are confidential and intended only for '
+                    'the recipient(s). If you are not the intended recipient, please notify the sender '
+                    'and delete the message. Unauthorized use, disclosure, or distribution of the email '
+                    'or the documents is prohibited. Leap Networks Arabia complies with GDPR and ensures '
+                    'the security of personal data. While we take steps to protect against malware, we '
+                    "cannot guarantee the email's security. Please verify any information before acting on it."
+                )
+                html_body = _build_late_attendance_email_html()
+                msg = EmailMultiAlternatives(
                     subject=f'Attendance Notice - {late_count} Late Arrivals in {month_label}',
-                    body=(
-                        f'{emp.full_name},\nYou have been marked Late {late_count} times in {month_label}. '
-                        f'Your attendance record for the month is attached.\nLeap ERP'
-                    ),
+                    body=plain_body,
                     from_email=settings.DEFAULT_FROM_EMAIL,
                     to=[to_email],
                 )
+                msg.attach_alternative(html_body, 'text/html')
                 msg.attach(f'{emp.full_name}_Attendance.pdf', buffer.getvalue(), 'application/pdf')
                 msg.send(fail_silently=False)
             except Exception:
@@ -171,6 +191,82 @@ class AttendanceRecord(models.Model):
                 connections.close_all()
 
         threading.Thread(target=_send, daemon=True).start()
+
+
+def _build_late_attendance_email_html():
+    """Build the branded HTML version of the 3-lates attendance email,
+    matching accounts.views._build_reset_email_html's styling. Content is
+    fixed (no per-employee variables) - the greeting is deliberately
+    generic ('Dear Employee'), not personalised."""
+    return '''<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0; padding:0; background:#f4f4f4; font-family:Arial,Helvetica,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4; padding:30px 0;">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.08);">
+
+    <!-- Header -->
+    <tr>
+        <td style="background:linear-gradient(135deg,#C41E3A,#a01830); padding:35px 40px; text-align:center;">
+            <h1 style="color:#ffffff; margin:0; font-size:22px; font-weight:700; letter-spacing:0.5px;">Attendance Notice</h1>
+        </td>
+    </tr>
+
+    <!-- Body -->
+    <tr>
+        <td style="padding:40px;">
+            <p style="color:#333; font-size:16px; margin:0 0 20px;">Dear Employee,</p>
+
+            <p style="color:#555; font-size:14px; line-height:1.7; margin:0 0 20px;">
+                This is an automated notification regarding your attendance record.
+            </p>
+
+            <p style="color:#555; font-size:14px; line-height:1.7; margin:0 0 20px;">
+                Our system indicates that you have recorded late arrivals on three occasions within the current cycle.
+                In accordance with company policy, three late arrivals are counted as one day of absence.
+                If you believe this notification is incorrect or wish to discuss your attendance record,
+                please contact the HR Department.
+            </p>
+
+            <p style="color:#555; font-size:14px; line-height:1.7; margin:0 0 30px;">
+                Your attendance PDF is attached.
+            </p>
+
+            <p style="color:#333; font-size:14px; margin:0 0 4px;">Kind regards,</p>
+            <p style="color:#333; font-size:14px; margin:0 0 15px;">Admin Team</p>
+            <img src="https://leap-erp.onrender.com/static/images/leap_logo.jpg" alt="Leap Networks Arabia" style="max-width:160px; margin-bottom:20px; display:block;" />
+
+            <p style="color:#777; font-size:12px; line-height:1.6; margin:0;">
+                Leap Networks Arabia<br>
+                P.O. Box &ndash; 70005, Al-Khobar-31952, Kingdom of Saudi Arabia<br>
+                TEL: (+966) 13 8491867 X 108<br>
+                Web: <a href="https://www.leap-arabia.com" style="color:#C41E3A; text-decoration:none;">www.leap-arabia.com</a>
+            </p>
+        </td>
+    </tr>
+
+    <!-- Footer / Disclaimer -->
+    <tr>
+        <td style="background:#2a2a2a; padding:22px 40px;">
+            <p style="color:#999; font-size:10px; line-height:1.6; margin:0;">
+                Disclaimer: This email and its attachments are confidential and intended only for the recipient(s).
+                If you are not the intended recipient, please notify the sender and delete the message.
+                Unauthorized use, disclosure, or distribution of the email or the documents is prohibited.
+                Leap Networks Arabia complies with GDPR and ensures the security of personal data.
+                While we take steps to protect against malware, we cannot guarantee the email's security.
+                Please verify any information before acting on it.
+            </p>
+        </td>
+    </tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>'''
+
+
 class WorkingDay(models.Model):
     """A normally-weekend date that is a working day (inverse of Holiday)."""
     date = models.DateField(unique=True)
