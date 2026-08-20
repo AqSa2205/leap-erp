@@ -12,6 +12,12 @@ class Asset(models.Model):
     asset_type = models.CharField(max_length=50, blank=True, verbose_name='Asset Type')
     serial_number = models.CharField(max_length=255, blank=True, verbose_name='Serial No.')
     specifications = models.CharField(max_length=255, blank=True, verbose_name='Specifications')
+    model = models.CharField(max_length=255, blank=True, verbose_name='Model')
+    part_number = models.CharField(max_length=100, blank=True, verbose_name='Part Number')
+    tag_number = models.CharField(max_length=100, blank=True, verbose_name='Tag Number')
+    item_description = models.TextField(blank=True, verbose_name='Item Description')
+    accessories = models.TextField(blank=True, verbose_name='Accessories')
+    software_installed = models.TextField(blank=True, verbose_name='Software Installed')
     invoice_number = models.CharField(max_length=100, blank=True, verbose_name='Invoice Number')
     employee_name = models.CharField(max_length=255, blank=True, verbose_name='Employee Name')
     department = models.CharField(max_length=100, blank=True, verbose_name='Department')
@@ -73,9 +79,28 @@ class Asset(models.Model):
         return self.assignments.filter(returned_at__isnull=True).select_related('employee').first()
 
     @property
+    def active_handover(self):
+        """The currently-active AssetHandover for this asset, or None. This
+        is the source of truth for current custody - active_assignment
+        (above) is the legacy AssetAssignment record, kept only for the
+        one-time migration and the duplicate-serial-number check below."""
+        return self.handovers.filter(status='active').select_related('employee').first()
+
+    @property
+    def pending_handover(self):
+        # A handover for this asset that has not reached Active yet (still
+        # being authorized, or awaiting the employee's signature).
+        # Distinct from active_handover - checked separately so "Issue to
+        # Employee" doesn't offer a second handover for an item that
+        # already has one in flight, even before it's in someone's custody.
+        return self.handovers.filter(
+            status__in=('pending_authorization', 'pending_receipt')
+        ).select_related('employee').first()
+
+    @property
     def current_holder(self):
-        a = self.active_assignment
-        return a.employee if a else None
+        h = self.active_handover
+        return h.employee if h else None
 
     @property
     def duplicate_active_assignments(self):
@@ -245,6 +270,19 @@ class Vehicle(models.Model):
             self.insurance_status == 'expired' or
             self.vehicle_status != 'valid'
         )
+
+    @property
+    def active_handover(self):
+        """The currently-active AssetHandover for this vehicle, or None."""
+        return self.handovers.filter(status='active').first()
+
+    @property
+    def pending_handover(self):
+        # A handover for this vehicle that has not reached Active yet -
+        # see the matching Asset.pending_handover note above.
+        return self.handovers.filter(
+            status__in=('pending_authorization', 'pending_receipt')
+        ).select_related('employee').first()
 
 
 class VehicleDocument(models.Model):

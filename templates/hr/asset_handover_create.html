@@ -1,0 +1,215 @@
+{% extends 'base.html' %}
+{% block title %}New Asset Handover{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+  <h1 class="h3 mb-3">New Asset Handover</h1>
+  <p class="text-muted mb-4">LNA_ADM/007</p>
+
+  <form method="post" id="handoverForm" enctype="multipart/form-data">
+    {% csrf_token %}
+    <div class="card mb-4">
+      <div class="card-header"><h5 class="mb-0">Item</h5></div>
+      <div class="card-body">
+        <div class="row mb-3">
+          <div class="col-md-4">
+            <label class="form-label">Item type</label>
+            <select name="item_kind" id="itemKind" class="form-select">
+              <option value="asset" {% if preselected_item_kind == 'asset' %}selected{% endif %}>Asset (laptop / equipment)</option>
+              <option value="vehicle" {% if preselected_item_kind == 'vehicle' %}selected{% endif %}>Vehicle</option>
+            </select>
+          </div>
+          <div class="col-md-8">
+            <label class="form-label">Select item</label>
+            <select name="item_id" id="assetSelect" class="form-select">
+              {% for a in assets %}
+              <option value="{{ a.pk }}" {% if preselected_item_id == a.pk|stringformat:"s" %}selected{% endif %}>{{ a.asset_name }} - {{ a.serial_number }}</option>
+              {% endfor %}
+            </select>
+            <select name="item_id_vehicle" id="vehicleSelect" class="form-select d-none">
+              {% for v in vehicles %}
+              <option value="{{ v.pk }}" {% if preselected_item_id == v.pk|stringformat:"s" %}selected{% endif %}>{{ v.plate_number }} - {{ v.vehicle_maker }} {{ v.vehicle_model }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="row mb-3">
+          <div class="col-md-6">
+            <label class="form-label">Assigned to</label>
+            <select name="employee_id" class="form-select" required>
+              <option value="">- select employee -</option>
+              {% for e in employees %}
+              <option value="{{ e.pk }}">{{ e.full_name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Authorizer (Super Admin)</label>
+            <select name="authorizer_id" class="form-select" required>
+              <option value="">- select authorizer -</option>
+              {% for u in super_admins %}
+              <option value="{{ u.pk }}" {% if default_authorizer and default_authorizer.pk == u.pk %}selected{% endif %}>{{ u.get_full_name|default:u.username }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="form-check mb-3">
+          <input type="checkbox" name="remember_authorizer" id="rememberAuthorizer" class="form-check-input">
+          <label class="form-check-label" for="rememberAuthorizer">Set as my default authorizer</label>
+        </div>
+        <div class="row mb-3">
+          <div class="col-md-6">
+            <label class="form-label">Accessories</label>
+            <textarea name="accessories" id="accessoriesField" class="form-control" rows="2">{{ default_accessories }}</textarea>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Software installed</label>
+            <textarea name="software_installed" id="softwareField" class="form-control" rows="2">{{ default_software_installed }}</textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-header"><h5 class="mb-0">Your signature - Issued By</h5></div>
+      <div class="card-body">
+        <ul class="nav nav-tabs mb-3" role="tablist">
+          <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#signDrawTab" type="button">Draw signature</button></li>
+          <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#signUploadTab" type="button">Upload image</button></li>
+        </ul>
+        <div class="tab-content">
+          <div class="tab-pane fade show active" id="signDrawTab" role="tabpanel">
+            <p class="text-muted small mb-2">Sign in the box below using your mouse or finger. Click <em>Clear</em> to redraw.</p>
+            <div class="border rounded bg-white" style="touch-action: none;">
+              <canvas id="signCanvas" width="700" height="220" style="width:100%; height:220px; cursor:crosshair; display:block;"></canvas>
+            </div>
+            <div class="d-flex justify-content-end mt-2">
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="signClearBtn"><i class="bi bi-eraser me-1"></i>Clear</button>
+            </div>
+          </div>
+          <div class="tab-pane fade" id="signUploadTab" role="tabpanel">
+            <p class="text-muted small mb-2">Pick a transparent or white-background image (PNG/JPG) of your signature.</p>
+            <input type="file" class="form-control" name="signature_file" id="signFileInput" accept="image/*">
+            <img id="signFilePreview" class="img-fluid border rounded mt-3 d-none" style="max-height:200px;">
+          </div>
+        </div>
+        <div id="signError" class="alert alert-danger d-none mt-3 mb-0"></div>
+      </div>
+    </div>
+
+    <div class="d-flex justify-content-end">
+      <button type="submit" class="btn btn-primary" id="submitBtn">
+        <i class="bi bi-check-lg me-1"></i>Sign and send
+      </button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+    var itemKind = document.getElementById('itemKind');
+    var assetSelect = document.getElementById('assetSelect');
+    var vehicleSelect = document.getElementById('vehicleSelect');
+
+    function syncItemSelects() {
+        if (itemKind.value === 'vehicle') {
+            assetSelect.classList.add('d-none');
+            assetSelect.name = '';
+            vehicleSelect.classList.remove('d-none');
+            vehicleSelect.name = 'item_id';
+        } else {
+            vehicleSelect.classList.add('d-none');
+            vehicleSelect.name = '';
+            assetSelect.classList.remove('d-none');
+            assetSelect.name = 'item_id';
+        }
+    }
+    itemKind.addEventListener('change', syncItemSelects);
+    syncItemSelects();
+
+    var signCanvas = document.getElementById('signCanvas');
+    var signClearBtn = document.getElementById('signClearBtn');
+    var signFileInput = document.getElementById('signFileInput');
+    var signFilePreview = document.getElementById('signFilePreview');
+    var signErrorBox = document.getElementById('signError');
+    var canvasCtx = null;
+    var drawing = false;
+    var canvasHasInk = false;
+
+    function setupCanvas() {
+        var rect = signCanvas.getBoundingClientRect();
+        var ratio = window.devicePixelRatio || 1;
+        signCanvas.width = Math.floor(rect.width * ratio);
+        signCanvas.height = Math.floor(rect.height * ratio);
+        canvasCtx = signCanvas.getContext('2d');
+        canvasCtx.scale(ratio, ratio);
+        canvasCtx.fillStyle = '#ffffff';
+        canvasCtx.fillRect(0, 0, rect.width, rect.height);
+        canvasCtx.lineWidth = 2.2;
+        canvasCtx.lineCap = 'round';
+        canvasCtx.lineJoin = 'round';
+        canvasCtx.strokeStyle = '#1a1a1a';
+        canvasHasInk = false;
+    }
+    window.addEventListener('load', setupCanvas);
+
+    function getPoint(ev) {
+        var rect = signCanvas.getBoundingClientRect();
+        var t = ev.touches ? ev.touches[0] : ev;
+        return { x: t.clientX - rect.left, y: t.clientY - rect.top };
+    }
+    function startDraw(ev) { ev.preventDefault(); drawing = true; var p = getPoint(ev); canvasCtx.beginPath(); canvasCtx.moveTo(p.x, p.y); }
+    function moveDraw(ev) { if (!drawing) return; ev.preventDefault(); var p = getPoint(ev); canvasCtx.lineTo(p.x, p.y); canvasCtx.stroke(); canvasHasInk = true; }
+    function endDraw() { drawing = false; }
+
+    signCanvas.addEventListener('mousedown', startDraw);
+    signCanvas.addEventListener('mousemove', moveDraw);
+    signCanvas.addEventListener('mouseup', endDraw);
+    signCanvas.addEventListener('mouseleave', endDraw);
+    signCanvas.addEventListener('touchstart', startDraw, { passive: false });
+    signCanvas.addEventListener('touchmove', moveDraw, { passive: false });
+    signCanvas.addEventListener('touchend', endDraw);
+    if (signClearBtn) signClearBtn.addEventListener('click', setupCanvas);
+
+    if (signFileInput) signFileInput.addEventListener('change', function () {
+        var f = this.files && this.files[0];
+        if (!f) return;
+        var reader = new FileReader();
+        reader.onload = function (e) {
+            signFilePreview.src = e.target.result;
+            signFilePreview.classList.remove('d-none');
+        };
+        reader.readAsDataURL(f);
+    });
+
+    document.getElementById('handoverForm').addEventListener('submit', function (ev) {
+        var uploadTabActive = document.getElementById('signUploadTab').classList.contains('active');
+        var file = signFileInput.files && signFileInput.files[0];
+        signErrorBox.classList.add('d-none');
+
+        if (uploadTabActive) {
+            if (!file) {
+                ev.preventDefault();
+                signErrorBox.textContent = 'Pick a signature image first.';
+                signErrorBox.classList.remove('d-none');
+                return;
+            }
+        } else {
+            if (!canvasHasInk) {
+                ev.preventDefault();
+                signErrorBox.textContent = 'Draw your signature on the pad first.';
+                signErrorBox.classList.remove('d-none');
+                return;
+            }
+            var hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = 'signature_data';
+            hidden.value = signCanvas.toDataURL('image/png');
+            this.appendChild(hidden);
+        }
+    });
+})();
+</script>
+{% endblock %}

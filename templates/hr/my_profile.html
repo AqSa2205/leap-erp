@@ -710,6 +710,30 @@
     </div>
     {% endif %}
 
+    <!-- Asset Handovers -->
+    {% if asset_handovers %}
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header fw-semibold"><i class="bi bi-box-seam me-1"></i> My Asset Handovers</div>
+        <div class="card-body p-0">
+          <table class="table table-sm mb-0">
+            <thead class="table-light"><tr><th>Item</th><th>Date</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              {% for h in asset_handovers %}
+              <tr>
+                <td class="fw-semibold">{{ h.item }}</td>
+                <td class="small">{{ h.created_at|date:"d M Y" }}</td>
+                <td><span class="badge bg-secondary">{{ h.get_status_display }}</span></td>
+                <td><a href="{% url 'hr:asset_handover_detail' h.pk %}" class="btn btn-sm btn-outline-primary">View</a></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
     <!-- Reporting Structure -->
     <div class="col-lg-6">
       <div class="card h-100">

@@ -28,8 +28,6 @@ urlpatterns = [
     path('assets/<int:pk>/', views.AssetDetailView.as_view(), name='asset_detail'),
     path('assets/<int:pk>/edit/', views.AssetUpdateView.as_view(), name='asset_update'),
     path('assets/<int:pk>/delete/', views.AssetDeleteView.as_view(), name='asset_delete'),
-    path('assets/<int:pk>/issue/', views.AssetIssueView.as_view(), name='asset_issue'),
-    path('assets/<int:pk>/return/', views.AssetReturnView.as_view(), name='asset_return'),
     path('assets/<int:pk>/decommission/', views.asset_decommission, name='asset_decommission'),
     path('assets/<int:pk>/restore/', views.asset_restore, name='asset_restore'),
 
@@ -96,4 +94,14 @@ urlpatterns = [
     path('attendance/mark-leave/', views.attendance_mark_leave, name='attendance_mark_leave'),
     path('attendance/unmark-leave/', views.attendance_unmark_leave, name='attendance_unmark_leave'),
     path('attendance/', views.attendance_grid, name='attendance_grid'),
+    # Asset Handover
+    path('assets/handovers/', views.asset_handover_list, name='asset_handover_list'),
+    path('assets/handovers/create/', views.asset_handover_create, name='asset_handover_create'),
+    path('assets/handovers/<int:pk>/', views.asset_handover_detail, name='asset_handover_detail'),
+    path('assets/handovers/<int:pk>/authorize/', views.asset_handover_authorize, name='asset_handover_authorize'),
+    path('assets/handovers/<int:pk>/receive/', views.asset_handover_receive, name='asset_handover_receive'),
+    path('assets/handovers/<int:pk>/return/', views.asset_handover_initiate_return, name='asset_handover_initiate_return'),
+    path('assets/handovers/<int:pk>/acknowledge-return/', views.asset_handover_acknowledge_return, name='asset_handover_acknowledge_return'),
+    path('assets/handovers/<int:pk>/export-pdf/', views.asset_handover_export_pdf, name='asset_handover_export_pdf'),
+    path('assets/<int:item_id>/active-handover/', views.asset_active_handover_redirect, name='asset_active_handover_redirect'),
 ]
