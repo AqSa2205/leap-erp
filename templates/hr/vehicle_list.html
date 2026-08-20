@@ -28,6 +28,7 @@
                 <div class="d-flex gap-2">
                     <button class="btn btn-outline-light" data-bs-toggle="modal" data-bs-target="#importModal"><i class="bi bi-upload me-1"></i>Import</button>
                     <a href="{% url 'hr:vehicle_export' %}" class="btn btn-outline-light"><i class="bi bi-download me-1"></i>Export</a>
+                    <a href="{% url 'hr:asset_handover_list' %}" class="btn btn-outline-light"><i class="bi bi-arrow-left-right me-1"></i>Handovers</a>
                     <a href="{% url 'hr:vehicle_create' %}" class="btn btn-warning fw-semibold"><i class="bi bi-plus-lg me-1"></i>Add Vehicle</a>
                 </div>
             </div>
@@ -84,6 +85,7 @@
                     <div class="btn-group btn-group-sm">
                         <a href="{% url 'hr:vehicle_detail' v.pk %}" class="btn btn-outline-primary" title="View"><i class="bi bi-eye"></i></a>
                         <a href="{% url 'hr:vehicle_update' v.pk %}" class="btn btn-outline-secondary" title="Edit"><i class="bi bi-pencil"></i></a>
+                        <a href="{% url 'hr:asset_handover_create' %}?item_kind=vehicle&item_id={{ v.pk }}" class="btn btn-outline-success" title="Create Handover"><i class="bi bi-file-earmark-check"></i></a>
                     </div>
                 </div>
             </div>

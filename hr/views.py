@@ -19,7 +19,7 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from .models import Employee, Asset, AssetAssignment, Vehicle, VehicleDocument, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay, WFHRecord, LeaveRequest, AttendanceException, LeaveRevokeRequest, AttendanceExceptionRevokeRequest
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
-    AssetForm, AssetFilterForm, AssetImportForm, AssetIssueForm, AssetReturnForm,
+    AssetForm, AssetFilterForm, AssetImportForm,
     VehicleForm, VehicleFilterForm, EmployeeDocumentForm, VehicleDocumentForm,
     LeaveTypeForm, HolidayForm, WorkingDayForm, WFHRecordForm,
     AttendanceSettingsForm, LeaveRequestForm, AttendanceExceptionForm,
@@ -190,6 +190,7 @@ def hr_dashboard(request):
         messages.error(request, 'Admin access required.')
         return redirect('dashboard:index')
 
+    from hr.models import AssetHandover
     employees = Employee.objects.all()
     assets = Asset.objects.all()
     vehicles = Vehicle.objects.all()
@@ -211,10 +212,15 @@ def hr_dashboard(request):
         count=Count('id')
     ).exclude(deployment='').order_by('-count')[:6]
 
-    # Asset stats
+    # Asset stats. "Assigned" means the asset has an active AssetHandover -
+    # AssetHandover, not the legacy in_stock field, is the source of truth
+    # for current custody. Decommissioned assets are excluded from both
+    # buckets (retired, not available and not held by anyone).
     total_assets = assets.count()
-    assets_in_stock = assets.filter(in_stock=True).count()
-    assets_assigned = assets.filter(in_stock=False).count()
+    assigned_asset_ids = set(AssetHandover.objects.filter(
+        status='active', asset__isnull=False).values_list('asset_id', flat=True))
+    assets_assigned = len(assigned_asset_ids)
+    assets_in_stock = assets.exclude(pk__in=assigned_asset_ids).exclude(is_decommissioned=True).count()
     total_asset_value = assets.aggregate(val=Sum('price'))['val'] or 0
 
     # Vehicle stats
@@ -227,24 +233,39 @@ def hr_dashboard(request):
         count=Count('id')
     ).order_by('-count')[:6]
 
-    # Employee-Asset-Vehicle assignments
+    # Employee-Asset-Vehicle assignments, built from active AssetHandover
+    # rows (the source of truth for custody) rather than fuzzy name
+    # matching against the legacy employee_name/driver_name fields.
+    assigned_asset_handovers = AssetHandover.objects.filter(
+        status='active', asset__isnull=False).select_related('asset', 'employee')
+    assigned_vehicle_handovers = AssetHandover.objects.filter(
+        status='active', vehicle__isnull=False).select_related('vehicle', 'employee')
+    assets_by_employee = {}
+    for h in assigned_asset_handovers:
+        assets_by_employee.setdefault(h.employee_id, []).append(h.asset)
+    vehicles_by_employee = {}
+    assigned_vehicle_ids = set()
+    for h in assigned_vehicle_handovers:
+        vehicles_by_employee.setdefault(h.employee_id, []).append(h.vehicle)
+        assigned_vehicle_ids.add(h.vehicle_id)
+
     assignments = []
     unassigned_employees = []
     for emp in employees.filter(is_active=True).order_by('full_name'):
-        emp_assets = assets.filter(employee_name__icontains=emp.full_name.split()[0]) if emp.full_name else assets.none()
-        emp_vehicles = vehicles.filter(driver_name__icontains=emp.full_name.split()[0]) if emp.full_name else vehicles.none()
-        if emp_assets.exists() or emp_vehicles.exists():
+        emp_assets = assets_by_employee.get(emp.pk, [])
+        emp_vehicles = vehicles_by_employee.get(emp.pk, [])
+        if emp_assets or emp_vehicles:
             assignments.append({
                 'employee': emp,
-                'assets': list(emp_assets),
-                'vehicles': list(emp_vehicles),
+                'assets': emp_assets,
+                'vehicles': emp_vehicles,
             })
         else:
             unassigned_employees.append(emp)
 
     # Unassigned assets & vehicles
-    unassigned_assets = assets.filter(in_stock=True)
-    unassigned_vehicles = vehicles.filter(Q(driver_name='') | Q(driver_name='-') | Q(driver_name__isnull=True))
+    unassigned_assets = assets.exclude(pk__in=assigned_asset_ids).exclude(is_decommissioned=True)
+    unassigned_vehicles = vehicles.exclude(pk__in=assigned_vehicle_ids)
 
     # Recent employees
     recent_employees = employees.order_by('-created_at')[:5]
@@ -518,17 +539,10 @@ def my_profile(request):
 
     if emp:
         today = timezone.localtime(timezone.now()).date()
-        # Assets in custody. The roster tracks holders two ways: proper
-        # issue/return assignments AND a denormalised Asset.employee_name (used
-        # by the imported data). Union both, deduped, so nothing is missed.
-        asset_ids = set(
-            emp.asset_assignments.filter(returned_at__isnull=True)
-            .values_list('asset_id', flat=True))
-        if emp.full_name:
-            asset_ids |= set(
-                Asset.objects.filter(employee_name__iexact=emp.full_name)
-                .values_list('id', flat=True))
-        context['assets'] = Asset.objects.filter(id__in=asset_ids).order_by('asset_name')
+        # Assets in custody - AssetHandover is the source of truth for
+        # current custody (see also hr_dashboard and asset_detail.html).
+        context['assets'] = Asset.objects.filter(
+            handovers__employee=emp, handovers__status='active').distinct().order_by('asset_name')
         # Documents (iqama/passport copies, contracts, etc.).
         context['documents'] = emp.documents.all()
         # Leave balance for the current year. The summary total only counts
@@ -690,15 +704,13 @@ def my_profile(request):
         direct_report_ids = [r.pk for r in direct_reports]
         context['downstream_reports'] = Employee.objects.filter(
             pk__in=emp.get_downstream_employee_ids()).exclude(pk__in=direct_report_ids)
-        # Vehicles. No hard FK, so match on driver_id == iqama (the reliable
-        # key in the data) or driver_name == full name.
-        veh_q = Q()
-        if emp.iqama_number:
-            veh_q |= Q(driver_id=emp.iqama_number)
-        if emp.full_name:
-            veh_q |= Q(driver_name__iexact=emp.full_name)
-        context['vehicles'] = (
-            Vehicle.objects.filter(veh_q) if veh_q else Vehicle.objects.none())
+        # Vehicles - AssetHandover is the source of truth for current
+        # custody (see also hr_dashboard and vehicle_detail.html).
+        context['vehicles'] = Vehicle.objects.filter(
+            handovers__employee=emp, handovers__status='active').distinct()
+        from hr.models import AssetHandover
+        context['asset_handovers'] = AssetHandover.objects.filter(
+            employee=emp).select_related('asset', 'vehicle').order_by('-created_at')[:20]
     return render(request, 'hr/my_profile.html', context)
 
 
@@ -1338,6 +1350,7 @@ class AssetListView(HRScopedAccessMixin, ListView):
 
     def get_queryset(self):
         queryset = self._scoped_base()
+        from hr.models import AssetHandover
 
         search = self.request.GET.get('search', '')
         asset_type = self.request.GET.get('asset_type', '')
@@ -1356,10 +1369,17 @@ class AssetListView(HRScopedAccessMixin, ListView):
             queryset = queryset.filter(asset_type__icontains=asset_type)
         if condition:
             queryset = queryset.filter(condition=condition)
-        if in_stock == 'true':
-            queryset = queryset.filter(in_stock=True)
-        elif in_stock == 'false':
-            queryset = queryset.filter(in_stock=False)
+        # "In stock" / "assigned" now reflect an active AssetHandover, not
+        # the legacy in_stock field (see also hr_dashboard, my_profile,
+        # asset_detail.html - AssetHandover is the sole source of truth
+        # for current custody).
+        if in_stock in ('true', 'false'):
+            assigned_ids = AssetHandover.objects.filter(
+                status='active', asset__isnull=False).values_list('asset_id', flat=True)
+            if in_stock == 'true':
+                queryset = queryset.exclude(pk__in=assigned_ids)
+            else:
+                queryset = queryset.filter(pk__in=assigned_ids)
         if status == 'decommissioned':
             queryset = queryset.filter(is_decommissioned=True)
         elif status == 'in_service':
@@ -1374,8 +1394,11 @@ class AssetListView(HRScopedAccessMixin, ListView):
         # only the team's held assets for scoped roles).
         base = self._scoped_base()
         context['total_count'] = base.count()
-        context['in_stock_count'] = base.filter(in_stock=True).count()
-        context['assigned_count'] = base.filter(in_stock=False).count()
+        from hr.models import AssetHandover
+        assigned_ids = AssetHandover.objects.filter(
+            status='active', asset__isnull=False).values_list('asset_id', flat=True)
+        context['assigned_count'] = base.filter(pk__in=assigned_ids).count()
+        context['in_stock_count'] = base.exclude(pk__in=assigned_ids).count()
         context['total_value'] = base.aggregate(total=Sum('price'))['total'] or 0
 
         # Counts by asset type (top types)
@@ -1517,116 +1540,6 @@ def asset_restore(request, pk):
                               'decommission_reason', 'updated_at'])
     messages.success(request, f'"{asset.asset_name}" restored to service.')
     return redirect(request.POST.get('next') or 'hr:asset_list')
-
-
-# ─── Asset Assignment (Issue / Return) ───────────────────────────────────────
-
-
-class AssetIssueView(AdminRequiredMixin, CreateView):
-    """Issue an asset to an employee.
-
-    Creates a new active AssetAssignment row and flips the asset's in_stock
-    flag off so existing list filters keep working. Refuses if the asset
-    already has an open assignment (defended by the unique partial index
-    on AssetAssignment as well).
-    """
-    model = AssetAssignment
-    form_class = AssetIssueForm
-    template_name = 'hr/asset_issue_form.html'
-
-    def dispatch(self, request, *args, **kwargs):
-        self.asset = get_object_or_404(Asset, pk=kwargs['pk'])
-        if self.asset.active_assignment is not None:
-            messages.error(
-                request,
-                f'{self.asset.asset_name} is already assigned to '
-                f'{self.asset.current_holder.full_name}. Return it first.',
-            )
-            return redirect('hr:asset_detail', pk=self.asset.pk)
-        return super().dispatch(request, *args, **kwargs)
-
-    def get_initial(self):
-        return {'assigned_at': date.today(), 'condition_out': self.asset.condition or 'used'}
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['asset'] = self.asset
-        return context
-
-    def form_valid(self, form):
-        form.instance.asset = self.asset
-        form.instance.assigned_by = self.request.user
-        response = super().form_valid(form)
-        # Mirror state to legacy fields so the existing list/filter UI is
-        # consistent without forcing a wider refactor.
-        self.asset.in_stock = False
-        self.asset.employee_name = self.object.employee.full_name
-        self.asset.handover_date = self.object.assigned_at
-        self.asset.handover_by = (
-            self.request.user.get_full_name() or self.request.user.username
-        )
-        self.asset.condition = self.object.condition_out
-        self.asset.save(update_fields=[
-            'in_stock', 'employee_name', 'handover_date', 'handover_by',
-            'condition', 'updated_at',
-        ])
-        messages.success(
-            self.request,
-            f'{self.asset.asset_name} issued to {self.object.employee.full_name}.',
-        )
-        return response
-
-    def get_success_url(self):
-        return reverse_lazy('hr:asset_detail', kwargs={'pk': self.asset.pk})
-
-
-class AssetReturnView(AdminRequiredMixin, UpdateView):
-    """Close the asset's active assignment by recording the return."""
-    model = AssetAssignment
-    form_class = AssetReturnForm
-    template_name = 'hr/asset_return_form.html'
-
-    def get_object(self, queryset=None):
-        asset = get_object_or_404(Asset, pk=self.kwargs['pk'])
-        active = asset.active_assignment
-        if active is None:
-            return None
-        self.asset = asset
-        return active
-
-    def dispatch(self, request, *args, **kwargs):
-        active = self.get_object()
-        if active is None:
-            messages.error(request, 'No active assignment to return.')
-            return redirect('hr:asset_detail', pk=kwargs['pk'])
-        return super().dispatch(request, *args, **kwargs)
-
-    def get_initial(self):
-        return {'returned_at': date.today(), 'condition_in': self.object.condition_out or 'used'}
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['asset'] = self.asset
-        return context
-
-    def form_valid(self, form):
-        form.instance.returned_by = self.request.user
-        response = super().form_valid(form)
-        # Flip the asset back into stock so the list filters reflect reality.
-        self.asset.in_stock = True
-        self.asset.employee_name = ''
-        self.asset.condition = self.object.condition_in or self.asset.condition
-        self.asset.save(update_fields=[
-            'in_stock', 'employee_name', 'condition', 'updated_at',
-        ])
-        messages.success(
-            self.request,
-            f'{self.asset.asset_name} returned by {self.object.employee.full_name}.',
-        )
-        return response
-
-    def get_success_url(self):
-        return reverse_lazy('hr:asset_detail', kwargs={'pk': self.asset.pk})
 
 
 @login_required
@@ -4009,3 +3922,444 @@ class OrgChartView(LoginRequiredMixin, UserPassesTestMixin, ListView):
                 for e in errors:
                     messages.error(request, f'{employee.full_name}: {e}')
         return redirect('hr:org_chart')
+
+
+@login_required
+def asset_handover_create(request):
+    """HR creates and signs a new handover in one step."""
+    from hr.models import Asset, Vehicle, Employee
+    from hr.asset_handover_services import create_asset_handover, get_default_authorizer
+    from procurement.views import _read_and_validate_signature
+    from accounts.models import User, Role
+    from django.core.files.base import ContentFile
+
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+        messages.error(request, 'You do not have access to create asset handovers.')
+        return redirect('hr:hr_dashboard')
+
+    if request.method == 'POST':
+        item_kind = request.POST.get('item_kind')
+        item_id = request.POST.get('item_id')
+        employee = Employee.objects.filter(pk=request.POST.get('employee_id')).first()
+        authorizer = User.objects.filter(pk=request.POST.get('authorizer_id'), role__name=Role.SUPER_ADMIN).first()
+        item = None
+        if item_kind == 'asset':
+            item = Asset.objects.filter(pk=item_id).first()
+        elif item_kind == 'vehicle':
+            item = Vehicle.objects.filter(pk=item_id).first()
+
+        if not (item and employee and authorizer):
+            messages.error(request, 'Please select a valid item, employee, and authorizer.')
+            return redirect('hr:asset_handover_create')
+
+        png_bytes, error_response = _read_and_validate_signature(request)
+        if error_response is not None:
+            messages.error(request, 'Signature could not be saved. Please try again.')
+            return redirect('hr:asset_handover_create')
+
+        try:
+            handover = create_asset_handover(
+                employee=employee, item=item, issued_by=request.user,
+                issued_signature=ContentFile(png_bytes, name='issued.png'),
+                authorizer=authorizer,
+                accessories=request.POST.get('accessories', ''),
+                software_installed=request.POST.get('software_installed', ''),
+                remember_authorizer=request.POST.get('remember_authorizer') == 'on',
+            )
+        except ValueError as e:
+            messages.error(request, str(e))
+            return redirect('hr:asset_handover_create')
+        messages.success(request, 'Handover created and sent for authorization.')
+        return redirect('hr:asset_handover_detail', pk=handover.pk)
+    preselected_item_kind = request.GET.get('item_kind', 'asset')
+    preselected_item_id = request.GET.get('item_id', '')
+    default_accessories = ''
+    default_software_installed = ''
+    if preselected_item_kind == 'asset' and preselected_item_id:
+        preselected_asset = Asset.objects.filter(pk=preselected_item_id).first()
+        if preselected_asset:
+            default_accessories = preselected_asset.accessories
+            default_software_installed = preselected_asset.software_installed
+
+
+    context = {
+        'assets': Asset.objects.filter(is_decommissioned=False).order_by('asset_name'),
+        'vehicles': Vehicle.objects.all().order_by('plate_number'),
+        'employees': Employee.objects.all().order_by('full_name'),
+        'super_admins': User.objects.filter(is_active=True, role__name=Role.SUPER_ADMIN).order_by('username'),
+        'default_authorizer': get_default_authorizer(request.user),
+        'preselected_item_kind': preselected_item_kind,
+        'preselected_item_id': preselected_item_id,
+        'default_accessories': default_accessories,
+        'default_software_installed': default_software_installed,
+    }
+    return render(request, 'hr/asset_handover_create.html', context)
+
+
+@login_required
+def asset_handover_detail(request, pk):
+    from hr.models import AssetHandover
+    handover = get_object_or_404(AssetHandover, pk=pk)
+    is_hr = bool(request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user)
+    is_employee = bool(handover.employee.user_id and handover.employee.user_id == request.user.id)
+    is_authorizer = bool(handover.authorizer_id and handover.authorizer_id == request.user.id)
+    if not (is_hr or is_employee or is_authorizer):
+        messages.error(request, 'You do not have access to this handover.')
+        return redirect('hr:hr_dashboard')
+    context = {
+        'handover': handover,
+        'can_authorize': is_authorizer and handover.status == 'pending_authorization',
+        'can_receive': is_employee and handover.status == 'pending_receipt',
+        'can_initiate_return': is_hr and handover.status == 'active',
+        'can_acknowledge_return': is_employee and handover.status == 'pending_return_confirmation',
+    }
+    return render(request, 'hr/asset_handover_detail.html', context)
+
+@login_required
+@require_POST
+def asset_handover_authorize(request, pk):
+    from hr.models import AssetHandover
+    from hr.asset_handover_services import authorize_handover
+    from procurement.views import _read_and_validate_signature
+    from django.core.files.base import ContentFile
+
+    handover = get_object_or_404(AssetHandover, pk=pk)
+    if handover.authorizer_id != request.user.id or not request.user.is_super_admin_user:
+        messages.error(request, 'You are not the assigned authorizer for this handover.')
+        return redirect('hr:asset_handover_detail', pk=pk)
+
+    png_bytes, error_response = _read_and_validate_signature(request)
+    if error_response is not None:
+        messages.error(request, 'Signature could not be saved. Please try again.')
+        return redirect('hr:asset_handover_detail', pk=pk)
+
+    try:
+        authorize_handover(handover, request.user, ContentFile(png_bytes, name='authorized.png'))
+        messages.success(request, 'Handover authorized and signed.')
+    except ValueError as e:
+        messages.error(request, str(e))
+    return redirect('hr:asset_handover_detail', pk=pk)
+
+
+@login_required
+@require_POST
+def asset_handover_receive(request, pk):
+    from hr.models import AssetHandover
+    from hr.asset_handover_services import receive_handover
+    from procurement.views import _read_and_validate_signature
+    from django.core.files.base import ContentFile
+
+    handover = get_object_or_404(AssetHandover, pk=pk)
+    if not (handover.employee.user_id and handover.employee.user_id == request.user.id):
+        messages.error(request, 'You are not the recipient of this handover.')
+        return redirect('hr:asset_handover_detail', pk=pk)
+
+    png_bytes, error_response = _read_and_validate_signature(request)
+    if error_response is not None:
+        messages.error(request, 'Signature could not be saved. Please try again.')
+        return redirect('hr:asset_handover_detail', pk=pk)
+
+    try:
+        receive_handover(handover, ContentFile(png_bytes, name='received.png'))
+        messages.success(request, 'Handover received and signed. The asset is now registered to you.')
+    except ValueError as e:
+        messages.error(request, str(e))
+    return redirect('hr:asset_handover_detail', pk=pk)
+
+
+@login_required
+@require_POST
+def asset_handover_initiate_return(request, pk):
+    from hr.models import AssetHandover
+    from hr.asset_handover_services import initiate_return
+    from procurement.views import _read_and_validate_signature
+    from django.core.files.base import ContentFile
+
+    handover = get_object_or_404(AssetHandover, pk=pk)
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+        messages.error(request, 'You do not have access to start a return.')
+        return redirect('hr:asset_handover_detail', pk=pk)
+
+    png_bytes, error_response = _read_and_validate_signature(request)
+    if error_response is not None:
+        messages.error(request, 'Signature could not be saved. Please try again.')
+        return redirect('hr:asset_handover_detail', pk=pk)
+
+    try:
+        initiate_return(handover, request.user, ContentFile(png_bytes, name='return_received.png'),
+                         remarks=request.POST.get('return_remarks', ''))
+        messages.success(request, 'Return request sent. Waiting on the employee to confirm.')
+    except ValueError as e:
+        messages.error(request, str(e))
+    return redirect('hr:asset_handover_detail', pk=pk)
+
+
+@login_required
+@require_POST
+def asset_handover_acknowledge_return(request, pk):
+    from hr.models import AssetHandover
+    from hr.asset_handover_services import acknowledge_return
+    from procurement.views import _read_and_validate_signature
+    from django.core.files.base import ContentFile
+
+    handover = get_object_or_404(AssetHandover, pk=pk)
+    if not (handover.employee.user_id and handover.employee.user_id == request.user.id):
+        messages.error(request, 'You are not the current holder of this item.')
+        return redirect('hr:asset_handover_detail', pk=pk)
+
+    png_bytes, error_response = _read_and_validate_signature(request)
+    if error_response is not None:
+        messages.error(request, 'Signature could not be saved. Please try again.')
+        return redirect('hr:asset_handover_detail', pk=pk)
+
+    try:
+        acknowledge_return(handover, ContentFile(png_bytes, name='returned.png'))
+        messages.success(request, 'Return confirmed. Custody released.')
+    except ValueError as e:
+        messages.error(request, str(e))
+    return redirect('hr:asset_handover_detail', pk=pk)
+
+
+@login_required
+def asset_handover_list(request):
+    """HR dashboard: every asset/vehicle's current owner and, if a new
+    handover is already in progress for it, the next owner too."""
+    from hr.models import AssetHandover
+
+    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+        messages.error(request, 'You do not have access to this page.')
+        return redirect('hr:hr_dashboard')
+
+    active = AssetHandover.objects.filter(status='active').select_related(
+        'asset', 'vehicle', 'employee')
+    in_progress = AssetHandover.objects.filter(
+        status__in=('pending_authorization', 'pending_receipt', 'pending_return_confirmation')
+    ).select_related('asset', 'vehicle', 'employee')
+
+    rows = {}
+    for h in active:
+        key = ('asset', h.asset_id) if h.asset_id else ('vehicle', h.vehicle_id)
+        rows[key] = {'item': h.item, 'current_owner': h.employee, 'next_owner': None, 'status': 'Active', 'handover': h}
+    for h in in_progress:
+        key = ('asset', h.asset_id) if h.asset_id else ('vehicle', h.vehicle_id)
+        if key in rows:
+            rows[key]['next_owner'] = h.employee
+            rows[key]['status'] = 'Transfer pending' if h.status != 'pending_return_confirmation' else 'Return pending'
+        else:
+            rows[key] = {'item': h.item, 'current_owner': None, 'next_owner': h.employee,
+                          'status': 'Pending', 'handover': h}
+
+    context = {'rows': list(rows.values())}
+    return render(request, 'hr/asset_handover_list.html', context)
+
+
+@login_required
+def asset_active_handover_redirect(request, item_id):
+    from hr.models import AssetHandover, Asset, Vehicle
+    item_kind = request.GET.get('item_kind', 'asset')
+    if item_kind == 'vehicle':
+        item = Vehicle.objects.filter(pk=item_id).first()
+        filter_kwargs = {'vehicle_id': item_id}
+        fallback_url, fallback_list_url = 'hr:vehicle_detail', 'hr:vehicle_list'
+    else:
+        item = Asset.objects.filter(pk=item_id).first()
+        filter_kwargs = {'asset_id': item_id}
+        fallback_url, fallback_list_url = 'hr:asset_detail', 'hr:asset_list'
+
+    # item_kind is caller-supplied (query string) and item_id is a raw pk -
+    # if they disagree with reality (e.g. item_kind=vehicle for what's
+    # actually an Asset's pk), redirecting straight to fallback_url with
+    # that pk could 404 on an unrelated/nonexistent record instead of
+    # showing a sensible error. Confirm the item actually exists as the
+    # claimed kind first.
+    if item is None:
+        messages.error(request, 'That item could not be found.')
+        return redirect(fallback_list_url)
+
+    handover = AssetHandover.objects.filter(
+        status='active', **filter_kwargs).order_by('-created_at').first()
+    if handover is None:
+        messages.error(request, 'No active handover found.')
+        return redirect(fallback_url, pk=item_id)
+    return redirect('hr:asset_handover_detail', pk=handover.pk)
+
+
+@login_required
+def asset_handover_export_pdf(request, pk):
+    from hr.models import AssetHandover
+    handover = get_object_or_404(AssetHandover, pk=pk)
+    is_hr = bool(request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user)
+    is_employee = bool(handover.employee.user_id and handover.employee.user_id == request.user.id)
+    is_authorizer = bool(handover.authorizer_id and handover.authorizer_id == request.user.id)
+    if not (is_hr or is_employee or is_authorizer):
+        messages.error(request, 'You do not have access to this handover.')
+        return redirect('hr:hr_dashboard')
+
+    import io
+    from io import BytesIO as _BytesIO
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer,
+                                     Image as RLImage)
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from xml.sax.saxutils import escape as _xml_escape
+    from django.contrib.staticfiles.finders import find as find_static
+
+    BRAND_RED = colors.HexColor('#C41E3A')
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=24, rightMargin=24, topMargin=24, bottomMargin=18)
+    styles = getSampleStyleSheet()
+    label_style = ParagraphStyle('label', parent=styles['Normal'], fontSize=9, textColor=colors.HexColor('#555555'))
+    value_style = ParagraphStyle('value', parent=styles['Normal'], fontSize=10)
+    section_style = ParagraphStyle('section', parent=styles['Normal'], fontSize=11, spaceBefore=6, spaceAfter=4, alignment=1)
+    note_style = ParagraphStyle('note', parent=styles['Normal'], fontSize=7.5, textColor=colors.HexColor('#555555'))
+
+    elements = []
+
+    # ── Header: title/form-number on the left, company logo on the right ──
+    logo_path = find_static('images/leap_logo.jpg')
+    if logo_path:
+        elements.append(RLImage(logo_path, width=55*mm, height=16.6*mm, hAlign='CENTER'))
+        elements.append(Spacer(1, 3*mm))
+    title_style_center = ParagraphStyle('titleCenter', parent=styles['Title'], alignment=1)
+    label_style_center = ParagraphStyle('labelCenter', parent=label_style, alignment=1)
+    elements.append(Paragraph('Asset Handover Form', title_style_center))
+    elements.append(Paragraph('LNA_ADM/007', label_style_center))
+    elements.append(Spacer(1, 4*mm))
+
+    item = handover.item
+    if handover.asset_id:
+        item_rows = [
+            ['Item Type', item.asset_type or '-', 'Model', item.model or '-'],
+            ['Serial No.', item.serial_number or '-', 'Part Number', item.part_number or '-'],
+            ['Tag Number', item.tag_number or '-', 'Quantity', str(item.quantity)],
+            ['Item Description', item.item_description or '-', '', ''],
+        ]
+    else:
+        item_rows = [
+            ['Plate Number', item.plate_number, 'Vehicle Model', item.vehicle_model or '-'],
+            ['Maker', item.vehicle_maker or '-', '', ''],
+        ]
+    item_rows.append(['Assigned To', handover.employee.full_name, 'Designation', handover.employee.designation or '-'])
+
+    item_table = Table(item_rows, colWidths=[35*mm, 55*mm, 35*mm, 55*mm])
+    item_table.setStyle(TableStyle([
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTNAME', (2, 0), (2, -1), 'Helvetica-Bold'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    elements.append(item_table)
+    elements.append(Spacer(1, 4*mm))
+
+    if handover.accessories:
+        elements.append(Paragraph(f'<b>Accessories:</b> {_xml_escape(handover.accessories)}', value_style))
+    if handover.software_installed:
+        elements.append(Paragraph(f'<b>Software Installed:</b> {_xml_escape(handover.software_installed)}', value_style))
+    elements.append(Spacer(1, 4*mm))
+
+    def _sig_image(field, max_w=45*mm, max_h=16*mm):
+        if not field:
+            return ''
+        try:
+            field.open('rb')
+            data = field.read()
+            field.close()
+            return RLImage(_BytesIO(data), width=max_w, height=max_h, kind='proportional')
+        except Exception:
+            return ''
+
+    elements.append(Paragraph('<u><b>HANDOVER</b></u>', section_style))
+    handover_rows = [
+        ['Issued By', 'Authorized By', 'Received By'],
+        [
+            handover.issued_by.get_full_name() or handover.issued_by.username if handover.issued_by_id else '-',
+            handover.authorizer.get_full_name() or handover.authorizer.username if handover.authorizer_id else '-',
+            handover.employee.full_name,
+        ],
+        [
+            handover.issued_at.strftime('%d %b %Y') if handover.issued_at else '-',
+            handover.authorized_at.strftime('%d %b %Y') if handover.authorized_at else '-',
+            handover.received_at.strftime('%d %b %Y') if handover.received_at else '-',
+        ],
+        [
+            _sig_image(handover.issued_signature),
+            _sig_image(handover.authorized_signature),
+            _sig_image(handover.received_signature),
+        ],
+    ]
+    handover_table = Table(handover_rows, colWidths=[60*mm, 60*mm, 60*mm], rowHeights=[None, None, None, 20*mm])
+    handover_table.setStyle(TableStyle([
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('BACKGROUND', (0, 0), (-1, 0), BRAND_RED),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    elements.append(handover_table)
+
+    if handover.status in ('pending_return_confirmation', 'returned'):
+        elements.append(Spacer(1, 6*mm))
+        elements.append(Paragraph('<u><b>ASSET RETURN</b></u>', section_style))
+        if handover.return_remarks:
+            elements.append(Paragraph(
+                f'<b>Remarks upon Return:</b> {_xml_escape(handover.return_remarks)}', value_style))
+            elements.append(Spacer(1, 2*mm))
+        return_rows = [
+            ['Returned By', 'Received By'],
+            [
+                handover.employee.full_name,
+                (handover.return_received_by.get_full_name() or handover.return_received_by.username)
+                if handover.return_received_by_id else '-',
+            ],
+            [
+                handover.returned_at.strftime('%d %b %Y') if handover.returned_at else '-',
+                handover.return_received_at.strftime('%d %b %Y') if handover.return_received_at else '-',
+            ],
+            [
+                _sig_image(handover.returned_signature),
+                _sig_image(handover.return_received_signature),
+            ],
+        ]
+        return_table = Table(return_rows, colWidths=[90*mm, 90*mm], rowHeights=[None, None, None, 20*mm])
+        return_table.setStyle(TableStyle([
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('BACKGROUND', (0, 0), (-1, 0), BRAND_RED),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        elements.append(return_table)
+
+    # ── Footer note ──
+    elements.append(Spacer(1, 8*mm))
+    note_text = (
+        "NOTE: Please be aware that it is your responsibility to take good care of the company's "
+        "property whilst you are using it, whether on your premises or outstationed. This particularly "
+        "applies to engineers taking Notebook and Laptops on service assignments.<br/>"
+        "If any of the company's property is damaged due to negligence, misuse, mishandling, etc and "
+        "requires repair or replacement, the company reserves the right to charge all or part of the "
+        "cost to the concerned individual. You are not allowed to install or change or delete any of "
+        "the software in the computer. If however the need arises, please refer to the concerned person."
+    )
+    elements.append(Paragraph(note_text, note_style))
+
+    doc.build(elements)
+    buffer.seek(0)
+    filename = f'asset_handover_{handover.pk}.pdf'
+    response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response
