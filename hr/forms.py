@@ -209,6 +209,8 @@ class AssetForm(forms.ModelForm):
         model = Asset
         fields = [
             'asset_name', 'asset_type', 'serial_number', 'specifications',
+            'model', 'part_number', 'tag_number', 'item_description',
+            'accessories', 'software_installed',
             'invoice_number', 'employee_name', 'department', 'designation',
             'handover_date', 'handover_by', 'condition', 'return_date',
             'return_to', 'quantity', 'purchase_date', 'price',
@@ -220,6 +222,12 @@ class AssetForm(forms.ModelForm):
             'asset_type': forms.TextInput(attrs={'class': 'form-control', 'list': 'asset-type-list', 'placeholder': 'e.g. Laptop, Monitor'}),
             'serial_number': forms.TextInput(attrs={'class': 'form-control'}),
             'specifications': forms.TextInput(attrs={'class': 'form-control'}),
+            'model': forms.TextInput(attrs={'class': 'form-control'}),
+            'part_number': forms.TextInput(attrs={'class': 'form-control'}),
+            'tag_number': forms.TextInput(attrs={'class': 'form-control'}),
+            'item_description': forms.Textarea(attrs={'class': 'form-control', 'rows': 2}),
+            'accessories': forms.Textarea(attrs={'class': 'form-control', 'rows': 2}),
+            'software_installed': forms.Textarea(attrs={'class': 'form-control', 'rows': 2}),
             'invoice_number': forms.TextInput(attrs={'class': 'form-control'}),
             'employee_name': forms.TextInput(attrs={'class': 'form-control'}),
             'department': forms.TextInput(attrs={'class': 'form-control'}),
@@ -399,52 +407,6 @@ class VehicleDocumentForm(forms.ModelForm):
         if cleaned.get('document_type') == 'other' and not cleaned.get('custom_type'):
             self.add_error('custom_type', 'Enter a label for the "Other" document type.')
         return cleaned
-
-
-class AssetIssueForm(forms.ModelForm):
-    """Issue an asset to an employee — creates a new active AssetAssignment."""
-
-    class Meta:
-        model = AssetAssignment
-        fields = ['employee', 'assigned_at', 'condition_out', 'handover_form', 'issue_notes']
-        widgets = {
-            'assigned_at': forms.DateInput(attrs={'type': 'date'}),
-            'issue_notes': forms.Textarea(attrs={'rows': 3, 'placeholder': 'Optional: serial-cross-check, accessories, etc.'}),
-        }
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields['employee'].queryset = Employee.objects.filter(is_active=True).order_by('full_name')
-        self.fields['employee'].empty_label = 'Select employee...'
-        for field in self.fields.values():
-            if isinstance(field.widget, forms.Select):
-                field.widget.attrs['class'] = 'form-select'
-            elif isinstance(field.widget, forms.FileInput):
-                field.widget.attrs['class'] = 'form-control'
-            else:
-                field.widget.attrs['class'] = 'form-control'
-
-
-class AssetReturnForm(forms.ModelForm):
-    """Close an active AssetAssignment by recording the return."""
-
-    class Meta:
-        model = AssetAssignment
-        fields = ['returned_at', 'condition_in', 'return_notes']
-        widgets = {
-            'returned_at': forms.DateInput(attrs={'type': 'date'}),
-            'return_notes': forms.Textarea(attrs={'rows': 3, 'placeholder': 'Optional: damage description, missing accessories, etc.'}),
-        }
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields['returned_at'].required = True
-        self.fields['condition_in'].required = True
-        for field in self.fields.values():
-            if isinstance(field.widget, forms.Select):
-                field.widget.attrs['class'] = 'form-select'
-            else:
-                field.widget.attrs['class'] = 'form-control'
 
 
 # ─── Leave Type & Holiday Forms ──────────────────────────────
