@@ -625,6 +625,14 @@ class ForgotPasswordViewTests(TestCase):
         resp = self.client.get(reverse('accounts:reset_password', args=[req.token]))
         self.assertEqual(resp.status_code, 200)
 
+    def test_reset_email_header_survives_outlook(self):
+        """Outlook renders mail through Word and ignores CSS gradients, so
+        without a flat bgcolor the header loses its background and the white
+        heading on it becomes invisible."""
+        from accounts.views import _build_reset_email_html
+        html = _build_reset_email_html('Someone', 'https://example.com/reset/abc')
+        self.assertIn('bgcolor="#C41E3A"', html)
+
 
 class LandingRedirectTests(TestCase):
     """Siloed roles (AI team) land on a page they can access instead of 403'ing

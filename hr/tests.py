@@ -8709,6 +8709,10 @@ class LateThresholdTests(TransactionTestCase):
             html_content, mimetype = sent.alternatives[0]
             self.assertEqual(mimetype, 'text/html')
             self.assertIn('Admin Team', html_content)
+            # Outlook renders mail through Word and ignores CSS gradients, so
+            # without a flat bgcolor the header loses its background and the
+            # white heading on it becomes invisible.
+            self.assertIn('bgcolor="#C41E3A"', html_content)
             self.assertEqual(len(sent.attachments), 1)
             filename, content, mimetype = sent.attachments[0]
             self.assertEqual(mimetype, 'application/pdf')

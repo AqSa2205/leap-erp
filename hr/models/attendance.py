@@ -208,7 +208,11 @@ def _build_late_attendance_email_html():
 
     <!-- Header -->
     <tr>
-        <td style="background:linear-gradient(135deg,#C41E3A,#a01830); padding:35px 40px; text-align:center;">
+        <!-- bgcolor is the Outlook fallback: it renders mail through Word,
+             which ignores CSS gradients, and without it this header loses its
+             background entirely and the white heading below becomes invisible.
+             Clients that do support the gradient paint over the flat colour. -->
+        <td bgcolor="#C41E3A" style="background:linear-gradient(135deg,#C41E3A,#a01830); padding:35px 40px; text-align:center;">
             <h1 style="color:#ffffff; margin:0; font-size:22px; font-weight:700; letter-spacing:0.5px;">Attendance Notice</h1>
         </td>
     </tr>
