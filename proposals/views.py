@@ -332,20 +332,20 @@ class ProposalEditContentView(LoginRequiredMixin, UserPassesTestMixin, View):
         return _can_edit_proposal(self.request.user, self.get_object())
 
     def _context(self, obj, section_fs, eng_fs):
-        # Generic headings: every active heading, department-templated ones
-        # included. A heading with e.g. an AI template still has its own
-        # (possibly blank) default_content and should stay pickable outside
-        # the AI toggle too — excluding it here would permanently hide any
-        # heading name that happens to also carry a department template
-        # (and, since SectionHeading.name is unique, a heading a department
-        # template's seed data get_or_create's onto is removed from the
-        # generic list for EVERY proposal, not just AI ones).
-        headings = SectionHeading.objects.filter(is_active=True)
+        # Generic headings: the plain, un-prefilled library — the one big
+        # list that shows no matter which (if any) department toggle is
+        # active. A heading that carries an AI/Telecom/Security template is
+        # NOT part of this list; it lives only under its department's own
+        # panel below, prefilled with that department's content. That's a
+        # deliberate partition (confirmed with the proposals team), not the
+        # additive "every heading everywhere" behavior from an earlier pass
+        # at this — the two sets are meant to stay visually distinct.
+        headings = SectionHeading.objects.filter(
+            is_active=True, dept_templates__isnull=True).distinct()
 
         # Department-specific headings: only ones that have a composed
         # template for that department. One group per department, so the
-        # template can show/hide the right group under the toggle. This is
-        # additive to the generic list above, not a partition of it.
+        # template can show/hide the right group under the toggle.
         dept_headings = {}
         for dept_code, dept_label in SectionHeadingTemplate.DEPARTMENT_CHOICES:
             dept_headings[dept_code] = {

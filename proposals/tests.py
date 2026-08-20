@@ -792,6 +792,43 @@ class DeptTemplateSeedMigrationTests(TestCase):
         mod.seed(real_apps, None)
         self.assertEqual(SectionHeadingTemplate.objects.count(), before)
 
+    def test_seed_does_not_annex_a_pre_existing_generic_heading(self):
+        # A heading that currently carries no department template at all —
+        # whether a genuinely independent, hand-created generic heading, or
+        # (as simulated here, since the real seed already ran once building
+        # this test DB) one whose department content was removed — must
+        # never have new department content silently welded onto it by a
+        # re-run. The department version gets its own distinct name
+        # instead, and the original heading is left completely alone.
+        import importlib
+        from django.apps import apps as real_apps
+
+        heading = SectionHeading.objects.get(name='Introduction')
+        heading.default_content = 'Plain, hand-written intro.'
+        heading.save(update_fields=['default_content'])
+        SectionHeadingTemplate.objects.filter(heading=heading, department='ai').delete()
+        self.assertFalse(heading.dept_templates.exists())
+
+        mod = importlib.import_module(
+            'proposals.migrations.0011_seed_dept_section_templates')
+        mod.seed(real_apps, None)
+
+        heading.refresh_from_db()
+        self.assertFalse(heading.dept_templates.exists())
+        self.assertEqual(heading.default_content, 'Plain, hand-written intro.')
+
+        disambiguated = SectionHeading.objects.get(name='Introduction (AI)')
+        self.assertTrue(
+            SectionHeadingTemplate.objects.filter(
+                heading=disambiguated, department='ai').exists())
+
+        # Re-running again must not duplicate the disambiguated version either.
+        before = SectionHeadingTemplate.objects.count()
+        mod.seed(real_apps, None)
+        self.assertEqual(SectionHeadingTemplate.objects.count(), before)
+        self.assertEqual(
+            SectionHeading.objects.filter(name='Introduction (AI)').count(), 1)
+
     def test_no_seeded_row_contains_escaped_raw_html(self):
         # Regression guard: the "Thermal Camera" row was once authored by
         # accidentally pasting raw HTML source into the rich-text editor,
@@ -947,17 +984,15 @@ class EditContentViewDepartmentGroupingTests(TestCase):
     def _get(self):
         return self.client.get(reverse('proposals:content', kwargs={'pk': self.proposal.pk}))
 
-    def test_generic_list_includes_department_templated_headings_too(self):
-        # Department panels are ADDITIVE, not a partition of the generic
-        # list. Excluding a dept-templated heading from the generic list
-        # would permanently hide it from every non-AI proposal too, since
-        # SectionHeading.name is unique — a name the AI seed data happens
-        # to get_or_create onto would vanish from the shared library for
-        # everyone, not just become AI-exclusive.
+    def test_generic_list_excludes_headings_that_have_any_department_template(self):
+        # The generic list and the department panels are a PARTITION, not
+        # additive: a heading with a department template is prefilled and
+        # only reachable from its own department's toggle, so it must never
+        # also show (un-prefilled) in the always-visible generic list.
         names = set(self._get().context['headings'].values_list('name', flat=True))
         self.assertIn('Generic Only', names)
-        self.assertIn('AI Only', names)
-        self.assertIn('Telecom And Procurement', names)
+        self.assertNotIn('AI Only', names)
+        self.assertNotIn('Telecom And Procurement', names)
 
     def test_each_department_group_only_shows_its_own_templated_headings(self):
         # Membership checks, not exact-set equality: the seed migration
