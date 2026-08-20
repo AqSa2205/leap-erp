@@ -29,9 +29,13 @@
                     <a href="{% url 'hr:asset_list' %}" class="btn btn-outline-secondary me-2">
                         <i class="bi bi-arrow-left"></i> Back
                     </a>
-                    {% if asset.active_assignment %}
+                    {% if asset.active_handover %}
                     <a href="{% url 'hr:asset_active_handover_redirect' asset.pk %}" class="btn btn-warning me-2">
                         <i class="bi bi-arrow-return-left"></i> Return Asset
+                    </a>
+                    {% elif asset.pending_handover %}
+                    <a href="{% url 'hr:asset_handover_detail' asset.pending_handover.pk %}" class="btn btn-outline-warning me-2">
+                        <i class="bi bi-hourglass-split"></i> Handover Pending
                     </a>
                     {% else %}
                     <a href="{% url 'hr:asset_handover_create' %}?item_kind=asset&item_id={{ asset.pk }}" class="btn btn-success me-2">
@@ -111,13 +115,13 @@
                         </div>
                     </div>
 
-                    {% with active=asset.active_assignment %}
+                    {% with active=asset.active_handover %}
                     <!-- Current Assignment -->
                     <div class="card mb-4">
                         <div class="card-header d-flex justify-content-between align-items-center">
                             <h5 class="mb-0"><i class="bi bi-person"></i> Current Assignment</h5>
                             {% if active %}
-                            <span class="badge bg-warning text-dark">Active since {{ active.assigned_at|date:"d M Y" }}</span>
+                            <span class="badge bg-warning text-dark">Active since {{ active.received_at|date:"d M Y" }}</span>
                             {% else %}
                             <span class="badge bg-success">In Stock</span>
                             {% endif %}
@@ -142,42 +146,40 @@
                                 </div>
                                 <div class="col-md-6 mb-3">
                                     <label class="text-muted small">Handover Date</label>
-                                    <p class="mb-0">{{ active.assigned_at|date:"d F Y" }}</p>
+                                    <p class="mb-0">{{ active.received_at|date:"d F Y" }}</p>
                                 </div>
                                 <div class="col-md-6 mb-3">
                                     <label class="text-muted small">Handover By</label>
-                                    <p class="mb-0">{{ active.assigned_by|default:"-" }}</p>
+                                    <p class="mb-0">{{ active.issued_by.get_full_name|default:active.issued_by.username|default:"-" }}</p>
                                 </div>
+                                {% if active.accessories %}
                                 <div class="col-md-6 mb-3">
-                                    <label class="text-muted small">Condition at Handover</label>
-                                    <p class="mb-0">
-                                        <span class="badge {% if active.condition_out == 'new' %}bg-success{% elif active.condition_out == 'damaged' %}bg-danger{% else %}bg-warning text-dark{% endif %}">
-                                            {{ active.get_condition_out_display }}
-                                        </span>
-                                    </p>
-                                </div>
-                                {% if active.handover_form %}
-                                <div class="col-md-6 mb-3">
-                                    <label class="text-muted small">Signed Handover Form</label>
-                                    <p class="mb-0">
-                                        <a href="{{ active.handover_form.url }}" target="_blank" class="text-decoration-none">
-                                            <i class="bi bi-file-earmark-pdf"></i> View / Download
-                                        </a>
-                                    </p>
+                                    <label class="text-muted small">Accessories</label>
+                                    <p class="mb-0">{{ active.accessories|linebreaksbr }}</p>
                                 </div>
                                 {% endif %}
-                                {% if active.issue_notes %}
-                                <div class="col-12 mb-3">
-                                    <label class="text-muted small">Notes</label>
-                                    <p class="mb-0">{{ active.issue_notes|linebreaksbr }}</p>
+                                {% if active.software_installed %}
+                                <div class="col-md-6 mb-3">
+                                    <label class="text-muted small">Software Installed</label>
+                                    <p class="mb-0">{{ active.software_installed|linebreaksbr }}</p>
                                 </div>
                                 {% endif %}
                             </div>
-                            <div class="d-flex justify-content-end">
+                            <div class="d-flex justify-content-end gap-2">
+                                <a href="{% url 'hr:asset_handover_detail' active.pk %}" class="btn btn-outline-secondary">
+                                    <i class="bi bi-file-earmark-text"></i> View Handover
+                                </a>
                                 <a href="{% url 'hr:asset_active_handover_redirect' asset.pk %}" class="btn btn-warning">
                                     <i class="bi bi-arrow-return-left"></i> Return Asset
                                 </a>
                             </div>
+                            {% elif asset.pending_handover %}
+                            <p class="text-muted mb-3">
+                                A handover to <strong>{{ asset.pending_handover.employee.full_name }}</strong> is already in progress.
+                            </p>
+                            <a href="{% url 'hr:asset_handover_detail' asset.pending_handover.pk %}" class="btn btn-outline-warning">
+                                <i class="bi bi-hourglass-split"></i> View Pending Handover
+                            </a>
                             {% else %}
                             <p class="text-muted mb-3">This asset is not currently assigned to anyone.</p>
                             <a href="{% url 'hr:asset_handover_create' %}?item_kind=asset&item_id={{ asset.pk }}" class="btn btn-success">
@@ -239,7 +241,7 @@
                     {% endif %}
                     {% endwith %}
 
-                    {% if asset.employee_name and not asset.active_assignment %}
+                    {% if asset.employee_name and not asset.active_handover %}
                     <!-- Legacy fields, only shown for pre-workflow records -->
                     <div class="card mb-4 border-secondary">
                         <div class="card-header bg-light">

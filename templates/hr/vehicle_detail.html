@@ -29,6 +29,8 @@
                             <a href="{% url 'hr:vehicle_list' %}" class="btn btn-outline-light" style="border-radius:8px;"><i class="bi bi-arrow-left"></i></a>
                             {% if vehicle.active_handover %}
                             <a href="{% url 'hr:asset_active_handover_redirect' vehicle.pk %}?item_kind=vehicle" class="btn btn-warning" style="border-radius:8px;"><i class="bi bi-arrow-return-left me-1"></i>Return Vehicle</a>
+                            {% elif vehicle.pending_handover %}
+                            <a href="{% url 'hr:asset_handover_detail' vehicle.pending_handover.pk %}" class="btn btn-outline-warning" style="border-radius:8px;"><i class="bi bi-hourglass-split me-1"></i>Handover Pending</a>
                             {% else %}
                             <a href="{% url 'hr:asset_handover_create' %}?item_kind=vehicle&item_id={{ vehicle.pk }}" class="btn btn-success" style="border-radius:8px;"><i class="bi bi-person-plus me-1"></i>Issue to Employee</a>
                             {% endif %}

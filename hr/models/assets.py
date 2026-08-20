@@ -79,9 +79,28 @@ class Asset(models.Model):
         return self.assignments.filter(returned_at__isnull=True).select_related('employee').first()
 
     @property
+    def active_handover(self):
+        """The currently-active AssetHandover for this asset, or None. This
+        is the source of truth for current custody - active_assignment
+        (above) is the legacy AssetAssignment record, kept only for the
+        one-time migration and the duplicate-serial-number check below."""
+        return self.handovers.filter(status='active').select_related('employee').first()
+
+    @property
+    def pending_handover(self):
+        # A handover for this asset that has not reached Active yet (still
+        # being authorized, or awaiting the employee's signature).
+        # Distinct from active_handover - checked separately so "Issue to
+        # Employee" doesn't offer a second handover for an item that
+        # already has one in flight, even before it's in someone's custody.
+        return self.handovers.filter(
+            status__in=('pending_authorization', 'pending_receipt')
+        ).select_related('employee').first()
+
+    @property
     def current_holder(self):
-        a = self.active_assignment
-        return a.employee if a else None
+        h = self.active_handover
+        return h.employee if h else None
 
     @property
     def duplicate_active_assignments(self):
@@ -256,6 +275,14 @@ class Vehicle(models.Model):
     def active_handover(self):
         """The currently-active AssetHandover for this vehicle, or None."""
         return self.handovers.filter(status='active').first()
+
+    @property
+    def pending_handover(self):
+        # A handover for this vehicle that has not reached Active yet -
+        # see the matching Asset.pending_handover note above.
+        return self.handovers.filter(
+            status__in=('pending_authorization', 'pending_receipt')
+        ).select_related('employee').first()
 
 
 class VehicleDocument(models.Model):

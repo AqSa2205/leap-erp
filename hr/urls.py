@@ -28,8 +28,6 @@ urlpatterns = [
     path('assets/<int:pk>/', views.AssetDetailView.as_view(), name='asset_detail'),
     path('assets/<int:pk>/edit/', views.AssetUpdateView.as_view(), name='asset_update'),
     path('assets/<int:pk>/delete/', views.AssetDeleteView.as_view(), name='asset_delete'),
-    path('assets/<int:pk>/issue/', views.AssetIssueView.as_view(), name='asset_issue'),
-    path('assets/<int:pk>/return/', views.AssetReturnView.as_view(), name='asset_return'),
     path('assets/<int:pk>/decommission/', views.asset_decommission, name='asset_decommission'),
     path('assets/<int:pk>/restore/', views.asset_restore, name='asset_restore'),
 

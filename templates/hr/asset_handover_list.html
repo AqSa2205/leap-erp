@@ -1,0 +1,53 @@
+{% extends 'base.html' %}
+{% block title %}HR - Asset Handovers{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Asset Handovers</h1>
+            <p class="text-muted mb-0">Current and in-progress handovers for every asset and vehicle</p>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body p-0">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Item</th>
+                        <th>Current Holder</th>
+                        <th>Next Holder</th>
+                        <th>Status</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                    <tr>
+                        <td>{{ row.item }}</td>
+                        <td>{{ row.current_owner.full_name|default:"-" }}</td>
+                        <td>{{ row.next_owner.full_name|default:"-" }}</td>
+                        <td>
+                            {% if row.status == 'Active' %}
+                            <span class="badge bg-success">{{ row.status }}</span>
+                            {% elif row.status == 'Return pending' %}
+                            <span class="badge bg-warning text-dark">{{ row.status }}</span>
+                            {% else %}
+                            <span class="badge bg-secondary">{{ row.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <a href="{% url 'hr:asset_handover_detail' row.handover.pk %}" class="btn btn-sm btn-outline-primary">View</a>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="5" class="text-center text-muted py-4">No active or in-progress handovers.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
