@@ -4155,14 +4155,27 @@ def asset_handover_list(request):
 
 @login_required
 def asset_active_handover_redirect(request, item_id):
-    from hr.models import AssetHandover
+    from hr.models import AssetHandover, Asset, Vehicle
     item_kind = request.GET.get('item_kind', 'asset')
     if item_kind == 'vehicle':
+        item = Vehicle.objects.filter(pk=item_id).first()
         filter_kwargs = {'vehicle_id': item_id}
-        fallback_url = 'hr:vehicle_detail'
+        fallback_url, fallback_list_url = 'hr:vehicle_detail', 'hr:vehicle_list'
     else:
+        item = Asset.objects.filter(pk=item_id).first()
         filter_kwargs = {'asset_id': item_id}
-        fallback_url = 'hr:asset_detail'
+        fallback_url, fallback_list_url = 'hr:asset_detail', 'hr:asset_list'
+
+    # item_kind is caller-supplied (query string) and item_id is a raw pk -
+    # if they disagree with reality (e.g. item_kind=vehicle for what's
+    # actually an Asset's pk), redirecting straight to fallback_url with
+    # that pk could 404 on an unrelated/nonexistent record instead of
+    # showing a sensible error. Confirm the item actually exists as the
+    # claimed kind first.
+    if item is None:
+        messages.error(request, 'That item could not be found.')
+        return redirect(fallback_list_url)
+
     handover = AssetHandover.objects.filter(
         status='active', **filter_kwargs).order_by('-created_at').first()
     if handover is None:

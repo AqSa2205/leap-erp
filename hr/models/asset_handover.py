@@ -74,6 +74,25 @@ class AssetHandover(models.Model):
     class Meta:
         ordering = ['-created_at']
         indexes = [models.Index(fields=['status', 'created_at'])]
+        constraints = [
+            # At most one non-returned handover per asset/vehicle at a
+            # time - the database-level backstop for the same rule
+            # create_asset_handover already checks at the application
+            # level, closing the race window between two simultaneous
+            # requests both passing that check before either commits.
+            models.UniqueConstraint(
+                fields=['asset'],
+                condition=models.Q(status__in=(
+                    'pending_authorization', 'pending_receipt', 'active', 'pending_return_confirmation')),
+                name='hr_assethandover_one_open_per_asset',
+            ),
+            models.UniqueConstraint(
+                fields=['vehicle'],
+                condition=models.Q(status__in=(
+                    'pending_authorization', 'pending_receipt', 'active', 'pending_return_confirmation')),
+                name='hr_assethandover_one_open_per_vehicle',
+            ),
+        ]
 
     def __str__(self):
         item = self.asset or self.vehicle

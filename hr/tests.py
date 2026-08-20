@@ -9044,6 +9044,18 @@ class AssetHandoverEdgeCaseTests(TestCase):
             reverse('hr:asset_active_handover_redirect', args=[self.asset.pk]) + '?item_kind=vehicle')
         self.assertRedirects(resp, reverse('hr:vehicle_detail', args=[self.asset.pk]))
 
+    def test_active_handover_redirect_nonexistent_kind_shows_error_not_404(self):
+        # item_kind=vehicle for a pk that genuinely has no matching Vehicle
+        # must not blindly redirect to a vehicle_detail URL that 404s -
+        # should show a clear error and land on the vehicle list instead.
+        from hr.models import Vehicle
+        nonexistent_pk = 999999
+        self.assertFalse(Vehicle.objects.filter(pk=nonexistent_pk).exists())
+        self.client.login(username='ahe-hr', password='testpass123')
+        resp = self.client.get(
+            reverse('hr:asset_active_handover_redirect', args=[nonexistent_pk]) + '?item_kind=vehicle')
+        self.assertRedirects(resp, reverse('hr:vehicle_list'))
+
     def test_vehicle_handover_item_property_returns_vehicle(self):
         from hr.asset_handover_services import create_asset_handover
         vh = create_asset_handover(
