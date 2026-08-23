@@ -257,7 +257,7 @@
           </ul>
           {% endif %}
 
-          {% if my_late_emails or my_late_queries %}
+          {% if my_late_emails or my_late_queries or my_lateness_reports %}
           <div class="fw-semibold small mb-2 mt-3"><i class="bi bi-envelope-exclamation me-1"></i> My Late Records</div>
           {% if my_late_emails %}
           <p class="text-muted small mb-1">Late-notice emails received:</p>
@@ -282,6 +282,14 @@
               {% if q.decided_at %}<span class="text-muted">· {{ q.decided_at|date:"d M Y" }}</span>{% endif %}
               {% include 'hr/_late_query_detail.html' %}
             </li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          {% if my_lateness_reports %}
+          <p class="text-muted small mb-1">Monthly lateness summaries:</p>
+          <ul class="small mb-2 ps-3">
+            {% for r in my_lateness_reports %}
+            <li>{{ r.month|date:"F Y" }}: {{ r.total_lates }} late(s) - {{ r.late_dates_display }} (+{{ r.converted_absences }} absence day(s))</li>
             {% endfor %}
           </ul>
           {% endif %}
