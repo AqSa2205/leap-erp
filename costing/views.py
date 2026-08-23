@@ -3329,11 +3329,20 @@ def costing_export_excel(request, pk):
         return redirect('costing:detail', pk=pk)
 
     sheet = get_object_or_404(CostingSheet, pk=pk)
+    # `?unpriced=1` produces a price-free BOM workbook, mirroring the unpriced
+    # PDF. Unlike the PDF — which blanks its number cells to keep the printed
+    # layout identical — the workbook drops the priced columns entirely: a
+    # spreadsheet with fourteen empty grey columns invites someone to conclude
+    # the data failed to export. The importer matches headers by name rather
+    # than position, so the narrower sheet still round-trips.
+    unpriced = request.GET.get('unpriced') == '1'
     if not _user_can_view_sheet(request.user, sheet):
         messages.error(request, 'You do not have permission to export this costing sheet.')
         return redirect('costing:list')
-    if getattr(request.user, 'is_proposal_team_user', False):
-        messages.error(request, 'Excel export includes pricing — only the sales team can download it.')
+    if not unpriced and getattr(request.user, 'is_proposal_team_user', False):
+        messages.error(
+            request,
+            'The priced Excel export is sales-only. Use "Export BOM Excel (unpriced)" instead.')
         return redirect('costing:detail', pk=pk)
     sections = sheet.sections.prefetch_related('line_items').all()
     rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
@@ -3363,27 +3372,30 @@ def costing_export_excel(request, pk):
     # Dark header for info columns (first half)
     hdr_dark = PatternFill(start_color='212529', end_color='212529', fill_type='solid')
 
-    # Row 2: Sheet parameters + Exchange Rates
-    ws['L2'] = 'Margin'
-    ws['M2'] = float(sheet.margin)
-    ws['L3'] = 'Discount'
-    ws['M3'] = float(sheet.discount_rate)
-    ws['L4'] = 'Shipping'
-    ws['M4'] = float(sheet.shipping_rate)
-    ws['L5'] = 'Customs'
-    ws['M5'] = float(sheet.customs_rate)
-    ws['L6'] = 'Finances'
-    ws['M6'] = float(sheet.finances_rate)
-    ws['L7'] = 'Installation'
-    ws['M7'] = float(sheet.installation_rate)
+    # Row 2: Sheet parameters + Exchange Rates. Both are pricing inputs —
+    # margin and the rate table would let anyone reconstruct the costs the
+    # unpriced export exists to withhold — so neither is written in that mode.
+    if not unpriced:
+        ws['L2'] = 'Margin'
+        ws['M2'] = float(sheet.margin)
+        ws['L3'] = 'Discount'
+        ws['M3'] = float(sheet.discount_rate)
+        ws['L4'] = 'Shipping'
+        ws['M4'] = float(sheet.shipping_rate)
+        ws['L5'] = 'Customs'
+        ws['M5'] = float(sheet.customs_rate)
+        ws['L6'] = 'Finances'
+        ws['M6'] = float(sheet.finances_rate)
+        ws['L7'] = 'Installation'
+        ws['M7'] = float(sheet.installation_rate)
 
-    ws['O2'] = 'EXCHANGE RATES'
-    ws['O2'].font = Font(bold=True)
-    rate_row = 3
-    for code, rate in sorted(rates.items()):
-        ws.cell(row=rate_row, column=15, value=code).font = Font(bold=True)  # O
-        ws.cell(row=rate_row, column=16, value=float(rate))  # P
-        rate_row += 1
+        ws['O2'] = 'EXCHANGE RATES'
+        ws['O2'].font = Font(bold=True)
+        rate_row = 3
+        for code, rate in sorted(rates.items()):
+            ws.cell(row=rate_row, column=15, value=code).font = Font(bold=True)  # O
+            ws.cell(row=rate_row, column=16, value=float(rate))  # P
+            rate_row += 1
 
     # Row 5: Project info
     ws['A5'] = 'Project:'
@@ -3399,23 +3411,26 @@ def costing_export_excel(request, pk):
     ws['F7'] = 'Date:'
 
     # Row 8: Title
-    ws['A8'] = 'BILL OF MATERIAL - COMMERCIAL'
+    ws['A8'] = 'BILL OF MATERIAL - UNPRICED' if unpriced else 'BILL OF MATERIAL - COMMERCIAL'
     ws['A8'].font = Font(bold=True, size=12)
 
-    # Column headers row
+    # Column headers row. The first seven describe the item; everything after
+    # them is pricing, so the unpriced workbook simply stops there.
     r = 10
-    headers = [
-        'Item No', 'Description', 'Vendor', 'Make', 'Model', 'Qty', 'Unit',
+    INFO_HEADERS = ['Item No', 'Description', 'Vendor', 'Make', 'Model', 'Qty', 'Unit']
+    PRICE_HEADERS = [
         'Unit Price', 'Total Price',
         'Currency', 'Base Unit Cost', 'Discount', 'Unit Cost', 'Total Cost',
         'Margin', 'Base Unit Price', 'Base Total Price',
         'Shipping %', 'Customs %', 'Finances %', 'Installation %',
         'Unit Price', 'Total Price',
     ]
+    headers = INFO_HEADERS if unpriced else INFO_HEADERS + PRICE_HEADERS
     col_fills = (
-        [hdr_dark]*9 +
-        [hdr_cost]*14
+        [hdr_dark]*len(INFO_HEADERS) if unpriced
+        else [hdr_dark]*9 + [hdr_cost]*14
     )
+    last_col = len(headers)
     for col, (h, fill) in enumerate(zip(headers, col_fills), 1):
         cell = ws.cell(row=r, column=col, value=h)
         cell.font = hdr_white
@@ -3426,13 +3441,13 @@ def costing_export_excel(request, pk):
     # Data rows
     row = 11
     data_fills = (
-        [None]*9 +
-        [cost_fill]*14
+        [None]*len(INFO_HEADERS) if unpriced
+        else [None]*9 + [cost_fill]*14
     )
 
     for section in sections:
         # Section header
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=23)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=last_col)
         cell = ws.cell(row=row, column=1, value=f"{section.section_number}  {section.title}")
         cell.font = section_font
         cell.fill = PatternFill(start_color='F0F0F0', end_color='F0F0F0', fill_type='solid')
@@ -3447,6 +3462,8 @@ def costing_export_excel(request, pk):
                 item.model_number,
                 float(item.quantity),
                 item.unit,
+            ]
+            values += [] if unpriced else [
                 # Unit Price and Total Price (calculated final)
                 round(float(item.final_unit_price), 2),
                 round(float(item.final_total_price), 2),
@@ -3478,26 +3495,30 @@ def costing_export_excel(request, pk):
                     cell.number_format = num_fmt
             row += 1
 
-        # Subtotal
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
-        cell = ws.cell(row=row, column=1, value=f"Sub-Total")
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal='right')
-        st_cell = ws.cell(row=row, column=9, value=round(float(section.subtotal), 2))
-        st_cell.font = Font(bold=True)
-        st_cell.number_format = num_fmt
-        row += 1
+        # Subtotal. Omitted entirely when unpriced rather than left as a
+        # labelled empty cell — a "Sub-Total" row with nothing beside it reads
+        # as a failed export rather than a deliberate omission.
+        if not unpriced:
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+            cell = ws.cell(row=row, column=1, value=f"Sub-Total")
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal='right')
+            st_cell = ws.cell(row=row, column=9, value=round(float(section.subtotal), 2))
+            st_cell.font = Font(bold=True)
+            st_cell.number_format = num_fmt
+            row += 1
 
-    # Grand total
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
-    cell = ws.cell(row=row, column=1, value=f'GRAND TOTAL ({sheet.output_currency})')
-    cell.font = Font(bold=True, size=12, color='FFFFFF')
-    cell.fill = PatternFill(start_color='C41E3A', end_color='C41E3A', fill_type='solid')
-    cell.alignment = Alignment(horizontal='right')
-    gt_cell = ws.cell(row=row, column=9, value=round(float(sheet.grand_total), 2))
-    gt_cell.font = Font(bold=True, size=12, color='FFFFFF')
-    gt_cell.fill = PatternFill(start_color='C41E3A', end_color='C41E3A', fill_type='solid')
-    gt_cell.number_format = num_fmt
+    # Grand total — same reasoning as the subtotal above.
+    if not unpriced:
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+        cell = ws.cell(row=row, column=1, value=f'GRAND TOTAL ({sheet.output_currency})')
+        cell.font = Font(bold=True, size=12, color='FFFFFF')
+        cell.fill = PatternFill(start_color='C41E3A', end_color='C41E3A', fill_type='solid')
+        cell.alignment = Alignment(horizontal='right')
+        gt_cell = ws.cell(row=row, column=9, value=round(float(sheet.grand_total), 2))
+        gt_cell.font = Font(bold=True, size=12, color='FFFFFF')
+        gt_cell.fill = PatternFill(start_color='C41E3A', end_color='C41E3A', fill_type='solid')
+        gt_cell.number_format = num_fmt
 
     # Column widths
     widths = {
@@ -3512,18 +3533,23 @@ def costing_export_excel(request, pk):
     for col_letter, w in widths.items():
         ws.column_dimensions[col_letter].width = w
 
-    filename = _safe_filename(sheet.title, suffix='BOM', extension='xlsx')
+    filename = _safe_filename(
+        sheet.title, suffix='BOM_Unpriced' if unpriced else 'BOM', extension='xlsx')
     # Write to a buffer so we can both save a revision copy and return it
     import io as _io
     xlsx_buffer = _io.BytesIO()
     wb.save(xlsx_buffer)
     xlsx_bytes = xlsx_buffer.getvalue()
 
-    try:
-        _save_costing_revision(sheet, xlsx_bytes, filename, export_format='excel', user=request.user)
-    except Exception as _e:
-        import logging
-        logging.getLogger(__name__).warning('Failed to save costing Excel revision: %s', _e)
+    # Unpriced exports are a derivative of the same sheet state, so they are
+    # not snapshotted as separate revisions — the priced export stays the
+    # canonical record. Matches how the unpriced PDF behaves.
+    if not unpriced:
+        try:
+            _save_costing_revision(sheet, xlsx_bytes, filename, export_format='excel', user=request.user)
+        except Exception as _e:
+            import logging
+            logging.getLogger(__name__).warning('Failed to save costing Excel revision: %s', _e)
 
     response = HttpResponse(
         xlsx_bytes,
