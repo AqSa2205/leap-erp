@@ -829,3 +829,58 @@ class OpportunityLostTests(TestCase):
         form = ProjectForm(user=self.user)
         self.assertIn(self.lost_status.pk, form.lost_status_ids)
         self.assertNotIn(self.open_status.pk, form.lost_status_ids)
+
+
+class TemplateCommentSyntaxTests(TestCase):
+    """No template may use a multi-line hash comment.
+
+    Django's tag regex has no DOTALL flag, so a hash comment spanning more than
+    one line is never matched and prints verbatim on the rendered page. In the
+    source it looks exactly like a correct comment, which is why this is worth
+    a test rather than vigilance — it shipped to production once already.
+    """
+
+    NEWLINE = '\n'
+
+    def _template_roots(self):
+        import os
+        from django.conf import settings
+        base = settings.BASE_DIR
+        roots = [os.path.join(base, 'templates')]
+        for entry in os.listdir(base):
+            candidate = os.path.join(base, entry, 'templates')
+            if os.path.isdir(candidate):
+                roots.append(candidate)
+        return [r for r in roots if os.path.isdir(r)]
+
+    def test_no_multiline_hash_comments_in_any_template(self):
+        import os
+        import re
+        offenders = []
+        for root in self._template_roots():
+            for dirpath, _dirnames, filenames in os.walk(root):
+                for filename in filenames:
+                    if not filename.endswith('.html'):
+                        continue
+                    path = os.path.join(dirpath, filename)
+                    with open(path, encoding='utf-8', errors='replace') as handle:
+                        text = handle.read()
+                    for match in re.finditer(re.escape('{#'), text):
+                        close = text.find('#}', match.start())
+                        if close == -1:
+                            continue
+                        if self.NEWLINE in text[match.start():close]:
+                            line = text[:match.start()].count(self.NEWLINE) + 1
+                            offenders.append(f'{path}:{line}')
+        self.assertEqual(
+            offenders, [],
+            'Multi-line hash comments render as visible text. Use '
+            '{% comment %} ... {% endcomment %} instead. Offenders: ' + ', '.join(offenders))
+
+    def test_the_mechanism_this_guards_against(self):
+        """Proves the failure mode, so the check above is not cargo-culted."""
+        from django.template import Context, Template
+        single = Template('A{# one line #}B').render(Context({}))
+        self.assertEqual(single, 'AB')
+        spanning = Template('A{# first' + self.NEWLINE + 'second #}B').render(Context({}))
+        self.assertIn('{#', spanning)          # the comment leaks into the output
