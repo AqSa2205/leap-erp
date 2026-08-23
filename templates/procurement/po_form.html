@@ -419,8 +419,10 @@
                         </div>
                     </div>
                     <div class="card-body" id="poTermsCardBody">
-                        {# Records the order terms are ticked, so the PDF/Excel print
-                           them in the sequence the user chose rather than alphabetically. #}
+                        {% comment %}
+                        Records the order terms are ticked, so the PDF/Excel print
+                        them in the sequence the user chose rather than alphabetically.
+                        {% endcomment %}
                         <input type="hidden" name="selected_terms_ordered" id="selectedTermsOrdered" value="{{ selected_terms_ordered }}">
                         {% for category_label, items_list in terms_by_category.items %}
                         {% if items_list %}
