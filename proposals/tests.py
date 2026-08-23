@@ -1103,3 +1103,64 @@ class EditContentViewDepartmentGroupingTests(TestCase):
         self.assertNotIn(
             'Inactive AI Heading',
             set(resp.context['dept_headings']['ai']['items'].values_list('name', flat=True)))
+
+
+class CompanyAcronymDoesNotEatCustomerTextTests(TestCase):
+    """The bare 'LNG' company key must never touch the customer's own words.
+
+    _replace_company_references matches 'LNG' as a substring. If it runs after
+    the cover page has been filled in, a project description like "SUPPLY FOR
+    LNG TERMINAL" silently becomes "LNA TERMINAL" — and the header and footer,
+    which take the same text by another route, keep saying LNG, so the exported
+    document contradicts itself page to page.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user('docx_lng', password='x')
+
+    def _proposal(self, **overrides):
+        data = dict(
+            title='LNG Terminal Telecom',
+            client_name='Qatargas LNG',
+            project_description='SUPPLY OF TELECOM SYSTEMS FOR LNG TERMINAL',
+            proposal_reference='LNA-2026-001',
+            region_entity='LNKSA',
+            revision_date=date(2026, 1, 1),
+            prepared_by_initials='AJ',
+            created_by=self.user,
+        )
+        data.update(overrides)
+        return TechnicalProposal.objects.create(**data)
+
+    def _document_xml(self, proposal):
+        # generate_proposal_docx returns an HttpResponse, not raw bytes.
+        content = generate_proposal_docx(proposal).content
+        with zipfile.ZipFile(io.BytesIO(content)) as z:
+            return z.read('word/document.xml').decode('utf-8', errors='replace')
+
+    def test_company_references_run_before_the_cover_page(self):
+        """Order is the fix; assert it directly so a reorder is caught."""
+        import inspect
+        from proposals import docx_export
+        src = inspect.getsource(docx_export.generate_proposal_docx)
+        company = src.index('_replace_company_references(body, proposal)')
+        cover = src.index('_replace_cover_page(body, proposal)')
+        self.assertLess(company, cover,
+                        'company references must be replaced before the cover page '
+                        'is filled with customer text')
+
+    def test_customer_description_keeps_its_lng(self):
+        xml = self._document_xml(self._proposal())
+        self.assertIn('LNG TERMINAL', xml)
+        self.assertNotIn('LNA TERMINAL', xml)
+
+    def test_customer_name_keeps_its_lng(self):
+        # The cover page writes the client name upper-cased.
+        xml = self._document_xml(self._proposal())
+        self.assertIn('QATARGAS LNG', xml)
+        self.assertNotIn('QATARGAS LNA', xml)
+
+    def test_the_company_name_itself_is_still_replaced(self):
+        """The reorder must not stop the substitution it exists to perform."""
+        xml = self._document_xml(self._proposal())
+        self.assertNotIn('Leap Networks Global Ltd', xml)

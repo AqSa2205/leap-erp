@@ -131,14 +131,23 @@ document.addEventListener('DOMContentLoaded', function() {
     projectSelect.addEventListener('change', function() {
         var data = PROJECT_MAP[projectSelect.value];
         if (!data) return;
-        if (refField && data.reference && refField.value.trim() === lastAutofilled.reference.trim()) {
-            refField.value = data.reference;
-            lastAutofilled.reference = data.reference;
+
+        // Note the guards test only "did we write what is currently there",
+        // not whether the incoming value is truthy. A project with a blank
+        // customer, or a reference too long to carry over, yields an empty
+        // string — and skipping the assignment in that case would leave the
+        // PREVIOUS project's client sitting in the field while the form now
+        // points somewhere else. Writing the blank is the honest outcome: the
+        // field matches the project that is actually selected.
+        function apply(field, key, value) {
+            if (!field) return;
+            if (field.value.trim() !== lastAutofilled[key].trim()) return;  // user-edited, leave alone
+            field.value = value || '';
+            lastAutofilled[key] = field.value;
         }
-        if (clientField && data.client && clientField.value.trim() === lastAutofilled.client.trim()) {
-            clientField.value = data.client;
-            lastAutofilled.client = data.client;
-        }
+
+        apply(refField, 'reference', data.reference);
+        apply(clientField, 'client', data.client);
     });
 });
 </script>

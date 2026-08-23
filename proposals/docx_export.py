@@ -1135,8 +1135,17 @@ def generate_proposal_docx(proposal):
                 root = etree.fromstring(data)
                 _strip_highlights(root)
                 body = root.find(f'.//{{{WNS}}}body')
-                _replace_cover_page(body, proposal)
+                # Company references are swapped BEFORE the cover page, so the
+                # replacements only ever see the template's own text. One of
+                # the keys is a bare 'LNG', matched as a substring — running it
+                # afterwards would rewrite the customer's own words, turning a
+                # description like "SUPPLY FOR LNG TERMINAL" into "LNA
+                # TERMINAL" and a client named "Qatargas LNG" into "Qatargas
+                # LNA". The header and footer take that same text through
+                # textbox_replacements and are not passed through here, so the
+                # document would also contradict itself page to page.
                 _replace_company_references(body, proposal)
+                _replace_cover_page(body, proposal)
                 _replace_textboxes_in_part(root, textbox_replacements,
                                            exact_replacements)
                 data = etree.tostring(root, xml_declaration=True,
