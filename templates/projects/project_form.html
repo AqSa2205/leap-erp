@@ -76,9 +76,15 @@
                 </div>
             </div>
 
-            {# Opportunity Lost — revealed only when the chosen status is a Lost
-               one. Hidden by default and unhidden by JS below, so it never
-               flashes into view on load for the majority of projects. #}
+            {% comment %}
+            Opportunity Lost — revealed only when the chosen status is a Lost
+            one. Hidden by default and unhidden by JS below, so it never
+            flashes into view on load for the majority of projects.
+
+            Note the tag: Django's hash-style comment is single-line only, so
+            spanning one across several lines leaves it unmatched and prints it
+            verbatim on the page.
+            {% endcomment %}
             <div class="row mb-4" id="lostReasonRow" style="display:none;">
                 <div class="col-12">
                     <div class="card border-danger-subtle">
