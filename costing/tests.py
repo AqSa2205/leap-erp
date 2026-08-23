@@ -1285,6 +1285,115 @@ class CommOfferContactTests(TestCase):
         self.assertEqual(self._contact(sheet)[0], 'Cathy Creator')
 
 
+class UnpricedExcelExportTests(TestCase):
+    """?unpriced=1 gives a BOM workbook with no pricing anywhere in it."""
+
+    def setUp(self):
+        from decimal import Decimal
+        from accounts.models import Role, User
+        from accounts.permissions import seed_default_permissions
+        from projects.models import Region, ProjectStatus, Project
+        from costing.models import CostingSheet, CostingSection, CostingLineItem
+
+        self.region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        status = ProjectStatus.objects.create(name='Open', category='active')
+
+        def mkuser(username, role_name):
+            role, _ = Role.objects.get_or_create(name=role_name)
+            u = User.objects.create_user(username, password='x')
+            u.role = role
+            u.region = self.region
+            u.save()
+            return u
+
+        self.sales = mkuser('xl_sales', Role.MANAGER)
+        self.proposal = mkuser('xl_prop', Role.PROPOSAL_REP)
+        seed_default_permissions()
+
+        project = Project.objects.create(
+            project_name='P', proposal_reference='REF-XL', status=status,
+            region=self.region, owner=self.sales)
+        self.sheet = CostingSheet.objects.create(
+            title='Sheet', project=project, created_by=self.sales,
+            margin=Decimal('40'), output_currency='SAR')
+        section = CostingSection.objects.create(
+            costing_sheet=self.sheet, section_number='1', title='CCTV', order=0)
+        CostingLineItem.objects.create(
+            section=section, item_number='1.1', description='Dome camera',
+            vendor_name='Acme', make='Hik', model_number='DS-2CD',
+            quantity=Decimal('4'), unit='Each',
+            supplier_currency='SAR', base_unit_cost=Decimal('1250.00'))
+
+    def _cells(self, content):
+        """Every non-empty cell value in the workbook, as strings."""
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(content))
+        ws = wb.active
+        return [str(c.value) for r in ws.iter_rows() for c in r if c.value is not None]
+
+    def _get(self, user, **params):
+        self.client.force_login(user)
+        return self.client.get(reverse('costing:export', args=[self.sheet.pk]), params)
+
+    def test_unpriced_export_succeeds_for_sales(self):
+        resp = self._get(self.sales, unpriced='1')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('spreadsheetml', resp['Content-Type'])
+
+    def test_proposal_team_can_download_unpriced_but_not_priced(self):
+        """The whole point: the BOM is theirs, the pricing is not."""
+        self.assertEqual(self._get(self.proposal, unpriced='1').status_code, 200)
+        self.assertEqual(self._get(self.proposal).status_code, 302)   # redirected away
+
+    def test_no_pricing_value_appears_anywhere_in_the_workbook(self):
+        cells = self._cells(self._get(self.sales, unpriced='1').content)
+        blob = ' '.join(cells)
+        for leak in ('1250', 'Unit Price', 'Total Price', 'Base Unit Cost',
+                     'Total Cost', 'Margin', 'GRAND TOTAL', 'Sub-Total',
+                     'EXCHANGE RATES'):
+            self.assertNotIn(leak, blob, f'{leak!r} leaked into the unpriced export')
+
+    def test_bom_content_is_all_present(self):
+        cells = self._cells(self._get(self.sales, unpriced='1').content)
+        blob = ' '.join(cells)
+        for kept in ('Item No', 'Description', 'Qty', 'Unit',
+                     'Dome camera', 'Hik', 'DS-2CD', 'CCTV'):
+            self.assertIn(kept, blob, f'{kept!r} missing from the unpriced export')
+
+    def test_title_says_unpriced(self):
+        self.assertIn('BILL OF MATERIAL - UNPRICED',
+                      ' '.join(self._cells(self._get(self.sales, unpriced='1').content)))
+
+    def test_priced_export_still_has_its_pricing(self):
+        """The unpriced flag must not have hollowed out the normal export."""
+        blob = ' '.join(self._cells(self._get(self.sales).content))
+        self.assertIn('GRAND TOTAL', blob)
+        self.assertIn('Base Unit Cost', blob)
+        self.assertIn('EXCHANGE RATES', blob)
+
+    def test_filename_distinguishes_the_two(self):
+        unpriced = self._get(self.sales, unpriced='1')['Content-Disposition']
+        priced = self._get(self.sales)['Content-Disposition']
+        self.assertIn('BOM_Unpriced', unpriced)
+        self.assertNotIn('BOM_Unpriced', priced)
+
+    def test_unpriced_export_is_not_saved_as_a_revision(self):
+        """A derivative of the same state; the priced export stays canonical."""
+        before = self.sheet.revisions.count() if hasattr(self.sheet, 'revisions') else 0
+        self._get(self.sales, unpriced='1')
+        after = self.sheet.revisions.count() if hasattr(self.sheet, 'revisions') else 0
+        self.assertEqual(before, after)
+
+    def test_headers_still_match_what_the_importer_looks_for(self):
+        """The importer finds its header row by name, so the narrower sheet
+        must still carry the names it keys on."""
+        cells = self._cells(self._get(self.sales, unpriced='1').content)
+        lowered = [c.lower() for c in cells]
+        self.assertIn('description', lowered)
+        self.assertIn('vendor', lowered)
+
+
 class SubHeadingRowTests(TestCase):
     """Sub-heading rows label the items beneath them and carry no figures —
     unless they genuinely hold a price, which must never be hidden."""
