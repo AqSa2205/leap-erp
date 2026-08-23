@@ -13,6 +13,7 @@ from .models import (
     TechnicalProposal, ProposalBoilerplate,
     PrequalificationDocument, PQDAttachment,
     ProposalSection, SectionHeading, EngineeringDocument,
+    SectionHeadingTemplate,
 )
 from .forms import (
     ProposalMetadataForm, ProposalContentForm, EngineeringDocumentFormSet,
@@ -135,6 +136,38 @@ class ProposalListView(ProposalPermissionMixin, ListView):
         return context
 
 
+def _project_autofill_map(project_queryset):
+    """{project_id: {reference, client}} for the New/Edit Proposal form's
+    JS to fill in Proposal Reference and Client Name when a project is
+    picked. Built from the form's OWN (already region-scoped) project
+    queryset, so it never shows more than the dropdown itself does.
+
+    Project.proposal_reference (max_length=255, e.g. "LNA 1234 - Some Long
+    Project Name") doesn't fit TechnicalProposal.proposal_reference
+    (max_length=50, unique) — autofilling the raw value would routinely
+    fail form validation on longer project names. Derive just the short
+    "LNA ####" form when possible; if the reference isn't a recognizable
+    LNA reference and is already short enough, use it as-is; otherwise
+    leave it out of the map entirely so the JS simply doesn't touch the
+    field, same as the reviewer's "leave this field for the user" fallback.
+    """
+    from projects.models import parse_lna_reference
+
+    result = {}
+    for p in project_queryset:
+        ref = p.proposal_reference or ''
+        parsed = parse_lna_reference(ref)
+        if parsed:
+            number, _revision = parsed
+            short_ref = f'LNA {number}'
+        elif len(ref) <= 50:
+            short_ref = ref
+        else:
+            short_ref = ''
+        result[p.pk] = {'reference': short_ref, 'client': p.customer}
+    return result
+
+
 class ProposalCreateView(LoginRequiredMixin, CreateView):
     model = TechnicalProposal
     form_class = ProposalMetadataForm
@@ -144,6 +177,12 @@ class ProposalCreateView(LoginRequiredMixin, CreateView):
         kwargs = super().get_form_kwargs()
         kwargs['user'] = self.request.user
         return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['project_autofill_map'] = _project_autofill_map(
+            context['form'].fields['project'].queryset)
+        return context
 
     def form_valid(self, form):
         form.instance.created_by = self.request.user
@@ -184,6 +223,12 @@ class ProposalUpdateView(ProposalPermissionMixin, UpdateView):
         kwargs = super().get_form_kwargs()
         kwargs['user'] = self.request.user
         return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['project_autofill_map'] = _project_autofill_map(
+            context['form'].fields['project'].queryset)
+        return context
 
     def form_valid(self, form):
         messages.success(self.request, 'Proposal updated successfully.')
@@ -287,11 +332,34 @@ class ProposalEditContentView(LoginRequiredMixin, UserPassesTestMixin, View):
         return _can_edit_proposal(self.request.user, self.get_object())
 
     def _context(self, obj, section_fs, eng_fs):
+        # Generic headings: the plain, un-prefilled library — the one big
+        # list that shows no matter which (if any) department toggle is
+        # active. A heading that carries an AI/Telecom/Security template is
+        # NOT part of this list; it lives only under its department's own
+        # panel below, prefilled with that department's content. That's a
+        # deliberate partition (confirmed with the proposals team), not the
+        # additive "every heading everywhere" behavior from an earlier pass
+        # at this — the two sets are meant to stay visually distinct.
+        headings = SectionHeading.objects.filter(
+            is_active=True, dept_templates__isnull=True).distinct()
+
+        # Department-specific headings: only ones that have a composed
+        # template for that department. One group per department, so the
+        # template can show/hide the right group under the toggle.
+        dept_headings = {}
+        for dept_code, dept_label in SectionHeadingTemplate.DEPARTMENT_CHOICES:
+            dept_headings[dept_code] = {
+                'label': dept_label,
+                'items': SectionHeading.objects.filter(
+                    is_active=True, dept_templates__department=dept_code).distinct(),
+            }
+
         return {
             'object': obj,
             'section_formset': section_fs,
             'eng_formset': eng_fs,
-            'headings': SectionHeading.objects.filter(is_active=True),
+            'headings': headings,
+            'dept_headings': dept_headings,
         }
 
     def get(self, request, pk):
@@ -320,7 +388,13 @@ class ProposalEditContentView(LoginRequiredMixin, UserPassesTestMixin, View):
 def add_proposal_section(request, pk):
     """Add one or more sections to a proposal at once — any number of checked
     library headings (each pre-fills its default content) plus an optional typed
-    custom heading. Returns to the editor."""
+    custom heading. Returns to the editor.
+
+    Optional 'department' POST field (ai/telecom/procurement): when set, any
+    checked heading that has a SectionHeadingTemplate for that department
+    pre-fills with that composed content instead of the heading's generic
+    default_content. Left blank (or omitted) behaves exactly as before.
+    """
     proposal = get_object_or_404(TechnicalProposal, pk=pk)
     if not _can_edit_proposal(request.user, proposal):
         messages.error(request, 'Permission denied.')
@@ -336,6 +410,11 @@ def add_proposal_section(request, pk):
         messages.error(request, 'Pick at least one heading, or type a custom one.')
         return redirect('proposals:content', pk=pk)
 
+    department = (request.POST.get('department') or '').strip()
+    valid_departments = {code for code, _label in SectionHeadingTemplate.DEPARTMENT_CHOICES}
+    if department not in valid_departments:
+        department = ''
+
     next_order = (proposal.sections.aggregate(m=Max('order'))['m'] or 0) + 1
     is_super = request.user.is_super_admin_user
     for heading in chosen:
@@ -345,10 +424,18 @@ def add_proposal_section(request, pk):
         if lib is None and is_super:
             lib_order = (SectionHeading.objects.aggregate(m=Max('order'))['m'] or 0) + 1
             lib = SectionHeading.objects.create(name=heading, order=lib_order)
+
+        content = lib.default_content if lib else ''
+        if lib and department:
+            dept_tmpl = SectionHeadingTemplate.objects.filter(
+                heading=lib, department=department).first()
+            if dept_tmpl and dept_tmpl.content:
+                content = dept_tmpl.content
+
         ProposalSection.objects.create(
             proposal=proposal,
             heading=lib.name if lib else heading,
-            content=(lib.default_content if lib else ''),
+            content=content,
             order=next_order)
         next_order += 1
 

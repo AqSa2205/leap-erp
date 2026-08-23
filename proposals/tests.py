@@ -6,7 +6,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from proposals.models import (
-    TechnicalProposal, ProposalSection, SectionHeading,
+    TechnicalProposal, ProposalSection, SectionHeading, SectionHeadingTemplate,
 )
 from proposals.docx_export import generate_proposal_docx
 from accounts.models import User, Role
@@ -35,6 +35,62 @@ class ProposalDocxExportTests(TestCase):
     def _doc_xml(self, proposal):
         return self._part_xml(proposal)
 
+    def test_image_renders_at_the_reduced_display_size(self):
+        # Use a real, resolvable image (one of the seed migration's) — a
+        # src that can't be resolved gets its whole drawing stripped (see
+        # test_missing_image_does_not_leave_a_dangling_reference below),
+        # which would remove the very wp:extent this test checks.
+        # document.xml also contains the cover page's own logo image (its
+        # own unrelated wp:extent) — so check our generated image's size is
+        # PRESENT among all extents, not that it's the first one found.
+        from lxml import etree
+        from django.core.files.storage import default_storage
+        from proposals.docx_export import IMAGE_WIDTH_EMU, IMAGE_HEIGHT_EMU
+        WP_NS = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
+        self.assertTrue(default_storage.exists('proposal_templates/ai/image3.png'))
+        p = self._proposal()
+        self._section(p, 'Diagram', '<img src="/media/proposal_templates/ai/image3.png" alt="Diagram">')
+        xml = self._doc_xml(p)
+        root = etree.fromstring(xml.encode('utf-8'))
+        extents = {(e.get('cx'), e.get('cy')) for e in root.findall(f'.//{{{WP_NS}}}extent')}
+        self.assertIn((str(IMAGE_WIDTH_EMU), str(IMAGE_HEIGHT_EMU)), extents)
+        # The old, larger forced size (600x300px) must be gone.
+        self.assertNotIn((str(600 * 9525), str(300 * 9525)), extents)
+
+    def test_missing_image_does_not_leave_a_dangling_reference(self):
+        # A src that can't be resolved to real bytes must not leave a
+        # literal "__LEAP_IMG_N__" placeholder as an r:embed value — Word
+        # refuses to open a document with a relationship id that doesn't
+        # exist, corrupting the WHOLE file over one missing image. The
+        # drawing run should be stripped instead, degrading gracefully.
+        p = self._proposal()
+        self._section(p, 'Diagram', '<img src="test.png" alt="Diagram">')
+        xml = self._doc_xml(p)
+        self.assertNotIn('__LEAP_IMG_', xml)
+        # The paragraph and its disclaimer caption still render — only the
+        # unresolvable drawing itself is gone.
+        self.assertIn('This image is for representation purposes only', xml)
+
+    def test_bare_image_gets_representation_disclaimer_caption(self):
+        p = self._proposal()
+        self._section(p, 'Diagram', '<img src="test.png" alt="Diagram">')
+        xml = self._doc_xml(p)
+        self.assertIn('This image is for representation purposes only', xml)
+
+    def test_figure_image_keeps_custom_caption_and_still_gets_disclaimer(self):
+        p = self._proposal()
+        html = ('<figure><img src="test.png" alt="Diagram">'
+                '<figcaption>Figure 1: Network Topology</figcaption></figure>')
+        self._section(p, 'Diagram', html)
+        xml = self._doc_xml(p)
+        self.assertIn('Figure 1: Network Topology', xml)
+        self.assertIn('This image is for representation purposes only', xml)
+        # Custom caption immediately follows the image; the disclaimer
+        # follows that — not a replacement, an addition.
+        self.assertLess(
+            xml.index('Figure 1: Network Topology'),
+            xml.index('This image is for representation purposes only'))
+
     def test_word_pasted_html_is_rendered_not_dumped_raw(self):
         p = self._proposal()
         html = (
@@ -55,6 +111,49 @@ class ProposalDocxExportTests(TestCase):
         p = self._proposal()
         self._section(p, 'Covering Letter', 'Just plain text here.')
         self.assertIn('Just plain text here.', self._doc_xml(p))
+
+    def test_pasted_table_does_not_set_center_alignment(self):
+        # Word only honors w:tblInd on a LEFT-aligned table: w:jc="center"
+        # makes it center the table across the FULL column width instead
+        # and silently ignore tblInd — landing the table ~354 twips left of
+        # the intended 709 (i.e. back under the sidebar). So correct
+        # positioning here specifically requires jc to be absent/left, not
+        # present-and-center — assert on that actual behavior, not just
+        # "some jc attribute exists" (which passes either way).
+        from lxml import etree
+        WNS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+        p = self._proposal()
+        html = ('<table><tr><th>Item</th><th>Qty</th></tr>'
+                '<tr><td>Widget</td><td>3</td></tr></table>')
+        self._section(p, 'Bill of Materials', html)
+        xml = self._doc_xml(p)
+        root = etree.fromstring(xml.encode('utf-8'))
+        tables = root.findall(f'.//{{{WNS}}}tbl')
+        self.assertEqual(len(tables), 1)
+        jc = tables[0].find(f'{{{WNS}}}tblPr/{{{WNS}}}jc')
+        if jc is not None:
+            self.assertEqual(jc.get(f'{{{WNS}}}val'), 'left')
+
+    def test_pasted_table_matches_the_body_text_indent(self):
+        # Body paragraphs are indented 709 twips to clear the sidebar labels
+        # floating in the header (see BODY_LEFT_INDENT_TWIPS). A table with
+        # no matching w:tblInd starts flush at the page margin instead and
+        # collides with that sidebar.
+        from lxml import etree
+        from proposals.docx_export import BODY_LEFT_INDENT_TWIPS, BODY_CONTENT_WIDTH_TWIPS
+        WNS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+        p = self._proposal()
+        html = '<table><tr><td>A</td></tr></table>'
+        self._section(p, 'Some Section', html)
+        xml = self._doc_xml(p)
+        root = etree.fromstring(xml.encode('utf-8'))
+        tbl = root.find(f'.//{{{WNS}}}tbl')
+        tblInd = tbl.find(f'{{{WNS}}}tblPr/{{{WNS}}}tblInd')
+        self.assertIsNotNone(tblInd, 'table has no w:tblInd set')
+        self.assertEqual(tblInd.get(f'{{{WNS}}}w'), str(BODY_LEFT_INDENT_TWIPS))
+        tblW = tbl.find(f'{{{WNS}}}tblPr/{{{WNS}}}tblW')
+        self.assertEqual(tblW.get(f'{{{WNS}}}type'), 'dxa')
+        self.assertEqual(tblW.get(f'{{{WNS}}}w'), str(BODY_CONTENT_WIDTH_TWIPS))
 
     def test_section_heading_appears_as_heading1(self):
         p = self._proposal()
@@ -85,6 +184,46 @@ class ProposalDocxExportTests(TestCase):
         h = self._part_xml(self._proposal(ref='TP-UK', region_entity='LNUK'),
                            'word/header1.xml')
         self.assertIn('Global', h)        # LEAP Networks Global Ltd. (unchanged)
+
+    def test_cover_page_prepared_by_company_name_is_arabia_for_ksa(self):
+        # The cover page's "Prepared by:" block is a separate run/casing
+        # ("LEAP NETWORKS " + "Global Ltd.") from both the header textbox
+        # and the body confidentiality text — must be replaced too.
+        xml = self._doc_xml(self._proposal(ref='TP-KSA-COVER', region_entity='LNKSA'))
+        idx = xml.find('Prepared by:')
+        self.assertNotEqual(idx, -1)
+        following = xml[idx:idx + 800]
+        self.assertIn('Arabia', following)
+        self.assertNotIn('LEAP NETWORKS Global', following)
+
+    def test_cover_page_prepared_by_company_name_is_global_for_uk(self):
+        xml = self._doc_xml(self._proposal(ref='TP-UK-COVER', region_entity='LNUK'))
+        idx = xml.find('Prepared by:')
+        self.assertNotEqual(idx, -1)
+        following = xml[idx:idx + 800]
+        self.assertIn('Global', following)
+        self.assertNotIn('Arabia', following)
+
+    def test_body_confidentiality_notice_says_arabia_for_ksa(self):
+        # The Confidentiality Notice sits on the cover page (before the
+        # first Heading1), so it survives even for a proposal with no
+        # sections yet — unlike the template's hardcoded "Company Overview"
+        # boilerplate further down, which _replace_body_sections always
+        # discards and rebuilds from the proposal's own ProposalSection rows.
+        xml = self._doc_xml(self._proposal(ref='TP-KSA-BODY', region_entity='LNKSA'))
+        idx = xml.find('proprietary information of')
+        self.assertNotEqual(idx, -1)
+        following = xml[idx:idx + 200]
+        self.assertIn('Leap Networks Arabia', following)
+        self.assertNotIn('Global', following)
+
+    def test_body_confidentiality_notice_says_global_for_uk(self):
+        xml = self._doc_xml(self._proposal(ref='TP-UK-BODY', region_entity='LNUK'))
+        idx = xml.find('proprietary information of')
+        self.assertNotEqual(idx, -1)
+        following = xml[idx:idx + 200]
+        self.assertIn('Leap Networks Global Ltd.', following)
+        self.assertNotIn('Arabia', following)
 
 
 class AddSectionViewTests(TestCase):
@@ -485,3 +624,543 @@ class AIProposalAccessTests(TestCase):
         self.assertEqual(r.status_code, 302)
         tp = TechnicalProposal.objects.get(created_by=self.ai)
         self.assertEqual(tp.project_id, self.project.pk)
+
+
+class ProjectAutofillTests(TestCase):
+    """New/Edit Proposal form: picking a project fills in Proposal Reference
+    and Client Name via JS. Server-side, that's just the view handing the
+    template a {project_id: {reference, client}} map — verify that plumbing
+    (view -> context -> rendered page) is correct; the JS behaviour itself
+    (overwrite vs. leave-alone) isn't exercisable from a Django TestCase."""
+
+    def setUp(self):
+        from projects.models import Region, ProjectStatus, Project
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user(
+            'autofill_boss', password='pw', role=self.sa_role)
+        self.client.force_login(self.user)
+        self.region = Region.objects.create(name='RegA', code='RGA')
+        self.status = ProjectStatus.objects.create(name='Open', category='open')
+        self.project = Project.objects.create(
+            project_name='Highway CCTV', region=self.region, status=self.status,
+            proposal_reference='RA-42', customer='Acme Corp')
+
+    def test_create_view_context_has_autofill_map_with_reference_and_client(self):
+        resp = self.client.get(reverse('proposals:create'))
+        self.assertEqual(resp.status_code, 200)
+        amap = resp.context['project_autofill_map']
+        self.assertEqual(
+            amap[self.project.pk], {'reference': 'RA-42', 'client': 'Acme Corp'})
+
+    def test_update_view_context_has_autofill_map(self):
+        proposal = TechnicalProposal.objects.create(
+            title='T', proposal_reference='TP-AF', client_name='ACME',
+            revision_date=date(2026, 1, 1), prepared_by_initials='AJ',
+            created_by=self.user)
+        resp = self.client.get(reverse('proposals:edit', kwargs={'pk': proposal.pk}))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(self.project.pk, resp.context['project_autofill_map'])
+
+    def test_autofill_data_is_embedded_in_the_page_for_js_to_read(self):
+        resp = self.client.get(reverse('proposals:create'))
+        self.assertContains(resp, 'id="project-autofill-data"')
+        self.assertContains(resp, 'RA-42')
+        self.assertContains(resp, 'Acme Corp')
+
+    def test_project_select_and_target_fields_are_present_for_the_js_to_bind_to(self):
+        resp = self.client.get(reverse('proposals:create'))
+        content = resp.content.decode()
+        self.assertIn('id="id_project"', content)
+        self.assertIn('id="id_proposal_reference"', content)
+        self.assertIn('id="id_client_name"', content)
+
+    def test_regular_user_only_sees_their_own_region_projects_in_the_map(self):
+        from projects.models import Region, Project
+        other_region = Region.objects.create(name='RegB', code='RGB')
+        other_project = Project.objects.create(
+            project_name='Other Region Job', region=other_region, status=self.status,
+            proposal_reference='RB-1', customer='Other Client')
+        rep_role, _ = Role.objects.get_or_create(name=Role.PROPOSAL_REP)
+        rep = User.objects.create_user(
+            'region_rep', password='pw', role=rep_role, region=self.region)
+        self.client.force_login(rep)
+
+        resp = self.client.get(reverse('proposals:create'))
+        amap = resp.context['project_autofill_map']
+        # Same-region project: visible, matches the dropdown.
+        self.assertIn(self.project.pk, amap)
+        # Other-region project: not in the map, same as it's not in the
+        # dropdown's queryset — no company-wide reference/client leakage.
+        self.assertNotIn(other_project.pk, amap)
+
+    def test_ai_team_user_sees_all_regions_in_the_map(self):
+        # AI works cross-region and usually has no region set — the map
+        # should follow the same "sees everything" rule as the dropdown.
+        from projects.models import Region, Project
+        other_region = Region.objects.create(name='RegB', code='RGB')
+        other_project = Project.objects.create(
+            project_name='Other Region Job', region=other_region, status=self.status,
+            proposal_reference='RB-1', customer='Other Client')
+        ai_role, _ = Role.objects.get_or_create(name=Role.AI_ENGINEER)
+        ai_user = User.objects.create_user('ai_autofill', password='pw', role=ai_role, region=None)
+        self.client.force_login(ai_user)
+
+        resp = self.client.get(reverse('proposals:create'))
+        amap = resp.context['project_autofill_map']
+        self.assertIn(self.project.pk, amap)
+        self.assertIn(other_project.pk, amap)
+
+    def test_autofill_map_keys_always_match_the_dropdown_exactly(self):
+        # The core invariant the fix relies on: the map is built FROM the
+        # dropdown's own queryset, so the two can never drift apart —
+        # whoever the user is, whatever set of projects they can pick from.
+        from projects.models import Region, Project
+        other_region = Region.objects.create(name='RegB', code='RGB')
+        Project.objects.create(
+            project_name='Other Region Job', region=other_region, status=self.status,
+            proposal_reference='RB-1', customer='Other Client')
+        rep_role, _ = Role.objects.get_or_create(name=Role.PROPOSAL_REP)
+        rep = User.objects.create_user(
+            'region_rep2', password='pw', role=rep_role, region=self.region)
+        self.client.force_login(rep)
+
+        resp = self.client.get(reverse('proposals:create'))
+        dropdown_pks = set(resp.context['form'].fields['project'].queryset.values_list('pk', flat=True))
+        map_pks = set(resp.context['project_autofill_map'].keys())
+        self.assertEqual(map_pks, dropdown_pks)
+        self.assertGreater(len(dropdown_pks), 0)  # sanity: didn't vacuously pass on empty sets
+
+    def test_update_view_also_scopes_the_map_to_the_users_region(self):
+        from projects.models import Region, Project
+        other_region = Region.objects.create(name='RegB', code='RGB')
+        other_project = Project.objects.create(
+            project_name='Other Region Job', region=other_region, status=self.status,
+            proposal_reference='RB-1', customer='Other Client')
+        rep_role, _ = Role.objects.get_or_create(name=Role.PROPOSAL_REP)
+        rep = User.objects.create_user(
+            'region_rep3', password='pw', role=rep_role, region=self.region)
+        proposal = TechnicalProposal.objects.create(
+            title='T', proposal_reference='TP-AF2', client_name='ACME',
+            revision_date=date(2026, 1, 1), prepared_by_initials='AJ',
+            created_by=rep)
+        self.client.force_login(rep)
+
+        resp = self.client.get(reverse('proposals:edit', kwargs={'pk': proposal.pk}))
+        amap = resp.context['project_autofill_map']
+        self.assertIn(self.project.pk, amap)
+        self.assertNotIn(other_project.pk, amap)
+
+
+DEPARTMENTS = ['ai', 'telecom', 'procurement']
+
+
+class DeptTemplateSeedMigrationTests(TestCase):
+    """0011_seed_dept_section_templates ships the real AI/Telecom/Procurement
+    content (that used to only exist in one person's local admin) as part of
+    the migration, so it lands automatically on every environment that runs
+    `migrate` — no manual re-entry. These tests confirm the migration
+    actually landed real content, not just an empty table."""
+
+    def test_seed_migration_created_the_expected_row_count_per_department(self):
+        counts = {
+            dept: SectionHeadingTemplate.objects.filter(department=dept).count()
+            for dept in DEPARTMENTS
+        }
+        self.assertEqual(counts, {'ai': 13, 'telecom': 18, 'procurement': 17})
+
+    def test_seeded_rows_have_real_non_empty_content(self):
+        tmpl = SectionHeadingTemplate.objects.get(
+            heading__name='Introduction', department='ai')
+        self.assertGreater(len(tmpl.content), 100)
+
+    def test_seeded_images_are_referenced_and_present_in_storage(self):
+        from django.core.files.storage import default_storage
+        tmpl = SectionHeadingTemplate.objects.get(
+            heading__name='System Architecture', department='ai')
+        self.assertIn('proposal_templates/ai/', tmpl.content)
+        self.assertTrue(default_storage.exists('proposal_templates/ai/image3.png'))
+
+    def test_seed_migration_is_idempotent(self):
+        # Re-running the seed function (e.g. re-applying against an
+        # environment that already has some/all of this content) must not
+        # duplicate rows or clobber existing ones.
+        import importlib
+        from django.apps import apps as real_apps
+        mod = importlib.import_module(
+            'proposals.migrations.0011_seed_dept_section_templates')
+        before = SectionHeadingTemplate.objects.count()
+        mod.seed(real_apps, None)
+        self.assertEqual(SectionHeadingTemplate.objects.count(), before)
+
+    def test_seed_does_not_annex_a_pre_existing_generic_heading(self):
+        # A heading that currently carries no department template at all —
+        # whether a genuinely independent, hand-created generic heading, or
+        # (as simulated here, since the real seed already ran once building
+        # this test DB) one whose department content was removed — must
+        # never have new department content silently welded onto it by a
+        # re-run. The department version gets its own distinct name
+        # instead, and the original heading is left completely alone.
+        import importlib
+        from django.apps import apps as real_apps
+
+        heading = SectionHeading.objects.get(name='Introduction')
+        heading.default_content = 'Plain, hand-written intro.'
+        heading.save(update_fields=['default_content'])
+        SectionHeadingTemplate.objects.filter(heading=heading, department='ai').delete()
+        self.assertFalse(heading.dept_templates.exists())
+
+        mod = importlib.import_module(
+            'proposals.migrations.0011_seed_dept_section_templates')
+        mod.seed(real_apps, None)
+
+        heading.refresh_from_db()
+        self.assertFalse(heading.dept_templates.exists())
+        self.assertEqual(heading.default_content, 'Plain, hand-written intro.')
+
+        disambiguated = SectionHeading.objects.get(name='Introduction (AI)')
+        self.assertTrue(
+            SectionHeadingTemplate.objects.filter(
+                heading=disambiguated, department='ai').exists())
+
+        # Re-running again must not duplicate the disambiguated version either.
+        before = SectionHeadingTemplate.objects.count()
+        mod.seed(real_apps, None)
+        self.assertEqual(SectionHeadingTemplate.objects.count(), before)
+        self.assertEqual(
+            SectionHeading.objects.filter(name='Introduction (AI)').count(), 1)
+
+    def test_no_seeded_row_contains_escaped_raw_html(self):
+        # Regression guard: the "Thermal Camera" row was once authored by
+        # accidentally pasting raw HTML source into the rich-text editor,
+        # which TinyMCE then escaped as literal text (&lt;p&gt; ... &lt;/p&gt;)
+        # instead of rendering it — every row should be real rendered
+        # content, never an escaped source dump.
+        offenders = [
+            f'{t.department}/{t.heading.name}'
+            for t in SectionHeadingTemplate.objects.select_related('heading')
+            if '&lt;' in t.content or '&gt;' in t.content
+        ]
+        self.assertEqual(offenders, [])
+
+    def test_thermal_camera_content_is_the_corrected_version(self):
+        tmpl = SectionHeadingTemplate.objects.get(
+            heading__name='Thermal Camera', department='procurement')
+        self.assertIn('Sarix', tmpl.content)
+        self.assertNotIn('&lt;p&gt;', tmpl.content)
+
+
+NEW_TELECOM_HEADINGS = [
+    'Information and Communication Technology (ICT)', 'Structured Cabling System',
+    'Core Switches', 'Distribution Switches', 'Access Switches',
+    'Industrial Ethernet Switches', 'Routers', 'Data Center / Server Infrastructure',
+    'Network Security', 'Communication Systems', 'Wireless Communication',
+    'Network Management', 'Time Synchronization', 'ICT in an Industrial Plant',
+]
+
+
+class NewTelecomHeadingsSeedMigrationTests(TestCase):
+    """0013_seed_new_telecom_headings ships 14 additional Telecom headings
+    (networking/ICT content) on top of the original 4 from 0011 — same
+    reasoning: this content used to only exist in one person's local admin,
+    now it lands automatically on every environment that runs `migrate`."""
+
+    def test_all_fourteen_new_headings_landed_with_real_content(self):
+        for name in NEW_TELECOM_HEADINGS:
+            tmpl = SectionHeadingTemplate.objects.get(
+                heading__name=name, department='telecom')
+            self.assertGreater(
+                len(tmpl.content), 50, f'{name} seeded with suspiciously little content')
+
+    def test_no_new_row_contains_escaped_raw_html(self):
+        offenders = [
+            t.heading.name
+            for t in SectionHeadingTemplate.objects.filter(
+                heading__name__in=NEW_TELECOM_HEADINGS, department='telecom'
+            ).select_related('heading')
+            if '&lt;' in t.content or '&gt;' in t.content
+        ]
+        self.assertEqual(offenders, [])
+
+    def test_ict_image_is_referenced_and_present_in_storage(self):
+        from django.core.files.storage import default_storage
+        tmpl = SectionHeadingTemplate.objects.get(
+            heading__name='Information and Communication Technology (ICT)',
+            department='telecom')
+        self.assertIn('proposal_templates/telecom/', tmpl.content)
+        self.assertTrue(default_storage.exists('proposal_templates/telecom/ict_image1.png'))
+
+    def test_migration_is_idempotent(self):
+        import importlib
+        from django.apps import apps as real_apps
+        mod = importlib.import_module(
+            'proposals.migrations.0013_seed_new_telecom_headings')
+        before = SectionHeadingTemplate.objects.filter(department='telecom').count()
+        mod.seed(real_apps, None)
+        self.assertEqual(
+            SectionHeadingTemplate.objects.filter(department='telecom').count(), before)
+
+    def test_does_not_annex_a_pre_existing_generic_heading(self):
+        import importlib
+        from django.apps import apps as real_apps
+        heading = SectionHeading.objects.get(name='Routers')
+        heading.default_content = 'Plain, hand-written intro.'
+        heading.save(update_fields=['default_content'])
+        SectionHeadingTemplate.objects.filter(heading=heading, department='telecom').delete()
+        self.assertFalse(heading.dept_templates.exists())
+
+        mod = importlib.import_module(
+            'proposals.migrations.0013_seed_new_telecom_headings')
+        mod.seed(real_apps, None)
+
+        heading.refresh_from_db()
+        self.assertFalse(heading.dept_templates.exists())
+        self.assertEqual(heading.default_content, 'Plain, hand-written intro.')
+
+        disambiguated = SectionHeading.objects.get(name='Routers (Telecom)')
+        self.assertTrue(
+            SectionHeadingTemplate.objects.filter(
+                heading=disambiguated, department='telecom').exists())
+
+
+class SectionHeadingTemplateModelTests(TestCase):
+    """The department-template row itself: one (heading, department) pair,
+    at most one per combination."""
+
+    def setUp(self):
+        self.heading, _ = SectionHeading.objects.update_or_create(name='Company Profile')
+
+    def test_str_includes_heading_and_department_label(self):
+        tmpl = SectionHeadingTemplate.objects.create(
+            heading=self.heading, department='ai', content='<p>AI body.</p>')
+        self.assertIn('Company Profile', str(tmpl))
+        self.assertIn('AI', str(tmpl))
+
+    def test_same_heading_and_department_cannot_be_created_twice(self):
+        from django.db import IntegrityError, transaction
+        SectionHeadingTemplate.objects.create(
+            heading=self.heading, department='telecom', content='First.')
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                SectionHeadingTemplate.objects.create(
+                    heading=self.heading, department='telecom', content='Second.')
+
+    def test_same_heading_different_departments_is_allowed(self):
+        for dept in DEPARTMENTS:
+            SectionHeadingTemplate.objects.create(
+                heading=self.heading, department=dept, content=f'{dept} body')
+        self.assertEqual(self.heading.dept_templates.count(), 3)
+
+
+
+
+class AddSectionDepartmentTemplateTests(TestCase):
+    """add_proposal_section's optional 'department' field: pre-fills a
+    checked heading with that department's composed content instead of the
+    heading's generic default_content."""
+
+    def setUp(self):
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user(
+            'boss2', password='pw', role=self.sa_role)
+        self.client.force_login(self.user)
+        self.proposal = TechnicalProposal.objects.create(
+            title='T', proposal_reference='TP-DEPT', client_name='ACME',
+            revision_date=date(2026, 1, 1), prepared_by_initials='AJ',
+            created_by=self.user)
+        self.heading, _ = SectionHeading.objects.update_or_create(
+            name='Company Profile',
+            defaults={'default_content': '<p>Generic default.</p>'})
+        for dept in DEPARTMENTS:
+            SectionHeadingTemplate.objects.create(
+                heading=self.heading, department=dept,
+                content=f'<p>{dept.upper()} composed content.</p>')
+
+    def _url(self):
+        return reverse('proposals:add_section', kwargs={'pk': self.proposal.pk})
+
+    def test_department_template_content_is_used_when_present(self):
+        for dept in DEPARTMENTS:
+            self.proposal.sections.all().delete()
+            self.client.post(self._url(), {
+                'heading': 'Company Profile', 'department': dept})
+            sec = self.proposal.sections.get()
+            self.assertEqual(sec.content, f'<p>{dept.upper()} composed content.</p>')
+
+    def test_falls_back_to_default_content_when_heading_has_no_template_for_that_department(self):
+        ai_only = SectionHeading.objects.create(
+            name='AI-Only Heading', default_content='<p>Generic fallback.</p>')
+        SectionHeadingTemplate.objects.create(
+            heading=ai_only, department='ai', content='<p>AI composed.</p>')
+        self.client.post(self._url(), {
+            'heading': 'AI-Only Heading', 'department': 'procurement'})
+        sec = self.proposal.sections.get()
+        self.assertEqual(sec.content, '<p>Generic fallback.</p>')
+
+    def test_department_omitted_behaves_exactly_as_before(self):
+        self.client.post(self._url(), {'heading': 'Company Profile'})
+        sec = self.proposal.sections.get()
+        self.assertEqual(sec.content, '<p>Generic default.</p>')
+
+    def test_unknown_department_value_is_ignored_not_a_500(self):
+        resp = self.client.post(self._url(), {
+            'heading': 'Company Profile', 'department': 'not-a-real-department'})
+        self.assertEqual(resp.status_code, 302)
+        sec = self.proposal.sections.get()
+        self.assertEqual(sec.content, '<p>Generic default.</p>')
+
+    def test_custom_heading_with_department_does_not_error(self):
+        # Custom (non-library) headings have no template to look up at all.
+        resp = self.client.post(self._url(), {
+            'custom_heading': 'Bespoke One-Off', 'department': 'ai'})
+        self.assertEqual(resp.status_code, 302)
+        sec = self.proposal.sections.get()
+        self.assertEqual(sec.content, '')
+
+    def test_post_without_csrf_token_is_rejected(self):
+        csrf_client = self.client_class(enforce_csrf_checks=True)
+        csrf_client.force_login(self.user)
+        resp = csrf_client.post(self._url(), {
+            'heading': 'Company Profile', 'department': 'ai'})
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(self.proposal.sections.count(), 0)
+
+
+class EditContentViewDepartmentGroupingTests(TestCase):
+    """The content editor splits the heading library into the original
+    generic group and one group per department, so the department toggle
+    shows the right headings without disturbing the existing generic list."""
+
+    def setUp(self):
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user(
+            'boss3', password='pw', role=self.sa_role)
+        self.client.force_login(self.user)
+        self.proposal = TechnicalProposal.objects.create(
+            title='T', proposal_reference='TP-GROUP', client_name='ACME',
+            revision_date=date(2026, 1, 1), prepared_by_initials='AJ',
+            created_by=self.user)
+
+        self.generic = SectionHeading.objects.create(
+            name='Generic Only', is_active=True)
+        self.ai_only = SectionHeading.objects.create(
+            name='AI Only', is_active=True)
+        SectionHeadingTemplate.objects.create(heading=self.ai_only, department='ai', content='x')
+        self.multi_dept = SectionHeading.objects.create(
+            name='Telecom And Procurement', is_active=True)
+        SectionHeadingTemplate.objects.create(heading=self.multi_dept, department='telecom', content='x')
+        SectionHeadingTemplate.objects.create(heading=self.multi_dept, department='procurement', content='x')
+        self.inactive_with_template = SectionHeading.objects.create(
+            name='Inactive AI Heading', is_active=False)
+        SectionHeadingTemplate.objects.create(
+            heading=self.inactive_with_template, department='ai', content='x')
+
+    def _get(self):
+        return self.client.get(reverse('proposals:content', kwargs={'pk': self.proposal.pk}))
+
+    def test_generic_list_excludes_headings_that_have_any_department_template(self):
+        # The generic list and the department panels are a PARTITION, not
+        # additive: a heading with a department template is prefilled and
+        # only reachable from its own department's toggle, so it must never
+        # also show (un-prefilled) in the always-visible generic list.
+        names = set(self._get().context['headings'].values_list('name', flat=True))
+        self.assertIn('Generic Only', names)
+        self.assertNotIn('AI Only', names)
+        self.assertNotIn('Telecom And Procurement', names)
+
+    def test_each_department_group_only_shows_its_own_templated_headings(self):
+        # Membership checks, not exact-set equality: the seed migration
+        # (0011_seed_dept_section_templates) ships real AI/Telecom/
+        # Procurement headings into every test database's baseline, same as
+        # the generic library seeded by 0006 already does — so these three
+        # groups are never empty/exact to begin with.
+        dept_headings = self._get().context['dept_headings']
+        ai_names = set(dept_headings['ai']['items'].values_list('name', flat=True))
+        telecom_names = set(dept_headings['telecom']['items'].values_list('name', flat=True))
+        procurement_names = set(dept_headings['procurement']['items'].values_list('name', flat=True))
+
+        self.assertIn('AI Only', ai_names)
+        self.assertNotIn('Telecom And Procurement', ai_names)
+
+        self.assertIn('Telecom And Procurement', telecom_names)
+        self.assertNotIn('AI Only', telecom_names)
+
+        self.assertIn('Telecom And Procurement', procurement_names)
+        self.assertNotIn('AI Only', procurement_names)
+
+    def test_department_group_labels_use_the_display_name(self):
+        # procurement's DB value is unchanged, but its display label is
+        # "Security" (matching the toggle button) — not "Procurement".
+        dept_headings = self._get().context['dept_headings']
+        self.assertEqual(dept_headings['ai']['label'], 'AI')
+        self.assertEqual(dept_headings['telecom']['label'], 'Telecom')
+        self.assertEqual(dept_headings['procurement']['label'], 'Security')
+
+    def test_inactive_heading_excluded_from_generic_and_department_groups(self):
+        resp = self._get()
+        self.assertNotIn(
+            'Inactive AI Heading',
+            set(resp.context['headings'].values_list('name', flat=True)))
+        self.assertNotIn(
+            'Inactive AI Heading',
+            set(resp.context['dept_headings']['ai']['items'].values_list('name', flat=True)))
+
+
+class CompanyAcronymDoesNotEatCustomerTextTests(TestCase):
+    """The bare 'LNG' company key must never touch the customer's own words.
+
+    _replace_company_references matches 'LNG' as a substring. If it runs after
+    the cover page has been filled in, a project description like "SUPPLY FOR
+    LNG TERMINAL" silently becomes "LNA TERMINAL" — and the header and footer,
+    which take the same text by another route, keep saying LNG, so the exported
+    document contradicts itself page to page.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user('docx_lng', password='x')
+
+    def _proposal(self, **overrides):
+        data = dict(
+            title='LNG Terminal Telecom',
+            client_name='Qatargas LNG',
+            project_description='SUPPLY OF TELECOM SYSTEMS FOR LNG TERMINAL',
+            proposal_reference='LNA-2026-001',
+            region_entity='LNKSA',
+            revision_date=date(2026, 1, 1),
+            prepared_by_initials='AJ',
+            created_by=self.user,
+        )
+        data.update(overrides)
+        return TechnicalProposal.objects.create(**data)
+
+    def _document_xml(self, proposal):
+        # generate_proposal_docx returns an HttpResponse, not raw bytes.
+        content = generate_proposal_docx(proposal).content
+        with zipfile.ZipFile(io.BytesIO(content)) as z:
+            return z.read('word/document.xml').decode('utf-8', errors='replace')
+
+    def test_company_references_run_before_the_cover_page(self):
+        """Order is the fix; assert it directly so a reorder is caught."""
+        import inspect
+        from proposals import docx_export
+        src = inspect.getsource(docx_export.generate_proposal_docx)
+        company = src.index('_replace_company_references(body, proposal)')
+        cover = src.index('_replace_cover_page(body, proposal)')
+        self.assertLess(company, cover,
+                        'company references must be replaced before the cover page '
+                        'is filled with customer text')
+
+    def test_customer_description_keeps_its_lng(self):
+        xml = self._document_xml(self._proposal())
+        self.assertIn('LNG TERMINAL', xml)
+        self.assertNotIn('LNA TERMINAL', xml)
+
+    def test_customer_name_keeps_its_lng(self):
+        # The cover page writes the client name upper-cased.
+        xml = self._document_xml(self._proposal())
+        self.assertIn('QATARGAS LNG', xml)
+        self.assertNotIn('QATARGAS LNA', xml)
+
+    def test_the_company_name_itself_is_still_replaced(self):
+        """The reorder must not stop the substitution it exists to perform."""
+        xml = self._document_xml(self._proposal())
+        self.assertNotIn('Leap Networks Global Ltd', xml)
