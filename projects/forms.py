@@ -27,9 +27,11 @@ class ProjectForm(forms.ModelForm):
             'owner', 'customer', 'end_user', 'project_stage', 'priority', 'status', 'region', 'year', 'estimated_value',
             'estimated_value_usd', 'estimated_value_per_annum', 'estimated_gp',
             'actual_sales', 'po_award_quarter', 'success_quotient', 'minimum_achievement',
-            'contact_with', 'remarks', 'notes', 'portal_url'
+            'contact_with', 'remarks', 'notes', 'portal_url',
+            'lost_reason', 'lost_comment',
         ]
         widgets = {
+            'lost_comment': forms.Textarea(attrs={'rows': 2}),
             'submission_deadline': forms.DateInput(attrs={'type': 'date'}),
             'estimated_po_date': forms.DateInput(attrs={'type': 'date'}),
             'bom_started_deadline': forms.DateInput(attrs={'type': 'date'}),
@@ -45,6 +47,12 @@ class ProjectForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         self.user = kwargs.pop('user', None)
         super().__init__(*args, **kwargs)
+
+        # Which status options mean "lost", so the template can reveal the
+        # reason fields without hardcoding ids or matching on a label that
+        # someone may rename.
+        self.lost_status_ids = list(
+            ProjectStatus.objects.filter(category='lost').values_list('id', flat=True))
 
         for field in self.fields.values():
             if isinstance(field.widget, forms.CheckboxInput):
@@ -94,8 +102,31 @@ class ProjectForm(forms.ModelForm):
         m = _re.match(r'^R?(\d+)$', raw)
         return f'R{m.group(1)}' if m else raw
 
+    def _validate_lost_reason(self, cleaned):
+        """A project marked Lost has to say why.
+
+        The reason is only demanded when the status is actually Lost, and an
+        existing reason is never cleared when the status moves away — projects
+        do get revived, and wiping the record of what went wrong the first time
+        loses the very thing this field exists to capture.
+        """
+        status = cleaned.get('status')
+        if not status or status.category != 'lost':
+            return
+        reason = cleaned.get('lost_reason')
+        if not reason:
+            self.add_error('lost_reason',
+                           'Choose why this opportunity was lost.')
+            return
+        if reason == Project.LOST_OTHER and not (cleaned.get('lost_comment') or '').strip():
+            # "Other" with no comment records nothing useful — it is the one
+            # answer that cannot be interpreted later without the context.
+            self.add_error('lost_comment',
+                           'Add a comment explaining the loss when the reason is Other.')
+
     def clean(self):
         cleaned = super().clean()
+        self._validate_lost_reason(cleaned)
         region = cleaned.get('region')
         name = cleaned.get('project_name')
         if self._is_lna(region):
