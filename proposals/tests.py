@@ -766,7 +766,7 @@ class DeptTemplateSeedMigrationTests(TestCase):
             dept: SectionHeadingTemplate.objects.filter(department=dept).count()
             for dept in DEPARTMENTS
         }
-        self.assertEqual(counts, {'ai': 13, 'telecom': 4, 'procurement': 17})
+        self.assertEqual(counts, {'ai': 13, 'telecom': 18, 'procurement': 17})
 
     def test_seeded_rows_have_real_non_empty_content(self):
         tmpl = SectionHeadingTemplate.objects.get(
@@ -847,6 +847,79 @@ class DeptTemplateSeedMigrationTests(TestCase):
             heading__name='Thermal Camera', department='procurement')
         self.assertIn('Sarix', tmpl.content)
         self.assertNotIn('&lt;p&gt;', tmpl.content)
+
+
+NEW_TELECOM_HEADINGS = [
+    'Information and Communication Technology (ICT)', 'Structured Cabling System',
+    'Core Switches', 'Distribution Switches', 'Access Switches',
+    'Industrial Ethernet Switches', 'Routers', 'Data Center / Server Infrastructure',
+    'Network Security', 'Communication Systems', 'Wireless Communication',
+    'Network Management', 'Time Synchronization', 'ICT in an Industrial Plant',
+]
+
+
+class NewTelecomHeadingsSeedMigrationTests(TestCase):
+    """0013_seed_new_telecom_headings ships 14 additional Telecom headings
+    (networking/ICT content) on top of the original 4 from 0011 — same
+    reasoning: this content used to only exist in one person's local admin,
+    now it lands automatically on every environment that runs `migrate`."""
+
+    def test_all_fourteen_new_headings_landed_with_real_content(self):
+        for name in NEW_TELECOM_HEADINGS:
+            tmpl = SectionHeadingTemplate.objects.get(
+                heading__name=name, department='telecom')
+            self.assertGreater(
+                len(tmpl.content), 50, f'{name} seeded with suspiciously little content')
+
+    def test_no_new_row_contains_escaped_raw_html(self):
+        offenders = [
+            t.heading.name
+            for t in SectionHeadingTemplate.objects.filter(
+                heading__name__in=NEW_TELECOM_HEADINGS, department='telecom'
+            ).select_related('heading')
+            if '&lt;' in t.content or '&gt;' in t.content
+        ]
+        self.assertEqual(offenders, [])
+
+    def test_ict_image_is_referenced_and_present_in_storage(self):
+        from django.core.files.storage import default_storage
+        tmpl = SectionHeadingTemplate.objects.get(
+            heading__name='Information and Communication Technology (ICT)',
+            department='telecom')
+        self.assertIn('proposal_templates/telecom/', tmpl.content)
+        self.assertTrue(default_storage.exists('proposal_templates/telecom/ict_image1.png'))
+
+    def test_migration_is_idempotent(self):
+        import importlib
+        from django.apps import apps as real_apps
+        mod = importlib.import_module(
+            'proposals.migrations.0013_seed_new_telecom_headings')
+        before = SectionHeadingTemplate.objects.filter(department='telecom').count()
+        mod.seed(real_apps, None)
+        self.assertEqual(
+            SectionHeadingTemplate.objects.filter(department='telecom').count(), before)
+
+    def test_does_not_annex_a_pre_existing_generic_heading(self):
+        import importlib
+        from django.apps import apps as real_apps
+        heading = SectionHeading.objects.get(name='Routers')
+        heading.default_content = 'Plain, hand-written intro.'
+        heading.save(update_fields=['default_content'])
+        SectionHeadingTemplate.objects.filter(heading=heading, department='telecom').delete()
+        self.assertFalse(heading.dept_templates.exists())
+
+        mod = importlib.import_module(
+            'proposals.migrations.0013_seed_new_telecom_headings')
+        mod.seed(real_apps, None)
+
+        heading.refresh_from_db()
+        self.assertFalse(heading.dept_templates.exists())
+        self.assertEqual(heading.default_content, 'Plain, hand-written intro.')
+
+        disambiguated = SectionHeading.objects.get(name='Routers (Telecom)')
+        self.assertTrue(
+            SectionHeadingTemplate.objects.filter(
+                heading=disambiguated, department='telecom').exists())
 
 
 class SectionHeadingTemplateModelTests(TestCase):
