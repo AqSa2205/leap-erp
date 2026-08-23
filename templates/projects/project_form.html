@@ -74,6 +74,34 @@
                     <label class="form-label">Owner</label>
                     {{ form.owner }}
                 </div>
+            </div>
+
+            {# Opportunity Lost — revealed only when the chosen status is a Lost
+               one. Hidden by default and unhidden by JS below, so it never
+               flashes into view on load for the majority of projects. #}
+            <div class="row mb-4" id="lostReasonRow" style="display:none;">
+                <div class="col-12">
+                    <div class="card border-danger-subtle">
+                        <div class="card-body py-3">
+                            <div class="row">
+                                <div class="col-md-5 mb-2 mb-md-0">
+                                    <label class="form-label" for="{{ form.lost_reason.id_for_label }}">
+                                        <i class="bi bi-x-circle me-1 text-danger"></i>Opportunity Lost — reason *
+                                    </label>
+                                    {{ form.lost_reason }}
+                                    {% if form.lost_reason.errors %}<div class="text-danger small">{{ form.lost_reason.errors.0 }}</div>{% endif %}
+                                </div>
+                                <div class="col-md-7">
+                                    <label class="form-label" for="{{ form.lost_comment.id_for_label }}">
+                                        Comment <span class="text-muted small" id="lostCommentHint"></span>
+                                    </label>
+                                    {{ form.lost_comment }}
+                                    {% if form.lost_comment.errors %}<div class="text-danger small">{{ form.lost_comment.errors.0 }}</div>{% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <div class="col-md-6 mb-3">
                     <label class="form-label">Customer</label>
                     {{ form.customer }}
@@ -437,5 +465,48 @@ if (discardBtn) {
     });
 }
 });
+</script>
+
+{{ form.lost_status_ids|json_script:"lostStatusIds" }}
+<script>
+// ─── Opportunity Lost ───
+// The reason and comment only make sense once a project is actually lost, so
+// they stay hidden until a Lost status is picked. Which statuses count is
+// decided by the server (category == 'lost'), not by matching a label here —
+// a status can be renamed without breaking this.
+(function () {
+    var row = document.getElementById('lostReasonRow');
+    var statusEl = document.getElementById('id_status');
+    var idsEl = document.getElementById('lostStatusIds');
+    if (!row || !statusEl || !idsEl) return;
+
+    var lostIds = JSON.parse(idsEl.textContent).map(String);
+    var reasonEl = document.getElementById('id_lost_reason');
+    var commentEl = document.getElementById('id_lost_comment');
+    var hintEl = document.getElementById('lostCommentHint');
+
+    function syncComment() {
+        // "Other" is the one answer that says nothing on its own, so the
+        // comment becomes required alongside it (the server enforces this too).
+        var isOther = reasonEl && reasonEl.value === 'other';
+        if (hintEl) hintEl.textContent = isOther ? '(required for "Other")' : '(optional)';
+        if (commentEl) commentEl.required = isOther;
+    }
+
+    function syncRow() {
+        var isLost = lostIds.indexOf(String(statusEl.value)) !== -1;
+        row.style.display = isLost ? '' : 'none';
+        if (reasonEl) reasonEl.required = isLost;
+        // Values are never cleared when the status moves away from Lost:
+        // projects get revived, and wiping the reason would lose the record
+        // of what went wrong the first time round.
+        if (isLost) syncComment();
+        else if (commentEl) commentEl.required = false;
+    }
+
+    statusEl.addEventListener('change', syncRow);
+    if (reasonEl) reasonEl.addEventListener('change', syncComment);
+    syncRow();   // reveal immediately when editing an already-lost project
+})();
 </script>
 {% endblock %}
