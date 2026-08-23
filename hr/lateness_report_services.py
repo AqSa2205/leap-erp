@@ -34,21 +34,45 @@ def is_last_day_of_month(d):
     return d.day == last_day
 
 
-def generate_monthly_lateness_reports(today=None):
-    """For every employee with at least one 'late' AttendanceRecord in
-    the current month (from the 1st up to and including `today`),
+def generate_monthly_lateness_reports(today=None, _skip_last_day_check=False):
+    """For every ACTIVE employee with at least one 'late' AttendanceRecord
+    in the current month (from the 1st up to and including `today`),
     create a MonthlyLatenessReport snapshot and email them the summary.
-    Idempotent per (employee, month) via get_or_create - re-running on
-    the same day, or being called again later, never creates a
-    duplicate report or resends the email. Returns the number of
-    reports created (and emailed) this call."""
+    Report creation is idempotent per (employee, month) via
+    get_or_create - re-running never duplicates or overwrites an
+    existing report's snapshot. The email send retries on every call
+    until it succeeds (report.email_sent_at is None) - a transient
+    failure (network blip, mail service down) on one run doesn't
+    silently mean the employee never hears about it; once sent, it's
+    never resent. Returns the number of NEW reports created this call
+    (retried sends on already-existing reports don't add to this
+    count).
+
+    Refuses to run (returns 0, logs a warning) unless `today` is
+    genuinely the last day of its month - a partial-month report would
+    otherwise be permanently locked in by the idempotency above, since
+    a later correct run on the true last day won't regenerate it. This
+    mirrors the management command's own gate, but belongs here too so
+    any direct caller (a script, a shell session, a future admin
+    action) gets the same protection. Pass _skip_last_day_check=True
+    only for a deliberate manual recovery (e.g. the scheduled run was
+    missed) - never for routine use."""
     from hr.models import AttendanceRecord, MonthlyLatenessReport
 
     today = today or timezone.localtime(timezone.now()).date()
+    if not _skip_last_day_check and not is_last_day_of_month(today):
+        logger.warning(
+            'generate_monthly_lateness_reports called with %s, which is not '
+            'the last day of its month - refusing to run (a partial-month '
+            'report would be permanently locked in). Pass '
+            '_skip_last_day_check=True for a deliberate manual recovery.', today)
+        return 0
     month_start = today.replace(day=1)
 
     late_records = (
-        AttendanceRecord.objects.filter(status='late', date__gte=month_start, date__lte=today)
+        AttendanceRecord.objects.filter(
+            status='late', date__gte=month_start, date__lte=today,
+            employee__is_active=True)
         .select_related('employee').order_by('employee_id', 'date')
     )
     by_employee = {}
@@ -70,11 +94,10 @@ def generate_monthly_lateness_reports(today=None):
                 'converted_absences': converted_absences,
             },
         )
-        if not created:
-            continue
+        if created:
+            created_count += 1
 
-        created_count += 1
-        if employee.user_id and employee.user.email:
+        if report.email_sent_at is None and employee.user_id and employee.user.email:
             _send_lateness_report_email(report)
 
     return created_count
