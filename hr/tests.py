@@ -10598,6 +10598,48 @@ class MonthlyLatenessReportTests(TransactionTestCase):
             self.assertEqual(len(mail.outbox), 0)
         self.assertTrue(MonthlyLatenessReport.objects.filter(employee=no_user_emp).exists())
 
+    def test_retries_email_if_previously_unsent(self):
+        from django.core import mail
+        from django.test import override_settings
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        import time as _time
+        self._mark_late(3)
+        self._mark_late(5)
+        self._mark_late(7)
+        # Simulate a report that was created but whose email send failed
+        # (email_sent_at still None) - created directly, bypassing the
+        # normal generate flow.
+        MonthlyLatenessReport.objects.create(
+            employee=self.emp, month=_date(2026, 8, 1),
+            total_lates=3, late_dates=['2026-08-03', '2026-08-05', '2026-08-07'],
+            converted_absences=1,
+        )
+        with override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend'):
+            count = generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+            _time.sleep(1)
+            self.assertEqual(count, 0)
+            summary_emails = [m for m in mail.outbox if 'Lateness Summary' in m.subject]
+            self.assertEqual(len(summary_emails), 1)
+            report = MonthlyLatenessReport.objects.get(employee=self.emp, month=_date(2026, 8, 1))
+            self.assertIsNotNone(report.email_sent_at)
+
+    def test_does_not_resend_once_already_sent(self):
+        from django.core import mail
+        from django.test import override_settings
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        import time as _time
+        self._mark_late(3)
+        self._mark_late(5)
+        self._mark_late(7)
+        with override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend'):
+            generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+            _time.sleep(1)
+            mail.outbox.clear()
+            generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+            _time.sleep(1)
+            summary_emails = [m for m in mail.outbox if 'Lateness Summary' in m.subject]
+            self.assertEqual(len(summary_emails), 0)
+
 
 class MonthlyLatenessReportAuthBoundaryTests(TestCase):
     """The 'Monthly Lateness Reports' card lives inside Team Exceptions'
@@ -10724,3 +10766,31 @@ class MonthlyLatenessReportEdgeCaseTests(TestCase):
         count = generate_monthly_lateness_reports(today=_date(2026, 10, 31))
         self.assertEqual(count, 0)
         self.assertFalse(MonthlyLatenessReport.objects.filter(month=_date(2026, 10, 1)).exists())
+
+    def test_refuses_to_run_on_non_last_day(self):
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        self._mark_late(2026, 8, 3)
+        self._mark_late(2026, 8, 5)
+        self._mark_late(2026, 8, 7)
+        count = generate_monthly_lateness_reports(today=_date(2026, 8, 20))
+        self.assertEqual(count, 0)
+        self.assertFalse(MonthlyLatenessReport.objects.filter(employee=self.emp).exists())
+
+    def test_skip_last_day_check_bypasses_guard(self):
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        self._mark_late(2026, 8, 3)
+        self._mark_late(2026, 8, 5)
+        self._mark_late(2026, 8, 7)
+        count = generate_monthly_lateness_reports(today=_date(2026, 8, 20), _skip_last_day_check=True)
+        self.assertEqual(count, 1)
+
+    def test_inactive_employee_excluded(self):
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        self.emp.is_active = False
+        self.emp.save(update_fields=['is_active'])
+        self._mark_late(2026, 8, 3)
+        self._mark_late(2026, 8, 5)
+        self._mark_late(2026, 8, 7)
+        count = generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+        self.assertEqual(count, 0)
+        self.assertFalse(MonthlyLatenessReport.objects.filter(employee=self.emp).exists())
