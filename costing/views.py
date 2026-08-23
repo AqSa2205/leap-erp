@@ -3807,8 +3807,15 @@ def costing_export_pdf(request, pk):
     region_name = sheet.project.region.name if sheet.project and sheet.project.region else 'N/A'
     ln_ref = sheet.project.proposal_reference if sheet.project else ''
     cust_ref = sheet.customer_reference or ''
-    created_by_name = sheet.created_by.get_full_name() if sheet.created_by else ''
-    created_by_email = sheet.created_by.email if sheet.created_by else ''
+    # The "Contact Person" on the offer is whoever owns the opportunity, so
+    # reassigning a project on the pipeline changes who the customer is told to
+    # deal with. Falls back to the sheet's creator when the project has no owner
+    # (or has no project at all) — most projects are currently unowned, and a
+    # hard switch would blank this row on the majority of offers.
+    _owner = sheet.project.owner if sheet.project_id and sheet.project.owner_id else None
+    _contact = _owner or sheet.created_by
+    created_by_name = (_contact.get_full_name() or _contact.username) if _contact else ''
+    created_by_email = _contact.email if _contact else ''
     current_date = datetime.now().strftime('%d/%m/%Y')
 
     # Page X of Y placeholder — filled in by the on_page callback.
@@ -4378,16 +4385,28 @@ def costing_export_pdf(request, pk):
             is_subheading = item.item_number in sub_heading_numbers
 
             if is_subheading:
-                # Sub-heading row: bold, highlighted bg
+                # Sub-heading row: bold, highlighted bg. A row that only labels
+                # the items beneath it has no quantity, unit or price of its
+                # own, so printing them produced a meaningless
+                # "1 / LOT / 0.00 / 0.00" on every sub-heading.
+                #
+                # The figures are dropped only when the row genuinely carries
+                # none. A sub-heading CAN hold a real price (rare, but it
+                # happens), and that price is counted in the sheet total — so
+                # blanking it unconditionally would print an offer whose lines
+                # do not add up to its own total. A silent discrepancy in the
+                # money is far worse than a tidy-looking heading.
+                carries_value = bool(item.final_total_price)
                 bom_data.append([
                     Paragraph(f'<b>{item.item_number}</b>', cell_sm_center_bold),
                     Paragraph(f'<b>{item.description}</b>', cell_sm_bold),
                     Paragraph(item.make or '', cell_sm),
                     Paragraph(item.model_number or '', cell_sm),
-                    Paragraph(str(int(item.quantity) if item.quantity == int(item.quantity) else item.quantity), cell_sm_center),
-                    Paragraph(item.unit, cell_sm_center),
-                    Paragraph(fmt_money(item.final_unit_price), cell_sm_right),
-                    Paragraph(fmt_money(item.final_total_price), cell_sm_right),
+                    Paragraph(str(int(item.quantity) if item.quantity == int(item.quantity)
+                                  else item.quantity), cell_sm_center) if carries_value else '',
+                    Paragraph(item.unit, cell_sm_center) if carries_value else '',
+                    Paragraph(fmt_money(item.final_unit_price), cell_sm_right) if carries_value else '',
+                    Paragraph(fmt_money(item.final_total_price), cell_sm_right) if carries_value else '',
                 ])
                 section_rows.append((row_idx, 'subheading'))
             else:

@@ -265,6 +265,40 @@ class Project(models.Model):
         on_delete=models.PROTECT,
         related_name='projects'
     )
+
+    # Why an opportunity was lost. Captured as a choice rather than free text
+    # so "why are we losing work" is answerable later — a comment field alone
+    # cannot be grouped or counted.
+    LOST_PRICE = 'price'
+    LOST_COMPETITOR = 'competitor'
+    LOST_CANCELLED = 'cancelled'
+    LOST_BUDGET = 'budget'
+    LOST_TIMELINE = 'timeline'
+    LOST_TECHNICAL = 'technical'
+    LOST_NO_DECISION = 'no_decision'
+    LOST_NO_BID = 'no_bid'
+    LOST_OTHER = 'other'
+    LOST_REASON_CHOICES = [
+        (LOST_PRICE, 'Price — we were too expensive'),
+        (LOST_COMPETITOR, 'Lost to competitor'),
+        (LOST_CANCELLED, 'Client cancelled — project shelved'),
+        (LOST_BUDGET, 'Budget — client could not fund it'),
+        (LOST_TIMELINE, 'Timeline — could not meet required dates'),
+        (LOST_TECHNICAL, 'Technical — solution did not meet requirements'),
+        (LOST_NO_DECISION, 'No decision — client went quiet'),
+        # Deliberately separate from the losses above: choosing not to pursue
+        # something is not the same as being beaten, and lumping them together
+        # would distort any analysis of why work is lost.
+        (LOST_NO_BID, 'Did not bid — we chose not to pursue'),
+        (LOST_OTHER, 'Other (comment required)'),
+    ]
+    lost_reason = models.CharField(
+        max_length=20, choices=LOST_REASON_CHOICES, blank=True,
+        help_text='Why the opportunity was lost. Required once the status is Lost.')
+    lost_comment = models.TextField(
+        blank=True,
+        help_text='Context for the loss. Required when the reason is Other.')
+
     region = models.ForeignKey(
         Region,
         on_delete=models.PROTECT,
@@ -484,6 +518,23 @@ class Project(models.Model):
     def status_category(self):
         """Get the status category"""
         return self.status.category if self.status else None
+
+    @property
+    def is_lost(self):
+        return self.status_category == 'lost'
+
+    @property
+    def lost_summary(self):
+        """One-line 'why we lost it', or '' when the project is not lost.
+
+        Deliberately does not clear itself when a project moves back out of
+        Lost — revivals happen, and wiping the reason would lose the record of
+        what went wrong the first time.
+        """
+        if not self.is_lost or not self.lost_reason:
+            return ''
+        label = dict(self.LOST_REASON_CHOICES).get(self.lost_reason, self.lost_reason)
+        return f'{label} — {self.lost_comment}' if self.lost_comment else label
 
 
 class ProjectHistory(models.Model):

@@ -736,3 +736,96 @@ class MilestoneDeadlineTests(TestCase):
         self.assertEqual(len(rows), 4)
         for r in rows:
             self.assertIsNone(r['variance_display'])
+
+
+class OpportunityLostTests(TestCase):
+    """A project marked Lost has to record why, as a choice not free text."""
+
+    def setUp(self):
+        from accounts.permissions import seed_default_permissions
+        self.region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        self.open_status = ProjectStatus.objects.create(name='Open', category='active')
+        self.lost_status = ProjectStatus.objects.create(name='Lost', category='lost')
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('sa_lost', password='x')
+        self.user.role = role
+        self.user.region = self.region
+        self.user.save()
+        seed_default_permissions()
+
+    def _form(self, **overrides):
+        from projects.forms import ProjectForm
+        data = {
+            'project_name': 'Lost deal', 'proposal_reference': 'REF-L1',
+            'status': self.lost_status.pk, 'region': self.region.pk,
+            'estimated_value': '0', 'estimated_value_usd': '0',
+            'estimated_value_per_annum': '0', 'estimated_gp': '0',
+            'actual_sales': '0', 'success_quotient': '0', 'minimum_achievement': '0',
+        }
+        data.update(overrides)
+        return ProjectForm(data=data, user=self.user)
+
+    def test_lost_without_a_reason_is_rejected(self):
+        form = self._form()
+        self.assertFalse(form.is_valid())
+        self.assertIn('lost_reason', form.errors)
+
+    def test_lost_with_a_reason_is_accepted(self):
+        form = self._form(lost_reason=Project.LOST_COMPETITOR)
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_other_requires_a_comment(self):
+        """'Other' with no comment records nothing anyone can interpret later."""
+        form = self._form(lost_reason=Project.LOST_OTHER)
+        self.assertFalse(form.is_valid())
+        self.assertIn('lost_comment', form.errors)
+
+    def test_other_with_a_comment_is_accepted(self):
+        form = self._form(lost_reason=Project.LOST_OTHER,
+                          lost_comment='Client merged with a competitor.')
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_whitespace_only_comment_does_not_satisfy_other(self):
+        form = self._form(lost_reason=Project.LOST_OTHER, lost_comment='   ')
+        self.assertFalse(form.is_valid())
+        self.assertIn('lost_comment', form.errors)
+
+    def test_non_lost_status_does_not_demand_a_reason(self):
+        form = self._form(status=self.open_status.pk, proposal_reference='REF-L2')
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_did_not_bid_is_a_distinct_choice(self):
+        """Choosing not to pursue is not the same as being beaten."""
+        codes = dict(Project.LOST_REASON_CHOICES)
+        self.assertIn(Project.LOST_NO_BID, codes)
+        self.assertNotEqual(codes[Project.LOST_NO_BID], codes[Project.LOST_COMPETITOR])
+
+    def test_lost_summary_reads_as_one_line(self):
+        proj = Project.objects.create(
+            project_name='P', proposal_reference='REF-S', status=self.lost_status,
+            region=self.region, lost_reason=Project.LOST_PRICE, lost_comment='15% over')
+        self.assertIn('Price', proj.lost_summary)
+        self.assertIn('15% over', proj.lost_summary)
+
+    def test_lost_summary_is_blank_when_not_lost(self):
+        proj = Project.objects.create(
+            project_name='P2', proposal_reference='REF-S2', status=self.open_status,
+            region=self.region, lost_reason=Project.LOST_PRICE)
+        self.assertEqual(proj.lost_summary, '')
+
+    def test_reason_survives_a_project_being_revived(self):
+        """Revivals happen; wiping the reason would lose why it was lost."""
+        proj = Project.objects.create(
+            project_name='P3', proposal_reference='REF-S3', status=self.lost_status,
+            region=self.region, lost_reason=Project.LOST_BUDGET)
+        proj.status = self.open_status
+        proj.save()
+        proj.refresh_from_db()
+        self.assertEqual(proj.lost_reason, Project.LOST_BUDGET)
+
+    def test_form_exposes_which_statuses_mean_lost(self):
+        """The template reveals the fields from this, not from a label match."""
+        from projects.forms import ProjectForm
+        form = ProjectForm(user=self.user)
+        self.assertIn(self.lost_status.pk, form.lost_status_ids)
+        self.assertNotIn(self.open_status.pk, form.lost_status_ids)

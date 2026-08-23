@@ -1226,3 +1226,112 @@ class ClientRemarkGridTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp['Content-Type'], 'application/pdf')
         self.assertTrue(bytes(resp.content).startswith(b'%PDF'))
+
+
+class CommOfferContactTests(TestCase):
+    """The offer names whoever owns the opportunity, not whoever typed it up."""
+
+    def setUp(self):
+        from accounts.models import Role, User
+        from projects.models import Region, ProjectStatus, Project
+        from costing.models import CostingSheet
+        self.region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+
+        def mk(username, first, last, email):
+            u = User.objects.create_user(username, password='x')
+            u.first_name, u.last_name, u.email = first, last, email
+            u.save()
+            return u
+
+        self.creator = mk('creator', 'Cathy', 'Creator', 'cathy@example.com')
+        self.owner = mk('owner', 'Omar', 'Owner', 'omar@example.com')
+        self.project = Project.objects.create(
+            project_name='P', proposal_reference='REF-C1', status=self.status,
+            region=self.region, owner=self.owner)
+        self.sheet = CostingSheet.objects.create(
+            title='S', project=self.project, created_by=self.creator)
+
+    def _contact(self, sheet):
+        """Mirror of the resolution in the Comm Offer header."""
+        owner = sheet.project.owner if sheet.project_id and sheet.project.owner_id else None
+        person = owner or sheet.created_by
+        return ((person.get_full_name() or person.username), person.email) if person else ('', '')
+
+    def test_owner_is_used_over_the_creator(self):
+        self.assertEqual(self._contact(self.sheet), ('Omar Owner', 'omar@example.com'))
+
+    def test_reassigning_the_owner_changes_the_contact(self):
+        from accounts.models import User
+        new = User.objects.create_user('new', password='x')
+        new.first_name, new.last_name, new.email = 'Nadia', 'New', 'nadia@example.com'
+        new.save()
+        self.project.owner = new
+        self.project.save()
+        self.sheet.refresh_from_db()
+        self.assertEqual(self._contact(self.sheet)[0], 'Nadia New')
+
+    def test_falls_back_to_the_creator_when_unowned(self):
+        """Most projects have no owner; a hard switch would blank this row."""
+        self.project.owner = None
+        self.project.save()
+        self.sheet.refresh_from_db()
+        self.assertEqual(self._contact(self.sheet), ('Cathy Creator', 'cathy@example.com'))
+
+    def test_falls_back_to_the_creator_with_no_project_at_all(self):
+        from costing.models import CostingSheet
+        sheet = CostingSheet.objects.create(title='No project', project=None,
+                                            created_by=self.creator)
+        self.assertEqual(self._contact(sheet)[0], 'Cathy Creator')
+
+
+class SubHeadingRowTests(TestCase):
+    """Sub-heading rows label the items beneath them and carry no figures —
+    unless they genuinely hold a price, which must never be hidden."""
+
+    def setUp(self):
+        from accounts.models import User
+        from costing.models import CostingSheet, CostingSection, CostingLineItem
+        self.user = User.objects.create_user('sh', password='x')
+        self.sheet = CostingSheet.objects.create(title='S', created_by=self.user)
+        self.section = CostingSection.objects.create(
+            costing_sheet=self.sheet, section_number='2', title='ELV', order=0)
+        self.CostingLineItem = CostingLineItem
+
+    def _item(self, number, price='0', qty='1'):
+        from decimal import Decimal
+        return self.CostingLineItem.objects.create(
+            section=self.section, item_number=number, description=f'Item {number}',
+            quantity=Decimal(qty), unit='LOT', base_unit_cost=Decimal(price))
+
+    def _sub_headings(self):
+        """Same detection the PDF uses: a number with children is a heading."""
+        items = list(self.section.line_items.all())
+        prefixes = set()
+        for i in items:
+            parts = i.item_number.rsplit('.', 1)
+            if len(parts) == 2 and parts[0]:
+                prefixes.add(parts[0])
+        return {i.item_number for i in items if i.item_number in prefixes}
+
+    def test_a_number_with_children_is_a_sub_heading(self):
+        self._item('2.3')
+        self._item('2.3.1', price='100')
+        self.assertEqual(self._sub_headings(), {'2.3'})
+
+    def test_a_leaf_is_not_a_sub_heading(self):
+        self._item('2.1', price='50')
+        self.assertEqual(self._sub_headings(), set())
+
+    def test_zero_priced_sub_heading_carries_no_value(self):
+        """The reported bug: these printed a meaningless 1 / LOT / 0.00 / 0.00."""
+        head = self._item('2.3')
+        self._item('2.3.1', price='100')
+        self.assertFalse(bool(head.final_total_price))
+
+    def test_priced_sub_heading_still_carries_its_value(self):
+        """Hiding it would print an offer whose lines do not match its total."""
+        head = self._item('1.2', price='154300.61')
+        self._item('1.2.2', price='10')
+        self.assertIn('1.2', self._sub_headings())
+        self.assertTrue(bool(head.final_total_price))
