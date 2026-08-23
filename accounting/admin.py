@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from .models import (
     Account, AccountingSettings, Document, DocumentLine, Partner, Voucher,
-    VoucherLine,
+    VoucherLine, ZohoAccountMap, ZohoCredentials,
 )
 
 
@@ -112,3 +112,43 @@ class DocumentAdmin(FinanceOnlyAdmin):
     date_hierarchy = 'date'
     raw_id_fields = ('partner', 'project')
     inlines = [DocumentLineInline]
+
+
+@admin.register(ZohoCredentials)
+class ZohoCredentialsAdmin(FinanceOnlyAdmin):
+    """Singleton. Secrets are write-only here and never rendered back."""
+    readonly_fields = ('status', 'api_domain', 'access_token_expires_at',
+                       'last_synced_at', 'updated_at')
+    exclude = ('access_token', 'refresh_token')
+
+    def has_add_permission(self, request):
+        return can_use_accounting(request.user) and not ZohoCredentials.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    @admin.display(description='Connection status')
+    def status(self, obj):
+        return obj.status
+
+
+@admin.register(ZohoAccountMap)
+class ZohoAccountMapAdmin(FinanceOnlyAdmin):
+    """The worklist: which Zoho account lands in which ERP account."""
+    list_display = ('zoho_account_code', 'zoho_account_name', 'zoho_account_type',
+                    'account', 'state')
+    list_filter = ('zoho_account_type', 'is_ignored', 'zoho_is_active')
+    search_fields = ('zoho_account_code', 'zoho_account_name', 'zoho_account_id',
+                     'account__code', 'account__name')
+    raw_id_fields = ('account',)
+    readonly_fields = ('zoho_account_id', 'first_seen_at', 'last_seen_at')
+    list_select_related = ('account',)
+
+    @admin.display(description='State')
+    def state(self, obj):
+        return obj.state
+
+    def has_add_permission(self, request):
+        # Rows come from Zoho; adding one by hand would invent an account that
+        # does not exist there.
+        return False

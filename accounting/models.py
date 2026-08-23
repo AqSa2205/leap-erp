@@ -487,6 +487,176 @@ class AccountingSettings(models.Model):
         return obj
 
 
+class ZohoCredentials(models.Model):
+    """Singleton holding the Zoho Books OAuth credentials.
+
+    Stored in the database rather than settings because the refresh token is
+    obtained at runtime (by exchanging a one-time Self Client code) and the
+    access token is rewritten every hour — neither can live in an env var.
+    The client id/secret can be seeded from the environment on first use so a
+    deploy never needs the secret typed into a form.
+
+    Read-only by design: the scopes requested are all `.READ`, and nothing in
+    accounting.zoho issues a write to Zoho.
+    """
+
+    client_id = models.CharField(max_length=255, blank=True)
+    client_secret = models.CharField(max_length=255, blank=True)
+    organization_id = models.CharField(
+        max_length=64, blank=True,
+        help_text='Zoho Books → Settings → Organization Profile.')
+
+    # Zoho runs regional data centres. accounts_url is where tokens are minted;
+    # api_domain is whatever Zoho returns as `api_domain` at token time, so it
+    # is recorded rather than assumed.
+    accounts_url = models.CharField(
+        max_length=255, default='https://accounts.zoho.com',
+        help_text='Region-specific Zoho accounts host, e.g. https://accounts.zoho.sa')
+    api_domain = models.CharField(max_length=255, default='https://www.zohoapis.com')
+
+    refresh_token = models.CharField(
+        max_length=512, blank=True,
+        help_text='Obtained once by exchanging a Self Client code; lasts until revoked.')
+    access_token = models.CharField(max_length=2048, blank=True)
+    access_token_expires_at = models.DateTimeField(null=True, blank=True)
+
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Zoho credentials'
+        verbose_name_plural = 'Zoho credentials'
+
+    def __str__(self):
+        return 'Zoho Books credentials'
+
+    def save(self, *args, **kwargs):
+        self.pk = 1                       # singleton
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        # Environment wins for the two long-lived secrets, so production can
+        # set them via the Render dashboard exactly like the R2 and Anthropic
+        # keys, and they never pass through a form or a git diff.
+        import os
+        changed = []
+        for field, env in (('client_id', 'ZOHO_CLIENT_ID'),
+                           ('client_secret', 'ZOHO_CLIENT_SECRET'),
+                           ('organization_id', 'ZOHO_ORGANIZATION_ID')):
+            value = os.environ.get(env)
+            if value and getattr(obj, field) != value:
+                setattr(obj, field, value)
+                changed.append(field)
+        if changed:
+            obj.save(update_fields=changed + ['updated_at'])
+        return obj
+
+    @property
+    def is_configured(self):
+        return bool(self.client_id and self.client_secret
+                    and self.organization_id and self.refresh_token)
+
+    @property
+    def status(self):
+        """Human-readable state for the admin, without exposing any secret."""
+        if not (self.client_id and self.client_secret):
+            return 'No client credentials'
+        if not self.organization_id:
+            return 'No organization ID'
+        if not self.refresh_token:
+            return 'Not connected — needs a Self Client code'
+        return 'Connected'
+
+
+class ZohoAccountMapQuerySet(models.QuerySet):
+    def unmapped(self):
+        return self.filter(account__isnull=True, is_ignored=False)
+
+    def mapped(self):
+        return self.filter(account__isnull=False)
+
+
+class ZohoAccountMap(models.Model):
+    """Translates one Zoho Books account into the ERP's own chart.
+
+    The ERP chart is not a copy of Zoho's — it is the structure the finance
+    team designed, and Zoho's data is coded *into* it. The two ends therefore
+    use different vocabularies (Zoho: income/expense/cash/bank; ours:
+    View/Regular/Payable/Receivable/Liquidity) and different codes, which is
+    expected rather than a discrepancy to reconcile.
+
+    The relationship is many-to-one on purpose: collapsing several Zoho
+    accounts into one ERP account is very often the reason the reshaping is
+    wanted in the first place.
+
+    An unmapped row is a worklist item, not an error. Sync records every Zoho
+    account it sees so finance can point it somewhere; nothing is silently
+    dropped, because a transaction quietly vanishing is far worse than one
+    that shows up needing attention.
+    """
+
+    zoho_account_id = models.CharField(max_length=64, unique=True, db_index=True)
+    zoho_account_code = models.CharField(max_length=50, blank=True, db_index=True)
+    zoho_account_name = models.CharField(max_length=255)
+    zoho_account_type = models.CharField(
+        max_length=50, blank=True,
+        help_text="Zoho's own type, e.g. income, expense, cash, bank.")
+    zoho_parent_name = models.CharField(max_length=255, blank=True)
+    zoho_is_active = models.BooleanField(default=True)
+
+    account = models.ForeignKey(
+        Account, on_delete=models.PROTECT, null=True, blank=True,
+        related_name='zoho_mappings',
+        help_text='The ERP account this lands in. Blank means it still needs mapping.')
+    is_ignored = models.BooleanField(
+        default=False,
+        help_text='Deliberately not mapped — keeps it off the worklist without '
+                  'pretending it has a home.')
+    note = models.TextField(blank=True)
+
+    first_seen_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    objects = ZohoAccountMapQuerySet.as_manager()
+
+    class Meta:
+        ordering = ['zoho_account_code', 'zoho_account_name']
+        verbose_name = 'Zoho account mapping'
+
+    def __str__(self):
+        target = self.account.code if self.account_id else 'unmapped'
+        return f'{self.zoho_account_name} → {target}'
+
+    @property
+    def is_mapped(self):
+        return self.account_id is not None
+
+    @property
+    def state(self):
+        if self.account_id:
+            return 'mapped'
+        return 'ignored' if self.is_ignored else 'needs mapping'
+
+
+def resolve_zoho_account(zoho_account_id=None, zoho_account_code=None):
+    """Find the ERP account a Zoho account maps to, or None.
+
+    Matches on Zoho's account id first — codes can be edited in Zoho, ids
+    cannot — then falls back to the code so a mapping still resolves when an
+    export carries no id.
+    """
+    lookup = None
+    if zoho_account_id:
+        lookup = ZohoAccountMap.objects.filter(
+            zoho_account_id=str(zoho_account_id)).first()
+    if lookup is None and zoho_account_code:
+        lookup = ZohoAccountMap.objects.filter(
+            zoho_account_code=str(zoho_account_code)).first()
+    return lookup.account if lookup and lookup.account_id else None
+
+
 class DocumentQuerySet(models.QuerySet):
     def invoices(self):
         return self.filter(kind=Document.KIND_INVOICE)
