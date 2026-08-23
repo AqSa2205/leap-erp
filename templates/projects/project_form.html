@@ -235,6 +235,7 @@
                 <a href="{% url 'projects:list' %}" class="btn btn-secondary">
                     <i class="bi bi-x-lg me-1"></i>Cancel
                 </a>
+                {% if user.is_super_admin_user or user.is_admin_user or user.is_sales_rep_user %}
                 {% if object %}
                 <a href="{% url 'projects:link_pipeline_email' object.pk %}" class="btn btn-outline-dark">
                     <i class="bi bi-envelope-paper me-1"></i>Add Emails
@@ -243,6 +244,7 @@
                 <a href="{% url 'projects:link_pipeline_email_new' %}" class="btn btn-outline-dark">
                     <i class="bi bi-envelope-paper me-1"></i>Add Emails
                 </a>
+                {% endif %}
                 {% endif %}
             </div>
 

@@ -127,8 +127,16 @@
 
                 const nameSpan = document.createElement('span');
                 nameSpan.className = 'file-name';
-                nameSpan.innerHTML = '<i class="bi bi-file-earmark-check text-success me-1"></i>' +
-                    f.name + ' <span class="text-muted">(' + (f.size / 1024 / 1024).toFixed(2) + ' MB)</span>';
+                const icon = document.createElement('i');
+                icon.className = 'bi bi-file-earmark-check text-success me-1';
+                const sizeSpan = document.createElement('span');
+                sizeSpan.className = 'text-muted';
+                sizeSpan.textContent = '(' + (f.size / 1024 / 1024).toFixed(2) + ' MB)';
+                nameSpan.appendChild(icon);
+                // f.name is the locally-chosen filename — attacker-controllable,
+                // so it goes in as a text node, never through innerHTML.
+                nameSpan.appendChild(document.createTextNode(f.name + ' '));
+                nameSpan.appendChild(sizeSpan);
 
                 const select = document.createElement('select');
                 select.className = 'form-control form-control-sm';

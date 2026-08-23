@@ -15,6 +15,7 @@ GraphMailError for the view to show inline rather than crashing the page.
 """
 import base64
 from email.utils import parseaddr
+from urllib.parse import quote
 
 import requests
 from django.conf import settings
@@ -22,6 +23,18 @@ from django.conf import settings
 GRAPH_SCOPE = ['https://graph.microsoft.com/.default']
 GRAPH_BASE = 'https://graph.microsoft.com/v1.0'
 REQUEST_TIMEOUT = 15
+
+# message_id/attachment_id below ultimately trace back to user input (a POST
+# body field, or JSON riding through the create-form draft) with no format
+# validation before it gets here — every one of them is quote(value, safe='')
+# before being placed in a Graph request URL's path. Without that, a crafted
+# id containing '/' or '..' segments could make this server-side, app-only-
+# authenticated request resolve to a completely different Graph resource
+# (e.g. another mailbox's messages) than the one PIPELINE_EMAIL_MAILBOX is
+# meant to restrict this feature to — a path-injection/confused-deputy risk,
+# not just a cosmetic one, since Mail.Read here is an application permission
+# that (absent an Exchange Application Access Policy) can reach any mailbox
+# in the tenant.
 
 
 class GraphMailError(Exception):
@@ -73,7 +86,7 @@ def list_inbox_messages(mailbox, top=50):
 
     access_token = _get_access_token()
     headers = {'Authorization': f'Bearer {access_token}'}
-    url = f'{GRAPH_BASE}/users/{mailbox}/mailFolders/Inbox/messages'
+    url = f'{GRAPH_BASE}/users/{quote(mailbox, safe="")}/mailFolders/Inbox/messages'
     params = {
         '$top': top,
         '$orderby': 'receivedDateTime desc',
@@ -130,7 +143,7 @@ def get_message_summary(mailbox, message_id):
 
     access_token = _get_access_token()
     headers = {'Authorization': f'Bearer {access_token}'}
-    url = f'{GRAPH_BASE}/users/{mailbox}/messages/{message_id}'
+    url = f'{GRAPH_BASE}/users/{quote(mailbox, safe="")}/messages/{quote(message_id, safe="")}'
     params = {'$select': 'id,subject,from,ccRecipients,receivedDateTime,bodyPreview'}
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
@@ -146,7 +159,7 @@ def get_message_summary(mailbox, message_id):
 def _list_message_attachments(mailbox, message_id, headers):
     """Metadata only (no bytes) for one message's real attachments —
     inline content (signature logos etc.) is left out."""
-    url = f'{GRAPH_BASE}/users/{mailbox}/messages/{message_id}/attachments'
+    url = f'{GRAPH_BASE}/users/{quote(mailbox, safe="")}/messages/{quote(message_id, safe="")}/attachments'
     params = {'$select': 'id,name,contentType,size,isInline'}
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
@@ -174,7 +187,8 @@ def fetch_attachment_bytes(mailbox, message_id, attachment_id):
         raise GraphMailError('PIPELINE_EMAIL_MAILBOX is not configured.')
 
     access_token = _get_access_token()
-    url = f'{GRAPH_BASE}/users/{mailbox}/messages/{message_id}/attachments/{attachment_id}'
+    url = (f'{GRAPH_BASE}/users/{quote(mailbox, safe="")}/messages/{quote(message_id, safe="")}'
+           f'/attachments/{quote(attachment_id, safe="")}')
     try:
         resp = requests.get(
             url, headers={'Authorization': f'Bearer {access_token}'}, timeout=REQUEST_TIMEOUT)
@@ -203,7 +217,7 @@ def fetch_raw_message_bytes(mailbox, message_id):
         raise GraphMailError('PIPELINE_EMAIL_MAILBOX is not configured.')
 
     access_token = _get_access_token()
-    url = f'{GRAPH_BASE}/users/{mailbox}/messages/{message_id}/$value'
+    url = f'{GRAPH_BASE}/users/{quote(mailbox, safe="")}/messages/{quote(message_id, safe="")}/$value'
     try:
         resp = requests.get(
             url,

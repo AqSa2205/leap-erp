@@ -595,7 +595,7 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
         initial = super().get_initial()
         if self.request.method == 'GET':
             message_id = self.request.GET.get('picked_email')
-            if message_id:
+            if message_id and _can_use_pipeline_email_feature(self.request.user):
                 try:
                     summary = graph_mail.get_message_summary(
                         settings.PIPELINE_EMAIL_MAILBOX, message_id)
@@ -689,7 +689,7 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
         # above are already committed by this point, so a failure here must
         # never surface as an error on top of an otherwise-successful create.
         picked_email_json = form.cleaned_data.get('picked_email_json')
-        if picked_email_json:
+        if picked_email_json and _can_use_pipeline_email_feature(self.request.user):
             try:
                 picked = json.loads(picked_email_json)
                 attachment_types = {
@@ -1307,6 +1307,18 @@ def add_project_documents_bulk(request, pk):
     })
 
 
+def _can_use_pipeline_email_feature(user):
+    """Add Emails (live inbox, attach, delink) is restricted to Sales,
+    Admin, and Super Admin — the roles that actually work commercial
+    pipeline entries day to day. Everyone else still sees the linked
+    email / Email Documents on the project detail page (read-only);
+    they just can't attach, pick, or delink one."""
+    return bool(
+        user.is_super_admin_user or user.is_admin_user
+        or getattr(user, 'is_sales_rep_user', False)
+    )
+
+
 def _delink_active_pipeline_email(project, user):
     """Mark the project's currently active linked email (if any) as
     delinked. This NEVER deletes the PipelineEmail row or any Document it
@@ -1392,6 +1404,9 @@ def link_pipeline_email(request, pk):
     """Attach an email from the live monitored inbox to an existing
     commercial pipeline entry — see _attach_email_to_project()."""
     project = get_object_or_404(Project, pk=pk)
+    if not _can_use_pipeline_email_feature(request.user):
+        messages.error(request, 'Add Emails is restricted to Sales, Admin, and Super Admin users.')
+        return redirect('projects:detail', pk=pk)
 
     if request.method == 'POST':
         message_id = request.POST.get('message_id')
@@ -1459,6 +1474,10 @@ def link_pipeline_email_new(request):
     its message_id back to the create form via a query param, where it
     rides along in that form's own draft-autosave state (ProjectForm.
     picked_email_json) until the entry is actually created."""
+    if not _can_use_pipeline_email_feature(request.user):
+        messages.error(request, 'Add Emails is restricted to Sales, Admin, and Super Admin users.')
+        return redirect('projects:create')
+
     if request.method == 'POST':
         message_id = request.POST.get('message_id')
         if not message_id:
@@ -1490,6 +1509,11 @@ def view_pipeline_inbox_attachment(request, message_id, attachment_id, pk=None):
     is None — see link_pipeline_email_new)."""
     if pk is not None:
         get_object_or_404(Project, pk=pk)
+    if not _can_use_pipeline_email_feature(request.user):
+        messages.error(request, 'Add Emails is restricted to Sales, Admin, and Super Admin users.')
+        if pk is not None:
+            return redirect('projects:detail', pk=pk)
+        return redirect('projects:create')
     try:
         filename, content_type, content = graph_mail.fetch_attachment_bytes(
             settings.PIPELINE_EMAIL_MAILBOX, message_id, attachment_id)
@@ -1521,6 +1545,9 @@ def delink_pipeline_email(request, pk):
     """Remove the currently linked email from a pipeline entry. The
     Documents it created are NEVER deleted — only the email link itself."""
     project = get_object_or_404(Project, pk=pk)
+    if not _can_use_pipeline_email_feature(request.user):
+        messages.error(request, 'Add Emails is restricted to Sales, Admin, and Super Admin users.')
+        return redirect('projects:detail', pk=pk)
     delinked = _delink_active_pipeline_email(project, request.user)
     if delinked:
         messages.success(request, 'Email delinked. Its documents remain under Project Documents.')

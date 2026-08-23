@@ -413,9 +413,11 @@
             <div class="card-header d-flex justify-content-between align-items-center" style="background: linear-gradient(135deg, #198754 0%, #20c997 100%); color: #fff;">
                 <h6 class="mb-0"><i class="bi bi-file-earmark-text me-2"></i>Project Documents</h6>
                 <div class="d-flex gap-2">
+                    {% if user.is_super_admin_user or user.is_admin_user or user.is_sales_rep_user %}
                     <a href="{% url 'projects:link_pipeline_email' project.pk %}" class="btn btn-light btn-sm">
                         <i class="bi bi-envelope-paper me-1"></i>Add Emails
                     </a>
+                    {% endif %}
                     <a href="{% url 'projects:add_document' project.pk %}" class="btn btn-light btn-sm">
                         <i class="bi bi-upload me-1"></i>Upload Document
                     </a>
@@ -442,6 +444,7 @@
                         </div>
                         {% endif %}
                     </div>
+                    {% if user.is_super_admin_user or user.is_admin_user or user.is_sales_rep_user %}
                     <form method="post" action="{% url 'projects:delink_pipeline_email' project.pk %}"
                           onsubmit="return confirm('Delink this email? Its documents will stay under Project Documents.');">
                         {% csrf_token %}
@@ -449,6 +452,7 @@
                             <i class="bi bi-x-circle me-1"></i>Delink
                         </button>
                     </form>
+                    {% endif %}
                 </div>
             </div>
             {% endif %}

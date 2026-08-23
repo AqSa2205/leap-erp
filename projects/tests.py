@@ -1042,7 +1042,8 @@ class LinkPipelineEmailExistingProjectViewTests(TestCase):
         self.PipelineEmail = PipelineEmail
         self.region = Region.objects.create(name='Test Region', code='TST')
         self.status = ProjectStatus.objects.create(name='Open', category='active')
-        self.user = User.objects.create_user('linker', password='pass12345')
+        sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        self.user = User.objects.create_user('linker', password='pass12345', role=sales_role)
         self.project = Project.objects.create(
             project_name='Linkable', proposal_reference='TST-LINK-1',
             region=self.region, status=self.status, owner=self.user)
@@ -1069,6 +1070,22 @@ class LinkPipelineEmailExistingProjectViewTests(TestCase):
         response = self.client.post(self.url, {'message_id': 'm1'})
         self.assertEqual(response.status_code, 302)
         self.assertIn('/login', response.url)
+        self.assertEqual(self.PipelineEmail.objects.count(), 0)
+
+    def test_unauthorized_role_denied_get_and_post(self):
+        # Add Emails is restricted to Sales/Admin/Super Admin — a role
+        # outside that (e.g. Finance) can view the project but not this.
+        finance_role, _ = Role.objects.get_or_create(name=Role.FINANCE_REP)
+        other = User.objects.create_user('finance1', password='x', role=finance_role, region=self.region)
+        self.client.force_login(other)
+
+        with patch('projects.graph_mail.list_inbox_messages') as mock_list:
+            response = self.client.get(self.url)
+        mock_list.assert_not_called()
+        self.assertRedirects(response, reverse('projects:detail', kwargs={'pk': self.project.pk}))
+
+        response = self.client.post(self.url, {'message_id': 'm1'})
+        self.assertRedirects(response, reverse('projects:detail', kwargs={'pk': self.project.pk}))
         self.assertEqual(self.PipelineEmail.objects.count(), 0)
 
     # --- GET / inbox listing ---
@@ -1170,7 +1187,8 @@ class LinkPipelineEmailNewViewTests(TestCase):
         from projects.models import Document, PipelineEmail
         self.Document = Document
         self.PipelineEmail = PipelineEmail
-        self.user = User.objects.create_user('creator', password='pass12345')
+        sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        self.user = User.objects.create_user('creator', password='pass12345', role=sales_role)
         self.url = reverse('projects:link_pipeline_email_new')
 
     def _inbox_message(self):
@@ -1187,6 +1205,20 @@ class LinkPipelineEmailNewViewTests(TestCase):
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 302)
         self.assertIn('/login', response.url)
+
+    def test_unauthorized_role_denied_get_and_post(self):
+        finance_role, _ = Role.objects.get_or_create(name=Role.FINANCE_REP)
+        other = User.objects.create_user('finance2', password='x', role=finance_role)
+        self.client.force_login(other)
+
+        with patch('projects.graph_mail.list_inbox_messages') as mock_list:
+            response = self.client.get(self.url)
+        mock_list.assert_not_called()
+        self.assertRedirects(response, reverse('projects:create'))
+
+        response = self.client.post(self.url, {'message_id': 'm1'})
+        self.assertRedirects(response, reverse('projects:create'))
+        self.assertEqual(Project.objects.count(), 0)
 
     def test_get_lists_inbox_and_creates_nothing(self):
         self.client.force_login(self.user)
@@ -1244,7 +1276,8 @@ class ViewPipelineInboxAttachmentTests(TestCase):
     def setUp(self):
         self.region = Region.objects.create(name='Test Region', code='TST')
         self.status = ProjectStatus.objects.create(name='Open', category='active')
-        self.user = User.objects.create_user('viewer', password='pass12345')
+        sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        self.user = User.objects.create_user('viewer', password='pass12345', role=sales_role)
         self.project = Project.objects.create(
             project_name='Viewable', proposal_reference='TST-VIEW-1',
             region=self.region, status=self.status)
@@ -1257,6 +1290,21 @@ class ViewPipelineInboxAttachmentTests(TestCase):
         response = self.client.get(self.url_with_pk)
         self.assertEqual(response.status_code, 302)
         self.assertIn('/login', response.url)
+
+    def test_unauthorized_role_denied_with_and_without_pk(self):
+        finance_role, _ = Role.objects.get_or_create(name=Role.FINANCE_REP)
+        other = User.objects.create_user('finance3', password='x', role=finance_role, region=self.region)
+        self.client.force_login(other)
+
+        with patch('projects.graph_mail.fetch_attachment_bytes') as mock_fetch:
+            response = self.client.get(self.url_with_pk)
+        mock_fetch.assert_not_called()
+        self.assertRedirects(response, reverse('projects:detail', kwargs={'pk': self.project.pk}))
+
+        with patch('projects.graph_mail.fetch_attachment_bytes') as mock_fetch:
+            response = self.client.get(self.url_without_pk)
+        mock_fetch.assert_not_called()
+        self.assertRedirects(response, reverse('projects:create'))
 
     def test_404_when_project_does_not_exist(self):
         self.client.force_login(self.user)
@@ -1327,7 +1375,8 @@ class DelinkPipelineEmailViewTests(TestCase):
         self.Document = Document
         self.region = Region.objects.create(name='Test Region', code='TST')
         self.status = ProjectStatus.objects.create(name='Open', category='active')
-        self.user = User.objects.create_user('delinker', password='pass12345')
+        sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        self.user = User.objects.create_user('delinker', password='pass12345', role=sales_role)
         self.project = Project.objects.create(
             project_name='Delinkable', proposal_reference='TST-DEL-1',
             region=self.region, status=self.status, owner=self.user)
@@ -1343,6 +1392,15 @@ class DelinkPipelineEmailViewTests(TestCase):
         response = self.client.post(self.url)
         self.assertEqual(response.status_code, 302)
         self.assertIn('/login', response.url)
+
+    def test_unauthorized_role_denied_and_email_stays_linked(self):
+        finance_role, _ = Role.objects.get_or_create(name=Role.FINANCE_REP)
+        other = User.objects.create_user('finance4', password='x', role=finance_role, region=self.region)
+        self.client.force_login(other)
+        response = self.client.post(self.url)
+        self.assertRedirects(response, reverse('projects:detail', kwargs={'pk': self.project.pk}))
+        self.email.refresh_from_db()
+        self.assertTrue(self.email.is_active)
 
     def test_get_not_allowed(self):
         self.client.force_login(self.user)
@@ -1621,3 +1679,124 @@ class ProjectCreateViewPickedEmailTests(TestCase):
         project = Project.objects.get(project_name='New Pipeline')
         self.assertTrue(CostingSheet.objects.filter(project=project).exists())
         self.assertEqual(self.PipelineEmail.objects.filter(project=project).count(), 0)
+
+    def test_unauthorized_role_get_does_not_call_graph(self):
+        finance_role, _ = Role.objects.get_or_create(name=Role.FINANCE_REP)
+        other = User.objects.create_user('finance5', password='x', role=finance_role,
+                                          region=self.region)
+        self.client.force_login(other)
+        with patch('projects.graph_mail.get_message_summary') as mock_summary:
+            response = self.client.get(self.url, {'picked_email': 'msg-1'})
+        mock_summary.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('picked_email_json', response.context['form'].initial)
+
+    def test_unauthorized_role_forged_picked_email_json_is_ignored_on_create(self):
+        # Even if a non-authorized user directly forges the hidden field
+        # (bypassing the picker UI, which they can't reach anyway), the
+        # project must still be created normally with no email attached —
+        # defense in depth on top of the picker/attach endpoints themselves
+        # being blocked.
+        finance_role, _ = Role.objects.get_or_create(name=Role.FINANCE_REP)
+        other = User.objects.create_user('finance6', password='x', role=finance_role,
+                                          region=self.region)
+        self.client.force_login(other)
+        data = self._post_data('TST-FORGED-1', picked_email_json=self._picked_email_json())
+        with patch('projects.graph_mail.fetch_raw_message_bytes') as mock_fetch:
+            response = self.client.post(self.url, data)
+        mock_fetch.assert_not_called()
+        self.assertEqual(response.status_code, 302)
+        project = Project.objects.get(project_name='New Pipeline')
+        self.assertTrue(CostingSheet.objects.filter(project=project).exists())
+        self.assertEqual(self.PipelineEmail.objects.filter(project=project).count(), 0)
+
+
+class PipelineEmailFeatureAccessTests(TestCase):
+    """_can_use_pipeline_email_feature() is the single gate behind every
+    Add Emails/attach/delink entry point — unit-tested directly against
+    every role so the view-level tests don't need to repeat this matrix."""
+
+    def _user(self, role_name):
+        from projects.views import _can_use_pipeline_email_feature
+        role, _ = Role.objects.get_or_create(name=role_name)
+        user = User.objects.create_user(f'u_{role_name}', password='x', role=role)
+        return _can_use_pipeline_email_feature(user)
+
+    def test_super_admin_allowed(self):
+        self.assertTrue(self._user(Role.SUPER_ADMIN))
+
+    def test_admin_allowed(self):
+        self.assertTrue(self._user(Role.ADMIN))
+
+    def test_sales_rep_allowed(self):
+        self.assertTrue(self._user(Role.SALES_REP))
+
+    def test_manager_denied(self):
+        self.assertFalse(self._user(Role.MANAGER))
+
+    def test_proposal_rep_denied(self):
+        self.assertFalse(self._user(Role.PROPOSAL_REP))
+
+    def test_finance_rep_denied(self):
+        self.assertFalse(self._user(Role.FINANCE_REP))
+
+    def test_procurement_officer_denied(self):
+        self.assertFalse(self._user(Role.PROCUREMENT_OFF))
+
+    def test_user_with_no_role_denied(self):
+        from projects.views import _can_use_pipeline_email_feature
+        user = User.objects.create_user('noroleuser', password='x')
+        self.assertFalse(_can_use_pipeline_email_feature(user))
+
+
+class GraphMailUrlEncodingTests(TestCase):
+    """message_id/attachment_id trace back to user input (a POST field, or
+    JSON riding through the create-form draft) with no format validation
+    before graph_mail builds a Graph API request URL from them. A crafted
+    id containing '/' or '..' segments must be percent-encoded, not placed
+    literally in the URL path — otherwise it could redirect this server-
+    side, app-only-authenticated request to a completely different Graph
+    resource (e.g. another mailbox) than PIPELINE_EMAIL_MAILBOX restricts
+    this feature to."""
+
+    def setUp(self):
+        patcher = patch('projects.graph_mail._get_access_token', return_value='tok')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.traversal_id = '../../../users/someone-else@leap-arabia.com/messages/x'
+
+    def test_fetch_raw_message_bytes_encodes_traversal_attempt(self):
+        with patch('projects.graph_mail.requests.get') as mock_get:
+            mock_get.return_value.status_code = 200
+            mock_get.return_value.content = b'raw-bytes'
+            graph_mail.fetch_raw_message_bytes('shared@leap-arabia.com', self.traversal_id)
+        called_url = mock_get.call_args[0][0]
+        self.assertNotIn('/../', called_url)
+        self.assertTrue(called_url.startswith(
+            'https://graph.microsoft.com/v1.0/users/shared%40leap-arabia.com/messages/'))
+        # The mailbox segment must stay exactly one segment — the encoded id
+        # can't reintroduce '/' as a literal path separator.
+        path_after_messages = called_url.split('/messages/', 1)[1]
+        self.assertNotIn('/', path_after_messages.rstrip('/$value'))
+
+    def test_get_message_summary_encodes_traversal_attempt(self):
+        with patch('projects.graph_mail.requests.get') as mock_get:
+            mock_get.return_value.status_code = 200
+            mock_get.return_value.json.return_value = {
+                'id': 'x', 'subject': 's', 'from': {}, 'value': []}
+            graph_mail.get_message_summary('shared@leap-arabia.com', self.traversal_id)
+        first_call_url = mock_get.call_args_list[0][0][0]
+        self.assertNotIn('/../', first_call_url)
+
+    def test_fetch_attachment_bytes_encodes_message_and_attachment_id(self):
+        import base64
+        with patch('projects.graph_mail.requests.get') as mock_get:
+            mock_get.return_value.status_code = 200
+            mock_get.return_value.json.return_value = {
+                'name': 'a.pdf', 'contentType': 'application/pdf',
+                'contentBytes': base64.b64encode(b'x').decode(),
+            }
+            graph_mail.fetch_attachment_bytes(
+                'shared@leap-arabia.com', self.traversal_id, '../also/../elsewhere')
+        called_url = mock_get.call_args[0][0]
+        self.assertNotIn('/../', called_url)
