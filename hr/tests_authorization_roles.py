@@ -113,11 +113,14 @@ class ERPAdminAccessTests(TestCase):
             resp = self.client.get(reverse(name))
             self.assertEqual(resp.status_code, 200, name)
 
-    def test_blocked_from_super_admin_only_tools(self):
-        # Users + Permission Matrix stay Super-Admin only.
-        for name in ['accounts:user_list', 'accounts:permission_matrix']:
+    def test_can_open_the_system_admin_tools(self):
+        # ERP Admin now owns the whole Administration section, Users and the
+        # Permission Matrix included. Note what that combination means: an ERP
+        # Admin can grant any role anything, themselves included.
+        for name in ['accounts:user_list', 'accounts:permission_matrix',
+                     'accounts:reset_requests', 'dashboard:storage_report']:
             resp = self.client.get(reverse(name))
-            self.assertIn(resp.status_code, (302, 403), name)
+            self.assertEqual(resp.status_code, 200, name)
 
 
 class AttendanceScopeTests(TestCase):
@@ -250,19 +253,16 @@ class OrgChartScopeTests(TestCase):
         # The template-comment guidance must NOT leak into the page as text.
         self.assertNotIn('vertical threshold', body)
 
-    def test_erp_admin_can_manage_hierarchy_but_not_leave_access(self):
+    def test_erp_admin_can_manage_hierarchy_and_leave_access(self):
         u = _user('erp', 'erp_admin')
         self.client.force_login(u)
         resp = self.client.get(reverse('hr:org_chart'))
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.context['can_manage_org'])
-        # Leave Dashboard Access is its own Super-Admin-only page (not part
-        # of Org Chart) -> whole-page 403 for ERP Admin, both GET and POST.
-        blocked = self.client.get(reverse('hr:leave_access'))
-        self.assertEqual(blocked.status_code, 403)
-        blocked_post = self.client.post(reverse('hr:leave_access'),
-                                        data={'grant_dashboard_access': self.report.pk})
-        self.assertEqual(blocked_post.status_code, 403)
+        # Leave Dashboard Access sits in the Administration section, which ERP
+        # Admin now owns in full, so it is reachable rather than a 403.
+        allowed = self.client.get(reverse('hr:leave_access'))
+        self.assertEqual(allowed.status_code, 200)
         # Hierarchy assignment IS allowed for ERP Admin (redirects on save).
         ok = self.client.post(reverse('hr:org_chart'),
                               data={'employee_id': self.report.pk, 'main_manager': '',

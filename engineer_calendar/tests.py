@@ -61,7 +61,7 @@ class CalendarCapabilityBoundaryTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.admin, self.admin_emp = _make_user_with_employee(
-            'caladmin', role_name=Role.ADMIN, full_name='Cal Admin')
+            'caladmin', role_name=Role.ERP_ADMIN, full_name='Cal Admin')
         self.plain, self.plain_emp = _make_user_with_employee(
             'calplain', role_name=Role.SALES_REP, full_name='Cal Plain')
         seed_default_permissions()
@@ -138,7 +138,7 @@ class CalendarCSRFEnforcementTests(TestCase):
     def setUp(self):
         self.client = Client(enforce_csrf_checks=True)
         self.admin, self.emp = _make_user_with_employee(
-            'calcsrf', role_name=Role.ADMIN)
+            'calcsrf', role_name=Role.ERP_ADMIN)
         seed_default_permissions()
         self.day = _today_month_dates(5)
 
@@ -177,7 +177,7 @@ class SaveCellTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.admin, self.emp = _make_user_with_employee(
-            'calsave', role_name=Role.ADMIN, full_name='Save Emp')
+            'calsave', role_name=Role.ERP_ADMIN, full_name='Save Emp')
         seed_default_permissions()
         self.client.login(username='calsave', password='testpass123')
         self.day = _today_month_dates(10)
@@ -268,7 +268,7 @@ class FillRangeTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.admin, self.emp = _make_user_with_employee(
-            'calfill', role_name=Role.ADMIN, full_name='Fill Emp')
+            'calfill', role_name=Role.ERP_ADMIN, full_name='Fill Emp')
         seed_default_permissions()
         self.client.login(username='calfill', password='testpass123')
         self.url = reverse('engineer_calendar:fill_range')
@@ -395,7 +395,7 @@ class MergeEditTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.admin, self.emp = _make_user_with_employee(
-            'calmerge', role_name=Role.ADMIN)
+            'calmerge', role_name=Role.ERP_ADMIN)
         seed_default_permissions()
         self.client.login(username='calmerge', password='testpass123')
         self.start, self.end = _today_month_dates(8, 11)
@@ -453,7 +453,7 @@ class CalendarGridRenderTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.admin, self.emp = _make_user_with_employee(
-            'calgrid', role_name=Role.ADMIN, full_name='Grid Emp Active')
+            'calgrid', role_name=Role.ERP_ADMIN, full_name='Grid Emp Active')
         self.inactive = Employee.objects.create(
             full_name='Inactive Emp', iqama_number='IQ-inactive-cal', is_active=False)
         seed_default_permissions()
@@ -519,7 +519,7 @@ class GenerateDraftViewTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.admin, self.emp = _make_user_with_employee(
-            'calgenview', role_name=Role.ADMIN)
+            'calgenview', role_name=Role.ERP_ADMIN)
         seed_default_permissions()
         self.client.login(username='calgenview', password='testpass123')
         self.code, _ = ActivityCode.objects.get_or_create(
@@ -555,7 +555,7 @@ class GenerateDraftServiceTests(TestCase):
 
     def setUp(self):
         self.user, self.emp = _make_user_with_employee(
-            'calgensvc', role_name=Role.ADMIN, full_name='Svc Emp')
+            'calgensvc', role_name=Role.ERP_ADMIN, full_name='Svc Emp')
         seed_default_permissions()
         self.code, _ = ActivityCode.objects.get_or_create(
             code='COS_0009', defaults={'label': 'Office', 'is_active': True})
@@ -639,7 +639,7 @@ class ExportExcelTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.admin, self.emp = _make_user_with_employee(
-            'calexport', role_name=Role.ADMIN, full_name='Export Emp')
+            'calexport', role_name=Role.ERP_ADMIN, full_name='Export Emp')
         self.plain, _ = _make_user_with_employee(
             'calexportplain', role_name=Role.SALES_REP)
         seed_default_permissions()
@@ -675,7 +675,7 @@ class ExportExcelTests(TestCase):
 
 class CalendarCellModelTests(TestCase):
     def setUp(self):
-        _, self.emp = _make_user_with_employee('calmodel', role_name=Role.ADMIN)
+        _, self.emp = _make_user_with_employee('calmodel', role_name=Role.ERP_ADMIN)
 
     def test_unique_together_employee_date(self):
         day = date(2026, 4, 1)
@@ -729,7 +729,7 @@ class EngineerCalendarMonthNavigationTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.admin, self.emp = _make_user_with_employee(
-            'calnav', role_name=Role.ADMIN, full_name='Cal Nav Emp')
+            'calnav', role_name=Role.ERP_ADMIN, full_name='Cal Nav Emp')
         seed_default_permissions()
         self.client.login(username='calnav', password='testpass123')
         CalendarCell.objects.create(
@@ -805,7 +805,7 @@ class EngineerCalendarZipDownloadTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.admin, self.emp = _make_user_with_employee(
-            'calzip', role_name=Role.ADMIN, full_name='Cal Zip Emp')
+            'calzip', role_name=Role.ERP_ADMIN, full_name='Cal Zip Emp')
         self.plain, _ = _make_user_with_employee('calzipplain', role_name=Role.SALES_REP)
         seed_default_permissions()
         CalendarCell.objects.create(
@@ -880,7 +880,7 @@ class ClearCellFallbackTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.admin, self.emp = _make_user_with_employee(
-            'calclear', role_name=Role.ADMIN, full_name='Clear Fallback Emp')
+            'calclear', role_name=Role.ERP_ADMIN, full_name='Clear Fallback Emp')
         seed_default_permissions()
         self.client.login(username='calclear', password='testpass123')
         self.code, _ = ActivityCode.objects.get_or_create(
@@ -1080,7 +1080,7 @@ class CalendarGridLocationToggleTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.admin, _ = _make_user_with_employee(
-            'calloc', role_name=Role.ADMIN, full_name='Cal Loc Admin')
+            'calloc', role_name=Role.ERP_ADMIN, full_name='Cal Loc Admin')
         seed_default_permissions()
         self.client.login(username='calloc', password='testpass123')
 
@@ -1246,7 +1246,7 @@ class ExportExcelLocationFilterTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.admin, _ = _make_user_with_employee(
-            'calexploc', role_name=Role.ADMIN, full_name='Cal Export Loc Admin')
+            'calexploc', role_name=Role.ERP_ADMIN, full_name='Cal Export Loc Admin')
         seed_default_permissions()
         self.client.login(username='calexploc', password='testpass123')
 

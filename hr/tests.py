@@ -1117,7 +1117,7 @@ class NewEmployeeAutoEntitlementTests(TestCase):
 class LeaveAdminViewTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x')
         self.admin.role = role
         self.admin.save()
@@ -1174,7 +1174,7 @@ class LeaveAdminViewTests(TestCase):
 class LeaveRecordViewTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
         # leave_record_create now unifies onto LeaveRequestCreateView, which is
         # SuperAdminRequiredMixin (the approval-workflow queue's existing access
@@ -1329,7 +1329,7 @@ class AttendanceStatusTests(TestCase):
 class AttendanceGridTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
         self.emp = make_employee()
         self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
@@ -1376,7 +1376,7 @@ class AttendanceGridTests(TestCase):
 class AttendanceHistoryTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
         self.emp = make_employee()
 
@@ -1394,7 +1394,7 @@ class AttendanceHistoryTests(TestCase):
 class AttendanceSettingsViewTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
 
     def test_update_weekend(self):
@@ -1411,7 +1411,7 @@ class HardeningTests(TestCase):
         from accounts.models import Role, User
         from datetime import time
         self.time = time
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
         self.emp = make_employee()
         self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
@@ -1530,7 +1530,7 @@ class MatrixHelperTests(TestCase):
 class MatrixViewTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
         self.emp = make_employee(name='Zara Tester')
 
@@ -1565,7 +1565,7 @@ class MatrixExportTimesTests(TestCase):
         from accounts.models import Role, User
         from datetime import time
         self.time = time
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
         self.emp = make_employee(name='Zara Tester')
         AttendanceRecord.objects.create(
@@ -1605,7 +1605,7 @@ class MatrixExportTimesTests(TestCase):
 class MarkLeaveTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
         self.emp = make_employee()
         self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
@@ -1637,7 +1637,7 @@ class MarkLeaveTests(TestCase):
 class UnmarkLeaveTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
         self.emp = make_employee()
         self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
@@ -1676,7 +1676,7 @@ class MarkLeaveIntegrityTests(TestCase):
         from accounts.models import Role, User
         from datetime import time
         self.time = time
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
         self.emp = make_employee()
         self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
@@ -1779,7 +1779,7 @@ class MatrixWorkingDayTests(TestCase):
 class WorkingDayViewTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
 
     def test_list_ok(self):
@@ -1796,7 +1796,7 @@ class WorkingDayViewTests(TestCase):
 class SettingsLateTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
 
     def test_update_expected_in_by(self):
@@ -1855,7 +1855,7 @@ class MatrixWFHTests(TestCase):
 class WFHViewTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
         self.emp = make_employee()
 
@@ -1874,7 +1874,7 @@ class WFHViewTests(TestCase):
 class GridWFHTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
         self.emp = make_employee()
 
@@ -1915,7 +1915,7 @@ class GridWFHTests(TestCase):
 class HistoryLateWFHSummaryTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
         self.emp = make_employee()
 
@@ -1932,7 +1932,7 @@ class HistoryLateWFHSummaryTests(TestCase):
 class EntitlementYearGroupedTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
         self.emp = make_employee()
         self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
@@ -1974,7 +1974,7 @@ class EntitlementYearGroupedTests(TestCase):
 class SickLeaveCertificateTests(TestCase):
     def setUp(self):
         from accounts.models import Role, User
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm', password='x'); self.admin.role = role; self.admin.save()
         # leave_record_create now unifies onto LeaveRequestCreateView (SuperAdminRequiredMixin).
         superadmin_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
@@ -5190,9 +5190,25 @@ class LeaveAccessViewTests(TestCase):
         self.assertContains(resp, 'Leave Access')
 
     def test_sidebar_hides_leave_access_link_for_plain_admin(self):
+        """A plain admin no longer reaches Administration at all.
+
+        This used to load an Administration page as an admin and check the
+        Leave Access link was absent from the sidebar. Administration is now
+        owned by super_admin and erp_admin, so the guarantee is stronger: the
+        admin is turned away from the page itself, and the link is missing from
+        a page they CAN open.
+        """
+        from accounts.permissions import seed_default_permissions
+        seed_default_permissions()   # so the admin can open a non-admin page at all
         self.client.login(username='access_admin', password='testpass123')
-        resp = self.client.get(reverse('hr:entitlement_year'))
-        self.assertNotContains(resp, reverse('hr:leave_access'))
+        # The Administration page itself is no longer reachable.
+        blocked = self.client.get(reverse('hr:entitlement_year'))
+        self.assertIn(blocked.status_code, (302, 403))
+        # And the sidebar on a page they can open offers no Administration link.
+        reachable = self.client.get(reverse('dashboard:index'))
+        self.assertEqual(reachable.status_code, 200)
+        self.assertNotContains(reachable, reverse('hr:leave_access'))
+        self.assertNotContains(reachable, 'data-section="administration"')
 
 
 class HasOverrideAccessTests(TestCase):
@@ -6244,7 +6260,7 @@ class AttendanceExportColorTests(TestCase):
 
     def setUp(self):
         from accounts.models import Role, User
-        role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         self.admin = User.objects.create_user('adm2', password='x'); self.admin.role = role; self.admin.save()
         self.emp = make_employee(iqama='E2', name='Leave Tester')
         self.annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})

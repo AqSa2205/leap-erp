@@ -1325,7 +1325,12 @@
         </ul>
         {% endif %}
 
-        {% if user.is_super_admin_user or user.is_admin_user or user.is_erp_admin_user %}
+        {% comment %}
+        Administration belongs to super_admin and erp_admin. The `admin` role
+        keeps its access everywhere else in the app but is locked out of this
+        section, and the views refuse it too — a hidden link is not a gate.
+        {% endcomment %}
+        {% if user.is_super_admin_user or user.is_erp_admin_user %}
         <div class="nav-section" data-section="administration"><span>Administration</span><i class="bi bi-chevron-down section-chevron"></i></div>
         <ul class="nav flex-column nav-section-items" data-section-items="administration">
             {% if user.is_super_admin_user %}
