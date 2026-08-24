@@ -1333,6 +1333,11 @@
         {% if user.is_super_admin_user or user.is_erp_admin_user %}
         <div class="nav-section" data-section="administration"><span>Administration</span><i class="bi bi-chevron-down section-chevron"></i></div>
         <ul class="nav flex-column nav-section-items" data-section-items="administration">
+            {% comment %}
+            Users and Permissions stay Super Admin only. ERP Admin owns the rest
+            of Administration, but holding those two as well would let the role
+            grant itself anything, leaving no tier above it.
+            {% endcomment %}
             {% if user.is_super_admin_user %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'user_list' %}active{% endif %}" href="{% url 'accounts:user_list' %}" data-title="Users">
@@ -1340,14 +1345,16 @@
                 </a>
             </li>
             <li class="nav-item">
-                <a class="nav-link {% if 'reset' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'accounts:reset_requests' %}" data-title="Reset Requests">
-                    <i class="bi bi-shield-lock"></i> <span>Reset Requests</span>
-                </a>
-            </li>
-            <li class="nav-item">
               <a class="nav-link {% if request.resolver_match.url_name == 'permission_matrix' %}active{% endif %}" href="{% url 'accounts:permission_matrix' %}" data-title="Permissions">
                 <i class="bi bi-shield-lock"></i> <span>Permissions</span>
               </a>
+            </li>
+            {% endif %}
+            {% if user.is_super_admin_user or user.is_erp_admin_user %}
+            <li class="nav-item">
+                <a class="nav-link {% if 'reset' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'accounts:reset_requests' %}" data-title="Reset Requests">
+                    <i class="bi bi-shield-lock"></i> <span>Reset Requests</span>
+                </a>
             </li>
             <li class="nav-item">
               <a class="nav-link {% if request.resolver_match.url_name == 'storage_report' %}active{% endif %}" href="{% url 'dashboard:storage_report' %}" data-title="Storage">
