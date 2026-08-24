@@ -63,15 +63,15 @@ def profile_view(request):
 
 
 class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
-    """User management — super_admin and erp_admin.
+    """User management — super_admin only.
 
-    erp_admin owns the whole Administration section, which includes this.
-    Note what that implies: together with the permission grid, an erp_admin
-    can grant any role anything, themselves included.
+    erp_admin owns the rest of the Administration section but deliberately not
+    this or the permission grid. Holding both would let that role grant itself
+    anything, which would make erp_admin indistinguishable from super_admin
+    and leave no tier that can actually restrain it.
     """
     def test_func(self):
-        u = self.request.user
-        return u.is_super_admin_user or u.is_erp_admin_user
+        return self.request.user.is_super_admin_user
 
 
 def filter_users(request):
@@ -111,9 +111,9 @@ class UserListView(AdminRequiredMixin, ListView):
 def user_export_pdf(request):
     """Export the (optionally region-filtered) user list to PDF — username,
     full name, email, role and region, with a per-region count. Super admin only."""
-    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
+    if not request.user.is_super_admin_user:
         messages.error(request, 'Admin access required.')
-        return redirect('accounts:user_list')
+        return redirect('accounts:reset_requests')
 
     from reportlab.lib.pagesizes import A4
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -345,13 +345,13 @@ def _build_reset_email_html(user_name, reset_url, self_requested=False):
 def send_reset_link(request, pk):
     """Super admin generates a reset link and emails it to the user."""
     if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
-        messages.error(request, 'Only super admins can send reset links.')
-        return redirect('accounts:user_list')
+        messages.error(request, 'Administration access required.')
+        return redirect('accounts:reset_requests')
 
     user = get_object_or_404(User, pk=pk)
     if not user.email:
         messages.error(request, f'{user.username} has no email address. Add one first.')
-        return redirect('accounts:user_list')
+        return redirect('accounts:reset_requests')
 
     # Generate token
     token = secrets.token_urlsafe(48)
@@ -387,7 +387,7 @@ def send_reset_link(request, pk):
     except Exception as e:
         messages.error(request, f'Failed to send email: {e}')
 
-    return redirect('accounts:user_list')
+    return redirect('accounts:reset_requests')
 
 
 @login_required
@@ -396,11 +396,11 @@ def send_reset_link_all(request):
     Emails are sent on background threads with proper error logging and
     DB connection cleanup."""
     if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
-        messages.error(request, 'Only super admins can do this.')
-        return redirect('accounts:user_list')
+        messages.error(request, 'Administration access required.')
+        return redirect('accounts:reset_requests')
 
     if request.method != 'POST':
-        return redirect('accounts:user_list')
+        return redirect('accounts:reset_requests')
 
     from notifications.services import send_email_in_background
 
@@ -439,7 +439,7 @@ def send_reset_link_all(request):
         request,
         f'Queued password reset emails for {queued} user(s). Delivery happens in the background.'
     )
-    return redirect('accounts:user_list')
+    return redirect('accounts:reset_requests')
 
 
 def forgot_password(request):
@@ -579,7 +579,7 @@ def reset_requests_list(request):
 def reject_reset(request, pk):
     """Super admin cancels a pending reset request (before the user uses it)."""
     if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
-        messages.error(request, 'Only super admins can reject resets.')
+        messages.error(request, 'Administration access required.')
         return redirect('accounts:reset_requests')
 
     reset_req = get_object_or_404(PasswordResetRequest, pk=pk)
@@ -600,7 +600,7 @@ def permission_matrix(request):
     Hardcoded super_admin gate (NOT capability-gated) so the page can never be
     toggled away or used to lock everyone out.
     """
-    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
+    if not request.user.is_super_admin_user:
         raise PermissionDenied
 
     roles = list(Role.objects.all())
@@ -629,7 +629,7 @@ def permission_matrix(request):
 @login_required
 @require_POST
 def ajax_toggle_permission(request):
-    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
+    if not request.user.is_super_admin_user:
         raise PermissionDenied
     try:
         payload = json.loads(request.body or '{}')

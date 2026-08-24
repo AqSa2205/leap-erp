@@ -113,14 +113,18 @@ class ERPAdminAccessTests(TestCase):
             resp = self.client.get(reverse(name))
             self.assertEqual(resp.status_code, 200, name)
 
-    def test_can_open_the_system_admin_tools(self):
-        # ERP Admin now owns the whole Administration section, Users and the
-        # Permission Matrix included. Note what that combination means: an ERP
-        # Admin can grant any role anything, themselves included.
-        for name in ['accounts:user_list', 'accounts:permission_matrix',
-                     'accounts:reset_requests', 'dashboard:storage_report']:
+    def test_can_open_the_administration_tools(self):
+        for name in ['accounts:reset_requests', 'dashboard:storage_report']:
             resp = self.client.get(reverse(name))
             self.assertEqual(resp.status_code, 200, name)
+
+    def test_still_blocked_from_users_and_permissions(self):
+        # ERP Admin owns the rest of Administration but deliberately not these
+        # two. Holding both would let the role grant itself anything, making it
+        # indistinguishable from super_admin and leaving no tier above it.
+        for name in ['accounts:user_list', 'accounts:permission_matrix']:
+            resp = self.client.get(reverse(name))
+            self.assertIn(resp.status_code, (302, 403), name)
 
 
 class AttendanceScopeTests(TestCase):
