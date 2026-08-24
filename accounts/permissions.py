@@ -158,7 +158,9 @@ DEFAULT_MODULE_ACCESS = {
     # dashboard, by-person, and data entry). Super admin can widen later from
     # the permission grid if management wants dept heads to see it.
     'super_admin':     _OPEN_TO_ALL | {'settings', 'devtracking', 'kpis','engineer_calendar'},
-    'admin':           _OPEN_TO_ALL | {'devtracking','engineer_calendar'},
+    # `admin` loses engineer_calendar with the rest of Administration; its
+    # access to costing/procurement/pipeline is untouched.
+    'admin':           _OPEN_TO_ALL | {'devtracking'},
     'manager':         set(_OPEN_TO_ALL),
     'sales_rep':       set(_OPEN_TO_ALL),
     'procurement_mgr': set(_OPEN_TO_ALL),
@@ -189,7 +191,10 @@ DEFAULT_MODULE_ACCESS = {
     'document_controller': {'dashboard', 'kpis'},
     # ERP Admin: a Dashboard landing page; the Administration section it manages
     # is role-gated (is_erp_admin_user), not capability-gated.
-    'erp_admin':           {'dashboard'},
+    # erp_admin owns the whole Administration section; engineer_calendar and
+    # the timesheet-request page both live in it, so the capability comes
+    # with the role rather than leaving dead links in their sidebar.
+    'erp_admin':           {'dashboard', 'engineer_calendar'},
 }
 
 # Per-codename baseline for ENFORCED granular caps that are not plain
@@ -199,7 +204,10 @@ DEFAULT_MODULE_ACCESS = {
 # independently-toggleable capabilities.
 DEFAULT_CODENAME_GRANTS = {
     'super_admin':  {'devtracking.admin', 'devtracking.mywork', 'kpis.manage', 'kpis.activity','timesheets.review'},
-    'admin':        {'devtracking.admin', 'devtracking.mywork','timesheets.review'},
+    # timesheets.review drives the Request Timesheets page in Administration,
+    # so it follows that section: erp_admin gains it, admin loses it.
+    'admin':        {'devtracking.admin', 'devtracking.mywork'},
+    'erp_admin':    {'timesheets.review'},
     'developer':    {'devtracking.mywork'},
     'ai_head':            {'devtracking.admin', 'devtracking.mywork'},
     'ai_intern':          {'devtracking.mywork'},

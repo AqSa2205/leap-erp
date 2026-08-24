@@ -1,0 +1,278 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Accounting — Chart of Accounts{% endblock %}
+{% block page_title %}Chart of Accounts{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <span>Accounting</span>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">Chart of Accounts</span>
+</nav>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .coa-hero { background: linear-gradient(135deg, #5b3fa0 0%, #402c73 100%); color:#fff; border:none; border-radius:14px; }
+    .coa-table td, .coa-table th { vertical-align: middle; }
+    .coa-table thead th { font-size:0.74rem; text-transform:uppercase; letter-spacing:0.3px; color:#402c73; border-bottom:2px solid #5b3fa0; }
+    .coa-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:0.86rem; white-space:nowrap; }
+    /* Heading rows carry the structure, so they read heavier than their leaves. */
+    .coa-heading { background:#faf9fd; }
+    .coa-heading .coa-name { font-weight:600; color:#402c73; }
+    .coa-indent { display:inline-block; }
+    .coa-stat { font-size:1.4rem; font-weight:600; line-height:1; }
+    .coa-name { color:inherit; }
+    .coa-name:hover { text-decoration:underline !important; }
+    /* Caret sits in a fixed-width slot so names stay aligned whether or not a
+       row has children. */
+    .coa-toggle, .coa-toggle-spacer { display:inline-block; width:1.35rem; text-align:left; }
+    .coa-toggle { border:0; background:none; padding:0; color:#5b3fa0; font-size:0.72rem; cursor:pointer; }
+    .coa-toggle[aria-expanded="false"] i { transform: rotate(-90deg); }
+    .coa-toggle i { display:inline-block; transition: transform .12s ease; }
+    .coa-count { display:inline-block; margin-left:0.5rem; padding:0 0.4rem; border-radius:10px;
+                 background:#ece7f6; color:#402c73; font-size:0.7rem; font-weight:600; }
+    [data-theme="dark"] .coa-heading { background:#252525; }
+    [data-theme="dark"] .coa-heading .coa-name { color:#c5b6ec; }
+    [data-theme="dark"] .coa-count { background:#3a3357; color:#c5b6ec; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-xxl-11">
+
+            <div class="card coa-hero mb-4">
+                <div class="card-body p-4 d-flex justify-content-between align-items-center flex-wrap gap-3">
+                    <div>
+                        <h1 class="h3 mb-1 text-white"><i class="bi bi-diagram-3 me-2"></i>Chart of Accounts</h1>
+                        <div class="opacity-75 small">The General Ledger account master, imported from the finance workbook</div>
+                    </div>
+                    <div class="d-flex gap-4 text-center">
+                        <div>
+                            <div class="coa-stat">{{ total_count|intcomma }}</div>
+                            <div class="small opacity-75">Accounts</div>
+                        </div>
+                        <div>
+                            <div class="coa-stat">{{ postable_count|intcomma }}</div>
+                            <div class="small opacity-75">Postable</div>
+                        </div>
+                        <div>
+                            <div class="coa-stat">{{ heading_count|intcomma }}</div>
+                            <div class="small opacity-75">Headings</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header bg-white py-3">
+                    <form method="get" class="row g-2 align-items-center">
+                        <div class="col-md-4">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text bg-white border-end-0" style="color:#5b3fa0"><i class="bi bi-search"></i></span>
+                                <input type="search" name="q" value="{{ search }}" class="form-control border-start-0"
+                                       placeholder="Search code or name…" aria-label="Search accounts">
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <select name="class" class="form-select form-select-sm" aria-label="Filter by class">
+                                <option value="">All classes</option>
+                                {% for digit, label in class_choices %}
+                                <option value="{{ digit }}" {% if selected_class == digit %}selected{% endif %}>{{ digit }} — {{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <select name="type" class="form-select form-select-sm" aria-label="Filter by internal type">
+                                <option value="">All types</option>
+                                {% for value, label in type_choices %}
+                                <option value="{{ value }}" {% if selected_type == value %}selected{% endif %}>{{ value }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <select name="postable" class="form-select form-select-sm" aria-label="Filter postable">
+                                <option value="">Postable & headings</option>
+                                <option value="1" {% if selected_postable == '1' %}selected{% endif %}>Postable only</option>
+                                <option value="0" {% if selected_postable == '0' %}selected{% endif %}>Headings only</option>
+                            </select>
+                        </div>
+                        <div class="col-md-1 d-grid">
+                            <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+                        </div>
+                    </form>
+                    {% if rows %}
+                    <div class="d-flex gap-2 mt-2">
+                        <button type="button" id="coaExpandAll" class="btn btn-sm btn-outline-secondary">
+                            <i class="bi bi-arrows-expand me-1"></i>Expand all
+                        </button>
+                        <button type="button" id="coaCollapseAll" class="btn btn-sm btn-outline-secondary">
+                            <i class="bi bi-arrows-collapse me-1"></i>Collapse to classes
+                        </button>
+                        <span class="small text-muted align-self-center ms-1">Click an account name to open it and see what's filed beneath it.</span>
+                    </div>
+                    {% endif %}
+                </div>
+
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover coa-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th style="width:9rem;">Code</th>
+                                    <th>Account</th>
+                                    <th style="width:9rem;">Internal Type</th>
+                                    <th style="width:9rem;">Class</th>
+                                    <th style="width:3rem;"><span class="visually-hidden">Ledger</span></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for account in rows %}
+                                <tr class="coa-row{% if not account.is_postable %} coa-heading{% endif %}{% if not account.is_active %} opacity-50{% endif %}"
+                                    data-code="{{ account.code }}"
+                                    data-parent="{{ account.parent.code|default:'' }}"
+                                    data-depth="{{ account.tree_depth }}">
+                                    <td class="coa-code">{{ account.code }}</td>
+                                    <td>
+                                        {# Indentation mirrors the code hierarchy, so the tree reads at a glance. #}
+                                        <span class="coa-indent" style="width:{{ account.tree_depth }}.5rem;"></span>
+                                        {% if account.counts.direct %}
+                                        <button type="button" class="coa-toggle" aria-expanded="true"
+                                                aria-label="Collapse {{ account.name }}"><i class="bi bi-caret-down-fill"></i></button>
+                                        {% else %}
+                                        <span class="coa-toggle-spacer"></span>
+                                        {% endif %}
+                                        {% if not account.is_postable %}<i class="bi bi-folder2 me-1" style="color:#5b3fa0"></i>{% endif %}
+                                        <a href="{% url 'accounting:account_detail' account.code %}" class="coa-name text-decoration-none">{{ account.name }}</a>
+                                        {% if account.counts.direct %}
+                                        <span class="coa-count" title="{{ account.counts.total }} account(s) beneath, {{ account.counts.postable }} postable">{{ account.counts.direct }}</span>
+                                        {% endif %}
+                                        {% if not account.is_active %}<span class="badge bg-secondary ms-2">Inactive</span>{% endif %}
+                                    </td>
+                                    <td>
+                                        {% if account.internal_type == 'View' %}
+                                        <span class="badge" style="background:#ece7f6;color:#402c73">View</span>
+                                        {% elif account.internal_type == 'Receivable' %}
+                                        <span class="badge bg-info-subtle text-info-emphasis">Receivable</span>
+                                        {% elif account.internal_type == 'Payable' %}
+                                        <span class="badge bg-warning-subtle text-warning-emphasis">Payable</span>
+                                        {% elif account.internal_type == 'Liquidity' %}
+                                        <span class="badge bg-success-subtle text-success-emphasis">Liquidity</span>
+                                        {% else %}
+                                        <span class="badge bg-light text-dark border">Regular</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="small text-muted">{{ account.account_class }}</td>
+                                    <td class="text-end">
+                                        <a href="{% url 'accounting:account_ledger' account.code %}"
+                                           class="btn btn-sm btn-outline-secondary py-0 px-1"
+                                           title="Ledger for {{ account.name }}"
+                                           aria-label="Ledger for {{ account.name }}"><i class="bi bi-journal-text"></i></a>
+                                    </td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="5" class="text-center text-muted py-5">
+                                        {% if is_filtered %}
+                                        No accounts match this filter.
+                                        <a href="{% url 'accounting:chart' %}" class="ms-1">Clear filters</a>
+                                        {% else %}
+                                        <i class="bi bi-inbox d-block mb-2" style="font-size:1.8rem;"></i>
+                                        No accounts imported yet. Run
+                                        <code>manage.py import_chart_of_accounts &lt;file.xlsx&gt;</code> to load the chart.
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                {% if rows %}
+                <div class="card-footer bg-white text-muted small py-2">
+                    Showing {{ rows|length|intcomma }} of {{ total_count|intcomma }} accounts.
+                    {% if is_filtered %}<a href="{% url 'accounting:chart' %}">Clear filters</a>{% endif %}
+                </div>
+                {% endif %}
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<script>
+// ─── Chart of Accounts tree ───
+// The table is rendered flat with data-code/data-parent, so collapsing is a
+// matter of hiding every row whose ancestor chain passes through a collapsed
+// account. Doing it client-side keeps the whole chart in one request while
+// still opening on a readable two-level view.
+(function () {
+    var table = document.querySelector('.coa-table tbody');
+    if (!table) return;
+    var rows = Array.prototype.slice.call(table.querySelectorAll('tr.coa-row'));
+    if (!rows.length) return;
+
+    var childrenOf = {};
+    rows.forEach(function (row) {
+        var parent = row.dataset.parent || '';
+        (childrenOf[parent] = childrenOf[parent] || []).push(row);
+    });
+    var collapsed = Object.create(null);
+
+    function apply() {
+        rows.forEach(function (row) {
+            // Hidden if ANY ancestor is collapsed — walk up the parent chain.
+            var parent = row.dataset.parent, guard = 0, hidden = false;
+            while (parent && guard++ < 12) {
+                if (collapsed[parent]) { hidden = true; break; }
+                var parentRow = table.querySelector('tr[data-code="' + parent + '"]');
+                parent = parentRow ? parentRow.dataset.parent : '';
+            }
+            row.style.display = hidden ? 'none' : '';
+            var toggle = row.querySelector('.coa-toggle');
+            if (toggle) {
+                var isOpen = !collapsed[row.dataset.code];
+                toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+                toggle.setAttribute('aria-label',
+                    (isOpen ? 'Collapse ' : 'Expand ') + row.dataset.code);
+            }
+        });
+    }
+
+    table.addEventListener('click', function (event) {
+        var toggle = event.target.closest('.coa-toggle');
+        if (!toggle) return;
+        event.preventDefault();
+        var code = toggle.closest('tr').dataset.code;
+        if (collapsed[code]) { delete collapsed[code]; } else { collapsed[code] = true; }
+        apply();
+    });
+
+    function setAll(state) {
+        collapsed = Object.create(null);
+        if (state === 'classes') {
+            // Show the top two levels: every account at depth >= 1 that has
+            // children starts closed, so you land on classes + their groups.
+            rows.forEach(function (row) {
+                if (row.querySelector('.coa-toggle') && Number(row.dataset.depth) >= 1) {
+                    collapsed[row.dataset.code] = true;
+                }
+            });
+        }
+        apply();
+    }
+
+    var expandBtn = document.getElementById('coaExpandAll');
+    var collapseBtn = document.getElementById('coaCollapseAll');
+    if (expandBtn) expandBtn.addEventListener('click', function () { setAll('all'); });
+    if (collapseBtn) collapseBtn.addEventListener('click', function () { setAll('classes'); });
+
+    // A filtered result set is already small and its parents may be filtered
+    // out entirely, so only the unfiltered chart opens collapsed.
+    setAll({% if is_filtered %}'all'{% else %}'classes'{% endif %});
+})();
+</script>
+{% endblock %}

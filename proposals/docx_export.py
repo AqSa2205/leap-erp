@@ -18,6 +18,28 @@ PIC_NS = 'http://schemas.openxmlformats.org/drawingml/2006/picture'
 REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 XML_SPACE = '{http://www.w3.org/XML/1998/namespace}space'
 
+# The template's body paragraphs are indented 709 twips from the left margin
+# to clear the vertical "PROJECT DEP / DESCRIPTION / DATE / REV" sidebar
+# labels that float in the header on every page (see word/header1.xml).
+# Content we generate (paragraphs AND tables) must match that indent or it
+# collides with the sidebar. Page is A4 (pgSz w=11906) with pgMar
+# left=1350, right=1016, so the usable text column is 9540 twips wide;
+# after the same left indent, that leaves 8831 twips for a table to span
+# from the indent to the right margin, same as body text does.
+BODY_LEFT_INDENT_TWIPS = 709
+BODY_CONTENT_WIDTH_TWIPS = 8831
+
+# Pasted images render at a fixed size (2:1) rather than whatever size they
+# were pasted at, so a huge screenshot doesn't blow out the page. 320x160px
+# at 96 DPI is ~3.33in wide, comfortably inside the ~6.13in usable column
+# above (BODY_CONTENT_WIDTH_TWIPS) — the original 600x300px (~6.25in) was
+# actually WIDER than that column, so images were overflowing past the
+# right margin / the sidebar border, same class of bug as the tables.
+IMAGE_WIDTH_EMU = 320 * 9525   # ~3.33in
+IMAGE_HEIGHT_EMU = 160 * 9525  # ~1.67in
+
+IMAGE_DISCLAIMER_TEXT = 'This image is for representation purposes only'
+
 # Detect rich-text HTML (from TinyMCE / Word paste) regardless of tag
 # attributes. Matches opening/closing tags of known HTML elements with a word
 # boundary, so a stray "<" in plain text won't false-positive.
@@ -107,8 +129,12 @@ def _replace_textboxes_in_part(root, replacements, exact_replacements):
 
 def _replace_in_paragraph_runs(para, replacements):
     """
-    Join all w:t in a paragraph's runs, apply replacements,
-    put result in first w:t, clear the rest.
+    Apply substring replacements within a paragraph's runs, preserving each
+    run's own formatting (bold, color, etc). Tries each run independently
+    first — none of this file's replacement phrases are actually split
+    across runs in the template — and only falls back to joining every run
+    into the first one (which collapses the whole paragraph onto the first
+    run's formatting) if a phrase genuinely spans a run boundary.
     """
     runs = para.findall(f'{{{WNS}}}r')
     if not runs:
@@ -123,6 +149,22 @@ def _replace_in_paragraph_runs(para, replacements):
     if not t_elements:
         return
 
+    changed = False
+    for t in t_elements:
+        text = t.text or ''
+        new_text = text
+        for old, new in replacements.items():
+            new_text = new_text.replace(old, new)
+        if new_text != text:
+            t.text = new_text
+            t.set(XML_SPACE, 'preserve')
+            changed = True
+
+    if changed:
+        return
+
+    # No single run contained a full match, so the phrase must span a run
+    # boundary — fall back to the old join-and-collapse behavior.
     joined = ''.join((t.text or '') for t in t_elements)
     original = joined
 
@@ -139,6 +181,59 @@ def _replace_in_paragraph_runs(para, replacements):
 
 
 # ── Cover page replacement ───────────────────────────────────
+
+def _replace_company_references(body, proposal):
+    """Replace every mention of the company name/acronym across the WHOLE
+    document body (not just the cover page) — the Confidentiality Notice,
+    Company Overview intro, and end-of-document Confidentiality section all
+    say the right entity for the proposal's region, not just the cover.
+    For Global proposals this is a no-op (replacement values equal the
+    original template text).
+
+    Every replacement value below is DERIVED from
+    TechnicalProposal.get_company_name()/get_company_acronym() — the same
+    single source of truth the header textbox replacement uses — instead of
+    a second hardcoded per-region map that could drift from it. The
+    transforms exactly reproduce the original literal strings (verified for
+    both LNUK and LNKSA); see the four target string shapes inline below.
+    """
+    # .iter(), not .findall() — findall only walks DIRECT children, so a
+    # paragraph inside a table cell (e.g. a company-name mention someone
+    # puts in a pasted table) would be silently skipped despite the
+    # docstring's claim of covering the whole body.
+    paragraphs = body.iter(f'{{{WNS}}}p')
+
+    company_name = proposal.get_company_name()      # e.g. 'LEAP Networks Arabia'
+    acronym = proposal.get_company_acronym()         # e.g. 'LNA'
+
+    # Body prose uses Title Case ("Leap"), not the header's all-caps "LEAP".
+    title_case = 'Leap' + company_name[4:]            # 'Leap Networks Arabia'
+    title_with_period = (title_case if title_case.endswith('.')
+                          else title_case + '.')       # 'Leap Networks Arabia.'
+    title_no_period = title_case.rstrip('.')           # 'Leap Networks Arabia'
+    # Cover page "Prepared by:" block uses all-caps "LEAP NETWORKS" instead.
+    networks_prefix = 'Leap Networks '
+    all_caps_networks = 'LEAP NETWORKS ' + title_with_period[len(networks_prefix):]
+
+    replacements = {
+        'Leap Networks Global Ltd (LNG)': f'{title_no_period} ({acronym})',
+        'Leap Networks Global Ltd.': title_with_period,
+        # Cover page "Prepared by:" block — same company name, but typed
+        # in the template with "LEAP NETWORKS" in caps (a different run
+        # than the header/body mentions above), so it needs its own key.
+        'LEAP NETWORKS Global Ltd.': all_caps_networks,
+        'LNG': acronym,
+    }
+
+    # Longest match first, so the full "...(LNG)" phrase is replaced whole
+    # rather than partially consumed by the bare "LNG" replacement first.
+    sorted_replacements = dict(
+        sorted(replacements.items(), key=lambda x: len(x[0]), reverse=True)
+    )
+
+    for p in paragraphs:
+        _replace_in_paragraph_runs(p, sorted_replacements)
+
 
 def _replace_cover_page(body, proposal):
     """
@@ -228,7 +323,7 @@ def _make_default_pPr():
     spacing.set(f'{{{WNS}}}line', '276')
     spacing.set(f'{{{WNS}}}lineRule', 'auto')
     ind = etree.SubElement(pPr, f'{{{WNS}}}ind')
-    ind.set(f'{{{WNS}}}left', '709')
+    ind.set(f'{{{WNS}}}left', str(BODY_LEFT_INDENT_TWIPS))
     jc = etree.SubElement(pPr, f'{{{WNS}}}jc')
     jc.set(f'{{{WNS}}}val', 'both')
     return pPr
@@ -496,6 +591,8 @@ def _html_to_elements(html_content, pPr_template, rPr_template, image_registry):
                     img_para = self._build_image_paragraph(self._figure_img, '')
                     if img_para is not None:
                         self.elements.append(img_para)
+                        self.elements.append(
+                            self._build_caption_paragraph(IMAGE_DISCLAIMER_TEXT))
                     self._figure_img = None
             elif tag == 'ul':
                 self._in_list = True
@@ -538,9 +635,11 @@ def _html_to_elements(html_content, pPr_template, rPr_template, image_registry):
                     )
                     if img_para is not None:
                         self.elements.append(img_para)
-                    if self._figure_caption:
-                        cap_para = self._build_caption_paragraph(self._figure_caption)
-                        self.elements.append(cap_para)
+                        if self._figure_caption:
+                            cap_para = self._build_caption_paragraph(self._figure_caption)
+                            self.elements.append(cap_para)
+                        self.elements.append(
+                            self._build_caption_paragraph(IMAGE_DISCLAIMER_TEXT))
                 self._in_figure = False
                 self._figure_img = None
                 self._figure_caption = ''
@@ -595,9 +694,8 @@ def _html_to_elements(html_content, pPr_template, rPr_template, image_registry):
             # we actually inject images into the zip
             rid_placeholder = f'__LEAP_IMG_{idx}__'
 
-            # Force 600 x 300 pixel display size (9525 EMU per pixel at 96 DPI)
-            cx = 600 * 9525   # 5,715,000 EMU ~ 15.9 cm
-            cy = 300 * 9525   # 2,857,500 EMU ~ 7.9 cm
+            cx = IMAGE_WIDTH_EMU
+            cy = IMAGE_HEIGHT_EMU
 
             pic_id = idx + 100  # start at 100 to avoid clashing with template pic ids
             alt = img_info.get('alt') or alt_caption or f'Picture {pic_id}'
@@ -672,8 +770,19 @@ def _html_to_elements(html_content, pPr_template, rPr_template, image_registry):
             tblStyle = etree.SubElement(tblPr, f'{{{WNS}}}tblStyle')
             tblStyle.set(f'{{{WNS}}}val', 'TableGrid')
             tblW = etree.SubElement(tblPr, f'{{{WNS}}}tblW')
-            tblW.set(f'{{{WNS}}}w', '5000')
-            tblW.set(f'{{{WNS}}}type', 'pct')
+            tblW.set(f'{{{WNS}}}w', str(BODY_CONTENT_WIDTH_TWIPS))
+            tblW.set(f'{{{WNS}}}type', 'dxa')
+            # Match the body paragraph indent so the table starts where the
+            # surrounding text does, clear of the sidebar labels, instead of
+            # flush against the page margin underneath them. NOTE: Word only
+            # honors w:tblInd on a LEFT-aligned table — w:jc="center" makes
+            # it center the table across the full column width instead and
+            # silently ignores tblInd, which put the table ~354 twips left
+            # of the intended 709 (i.e. right back under the sidebar). Leave
+            # w:jc unset (default is left) so the indent actually applies.
+            tblInd = etree.SubElement(tblPr, f'{{{WNS}}}tblInd')
+            tblInd.set(f'{{{WNS}}}w', str(BODY_LEFT_INDENT_TWIPS))
+            tblInd.set(f'{{{WNS}}}type', 'dxa')
             # Borders
             tblBorders = etree.SubElement(tblPr, f'{{{WNS}}}tblBorders')
             for bname in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
@@ -866,13 +975,17 @@ def _inject_images(modified_files, image_registry, all_names):
 
     # Map placeholder -> real rId so we can rewrite document.xml at the end
     rid_map = {}
+    missing_placeholders = []
 
     for idx, img in enumerate(image_registry):
         placeholder = f'__LEAP_IMG_{idx}__'
         ext, data = _read_image_bytes(img['src'])
         if data is None:
-            # Missing/unreadable — leave placeholder in document.xml (will error
-            # but easier to debug than mysterious broken image references)
+            # Missing/unreadable — an r:embed that doesn't resolve to a real
+            # relationship makes Word refuse to open the WHOLE document, not
+            # just show a broken-image icon. Strip the drawing run instead
+            # (see below) so one bad image degrades gracefully.
+            missing_placeholders.append(placeholder)
             continue
 
         if ext not in ext_to_ct:
@@ -901,8 +1014,9 @@ def _inject_images(modified_files, image_registry, all_names):
     if ct_root is not None:
         modified_files[ct_name] = etree.tostring(ct_root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
-    # Replace rId placeholders in document.xml with real ones
-    if rid_map:
+    # Replace rId placeholders in document.xml with real ones, and strip the
+    # whole drawing run for any image that couldn't be read.
+    if rid_map or missing_placeholders:
         doc_name = 'word/document.xml'
         doc_xml = modified_files.get(doc_name)
         if doc_xml is not None:
@@ -912,6 +1026,15 @@ def _inject_images(modified_files, image_registry, all_names):
                 doc_text = doc_xml
             for placeholder, real_rid in rid_map.items():
                 doc_text = doc_text.replace(placeholder, real_rid)
+            for placeholder in missing_placeholders:
+                # _build_image_paragraph always emits the placeholder inside
+                # exactly one self-contained <w:r>...<w:drawing>...</w:drawing>
+                # </w:r> — strip that whole run (non-greedy, so it stops at
+                # the FIRST </w:r>, not some later unrelated one).
+                doc_text = re.sub(
+                    r'<w:r>(?:(?!</w:r>).)*?' + re.escape(placeholder)
+                    + r'(?:(?!</w:r>).)*?</w:r>',
+                    '', doc_text, flags=re.DOTALL)
             modified_files[doc_name] = doc_text.encode('utf-8')
 
 
@@ -956,8 +1079,13 @@ def generate_proposal_docx(proposal):
     # Region
     textbox_replacements['UNITED KINGDOM'] = proposal.get_region_display_name().upper()
 
-    # Company entity in the header — changes with the region (LNUK -> Global,
-    # LNKSA -> Arabia, LNIRL -> Ireland).
+    # Company entity in the header textbox (top of every page) — changes with
+    # the region (LNUK -> Global, LNKSA -> Arabia). The header textbox's
+    # actual runs read "LEAP Networks Global Lt" + "d" + "." (mixed-case
+    # "Networks") — confirmed against the template XML. This is a DIFFERENT
+    # run/casing than the cover page's "Prepared by:" block (handled in
+    # _replace_company_references above), which is genuinely all-caps
+    # "LEAP NETWORKS" in the template — don't conflate the two.
     textbox_replacements['LEAP Networks Global Ltd.'] = proposal.get_company_name()
 
     # ── Exact-match replacements (initials — only when the entire
@@ -1007,6 +1135,16 @@ def generate_proposal_docx(proposal):
                 root = etree.fromstring(data)
                 _strip_highlights(root)
                 body = root.find(f'.//{{{WNS}}}body')
+                # Company references are swapped BEFORE the cover page, so the
+                # replacements only ever see the template's own text. One of
+                # the keys is a bare 'LNG', matched as a substring — running it
+                # afterwards would rewrite the customer's own words, turning a
+                # description like "SUPPLY FOR LNG TERMINAL" into "LNA
+                # TERMINAL" and a client named "Qatargas LNG" into "Qatargas
+                # LNA". The header and footer take that same text through
+                # textbox_replacements and are not passed through here, so the
+                # document would also contradict itself page to page.
+                _replace_company_references(body, proposal)
                 _replace_cover_page(body, proposal)
                 _replace_textboxes_in_part(root, textbox_replacements,
                                            exact_replacements)

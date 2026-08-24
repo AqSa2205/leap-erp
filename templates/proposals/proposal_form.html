@@ -31,6 +31,7 @@
                         <div class="col-md-6">
                             <label class="form-label fw-bold">Project (Optional)</label>
                             {{ form.project }}
+                            <small class="text-muted">Picking a project fills in the reference and client name below (you can still edit them).</small>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label fw-bold">Proposal Reference</label>
@@ -45,6 +46,7 @@
                             {{ form.client_name }}
                             {% if form.client_name.errors %}<div class="text-danger small">{{ form.client_name.errors.0 }}</div>{% endif %}
                         </div>
+
                         <div class="col-md-6">
                             <label class="form-label fw-bold">Document Type</label>
                             {{ form.document_type }}
@@ -108,4 +110,45 @@
         </div>
     </div>
 </div>
+
+{{ project_autofill_map|json_script:"project-autofill-data" }}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var PROJECT_MAP = JSON.parse(document.getElementById('project-autofill-data').textContent);
+    var projectSelect = document.getElementById('{{ form.project.id_for_label }}');
+    var refField = document.getElementById('{{ form.proposal_reference.id_for_label }}');
+    var clientField = document.getElementById('{{ form.client_name.id_for_label }}');
+    if (!projectSelect) return;
+
+    // Track what WE last put in these fields, so we can tell "still what we
+    // autofilled" (safe to overwrite on the next project change) apart from
+    // "the user typed something else on purpose" (leave it alone). Starts
+    // empty — NOT the field's current value — so a saved value on the edit
+    // page (which we never wrote) is never mistaken for something we
+    // autofilled and silently overwritten on the first project change.
+    var lastAutofilled = { reference: '', client: '' };
+
+    projectSelect.addEventListener('change', function() {
+        var data = PROJECT_MAP[projectSelect.value];
+        if (!data) return;
+
+        // Note the guards test only "did we write what is currently there",
+        // not whether the incoming value is truthy. A project with a blank
+        // customer, or a reference too long to carry over, yields an empty
+        // string — and skipping the assignment in that case would leave the
+        // PREVIOUS project's client sitting in the field while the form now
+        // points somewhere else. Writing the blank is the honest outcome: the
+        // field matches the project that is actually selected.
+        function apply(field, key, value) {
+            if (!field) return;
+            if (field.value.trim() !== lastAutofilled[key].trim()) return;  // user-edited, leave alone
+            field.value = value || '';
+            lastAutofilled[key] = field.value;
+        }
+
+        apply(refField, 'reference', data.reference);
+        apply(clientField, 'client', data.client);
+    });
+});
+</script>
 {% endblock %}
