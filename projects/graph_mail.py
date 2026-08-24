@@ -74,13 +74,22 @@ def _recipients_str(addresses):
     return ', '.join(out)
 
 
+_ATTACHMENTS_EXPAND = 'attachments($select=id,name,contentType,size,isInline)'
+
+
 def list_inbox_messages(mailbox, top=50):
     """Return the most recent messages in `mailbox`'s Inbox that have at
     least one real (non-inline) attachment, newest first — this feature is
     document-first, so messages with nothing to attach are left out. Each
     entry is a plain dict: id, subject, sender_name, sender_email,
     received_at, body_preview, cc, attachments (list of {id, name,
-    content_type, size})."""
+    content_type, size}).
+
+    Attachments come back via $expand on this same request rather than a
+    separate GET per message — with up to `top` messages, a per-message
+    /attachments call would be up to 50 extra sequential HTTPS round trips
+    (each with its own timeout), enough to hang the page for minutes if
+    Graph is slow. $expand fetches everything in one request."""
     if not mailbox:
         raise GraphMailError('PIPELINE_EMAIL_MAILBOX is not configured.')
 
@@ -91,6 +100,7 @@ def list_inbox_messages(mailbox, top=50):
         '$top': top,
         '$orderby': 'receivedDateTime desc',
         '$select': 'id,subject,from,ccRecipients,receivedDateTime,hasAttachments,bodyPreview',
+        '$expand': _ATTACHMENTS_EXPAND,
     }
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
@@ -104,7 +114,7 @@ def list_inbox_messages(mailbox, top=50):
     for item in resp.json().get('value', []):
         if not item.get('hasAttachments'):
             continue
-        entry = _message_item_to_dict(item, mailbox, headers)
+        entry = _message_item_to_dict(item)
         if not entry['attachments']:
             # Only inline images (e.g. a signature logo) — nothing to attach.
             continue
@@ -112,24 +122,24 @@ def list_inbox_messages(mailbox, top=50):
     return messages
 
 
-def _message_item_to_dict(item, mailbox, headers):
+def _message_item_to_dict(item):
     """One Graph message item (from the list endpoint or a single-message
-    fetch) -> the plain dict shape used throughout this module."""
-    message_id = item.get('id')
+    fetch, both requested with $expand=attachments) -> the plain dict shape
+    used throughout this module."""
     sender = (item.get('from') or {}).get('emailAddress') or {}
     sender_name, sender_email = sender.get('name', ''), sender.get('address', '')
     if not sender_name:
         sender_name, sender_email = parseaddr(sender_email)
 
     return {
-        'id': message_id,
+        'id': item.get('id'),
         'subject': item.get('subject') or '(no subject)',
         'sender_name': sender_name,
         'sender_email': sender_email,
         'cc': _recipients_str(item.get('ccRecipients')),
         'received_at': item.get('receivedDateTime'),
         'body_preview': item.get('bodyPreview') or '',
-        'attachments': _list_message_attachments(mailbox, message_id, headers),
+        'attachments': _real_attachments(item.get('attachments')),
     }
 
 
@@ -144,7 +154,10 @@ def get_message_summary(mailbox, message_id):
     access_token = _get_access_token()
     headers = {'Authorization': f'Bearer {access_token}'}
     url = f'{GRAPH_BASE}/users/{quote(mailbox, safe="")}/messages/{quote(message_id, safe="")}'
-    params = {'$select': 'id,subject,from,ccRecipients,receivedDateTime,bodyPreview'}
+    params = {
+        '$select': 'id,subject,from,ccRecipients,receivedDateTime,bodyPreview',
+        '$expand': _ATTACHMENTS_EXPAND,
+    }
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
     except requests.RequestException as exc:
@@ -153,20 +166,14 @@ def get_message_summary(mailbox, message_id):
     if resp.status_code != 200:
         raise GraphMailError(f'Graph message fetch failed ({resp.status_code}): {resp.text}')
 
-    return _message_item_to_dict(resp.json(), mailbox, headers)
+    return _message_item_to_dict(resp.json())
 
 
-def _list_message_attachments(mailbox, message_id, headers):
-    """Metadata only (no bytes) for one message's real attachments —
-    inline content (signature logos etc.) is left out."""
-    url = f'{GRAPH_BASE}/users/{quote(mailbox, safe="")}/messages/{quote(message_id, safe="")}/attachments'
-    params = {'$select': 'id,name,contentType,size,isInline'}
-    try:
-        resp = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
-    except requests.RequestException:
-        return []
-    if resp.status_code != 200:
-        return []
+def _real_attachments(raw_attachments):
+    """Graph's $expand=attachments(...) embeds every attachment straight
+    on the message, including inline content (signature logos etc.) —
+    this keeps only the real ones and reshapes them to the dict shape
+    this module uses."""
     return [
         {
             'id': a.get('id'),
@@ -174,7 +181,7 @@ def _list_message_attachments(mailbox, message_id, headers):
             'content_type': a.get('contentType') or 'application/octet-stream',
             'size': a.get('size') or 0,
         }
-        for a in resp.json().get('value', [])
+        for a in raw_attachments or []
         if not a.get('isInline')
     ]
 

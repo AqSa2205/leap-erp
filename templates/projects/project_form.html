@@ -600,6 +600,12 @@ if (discardBtn) {
                     clearUnchangedDraftFields(formEl, resumedSnapshot);
                     resumedSnapshot = null;
                 }
+                // clearUnchangedDraftFields() can blank the hidden
+                // picked_email_json field without touching the visible
+                // "Email to be attached" panel built from it — without this,
+                // the panel would keep showing an email that's actually been
+                // silently dropped from the form.
+                renderPickedEmailSection();
                 var banner = discardBtn.closest('.alert');
                 if (banner) banner.remove();
             });

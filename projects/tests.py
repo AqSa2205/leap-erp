@@ -6,6 +6,7 @@ from unittest.mock import patch
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
+from django.utils.http import urlencode
 
 from accounts.models import Role, User
 from projects.models import Region, ProjectStatus, Project
@@ -947,13 +948,17 @@ class AttachEmailToProjectHelperTests(TestCase):
         self.assertEqual(doc.project, self.project)
         self.assertEqual(doc.uploaded_by, self.user)
 
-    def test_per_attachment_type_applied_by_filename_match(self):
+    def test_per_attachment_type_applied_by_index(self):
+        """Keyed by position within the email, not filename — the picker UI's
+        filenames (from Graph) and parse_eml_file()'s re-derived filenames
+        can legitimately differ (RFC 2047 decoding, synthesised names for
+        attachments with none), so filename was never a reliable key."""
         _, created_count = self._attach(
             attachments=[
                 ('quote.pdf', b'%PDF-1', 'application', 'pdf'),
                 ('po.pdf', b'%PDF-2', 'application', 'pdf'),
             ],
-            attachment_types={'quote.pdf': 'vendor_quotation', 'po.pdf': 'po_document'},
+            attachment_types={'0': 'vendor_quotation', '1': 'po_document'},
         )
         self.assertEqual(created_count, 2)
         self.assertEqual(
@@ -968,7 +973,7 @@ class AttachEmailToProjectHelperTests(TestCase):
         arbitrary text into a choices field."""
         self._attach(
             attachments=[('quote.pdf', b'%PDF', 'application', 'pdf')],
-            attachment_types={'quote.pdf': '<script>alert(1)</script>'},
+            attachment_types={'0': '<script>alert(1)</script>'},
         )
         doc = self.Document.objects.get(name='quote.pdf')
         self.assertEqual(doc.document_type, 'vendor_quotation')
@@ -1125,7 +1130,7 @@ class LinkPipelineEmailExistingProjectViewTests(TestCase):
         with patch('projects.graph_mail.fetch_raw_message_bytes', return_value=raw):
             response = self.client.post(self.url, {
                 'message_id': 'm1',
-                'doc_filename': ['a.pdf', 'b.xlsx'],
+                'doc_index': ['0', '1'],
                 'doc_type': ['po_document', 'contract'],
             })
         self.assertRedirects(response, reverse('projects:detail', kwargs={'pk': self.project.pk}))
@@ -1137,7 +1142,7 @@ class LinkPipelineEmailExistingProjectViewTests(TestCase):
         raw = _make_eml_bytes(attachments=[('a.pdf', b'%PDF-A', 'application', 'pdf')])
         with patch('projects.graph_mail.fetch_raw_message_bytes', return_value=raw):
             self.client.post(self.url, {
-                'message_id': 'm1', 'doc_filename': ['a.pdf'], 'doc_type': ['not-a-real-type'],
+                'message_id': 'm1', 'doc_index': ['0'], 'doc_type': ['not-a-real-type'],
             })
         self.assertEqual(self.Document.objects.get(name='a.pdf').document_type, 'vendor_quotation')
 
@@ -1278,13 +1283,24 @@ class ViewPipelineInboxAttachmentTests(TestCase):
         self.status = ProjectStatus.objects.create(name='Open', category='active')
         sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
         self.user = User.objects.create_user('viewer', password='pass12345', role=sales_role)
+        # owner=self.user: a Sales Rep only sees/acts on projects they own
+        # (ProjectPermissionMixin.get_queryset, reused via
+        # _scoped_project_or_404 for link_pipeline_email). An ownerless
+        # project here would 404 for this user on the redirect target in
+        # test_graph_failure_redirects_gracefully_with_pk, not because of
+        # anything under test in this class.
         self.project = Project.objects.create(
             project_name='Viewable', proposal_reference='TST-VIEW-1',
-            region=self.region, status=self.status)
-        self.url_with_pk = reverse('projects:view_pipeline_inbox_attachment', kwargs={
-            'pk': self.project.pk, 'message_id': 'm1', 'attachment_id': 'a1'})
-        self.url_without_pk = reverse('projects:view_pipeline_inbox_attachment_new', kwargs={
-            'message_id': 'm1', 'attachment_id': 'a1'})
+            region=self.region, status=self.status, owner=self.user)
+        # message_id/attachment_id are query params, not path kwargs — see
+        # _add_attachment_urls() in views.py for why (Graph ids can contain
+        # characters like '/' that a <str:> path segment rejects).
+        self.url_with_pk = reverse(
+            'projects:view_pipeline_inbox_attachment', kwargs={'pk': self.project.pk}
+        ) + '?' + urlencode({'message_id': 'm1', 'attachment_id': 'a1'})
+        self.url_without_pk = reverse(
+            'projects:view_pipeline_inbox_attachment_new'
+        ) + '?' + urlencode({'message_id': 'm1', 'attachment_id': 'a1'})
 
     def test_anonymous_redirected_to_login(self):
         response = self.client.get(self.url_with_pk)
@@ -1308,8 +1324,9 @@ class ViewPipelineInboxAttachmentTests(TestCase):
 
     def test_404_when_project_does_not_exist(self):
         self.client.force_login(self.user)
-        url = reverse('projects:view_pipeline_inbox_attachment', kwargs={
-            'pk': 999999, 'message_id': 'm1', 'attachment_id': 'a1'})
+        url = reverse(
+            'projects:view_pipeline_inbox_attachment', kwargs={'pk': 999999}
+        ) + '?' + urlencode({'message_id': 'm1', 'attachment_id': 'a1'})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 404)
 

@@ -13,6 +13,8 @@ import email
 from email import policy
 from email.utils import parseaddr, parsedate_to_datetime
 
+from django.utils import timezone
+
 
 class EmailParseError(Exception):
     """Raised when the uploaded file isn't a readable email."""
@@ -62,6 +64,15 @@ def parse_eml_file(file_obj):
             sent_at = parsedate_to_datetime(date_header)
         except (TypeError, ValueError):
             sent_at = None
+        else:
+            # parsedate_to_datetime() returns a NAIVE datetime for a Date
+            # header ending in "-0000" (vs. a genuinely tz-aware "+0000") —
+            # Django then interprets that naive value using the local
+            # server timezone (Asia/Riyadh here) instead of UTC, which is
+            # what "-0000" actually means, so the stored time is off by
+            # however far Riyadh is from UTC. Treat a naive result as UTC.
+            if sent_at is not None and timezone.is_naive(sent_at):
+                sent_at = timezone.make_aware(sent_at, timezone.utc)
 
     body_text = _extract_body_text(msg)
     attachments = _extract_attachments(msg)

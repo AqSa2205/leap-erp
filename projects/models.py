@@ -777,9 +777,11 @@ class PipelineEmail(models.Model):
     subject = models.CharField(max_length=500, blank=True)
     sender_name = models.CharField(max_length=255, blank=True)
     sender_email = models.EmailField(blank=True)
-    recipients = models.CharField(
-        max_length=1000, blank=True, help_text="The email's 'To' line, as-is."
-    )
+    # TextField, not CharField(max_length=...) — a real "To" line on a
+    # 20+ person email routinely exceeds 1000 characters, and Django does
+    # not enforce max_length on .create()/.save(), so that would surface
+    # as an uncaught database error rather than a clean validation message.
+    recipients = models.TextField(blank=True, help_text="The email's 'To' line, as-is.")
     sent_at = models.DateTimeField(null=True, blank=True)
     body_text = models.TextField(blank=True)
 

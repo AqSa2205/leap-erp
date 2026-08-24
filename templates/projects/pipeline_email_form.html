@@ -160,7 +160,7 @@
                                     {{ att.name }}
                                 </a>
                                 {% if project %}
-                                <input type="hidden" name="doc_filename" value="{{ att.name }}">
+                                <input type="hidden" name="doc_index" value="{{ forloop.counter0 }}">
                                 <select name="doc_type" class="form-control form-control-sm">
                                     {% for value, label in document_type_choices %}
                                     <option value="{{ value }}" {% if value == 'vendor_quotation' %}selected{% endif %}>{{ label }}</option>
