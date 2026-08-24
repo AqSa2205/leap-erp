@@ -3197,7 +3197,7 @@ def revision_email_thread(request, pk):
 
     rev = get_object_or_404(CostingSheetRevision, pk=pk)
     sheet = rev.sheet
-    if not _user_can_see_pricing(request.user):
+    if not (_user_can_see_pricing(request.user) and _user_can_view_sheet(request.user, sheet)):
         return HttpResponse('Permission denied.', status=403)
 
     context = {
@@ -3219,7 +3219,7 @@ def sync_costing_revision_email_thread(request, pk):
     from .models import CostingSheetRevision
 
     rev = get_object_or_404(CostingSheetRevision, pk=pk)
-    if not _user_can_see_pricing(request.user):
+    if not (_user_can_see_pricing(request.user) and _user_can_view_sheet(request.user, rev.sheet)):
         return JsonResponse({'error': 'Permission denied.'}, status=403)
     if not hasattr(rev, 'email_thread'):
         return JsonResponse({'error': 'This revision has not been sent yet.'}, status=400)
@@ -3238,7 +3238,8 @@ def download_revision_email_attachment(request, message_pk, attachment_id):
     from .models import RevisionEmailMessage
 
     msg = get_object_or_404(RevisionEmailMessage, pk=message_pk)
-    if not _user_can_see_pricing(request.user):
+    sheet = msg.thread.revision.sheet
+    if not (_user_can_see_pricing(request.user) and _user_can_view_sheet(request.user, sheet)):
         return HttpResponse('Permission denied.', status=403)
 
     try:
@@ -3261,7 +3262,8 @@ def browse_revision_mailbox(request, pk):
     from .models import RevisionEmailThread
 
     thread = get_object_or_404(RevisionEmailThread, pk=pk)
-    if not _user_can_see_pricing(request.user):
+    sheet = thread.revision.sheet
+    if not (_user_can_see_pricing(request.user) and _user_can_view_sheet(request.user, sheet)):
         return HttpResponse('Permission denied.', status=403)
 
     already_linked = set(thread.messages.values_list('graph_message_id', flat=True))
