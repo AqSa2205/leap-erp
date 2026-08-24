@@ -1473,6 +1473,18 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
                             <a href="{{ rev.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary" title="Preview / download">
                                 <i class="bi bi-eye"></i>
                             </a>
+                            {% if rev.email_thread %}
+                            <button type="button" class="btn btn-sm btn-outline-{% if rev.email_thread.status == 'replied' %}success{% else %}info{% endif %}"
+                                    title="View email thread" onclick="openRevisionEmailThread({{ rev.pk }})">
+                                <i class="bi bi-envelope-check"></i>
+                                {% if rev.email_thread.status == 'replied' %}Replied{% else %}Sent{% endif %}
+                            </button>
+                            {% elif can_edit %}
+                            <button type="button" class="btn btn-sm btn-outline-secondary" title="Send to client"
+                                    onclick="openSendRevisionEmail({{ rev.pk }}, '{{ rev.revision_label }}')">
+                                <i class="bi bi-envelope"></i>
+                            </button>
+                            {% endif %}
                             {% if can_edit %}
                             <form method="post" action="{% url 'costing:delete_revision' rev.pk %}" class="d-inline" onsubmit="return confirm('Delete revision {{ rev.revision_label }}? This cannot be undone.');">
                                 {% csrf_token %}
@@ -1496,6 +1508,60 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
     </div>
 </div>
 {% endif %}
+
+<!-- Send Revision to Client -->
+<div class="modal fade" id="sendRevisionEmailModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form id="sendRevisionEmailForm">
+                {% csrf_token %}
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-envelope me-2"></i>Send <span id="sendRevisionLabel"></span> to Client</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="small text-muted">Sending from: <strong>{{ revision_email_mailbox|default:"(not configured)" }}</strong></p>
+                    <div class="mb-2">
+                        <label class="form-label fw-bold">To *</label>
+                        <input type="text" name="to" class="form-control" placeholder="client@example.com, other@example.com" required>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label fw-bold">Cc</label>
+                        <input type="text" name="cc" class="form-control" placeholder="optional, comma-separated">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label fw-bold">Subject *</label>
+                        <input type="text" name="subject" class="form-control" required>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label fw-bold">Message *</label>
+                        <textarea name="body" class="form-control" rows="5" required></textarea>
+                    </div>
+                    <div id="sendRevisionEmailStatus" class="small mt-2"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="bi bi-send me-1"></i>Send</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Revision Email Thread -->
+<div class="modal fade" id="revisionEmailThreadModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-envelope-open me-2"></i>Email Thread</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="revisionEmailThreadBody">
+                <div class="text-center text-muted py-4">Loading…</div>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- PDF Terms & Conditions Selection -->
 <div class="card mt-3 bom-pricing-only">
@@ -2190,6 +2256,104 @@ var CAN_EDIT = {% if can_edit %}true{% else %}false{% endif %};
             });
         });
     });
+
+    // ─── Revision email thread ───────────────────────────────────
+    var sendRevisionEmailModalEl = document.getElementById('sendRevisionEmailModal');
+    var sendRevisionEmailModal = sendRevisionEmailModalEl ? new bootstrap.Modal(sendRevisionEmailModalEl) : null;
+    var sendRevisionEmailForm = document.getElementById('sendRevisionEmailForm');
+    var sendRevisionEmailStatus = document.getElementById('sendRevisionEmailStatus');
+    var currentSendRevisionPk = null;
+
+    window.openSendRevisionEmail = function(pk, label) {
+        currentSendRevisionPk = pk;
+        document.getElementById('sendRevisionLabel').textContent = label;
+        sendRevisionEmailStatus.textContent = '';
+        sendRevisionEmailForm.reset();
+        sendRevisionEmailModal.show();
+    };
+
+    if (sendRevisionEmailForm) {
+        sendRevisionEmailForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            var formData = new FormData(sendRevisionEmailForm);
+            sendRevisionEmailStatus.textContent = 'Sending…';
+            fetch('/costing/revision/' + currentSendRevisionPk + '/send-email/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrfToken},
+                body: formData,
+            })
+            .then(function() { window.location.reload(); })
+            .catch(function(err) {
+                sendRevisionEmailStatus.textContent = 'Failed to send: ' + err;
+            });
+        });
+    }
+
+    var revisionEmailThreadModalEl = document.getElementById('revisionEmailThreadModal');
+    var revisionEmailThreadModal = revisionEmailThreadModalEl ? new bootstrap.Modal(revisionEmailThreadModalEl) : null;
+    var revisionEmailThreadBody = document.getElementById('revisionEmailThreadBody');
+
+    window.openRevisionEmailThread = function(pk) {
+        revisionEmailThreadBody.innerHTML = '<div class="text-center text-muted py-4">Loading…</div>';
+        revisionEmailThreadModal.show();
+        fetch('/costing/revision/' + pk + '/email-thread/')
+            .then(function(r) { return r.text(); })
+            .then(function(html) { revisionEmailThreadBody.innerHTML = html; })
+            .catch(function(err) {
+                revisionEmailThreadBody.innerHTML = '<div class="text-danger">Failed to load: ' + err + '</div>';
+            });
+    };
+
+    if (revisionEmailThreadBody) {
+        revisionEmailThreadBody.addEventListener('click', function(e) {
+            var refreshBtn = e.target.closest('.js-refresh-thread');
+            if (refreshBtn) {
+                var syncUrl = refreshBtn.dataset.url;
+                var revPk = refreshBtn.dataset.revPk;
+                refreshBtn.disabled = true;
+                refreshBtn.textContent = 'Refreshing…';
+                fetch(syncUrl, {method: 'POST', headers: {'X-CSRFToken': csrfToken}})
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (data.error) { alert('Error: ' + data.error); return; }
+                        window.openRevisionEmailThread(revPk);
+                    })
+                    .catch(function(err) { alert('Refresh failed: ' + err); });
+                return;
+            }
+            var browseBtn = e.target.closest('.js-browse-mailbox');
+            if (browseBtn) {
+                revisionEmailThreadBody.innerHTML = '<div class="text-center text-muted py-4">Loading…</div>';
+                fetch(browseBtn.dataset.url)
+                    .then(function(r) { return r.text(); })
+                    .then(function(html) { revisionEmailThreadBody.innerHTML = html; })
+                    .catch(function(err) {
+                        revisionEmailThreadBody.innerHTML = '<div class="text-danger">Failed to load: ' + err + '</div>';
+                    });
+                return;
+            }
+            var backBtn = e.target.closest('.js-back-to-thread');
+            if (backBtn) {
+                window.openRevisionEmailThread(backBtn.dataset.revPk);
+                return;
+            }
+            var linkBtn = e.target.closest('.js-link-message');
+            if (linkBtn) {
+                linkBtn.disabled = true;
+                linkBtn.textContent = 'Linking…';
+                var body = new URLSearchParams();
+                body.set('message_id', linkBtn.dataset.messageId);
+                fetch(linkBtn.dataset.url, {
+                    method: 'POST',
+                    headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: body.toString(),
+                })
+                .then(function() { window.location.reload(); })
+                .catch(function(err) { alert('Link failed: ' + err); });
+                return;
+            }
+        });
+    }
 
     // ─── Terms template toggle ──────────────────────────────────
     var toggleTermUrl = '{% url "costing:toggle_term" sheet.pk %}';

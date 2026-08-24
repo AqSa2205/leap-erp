@@ -79,6 +79,14 @@ urlpatterns = [
     path('revision/<int:pk>/delete/', login_required(views.delete_costing_revision), name='delete_revision'),
     path('<int:pk>/revisions/cleanup/', login_required(views.cleanup_costing_revisions), name='cleanup_revisions'),
 
+    # Revision -> client email thread
+    path('revision/<int:pk>/send-email/', login_required(views.send_costing_revision_email), name='send_revision_email'),
+    path('revision/<int:pk>/email-thread/', login_required(views.revision_email_thread), name='revision_email_thread'),
+    path('revision/<int:pk>/email-thread/sync/', login_required(views.sync_costing_revision_email_thread), name='sync_revision_email_thread'),
+    path('revision-email/<int:message_pk>/attachment/<str:attachment_id>/', login_required(views.download_revision_email_attachment), name='download_revision_email_attachment'),
+    path('email-thread/<int:pk>/browse-mailbox/', login_required(views.browse_revision_mailbox), name='browse_revision_mailbox'),
+    path('email-thread/<int:pk>/link-message/', login_required(views.link_reply_message), name='link_reply_message'),
+
     # Workflow stage transitions (handover BOM → costing → finalize)
     path('<int:pk>/workflow/', views.costing_workflow_transition, name='workflow_transition'),
 

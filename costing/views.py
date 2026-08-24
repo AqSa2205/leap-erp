@@ -1,4 +1,5 @@
 import json
+from django.conf import settings
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.shortcuts import get_object_or_404, redirect, render
@@ -1158,7 +1159,7 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
         # PDF revisions (saved snapshots from previous Export PDF clicks).
         # Attach each file's size + a total so the UI can show storage cost and
         # offer cleanup. .size hits the backend; a sheet has only a handful.
-        revisions = list(sheet.pdf_revisions.select_related('created_by').all())
+        revisions = list(sheet.pdf_revisions.select_related('created_by', 'email_thread').all())
         total_rev_size = 0
         for rev in revisions:
             try:
@@ -1168,6 +1169,7 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
                 rev.size_bytes = None
         context['pdf_revisions'] = revisions
         context['pdf_revisions_total_size'] = total_rev_size
+        context['revision_email_mailbox'] = settings.REVISION_EMAIL_MAILBOX
 
         # Recent change log (for cross-team visibility).
         # The UI lets the user dial how many entries are shown via ?change_log_limit=N.
@@ -3110,6 +3112,220 @@ def cleanup_costing_revisions(request, pk):
             f'Kept the latest of each format.')
     else:
         messages.info(request, 'Nothing to clean up — only the latest export of each type is kept.')
+    return redirect('costing:detail', pk=sheet.pk)
+
+
+# ─── Revision → Client Email Thread ──────────────────────────
+
+@require_POST
+def send_costing_revision_email(request, pk):
+    """Email a CostingSheetRevision's file to a client and start tracking
+    the reply thread. One thread per revision — the 'Send to Client'
+    action disappears once revision.email_thread exists."""
+    from . import graph_thread
+    from .models import CostingSheetRevision, RevisionEmailThread, RevisionEmailMessage
+
+    rev = get_object_or_404(CostingSheetRevision, pk=pk)
+    sheet = rev.sheet
+    if not (_user_can_see_pricing(request.user) and _user_can_edit_sheet(request.user, sheet)):
+        messages.error(request, 'Permission denied.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    if hasattr(rev, 'email_thread'):
+        messages.error(request, f'Revision {rev.revision_label} has already been sent to a client.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    to = [addr.strip() for addr in (request.POST.get('to') or '').split(',') if addr.strip()]
+    cc = [addr.strip() for addr in (request.POST.get('cc') or '').split(',') if addr.strip()]
+    subject = (request.POST.get('subject') or '').strip()
+    body_text = (request.POST.get('body') or '').strip()
+
+    if not to or not subject or not body_text:
+        messages.error(request, 'To, subject, and message are all required.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    mailbox = settings.REVISION_EMAIL_MAILBOX
+    if not mailbox:
+        messages.error(request, 'REVISION_EMAIL_MAILBOX is not configured.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    rev.file.open('rb')
+    try:
+        attachment_bytes = rev.file.read()
+    finally:
+        rev.file.close()
+    attachment_filename = rev.original_filename or rev.file.name.rsplit('/', 1)[-1]
+
+    try:
+        message_id, conversation_id = graph_thread.send_revision_email(
+            mailbox=mailbox, to=to, cc=cc, subject=subject, body_text=body_text,
+            attachment_bytes=attachment_bytes, attachment_filename=attachment_filename,
+        )
+    except graph_thread.GraphThreadError as exc:
+        messages.error(request, f'Could not send the email: {exc}')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    thread = RevisionEmailThread.objects.create(
+        revision=rev,
+        mailbox=mailbox,
+        graph_conversation_id=conversation_id,
+        client_to=', '.join(to),
+        client_cc=', '.join(cc),
+        subject=subject,
+        sent_by=request.user if request.user.is_authenticated else None,
+    )
+    RevisionEmailMessage.objects.create(
+        thread=thread,
+        graph_message_id=message_id,
+        direction='out',
+        sender_email=mailbox,
+        to_recipients=', '.join(to),
+        cc_recipients=', '.join(cc),
+        subject=subject,
+        body_html=body_text,
+        body_text=body_text,
+        sent_at=timezone.now(),
+    )
+    messages.success(request, f'Revision {rev.revision_label} emailed to {", ".join(to)}.')
+    return redirect('costing:detail', pk=sheet.pk)
+
+
+def revision_email_thread(request, pk):
+    """Render the email-thread modal content for one CostingSheetRevision —
+    either the compose form (not sent yet) or the message list (sent)."""
+    from .models import CostingSheetRevision
+
+    rev = get_object_or_404(CostingSheetRevision, pk=pk)
+    sheet = rev.sheet
+    if not _user_can_see_pricing(request.user):
+        return HttpResponse('Permission denied.', status=403)
+
+    context = {
+        'rev': rev,
+        'sheet': sheet,
+        'can_edit': _user_can_edit_sheet(request.user, sheet),
+        'mailbox': settings.REVISION_EMAIL_MAILBOX,
+    }
+    if hasattr(rev, 'email_thread'):
+        context['thread'] = rev.email_thread
+        context['thread_messages'] = rev.email_thread.messages.all()
+    return render(request, 'costing/_revision_email_thread.html', context)
+
+
+@require_POST
+def sync_costing_revision_email_thread(request, pk):
+    """AJAX: pull new messages for one revision's thread from Graph."""
+    from . import graph_thread
+    from .models import CostingSheetRevision
+
+    rev = get_object_or_404(CostingSheetRevision, pk=pk)
+    if not _user_can_see_pricing(request.user):
+        return JsonResponse({'error': 'Permission denied.'}, status=403)
+    if not hasattr(rev, 'email_thread'):
+        return JsonResponse({'error': 'This revision has not been sent yet.'}, status=400)
+
+    try:
+        new_count = graph_thread.sync_thread(rev.email_thread)
+    except graph_thread.GraphThreadError as exc:
+        return JsonResponse({'error': str(exc)}, status=502)
+    return JsonResponse({'new_messages': new_count})
+
+
+def download_revision_email_attachment(request, message_pk, attachment_id):
+    """Stream one reply's attachment straight from Graph — never stored
+    locally, matching the plan's 'don't persist client attachments' choice."""
+    from . import graph_thread
+    from .models import RevisionEmailMessage
+
+    msg = get_object_or_404(RevisionEmailMessage, pk=message_pk)
+    if not _user_can_see_pricing(request.user):
+        return HttpResponse('Permission denied.', status=403)
+
+    try:
+        filename, content_type, data = graph_thread.fetch_attachment_bytes(
+            msg.thread.mailbox, msg.graph_message_id, attachment_id)
+    except graph_thread.GraphThreadError as exc:
+        return HttpResponse(str(exc), status=502)
+
+    safe_name = filename.replace('"', "'").replace('\r', '').replace('\n', '')
+    response = HttpResponse(data, content_type=content_type)
+    response['Content-Disposition'] = f'attachment; filename="{safe_name}"'
+    return response
+
+
+def browse_revision_mailbox(request, pk):
+    """List recent inbox messages for one thread's mailbox, so a person can
+    manually pick a reply that didn't thread automatically (e.g. the client
+    composed a fresh email instead of hitting Reply)."""
+    from . import graph_thread
+    from .models import RevisionEmailThread
+
+    thread = get_object_or_404(RevisionEmailThread, pk=pk)
+    if not _user_can_see_pricing(request.user):
+        return HttpResponse('Permission denied.', status=403)
+
+    already_linked = set(thread.messages.values_list('graph_message_id', flat=True))
+    try:
+        candidates = graph_thread.list_recent_messages(thread.mailbox)
+    except graph_thread.GraphThreadError as exc:
+        return render(request, 'costing/_revision_mailbox_browser.html',
+                       {'thread': thread, 'error': str(exc)})
+    for c in candidates:
+        c['already_linked'] = c['id'] in already_linked
+    return render(request, 'costing/_revision_mailbox_browser.html',
+                  {'thread': thread, 'candidates': candidates})
+
+
+@require_POST
+def link_reply_message(request, pk):
+    """Manually attach one Graph message (picked via browse_revision_mailbox)
+    onto a thread as a RevisionEmailMessage, bypassing conversationId
+    matching entirely — the fallback for replies that didn't thread."""
+    from django.utils.dateparse import parse_datetime
+    from django.utils.html import strip_tags as _strip_tags
+    from . import graph_thread
+    from .models import RevisionEmailThread, RevisionEmailMessage
+
+    thread = get_object_or_404(RevisionEmailThread, pk=pk)
+    sheet = thread.revision.sheet
+    if not (_user_can_see_pricing(request.user) and _user_can_edit_sheet(request.user, sheet)):
+        messages.error(request, 'Permission denied.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    message_id = request.POST.get('message_id')
+    if not message_id:
+        messages.error(request, 'No message selected.')
+        return redirect('costing:detail', pk=sheet.pk)
+    if RevisionEmailMessage.objects.filter(graph_message_id=message_id).exists():
+        messages.info(request, 'That email is already linked to a thread.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    try:
+        msg = graph_thread.get_message_detail(thread.mailbox, message_id)
+    except graph_thread.GraphThreadError as exc:
+        messages.error(request, f'Could not fetch that email: {exc}')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    direction = 'out' if msg['sender_email'].lower() == thread.mailbox.lower() else 'in'
+    RevisionEmailMessage.objects.create(
+        thread=thread,
+        graph_message_id=msg['id'],
+        direction=direction,
+        sender_name=msg['sender_name'],
+        sender_email=msg['sender_email'],
+        to_recipients=msg['to'],
+        cc_recipients=msg['cc'],
+        subject=msg['subject'],
+        body_html=msg['body_html'],
+        body_text=_strip_tags(msg['body_html']),
+        sent_at=parse_datetime(msg['sent_at']) if msg['sent_at'] else None,
+        has_attachments=msg['has_attachments'],
+        attachment_meta=msg['attachments'] or None,
+    )
+    if direction == 'in':
+        thread.status = 'replied'
+        thread.save(update_fields=['status'])
+    messages.success(request, 'Email linked to the thread.')
     return redirect('costing:detail', pk=sheet.pk)
 
 

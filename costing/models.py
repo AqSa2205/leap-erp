@@ -1279,6 +1279,75 @@ class CostingSheetRevision(models.Model):
             return f'R{int(label[1:]) + 1:02d}'
         return f'R{cls.objects.filter(sheet=sheet).count():02d}'
 
+class RevisionEmailThread(models.Model):
+    """Tracks that a costing sheet was emailed to the client and also
+    carries the full reply thread (RevisionEmailMessage rows to it)."""
+
+    STATUS_CHOICES= [
+        ('sent','Sent'),
+        ('replied','Client Replied'),
+    ]
+
+    revision = models.OneToOneField(
+        CostingSheetRevision,
+        on_delete=models.CASCADE,
+        related_name='email_thread'
+    )
+    mailbox = models.EmailField(
+        help_text='The mailbox this was sent from and is read back from.',
+    )
+    graph_conversation_id = models.CharField(max_length=225, db_index=True)
+    client_to = models.CharField(max_length=1000)
+    client_cc= models.CharField(max_length=1000, blank=True)
+    subject = models.CharField(max_length=500)
+    status= models.CharField(max_length=20, choices=STATUS_CHOICES, default ='sent')
+    sent_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='revision_threads_sent',
+    )
+    sent_at = models.DateTimeField(auto_now_add=True)
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f'{self.revision} - {self.subject}'
+
+
+class RevisionEmailMessage(models.Model):
+    """One email in a RevisionEmailThread - either one we sent, 
+    or one that came back from the client (or anyone else on the thread)."""
+
+    DIRECTION_CHOICES = [
+        ('out', 'Sent by Leap'),
+        ('in', 'Client / other'),
+    ]
+
+    thread = models.ForeignKey(
+        RevisionEmailThread,
+        on_delete=models.CASCADE,
+        related_name='messages',
+    )
+    graph_message_id = models.CharField(max_length=255, unique=True)
+    direction = models.CharField(max_length=3, choices=DIRECTION_CHOICES)
+    sender_name = models.CharField(max_length=255, blank=True)
+    sender_email = models.EmailField(blank=True)
+    to_recipients = models.CharField(max_length=1000, blank=True)
+    cc_recipients = models.CharField(max_length=1000, blank=True)
+    subject = models.CharField(max_length=500, blank=True)
+    body_html = models.TextField(blank=True)
+    body_text = models.TextField(blank=True)
+    sent_at = models.DateTimeField(null=True, blank= True)
+    has_attachments = models.BooleanField(default=False)
+    attachment_meta = models.JSONField(null= True, blank=True)
+
+    class Meta:
+        ordering = ['sent_at']
+
+    def __str__(self):
+        return f'{self.get_direction_display()} - {self.subject}'
+
 
 class VendorQuote(models.Model):
     """A supplier/vendor quote file uploaded against a costing sheet.

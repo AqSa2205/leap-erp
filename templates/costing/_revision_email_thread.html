@@ -1,0 +1,65 @@
+{% if thread %}
+<div class="mb-3">
+    <div class="d-flex justify-content-between align-items-start">
+        <div>
+            <div class="small text-muted">Subject</div>
+            <div class="fw-bold">{{ thread.subject }}</div>
+        </div>
+        <span class="badge bg-{% if thread.status == 'replied' %}success{% else %}info{% endif %}">
+            {{ thread.get_status_display }}
+        </span>
+    </div>
+    <div class="small text-muted mt-1">
+        To: {{ thread.client_to }}{% if thread.client_cc %} &middot; Cc: {{ thread.client_cc }}{% endif %}
+    </div>
+    <div class="small text-muted">
+        Sent {{ thread.sent_at|date:"d M Y H:i" }} by {% if thread.sent_by %}{{ thread.sent_by.get_full_name|default:thread.sent_by.username }}{% else %}&mdash;{% endif %}
+        {% if thread.last_synced_at %} &middot; Last synced {{ thread.last_synced_at|date:"d M Y H:i" }}{% endif %}
+    </div>
+</div>
+
+<div class="mb-3" style="max-height: 400px; overflow-y: auto;">
+    {% for msg in thread_messages %}
+    <div class="border rounded p-2 mb-2 {% if msg.direction == 'out' %}bg-light{% endif %}">
+        <div class="d-flex justify-content-between">
+            <span class="small fw-bold">
+                {% if msg.direction == 'out' %}
+                <i class="bi bi-arrow-up-right text-primary"></i> Leap
+                {% else %}
+                <i class="bi bi-arrow-down-left text-success"></i> {{ msg.sender_name|default:msg.sender_email }}
+                {% endif %}
+            </span>
+            <span class="small text-muted">{{ msg.sent_at|date:"d M Y H:i"|default:"—" }}</span>
+        </div>
+        <div class="small text-muted">{{ msg.subject }}</div>
+        <div class="mt-1" style="white-space: pre-wrap;">{{ msg.body_text|truncatewords:120 }}</div>
+        {% if msg.attachment_meta %}
+        <div class="mt-1">
+            {% for att in msg.attachment_meta %}
+            <a href="{% url 'costing:download_revision_email_attachment' msg.pk att.id %}" class="badge bg-secondary text-decoration-none me-1">
+                <i class="bi bi-paperclip"></i> {{ att.name }}
+            </a>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    {% empty %}
+    <div class="text-center text-muted py-3 small">No messages yet.</div>
+    {% endfor %}
+</div>
+
+<div class="d-flex gap-2">
+    <button type="button" class="btn btn-sm btn-outline-primary js-refresh-thread"
+            data-url="{% url 'costing:sync_revision_email_thread' rev.pk %}" data-rev-pk="{{ rev.pk }}">
+        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+    </button>
+    {% if can_edit %}
+    <button type="button" class="btn btn-sm btn-outline-secondary js-browse-mailbox"
+            data-url="{% url 'costing:browse_revision_mailbox' thread.pk %}">
+        <i class="bi bi-search me-1"></i>Attach a reply
+    </button>
+    {% endif %}
+</div>
+{% else %}
+<div class="text-center text-muted py-3">This revision hasn't been sent to a client yet.</div>
+{% endif %}
