@@ -84,6 +84,29 @@ def dashboard(request):
     return render(request, 'kpis/dashboard.html', context)
 
 
+def kpi_new(request):
+    """Skeleton for the new GM-facing KPI dashboard - Sales & Proposal
+    Performance owned by the lead, Procurement owned by this dev, split into
+    separate template partials (kpi_new_sales.html, kpi_new_proposal.html,
+    kpi_new_procurement.html, kpi_new_pmo.html) so each person's work stays
+    in their own file and doesn't conflict. Reuses the existing KPI
+    registry/dashboard data (build_dashboard) so already-computed KPIs
+    (revenue, pipeline coverage, cost savings, on-time delivery, etc.) are
+    available immediately - metrics with no registry entry yet need a new
+    compute function in kpis/registry.py before they'll show real data."""
+    period = _resolve_period(request)
+    region, regions = _resolve_region(request)
+    data = build_dashboard(period, region=region)
+    context = {
+        'data': data,
+        'period': period,
+        'period_options': period_options(),
+        'regions': regions,
+        'selected_region': region,
+    }
+    return render(request, 'kpis/kpi_new.html', context)
+
+
 @login_required
 @require_capability('kpis.access')
 def people(request):

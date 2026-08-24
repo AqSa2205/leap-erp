@@ -1,0 +1,50 @@
+{% extends 'base.html' %}
+{% block title %}GM KPI Dashboard (New) — Leap Networks ERP{% endblock %}
+{% block page_title %}GM KPI Dashboard{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+        <div>
+            <h1 class="h3 mb-1">GM KPI Dashboard</h1>
+            <p class="text-muted mb-0">
+                {{ data.period_label }}
+                · {% if selected_region %}{{ selected_region.name }}{% else %}<span title="Money KPIs blend currencies across regions — pick a region for a clean figure">All regions</span>{% endif %}
+            </p>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+            <form method="get" class="d-flex gap-2 align-items-center">
+                <select name="region" class="form-select form-select-sm" onchange="this.form.submit()" style="min-width:150px;" title="Region">
+                    <option value="all" {% if not selected_region %}selected{% endif %}>All regions</option>
+                    {% for r in regions %}
+                    <option value="{{ r.code }}" {% if selected_region and selected_region.pk == r.pk %}selected{% endif %}>{{ r.name }}</option>
+                    {% endfor %}
+                </select>
+                <select name="period" class="form-select form-select-sm" onchange="this.form.submit()" style="min-width:150px;" title="Period">
+                    {% for val, lbl in period_options %}
+                    <option value="{{ val }}" {% if val == period %}selected{% endif %}>{{ lbl }}</option>
+                    {% endfor %}
+                </select>
+            </form>
+        </div>
+    </div>
+
+    <!--
+      Working sandbox tab: if it looks good, we keep it. Each section below is
+      its own include so we don't collide editing the same file — own only
+      your own partial.
+        - Sales & Pipeline:        kpi_new_sales.html        (owner: lead)
+        - RFQ / Proposal Activity: kpi_new_proposal.html     (owner: lead)
+        - Procurement:             kpi_new_procurement.html  (owner: this dev)
+        - Project Delivery (PMO):  kpi_new_pmo.html          (owner: TBD)
+      `data` (from build_dashboard) and `period`/`selected_region` are
+      already in context here and available to every partial below.
+    -->
+
+    {% include 'kpis/kpi_new_sales.html' %}
+    {% include 'kpis/kpi_new_proposal.html' %}
+    {% include 'kpis/kpi_new_procurement.html' %}
+    {% include 'kpis/kpi_new_pmo.html' %}
+
+</div>
+{% endblock %}
