@@ -322,7 +322,7 @@ def storage_report(request):
     from django.core.exceptions import PermissionDenied
     from dashboard.storage_report import build_storage_report
 
-    if not request.user.is_super_admin_user:
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         raise PermissionDenied
 
     cache_key = 'storage_report'
@@ -346,7 +346,7 @@ def storage_orphan_preview(request):
     from django.core.files.storage import default_storage
     from django.http import Http404, HttpResponseRedirect
 
-    if not request.user.is_super_admin_user:
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         raise PermissionDenied
     key = request.GET.get('key', '')
     if not key:
