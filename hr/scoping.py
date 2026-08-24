@@ -74,9 +74,12 @@ def can_manage_hr_scoped(user):
     """True for any role that reaches the (scoped or global) HR feature set:
     the team-scoped roles plus the company-wide admin tiers. Used as the access
     gate on the shared HR feature views (attendance/leave/assets/exceptions)."""
+    # `admin` is deliberately absent: these HR screens sit inside the
+    # Administration section, which admin is locked out of. Leaving it here
+    # would keep the pages reachable by direct URL after the sidebar stopped
+    # offering them — a hidden link is not an access control.
     return bool(
         user.is_super_admin_user
-        or user.is_admin_user
         or user.is_erp_admin_user
         or user.is_team_scoped_hr_user
     )

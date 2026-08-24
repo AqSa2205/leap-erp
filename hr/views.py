@@ -32,16 +32,26 @@ from .scoping import scoped_employee_ids, scope_employee_queryset, scope_asset_q
 
 
 class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
+    """Gate for the Administration section.
+
+    The `admin` role is deliberately NOT here. Administration is owned by
+    super_admin and erp_admin; `admin` keeps its access everywhere else in the
+    app (costing, procurement, pipeline) but is locked out of this section
+    entirely, so hiding it from the sidebar is matched by the views refusing a
+    direct URL too.
+    """
     def test_func(self):
         u = self.request.user
-        return u.is_super_admin_user or u.is_admin_user or u.is_erp_admin_user
+        return u.is_super_admin_user or u.is_erp_admin_user
 
 
 class SuperAdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
-    """Stricter than AdminRequiredMixin — Super Admin only, no 'admin' role.
-    Used for the conditional-leave approval queue per the access-control spec."""
+    """Historically super-admin-only; erp_admin now has the whole
+    Administration section, so it passes here too. Kept as a separate mixin
+    because the name marks these as the more sensitive screens."""
     def test_func(self):
-        return self.request.user.is_super_admin_user
+        u = self.request.user
+        return u.is_super_admin_user or u.is_erp_admin_user
 
 
 class HRScopedAccessMixin(LoginRequiredMixin, UserPassesTestMixin):
@@ -99,7 +109,11 @@ def can_view_leave_dashboard(user):
     has_override_access) must be able to see it too, or granting them
     override authority would be pointless — they couldn't reach the page to
     use it."""
-    return bool(user.is_super_admin_user or is_designated_approver(user) or has_override_access(user))
+    # erp_admin is included because Leave Requests sits in the Administration
+    # section, which that role now owns in full — without it the sidebar would
+    # offer a link the view refuses.
+    return bool(user.is_super_admin_user or user.is_erp_admin_user
+                or is_designated_approver(user) or has_override_access(user))
 
 
 def _is_head_manager_role(user):
@@ -186,7 +200,7 @@ def can_decide_attendance_exception(user, exc):
 @login_required
 def hr_dashboard(request):
     """Comprehensive HR Admin Dashboard with employees, assets, vehicles, and assignments."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('dashboard:index')
 
@@ -1071,7 +1085,7 @@ class EmployeeDeleteView(AdminRequiredMixin, DeleteView):
 
 @login_required
 def employee_import(request):
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'You do not have permission to import employees.')
         return redirect('hr:employee_list')
 
@@ -1239,7 +1253,7 @@ def employee_import(request):
 
 @login_required
 def employee_export(request):
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'You do not have permission to export employees.')
         return redirect('hr:employee_list')
 
@@ -1507,7 +1521,7 @@ class AssetDeleteView(AdminRequiredMixin, DeleteView):
 def asset_decommission(request, pk):
     """Mark an asset as out of service (dead / no longer usable). It can never
     be in stock once decommissioned."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:asset_list')
     from django.utils import timezone
@@ -1529,7 +1543,7 @@ def asset_decommission(request, pk):
 @require_POST
 def asset_restore(request, pk):
     """Restore a decommissioned asset back into service."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:asset_list')
     asset = get_object_or_404(Asset, pk=pk)
@@ -1544,7 +1558,7 @@ def asset_restore(request, pk):
 
 @login_required
 def asset_import(request):
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'You do not have permission to import assets.')
         return redirect('hr:asset_list')
 
@@ -1708,7 +1722,7 @@ def asset_import(request):
 
 @login_required
 def asset_export(request):
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'You do not have permission to export assets.')
         return redirect('hr:asset_list')
 
@@ -1843,7 +1857,7 @@ def leave_request_document_download(request, pk):
 @login_required
 def employee_document_upload(request, pk):
     """Upload a document for an employee."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:employee_list')
 
@@ -1866,7 +1880,7 @@ def employee_document_upload(request, pk):
 @login_required
 def employee_document_delete(request, pk):
     """Delete an employee document."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:employee_list')
 
@@ -1951,7 +1965,7 @@ class VehicleDetailView(AdminRequiredMixin, DetailView):
 @login_required
 def vehicle_document_upload(request, pk):
     """Upload a document for a vehicle."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:vehicle_list')
 
@@ -1974,7 +1988,7 @@ def vehicle_document_upload(request, pk):
 def vehicle_document_edit(request, pk):
     """Edit a vehicle document's details, optionally replacing the file.
     Replacing the file reclaims the old one via the central pre_save signal."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:vehicle_list')
 
@@ -1995,7 +2009,7 @@ def vehicle_document_edit(request, pk):
 @login_required
 def vehicle_document_delete(request, pk):
     """Delete a vehicle document (its file is reclaimed by the cleanup signal)."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:vehicle_list')
 
@@ -2037,7 +2051,7 @@ class VehicleDeleteView(AdminRequiredMixin, DeleteView):
 @login_required
 def vehicle_import(request):
     """Import vehicles from MOI Excel export."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:vehicle_list')
 
@@ -2123,7 +2137,7 @@ def vehicle_import(request):
 @login_required
 def vehicle_export(request):
     """Export vehicles to Excel."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:vehicle_list')
 
@@ -2652,7 +2666,7 @@ class EmployeeLeaveSummaryView(HRScopedAccessMixin, DetailView):
 
 @login_required
 def entitlement_year(request):
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:hr_dashboard')
     year = _int_or(request.GET.get('year'), timezone.now().year)
@@ -2832,7 +2846,7 @@ def attendance_grid(request):
 
 @login_required
 def attendance_settings(request):
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:hr_dashboard')
     obj = AttendanceSettings.load()
@@ -2854,7 +2868,7 @@ def attendance_settings(request):
 @require_POST
 def attendance_regenerate(request):
     """Re-derive stored status for all records on a given date (after leave/holiday edits)."""
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:hr_dashboard')
     day = _parse_date(request.POST.get('date'))
@@ -3933,7 +3947,7 @@ def asset_handover_create(request):
     from accounts.models import User, Role
     from django.core.files.base import ContentFile
 
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'You do not have access to create asset handovers.')
         return redirect('hr:hr_dashboard')
 
@@ -4000,7 +4014,7 @@ def asset_handover_create(request):
 def asset_handover_detail(request, pk):
     from hr.models import AssetHandover
     handover = get_object_or_404(AssetHandover, pk=pk)
-    is_hr = bool(request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user)
+    is_hr = bool(request.user.is_super_admin_user or request.user.is_erp_admin_user)
     is_employee = bool(handover.employee.user_id and handover.employee.user_id == request.user.id)
     is_authorizer = bool(handover.authorizer_id and handover.authorizer_id == request.user.id)
     if not (is_hr or is_employee or is_authorizer):
@@ -4076,7 +4090,7 @@ def asset_handover_initiate_return(request, pk):
     from django.core.files.base import ContentFile
 
     handover = get_object_or_404(AssetHandover, pk=pk)
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'You do not have access to start a return.')
         return redirect('hr:asset_handover_detail', pk=pk)
 
@@ -4126,7 +4140,7 @@ def asset_handover_list(request):
     handover is already in progress for it, the next owner too."""
     from hr.models import AssetHandover
 
-    if not (request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user):
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
         messages.error(request, 'You do not have access to this page.')
         return redirect('hr:hr_dashboard')
 
@@ -4188,7 +4202,7 @@ def asset_active_handover_redirect(request, item_id):
 def asset_handover_export_pdf(request, pk):
     from hr.models import AssetHandover
     handover = get_object_or_404(AssetHandover, pk=pk)
-    is_hr = bool(request.user.is_super_admin_user or request.user.is_admin_user or request.user.is_erp_admin_user)
+    is_hr = bool(request.user.is_super_admin_user or request.user.is_erp_admin_user)
     is_employee = bool(handover.employee.user_id and handover.employee.user_id == request.user.id)
     is_authorizer = bool(handover.authorizer_id and handover.authorizer_id == request.user.id)
     if not (is_hr or is_employee or is_authorizer):

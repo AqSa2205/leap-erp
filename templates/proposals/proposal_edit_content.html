@@ -31,6 +31,11 @@
         <code class="ms-2">{{ object.proposal_reference }}</code>
     </div>
     <div class="d-flex align-items-center gap-2">
+        <div class="btn-group btn-group-sm" role="group" aria-label="Department template toggle" id="deptToggle">
+            <button type="button" class="btn btn-outline-primary dept-toggle-btn" data-dept="ai">AI</button>
+            <button type="button" class="btn btn-outline-primary dept-toggle-btn" data-dept="telecom">Telecom</button>
+            <button type="button" class="btn btn-outline-primary dept-toggle-btn" data-dept="procurement">Security</button>
+        </div>
         <a href="{% url 'proposals:export_docx' object.pk %}" class="btn btn-success btn-sm">
             <i class="bi bi-file-earmark-word me-1"></i> Export DOCX
         </a>
@@ -57,6 +62,7 @@
         </div>
     </div>
     <div class="card-body py-3">
+        <input type="hidden" name="department" id="sectDepartmentField" value="">
         {% if headings %}
         <div class="row g-1 mb-2">
             {% for h in headings %}
@@ -73,6 +79,27 @@
         {% else %}
         <p class="text-muted small mb-2">No headings in the library yet — add some in the admin, or type a custom one below.</p>
         {% endif %}
+
+        {% for dept, dept_hs in dept_headings.items %}
+        {% if dept_hs.items %}
+        <div class="dept-heading-panel" data-dept="{{ dept }}" style="display:none">
+            <div class="small text-muted mb-1">{{ dept_hs.label }} sections:</div>
+            <div class="row g-1 mb-2">
+                {% for h in dept_hs.items %}
+                <div class="col-lg-3 col-md-4 col-sm-6">
+                    <div class="form-check">
+                        <input class="form-check-input sect-pick" type="checkbox" name="heading"
+                               value="{{ h.name }}" id="pick-{{ dept }}-{{ h.pk }}">
+                        <label class="form-check-label" for="pick-{{ dept }}-{{ h.pk }}">{{ h.name }}</label>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            <hr class="my-2">
+        </div>
+        {% endif %}
+        {% endfor %}
+
         <div class="d-flex flex-wrap gap-2 align-items-center">
             <label class="small text-muted mb-0">Custom heading:</label>
             <input type="text" name="custom_heading" class="form-control form-control-sm"
@@ -270,14 +297,21 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     // ─── Add-sections: select all / clear ──────────────────────
-    var picks = document.querySelectorAll('.sect-pick');
+    // Only the currently-visible checkboxes — .sect-pick also lives inside
+    // the hidden .dept-heading-panel toggles, and picking those up here
+    // would submit every department heading with no department set,
+    // creating a pile of empty sections.
+    function visiblePicks() {
+        return Array.from(document.querySelectorAll('.sect-pick'))
+            .filter(function(p) { return p.offsetParent !== null; });
+    }
     var selAll = document.getElementById('sectSelectAll');
     var clr = document.getElementById('sectClear');
     if (selAll) selAll.addEventListener('click', function() {
-        picks.forEach(function(p) { p.checked = true; });
+        visiblePicks().forEach(function(p) { p.checked = true; });
     });
     if (clr) clr.addEventListener('click', function() {
-        picks.forEach(function(p) { p.checked = false; });
+        visiblePicks().forEach(function(p) { p.checked = false; });
     });
 
     // ─── Dim a section row when its Remove box is ticked ────────
@@ -286,6 +320,38 @@ document.addEventListener('DOMContentLoaded', function() {
         function sync() { block.classList.toggle('to-delete', box.checked); }
         box.addEventListener('change', sync);
         sync();
+    });
+
+    // ─── Department toggle (AI / Telecom / Procurement) ──────────
+    var deptField = document.getElementById('sectDepartmentField');
+    document.querySelectorAll('.dept-toggle-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var wasActive = btn.classList.contains('active');
+
+            // Reset all buttons, hide all panels, uncheck anything inside
+            // hidden panels so a stale checked box can't sneak into the
+            // submit after the toggle moves away from it.
+            document.querySelectorAll('.dept-toggle-btn').forEach(function(b) {
+                b.classList.remove('active', 'btn-primary');
+                b.classList.add('btn-outline-primary');
+            });
+            document.querySelectorAll('.dept-heading-panel').forEach(function(panel) {
+                panel.style.display = 'none';
+                panel.querySelectorAll('.sect-pick').forEach(function(cb) { cb.checked = false; });
+            });
+
+            if (wasActive) {
+                deptField.value = '';
+                return;
+            }
+
+            btn.classList.add('active', 'btn-primary');
+            btn.classList.remove('btn-outline-primary');
+            deptField.value = btn.dataset.dept;
+
+            var panel = document.querySelector('.dept-heading-panel[data-dept="' + btn.dataset.dept + '"]');
+            if (panel) panel.style.display = '';
+        });
     });
 });
 </script>

@@ -308,7 +308,7 @@ class HRReviewCapabilityBoundaryTests(TestCase):
         # HR user: explicitly admin, which DOES have timesheets.review
         # per accounts/permissions.py's DEFAULT_CODENAME_GRANTS.
         self.hr_user, self.hr_emp = _make_user_with_employee(
-            'hrperson', role_name=Role.ADMIN, full_name='HR Person')
+            'hrperson', role_name=Role.ERP_ADMIN, full_name='HR Person')
         seed_default_permissions()
 
         from .services import request_timesheets
@@ -374,7 +374,7 @@ class SubmitMonthTests(TestCase):
         self.code, _ = ActivityCode.objects.get_or_create(
             code='COS_0009', defaults={'label': 'Office', 'is_active': True})
         self.user, self.emp = _make_user_with_employee('submitter')
-        self.hr_user, _ = _make_user_with_employee('subhr', role_name=Role.ADMIN)
+        self.hr_user, _ = _make_user_with_employee('subhr', role_name=Role.ERP_ADMIN)
         seed_default_permissions()
 
     def test_submitting_empty_month_raises(self):
@@ -447,7 +447,7 @@ class ReopenMonthTests(TestCase):
         self.code, _ = ActivityCode.objects.get_or_create(
             code='COS_0009', defaults={'label': 'Office', 'is_active': True})
         self.user, self.emp = _make_user_with_employee('reopener')
-        self.hr_user, _ = _make_user_with_employee('reopenhr', role_name=Role.ADMIN)
+        self.hr_user, _ = _make_user_with_employee('reopenhr', role_name=Role.ERP_ADMIN)
         seed_default_permissions()
         self.entry = TimesheetEntry.objects.create(
             employee=self.emp, date=date(2026, 7, 1),
@@ -502,7 +502,7 @@ class SendToHRTests(TestCase):
         self.client = Client()
         self.code, _ = ActivityCode.objects.get_or_create(
             code='COS_0009', defaults={'label': 'Office', 'is_active': True})
-        self.hr_user, _ = _make_user_with_employee('sendhr', role_name=Role.ADMIN)
+        self.hr_user, _ = _make_user_with_employee('sendhr', role_name=Role.ERP_ADMIN)
         HRSettings.objects.get_or_create(pk=1, defaults={'hr_email': 'hr@leap-arabia.com'})
         self.user_a, self.emp_a = _make_user_with_employee('senda', full_name='Send A')
         self.user_b, self.emp_b = _make_user_with_employee('sendb', full_name='Send B')
@@ -618,7 +618,7 @@ class NotificationTargetingTests(TestCase):
     only the one targeted employee, not broadcast to everyone."""
 
     def setUp(self):
-        self.hr_user, self.hr_emp = _make_user_with_employee('notifhr', role_name=Role.ADMIN)
+        self.hr_user, self.hr_emp = _make_user_with_employee('notifhr', role_name=Role.ERP_ADMIN)
         self.user_a, self.emp_a = _make_user_with_employee('notifa')
         self.user_b, self.emp_b = _make_user_with_employee('notifb')
         # AI roles do NOT have timesheets.access per DEFAULT_MODULE_ACCESS —
@@ -669,7 +669,7 @@ class CSRFEnforcementTests(TestCase):
 
     def setUp(self):
         self.client = Client(enforce_csrf_checks=True)
-        self.hr_user, _ = _make_user_with_employee('csrfhr', role_name=Role.ADMIN)
+        self.hr_user, _ = _make_user_with_employee('csrfhr', role_name=Role.ERP_ADMIN)
         self.user, self.emp = _make_user_with_employee('csrfemp')
         seed_default_permissions()
         self.ts_request = request_timesheets(year=2026, month=7, requested_by=self.hr_user)
@@ -710,7 +710,7 @@ class RequestTimesheetsDeduplicationTests(TestCase):
     row, not fragment ack-tracking across multiple copies of 'July'."""
 
     def setUp(self):
-        self.hr_user, _ = _make_user_with_employee('duphr', role_name=Role.ADMIN)
+        self.hr_user, _ = _make_user_with_employee('duphr', role_name=Role.ERP_ADMIN)
         seed_default_permissions()
 
     def test_calling_twice_for_same_month_creates_only_one_request(self):
@@ -745,7 +745,7 @@ class RemindAlreadyAckedTests(TestCase):
     hid the button."""
 
     def setUp(self):
-        self.hr_user, _ = _make_user_with_employee('remindhr', role_name=Role.ADMIN)
+        self.hr_user, _ = _make_user_with_employee('remindhr', role_name=Role.ERP_ADMIN)
         self.user, self.emp = _make_user_with_employee('remindme')
         seed_default_permissions()
         self.ts_request = request_timesheets(year=2026, month=7, requested_by=self.hr_user)
@@ -784,7 +784,7 @@ class MalformedQueryParamTests(TestCase):
     clean redirect with an error), never an unhandled 500."""
 
     def setUp(self):
-        self.hr_user, _ = _make_user_with_employee('malformedhr', role_name=Role.ADMIN)
+        self.hr_user, _ = _make_user_with_employee('malformedhr', role_name=Role.ERP_ADMIN)
         self.user, self.emp = _make_user_with_employee('malformeduser')
         seed_default_permissions()
 
@@ -818,7 +818,7 @@ class HRRequestYearDefaultingTests(TestCase):
     error or silently use year=0/None."""
 
     def setUp(self):
-        self.hr_user, _ = _make_user_with_employee('yrdefault', role_name=Role.ADMIN)
+        self.hr_user, _ = _make_user_with_employee('yrdefault', role_name=Role.ERP_ADMIN)
         seed_default_permissions()
 
     def test_posting_without_year_field_defaults_to_current_year(self):
@@ -882,7 +882,7 @@ class HRRequestDetailQueryCountTests(TestCase):
     accidentally removes select_related gets caught immediately."""
 
     def setUp(self):
-        self.hr_user, _ = _make_user_with_employee('queryhr', role_name=Role.ADMIN)
+        self.hr_user, _ = _make_user_with_employee('queryhr', role_name=Role.ERP_ADMIN)
         for i in range(5):
             _make_user_with_employee(f'queryemp{i}')
         seed_default_permissions()
@@ -891,13 +891,17 @@ class HRRequestDetailQueryCountTests(TestCase):
     def test_request_detail_query_count_does_not_scale_with_employee_count(self):
         client = Client()
         client.login(username='queryhr', password='testpass123')
-        with self.assertNumQueries(20):  # adjust once if your baseline differs; the
+        with self.assertNumQueries(17):  # adjust once if your baseline differs; the
                                           # point is this number staying FLAT as
                                           # employee count grows, not its exact value.
                                           # 17 -> 20: the global HR pending-counts
                                           # context processor gained 3 fixed COUNT
                                           # queries (attendance-exception revoke) that
                                           # run on every page; still flat per employee.
+                                          # 20 -> 17: this page is now driven by
+                                          # erp_admin rather than admin, and those 3
+                                          # pending-count queries only run for the
+                                          # admin tier that still reaches that queue.
             client.get(reverse('timesheets:hr_request_detail', args=[self.ts_request.pk]))
 
 
@@ -1092,7 +1096,7 @@ class SendToHRNoEmployeeLinkTests(TestCase):
         client = Client()
         client.login(username='noemplink', password='testpass123')
         from .services import request_timesheets
-        hr_role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        hr_role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
         hr_user = User.objects.create_user(username='noemplinkhr', password='testpass123', role=hr_role)
         ts_request = request_timesheets(year=2026, month=7, requested_by=hr_user)
         resp = client.get(reverse('timesheets:send_to_hr', args=[ts_request.pk]))
@@ -1104,7 +1108,7 @@ class EmployeesForRequestOrderingTests(TestCase):
     within each group — the HR detail page's usefulness depends on this."""
 
     def setUp(self):
-        self.hr_user, _ = _make_user_with_employee('orderhr', role_name=Role.ADMIN)
+        self.hr_user, _ = _make_user_with_employee('orderhr', role_name=Role.ERP_ADMIN)
         self.zoe_user, self.zoe_emp = _make_user_with_employee('orderz', full_name='Zoe')
         self.amy_user, self.amy_emp = _make_user_with_employee('ordera', full_name='Amy')
         seed_default_permissions()
@@ -1134,7 +1138,7 @@ class RemainingCSRFEnforcementTests(TestCase):
         self.code, _ = ActivityCode.objects.get_or_create(
             code='COS_0009', defaults={'label': 'Office', 'is_active': True})
         self.user, self.emp = _make_user_with_employee('csrfall')
-        self.hr_user, _ = _make_user_with_employee('csrfallhr', role_name=Role.ADMIN)
+        self.hr_user, _ = _make_user_with_employee('csrfallhr', role_name=Role.ERP_ADMIN)
         seed_default_permissions()
         from .services import request_timesheets
         self.ts_request = request_timesheets(year=2026, month=7, requested_by=self.hr_user)
@@ -1245,7 +1249,7 @@ class InactiveEmployeeVisibilityTests(TestCase):
     change someone reviews, not an accidental side effect."""
 
     def setUp(self):
-        self.hr_user, _ = _make_user_with_employee('inactivehr', role_name=Role.ADMIN)
+        self.hr_user, _ = _make_user_with_employee('inactivehr', role_name=Role.ERP_ADMIN)
         self.user, self.emp = _make_user_with_employee('inactiveemp', full_name='Inactive Person')
         seed_default_permissions()
         from .services import request_timesheets
@@ -1271,7 +1275,7 @@ class HRSettingsAdminSingletonTests(TestCase):
     HRSettings row through /admin/, not just through .load()."""
 
     def setUp(self):
-        self.hr_user, _ = _make_user_with_employee('adminhr', role_name=Role.ADMIN)
+        self.hr_user, _ = _make_user_with_employee('adminhr', role_name=Role.ERP_ADMIN)
         self.hr_user.is_staff = True
         self.hr_user.is_superuser = True
         self.hr_user.save()
@@ -1297,7 +1301,7 @@ class HRRequestDeleteTests(TestCase):
     (acks + notifications) actually happens, not just the request row."""
 
     def setUp(self):
-        self.hr_user, self.hr_emp = _make_user_with_employee('delhr', role_name=Role.ADMIN)
+        self.hr_user, self.hr_emp = _make_user_with_employee('delhr', role_name=Role.ERP_ADMIN)
         self.plain_user, self.plain_emp = _make_user_with_employee('delplain')
         seed_default_permissions()
         self.ts_request = request_timesheets(year=2026, month=7, requested_by=self.hr_user)
@@ -1395,7 +1399,7 @@ class FlatOfficeHoursTests(TestCase):
         self.assertEqual(ws.cell(row=11 + 3, column=6).value, Decimal('10'))
 
     def test_send_to_hr_preview_shows_flat_10_matching_export(self):
-        hr_user, _ = _make_user_with_employee('flathourshr', role_name=Role.ADMIN)
+        hr_user, _ = _make_user_with_employee('flathourshr', role_name=Role.ERP_ADMIN)
         ts_request = request_timesheets(year=2026, month=7, requested_by=hr_user)
         TimesheetEntry.objects.create(
             employee=self.emp, date=date(2026, 7, 3),
@@ -1453,7 +1457,7 @@ class ReRequestExcludesAckedTests(TestCase):
     stragglers only, not re-notify everyone including those done."""
 
     def setUp(self):
-        self.hr_user, _ = _make_user_with_employee('rerequesthr', role_name=Role.ADMIN)
+        self.hr_user, _ = _make_user_with_employee('rerequesthr', role_name=Role.ERP_ADMIN)
         self.user, self.emp = _make_user_with_employee('alreadyacked')
         seed_default_permissions()
 
@@ -1674,7 +1678,7 @@ class HRDownloadZipTests(TestCase):
         self.client = Client()
         self.code, _ = ActivityCode.objects.get_or_create(
             code='COS_0009', defaults={'label': 'Office', 'is_active': True})
-        self.hr_user, _ = _make_user_with_employee('ziphr', role_name=Role.ADMIN)
+        self.hr_user, _ = _make_user_with_employee('ziphr', role_name=Role.ERP_ADMIN)
         self.plain_user, _ = _make_user_with_employee('zipplain')
         self.emp_a_user, self.emp_a = _make_user_with_employee('zipempa', full_name='Zip Employee A')
         self.emp_b_user, self.emp_b = _make_user_with_employee('zipempb', full_name='Zip Employee B')
@@ -1800,7 +1804,7 @@ class SendToHRBrowsingDecouplingTests(TestCase):
         self.client = Client()
         self.code, _ = ActivityCode.objects.get_or_create(
             code='COS_0009', defaults={'label': 'Office', 'is_active': True})
-        self.hr_user, _ = _make_user_with_employee('decouplehr', role_name=Role.ADMIN)
+        self.hr_user, _ = _make_user_with_employee('decouplehr', role_name=Role.ERP_ADMIN)
         HRSettings.objects.get_or_create(pk=1, defaults={'hr_email': 'hr@leap-arabia.com'})
         self.user_a, self.emp_a = _make_user_with_employee('decouplea', full_name='Decouple A')
         seed_default_permissions()

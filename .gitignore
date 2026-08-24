@@ -53,3 +53,12 @@ build/
 
 # Pre-migration reference snapshots
 backups/
+
+# Generated developer docs. produced by generate_dev_guide.py /
+# generate_schema_pdf.py, they embed the generating machine's absolute paths
+# and go stale as soon as a model changes, so they are regenerated on demand
+# rather than tracked.
+developer_guide.md
+developer_guide.pdf
+schema_summary.md
+schema_summary.pdf
