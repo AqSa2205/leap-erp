@@ -1,20 +1,134 @@
 {% comment %} ============================================================
    Sales & Pipeline — OWNER: lead
-   Metrics to build (see GM_KPI_Dashboard_Build_Spec.docx for the full
-   visual/table mapping we agreed):
-     - Revenue secured this month     -> registry key: sales_revenue_achievement
-     - YTD revenue                    -> same KPI, pass a year-period instead of month
-     - Revenue forecast (ongoing/hotlead/won, shown separately - NOT summed)
-       -> not yet in the registry, needs a new compute function
-     - Total pipeline value           -> not yet exposed as its own KPI
-     - Pipeline coverage ratio        -> registry key: sales_pipeline_coverage
-     (target is entered via "Enter KPI Data" - KPIEntry.target)
-     - New opportunities added (region-wise, this month) -> not yet in the registry
-     - Lost opportunities (region-wise, this month)       -> not yet in the registry
+
+   Laid out as the GM asked for it: Sales Performance first, then Pipeline
+   Overview. Cards are pulled by key from `cards.sales` (built in the view
+   from build_dashboard's own output — no second computation) rather than
+   looped in registry order, so a metric sits where the layout wants it.
+
+   Registry keys used here:
+     Revenue secured this period  -> sales_revenue_achievement
+     YTD revenue                  -> same KPI against a year period; the view
+                                     computes it as `ytd` because the dashboard
+                                     only ever builds one period
+     Total pipeline value         -> sales_pipeline_value
+     Pipeline coverage ratio      -> sales_pipeline_coverage  (needs a target)
+     New opportunities added      -> sales_new_opportunities
+     Lost opportunities           -> sales_lost_opportunities
+
+   STILL TO BUILD — Revenue forecast. The original note here said it should
+   show ongoing / hot lead / won SEPARATELY and NOT summed, citing the build
+   spec doc. That is a different thing from a single blended forecast figure,
+   so it is deliberately not guessed at: it needs the spec, or a decision,
+   before there is any point computing it.
    ============================================================ {% endcomment %}
+
 <div class="card mb-4">
-  <div class="card-header"><h5 class="mb-0"><i class="bi bi-graph-up"></i> Sales & Pipeline</h5></div>
+  <div class="card-header d-flex align-items-center justify-content-between">
+    <h5 class="mb-0"><i class="bi bi-graph-up"></i> Sales &amp; Pipeline</h5>
+    <span class="text-muted small">
+      {{ data.period_label }}{% if selected_region %} · {{ selected_region.name }}{% endif %}
+    </span>
+  </div>
   <div class="card-body">
-    <p class="text-muted small mb-0">TODO — build out this section. `data.departments` (from build_dashboard) already has the Sales department's registered KPIs if you want a starting point; see kpi_new_procurement.html below for a working example of reading from it.</p>
+
+    <div class="text-muted text-uppercase small fw-semibold mb-2"
+         style="letter-spacing:.06em;">Sales Performance</div>
+    <div class="row g-3 mb-4">
+
+      {% with c=cards.sales.sales_revenue_achievement %}
+      <div class="col-md-4">
+        <div class="border rounded p-3 h-100">
+          <div class="text-muted small text-uppercase">Revenue secured</div>
+          <div class="fs-4 fw-bold">{{ c.value_display|default:"—" }}</div>
+          <div class="text-muted small mt-1">{{ c.coverage|default:"—" }}</div>
+        </div>
+      </div>
+      {% endwith %}
+
+      <div class="col-md-4">
+        <div class="border rounded p-3 h-100">
+          <div class="text-muted small text-uppercase">YTD revenue</div>
+          <div class="fs-4 fw-bold">{{ ytd.value_display|default:"—" }}</div>
+          <div class="text-muted small mt-1">
+            {% if ytd %}{{ ytd.period_label }} · {{ ytd.coverage }}{% else %}—{% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="col-md-4">
+        <div class="border rounded p-3 h-100 bg-body-tertiary">
+          <div class="text-muted small text-uppercase">Revenue forecast</div>
+          <div class="fs-4 fw-bold text-muted">—</div>
+          <div class="text-muted small mt-1">
+            Not built. The spec asks for ongoing / hot lead / won shown
+            separately rather than one blended figure — needs confirming
+            before it is computed.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="text-muted text-uppercase small fw-semibold mb-2"
+         style="letter-spacing:.06em;">Pipeline Overview</div>
+    <div class="row g-3">
+
+      {% with c=cards.sales.sales_pipeline_value %}
+      <div class="col-md-3">
+        <div class="border rounded p-3 h-100">
+          <div class="text-muted small text-uppercase">Total pipeline value</div>
+          <div class="fs-4 fw-bold">{{ c.value_display|default:"—" }}</div>
+          <div class="text-muted small mt-1">{{ c.coverage|default:"—" }}</div>
+        </div>
+      </div>
+      {% endwith %}
+
+      {% with c=cards.sales.sales_pipeline_coverage %}
+      <div class="col-md-3">
+        <div class="border rounded p-3 h-100">
+          <div class="text-muted small text-uppercase">Pipeline coverage</div>
+          <div class="fs-4 fw-bold">
+            {{ c.value_display|default:"—" }}
+            {% if c.target_display %}<span class="fs-6 fw-normal text-muted">/ {{ c.target_display }}</span>{% endif %}
+          </div>
+          <div class="text-muted small mt-1">{{ c.coverage|default:"—" }}</div>
+          {% if c.status and c.status != 'na' %}
+          <span class="badge bg-{% if c.status == 'on' %}success{% elif c.status == 'near' %}warning{% else %}danger{% endif %} mt-2">
+            {{ c.status }}
+          </span>
+          {% endif %}
+        </div>
+      </div>
+      {% endwith %}
+
+      {% with c=cards.sales.sales_new_opportunities %}
+      <div class="col-md-3">
+        <div class="border rounded p-3 h-100">
+          <div class="text-muted small text-uppercase">New opportunities</div>
+          <div class="fs-4 fw-bold">{{ c.value_display|default:"—" }}</div>
+          <div class="text-muted small mt-1">{{ c.coverage|default:"—" }}</div>
+        </div>
+      </div>
+      {% endwith %}
+
+      {% with c=cards.sales.sales_lost_opportunities %}
+      <div class="col-md-3">
+        <div class="border rounded p-3 h-100">
+          <div class="text-muted small text-uppercase">Lost opportunities</div>
+          <div class="fs-4 fw-bold">{{ c.value_display|default:"—" }}</div>
+          <div class="text-muted small mt-1">{{ c.coverage|default:"—" }}</div>
+        </div>
+      </div>
+      {% endwith %}
+    </div>
+
+    {% comment %} Pipeline value and coverage are a snapshot of what is open
+    right now, not a period total — a deal does not leave the pipeline because
+    the month did. Saying so on the tile stops the period selector looking
+    broken when those two do not move with it. {% endcomment %}
+    <p class="text-muted small mt-3 mb-0">
+      Pipeline value and coverage show what is open <em>now</em>; they do not
+      change with the period. Revenue, new and lost opportunities do.
+    </p>
   </div>
 </div>
