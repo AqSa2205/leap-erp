@@ -328,6 +328,13 @@
               </button>
             </div>
 
+            {% if leave_cooldown %}
+            <div class="alert alert-warning py-2 small mb-3">
+              <i class="bi bi-exclamation-triangle me-1"></i>
+              {{ leave_cooldown.reason }}
+            </div>
+            {% endif %}
+
             <div class="collapse mb-3{% if leave_request_form.errors or leave_request_submit_failed %} show{% endif %}" id="requestLeaveForm">
               <form method="post" enctype="multipart/form-data" class="border rounded p-3">
                 {% csrf_token %}
