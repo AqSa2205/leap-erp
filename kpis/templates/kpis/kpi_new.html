@@ -29,7 +29,7 @@
         </div>
     </div>
 
-    <!--
+    {% comment %}
       Working sandbox tab: if it looks good, we keep it. Each section below is
       its own include so we don't collide editing the same file — own only
       your own partial.
@@ -39,7 +39,11 @@
         - Project Delivery (PMO):  kpi_new_pmo.html          (owner: TBD)
       `data` (from build_dashboard) and `period`/`selected_region` are
       already in context here and available to every partial below.
-    -->
+
+      A Django comment rather than an HTML one: an HTML comment is stripped
+      by neither Django nor the browser, so these internal ownership notes
+      would ship in the page source. The partials do the same.
+    {% endcomment %}
 
     {% include 'kpis/kpi_new_sales.html' %}
     {% include 'kpis/kpi_new_proposal.html' %}
