@@ -15,7 +15,7 @@ from .models import KPIEntry
 from .periods import period_bounds, label_for
 from .registry import (
     KPI_DEFINITIONS, KPI_BY_KEY, make_context, evaluate, achievement_pct,
-    kpis_for_department, SALES, PROPOSAL, PROCUREMENT,
+    kpis_for_department, SALES, PROPOSAL, PROCUREMENT, _outcome_projects,
 )
 from .services import build_dashboard, build_person_scorecard, format_value
 
@@ -625,3 +625,150 @@ class KpiNewAccessTests(TestCase):
         body = self.client.get(reverse('kpis:kpi_new')).content.decode()
         self.assertNotIn('owner: this dev', body)
         self.assertNotIn('Working sandbox tab', body)
+
+
+class MonthBucketingTests(ComputeFixtureMixin, TestCase):
+    """A month period must mean that month.
+
+    `po_award_quarter` cannot express a month, so `_period_year_quarter()`
+    widens June to Q2. Bucketing a month on the tags therefore returned April,
+    May and June under a tile labelled "June" -- and worse, the old
+    tag-primary/history-fallback pair applied *both* rules inside one number:
+    a quarter-tagged deal counted in all three months while an untagged one
+    counted only in its own, with nothing on the tile revealing which deal got
+    which treatment.
+
+    Month periods now bucket purely on the transition date. Year and quarter
+    periods keep the tag basis, which is what those fields are for."""
+
+    def _won_on(self, ref, when, year='2026', quarter='Q2'):
+        """A won deal tagged for `quarter`, whose transition happened on `when`."""
+        p = self._project(ref, self.won, est='100000', year=year, quarter=quarter)
+        h = ProjectHistory.objects.create(project=p, new_status=self.won)
+        ProjectHistory.objects.filter(pk=h.pk).update(
+            changed_at=timezone.make_aware(when))
+        return p
+
+    def test_month_counts_only_that_month(self):
+        self._won_on('APR', datetime.datetime(2026, 4, 10, 9, 0))
+        self._won_on('MAY', datetime.datetime(2026, 5, 10, 9, 0))
+        self._won_on('JUN', datetime.datetime(2026, 6, 10, 9, 0))
+        # All three are tagged Q2. Before the fix, each month returned all three.
+        for period, expected in (('2026-04', 'APR'), ('2026-05', 'MAY'),
+                                 ('2026-06', 'JUN')):
+            with self.subTest(period=period):
+                qs = _outcome_projects(make_context(period))
+                self.assertEqual([p.project_name for p in qs], [expected])
+
+    def test_quarter_still_uses_the_tags(self):
+        """The tag basis is deliberate at quarter granularity -- a deal tagged
+        Q2 belongs to Q2 whether or not a transition was ever logged."""
+        self._project('TAGGED', self.won, est='100000', quarter='Q2')
+        qs = _outcome_projects(make_context('2026-Q2'))
+        self.assertEqual([p.project_name for p in qs], ['TAGGED'])
+
+    def test_month_ignores_a_tag_with_no_transition(self):
+        """A deal tagged Q2 but with no recorded transition cannot be placed in
+        a month -- there is no date to place it by. It must not silently land
+        in every month of the quarter."""
+        self._project('TAGGED_ONLY', self.won, est='100000', quarter='Q2')
+        for period in ('2026-04', '2026-05', '2026-06'):
+            with self.subTest(period=period):
+                self.assertEqual(list(_outcome_projects(make_context(period))), [])
+        # Still counted at quarter granularity, where the tag is the basis.
+        self.assertEqual(len(_outcome_projects(make_context('2026-Q2'))), 1)
+
+    def test_one_rule_per_period_tagged_and_untagged_alike(self):
+        """The mixed-basis bug: a tagged and an untagged deal, both won in May,
+        must both appear in May and neither in April."""
+        self._won_on('TAGGED', datetime.datetime(2026, 5, 5, 9, 0), quarter='Q2')
+        self._won_on('UNTAGGED', datetime.datetime(2026, 5, 6, 9, 0),
+                     year='', quarter='')
+        may = sorted(p.project_name for p in _outcome_projects(make_context('2026-05')))
+        self.assertEqual(may, ['TAGGED', 'UNTAGGED'])
+        self.assertEqual(list(_outcome_projects(make_context('2026-04'))), [])
+
+
+class ValueLadderTests(ComputeFixtureMixin, TestCase):
+    """Revenue and pipeline value must resolve a deal the same way the home
+    dashboard's Won tile does -- costing sheet, then actual_sales, then
+    estimated_value.
+
+    The KPI used to sum `actual_sales` alone while the tile resolved through
+    costing, so the two pages reported different revenue for the same deals and
+    the KPI ignored every costing sheet on record."""
+
+    def _priced_sheet(self, project, unit_cost, currency='SAR'):
+        """A sheet whose contract_total is non-zero, via one line item."""
+        sheet = CostingSheet.objects.create(
+            title=f'S-{project.project_name}', project=project,
+            margin=Decimal('0'), workflow_stage='finalized',
+            output_currency=currency)
+        section = CostingSection.objects.create(
+            costing_sheet=sheet, section_number='1', title='Works', order=0)
+        CostingLineItem.objects.create(
+            section=section, item_number='1', description='Item',
+            quantity=Decimal('1'), base_unit_cost=Decimal(unit_cost),
+            supplier_currency='SAR', margin=Decimal('0'))
+        return sheet
+
+    def test_costing_outranks_actual_sales(self):
+        """The rule chosen for the whole ERP: a live costing sheet wins."""
+        p = self._project('W1', self.won, actual='500000')
+        self._priced_sheet(p, '900000')
+        res = KPI_BY_KEY['sales_revenue_achievement'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('900000.00'))
+
+    def test_falls_back_to_actual_then_estimate(self):
+        self._project('A', self.won, actual='500000', est='111')
+        self._project('B', self.won, actual='0', est='250000')
+        res = KPI_BY_KEY['sales_revenue_achievement'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('750000'))
+
+    def test_agrees_with_the_home_dashboard_resolver(self):
+        """The invariant worth keeping: whatever the tile resolves per deal is
+        what the KPI totals. Pinned against the resolver itself, so the two
+        cannot drift apart again."""
+        from projects.views import _resolve_project_sales_value
+        p1 = self._project('A', self.won, actual='500000')
+        self._priced_sheet(p1, '900000')
+        p2 = self._project('B', self.won, est='250000')
+        expected = sum(
+            (_resolve_project_sales_value(p, list(p.costing_sheets.all()))['amount']
+             or Decimal('0')) for p in (p1, p2))
+        res = KPI_BY_KEY['sales_revenue_achievement'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, expected)
+
+    def test_coverage_reports_deals_with_no_value(self):
+        self._project('A', self.won, actual='500000')
+        self._project('B', self.won, actual='0', est='0')
+        res = KPI_BY_KEY['sales_revenue_achievement'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('500000'))
+        self.assertIn('1 with no value recorded', res.coverage)
+
+    def test_coverage_flags_a_sheet_in_another_currency(self):
+        """Region-scoped totals assume every sheet is raised in the region's
+        currency. If one is not, the tile says so instead of adding GBP to SAR
+        in silence."""
+        p = self._project('W1', self.won)
+        self._priced_sheet(p, '1000', currency='GBP')
+        res = KPI_BY_KEY['sales_revenue_achievement'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertIn('mixed currency', res.coverage)
+        self.assertIn('GBP', res.coverage)
+
+    def test_pipeline_coverage_counts_a_costed_open_deal_at_its_costing(self):
+        """Open pipeline read `estimated_value`, so a fully costed deal counted
+        at the estimate it was raised with -- the pipeline understated itself
+        precisely on the deals it knew most about."""
+        p = self._project('OPEN', self.active, est='100000')
+        self._priced_sheet(p, '400000')
+        res = KPI_BY_KEY['sales_pipeline_coverage'].compute(
+            make_context('2026-Q2', region=self.region,
+                         targets={'sales_revenue_achievement': Decimal('200000')}))
+        self.assertEqual(res.value, Decimal('2.00'))   # 400k costed / 200k goal
+        self.assertIn('1 costed', res.coverage)
