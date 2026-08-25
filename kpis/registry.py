@@ -11,9 +11,19 @@ a blank/odd tile explain itself ("0 submitted proposals", "1 of 3 won have
 actuals") instead of looking broken.
 
 Time basis: the project-outcome KPIs (win rate, revenue, forecast accuracy,
-proposal win rate) bucket a deal into a period by the project's financial `year`
-+ `po_award_quarter` (the fields management maintains), NOT the status-history
-log. Procurement/proposal KPIs that have real timestamps stay date-based.
+proposal win rate) bucket a deal by the project's financial `year` +
+`po_award_quarter` — the fields management maintains — for YEAR and QUARTER
+periods. A MONTH period buckets on the status-history transition date instead,
+because `po_award_quarter` cannot express a month and widening it to the
+containing quarter reported three months under a one-month heading. See
+`_outcome_projects()`. Procurement/proposal KPIs with real timestamps are
+date-based throughout.
+
+Money basis: anything valuing a deal goes through
+`projects.views._resolve_project_sales_value()` — costing sheet, then
+`actual_sales`, then `estimated_value` — which is the same ladder the home
+dashboard's Won tile uses. Do not sum a value column directly here; that is
+what made the two pages disagree.
 """
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -119,13 +129,33 @@ def _period_year_quarter(period):
 # Compute helpers.
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _period_is_month(period):
+    """True for 'YYYY-MM'. Distinguished from 'YYYY-Qn' and 'YYYY'."""
+    parts = (period or '').split('-')
+    return len(parts) == 2 and not parts[1].upper().startswith('Q')
+
+
 def _outcome_projects(ctx):
     """Projects whose CURRENT status is won/lost, placed into the period.
 
-    Primary basis = the project's financial year + po_award_quarter (what
-    management maintains). Untagged deals (blank year) FALL BACK to their
-    status-history transition date in the period window, so legacy deals that
-    were never year-tagged still count instead of vanishing.
+    Two bucketing bases, because the fields have different granularities:
+
+    * **Year and quarter** use the project's financial ``year`` +
+      ``po_award_quarter`` — the fields management maintains. Untagged deals
+      (blank year) fall back to their status-history transition date, so
+      legacy deals that were never year-tagged still count instead of
+      vanishing.
+
+    * **A month** uses the transition date alone. ``po_award_quarter`` cannot
+      express a month, and ``_period_year_quarter()`` widens June to Q2 — so
+      bucketing a month on the tags returned April, May and June under a tile
+      labelled "June". Three months of revenue under a one-month heading is
+      not an approximation, it is a different number.
+
+    The two must not be mixed within one period, which is what the old
+    tag-primary/history-fallback pair did on a month: a quarter-tagged deal
+    counted in all three months while an untagged one counted only in its own,
+    and nothing on the tile revealed which rule had applied to which deal.
     """
     from projects.models import Project, ProjectHistory
     year, quarter = _period_year_quarter(ctx.period)
@@ -135,6 +165,15 @@ def _outcome_projects(ctx):
         base = base.filter(region=ctx.region)
     if ctx.user is not None:
         base = base.filter(owner=ctx.user)
+
+    if _period_is_month(ctx.period):
+        # Date only — every deal placed by the same rule, tagged or not.
+        month_ids = set(ProjectHistory.objects.filter(
+            changed_at__date__gte=ctx.start, changed_at__date__lt=ctx.end,
+            new_status__category__in=['won', 'lost'],
+            project__in=base,
+        ).values_list('project_id', flat=True))
+        return base.filter(id__in=month_ids)
 
     # Primary: tagged by financial year (+ quarter when the period is a quarter).
     tagged = base.filter(year=year)
@@ -180,19 +219,66 @@ def compute_attendance_punctuality(ctx):
 
 
 
+def _resolved_values(projects):
+    """Value every project through the SAME ladder the home dashboard uses —
+    ``projects.views._resolve_project_sales_value()``: a live costing sheet
+    first, then ``actual_sales``, then ``estimated_value``.
+
+    This function exists so the two surfaces cannot drift. Summing
+    ``actual_sales`` here while the Won tile resolves through costing gave two
+    answers to one question on two pages of the same ERP, and the tile a GM
+    reads was the one ignoring every costing sheet on record.
+
+    Yields ``(project, resolved)`` with the sheets prefetched, so a period's
+    worth of deals costs a fixed number of queries rather than one per deal.
+    """
+    from projects.views import _resolve_project_sales_value
+    from costing.models import ExchangeRate
+
+    rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
+    qs = projects.select_related('region').prefetch_related(
+        'costing_sheets__sections__line_items',
+        'costing_sheets__scope_of_work_items',
+    )
+    for project in qs:
+        sheets = list(project.costing_sheets.all())
+        for sheet in sheets:
+            sheet.set_rates_cache(rates)
+        yield project, _resolve_project_sales_value(project, sheets)
+
+
 def compute_revenue_won(ctx):
-    from django.db.models import Sum
     qs = _outcome_projects(ctx).filter(status__category='won')
     n = qs.count()
     if not n:
         return KPIResult(Decimal('0'), 'no won deals in this period',
                          currency=_ctx_currency(ctx))
-    total = qs.aggregate(s=Sum('actual_sales'))['s'] or Decimal('0')
-    with_actuals = qs.filter(actual_sales__gt=0).count()
+
+    display_ccy = _ctx_currency(ctx)
+    total = Decimal('0')
+    priced = 0
+    foreign = set()
+    for _project, resolved in _resolved_values(qs):
+        amount = resolved.get('amount')
+        if not amount:
+            continue
+        # The ladder reports a costing-sourced amount in the SHEET's own output
+        # currency, and actual/estimate in the region's. Within one region those
+        # are the same currency in normal use — but say so rather than assume it,
+        # because a sheet raised in another currency would otherwise be added
+        # straight into the total as if the units matched.
+        row_ccy = resolved.get('currency')
+        if display_ccy != 'mixed' and row_ccy and row_ccy != display_ccy:
+            foreign.add(row_ccy)
+        total += Decimal(amount)
+        priced += 1
+
     cov = f'{n} won deal{"s" if n != 1 else ""}'
-    if with_actuals < n:
-        cov += f' ({n - with_actuals} missing actual sales)'
-    return KPIResult(_d(total) or Decimal('0'), cov, currency=_ctx_currency(ctx))
+    if priced < n:
+        cov += f' ({n - priced} with no value recorded)'
+    if foreign:
+        cov += f' — mixed currency: {", ".join(sorted(foreign))}'
+    return KPIResult(total, cov, currency=display_ccy)
 
 
 def compute_forecast_accuracy(ctx):
@@ -227,15 +313,39 @@ def compute_pipeline_coverage(ctx):
     if not goal or goal <= 0:
         return KPIResult(None, 'set a revenue goal to compute coverage')
     qs = Project.objects.filter(status__category__in=['active', 'hot_lead'])
-    if ctx.region is not None:
-        qs = qs.filter(region=ctx.region)
-        field_name, cur = 'estimated_value', ctx.region.currency
-    else:
-        field_name, cur = 'estimated_value_usd', 'USD'
-    open_value = qs.aggregate(s=Sum(field_name))['s'] or Decimal('0')
     n = qs.count()
-    return KPIResult((Decimal(open_value) / goal).quantize(Decimal('0.01')),
-                     f'{n} open deal{"s" if n != 1 else ""}', currency=cur)
+
+    if ctx.region is None:
+        # No region picked: estimated_value_usd is the only pre-normalised
+        # column, so this path stays on it. Summing per-region estimates across
+        # regions would add SAR to GBP.
+        open_value = qs.aggregate(s=Sum('estimated_value_usd'))['s'] or Decimal('0')
+        return KPIResult((Decimal(open_value) / goal).quantize(Decimal('0.01')),
+                         f'{n} open deal{"s" if n != 1 else ""}, all regions',
+                         currency='USD')
+
+    # Region picked: value each deal through the same ladder the Won tile and
+    # revenue KPI use, so a fully costed open deal counts at its costing total
+    # rather than the estimate it was raised with. Reading estimated_value here
+    # made the pipeline understate itself precisely on the deals it knew most
+    # about.
+    qs = qs.filter(region=ctx.region)
+    n = qs.count()
+    open_value = Decimal('0')
+    costed = 0
+    for _project, resolved in _resolved_values(qs):
+        amount = resolved.get('amount')
+        if not amount:
+            continue
+        open_value += Decimal(amount)
+        if resolved.get('source') == 'costing':
+            costed += 1
+
+    cov = f'{n} open deal{"s" if n != 1 else ""}'
+    if costed:
+        cov += f', {costed} costed'
+    return KPIResult((open_value / goal).quantize(Decimal('0.01')), cov,
+                     currency=ctx.region.currency)
 
 
 def _submission_ontime(ctx, by='deadline'):
