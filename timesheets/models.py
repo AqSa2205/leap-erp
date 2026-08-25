@@ -86,7 +86,17 @@ class TimesheetMonth(models.Model):
 
     @property
     def is_submitted(self):
-        """Locked = submitted and not since reopened."""
+        """Locked = submitted and not since reopened.
+
+        There is no explicit state column: which of the two transitions
+        happened last is inferred from their timestamps, so the strict '>'
+        below is only sound because both are written through
+        services._next_transition_time(), which guarantees each transition
+        lands strictly after the one before it. timezone.now() alone does
+        not — it resolves to roughly 15ms on Windows, so a submit and a
+        reopen inside one tick would tie and one of them would be silently
+        ignored. Anything that sets these fields must go through the
+        services, not assign timezone.now() directly."""
         if not self.submitted_at:
             return False
         if self.reopened_at and self.reopened_at > self.submitted_at:
