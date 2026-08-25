@@ -565,3 +565,63 @@ class ActivityViewTests(TestCase):
         self.assertContains(resp, 'Pipelines created')
         self.assertContains(resp, 'Total')
 
+
+
+class KpiNewAccessTests(TestCase):
+    """The sandbox tab renders the same build_dashboard() output the real
+    dashboard does — company revenue, cost savings, on-time delivery — so it
+    has to be gated the same way. It shipped without decorators, and because
+    nothing covered the view, nothing caught it: `/kpis/new/` answered 200 to
+    anonymous requests while `/kpis/` redirected to login.
+
+    Each case is pinned against the equivalent on kpis:dashboard, so the two
+    can't drift apart as the sandbox grows."""
+
+    def setUp(self):
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+
+    def _user(self, role_name):
+        role = Role.objects.get(name=role_name)
+        return User.objects.create_user(
+            username=f'kn_{role_name}', password='pw', role=role)
+
+    def test_anonymous_is_redirected_to_login(self):
+        resp = self.client.get(reverse('kpis:kpi_new'))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/accounts/login/', resp['Location'])
+
+    def test_sales_rep_denied(self):
+        self.client.force_login(self._user(Role.SALES_REP))
+        self.assertEqual(
+            self.client.get(reverse('kpis:kpi_new')).status_code, 403)
+
+    def test_manager_denied(self):
+        self.client.force_login(self._user(Role.MANAGER))
+        self.assertEqual(
+            self.client.get(reverse('kpis:kpi_new')).status_code, 403)
+
+    def test_super_admin_allowed(self):
+        self.client.force_login(self._user(Role.SUPER_ADMIN))
+        self.assertEqual(
+            self.client.get(reverse('kpis:kpi_new')).status_code, 200)
+
+    def test_gated_identically_to_the_real_dashboard(self):
+        """Whatever the answer is for kpis:dashboard, it must be the same
+        here — this is the invariant worth keeping as the sandbox grows."""
+        for role_name in (Role.SUPER_ADMIN, Role.ADMIN, Role.MANAGER, Role.SALES_REP):
+            with self.subTest(role=role_name):
+                client = self.client_class()
+                client.force_login(self._user(role_name))
+                self.assertEqual(
+                    client.get(reverse('kpis:kpi_new')).status_code,
+                    client.get(reverse('kpis:dashboard')).status_code)
+
+    def test_internal_notes_do_not_reach_the_page_source(self):
+        """The shell's ownership notes are a Django comment, not an HTML one,
+        so they must not appear in the rendered output."""
+        self.client.force_login(self._user(Role.SUPER_ADMIN))
+        body = self.client.get(reverse('kpis:kpi_new')).content.decode()
+        self.assertNotIn('owner: this dev', body)
+        self.assertNotIn('Working sandbox tab', body)

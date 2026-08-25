@@ -1249,6 +1249,11 @@
             {% endif %}
             {% if user|can:'kpis.manage' %}
             <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'kpis' and request.resolver_match.url_name == 'kpi_new' %}active{% endif %}" href="{% url 'kpis:kpi_new' %}" data-title="KPI New">
+                    <i class="bi bi-stars"></i> <span>KPI New</span>
+                </a>
+            </li>
+            <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'kpis' and request.resolver_match.url_name == 'manage' %}active{% endif %}" href="{% url 'kpis:manage' %}" data-title="Enter KPI Data">
                     <i class="bi bi-pencil-square"></i> <span>Enter KPI Data</span>
                 </a>

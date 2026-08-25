@@ -1,0 +1,20 @@
+{% comment %} ============================================================
+   Sales & Pipeline — OWNER: lead
+   Metrics to build (see GM_KPI_Dashboard_Build_Spec.docx for the full
+   visual/table mapping we agreed):
+     - Revenue secured this month     -> registry key: sales_revenue_achievement
+     - YTD revenue                    -> same KPI, pass a year-period instead of month
+     - Revenue forecast (ongoing/hotlead/won, shown separately - NOT summed)
+       -> not yet in the registry, needs a new compute function
+     - Total pipeline value           -> not yet exposed as its own KPI
+     - Pipeline coverage ratio        -> registry key: sales_pipeline_coverage
+     (target is entered via "Enter KPI Data" - KPIEntry.target)
+     - New opportunities added (region-wise, this month) -> not yet in the registry
+     - Lost opportunities (region-wise, this month)       -> not yet in the registry
+   ============================================================ {% endcomment %}
+<div class="card mb-4">
+  <div class="card-header"><h5 class="mb-0"><i class="bi bi-graph-up"></i> Sales & Pipeline</h5></div>
+  <div class="card-body">
+    <p class="text-muted small mb-0">TODO — build out this section. `data.departments` (from build_dashboard) already has the Sales department's registered KPIs if you want a starting point; see kpi_new_procurement.html below for a working example of reading from it.</p>
+  </div>
+</div>
