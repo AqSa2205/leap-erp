@@ -281,6 +281,132 @@ def compute_revenue_won(ctx):
     return KPIResult(total, cov, currency=display_ccy)
 
 
+def _open_pipeline(ctx):
+    """Deals still in play, scoped to the context's region/owner.
+
+    Open means active or hot_lead — a deal that has been won or lost is an
+    outcome, not pipeline, and belongs to the revenue metrics instead. This is
+    deliberately NOT period-filtered: pipeline is a snapshot of what is open
+    right now, not a record of what happened during a window.
+    """
+    from projects.models import Project
+    qs = Project.objects.filter(status__category__in=['active', 'hot_lead'])
+    if ctx.region is not None:
+        qs = qs.filter(region=ctx.region)
+    if ctx.user is not None:
+        qs = qs.filter(owner=ctx.user)
+    return qs
+
+
+def _sum_resolved(projects):
+    """(total, valued_count, foreign_currencies) over the shared value ladder."""
+    total = Decimal('0')
+    valued = 0
+    foreign = set()
+    for _project, resolved in _resolved_values(projects):
+        amount = resolved.get('amount')
+        if not amount:
+            continue
+        total += Decimal(amount)
+        valued += 1
+        currency = resolved.get('currency')
+        if currency:
+            foreign.add(currency)
+    return total, valued, foreign
+
+
+def _money_note(total, currency, valued, n, foreign):
+    """Coverage line for a count-headline tile: the money behind the count, and
+    anything that would make that money untrustworthy."""
+    ccy = currency if currency and currency != 'mixed' else ''
+    note = f'{ccy} {total:,.0f}'.strip()
+    if valued < n:
+        note += f' · {n - valued} with no value'
+    if len(foreign) > 1:
+        note += f' · mixed currency: {", ".join(sorted(foreign))}'
+    return note
+
+
+def compute_new_opportunities(ctx):
+    """Deals created during the period.
+
+    `created_at` is set automatically on every row, so unlike the outcome KPIs
+    this needs no tagging discipline and no status history — it is the same
+    answer however the pipeline is maintained.
+
+    The headline is the count; the value rides in the coverage line, because
+    ten small enquiries and one large tender are not the same month and a
+    single figure hides which one happened.
+    """
+    from projects.models import Project
+    qs = Project.objects.filter(
+        created_at__date__gte=ctx.start, created_at__date__lt=ctx.end)
+    if ctx.region is not None:
+        qs = qs.filter(region=ctx.region)
+    if ctx.user is not None:
+        qs = qs.filter(owner=ctx.user)
+
+    n = qs.count()
+    if not n:
+        return KPIResult(Decimal('0'), 'nothing added in this period')
+    total, valued, foreign = _sum_resolved(qs)
+    return KPIResult(Decimal(n),
+                     _money_note(total, _ctx_currency(ctx), valued, n, foreign))
+
+
+def compute_lost_opportunities(ctx):
+    """Deals lost during the period, with the leading reason.
+
+    Counts every deal in the `lost` category, including no-bids — this is a
+    record of what left the pipeline, so a tender we declined did leave it.
+    The distinction matters for WIN RATE, which is a measure of competitive
+    performance and should not move because workload changed; it does not
+    matter here. The split is surfaced in the coverage line either way.
+    """
+    from projects.models import Project
+    qs = _outcome_projects(ctx).filter(status__category='lost')
+    n = qs.count()
+    if not n:
+        return KPIResult(Decimal('0'), 'none lost in this period')
+
+    total, valued, foreign = _sum_resolved(qs)
+    note = _money_note(total, _ctx_currency(ctx), valued, n, foreign)
+
+    reasons = {}
+    for reason in qs.values_list('lost_reason', flat=True):
+        if reason:
+            reasons[reason] = reasons.get(reason, 0) + 1
+    if reasons:
+        labels = dict(Project._meta.get_field('lost_reason').choices or [])
+        top, count = max(reasons.items(), key=lambda kv: kv[1])
+        note += f' · mostly {labels.get(top, top).lower()} ({count})'
+    else:
+        note += ' · no reasons recorded'
+    return KPIResult(Decimal(n), note)
+
+
+def compute_pipeline_value(ctx):
+    """Total value of everything still open, right now.
+
+    The companion to pipeline coverage: coverage answers "is there enough of
+    it", this answers "how much is there". Same ladder, same deals — so the
+    ratio and the amount can never tell different stories.
+    """
+    qs = _open_pipeline(ctx)
+    n = qs.count()
+    if not n:
+        return KPIResult(Decimal('0'), 'no open deals',
+                         currency=_ctx_currency(ctx))
+    total, valued, foreign = _sum_resolved(qs)
+    cov = f'{n} open deal{"s" if n != 1 else ""}'
+    if valued < n:
+        cov += f' ({n - valued} with no value recorded)'
+    display = _ctx_currency(ctx)
+    if display != 'mixed' and len(foreign) > 1:
+        cov += f' — mixed currency: {", ".join(sorted(foreign))}'
+    return KPIResult(total, cov, currency=display)
+
+
 def compute_forecast_accuracy(ctx):
     """Average accuracy of estimated_value vs actual_sales for won deals that
     HAVE an actual recorded (deals with no actual are excluded, not counted as a
@@ -532,6 +658,21 @@ KPI_DEFINITIONS = [
     KPI('sales_ontime_rfq', SALES, 'On-time RFQ submission', PERCENT, 'higher',
         target=Decimal('100'), source='auto', compute=compute_ontime_rfq_submission,
         help='Share of deals (deadline this period) whose proposal was submitted on time.'),
+    KPI('sales_pipeline_value', SALES, 'Total pipeline value', CURRENCY, 'higher',
+        target=None, source='auto', compute=compute_pipeline_value,
+        help='Value of every deal still open right now (active + hot lead). A '
+             'snapshot, not a period total — changing the period does not change it.',
+        target_help='Open-pipeline value you want to be carrying'),
+    KPI('sales_new_opportunities', SALES, 'New opportunities added', COUNT, 'higher',
+        target=None, source='auto', compute=compute_new_opportunities,
+        help='Deals created during the period. The value behind the count is on '
+             'the line below it.',
+        target_help='New deals you want added per period'),
+    KPI('sales_lost_opportunities', SALES, 'Lost opportunities', COUNT, 'lower',
+        target=None, source='auto', compute=compute_lost_opportunities,
+        help='Deals lost during the period, with the leading reason. Includes '
+             'deals we chose not to bid — they left the pipeline too.',
+        target_help='Most you would accept losing per period'),
 
     # ── Proposal ─────────────────────────────────────────────────────────────
     KPI('proposal_submission_ontime', PROPOSAL, 'Submission on-time', PERCENT, 'higher',
@@ -596,6 +737,10 @@ KPI_BY_KEY = {k.key: k for k in KPI_DEFINITIONS}
 USER_ATTRIBUTABLE_KEYS = {
     'sales_revenue_achievement', 'sales_win_rate', 'sales_forecast_accuracy',
     'sales_ontime_rfq',
+    # A rep's own additions, losses and open book. Pipeline VALUE is
+    # attributable; pipeline COVERAGE is not — it divides by a revenue goal
+    # that is set per region, not per person.
+    'sales_new_opportunities', 'sales_lost_opportunities', 'sales_pipeline_value',
     'proposal_submission_ontime', 'proposal_win_rate',
     'proc_cost_savings', 'proc_ppv', 'proc_pr_to_po_cycle', 'proc_ontime_delivery',
     'hr_attendance_punctuality',
