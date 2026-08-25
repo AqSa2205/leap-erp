@@ -50,14 +50,14 @@ class PeriodTests(TestCase):
 
 class RegistryTests(TestCase):
     def test_counts_per_department(self):
-        self.assertEqual(len(kpis_for_department(SALES)), 5)
+        self.assertEqual(len(kpis_for_department(SALES)), 8)
         self.assertEqual(len(kpis_for_department(PROPOSAL)), 6)
         self.assertEqual(len(kpis_for_department(PROCUREMENT)), 10)
-        self.assertEqual(len(KPI_DEFINITIONS), 22)
+        self.assertEqual(len(KPI_DEFINITIONS), 25)
 
-    def test_eleven_auto_ten_manual(self):
+    def test_auto_manual_split(self):
         auto = [k for k in KPI_DEFINITIONS if k.is_auto]
-        self.assertEqual(len(auto), 12)
+        self.assertEqual(len(auto), 15)
         self.assertEqual(len(KPI_DEFINITIONS) - len(auto), 10)
 
     def test_evaluate_higher(self):
@@ -211,7 +211,7 @@ class PerUserComputeTests(ComputeFixtureMixin, TestCase):
     def test_scorecard_excludes_manual_and_dept_only(self):
         card = build_person_scorecard('2026-Q2', self.alice)
         keys = [c['key'] for d in card['departments'] for c in d['cards']]
-        self.assertEqual(len(keys), 11)
+        self.assertEqual(len(keys), 14)
         self.assertNotIn('proc_supplier_performance', keys)   # manual excluded
         self.assertNotIn('sales_pipeline_coverage', keys)     # dept-only excluded
 
@@ -221,7 +221,7 @@ class ServiceTests(ComputeFixtureMixin, TestCase):
         data = build_dashboard('2026-Q2')
         self.assertEqual(len(data['departments']), 4)
         counts = {d['key']: len(d['cards']) for d in data['departments']}
-        self.assertEqual(counts, {SALES: 5, PROPOSAL: 6, PROCUREMENT: 10, 'hr': 1})
+        self.assertEqual(counts, {SALES: 8, PROPOSAL: 6, PROCUREMENT: 10, 'hr': 1})
 
     def test_manual_value_flows_into_card(self):
         KPIEntry.objects.create(
@@ -772,3 +772,226 @@ class ValueLadderTests(ComputeFixtureMixin, TestCase):
                          targets={'sales_revenue_achievement': Decimal('200000')}))
         self.assertEqual(res.value, Decimal('2.00'))   # 400k costed / 200k goal
         self.assertIn('1 costed', res.coverage)
+
+
+class NewOpportunityTests(ComputeFixtureMixin, TestCase):
+    """Deals created during the period.
+
+    `created_at` is set automatically on every row, so unlike the outcome KPIs
+    this needs no tagging discipline and no status history. That makes it the
+    one Sales metric whose answer does not depend on how well the pipeline is
+    maintained -- which is why it is the first one built."""
+
+    def _created_on(self, ref, when, est='100000', region=None, owner=None):
+        p = self._project(ref, self.active, est=est, region=region, owner=owner)
+        Project.objects.filter(pk=p.pk).update(
+            created_at=timezone.make_aware(when))
+        return p
+
+    def test_counts_only_deals_created_in_the_window(self):
+        self._created_on('MAY', datetime.datetime(2026, 5, 20, 9, 0))
+        self._created_on('JUN', datetime.datetime(2026, 6, 2, 9, 0))
+        self.assertEqual(_val('sales_new_opportunities', '2026-05'), Decimal('1'))
+        self.assertEqual(_val('sales_new_opportunities', '2026-06'), Decimal('1'))
+        self.assertEqual(_val('sales_new_opportunities', '2026-Q2'), Decimal('2'))
+
+    def test_value_rides_in_the_coverage_line(self):
+        """The count is the headline; ten small enquiries and one large tender
+        are not the same month, so both numbers have to be visible."""
+        self._created_on('A', datetime.datetime(2026, 5, 1, 9, 0), est='400000')
+        self._created_on('B', datetime.datetime(2026, 5, 2, 9, 0), est='600000')
+        res = KPI_BY_KEY['sales_new_opportunities'].compute(
+            make_context('2026-05', region=self.region))
+        self.assertEqual(res.value, Decimal('2'))
+        self.assertIn('1,000,000', res.coverage)
+        self.assertIn('SAR', res.coverage)
+
+    def test_flags_deals_carrying_no_value(self):
+        self._created_on('A', datetime.datetime(2026, 5, 1, 9, 0), est='400000')
+        self._created_on('B', datetime.datetime(2026, 5, 2, 9, 0), est='0')
+        res = KPI_BY_KEY['sales_new_opportunities'].compute(
+            make_context('2026-05', region=self.region))
+        self.assertIn('1 with no value', res.coverage)
+
+    def test_empty_period_says_so_rather_than_looking_broken(self):
+        res = KPI_BY_KEY['sales_new_opportunities'].compute(make_context('2026-05'))
+        self.assertEqual(res.value, Decimal('0'))
+        self.assertIn('nothing added', res.coverage)
+
+    def test_scoped_by_region_and_owner(self):
+        other = User.objects.create_user(username='rep_no', password='pw')
+        mine = User.objects.create_user(username='rep_me', password='pw')
+        self._created_on('MINE', datetime.datetime(2026, 5, 1, 9, 0), owner=mine)
+        self._created_on('THEIRS', datetime.datetime(2026, 5, 2, 9, 0), owner=other)
+        self._created_on('OTHERREGION', datetime.datetime(2026, 5, 3, 9, 0),
+                         region=self.region2)
+        self.assertEqual(
+            _val('sales_new_opportunities', '2026-05', region=self.region),
+            Decimal('2'))
+        self.assertEqual(
+            _val('sales_new_opportunities', '2026-05', user=mine), Decimal('1'))
+
+
+class LostOpportunityTests(ComputeFixtureMixin, TestCase):
+    """Deals lost during the period, with the leading reason."""
+
+    def _lost(self, ref, est, reason):
+        p = self._project(ref, self.lost, est=est)
+        Project.objects.filter(pk=p.pk).update(lost_reason=reason)
+        return p
+
+    def test_counts_lost_and_reports_the_leading_reason(self):
+        self._lost('L1', '100000', 'price')
+        self._lost('L2', '200000', 'price')
+        self._lost('L3', '50000', 'competitor')
+        res = KPI_BY_KEY['sales_lost_opportunities'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('3'))
+        self.assertIn('350,000', res.coverage)
+        self.assertIn('mostly', res.coverage)
+        self.assertIn('too expensive', res.coverage)
+
+    def test_no_bid_still_counts_as_leaving_the_pipeline(self):
+        """A tender we declined did leave the pipeline, so it belongs in this
+        count. The distinction matters for WIN RATE -- a measure of competitive
+        performance that should not move when workload changes -- not here."""
+        self._lost('NB', '100000', 'no_bid')
+        res = KPI_BY_KEY['sales_lost_opportunities'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('1'))
+        self.assertIn('did not bid', res.coverage.lower())
+
+    def test_says_when_no_reasons_were_recorded(self):
+        self._project('L1', self.lost, est='100000')
+        res = KPI_BY_KEY['sales_lost_opportunities'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertIn('no reasons recorded', res.coverage)
+
+    def test_direction_is_lower_is_better(self):
+        self.assertEqual(KPI_BY_KEY['sales_lost_opportunities'].direction, 'lower')
+
+    def test_empty_period(self):
+        res = KPI_BY_KEY['sales_lost_opportunities'].compute(make_context('2026-Q2'))
+        self.assertEqual(res.value, Decimal('0'))
+        self.assertIn('none lost', res.coverage)
+
+
+class PipelineValueTests(ComputeFixtureMixin, TestCase):
+    """Total value of everything still open -- the companion to pipeline
+    coverage. Same deals, same ladder, so the ratio and the amount can never
+    tell different stories."""
+
+    def test_sums_open_deals_only(self):
+        self._project('OPEN1', self.active, est='300000')
+        self._project('OPEN2', self.active, est='200000')
+        self._project('WON', self.won, est='999999')
+        self._project('LOST', self.lost, est='888888')
+        res = KPI_BY_KEY['sales_pipeline_value'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('500000'))
+        self.assertIn('2 open deals', res.coverage)
+
+    def test_is_a_snapshot_not_a_period_total(self):
+        """Pipeline is what is open right now. Changing the period must not
+        change it -- a deal does not leave the pipeline because the month did."""
+        self._project('OPEN', self.active, est='300000')
+        first = _val('sales_pipeline_value', '2026-05', region=self.region)
+        for period in ('2026-06', '2026-Q1', '2026-Q2', '2026'):
+            with self.subTest(period=period):
+                self.assertEqual(
+                    _val('sales_pipeline_value', period, region=self.region), first)
+
+    def test_agrees_with_pipeline_coverage(self):
+        """value / goal must equal the coverage ratio, or the two tiles are
+        telling different stories about the same deals."""
+        self._project('OPEN1', self.active, est='300000')
+        self._project('OPEN2', self.active, est='300000')
+        goal = Decimal('200000')
+        value = _val('sales_pipeline_value', '2026-Q2', region=self.region)
+        ratio = _val('sales_pipeline_coverage', '2026-Q2', region=self.region,
+                     targets={'sales_revenue_achievement': goal})
+        self.assertEqual((value / goal).quantize(Decimal('0.01')), ratio)
+
+    def test_empty_pipeline(self):
+        res = KPI_BY_KEY['sales_pipeline_value'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('0'))
+        self.assertIn('no open deals', res.coverage)
+
+
+class SalesSectionRenderTests(ComputeFixtureMixin, TestCase):
+    """The Sales partial renders real figures on the page.
+
+    Worth having as a view test rather than only compute tests: a template
+    typo raises at render time, not import time, so a broken partial 500s the
+    whole dashboard and no amount of registry testing notices."""
+
+    def setUp(self):
+        super().setUp()
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.user = User.objects.create_user(
+            username='gm', password='pw', role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.client.force_login(self.user)
+
+    def _get(self, **params):
+        url = reverse('kpis:kpi_new')
+        if params:
+            url += '?' + '&'.join(f'{k}={v}' for k, v in params.items())
+        return self.client.get(url)
+
+    def test_page_renders_with_the_sales_section(self):
+        resp = self._get()
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode()
+        self.assertIn('Sales &amp; Pipeline', body)
+        self.assertIn('Sales Performance', body)
+        self.assertIn('Pipeline Overview', body)
+
+    def test_every_sales_tile_is_present(self):
+        body = self._get().content.decode()
+        for label in ('Revenue secured', 'YTD revenue', 'Revenue forecast',
+                      'Total pipeline value', 'Pipeline coverage',
+                      'New opportunities', 'Lost opportunities'):
+            with self.subTest(tile=label):
+                self.assertIn(label, body)
+
+    def test_figures_reach_the_page(self):
+        """Not just that the tiles exist -- that a real number lands in one."""
+        self._project('OPEN1', self.active, est='750000')
+        body = self._get(region=self.region.code).content.decode()
+        self.assertIn('750,000', body)
+        self.assertIn('1 open deal', body)
+
+    def test_ytd_is_computed_against_the_year_not_the_selected_period(self):
+        """A deal won in Q1 must not appear in a Q2 revenue tile, but must
+        still be inside YTD -- which is the whole reason YTD is computed
+        separately from the dashboard's single period."""
+        self._project('Q1WIN', self.won, est='400000', quarter='Q1')
+        resp = self._get(period='2026-Q2', region=self.region.code)
+        self.assertEqual(resp.status_code, 200)
+        ytd = resp.context['ytd']
+        self.assertEqual(ytd['value'], Decimal('400000'))
+        self.assertEqual(ytd['period_label'], 'FY 2026')
+        # ...while the selected-period tile for Q2 saw nothing.
+        q2 = resp.context['cards']['sales']['sales_revenue_achievement']
+        self.assertEqual(q2['value'], Decimal('0'))
+
+    def test_cards_lookup_covers_every_sales_kpi(self):
+        """The partial addresses cards by key. A key that stops existing would
+        silently render an empty tile, so pin the lookup itself."""
+        resp = self._get()
+        sales = resp.context['cards']['sales']
+        for key in ('sales_revenue_achievement', 'sales_pipeline_value',
+                    'sales_pipeline_coverage', 'sales_new_opportunities',
+                    'sales_lost_opportunities'):
+            with self.subTest(key=key):
+                self.assertIn(key, sales)
+
+    def test_malformed_period_does_not_break_the_ytd_figure(self):
+        """_resolve_period falls back to the current quarter on garbage, so the
+        page must still render rather than propagating the bad string."""
+        resp = self._get(period='not-a-period')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNotNone(resp.context['ytd'])

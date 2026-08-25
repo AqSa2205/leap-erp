@@ -106,14 +106,59 @@ def kpi_new(request):
     period = _resolve_period(request)
     region, regions = _resolve_region(request)
     data = build_dashboard(period, region=region)
+
+    # Cards keyed by KPI key, so a partial can place one specific metric where
+    # the GM's layout wants it instead of looping over the whole department in
+    # registry order. Same card dicts build_dashboard already produced - no
+    # second computation.
+    cards = {
+        dept['key']: {c['key']: c for c in dept['cards']}
+        for dept in data['departments']
+    }
+
     context = {
         'data': data,
+        'cards': cards,
+        'ytd': _ytd_revenue_card(period, region),
         'period': period,
         'period_options': period_options(),
         'regions': regions,
         'selected_region': region,
     }
     return render(request, 'kpis/kpi_new.html', context)
+
+
+def _ytd_revenue_card(period, region):
+    """Revenue for the financial year containing `period`.
+
+    The dashboard computes one period, but Sales wants revenue for the selected
+    period AND year-to-date on screen together. Rather than build a second full
+    dashboard - which would recompute every department's KPIs to use one number
+    - this computes the single revenue KPI against a year period.
+
+    Returns None if the period string is malformed; the template just omits the
+    figure rather than the page failing.
+    """
+    from .services import build_card
+    from .models import KPIEntry
+    from .periods import period_bounds
+
+    year = (period or '').split('-')[0]
+    if not year.isdigit():
+        return None
+    try:
+        bounds = period_bounds(year)
+    except ValueError:
+        return None
+
+    entries = {e.kpi_key: e for e in KPIEntry.objects.filter(period=year)}
+    targets = {k: e.target for k, e in entries.items() if e.target is not None}
+    card = build_card(KPI_BY_KEY['sales_revenue_achievement'], year, entries,
+                      bounds, targets, region=region)
+    # build_card() does not carry the period it was built for, and the template
+    # needs to say which year this figure covers.
+    card['period_label'] = label_for(year)
+    return card
 
 
 @login_required
