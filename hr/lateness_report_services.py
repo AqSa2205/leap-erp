@@ -6,10 +6,28 @@ notification: never touches AttendanceRecord rows or any existing
 absence/leave totals, and late_dates is snapshotted at generation time
 rather than derived live, so the report reflects what was true when it
 ran even if underlying records are corrected afterward.
+
+Emails are sent synchronously. The only production caller is a one-shot
+management command (see hr/management/commands/generate_monthly_lateness_reports.py) -
+a background thread there would be silently killed when the process
+exits right after handle() returns, before SMTP delivery completes.
+That is not hypothetical: it was the original implementation, and it
+meant essentially no email was ever actually delivered in production
+despite report rows and logs looking correct.
+
+Cron scheduling constraint: is_last_day_of_month is evaluated against
+Asia/Riyadh local time (UTC+3), but Render cron schedules run in UTC.
+Local midnight is 21:00 UTC the prior day, so the job must be scheduled
+strictly before 21:00 UTC to still see "today" as the last day locally;
+scheduling at or after 21:00 UTC means the job silently no-ops every
+month (today is already the 1st locally). Late arrivals are also frozen
+at whatever point in the day the job runs (see generate_monthly_lateness_reports's
+docstring), so schedule as close to 21:00 UTC as safely possible - e.g.
+20:30 UTC (23:30 Riyadh) - to catch the fullest possible day while
+staying inside the safe window.
 """
 import calendar
 import logging
-import sys
 from datetime import date as date_cls
 
 from django.conf import settings
@@ -17,36 +35,40 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-# Sending synchronously during tests avoids a real SQLite-locking race:
-# TransactionTestCase does real commits and flushes tables between tests,
-# but a fire-and-forget background thread from one test's email send can
-# still be writing (report.save(update_fields=[...])) when the next test
-# starts, and SQLite only allows one writer at a time.
-_RUNNING_TESTS = 'test' in sys.argv
-
 
 def is_last_day_of_month(d):
     """True if d is the final calendar day of its month - the trigger
     condition generate_monthly_lateness_reports checks, so the
     underlying management command can safely run daily via cron and
-    only actually do anything once a month."""
+    only actually do anything once a month. See this module's docstring
+    for the UTC-cron-vs-local-date scheduling constraint."""
     last_day = calendar.monthrange(d.year, d.month)[1]
     return d.day == last_day
 
 
-def generate_monthly_lateness_reports(today=None, _skip_last_day_check=False):
-    """For every ACTIVE employee with at least one 'late' AttendanceRecord
-    in the current month (from the 1st up to and including `today`),
-    create a MonthlyLatenessReport snapshot and email them the summary.
-    Report creation is idempotent per (employee, month) via
-    get_or_create - re-running never duplicates or overwrites an
-    existing report's snapshot. The email send retries on every call
-    until it succeeds (report.email_sent_at is None) - a transient
-    failure (network blip, mail service down) on one run doesn't
-    silently mean the employee never hears about it; once sent, it's
-    never resent. Returns the number of NEW reports created this call
-    (retried sends on already-existing reports don't add to this
-    count).
+def generate_monthly_lateness_reports(today=None, _skip_last_day_check=False, target_month=None):
+    """For every ACTIVE employee with at least one undisputed 'late'
+    AttendanceRecord in the target month, create a MonthlyLatenessReport
+    snapshot and email them the summary. Report creation is idempotent
+    per (employee, month) via get_or_create - re-running never
+    duplicates or overwrites an existing report's snapshot, which also
+    means a run partway through the last day permanently freezes
+    whatever late arrivals were stamped by that point - schedule cron
+    as late in the day as the UTC constraint (see module docstring)
+    safely allows. The email send retries on every call until it
+    succeeds (report.email_sent_at is None) - a transient failure
+    (network blip, mail service down) on one run doesn't silently mean
+    the employee never hears about it; once sent, it's never resent.
+    Returns the number of NEW reports created this call (retried sends
+    on already-existing reports don't add to this count).
+
+    Days with a currently-pending LateQuery are excluded from the count
+    entirely (not just flagged) - a disputed lateness that hasn't been
+    resolved yet shouldn't be reported to the employee or HR as a
+    confirmed policy consequence. If the query is later approved and the
+    day flips to Present, the report for that month (if already
+    generated) is not retroactively corrected - this is the same
+    frozen-snapshot trade-off documented above.
 
     Refuses to run (returns 0, logs a warning) unless `today` is
     genuinely the last day of its month - a partial-month report would
@@ -56,8 +78,17 @@ def generate_monthly_lateness_reports(today=None, _skip_last_day_check=False):
     any direct caller (a script, a shell session, a future admin
     action) gets the same protection. Pass _skip_last_day_check=True
     only for a deliberate manual recovery (e.g. the scheduled run was
-    missed) - never for routine use."""
-    from hr.models import AttendanceRecord, MonthlyLatenessReport
+    missed) - never for routine use.
+
+    target_month (a date; only its year/month are used) lets a recovery
+    call explicitly target the missed month instead of deriving it from
+    `today`. Without this, recovering a missed 31 Aug run by calling
+    this on 1 Sep with _skip_last_day_check=True would generate a
+    one-day September report instead of the intended August one,
+    permanently locking September to a broken partial snapshot - always
+    pass target_month explicitly alongside _skip_last_day_check for any
+    manual recovery."""
+    from hr.models import AttendanceRecord, MonthlyLatenessReport, LateQuery
 
     today = today or timezone.localtime(timezone.now()).date()
     if not _skip_last_day_check and not is_last_day_of_month(today):
@@ -65,15 +96,28 @@ def generate_monthly_lateness_reports(today=None, _skip_last_day_check=False):
             'generate_monthly_lateness_reports called with %s, which is not '
             'the last day of its month - refusing to run (a partial-month '
             'report would be permanently locked in). Pass '
-            '_skip_last_day_check=True for a deliberate manual recovery.', today)
+            '_skip_last_day_check=True and an explicit target_month for a '
+            'deliberate manual recovery.', today)
         return 0
-    month_start = today.replace(day=1)
+
+    month_start = (target_month or today).replace(day=1)
+    last_day_num = calendar.monthrange(month_start.year, month_start.month)[1]
+    month_end = date_cls(month_start.year, month_start.month, last_day_num)
+    # Bounding by month_end (not just today) matters for a target_month
+    # recovery on a later date - without it, a call on 5 Sep recovering
+    # August would incorrectly pull in September's lates too.
+    range_end = min(month_end, today)
+
+    disputed_record_ids = set(
+        LateQuery.objects.filter(status='pending').values_list('attendance_record_id', flat=True)
+    )
 
     late_records = (
         AttendanceRecord.objects.filter(
-            status='late', date__gte=month_start, date__lte=today,
+            status='late', date__gte=month_start, date__lte=range_end,
             employee__is_active=True)
-        .select_related('employee').order_by('employee_id', 'date')
+        .exclude(pk__in=disputed_record_ids)
+        .select_related('employee', 'employee__user').order_by('employee_id', 'date')
     )
     by_employee = {}
     for r in late_records:
@@ -113,69 +157,60 @@ def _format_late_dates(late_dates):
 
 
 def _send_lateness_report_email(report):
-    """Sends the monthly summary and stamps email_sent_at - mirrors the
-    threaded-send pattern used by AttendanceRecord._send_late_email
-    (hr/models/attendance.py), including the same branded HTML
-    alternative and letter format (logo after 'Admin Team', address
-    block, confidentiality disclaimer)."""
-    import threading
+    """Sends the monthly summary and stamps email_sent_at. Synchronous
+    by design - see this module's docstring for why a background thread
+    is wrong for this specific caller (a one-shot management command),
+    even though the same threaded pattern is correct and intentional in
+    AttendanceRecord._send_late_email, which runs inside a long-lived
+    gunicorn worker instead."""
     from django.core.mail import EmailMultiAlternatives
-    from django.db import connections
 
     employee = report.employee
     to_email = employee.user.email
     month_label = report.month.strftime('%B %Y')
     late_dates_formatted = _format_late_dates(report.late_dates)
 
-    def _send():
-        try:
-            plain_body = (
-                f'Dear {employee.full_name},\n\n'
-                f'You have accumulated {report.total_lates} late arrival(s) in {month_label}. '
-                f'According to company policy (3 lates = 1 absence), this results in '
-                f'{report.converted_absences} absence day(s) added to your monthly attendance record.\n\n'
-                f'Total Lates: {report.total_lates}\n'
-                f'Late Dates: {late_dates_formatted}\n'
-                f'Converted Absences: {report.total_lates} lates \u00f7 3 = {report.converted_absences} day(s) absent\n'
-                f'Monthly Attendance Impact: +{report.converted_absences} absence day(s) added to your record\n\n'
-                'For questions or corrections, please contact HR.\n\n'
-                'Kind regards,\n'
-                'Admin Team\n\n'
-                'Leap Networks Arabia\n'
-                'P.O. Box \u2013 70005, Al-Khobar-31952, Kingdom of Saudi Arabia\n'
-                'TEL: (+966) 13 8491867 X 108\n'
-                'Web: www.leap-arabia.com\n\n'
-                'Disclaimer: This email and its attachments are confidential and intended only for '
-                'the recipient(s). If you are not the intended recipient, please notify the sender '
-                'and delete the message. Unauthorized use, disclosure, or distribution of the email '
-                'or the documents is prohibited. Leap Networks Arabia complies with GDPR and ensures '
-                'the security of personal data. While we take steps to protect against malware, we '
-                "cannot guarantee the email's security. Please verify any information before acting on it."
-            )
-            html_body = _build_lateness_report_email_html(
-                employee_name=employee.full_name, month_label=month_label,
-                total_lates=report.total_lates, late_dates_formatted=late_dates_formatted,
-                converted_absences=report.converted_absences,
-            )
-            msg = EmailMultiAlternatives(
-                subject=f'Attendance Alert - Lateness Summary for {month_label}',
-                body=plain_body,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                to=[to_email],
-            )
-            msg.attach_alternative(html_body, 'text/html')
-            msg.send(fail_silently=False)
-            report.email_sent_at = timezone.now()
-            report.save(update_fields=['email_sent_at'])
-        except Exception:
-            logger.exception('Failed to send monthly lateness report email to %s', to_email)
-        finally:
-            connections.close_all()
-
-    if _RUNNING_TESTS:
-        _send()
-    else:
-        threading.Thread(target=_send, daemon=True).start()
+    try:
+        plain_body = (
+            f'Dear {employee.full_name},\n\n'
+            f'You have accumulated {report.total_lates} late arrival(s) in {month_label}. '
+            f'According to company policy (3 lates = 1 absence), this is calculated as '
+            f'{report.converted_absences} absence day(s) under this policy.\n\n'
+            f'Total Lates: {report.total_lates}\n'
+            f'Late Dates: {late_dates_formatted}\n'
+            f'Converted Absences: {report.total_lates} lates \u00f7 3 = {report.converted_absences} day(s)\n'
+            f'Monthly Attendance Impact: {report.converted_absences} absence day(s) calculated under this policy - to be applied by HR\n\n'
+            'For questions or corrections, please contact HR.\n\n'
+            'Kind regards,\n'
+            'Admin Team\n\n'
+            'Leap Networks Arabia\n'
+            'P.O. Box \u2013 70005, Al-Khobar-31952, Kingdom of Saudi Arabia\n'
+            'TEL: (+966) 13 8491867 X 108\n'
+            'Web: www.leap-arabia.com\n\n'
+            'Disclaimer: This email and its attachments are confidential and intended only for '
+            'the recipient(s). If you are not the intended recipient, please notify the sender '
+            'and delete the message. Unauthorized use, disclosure, or distribution of the email '
+            'or the documents is prohibited. Leap Networks Arabia complies with GDPR and ensures '
+            'the security of personal data. While we take steps to protect against malware, we '
+            "cannot guarantee the email's security. Please verify any information before acting on it."
+        )
+        html_body = _build_lateness_report_email_html(
+            employee_name=employee.full_name, month_label=month_label,
+            total_lates=report.total_lates, late_dates_formatted=late_dates_formatted,
+            converted_absences=report.converted_absences,
+        )
+        msg = EmailMultiAlternatives(
+            subject=f'Attendance Alert - Lateness Summary for {month_label}',
+            body=plain_body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=[to_email],
+        )
+        msg.attach_alternative(html_body, 'text/html')
+        msg.send(fail_silently=False)
+        report.email_sent_at = timezone.now()
+        report.save(update_fields=['email_sent_at'])
+    except Exception:
+        logger.exception('Failed to send monthly lateness report email to %s', to_email)
 
 
 def _build_lateness_report_email_html(employee_name, month_label, total_lates,
@@ -206,8 +241,8 @@ def _build_lateness_report_email_html(employee_name, month_label, total_lates,
 
             <p style="color:#555; font-size:14px; line-height:1.7; margin:0 0 25px;">
                 You have accumulated <strong>{total_lates}</strong> late arrival(s) in {month_label}.
-                According to company policy (3 lates = 1 absence), this results in
-                <strong>{converted_absences}</strong> absence day(s) added to your monthly attendance record.
+                According to company policy (3 lates = 1 absence), this is calculated as
+                <strong>{converted_absences}</strong> absence day(s) under this policy.
             </p>
 
             <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8f9fa; border-radius:8px; border-left:4px solid #C41E3A;">
@@ -219,10 +254,10 @@ def _build_lateness_report_email_html(employee_name, month_label, total_lates,
                     <strong>Late Dates:</strong> {late_dates_formatted}
                 </p>
                 <p style="color:#555; font-size:13px; margin:0 0 10px; line-height:1.6;">
-                    <strong>Converted Absences:</strong> {total_lates} lates &divide; 3 = {converted_absences} day(s) absent
+                    <strong>Converted Absences:</strong> {total_lates} lates &divide; 3 = {converted_absences} day(s)
                 </p>
                 <p style="color:#555; font-size:13px; margin:0; line-height:1.6;">
-                    <strong>Monthly Attendance Impact:</strong> +{converted_absences} absence day(s) added to your record
+                    <strong>Monthly Attendance Impact:</strong> {converted_absences} absence day(s) calculated under this policy &ndash; to be applied by HR
                 </p>
             </td></tr>
             </table>
