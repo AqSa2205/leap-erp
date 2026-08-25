@@ -10577,7 +10577,7 @@ class MonthlyLatenessReportTests(TransactionTestCase):
             self.assertIn('Total Lates: 6', sent.body)
             self.assertIn('3 Aug, 5 Aug, 7 Aug, 12 Aug, 18 Aug, 22 Aug', sent.body)
             self.assertIn('6 lates \u00f7 3 = 2', sent.body)
-            self.assertIn('+2 absence day', sent.body)
+            self.assertIn('2 absence day(s) calculated under this policy', sent.body)
             self.assertEqual(len(sent.alternatives), 1)
             html_content, mimetype = sent.alternatives[0]
             self.assertEqual(mimetype, 'text/html')
@@ -10717,9 +10717,9 @@ class MonthlyLatenessReportEdgeCaseTests(TestCase):
         self.emp.save(update_fields=['user'])
 
     def _mark_late(self, year, month, day):
-        AttendanceRecord.objects.bulk_create([
+        return AttendanceRecord.objects.bulk_create([
             AttendanceRecord(employee=self.emp, date=_date(year, month, day), status='late')
-        ])
+        ])[0]
 
     def test_previous_month_lates_not_counted(self):
         from hr.lateness_report_services import generate_monthly_lateness_reports
@@ -10794,3 +10794,50 @@ class MonthlyLatenessReportEdgeCaseTests(TestCase):
         count = generate_monthly_lateness_reports(today=_date(2026, 8, 31))
         self.assertEqual(count, 0)
         self.assertFalse(MonthlyLatenessReport.objects.filter(employee=self.emp).exists())
+
+    def test_target_month_recovers_correct_month(self):
+        # Simulate a missed 31 Aug run being recovered on 5 Sep - without
+        # target_month, this would incorrectly generate a one-day September
+        # report instead of the intended August one.
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        self._mark_late(2026, 8, 3)
+        self._mark_late(2026, 8, 5)
+        self._mark_late(2026, 8, 7)
+        self._mark_late(2026, 9, 2)  # should NOT leak into the August recovery
+        count = generate_monthly_lateness_reports(
+            today=_date(2026, 9, 5), _skip_last_day_check=True,
+            target_month=_date(2026, 8, 1))
+        self.assertEqual(count, 1)
+        report = MonthlyLatenessReport.objects.get(employee=self.emp, month=_date(2026, 8, 1))
+        self.assertEqual(report.total_lates, 3)
+        self.assertEqual(report.late_dates, ['2026-08-03', '2026-08-05', '2026-08-07'])
+        self.assertFalse(MonthlyLatenessReport.objects.filter(
+            employee=self.emp, month=_date(2026, 9, 1)).exists())
+
+    def test_pending_disputed_late_excluded(self):
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        from hr.models import LateQuery
+        self._mark_late(2026, 8, 3)
+        self._mark_late(2026, 8, 5)
+        disputed_record = self._mark_late(2026, 8, 7)
+        LateQuery.objects.create(
+            employee=self.emp, attendance_record=disputed_record,
+            status='pending', message='I was not late.')
+        generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+        report = MonthlyLatenessReport.objects.get(employee=self.emp, month=_date(2026, 8, 1))
+        self.assertEqual(report.total_lates, 2)
+        self.assertEqual(report.late_dates, ['2026-08-03', '2026-08-05'])
+
+    def test_resolved_disputed_late_still_counted(self):
+        # Only PENDING disputes are excluded - an approved or rejected
+        # query no longer blocks the day from being counted.
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        from hr.models import LateQuery
+        self._mark_late(2026, 8, 3)
+        resolved_record = self._mark_late(2026, 8, 5)
+        LateQuery.objects.create(
+            employee=self.emp, attendance_record=resolved_record,
+            status='rejected', message='Disputed but rejected.')
+        generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+        report = MonthlyLatenessReport.objects.get(employee=self.emp, month=_date(2026, 8, 1))
+        self.assertEqual(report.total_lates, 2)
