@@ -51,13 +51,13 @@ class PeriodTests(TestCase):
 class RegistryTests(TestCase):
     def test_counts_per_department(self):
         self.assertEqual(len(kpis_for_department(SALES)), 8)
-        self.assertEqual(len(kpis_for_department(PROPOSAL)), 6)
+        self.assertEqual(len(kpis_for_department(PROPOSAL)), 10)
         self.assertEqual(len(kpis_for_department(PROCUREMENT)), 10)
-        self.assertEqual(len(KPI_DEFINITIONS), 25)
+        self.assertEqual(len(KPI_DEFINITIONS), 29)
 
     def test_auto_manual_split(self):
         auto = [k for k in KPI_DEFINITIONS if k.is_auto]
-        self.assertEqual(len(auto), 15)
+        self.assertEqual(len(auto), 19)
         self.assertEqual(len(KPI_DEFINITIONS) - len(auto), 10)
 
     def test_evaluate_higher(self):
@@ -211,7 +211,7 @@ class PerUserComputeTests(ComputeFixtureMixin, TestCase):
     def test_scorecard_excludes_manual_and_dept_only(self):
         card = build_person_scorecard('2026-Q2', self.alice)
         keys = [c['key'] for d in card['departments'] for c in d['cards']]
-        self.assertEqual(len(keys), 14)
+        self.assertEqual(len(keys), 18)
         self.assertNotIn('proc_supplier_performance', keys)   # manual excluded
         self.assertNotIn('sales_pipeline_coverage', keys)     # dept-only excluded
 
@@ -221,7 +221,7 @@ class ServiceTests(ComputeFixtureMixin, TestCase):
         data = build_dashboard('2026-Q2')
         self.assertEqual(len(data['departments']), 4)
         counts = {d['key']: len(d['cards']) for d in data['departments']}
-        self.assertEqual(counts, {SALES: 8, PROPOSAL: 6, PROCUREMENT: 10, 'hr': 1})
+        self.assertEqual(counts, {SALES: 8, PROPOSAL: 10, PROCUREMENT: 10, 'hr': 1})
 
     def test_manual_value_flows_into_card(self):
         KPIEntry.objects.create(
@@ -995,3 +995,233 @@ class SalesSectionRenderTests(ComputeFixtureMixin, TestCase):
         resp = self._get(period='not-a-period')
         self.assertEqual(resp.status_code, 200)
         self.assertIsNotNone(resp.context['ytd'])
+
+
+class RFQActivityTests(ComputeFixtureMixin, TestCase):
+    """RFQ Activity: received, submitted, overdue, pending.
+
+    Every pipeline project counts as an RFQ - a project is raised when a
+    tender arrives, so the two are the same event and nothing has to be filled
+    in for a tender to be counted. The accepted trade-off is that a project
+    with no submission_deadline can never be overdue; the tile reports how many
+    it cannot see rather than quietly dropping them."""
+
+    def setUp(self):
+        super().setUp()
+        self.today = timezone.localdate()
+
+    def _rfq(self, ref, deadline_offset=None, status=None, created=None,
+             owner=None, region=None):
+        """An RFQ. `deadline_offset` in days from today; None = no deadline."""
+        p = self._project(ref, status or self.active, est='100000',
+                          owner=owner, region=region)
+        fields = {}
+        if deadline_offset is not None:
+            fields['submission_deadline'] = (
+                self.today + datetime.timedelta(days=deadline_offset))
+        if created is not None:
+            fields['created_at'] = timezone.make_aware(created)
+        if fields:
+            Project.objects.filter(pk=p.pk).update(**fields)
+        return p
+
+    def _submit(self, project, days_ago=1, by=None):
+        from proposals.models import TechnicalProposal
+        # proposal_reference is unique, so revisions of the same proposal each
+        # need their own -- which is exactly why the compute counts distinct
+        # projects rather than rows.
+        n = TechnicalProposal.objects.count() + 1
+        return TechnicalProposal.objects.create(
+            project=project, title=f'TP-{project.project_name}',
+            proposal_reference=f'TP-REF-{n:04d}',
+            status='submitted',
+            revision_date=self.today - datetime.timedelta(days=days_ago),
+            created_by=by)
+
+    # ── received ────────────────────────────────────────────────────────────
+
+    def test_received_counts_projects_created_in_the_window(self):
+        self._rfq('MAY', created=datetime.datetime(2026, 5, 10, 9, 0))
+        self._rfq('JUN', created=datetime.datetime(2026, 6, 10, 9, 0))
+        self.assertEqual(_val('proposal_rfqs_received', '2026-05'), Decimal('1'))
+        self.assertEqual(_val('proposal_rfqs_received', '2026-Q2'), Decimal('2'))
+
+    def test_received_flags_rfqs_with_no_deadline(self):
+        self._rfq('A', deadline_offset=10, created=datetime.datetime(2026, 5, 1, 9, 0))
+        self._rfq('B', created=datetime.datetime(2026, 5, 2, 9, 0))
+        res = KPI_BY_KEY['proposal_rfqs_received'].compute(
+            make_context('2026-05', region=self.region))
+        self.assertEqual(res.value, Decimal('2'))
+        self.assertIn('1 with no deadline set', res.coverage)
+
+    def test_received_matches_the_sales_new_opportunities_tile(self):
+        """Same underlying event seen by two audiences. They must agree -- if
+        they ever diverge, one of them has quietly changed its definition."""
+        for i in range(3):
+            self._rfq(f'R{i}', created=datetime.datetime(2026, 5, i + 1, 9, 0))
+        ctx = ('2026-05',)
+        self.assertEqual(
+            _val('proposal_rfqs_received', *ctx, region=self.region),
+            _val('sales_new_opportunities', *ctx, region=self.region))
+
+    # ── submitted ───────────────────────────────────────────────────────────
+
+    def test_submitted_counts_once_per_project_not_per_revision(self):
+        """A proposal revised three times is one RFQ answered. Counting rows
+        would let re-work inflate the figure."""
+        p = self._rfq('MULTI', deadline_offset=5)
+        for d in (9, 5, 2):
+            self._submit(p, days_ago=d)
+        period = f'{self.today.year}-{self.today.month:02d}'
+        res = KPI_BY_KEY['proposal_rfqs_submitted'].compute(
+            make_context(period, region=self.region))
+        self.assertEqual(res.value, Decimal('1'))
+
+    def test_submitted_uses_the_latest_revision_for_the_period(self):
+        p = self._rfq('LATE_REV', deadline_offset=5)
+        self._submit(p, days_ago=400)          # last year
+        self._submit(p, days_ago=1)            # this month -> counts here
+        period = f'{self.today.year}-{self.today.month:02d}'
+        self.assertEqual(
+            _val('proposal_rfqs_submitted', period, region=self.region), Decimal('1'))
+
+    def test_submitted_ignores_drafts(self):
+        from proposals.models import TechnicalProposal
+        p = self._rfq('DRAFT', deadline_offset=5)
+        TechnicalProposal.objects.create(
+            project=p, title='D', proposal_reference='TP-DRAFT-1',
+            status='draft', revision_date=self.today)
+        period = f'{self.today.year}-{self.today.month:02d}'
+        res = KPI_BY_KEY['proposal_rfqs_submitted'].compute(
+            make_context(period, region=self.region))
+        self.assertEqual(res.value, Decimal('0'))
+        self.assertIn('none submitted', res.coverage)
+
+    # ── overdue ─────────────────────────────────────────────────────────────
+
+    def test_overdue_counts_past_deadline_with_nothing_submitted(self):
+        self._rfq('LATE', deadline_offset=-5)
+        self._rfq('FUTURE', deadline_offset=5)
+        res = KPI_BY_KEY['proposal_rfqs_overdue'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('1'))
+        self.assertIn('past deadline', res.coverage)
+
+    def test_a_submitted_rfq_is_not_overdue_however_late_the_deadline(self):
+        """Answered is answered. A proposal submitted last quarter still
+        answers the RFQ today, so it must not resurface as overdue."""
+        p = self._rfq('ANSWERED', deadline_offset=-30)
+        self._submit(p, days_ago=200)
+        self.assertEqual(
+            _val('proposal_rfqs_overdue', '2026-Q2', region=self.region), Decimal('0'))
+
+    def test_won_and_lost_rfqs_drop_out(self):
+        """A decided deal is no longer awaiting a proposal. Counting it forever
+        would make the tile grow without bound."""
+        self._rfq('WON_LATE', deadline_offset=-10, status=self.won)
+        self._rfq('LOST_LATE', deadline_offset=-10, status=self.lost)
+        self.assertEqual(
+            _val('proposal_rfqs_overdue', '2026-Q2', region=self.region), Decimal('0'))
+
+    def test_overdue_reports_what_it_cannot_see(self):
+        """The accepted blind spot: no deadline means nothing to be late
+        against. It has to be visible on the tile, not silently dropped."""
+        self._rfq('LATE', deadline_offset=-5)
+        self._rfq('NO_DEADLINE')
+        res = KPI_BY_KEY['proposal_rfqs_overdue'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('1'))
+        self.assertIn('no deadline set', res.coverage)
+
+    def test_overdue_is_a_snapshot_not_a_period_total(self):
+        self._rfq('LATE', deadline_offset=-5)
+        first = _val('proposal_rfqs_overdue', '2026-05', region=self.region)
+        for period in ('2026-06', '2026-Q1', '2026-Q2', '2026'):
+            with self.subTest(period=period):
+                self.assertEqual(
+                    _val('proposal_rfqs_overdue', period, region=self.region), first)
+
+    # ── pending ─────────────────────────────────────────────────────────────
+
+    def test_pending_counts_unanswered_and_not_yet_late(self):
+        self._rfq('SOON', deadline_offset=3)
+        self._rfq('LATER', deadline_offset=40)
+        self._rfq('LATE', deadline_offset=-5)          # overdue, not pending
+        res = KPI_BY_KEY['proposal_rfqs_pending'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('2'))
+        self.assertIn('1 due within 7 days', res.coverage)
+
+    def test_an_rfq_with_no_deadline_is_pending_not_overdue(self):
+        self._rfq('NO_DEADLINE')
+        self.assertEqual(
+            _val('proposal_rfqs_pending', '2026-Q2', region=self.region), Decimal('1'))
+        self.assertEqual(
+            _val('proposal_rfqs_overdue', '2026-Q2', region=self.region), Decimal('0'))
+
+    def test_overdue_and_pending_reconcile(self):
+        """The invariant that makes the two tiles trustworthy together: they
+        are mutually exclusive and between them cover every open RFQ with
+        nothing submitted."""
+        self._rfq('LATE1', deadline_offset=-9)
+        self._rfq('LATE2', deadline_offset=-1)
+        self._rfq('SOON', deadline_offset=2)
+        self._rfq('NO_DEADLINE')
+        answered = self._rfq('ANSWERED', deadline_offset=-3)
+        self._submit(answered)
+
+        overdue = _val('proposal_rfqs_overdue', '2026-Q2', region=self.region)
+        pending = _val('proposal_rfqs_pending', '2026-Q2', region=self.region)
+        unanswered = Project.objects.filter(
+            status__category__in=['active', 'hot_lead'], region=self.region
+        ).exclude(pk=answered.pk).count()
+        self.assertEqual(overdue + pending, Decimal(unanswered))
+
+    def test_scoped_by_region(self):
+        self._rfq('MINE', deadline_offset=-5, region=self.region)
+        self._rfq('THEIRS', deadline_offset=-5, region=self.region2)
+        self.assertEqual(
+            _val('proposal_rfqs_overdue', '2026-Q2', region=self.region), Decimal('1'))
+        self.assertEqual(
+            _val('proposal_rfqs_overdue', '2026-Q2', region=self.region2), Decimal('1'))
+
+
+class ProposalSectionRenderTests(ComputeFixtureMixin, TestCase):
+    """The RFQ / Proposal partial renders. A template typo raises at render
+    time, so a broken partial 500s the whole dashboard and no amount of
+    registry testing notices."""
+
+    def setUp(self):
+        super().setUp()
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.user = User.objects.create_user(
+            username='gm_prop', password='pw',
+            role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.client.force_login(self.user)
+
+    def test_every_rfq_tile_is_present(self):
+        resp = self.client.get(reverse('kpis:kpi_new'))
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode()
+        for label in ('RFQ / Proposal Activity', 'RFQs received', 'RFQs submitted',
+                      'RFQs overdue', 'RFQs pending'):
+            with self.subTest(tile=label):
+                self.assertIn(label, body)
+
+    def test_cards_lookup_covers_every_rfq_kpi(self):
+        resp = self.client.get(reverse('kpis:kpi_new'))
+        proposal = resp.context['cards']['proposal']
+        for key in ('proposal_rfqs_received', 'proposal_rfqs_submitted',
+                    'proposal_rfqs_overdue', 'proposal_rfqs_pending'):
+            with self.subTest(key=key):
+                self.assertIn(key, proposal)
+
+    def test_a_real_figure_reaches_the_page(self):
+        p = self._project('LATE', self.active, est='100000')
+        Project.objects.filter(pk=p.pk).update(
+            submission_deadline=timezone.localdate() - datetime.timedelta(days=3))
+        body = self.client.get(
+            reverse('kpis:kpi_new') + f'?region={self.region.code}').content.decode()
+        self.assertIn('past deadline, unanswered', body)
