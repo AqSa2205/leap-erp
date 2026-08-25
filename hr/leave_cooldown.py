@@ -49,13 +49,18 @@ def annual_leave_cooldown(employee, leave_type, *, today=None):
     if last_record is None:
         return None
 
-    taken_days = last_record.days or Decimal('0')
+    last_leave_days = last_record.days or Decimal('0')
 
     entitlement = employee.leave_entitlements.filter(
         leave_type=leave_type, year=last_record.start_date.year).first()
+    # Cumulative across every booking in the year (entitlement.taken_days
+    # sums all of the employee's LeaveRecord rows for this type/year), not
+    # just the last one — someone who uses up their full entitlement
+    # gradually across several smaller bookings hits the same "wait for
+    # next year" rule as someone who used it all in a single request.
     used_full_entitlement = bool(
         entitlement and entitlement.entitled_days > 0
-        and taken_days >= entitlement.entitled_days)
+        and entitlement.taken_days >= entitlement.entitled_days)
 
     if used_full_entitlement:
         if employee.joining_date:
@@ -63,21 +68,26 @@ def annual_leave_cooldown(employee, leave_type, *, today=None):
         else:
             eligible_date = date(last_record.end_date.year + 1, 1, 1)
         reason = (
-            f'You used your full {entitlement.entitled_days:g}-day annual leave entitlement in one '
-            f'booking (ending {last_record.end_date:%d %b %Y}). You can apply again from '
-            f'{eligible_date:%d %b %Y}, when your leave entitlement renews.')
-    elif taken_days < SHORT_LEAVE_THRESHOLD_DAYS:
+            f'You have used your full {entitlement.entitled_days:g}-day annual leave entitlement for '
+            f'{last_record.start_date.year} (most recently ending {last_record.end_date:%d %b %Y}). '
+            f'You can apply again from {eligible_date:%d %b %Y}, when your leave entitlement renews.')
+    elif last_leave_days < SHORT_LEAVE_THRESHOLD_DAYS:
         eligible_date = _add_months(last_record.end_date, SHORT_LEAVE_COOLDOWN_MONTHS)
         reason = (
-            f'You returned from a {taken_days:g}-day annual leave on {last_record.end_date:%d %b %Y}. '
+            f'You returned from a {last_leave_days:g}-day annual leave on {last_record.end_date:%d %b %Y}. '
             f'You can apply for annual leave again from {eligible_date:%d %b %Y}.')
     else:
         eligible_date = _add_months(last_record.end_date, LONG_LEAVE_COOLDOWN_MONTHS)
         reason = (
-            f'You returned from a {taken_days:g}-day annual leave on {last_record.end_date:%d %b %Y}. '
+            f'You returned from a {last_leave_days:g}-day annual leave on {last_record.end_date:%d %b %Y}. '
             f'Because it was 10 days or more, you can apply for annual leave again from '
             f'{eligible_date:%d %b %Y}.')
 
     if today < eligible_date:
-        return {'eligible_date': eligible_date, 'reason': reason}
+        return {
+            'eligible_date': eligible_date,
+            'reason': reason,
+            'days_remaining': (eligible_date - today).days,
+            'leave_type_id': leave_type.pk,
+        }
     return None

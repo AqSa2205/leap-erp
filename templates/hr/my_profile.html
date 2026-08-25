@@ -332,10 +332,14 @@
             <div class="alert alert-warning py-2 small mb-3">
               <i class="bi bi-exclamation-triangle me-1"></i>
               {{ leave_cooldown.reason }}
+              <span class="badge bg-warning text-dark ms-1">
+                {{ leave_cooldown.days_remaining }} day{{ leave_cooldown.days_remaining|pluralize }} left
+              </span>
             </div>
             {% endif %}
 
-            <div class="collapse mb-3{% if leave_request_form.errors or leave_request_submit_failed %} show{% endif %}" id="requestLeaveForm">
+            <div class="collapse mb-3{% if leave_request_form.errors or leave_request_submit_failed %} show{% endif %}" id="requestLeaveForm"
+                 {% if leave_cooldown %}data-cooldown-leave-type="{{ leave_cooldown.leave_type_id }}" data-cooldown-days="{{ leave_cooldown.days_remaining }}"{% endif %}>
               <form method="post" enctype="multipart/form-data" class="border rounded p-3">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="request_leave">
@@ -368,6 +372,31 @@
                 <button type="submit" class="btn btn-sm btn-primary">Submit Request</button>
               </form>
             </div>
+            <script>
+            (function () {
+              // Client-side convenience only — the server is the real gate
+              // (see hr.leave_cooldown.annual_leave_cooldown, enforced in
+              // hr.views.my_profile before submit_leave_request runs). This
+              // just greys out the Annual option and shows a day countdown
+              // so employees don't pick it only to be told no afterwards.
+              var wrap = document.getElementById('requestLeaveForm');
+              if (!wrap) return;
+              var lockedId = wrap.dataset.cooldownLeaveType;
+              if (!lockedId) return;
+              var select = wrap.querySelector('select[name="leave_type"]');
+              if (!select) return;
+              var opt = select.querySelector('option[value="' + lockedId + '"]');
+              if (!opt) return;
+              var days = wrap.dataset.cooldownDays;
+              opt.disabled = true;
+              opt.textContent += ' (locked — ' + days + ' day' + (days == 1 ? '' : 's') + ' left)';
+              if (opt.selected) {
+                for (var i = 0; i < select.options.length; i++) {
+                  if (!select.options[i].disabled) { select.selectedIndex = i; break; }
+                }
+              }
+            })();
+            </script>
 
             {% if leave_requests %}
             <div class="d-flex justify-content-between align-items-center mb-1" style="cursor:pointer;"
