@@ -25,6 +25,7 @@ Money basis: anything valuing a deal goes through
 dashboard's Won tile uses. Do not sum a value column directly here; that is
 what made the two pages disagree.
 """
+import datetime
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Callable, Optional
@@ -537,6 +538,148 @@ def compute_proposal_win_rate(ctx):
     return KPIResult(val, f'{won} won of {decided} proposed & decided')
 
 
+# ── RFQ activity ─────────────────────────────────────────────────────────────
+# Every pipeline project counts as an RFQ: in this ERP a project is raised when
+# a tender arrives, so the two are the same event and nothing has to be filled
+# in for a tender to be counted. The trade-off, made deliberately, is that a
+# project with no submission_deadline can never be overdue - it has no due date
+# to be late against. The overdue tile reports how many are invisible to it for
+# that reason rather than quietly leaving them out.
+
+
+def _submitted_project_ids(region=None, user=None):
+    """Projects that have at least one SUBMITTED technical proposal.
+
+    Used as the "already answered" set for the overdue/pending tiles. Not
+    period-filtered: a proposal submitted last quarter still answers the RFQ
+    today, so it must not reappear as pending.
+    """
+    from proposals.models import TechnicalProposal
+    qs = TechnicalProposal.objects.filter(status='submitted', project__isnull=False)
+    if region is not None:
+        qs = qs.filter(project__region=region)
+    if user is not None:
+        qs = qs.filter(created_by=user)
+    return set(qs.values_list('project_id', flat=True))
+
+
+def _open_rfqs(ctx):
+    """RFQs still awaiting an answer, scoped to region/owner.
+
+    Restricted to open projects. A deal that has been won or lost is no longer
+    awaiting a proposal - counting it as pending forever would make the tile
+    grow without bound and describe nothing anyone can act on.
+    """
+    from projects.models import Project
+    qs = Project.objects.filter(status__category__in=['active', 'hot_lead'])
+    if ctx.region is not None:
+        qs = qs.filter(region=ctx.region)
+    if ctx.user is not None:
+        qs = qs.filter(owner=ctx.user)
+    return qs.exclude(pk__in=_submitted_project_ids(ctx.region))
+
+
+def compute_rfqs_received(ctx):
+    """RFQs that arrived during the period.
+
+    Anchored on created_at, which is set automatically, so this needs no field
+    to be maintained. It is the same underlying event as the Sales "new
+    opportunities" tile - one counts pipeline intake, the other counts work
+    arriving at the proposal desk - so the two agreeing is correct, not
+    duplication.
+    """
+    from projects.models import Project
+    qs = Project.objects.filter(
+        created_at__date__gte=ctx.start, created_at__date__lt=ctx.end)
+    if ctx.region is not None:
+        qs = qs.filter(region=ctx.region)
+    if ctx.user is not None:
+        qs = qs.filter(owner=ctx.user)
+
+    n = qs.count()
+    if not n:
+        return KPIResult(Decimal('0'), 'none received in this period')
+    dated = qs.filter(submission_deadline__isnull=False).count()
+    cov = f'{n} received'
+    if dated < n:
+        cov += f' · {n - dated} with no deadline set'
+    return KPIResult(Decimal(n), cov)
+
+
+def compute_rfqs_submitted(ctx):
+    """RFQs answered during the period.
+
+    Counted by PROJECT, not by proposal row: a proposal revised three times is
+    one RFQ answered, and counting revisions would let re-work inflate the
+    figure. The latest revision decides which period it lands in.
+    """
+    from proposals.models import TechnicalProposal
+    qs = TechnicalProposal.objects.filter(
+        status='submitted', project__isnull=False, revision_date__isnull=False)
+    if ctx.region is not None:
+        qs = qs.filter(project__region=ctx.region)
+    if ctx.user is not None:
+        qs = qs.filter(created_by=ctx.user)
+
+    latest = {}
+    for pid, rev in qs.values_list('project_id', 'revision_date'):
+        if pid not in latest or rev > latest[pid]:
+            latest[pid] = rev
+    n = sum(1 for rev in latest.values() if ctx.start <= rev < ctx.end)
+    if not n:
+        return KPIResult(Decimal('0'), 'none submitted in this period')
+    return KPIResult(Decimal(n), f'{n} submitted')
+
+
+def compute_rfqs_overdue(ctx):
+    """RFQs whose deadline has passed with nothing submitted.
+
+    A snapshot of what is late RIGHT NOW, not a period total - an RFQ does not
+    stop being overdue because the month ended. Changing the period does not
+    change this number, and the section says so.
+    """
+    from django.utils import timezone
+    today = timezone.localdate()
+    open_rfqs = _open_rfqs(ctx)
+    overdue = open_rfqs.filter(submission_deadline__lt=today).count()
+    # Deliberate blind spot, surfaced rather than hidden: with no deadline
+    # there is nothing to be late against.
+    undated = open_rfqs.filter(submission_deadline__isnull=True).count()
+
+    if not overdue:
+        cov = 'nothing overdue'
+        if undated:
+            cov += f' · {undated} open with no deadline set'
+        return KPIResult(Decimal('0'), cov)
+    cov = f'{overdue} past deadline, unanswered'
+    if undated:
+        cov += f' · {undated} more with no deadline set'
+    return KPIResult(Decimal(overdue), cov)
+
+
+def compute_rfqs_pending(ctx):
+    """RFQs still awaiting a submission and not yet late.
+
+    Snapshot, like overdue. Pending and overdue are mutually exclusive and
+    together cover every open RFQ with nothing submitted, so the two tiles
+    reconcile against each other.
+    """
+    from django.utils import timezone
+    today = timezone.localdate()
+    open_rfqs = _open_rfqs(ctx)
+    pending = open_rfqs.exclude(submission_deadline__lt=today).count()
+    if not pending:
+        return KPIResult(Decimal('0'), 'nothing pending')
+
+    due_soon = open_rfqs.filter(
+        submission_deadline__gte=today,
+        submission_deadline__lt=today + datetime.timedelta(days=7)).count()
+    cov = f'{pending} awaiting submission'
+    if due_soon:
+        cov += f' · {due_soon} due within 7 days'
+    return KPIResult(Decimal(pending), cov)
+
+
 def _bom_vs_po_items(ctx):
     """PO line items issued in the window that trace back to a BOM item,
     narrowed by region (PO's project) and creator (user)."""
@@ -675,6 +818,26 @@ KPI_DEFINITIONS = [
         target_help='Most you would accept losing per period'),
 
     # ── Proposal ─────────────────────────────────────────────────────────────
+    KPI('proposal_rfqs_received', PROPOSAL, 'RFQs received', COUNT, 'higher',
+        target=None, source='auto', compute=compute_rfqs_received,
+        help='RFQs that arrived during the period. Every pipeline project '
+             'counts as an RFQ, so nothing has to be filled in to be counted.',
+        target_help='RFQs you expect to receive per period'),
+    KPI('proposal_rfqs_submitted', PROPOSAL, 'RFQs submitted', COUNT, 'higher',
+        target=None, source='auto', compute=compute_rfqs_submitted,
+        help='RFQs answered during the period, counted once per project - a '
+             'proposal revised three times is one RFQ answered.',
+        target_help='RFQs you aim to answer per period'),
+    KPI('proposal_rfqs_overdue', PROPOSAL, 'RFQs overdue', COUNT, 'lower',
+        target=Decimal('0'), source='auto', compute=compute_rfqs_overdue,
+        help='Open RFQs past their deadline with nothing submitted. A snapshot '
+             'of what is late now - it does not change with the period.',
+        target_help='Most you would accept being late'),
+    KPI('proposal_rfqs_pending', PROPOSAL, 'RFQs pending', COUNT, 'lower',
+        target=None, source='auto', compute=compute_rfqs_pending,
+        help='Open RFQs awaiting a submission and not yet late. A snapshot, '
+             'like overdue; the two together cover every unanswered RFQ.',
+        target_help='Comfortable size for the open queue'),
     KPI('proposal_submission_ontime', PROPOSAL, 'Submission on-time', PERCENT, 'higher',
         target=Decimal('100'), source='auto', compute=compute_proposal_submission_ontime,
         help='Proposals submitted this period vs their RFQ deadline.'),
@@ -742,6 +905,8 @@ USER_ATTRIBUTABLE_KEYS = {
     # that is set per region, not per person.
     'sales_new_opportunities', 'sales_lost_opportunities', 'sales_pipeline_value',
     'proposal_submission_ontime', 'proposal_win_rate',
+    'proposal_rfqs_received', 'proposal_rfqs_submitted',
+    'proposal_rfqs_overdue', 'proposal_rfqs_pending',
     'proc_cost_savings', 'proc_ppv', 'proc_pr_to_po_cycle', 'proc_ontime_delivery',
     'hr_attendance_punctuality',
 }
