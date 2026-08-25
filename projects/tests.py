@@ -1817,3 +1817,92 @@ class GraphMailUrlEncodingTests(TestCase):
                 'shared@leap-arabia.com', self.traversal_id, '../also/../elsewhere')
         called_url = mock_get.call_args[0][0]
         self.assertNotIn('/../', called_url)
+
+
+class InlineAttachmentAlignmentTests(TestCase):
+    """The attachment picker and the code that creates Documents are two
+    independent parsers over the same message: graph_mail._real_attachments()
+    shapes what the user sees and picks types for, while
+    email_parsing._extract_attachments() produces what actually gets saved.
+    _attach_email_to_project() pairs the user's choices to the second list
+    *by position*, so the two must agree on which parts count as real
+    attachments.
+
+    They did not. Graph drops anything flagged `isInline`; the MIME walk
+    kept it, because iter_attachments() yields embedded content too. Any
+    email with an Outlook signature logo — which is to say most business
+    email — shifted every index after the logo by one: the logo was filed
+    under the type chosen for the first real attachment, and the real
+    attachment silently fell back to 'vendor_quotation'.
+
+    These tests pin the two lists together on a message shaped like a real
+    Outlook reply."""
+
+    def _outlook_shaped_message(self):
+        """A signature logo (inline, with a Content-ID, exactly as Outlook
+        sends it) followed by one genuine attachment."""
+        msg = StdEmailMessage()
+        msg['Subject'] = 'Quotation for the Riyadh fit-out'
+        msg['From'] = 'sales@vendor.com'
+        msg['To'] = 'pipeline@leap-arabia.com'
+        msg.set_content('Please find our quotation attached.')
+        msg.add_attachment(b'\x89PNG-logo-bytes', maintype='image', subtype='png',
+                           filename='signature-logo.png', cid='<sig-001>',
+                           disposition='inline')
+        msg.add_attachment(b'%PDF-quotation', maintype='application', subtype='pdf',
+                           filename='quotation.pdf')
+        return msg
+
+    def _parsed_attachments(self, msg):
+        import email as _email
+        import io as _io
+        from projects.email_parsing import _extract_attachments
+        parsed = _email.message_from_bytes(
+            _io.BytesIO(msg.as_bytes()).getvalue(), policy=_email.policy.default)
+        return _extract_attachments(parsed)
+
+    def test_signature_logo_is_not_saved_as_a_document(self):
+        names = [a['filename'] for a in self._parsed_attachments(
+            self._outlook_shaped_message())]
+        self.assertEqual(names, ['quotation.pdf'])
+
+    def test_picker_and_saved_lists_agree_position_by_position(self):
+        """The actual regression: same message through both parsers, same
+        sequence out. Index 0 must be the quotation on both sides, or the
+        user's document-type choice lands on the wrong file."""
+        graph_side = graph_mail._real_attachments([
+            {'id': 'a1', 'name': 'signature-logo.png', 'contentType': 'image/png',
+             'size': 15, 'isInline': True},
+            {'id': 'a2', 'name': 'quotation.pdf', 'contentType': 'application/pdf',
+             'size': 14, 'isInline': False},
+        ])
+        mime_side = self._parsed_attachments(self._outlook_shaped_message())
+        self.assertEqual([a['name'] for a in graph_side],
+                         [a['filename'] for a in mime_side])
+
+    def test_real_attachment_keeps_its_content_id(self):
+        """A genuine attachment is sometimes given a Content-ID as well.
+        An explicit 'attachment' disposition must win, or forwarded files
+        would vanish from the project."""
+        msg = StdEmailMessage()
+        msg['Subject'] = 'Forwarded drawings'
+        msg['From'] = 'pm@client.com'
+        msg['To'] = 'pipeline@leap-arabia.com'
+        msg.set_content('Forwarding the drawings.')
+        msg.add_attachment(b'%PDF-drawings', maintype='application', subtype='pdf',
+                           filename='drawings.pdf', cid='<fwd-77>',
+                           disposition='attachment')
+        names = [a['filename'] for a in self._parsed_attachments(msg)]
+        self.assertEqual(names, ['drawings.pdf'])
+
+    def test_document_types_land_on_the_files_the_user_picked(self):
+        """End to end through the position mapping: the user tags picker
+        index 0 — the quotation — as a client RFQ, and that is the file
+        that must come back tagged."""
+        attachments = self._parsed_attachments(self._outlook_shaped_message())
+        chosen = {'0': 'client_rfq'}
+        resolved = {
+            a['filename']: (chosen.get(str(i)) or 'vendor_quotation')
+            for i, a in enumerate(attachments)
+        }
+        self.assertEqual(resolved, {'quotation.pdf': 'client_rfq'})

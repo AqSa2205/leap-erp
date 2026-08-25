@@ -108,6 +108,32 @@ def _extract_body_text(msg):
     return ''
 
 
+def _is_inline_part(part):
+    """True for embedded content (signature logos, images pasted into the
+    body) as opposed to a real attachment.
+
+    This MUST agree with graph_mail._real_attachments(), which drops
+    anything Graph flags `isInline`. The two are independent parsers over
+    the same message — Graph builds the list shown in the attachment
+    picker, this builds the list that actually becomes Documents — and
+    _attach_email_to_project() pairs the user's per-document type choices
+    to that list *by position*. If one side skips a signature logo and the
+    other keeps it, every index after the logo is off by one: the logo is
+    filed under the type the user picked for the first real attachment,
+    and the real attachment silently falls back to the default. Outlook
+    puts an inline logo in essentially every reply, so a mismatch here
+    fires on the common case, not an edge case.
+
+    Graph sets isInline from the part's disposition and its Content-ID, so
+    both are checked. An explicit `attachment` disposition always wins —
+    a genuine attachment is sometimes given a Content-ID as well, and that
+    must not be mistaken for embedded content."""
+    disposition = (part.get_content_disposition() or '').lower()
+    if disposition == 'attachment':
+        return False
+    return disposition == 'inline' or bool(part.get('Content-ID'))
+
+
 def _extract_attachments(msg):
     """Pull out every real attachment (any file type — PDF, Word, Excel,
     etc.), skipping inline content like signature logos."""
@@ -118,6 +144,11 @@ def _extract_attachments(msg):
         parts = []
 
     for part in parts:
+        # iter_attachments() yields embedded content too, so this is what
+        # actually keeps the list aligned with the picker's.
+        if _is_inline_part(part):
+            continue
+
         filename = part.get_filename() or ''
         content_type = part.get_content_type() or ''
 

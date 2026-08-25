@@ -1609,13 +1609,18 @@ def view_pipeline_inbox_attachment(request, pk=None):
     attachment_id = request.GET.get('attachment_id')
     if not message_id or not attachment_id:
         raise Http404('Missing message_id/attachment_id.')
-    if pk is not None:
-        get_object_or_404(Project, pk=pk)
     if not _can_use_pipeline_email_feature(request.user):
         messages.error(request, 'Add Emails is restricted to Sales, Admin, and Super Admin users.')
         if pk is not None:
             return redirect('projects:detail', pk=pk)
         return redirect('projects:create')
+    # Scoped like every other pipeline-email view, and checked only after
+    # the permission gate above: a bare get_object_or_404(Project, ...)
+    # ahead of the gate told a user who cannot use this feature at all
+    # which project ids exist, by returning 404 for one and a redirect for
+    # the other.
+    if pk is not None:
+        _scoped_project_or_404(request, pk)
     try:
         filename, content_type, content = graph_mail.fetch_attachment_bytes(
             settings.PIPELINE_EMAIL_MAILBOX, message_id, attachment_id)
