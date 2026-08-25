@@ -1863,3 +1863,76 @@ class SendToHRBrowsingDecouplingTests(TestCase):
 
 
 
+
+
+class SameInstantTransitionTests(TestCase):
+    """TimesheetMonth has no state column — whether a month is locked is
+    inferred by comparing submitted_at against reopened_at. timezone.now()
+    resolves to roughly 15ms on Windows, so a submit and a reopen inside one
+    tick used to tie, and a tie silently drops one of the transitions.
+
+    Both directions are pinned here because the obvious one-character fix
+    ('>' to '>=') only moves the bug: it unlocks the month when HR reopens
+    in the same instant, but then leaves it unlocked forever if the employee
+    resubmits in the same instant HR reopened. The timestamps are nudged
+    apart instead, so neither case can tie.
+
+    These run against a frozen clock rather than hoping the real one is
+    coarse enough — the full-suite flake this fixes only reproduced
+    occasionally, which is exactly why it survived so long."""
+
+    def setUp(self):
+        self.code, _ = ActivityCode.objects.get_or_create(
+            code='COS_0011', defaults={'label': 'Office', 'is_active': True})
+        self.user, self.emp = _make_user_with_employee('sameinstant')
+        self.hr_user, _ = _make_user_with_employee('sameinstanthr', role_name=Role.ERP_ADMIN)
+        seed_default_permissions()
+        TimesheetEntry.objects.create(
+            employee=self.emp, date=date(2026, 7, 1),
+            task_description='t1', activity_code=self.code, hours=Decimal('4'))
+        self.frozen = timezone.now()
+
+    def _frozen_clock(self):
+        """Every timezone.now() inside the services returns the same value —
+        a clock too coarse to separate two transitions."""
+        return patch('timesheets.services.timezone.now', return_value=self.frozen)
+
+    def test_reopen_in_the_same_instant_still_unlocks(self):
+        """The reported failure: HR reopens, the clock hasn't moved, and the
+        month has to come back unlocked."""
+        with self._frozen_clock():
+            submit_month(employee=self.emp, year=2026, month=7, submitted_by=self.user)
+            tsm = reopen_month(employee=self.emp, year=2026, month=7, reopened_by=self.hr_user)
+        self.assertFalse(tsm.is_submitted)
+        tsm.refresh_from_db()
+        self.assertFalse(tsm.is_submitted, 'must survive a round trip through the database')
+
+    def test_resubmit_in_the_same_instant_still_locks(self):
+        """The mirror case, which a plain '>=' would have broken: after a
+        reopen, resubmitting on the same clock value must lock again — not
+        leave the month editable forever."""
+        with self._frozen_clock():
+            submit_month(employee=self.emp, year=2026, month=7, submitted_by=self.user)
+            reopen_month(employee=self.emp, year=2026, month=7, reopened_by=self.hr_user)
+            tsm = submit_month(employee=self.emp, year=2026, month=7, submitted_by=self.user)
+        self.assertTrue(tsm.is_submitted)
+        tsm.refresh_from_db()
+        self.assertTrue(tsm.is_submitted, 'must survive a round trip through the database')
+
+    def test_full_cycle_on_a_frozen_clock_keeps_the_transitions_ordered(self):
+        with self._frozen_clock():
+            a = submit_month(employee=self.emp, year=2026, month=7, submitted_by=self.user)
+            first_submit = a.submitted_at
+            b = reopen_month(employee=self.emp, year=2026, month=7, reopened_by=self.hr_user)
+            c = submit_month(employee=self.emp, year=2026, month=7, submitted_by=self.user)
+        self.assertLess(first_submit, b.reopened_at)
+        self.assertLess(b.reopened_at, c.submitted_at)
+
+    def test_timestamps_stay_truthful_when_the_clock_does_move(self):
+        """The nudge only applies to a tie — normal operation records the
+        real time, so the admin's audit columns stay meaningful."""
+        before = timezone.now()
+        tsm = submit_month(employee=self.emp, year=2026, month=7, submitted_by=self.user)
+        after = timezone.now()
+        self.assertGreaterEqual(tsm.submitted_at, before)
+        self.assertLessEqual(tsm.submitted_at, after)

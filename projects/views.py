@@ -1,19 +1,29 @@
+import io
+import json
+import os
 from decimal import Decimal, InvalidOperation
 
+from django.conf import settings
 from django.shortcuts import render, redirect, get_object_or_404
-from django.http import Http404
+from django.http import Http404, HttpResponse
 from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib import messages
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView, View
 from django.urls import reverse, reverse_lazy
+from django.utils.http import urlencode
+from django.db import transaction
 from django.db.models import Q, Sum, Count
 from django.core.paginator import Paginator
+from django.core.files.base import ContentFile
+from django.utils import timezone
 import openpyxl
 
-from .models import Project, Region, ProjectStatus, ProjectHistory, Document, ProjectRevision
+from .models import Project, Region, ProjectStatus, ProjectHistory, Document, ProjectRevision, PipelineEmail
 from .forms import ProjectForm, ProjectFilterForm, DocumentForm, DocumentFilterForm
+from .email_parsing import parse_eml_file, EmailParseError
+from . import graph_mail
 from notifications.services import notify_users
 from accounts.permissions import CapabilityRequiredMixin
 
@@ -378,6 +388,13 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
         # Sort newest first
         events.sort(key=lambda e: e['when'] or project.created_at, reverse=True)
         context['timeline'] = events
+
+        # ── Pipeline email linking ("Add Emails" / "Delink") ──────────────
+        # Purely additive: doesn't touch any of the context keys above.
+        context['active_linked_email'] = project.linked_emails.filter(is_active=True).first()
+        context['email_documents'] = project.documents.filter(source_pipeline_email__isnull=False)
+        context['other_documents'] = project.documents.filter(source_pipeline_email__isnull=True)
+
         return context
 
 
@@ -568,10 +585,42 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
         kwargs['user'] = self.request.user
         return kwargs
 
+    def get_initial(self):
+        # Coming back from the live-inbox "Add Emails" flow (see
+        # link_pipeline_email_new) with a freshly picked email — re-fetch
+        # its summary so the hidden picked_email_json field (and therefore
+        # the "Email to be attached" section) is populated on this fresh
+        # GET. Only on GET: this form has no <form action>, so a real
+        # Create POST still carries the same ?picked_email=... — without
+        # this guard we'd hit Graph pointlessly (and unsafely) on every
+        # real submission too.
+        initial = super().get_initial()
+        if self.request.method == 'GET':
+            message_id = self.request.GET.get('picked_email')
+            if message_id and _can_use_pipeline_email_feature(self.request.user):
+                try:
+                    summary = graph_mail.get_message_summary(
+                        settings.PIPELINE_EMAIL_MAILBOX, message_id)
+                    # Default type, same as the existing-project attach flow —
+                    # editable in the "Email to be attached" section, and
+                    # whatever's chosen there rides along in this same field.
+                    for attachment in summary['attachments']:
+                        attachment['document_type'] = 'vendor_quotation'
+                    # Without this, each attachment's .url is never set here
+                    # (only the existing-project attach flow set it), so the
+                    # "Email to be attached" panel renders a dead href="" —
+                    # clicking a document just reloads the create page.
+                    _add_attachment_urls([summary], None)
+                    initial['picked_email_json'] = json.dumps(summary)
+                except graph_mail.GraphMailError as exc:
+                    messages.warning(self.request, f'Could not load that email: {exc}')
+        return initial
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['exchange_rates_json'] = _exchange_rates_json()
         context.update(_lna_form_context(getattr(self, 'object', None)))
+        context['document_type_choices'] = Document.DOCUMENT_TYPE_CHOICES
         from drafts.models import FormDraft
         context['draft'] = FormDraft.objects.filter(
             user=self.request.user, form_key='project_create', object_id=None
@@ -639,6 +688,35 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
             level='info',
             send_email=True,
         )
+
+        # An email picked from the live inbox while filling out this form
+        # (see link_pipeline_email_new / ProjectForm.picked_email_json) is
+        # only materialized into a real PipelineEmail + Documents now that
+        # the project actually exists. The project/costing sheet/notification
+        # above are already committed by this point, so a failure here must
+        # never surface as an error on top of an otherwise-successful create.
+        picked_email_json = form.cleaned_data.get('picked_email_json')
+        if picked_email_json and _can_use_pipeline_email_feature(self.request.user):
+            try:
+                picked = json.loads(picked_email_json)
+                # Keyed by position, not a['name'] — see
+                # _attach_email_to_project()'s docstring for why a filename
+                # picked here (from Graph's attachment listing) can't be
+                # trusted to match the filename parse_eml_file() re-derives.
+                attachment_types = {
+                    str(index): a.get('document_type')
+                    for index, a in enumerate(picked.get('attachments', []))
+                }
+                _attach_email_to_project(
+                    project, self.request.user, picked['id'],
+                    attachment_types=attachment_types)
+            except Exception:
+                messages.warning(
+                    self.request,
+                    'The project was created, but the picked email could not be attached '
+                    'automatically — you can attach it again from the project page.'
+                )
+
         return response
 
 
@@ -1201,6 +1279,393 @@ def add_project_document(request, pk):
         'project': project,
         'title': f'Add Document to {project.project_name}'
     })
+
+
+@login_required
+def add_project_documents_bulk(request, pk):
+    """Upload several documents to a project in one go — same Document
+    model/fields as add_project_document, just one file input accepting
+    multiple files instead of uploading them one at a time. Each file gets
+    its own document type, picked in the preview list before upload, same
+    as if it had been uploaded individually via add_project_document."""
+    project = _scoped_project_or_404(request, pk)
+
+    if request.method == 'POST':
+        uploaded_files = request.FILES.getlist('files')
+        if not uploaded_files:
+            messages.error(request, 'Please choose at least one file to upload.')
+            return redirect('projects:add_documents_bulk', pk=pk)
+
+        valid_types = dict(Document.DOCUMENT_TYPE_CHOICES)
+        for index, uploaded_file in enumerate(uploaded_files):
+            document_type = request.POST.get(f'document_type_{index}') or 'other'
+            if document_type not in valid_types:
+                document_type = 'other'
+            Document.objects.create(
+                project=project,
+                document_type=document_type,
+                name=uploaded_file.name,
+                uploaded_by=request.user,
+                file=uploaded_file,
+            )
+        messages.success(
+            request, f'{len(uploaded_files)} document(s) uploaded successfully.')
+        return redirect('projects:detail', pk=pk)
+
+    return render(request, 'projects/document_bulk_form.html', {
+        'project': project,
+        'document_type_choices': Document.DOCUMENT_TYPE_CHOICES,
+    })
+
+
+def _can_use_pipeline_email_feature(user):
+    """Add Emails (live inbox, attach, delink) is restricted to Sales,
+    Admin, and Super Admin — the roles that actually work commercial
+    pipeline entries day to day. Everyone else still sees the linked
+    email / Email Documents on the project detail page (read-only);
+    they just can't attach, pick, or delink one."""
+    return bool(
+        user.is_super_admin_user or user.is_admin_user
+        or getattr(user, 'is_sales_rep_user', False)
+    )
+
+
+def _scoped_project_or_404(request, pk):
+    """Same region/ownership visibility rule as ProjectPermissionMixin
+    (used by every class-based project view) — for the plain function-based
+    pipeline-email views below, which otherwise did a bare
+    get_object_or_404(Project, pk=pk) and let any Sales Rep act on any
+    OTHER rep's project just by guessing its id, bypassing the scoping
+    every other project view already enforces."""
+    mixin = ProjectPermissionMixin()
+    mixin.request = request
+    return get_object_or_404(mixin.get_queryset(), pk=pk)
+
+
+def _delink_active_pipeline_email(project, user):
+    """Mark the project's currently active linked email (if any) as
+    delinked. This NEVER deletes the PipelineEmail row or any Document it
+    created — it only flips is_active off, so the email drops out of the
+    'currently linked' widget while its documents stay exactly where they
+    are under Project Documents."""
+    active = project.linked_emails.filter(is_active=True).first()
+    if active:
+        active.is_active = False
+        active.delinked_by = user
+        active.delinked_at = timezone.now()
+        active.save(update_fields=['is_active', 'delinked_by', 'delinked_at'])
+    return active
+
+
+def _safe_attachment_filename(filename):
+    """A crafted attachment filename like '../../x.pdf' would otherwise
+    reach Django's storage backend as-is and raise an uncaught
+    SuspiciousFileOperation mid-attach (see _attach_email_to_project) —
+    os.path.basename() strips any directory-traversal components before
+    that ever happens, and the length clamp keeps it comfortably under
+    Document.name's max_length=255 (a real attachment filename is never
+    anywhere near this long).
+
+    basename() alone still lets '.' or '..' straight through unchanged —
+    those aren't traversal sequences by themselves, but Django's storage
+    backend treats them as reserved names and raises SuspiciousFileOperation
+    for them too, which would otherwise still crash this uncaught."""
+    name = os.path.basename((filename or '').strip()) or 'attachment'
+    if name in ('.', '..'):
+        name = 'attachment'
+    return name[:200]
+
+
+def _attach_email_to_project(project, user, message_id, attachment_types=None):
+    """Fetch one message from the live monitored inbox (Microsoft Graph —
+    see projects/graph_mail.py) and turn it into a PipelineEmail + Document
+    rows on `project`, tagged with source_pipeline_email (see
+    projects/models.py) so they show up under Project Documents.
+
+    attachment_types is an optional {index: document_type} map, index being
+    the attachment's 0-based position within this email — NOT its filename.
+    Filename used to be the key, but the picker UI's filenames come from
+    Graph's attachment listing while parse_eml_file() below re-derives
+    filenames independently (different RFC 2047 decoding, synthesised
+    "attachment_N.ext" names when none is present) — a mismatch between the
+    two silently reverted the user's choice to 'vendor_quotation' with no
+    indication anything had gone wrong. Position is the one thing both
+    parsers agree on, since both just walk the same MIME parts in order.
+    Anything missing/invalid falls back to 'vendor_quotation', matching this
+    feature's original default before per-document types existed.
+
+    If an email is already linked, adding a new one automatically delinks
+    the old one first — this matches "add a new email, removing the one
+    before" — but the old email's documents are never touched or removed.
+    That delink, and every row created below, happens inside one
+    transaction.atomic() block, and the delink happens LAST: if anything
+    above it fails (a bad filename, a database error), the whole thing
+    rolls back and the previously-linked email is left exactly as it was,
+    rather than ending up delinked with a half-built replacement.
+
+    Raises GraphMailError/EmailParseError on failure — callers decide how
+    to surface that. Returns (pipeline_email, created_document_count)."""
+    attachment_types = attachment_types or {}
+    valid_types = dict(Document.DOCUMENT_TYPE_CHOICES)
+
+    raw_bytes = graph_mail.fetch_raw_message_bytes(settings.PIPELINE_EMAIL_MAILBOX, message_id)
+    parsed = parse_eml_file(io.BytesIO(raw_bytes))
+
+    raw_filename = f"pipeline_email_{project.pk}_{timezone.now():%Y%m%d%H%M%S}.eml"
+
+    with transaction.atomic():
+        # Captured BEFORE the new email is created, and delinked as this
+        # specific object at the end — not re-queried afterward. The new
+        # PipelineEmail below is also created with is_active=True, so a
+        # fresh "whichever email is active" query at the end would match
+        # both of them and — ordered newest-first — delink the one just
+        # created instead of the actual previous one.
+        previous_active = project.linked_emails.filter(is_active=True).first()
+
+        pipeline_email = PipelineEmail.objects.create(
+            project=project,
+            subject=parsed['subject'],
+            sender_name=parsed['sender_name'],
+            sender_email=parsed['sender_email'],
+            recipients=parsed['recipients'],
+            sent_at=parsed['sent_at'],
+            body_text=parsed['body_text'],
+            raw_file=ContentFile(raw_bytes, name=raw_filename),
+            raw_filename=raw_filename,
+            is_active=True,
+            linked_by=user,
+        )
+
+        created_count = 0
+        for index, attachment in enumerate(parsed['attachments']):
+            document_type = attachment_types.get(str(index)) or 'vendor_quotation'
+            if document_type not in valid_types:
+                document_type = 'vendor_quotation'
+            safe_filename = _safe_attachment_filename(attachment['filename'])
+            document = Document(
+                project=project,
+                document_type=document_type,
+                name=safe_filename,
+                uploaded_by=user,
+                source_pipeline_email=pipeline_email,
+            )
+            document.file.save(
+                safe_filename,
+                ContentFile(attachment['content']),
+                save=False,
+            )
+            document.save()
+            created_count += 1
+
+        if previous_active:
+            previous_active.is_active = False
+            previous_active.delinked_by = user
+            previous_active.delinked_at = timezone.now()
+            previous_active.save(update_fields=['is_active', 'delinked_by', 'delinked_at'])
+
+    return pipeline_email, created_count
+
+
+@login_required
+def link_pipeline_email(request, pk):
+    """Attach an email from the live monitored inbox to an existing
+    commercial pipeline entry — see _attach_email_to_project()."""
+    project = _scoped_project_or_404(request, pk)
+    if not _can_use_pipeline_email_feature(request.user):
+        messages.error(request, 'Add Emails is restricted to Sales, Admin, and Super Admin users.')
+        return redirect('projects:detail', pk=pk)
+
+    if request.method == 'POST':
+        message_id = request.POST.get('message_id')
+        if not message_id:
+            messages.error(request, 'Please choose an email to attach.')
+            return redirect('projects:link_pipeline_email', pk=pk)
+
+        # Keyed by position within the email, not filename — see
+        # _attach_email_to_project()'s docstring for why.
+        attachment_types = dict(zip(
+            request.POST.getlist('doc_index'), request.POST.getlist('doc_type')))
+
+        try:
+            pipeline_email, created_count = _attach_email_to_project(
+                project, request.user, message_id, attachment_types=attachment_types)
+        except (graph_mail.GraphMailError, EmailParseError) as exc:
+            messages.error(request, f'Could not attach that email: {exc}')
+            return redirect('projects:link_pipeline_email', pk=pk)
+
+        if created_count:
+            messages.success(
+                request,
+                f'Email "{pipeline_email.subject or "(no subject)"}" linked — '
+                f'{created_count} document(s) added to Project Documents.'
+            )
+        else:
+            messages.success(
+                request,
+                f'Email "{pipeline_email.subject or "(no subject)"}" linked. '
+                f'No attachments were found inside it.'
+            )
+        return redirect('projects:detail', pk=pk)
+
+    inbox_messages = []
+    inbox_error = None
+    try:
+        inbox_messages = graph_mail.list_inbox_messages(settings.PIPELINE_EMAIL_MAILBOX)
+    except graph_mail.GraphMailError as exc:
+        inbox_error = str(exc)
+    _add_attachment_urls(inbox_messages, project.pk)
+
+    return render(request, 'projects/pipeline_email_form.html', {
+        'project': project,
+        'active_email': project.linked_emails.filter(is_active=True).first(),
+        'inbox_messages': inbox_messages,
+        'inbox_error': inbox_error,
+        'document_type_choices': Document.DOCUMENT_TYPE_CHOICES,
+    })
+
+
+def _add_attachment_urls(inbox_messages, project_pk):
+    """Precompute each attachment's open/preview URL onto its dict, so the
+    template doesn't need to branch on whether a project exists yet.
+
+    message_id/attachment_id ride as query params, not path segments —
+    Microsoft documents that Graph ids may contain characters (notably '/')
+    that Django's <str:> path converter rejects. With ids in the path,
+    reverse() raised NoReverseMatch for any such message, which took this
+    whole page down — one oddly-encoded id anywhere in the inbox, and
+    nobody could use Add Emails at all. Query params have no such
+    restriction."""
+    if project_pk:
+        url_name, kwargs = 'projects:view_pipeline_inbox_attachment', {'pk': project_pk}
+    else:
+        url_name, kwargs = 'projects:view_pipeline_inbox_attachment_new', {}
+    base_url = reverse(url_name, kwargs=kwargs)
+    for msg in inbox_messages:
+        for att in msg['attachments']:
+            att['url'] = base_url + '?' + urlencode({
+                'message_id': msg['id'], 'attachment_id': att['id']})
+
+
+@login_required
+def link_pipeline_email_new(request):
+    """Same live inbox as link_pipeline_email, but for a pipeline entry
+    that doesn't exist yet (the "Add Emails" button on the create form).
+    Nothing is saved to the database here — picking an email just carries
+    its message_id back to the create form via a query param, where it
+    rides along in that form's own draft-autosave state (ProjectForm.
+    picked_email_json) until the entry is actually created."""
+    if not _can_use_pipeline_email_feature(request.user):
+        messages.error(request, 'Add Emails is restricted to Sales, Admin, and Super Admin users.')
+        return redirect('projects:create')
+
+    if request.method == 'POST':
+        message_id = request.POST.get('message_id')
+        if not message_id:
+            messages.error(request, 'Please choose an email.')
+            return redirect('projects:link_pipeline_email_new')
+        return redirect(reverse('projects:create') + '?' + urlencode({'picked_email': message_id}))
+
+    inbox_messages = []
+    inbox_error = None
+    try:
+        inbox_messages = graph_mail.list_inbox_messages(settings.PIPELINE_EMAIL_MAILBOX)
+    except graph_mail.GraphMailError as exc:
+        inbox_error = str(exc)
+    _add_attachment_urls(inbox_messages, None)
+
+    return render(request, 'projects/pipeline_email_form.html', {
+        'project': None,
+        'active_email': None,
+        'inbox_messages': inbox_messages,
+        'inbox_error': inbox_error,
+    })
+
+
+# Content types safe to render inline in the browser from
+# view_pipeline_inbox_attachment below. Both the bytes and the content
+# type there come straight from an attachment in the externally-reachable
+# monitored mailbox — anyone who can email that inbox controls both. An
+# attachment named "quote.html" with contentType "text/html" (or
+# "image/svg+xml", which can also carry a <script>) served inline would
+# execute the sender's JavaScript on the ERP's own origin, with whichever
+# staff member's session happened to click it. Anything not on this list
+# is forced to download instead of rendering in the browser.
+_INLINE_SAFE_CONTENT_TYPES = {
+    'application/pdf',
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp',
+}
+
+
+@login_required
+def view_pipeline_inbox_attachment(request, pk=None):
+    """Open/preview one attachment straight from the live inbox, before it's
+    attached to anything — read-only, nothing is saved. Works both for an
+    existing pipeline entry (pk given) and while creating a new one (pk
+    is None — see link_pipeline_email_new).
+
+    message_id/attachment_id come from query params, not path segments —
+    see _add_attachment_urls() for why."""
+    message_id = request.GET.get('message_id')
+    attachment_id = request.GET.get('attachment_id')
+    if not message_id or not attachment_id:
+        raise Http404('Missing message_id/attachment_id.')
+    if not _can_use_pipeline_email_feature(request.user):
+        messages.error(request, 'Add Emails is restricted to Sales, Admin, and Super Admin users.')
+        if pk is not None:
+            return redirect('projects:detail', pk=pk)
+        return redirect('projects:create')
+    # Scoped like every other pipeline-email view, and checked only after
+    # the permission gate above: a bare get_object_or_404(Project, ...)
+    # ahead of the gate told a user who cannot use this feature at all
+    # which project ids exist, by returning 404 for one and a redirect for
+    # the other.
+    if pk is not None:
+        _scoped_project_or_404(request, pk)
+    try:
+        filename, content_type, content = graph_mail.fetch_attachment_bytes(
+            settings.PIPELINE_EMAIL_MAILBOX, message_id, attachment_id)
+    except graph_mail.GraphMailError as exc:
+        messages.error(request, f'Could not open that document: {exc}')
+        if pk is not None:
+            return redirect('projects:link_pipeline_email', pk=pk)
+        return redirect('projects:link_pipeline_email_new')
+
+    disposition = 'inline' if content_type in _INLINE_SAFE_CONTENT_TYPES else 'attachment'
+    response = HttpResponse(content, content_type=content_type)
+    response['Content-Disposition'] = (
+        f'{disposition}; filename="{_safe_header_filename(filename)}"')
+    # Defense in depth on top of the allowlist above: stops a browser from
+    # ever second-guessing the declared content type and rendering
+    # something dangerous anyway.
+    response['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+
+def _safe_header_filename(filename):
+    """Strip characters that would break out of the quoted filename or inject
+    a new header line. `filename` comes straight from Graph — untrusted,
+    external data — so this must fail closed rather than let a crafted
+    filename (e.g. containing '\\r\\n') reach HttpResponse and either crash
+    the request or smuggle an extra header."""
+    cleaned = (filename or '').replace('\r', '').replace('\n', '').replace('"', "'")
+    return cleaned or 'attachment'
+
+
+@login_required
+@require_POST
+def delink_pipeline_email(request, pk):
+    """Remove the currently linked email from a pipeline entry. The
+    Documents it created are NEVER deleted — only the email link itself."""
+    project = _scoped_project_or_404(request, pk)
+    if not _can_use_pipeline_email_feature(request.user):
+        messages.error(request, 'Add Emails is restricted to Sales, Admin, and Super Admin users.')
+        return redirect('projects:detail', pk=pk)
+    delinked = _delink_active_pipeline_email(project, request.user)
+    if delinked:
+        messages.success(request, 'Email delinked. Its documents remain under Project Documents.')
+    else:
+        messages.info(request, 'There is no linked email to remove.')
+    return redirect('projects:detail', pk=pk)
 
 
 # ─── Commercial Pipeline Revisions ───────────────────────────

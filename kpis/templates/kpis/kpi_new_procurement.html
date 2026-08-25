@@ -1,0 +1,43 @@
+{% comment %} ============================================================
+   Procurement — OWNER: this dev
+   Metrics to build:
+     - PO cycle time (created -> approval -> finalised) -> registry has
+       proc_pr_to_po_cycle, but it measures a DIFFERENT leg (PR->PO issuance,
+       not created->approved->finalised) - decide whether that's actually
+       what we want, or build a new compute function alongside it
+     - Supplier delivery performance  -> registry key: proc_ontime_delivery
+     - Material shortages             -> not yet in the registry, needs a
+       definition first (no "shortage" field exists anywhere)
+     - Cost savings                   -> registry key: proc_cost_savings
+     - Delivery % of each project     -> not yet in the registry (existing
+       KPI is an aggregate, not sliced per project)
+
+   Working example below: reads the already-registered Procurement KPIs
+   straight off `data.departments` (from build_dashboard) so cost savings
+   and on-time delivery show real numbers immediately. Extend this pattern
+   for the two new metrics, or replace it entirely - just keep everything
+   procurement-related in this file.
+   ============================================================ {% endcomment %}
+<div class="card mb-4">
+  <div class="card-header"><h5 class="mb-0"><i class="bi bi-truck"></i> Procurement</h5></div>
+  <div class="card-body">
+    {% for dept in data.departments %}
+      {% if dept.key == 'procurement' %}
+      <div class="row g-3">
+        {% for card in dept.cards %}
+        <div class="col-md-3">
+          <div class="border rounded p-3 h-100">
+            <div class="text-muted small text-uppercase">{{ card.label }}</div>
+            <div class="fs-4 fw-bold">{{ card.value|default:"—" }}</div>
+            <span class="badge bg-{% if card.status == 'on' %}success{% elif card.status == 'near' %}warning{% elif card.status == 'off' %}danger{% else %}secondary{% endif %}">
+              {{ card.status|default:"n/a" }}
+            </span>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    {% endfor %}
+    <p class="text-muted small mt-3 mb-0">TODO — this shows every registered Procurement KPI as a generic card (including manual-entry ones with no data yet). Replace with the specific visuals from the build spec (funnel for PO cycle time, sorted bar for supplier delivery) and add material shortages + per-project delivery %, which aren't in the registry yet.</p>
+  </div>
+</div>

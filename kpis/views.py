@@ -86,6 +86,38 @@ def dashboard(request):
 
 @login_required
 @require_capability('kpis.access')
+def kpi_new(request):
+    """Skeleton for the new GM-facing KPI dashboard - Sales & Proposal
+    Performance owned by the lead, Procurement owned by this dev, split into
+    separate template partials (kpi_new_sales.html, kpi_new_proposal.html,
+    kpi_new_procurement.html, kpi_new_pmo.html) so each person's work stays
+    in their own file and doesn't conflict. Reuses the existing KPI
+    registry/dashboard data (build_dashboard) so already-computed KPIs
+    (revenue, pipeline coverage, cost savings, on-time delivery, etc.) are
+    available immediately - metrics with no registry entry yet need a new
+    compute function in kpis/registry.py before they'll show real data.
+
+    Gated exactly like dashboard() above. This is a sandbox, but it renders
+    the same build_dashboard() output the real dashboard does - company
+    revenue, cost savings, on-time delivery - so it needs the same two
+    decorators. The nav entry is behind `kpis.manage`, which only hides the
+    link; without these the URL itself answered 200 to anyone, signed in or
+    not. Whatever else changes here, keep them."""
+    period = _resolve_period(request)
+    region, regions = _resolve_region(request)
+    data = build_dashboard(period, region=region)
+    context = {
+        'data': data,
+        'period': period,
+        'period_options': period_options(),
+        'regions': regions,
+        'selected_region': region,
+    }
+    return render(request, 'kpis/kpi_new.html', context)
+
+
+@login_required
+@require_capability('kpis.access')
 def people(request):
     """Per-person KPI scorecard. Pick a user; see the attributable auto KPIs
     computed from records they own/created."""
