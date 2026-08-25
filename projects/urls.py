@@ -16,6 +16,17 @@ urlpatterns = [
     path('<int:pk>/restore/', views.project_restore, name='restore'),
     path('import/', views.ProjectImportView.as_view(), name='import_projects'),
     path('<int:pk>/add-document/', views.add_project_document, name='add_document'),
+    path('<int:pk>/add-documents-bulk/', views.add_project_documents_bulk, name='add_documents_bulk'),
+    path('<int:pk>/link-email/', views.link_pipeline_email, name='link_pipeline_email'),
+    # message_id/attachment_id ride as ?query params here, not path segments
+    # — Graph ids can contain characters (e.g. '/') that <str:> rejects.
+    # See _add_attachment_urls() in views.py.
+    path('<int:pk>/link-email/attachment/',
+         views.view_pipeline_inbox_attachment, name='view_pipeline_inbox_attachment'),
+    path('<int:pk>/delink-email/', views.delink_pipeline_email, name='delink_pipeline_email'),
+    path('link-email/new/', views.link_pipeline_email_new, name='link_pipeline_email_new'),
+    path('link-email/new/attachment/',
+         views.view_pipeline_inbox_attachment, name='view_pipeline_inbox_attachment_new'),
     path('next-reference/', views.next_lna_reference_preview, name='next_reference_preview'),
 
     # Revisions

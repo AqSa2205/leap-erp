@@ -1,0 +1,215 @@
+{% extends 'base.html' %}
+
+{% block title %}Add Emails{% if project %} - {{ project.project_name }}{% endif %} - Leap Networks ERP{% endblock %}
+{% block page_title %}Add Emails{% endblock %}
+
+{% block extra_css %}
+<style>
+    .form-card {
+        border-radius: 12px;
+        border: none;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        overflow: hidden;
+    }
+    .form-card .card-header {
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+        color: #fff;
+        padding: 1rem 1.25rem;
+    }
+    .form-card .card-header h5 {
+        color: #fff;
+    }
+    .inbox-list {
+        border: 1px solid #dee2e6;
+        border-radius: 12px;
+        overflow: hidden;
+    }
+    .inbox-row {
+        padding: 0.9rem 1.1rem;
+        border-bottom: 1px solid #eee;
+    }
+    .inbox-row:last-child {
+        border-bottom: none;
+    }
+    .inbox-row:hover {
+        background: rgba(196, 30, 58, 0.04);
+    }
+    .doc-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.35rem 0.7rem;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        background: #fff;
+        text-decoration: none;
+        color: #212529;
+        font-weight: 600;
+        font-size: 0.9rem;
+    }
+    .doc-chip:hover {
+        border-color: #C41E3A;
+        color: #C41E3A;
+    }
+    .doc-chip i {
+        font-size: 1.1rem;
+    }
+    .doc-row {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        margin-bottom: 0.5rem;
+    }
+    .doc-row .doc-chip {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+    .doc-row select {
+        flex: 0 0 auto;
+        width: auto;
+        min-width: 170px;
+    }
+    .email-toggle {
+        border: none;
+        background: none;
+        color: #6c757d;
+        padding: 0.25rem 0.4rem;
+    }
+    .email-toggle[aria-expanded="true"] i {
+        transform: rotate(90deg);
+    }
+    .email-toggle i {
+        transition: transform 0.15s ease;
+    }
+    .email-details {
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 0.75rem 1rem;
+        margin-top: 0.6rem;
+        font-size: 0.9rem;
+    }
+    .email-details dt {
+        color: #6c757d;
+        font-weight: 600;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+    }
+    .email-details dd {
+        margin-bottom: 0.5rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-9">
+        <div class="card form-card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="bi bi-envelope-paper me-2"></i>Add Emails{% if project %} to {{ project.project_name }}{% endif %}
+                </h5>
+            </div>
+            <div class="card-body p-4">
+
+                {% if active_email %}
+                <div class="alert alert-warning">
+                    <i class="bi bi-info-circle me-1"></i>
+                    An email ("{{ active_email.subject|default:"(no subject)" }}") is already linked to this
+                    pipeline entry. Attaching a new one below will replace it as the linked email —
+                    but the documents already added from it will stay under Project Documents.
+                </div>
+                {% endif %}
+
+                {% if inbox_error %}
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle me-1"></i>
+                    Couldn't load the live inbox: {{ inbox_error }}
+                </div>
+                {% elif not inbox_messages %}
+                <div class="alert alert-secondary">
+                    <i class="bi bi-inbox me-1"></i>No emails with attachments found in the monitored inbox.
+                </div>
+                {% else %}
+                <p class="text-muted small mb-2">
+                    Showing recent emails from the monitored inbox that have documents attached.
+                    Click a document to open it, or {% if project %}Attach to add the whole email's
+                    documents to this pipeline entry{% else %}Use This Email to bring it back to the
+                    entry you're creating{% endif %}.
+                </p>
+                <div class="inbox-list mb-3">
+                    {% for msg in inbox_messages %}
+                    <div class="inbox-row">
+                        <form method="post">
+                            {% csrf_token %}
+                            <input type="hidden" name="message_id" value="{{ msg.id }}">
+
+                            {% for att in msg.attachments %}
+                            <div class="doc-row">
+                                <a class="doc-chip" href="{{ att.url }}" target="_blank" rel="noopener">
+                                    {% if '.pdf' in att.name|lower %}
+                                        <i class="bi bi-file-earmark-pdf text-danger"></i>
+                                    {% elif '.xls' in att.name|lower %}
+                                        <i class="bi bi-file-earmark-excel text-success"></i>
+                                    {% elif '.doc' in att.name|lower %}
+                                        <i class="bi bi-file-earmark-word text-primary"></i>
+                                    {% elif '.png' in att.name|lower or '.jpg' in att.name|lower or '.jpeg' in att.name|lower %}
+                                        <i class="bi bi-file-earmark-image text-muted"></i>
+                                    {% else %}
+                                        <i class="bi bi-file-earmark text-muted"></i>
+                                    {% endif %}
+                                    {{ att.name }}
+                                </a>
+                                {% if project %}
+                                <input type="hidden" name="doc_index" value="{{ forloop.counter0 }}">
+                                <select name="doc_type" class="form-control form-control-sm">
+                                    {% for value, label in document_type_choices %}
+                                    <option value="{{ value }}" {% if value == 'vendor_quotation' %}selected{% endif %}>{{ label }}</option>
+                                    {% endfor %}
+                                </select>
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+
+                            <div class="d-flex align-items-center justify-content-between mt-2">
+                                <button type="button" class="email-toggle" data-bs-toggle="collapse"
+                                        data-bs-target="#email-{{ forloop.counter }}" aria-expanded="false">
+                                    <i class="bi bi-chevron-right"></i>
+                                    <span class="small">{{ msg.subject }} &middot; {{ msg.received_at }}</span>
+                                </button>
+                                <button type="submit" class="btn btn-sm btn-primary flex-shrink-0">
+                                    <i class="bi bi-paperclip me-1"></i>{% if project %}Attach{% else %}Use This Email{% endif %}
+                                </button>
+                            </div>
+                        </form>
+
+                        <div class="collapse" id="email-{{ forloop.counter }}">
+                            <dl class="email-details row mb-0">
+                                <dt class="col-sm-2">From</dt>
+                                <dd class="col-sm-10">{{ msg.sender_name|default:msg.sender_email }}
+                                    {% if msg.sender_name %}&lt;{{ msg.sender_email }}&gt;{% endif %}</dd>
+                                {% if msg.cc %}
+                                <dt class="col-sm-2">Cc</dt>
+                                <dd class="col-sm-10">{{ msg.cc }}</dd>
+                                {% endif %}
+                                <dt class="col-sm-2">Subject</dt>
+                                <dd class="col-sm-10">{{ msg.subject }}</dd>
+                                <dt class="col-sm-2">Body</dt>
+                                <dd class="col-sm-10">{{ msg.body_preview }}</dd>
+                            </dl>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <div class="d-flex justify-content-start pt-3 border-top">
+                    <a href="{% if project %}{% url 'projects:detail' project.pk %}{% else %}{% url 'projects:create' %}{% endif %}"
+                       class="btn btn-outline-secondary">
+                        <i class="bi bi-arrow-left me-1"></i>Cancel
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

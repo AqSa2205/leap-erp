@@ -307,6 +307,10 @@ EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'notifications.graph_email_backe
 MS_TENANT_ID = os.environ.get('MS_TENANT_ID', '')
 MS_CLIENT_ID = os.environ.get('MS_CLIENT_ID', '')
 MS_CLIENT_SECRET = os.environ.get('MS_CLIENT_SECRET', '')
+# The mailbox the "Add Emails" live-inbox flow on Commercial Pipeline entries
+# reads from (projects/graph_mail.py) — same Graph app/credentials above,
+# just a different mailbox and a read (Mail.Read) instead of a send.
+PIPELINE_EMAIL_MAILBOX = os.environ.get('PIPELINE_EMAIL_MAILBOX', '')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'Leap ERP <notifications@leap-arabia.com>')
 # The mailbox Graph actually sends as (the /users/{sender}/sendMail path) —
 # derived from DEFAULT_FROM_EMAIL's bare address so the two can't drift apart,

@@ -18,6 +18,14 @@ class ProjectForm(forms.ModelForm):
         widget=forms.TextInput(attrs={'placeholder': 'e.g. R03', 'data-lna-revision': '1'}),
         help_text='Revision tag (optional), e.g. R03. Leave blank for none.')
 
+    # An email picked from the live inbox before the project exists yet (see
+    # projects/views.py: link_pipeline_email_new). Not a model field — just
+    # opaque JSON riding along in the form so the existing draft-autosave
+    # system (drafts.FormDraft) picks it up and restores it automatically,
+    # same as every other field. Materialized into a real PipelineEmail +
+    # Documents only once the project is actually created.
+    picked_email_json = forms.CharField(required=False, widget=forms.HiddenInput())
+
     class Meta:
         model = Project
         fields = [
