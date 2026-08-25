@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.db import transaction
 from django.utils import timezone
 from .models import TimesheetRequest, TimesheetRequestAck
@@ -6,6 +8,33 @@ from accounts.models import User, RolePermission
 from notifications.services import notify_users
 from django.contrib.contenttypes.models import ContentType
 from notifications.models import Notification
+
+def _next_transition_time(previous):
+    """`timezone.now()`, but guaranteed to fall strictly after `previous`.
+
+    TimesheetMonth has no explicit state column — whether a month is locked
+    is inferred by comparing submitted_at against reopened_at, so the two
+    transitions have to be orderable by their timestamps alone. That breaks
+    when they land on the same value, and they can: timezone.now() resolves
+    to roughly 15ms on Windows, so a submit and a reopen inside one tick
+    read as simultaneous.
+
+    Whichever way the comparison is then written, one real transition is
+    silently dropped. With a strict '>', HR reopening a month in the same
+    instant it was submitted leaves it locked and the employee still cannot
+    edit. Loosen it to '>=' and the mirror case appears instead: an employee
+    resubmitting in the same instant HR reopened leaves the month unlocked,
+    permanently, since is_submitted recomputes from the same stored values
+    every time.
+
+    Nudging by a microsecond keeps both timestamps real for the audit trail
+    in the admin, and keeps the ordering unambiguous without a schema
+    change. Nothing displays sub-second precision."""
+    now = timezone.now()
+    if previous and now <= previous:
+        return previous + timedelta(microseconds=1)
+    return now
+
 
 def submit_month(*, employee, year, month, submitted_by):
     """Lock an employee's timesheet for one calendar month.
@@ -32,7 +61,7 @@ def submit_month(*, employee, year, month, submitted_by):
 
         draft_entries.update(status=TimesheetEntry.STATUS_SUBMITTED)
 
-        tsm.submitted_at = timezone.now()
+        tsm.submitted_at = _next_transition_time(tsm.reopened_at)
         tsm.submitted_by = submitted_by
         tsm.save(update_fields=['submitted_at', 'submitted_by'])
 
@@ -60,7 +89,7 @@ def reopen_month(*, employee, year, month, reopened_by):
             status=TimesheetEntry.STATUS_SUBMITTED,
         ).update(status=TimesheetEntry.STATUS_DRAFT)
 
-        tsm.reopened_at = timezone.now()
+        tsm.reopened_at = _next_transition_time(tsm.submitted_at)
         tsm.reopened_by = reopened_by
         tsm.save(update_fields=['reopened_at', 'reopened_by'])
 
