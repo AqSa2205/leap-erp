@@ -122,6 +122,7 @@ def kpi_new(request):
             'activity': build_activity_overview(
                 period, region_id=region.pk if region else None),
             'period': period,
+            'period_label': 'All time' if period == 'all' else label_for(period),
             'period_picker': _period_picker(period, include_all=True),
             'regions': regions,
             'selected_region': region,
@@ -137,6 +138,7 @@ def kpi_new(request):
             'view': view,
             'won': build_deals_won(period, region=region),
             'period': period,
+            'period_label': label_for(period),
             'period_picker': _period_picker(period),
             'regions': regions,
             'selected_region': region,
@@ -157,6 +159,7 @@ def kpi_new(request):
     context = {
         'view': view,
         'data': data,
+        'period_label': data['period_label'],
         'cards': cards,
         'ytd': _ytd_revenue_card(period, region),
         'period': period,
