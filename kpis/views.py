@@ -1,3 +1,4 @@
+import datetime
 from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
@@ -121,11 +122,118 @@ def kpi_new(request):
         'cards': cards,
         'ytd': _ytd_revenue_card(period, region),
         'period': period,
-        'period_options': period_options(),
+        'period_picker': _period_picker(period),
         'regions': regions,
         'selected_region': region,
     }
     return render(request, 'kpis/kpi_new.html', context)
+
+
+# ── Period picker ────────────────────────────────────────────────────────────
+# period_options() returns months, quarters and years in one flat list - 18
+# entries of three different granularities in a single dropdown, where picking
+# "June 2026" and "Q2 2026" look like the same kind of choice and the reader
+# cannot see at a glance which they are on. The picker below splits that into
+# granularity first, then value, so only one granularity's worth of options is
+# ever on screen.
+
+PERIOD_KINDS = (
+    ('month', 'Month'),
+    ('quarter', 'Quarter'),
+    ('year', 'Year'),
+)
+
+
+def _period_kind(period):
+    """'month' | 'quarter' | 'year' for a period string."""
+    parts = (period or '').split('-')
+    if len(parts) == 1:
+        return 'year'
+    return 'quarter' if parts[1].upper().startswith('Q') else 'month'
+
+
+def _switch_period_kind(period, kind, today=None):
+    """The same point in time expressed at a different granularity.
+
+    Switching granularity should keep the reader where they are rather than
+    jumping to today: from June 2026 to Quarter gives Q2 2026, not whichever
+    quarter it happens to be now. Going the other way - to a finer grain than
+    the period carries - there is no single right answer, so it lands on the
+    current month/quarter when that falls inside the period, and on the first
+    one otherwise.
+    """
+    if today is None:
+        from django.utils import timezone
+        today = timezone.localdate()
+
+    parts = (period or '').split('-')
+    year = parts[0] if parts and parts[0].isdigit() else str(today.year)
+    src = _period_kind(period)
+
+    if kind == 'year':
+        return year
+
+    if kind == 'quarter':
+        if src == 'month':
+            month = int(parts[1])
+            return f'{year}-Q{(month - 1) // 3 + 1}'
+        if src == 'quarter':
+            return period
+        # From a year: this quarter if we are in that year, else Q1.
+        q = (today.month - 1) // 3 + 1 if str(today.year) == year else 1
+        return f'{year}-Q{q}'
+
+    # kind == 'month'
+    if src == 'month':
+        return period
+    if src == 'quarter':
+        q = int(parts[1][1:])
+        first = (q - 1) * 3 + 1
+        # This month if it sits in that quarter, else the quarter's first.
+        if str(today.year) == year and first <= today.month < first + 3:
+            return f'{year}-{today.month:02d}'
+        return f'{year}-{first:02d}'
+    month = today.month if str(today.year) == year else 1
+    return f'{year}-{month:02d}'
+
+
+def _period_picker(period, today=None):
+    """Everything the filter bar needs: the active granularity, the values
+    available within it, and where each granularity tab should link to."""
+    from .periods import label_for, current_period
+    if today is None:
+        from django.utils import timezone
+        today = timezone.localdate()
+
+    kind = _period_kind(period)
+
+    if kind == 'month':
+        # The last 12 months, newest first.
+        values = []
+        cur = datetime.date(today.year, today.month, 1)
+        for i in range(12):
+            idx = (cur.year * 12 + (cur.month - 1)) - i
+            d = datetime.date(idx // 12, idx % 12 + 1, 1)
+            values.append(f'{d.year}-{d.month:02d}')
+    elif kind == 'quarter':
+        year = period.split('-')[0]
+        values = [f'{year}-Q{q}' for q in range(1, 5)]
+    else:
+        values = [str(today.year - n) for n in range(3)]
+
+    return {
+        'kind': kind,
+        'kinds': [
+            {'key': k, 'label': lbl, 'active': k == kind,
+             'period': _switch_period_kind(period, k, today)}
+            for k, lbl in PERIOD_KINDS
+        ],
+        'values': [
+            {'period': v, 'label': label_for(v), 'active': v == period,
+             'is_current': v == current_period(kind, today)}
+            for v in values
+        ],
+    }
 
 
 def _ytd_revenue_card(period, region):
