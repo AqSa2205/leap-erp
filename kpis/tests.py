@@ -1985,3 +1985,136 @@ class DeadlineReliabilityTests(ComputeFixtureMixin, TestCase):
         d = build_deadline_reliability('2026-Q2', region=self.region)
         self.assertEqual(d['total'], 0)
         self.assertIsNone(d['pct'])
+
+
+class DeadlineDateBoundaryTests(ComputeFixtureMixin, TestCase):
+    """Milestone dates are read in Riyadh time, not UTC.
+
+    Stamps are stored UTC and Riyadh is UTC+3, so anything finished after
+    21:00 local falls on the PREVIOUS day in UTC. Calling .date() on the
+    aware datetime therefore scored evening work a day more punctual than it
+    was - and quietly turned a milestone finished the evening after its
+    deadline into an on-time one.
+
+    The existing tests all used 09:00, which is the same date either way, so
+    none of them could see it."""
+
+    def setUp(self):
+        super().setUp()
+        self.alice = User.objects.create_user(username='tz_alice', password='pw')
+
+    def _at(self, ref, deadline, finished_local, by=None):
+        """finished_local is a naive Riyadh wall-clock datetime."""
+        p = self._project(ref, self.active, est='100000')
+        Project.objects.filter(pk=p.pk).update(handed_over_deadline=deadline)
+        sheet = CostingSheet.objects.create(title=f'S-{ref}', project=p)
+        CostingSheet.objects.filter(pk=sheet.pk).update(
+            handed_over_at=timezone.make_aware(finished_local),
+            handed_over_by=by or self.alice)
+        return p
+
+    def test_late_evening_work_counts_on_the_day_it_actually_happened(self):
+        """22:00 on the 11th Riyadh is 19:00 UTC on the 11th - same day. But
+        23:30 on the 11th is 20:30 UTC, still the 11th. Push to 02:00 on the
+        12th Riyadh and UTC says 23:00 on the 11th: that is the shift."""
+        from kpis.services import build_deadline_reliability
+        # Deadline the 11th; finished 02:00 on the 12th local = one day late.
+        self._at('MIDNIGHT', datetime.date(2026, 5, 11),
+                 datetime.datetime(2026, 5, 12, 2, 0))
+        d = build_deadline_reliability('2026-Q2', region=self.region)
+        self.assertEqual((d['on_time'], d['total']), (0, 1),
+                         'finished after midnight local is late, even though '
+                         'UTC still calls it the deadline day')
+        self.assertEqual(d['people'][0]['worst'], -1)
+
+    def test_the_deadline_evening_is_still_on_time(self):
+        from kpis.services import build_deadline_reliability
+        self._at('EVENING', datetime.date(2026, 5, 11),
+                 datetime.datetime(2026, 5, 11, 22, 30))
+        d = build_deadline_reliability('2026-Q2', region=self.region)
+        self.assertEqual((d['on_time'], d['total']), (1, 1))
+
+    def test_project_milestone_variance_uses_local_time_too(self):
+        """The same fix in projects.models, which drives the +/- day figure on
+        the pipeline detail page."""
+        p = self._at('VAR', datetime.date(2026, 5, 11),
+                     datetime.datetime(2026, 5, 12, 2, 0))
+        sheet = p.costing_sheets.first()
+        variance = p._milestone_variance(
+            datetime.date(2026, 5, 11), sheet.handed_over_at)
+        self.assertEqual(variance, -1)
+
+
+class MultiSheetMilestoneTests(ComputeFixtureMixin, TestCase):
+    """A project can carry several costing sheets, and a milestone may have
+    been reached on any of them.
+
+    Deadline reliability used to read only the furthest-along sheet, which
+    made it disagree with the RFQ Activity tab - that one scans them all. The
+    same project could be 'handed to sales' on one tab and 'overdue, not done'
+    on the other."""
+
+    def setUp(self):
+        super().setUp()
+        self.alice = User.objects.create_user(username='ms_alice', password='pw')
+
+    def test_a_milestone_on_a_non_furthest_sheet_still_counts(self):
+        from kpis.services import build_deadline_reliability
+        p = self._project('MULTI', self.active, est='100000')
+        Project.objects.filter(pk=p.pk).update(
+            handed_over_deadline=datetime.date(2026, 5, 20))
+
+        # The handover happened on an early sheet...
+        early = CostingSheet.objects.create(title='rev A', project=p)
+        CostingSheet.objects.filter(pk=early.pk).update(
+            workflow_stage='ready_for_costing',
+            handed_over_at=timezone.make_aware(
+                datetime.datetime(2026, 5, 18, 9, 0)),
+            handed_over_by=self.alice)
+        # ...while a later sheet is further along the workflow but never
+        # carried a handover stamp of its own.
+        later = CostingSheet.objects.create(title='rev B', project=p)
+        CostingSheet.objects.filter(pk=later.pk).update(
+            workflow_stage='finance_approved')
+
+        d = build_deadline_reliability('2026-Q2', region=self.region)
+        self.assertEqual((d['on_time'], d['total']), (1, 1))
+        self.assertEqual(d['overdue_open'], 0)
+        self.assertEqual(d['people'][0]['user'], self.alice)
+
+    def test_the_earliest_handover_wins(self):
+        """The work happened the first time it happened; a later revision does
+        not undo it, and must not be the one scored."""
+        from kpis.services import build_deadline_reliability
+        p = self._project('TWICE', self.active, est='100000')
+        Project.objects.filter(pk=p.pk).update(
+            handed_over_deadline=datetime.date(2026, 5, 20))
+        for title, day in (('rev A', 18), ('rev B', 25)):
+            sheet = CostingSheet.objects.create(title=title, project=p)
+            CostingSheet.objects.filter(pk=sheet.pk).update(
+                handed_over_at=timezone.make_aware(
+                    datetime.datetime(2026, 5, day, 9, 0)),
+                handed_over_by=self.alice)
+        d = build_deadline_reliability('2026-Q2', region=self.region)
+        # The 18th is on time; the 25th would have been 5 days late.
+        self.assertEqual((d['on_time'], d['total']), (1, 1))
+
+    def test_agrees_with_the_rfq_activity_tab_on_the_same_project(self):
+        """The invariant behind this fix: if RFQ Activity says the BOM went to
+        sales, Deadlines must not call the same project unfinished."""
+        from kpis.services import build_deadline_reliability
+        from kpis.registry import _handed_over_map
+        p = self._project('AGREE', self.active, est='100000')
+        Project.objects.filter(pk=p.pk).update(
+            handed_over_deadline=datetime.date(2026, 5, 20))
+        early = CostingSheet.objects.create(title='rev A', project=p)
+        CostingSheet.objects.filter(pk=early.pk).update(
+            handed_over_at=timezone.make_aware(
+                datetime.datetime(2026, 5, 18, 9, 0)),
+            handed_over_by=self.alice)
+        CostingSheet.objects.create(title='rev B', project=p)
+
+        self.assertIn(p.pk, _handed_over_map(self.region))
+        d = build_deadline_reliability('2026-Q2', region=self.region)
+        self.assertEqual(d['overdue_open'], 0)
+        self.assertEqual(d['total'], 1)
