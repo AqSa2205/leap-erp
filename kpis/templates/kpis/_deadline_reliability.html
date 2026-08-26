@@ -1,0 +1,144 @@
+{% comment %} ============================================================
+   Deadline reliability — who hits their dates, per person and per milestone.
+
+   Anchored on the DEADLINE falling in the period, not on when the work was
+   done, so finished and unfinished work stay comparable: "of the milestones
+   due this quarter, how many were met".
+
+   Two things are deliberately kept apart. A completed milestone scores
+   against the person who completed it. A milestone past its deadline that
+   nobody has done is late but has NO actor — charging it to the previous
+   stage's actor would blame the wrong person — so it shows per milestone
+   instead, revealing where work is stuck even when the system cannot say who
+   is holding it.
+   ============================================================ {% endcomment %}
+
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="border rounded p-3 h-100">
+      <div class="text-muted small text-uppercase">On time</div>
+      <div class="fs-3 fw-bold">
+        {% if reliability.pct is not None %}{{ reliability.pct }}%{% else %}—{% endif %}
+      </div>
+      <div class="text-muted small mt-1">
+        {% if reliability.total %}
+          {{ reliability.on_time }} of {{ reliability.total }} milestones due in {{ period_label }}
+        {% else %}
+          no milestones were due in {{ period_label }}
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="border rounded p-3 h-100 {% if reliability.overdue_open %}border-warning{% endif %}">
+      <div class="text-muted small text-uppercase">Overdue, not done</div>
+      <div class="fs-3 fw-bold {% if reliability.overdue_open %}text-warning{% endif %}">
+        {{ reliability.overdue_open }}
+      </div>
+      <div class="text-muted small mt-1">
+        {% if reliability.overdue_open %}
+          past their date with nobody having done them — no one to attribute
+          these to, so they are not in anyone's score below
+        {% else %}
+          nothing past its date and unstarted
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="border rounded p-3 h-100">
+      <div class="text-muted small text-uppercase">People measured</div>
+      <div class="fs-3 fw-bold">{{ reliability.people|length }}</div>
+      <div class="text-muted small mt-1">with at least one milestone completed</div>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header"><h6 class="mb-0"><i class="bi bi-flag me-1"></i> By milestone</h6></div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Milestone</th>
+          <th class="text-end">On time</th>
+          <th class="text-end">Due</th>
+          <th class="text-end">Rate</th>
+          <th class="text-end">Overdue, not done</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in reliability.milestones %}
+        <tr>
+          <td class="fw-semibold">{{ m.label }}</td>
+          <td class="text-end">{{ m.on_time }}</td>
+          <td class="text-end">{{ m.total }}</td>
+          <td class="text-end">
+            {% if m.pct is not None %}{{ m.pct }}%{% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td class="text-end {% if m.overdue_open %}text-warning fw-semibold{% endif %}">
+            {{ m.overdue_open }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h6 class="mb-0"><i class="bi bi-person-check me-1"></i> By person</h6>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Person</th>
+          <th class="text-end">On time</th>
+          <th class="text-end">Rate</th>
+          {% comment %} Median, not mean: one catastrophic slip should not
+          define someone otherwise reliable. The worst case sits beside it so
+          it is not hidden either. {% endcomment %}
+          <th class="text-end">Typically</th>
+          <th class="text-end">Worst</th>
+          <th>Breakdown</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in reliability.people %}
+        <tr>
+          <td class="fw-semibold">{{ r.user.get_full_name|default:r.user.username }}</td>
+          <td class="text-end">{{ r.on_time }} / {{ r.total }}</td>
+          <td class="text-end fw-bold">{{ r.pct }}%</td>
+          <td class="text-end">
+            {% if r.median > 0 %}<span class="text-success">{{ r.median }}d early</span>
+            {% elif r.median < 0 %}<span class="text-danger">{{ r.median|cut:"-" }}d late</span>
+            {% else %}on the day{% endif %}
+          </td>
+          <td class="text-end">
+            {% if r.worst < 0 %}<span class="text-danger">{{ r.worst|cut:"-" }}d late</span>
+            {% else %}<span class="text-muted">never late</span>{% endif %}
+          </td>
+          <td class="small text-muted">
+            {% for m in r.per_milestone %}
+            <span class="me-2 text-nowrap">{{ m.label }} {{ m.on_time }}/{{ m.total }}</span>
+            {% endfor %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="6" class="text-center text-muted py-4">
+            Nobody completed a milestone with a deadline in this period.
+            <div class="small mt-1">
+              This measure needs milestone deadlines on the pipeline entry —
+              BOM started, handed to sales, costing started, finalised. Without
+              a date there is nothing to be measured against.
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>

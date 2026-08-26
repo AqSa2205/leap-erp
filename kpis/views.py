@@ -16,7 +16,7 @@ from .periods import current_period, period_options, period_bounds, label_for
 from .registry import KPI_DEFINITIONS, DEPARTMENTS, KPI_BY_KEY
 from .services import (
     build_dashboard, format_value, build_person_scorecard, attributable_users,
-    build_deals_won,
+    build_deals_won, build_deadline_reliability,
 )
 
 
@@ -107,7 +107,7 @@ def kpi_new(request):
     not. Whatever else changes here, keep them."""
     region, regions = _resolve_region(request)
     view = request.GET.get('view')
-    if view not in ('activity', 'won'):
+    if view not in ('activity', 'won', 'deadlines'):
         view = 'kpis'
 
     if view == 'activity':
@@ -137,6 +137,21 @@ def kpi_new(request):
         return render(request, 'kpis/kpi_new.html', {
             'view': view,
             'won': build_deals_won(period, region=region),
+            'period': period,
+            'period_label': label_for(period),
+            'period_picker': _period_picker(period),
+            'regions': regions,
+            'selected_region': region,
+        })
+
+    if view == 'deadlines':
+        # Deadline reliability: who hits their dates, per person and per
+        # milestone. Anchored on the deadline falling in the window, so
+        # finished and unfinished work stay comparable.
+        period = _resolve_period(request)
+        return render(request, 'kpis/kpi_new.html', {
+            'view': view,
+            'reliability': build_deadline_reliability(period, region=region),
             'period': period,
             'period_label': label_for(period),
             'period_picker': _period_picker(period),

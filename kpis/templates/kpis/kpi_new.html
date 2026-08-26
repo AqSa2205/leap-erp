@@ -12,10 +12,49 @@
         </p>
     </div>
 
+{% comment %} Bootstrap paints nav-tabs links its own link blue (#0d6efd),
+which belongs to no other surface in this app. These follow the sidebar's
+convention instead — leap-dark when idle, leap-red when active, with the red
+edge moved from the left to the bottom because the tabs run horizontally.
+Both themes, matching base.html's own dark-mode values. {% endcomment %}
+<style>
+  .kpi-tabs { border-bottom: 1px solid rgba(128,128,128,.25); }
+  .kpi-tabs .nav-link {
+    color: var(--leap-dark);
+    border: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    padding: .55rem 1rem;
+    font-weight: 500;
+    transition: all .2s;
+  }
+  .kpi-tabs .nav-link i { color: var(--leap-red); }
+  .kpi-tabs .nav-link:hover {
+    background: rgba(196, 30, 58, 0.08);
+    color: var(--leap-black);
+    border-bottom-color: rgba(196, 30, 58, .4);
+  }
+  .kpi-tabs .nav-link.active {
+    background: rgba(196, 30, 58, 0.12);
+    color: var(--leap-red);
+    border-bottom-color: var(--leap-red);
+    font-weight: 600;
+  }
+  [data-theme="dark"] .kpi-tabs .nav-link { color: #ccc; }
+  [data-theme="dark"] .kpi-tabs .nav-link:hover {
+    background: rgba(196, 30, 58, 0.15);
+    color: #fff;
+  }
+  [data-theme="dark"] .kpi-tabs .nav-link.active {
+    background: rgba(196, 30, 58, 0.2);
+    color: var(--leap-red);
+  }
+</style>
+
     {% comment %} Tabs as links, like the filter bar: each is a real URL, and
     both carry the current region and period so switching tab never silently
     resets the filters. {% endcomment %}
-    <ul class="nav nav-tabs mb-3">
+    <ul class="nav nav-tabs kpi-tabs mb-3">
       <li class="nav-item">
         <a class="nav-link {% if view == 'kpis' %}active{% endif %}"
            href="?period={{ period }}{% if selected_region %}&amp;region={{ selected_region.code }}{% endif %}">
@@ -26,6 +65,12 @@
         <a class="nav-link {% if view == 'won' %}active{% endif %}"
            href="?view=won&amp;period={{ period }}{% if selected_region %}&amp;region={{ selected_region.code }}{% endif %}">
           <i class="bi bi-trophy me-1"></i> Deals Won
+        </a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link {% if view == 'deadlines' %}active{% endif %}"
+           href="?view=deadlines&amp;period={{ period }}{% if selected_region %}&amp;region={{ selected_region.code }}{% endif %}">
+          <i class="bi bi-clock-history me-1"></i> Deadlines
         </a>
       </li>
       <li class="nav-item">
@@ -59,6 +104,9 @@
     a full set of empty tiles underneath whichever tab you were on. {% endcomment %}
     {% if view == 'won' %}
       {% include 'kpis/_deals_won.html' %}
+
+    {% elif view == 'deadlines' %}
+      {% include 'kpis/_deadline_reliability.html' %}
 
     {% elif view == 'activity' %}
       {% comment %} The same builder and the same table partial the standalone
