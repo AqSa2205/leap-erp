@@ -1698,3 +1698,100 @@ class DealsWonTabTests(ComputeFixtureMixin, TestCase):
         body = self.client.get(
             reverse('kpis:kpi_new') + '?view=won').content.decode()
         self.assertIn('&amp;view=won', body)
+
+
+class TabExclusivityTests(ComputeFixtureMixin, TestCase):
+    """Exactly one content block renders per tab, and exactly one tab is lit.
+
+    This shipped broken. A scripted edit matched `{% if view == 'activity' %}`
+    inside the page SUBTITLE rather than the content branch, so the Deals Won
+    include landed above the tabs, and the content branch - never given a
+    'won' case - fell through to `{% else %}` and drew the KPI tiles
+    underneath as well. Every tile was an em-dash, because a Deals Won request
+    has no `data` in context.
+
+    Nothing caught it because the existing tab tests asked "is the right
+    content present" and it was. They never asked whether the WRONG content
+    was also present, or where on the page any of it sat."""
+
+    def setUp(self):
+        super().setUp()
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.user = User.objects.create_user(
+            username='gm_excl', password='pw',
+            role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.client.force_login(self.user)
+
+    # Markers unique to each tab's content.
+    BLOCKS = {
+        'kpis': 'Sales &amp; Pipeline',
+        'won': 'Marked won by',
+        'activity': 'ta-region-head',
+    }
+
+    def _body(self, view=None):
+        url = reverse('kpis:kpi_new')
+        if view:
+            url += f'?view={view}&period=2026-Q2'
+        return self.client.get(url).content.decode()
+
+    def test_each_tab_renders_only_its_own_block(self):
+        # Give the activity tab something to draw, so its marker is real.
+        self._project('SEED', self.active, est='100000')
+        for view, expected in (('kpis', 'kpis'), ('won', 'won'),
+                               ('activity', 'activity')):
+            body = self._body(None if view == 'kpis' else view)
+            for key, marker in self.BLOCKS.items():
+                if key == 'activity' and expected != 'activity':
+                    # ta-region-head only appears when there is activity to
+                    # show; absence proves nothing, so only assert presence.
+                    continue
+                with self.subTest(tab=view, block=key):
+                    if key == expected:
+                        self.assertIn(marker, body)
+                    else:
+                        self.assertNotIn(marker, body)
+
+    def test_exactly_one_tab_is_marked_active(self):
+        import re
+        for view in (None, 'won', 'activity'):
+            body = self._body(view)
+            start = body.index('nav nav-tabs')
+            tabs = body[start:body.index('</ul>', start)]
+            with self.subTest(tab=view or 'kpis'):
+                self.assertEqual(tabs.count('nav-link active'), 1)
+
+    def test_the_kpis_tab_is_not_lit_on_the_other_tabs(self):
+        """It was tested as "not activity", so it stayed lit on Deals Won."""
+        import re
+        for view in ('won', 'activity'):
+            body = self._body(view)
+            start = body.index('nav nav-tabs')
+            tabs = body[start:body.index('</ul>', start)]
+            # Split on the list items: the first is the KPIs tab. Slicing to
+            # the text "Deals Won" would run past that tab's own class.
+            kpis_link = tabs.split('<li class="nav-item">')[1]
+            with self.subTest(tab=view):
+                self.assertNotIn('nav-link active', kpis_link)
+
+    def test_content_comes_after_the_tabs_and_filter_bar(self):
+        """The break put a whole table inside the page subtitle. Assert the
+        document order rather than mere presence."""
+        for view, marker in (('won', 'Marked won by'), (None, 'Sales &amp; Pipeline')):
+            body = self._body(view)
+            with self.subTest(tab=view or 'kpis'):
+                self.assertLess(body.index('nav nav-tabs'), body.index(marker))
+                self.assertLess(body.index('kpi-filter'), body.index(marker))
+
+    def test_the_subtitle_shows_a_period_label_on_every_tab(self):
+        """Only the KPI branch has `data`, so the subtitle reads a dedicated
+        period_label rather than reaching into one tab's payload."""
+        for view, expected in ((None, 'Q2 2026'), ('won', 'Q2 2026')):
+            with self.subTest(tab=view or 'kpis'):
+                self.assertIn(expected, self._body(view))
+        # Activity defaults to the lifetime view.
+        body = self.client.get(
+            reverse('kpis:kpi_new') + '?view=activity').content.decode()
+        self.assertIn('All time', body)
