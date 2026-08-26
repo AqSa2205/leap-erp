@@ -401,6 +401,11 @@ def my_profile(request):
         return redirect('hr:my_approvals')
 
     context = {'employee': emp}
+    # Computed once and reused everywhere below (submission gate, edit gate,
+    # banner context) so the cooldown check can never disagree with itself
+    # within one request — a naive date.today() would drift from this by up
+    # to 3 hours around midnight Riyadh time on a UTC-clocked host.
+    today = timezone.localtime(timezone.now()).date()
 
     is_leave_request_post = (
         emp and request.method == 'POST' and request.POST.get('action') == 'request_leave')
@@ -414,7 +419,7 @@ def my_profile(request):
             # logic stays untouched. annual_leave_cooldown returns None for
             # every non-Annual leave type, so this can never block Sick,
             # Unpaid, etc.
-            cooldown = annual_leave_cooldown(emp, form.cleaned_data['leave_type'])
+            cooldown = annual_leave_cooldown(emp, form.cleaned_data['leave_type'], today=today)
             if cooldown:
                 messages.error(request, cooldown['reason'])
                 context['leave_request_submit_failed'] = True
@@ -450,6 +455,15 @@ def my_profile(request):
             request.POST, request.FILES, fixed_employee=target.employee, exclude_request_id=target.pk,
             allow_leave_type=target.leave_type, initial={'document': target.document})
         if edit_form.is_valid():
+            from hr.leave_cooldown import annual_leave_cooldown
+            # Same gate as a fresh submission — editing a pending request
+            # (including switching its leave_type to Annual, or a still-
+            # pending Annual request) must not be a way to route around the
+            # cooldown that a brand-new request would be blocked by.
+            cooldown = annual_leave_cooldown(target.employee, edit_form.cleaned_data['leave_type'], today=today)
+            if cooldown:
+                return _edit_leave_retry_redirect(
+                    request, 'hr:my_profile', target, edit_form, error_text=cooldown['reason'])
             try:
                 edit_leave_request(
                     target, request.user, leave_type=edit_form.cleaned_data['leave_type'],
@@ -616,7 +630,6 @@ def my_profile(request):
         return redirect('hr:my_profile')
 
     if emp:
-        today = timezone.localtime(timezone.now()).date()
         # Assets in custody - AssetHandover is the source of truth for
         # current custody (see also hr_dashboard and asset_detail.html).
         context['assets'] = Asset.objects.filter(

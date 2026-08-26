@@ -51,25 +51,34 @@ def annual_leave_cooldown(employee, leave_type, *, today=None):
 
     last_leave_days = last_record.days or Decimal('0')
 
+    entitlement_year = last_record.start_date.year
     entitlement = employee.leave_entitlements.filter(
-        leave_type=leave_type, year=last_record.start_date.year).first()
+        leave_type=leave_type, year=entitlement_year).first()
     # Cumulative across every booking in the year (entitlement.taken_days
     # sums all of the employee's LeaveRecord rows for this type/year), not
     # just the last one — someone who uses up their full entitlement
     # gradually across several smaller bookings hits the same "wait for
     # next year" rule as someone who used it all in a single request.
+    # Compared against effective_entitled_days (base + any HR-granted
+    # LeaveExceptionGrant days), matching how "full balance" is defined
+    # everywhere else in this codebase (see validate_leave_submission) —
+    # an employee with bonus exception days must not be judged against
+    # their un-topped-up base entitled_days alone.
     used_full_entitlement = bool(
-        entitlement and entitlement.entitled_days > 0
-        and entitlement.taken_days >= entitlement.entitled_days)
+        entitlement and entitlement.effective_entitled_days > 0
+        and entitlement.taken_days >= entitlement.effective_entitled_days)
 
     if used_full_entitlement:
         if employee.joining_date:
             eligible_date = _next_joining_anniversary(employee.joining_date, last_record.end_date)
         else:
-            eligible_date = date(last_record.end_date.year + 1, 1, 1)
+            # Anchored to entitlement_year (the same year the entitlement
+            # itself is keyed to), not last_record.end_date.year — those can
+            # differ for a leave that spans a year boundary.
+            eligible_date = date(entitlement_year + 1, 1, 1)
         reason = (
-            f'You have used your full {entitlement.entitled_days:g}-day annual leave entitlement for '
-            f'{last_record.start_date.year} (most recently ending {last_record.end_date:%d %b %Y}). '
+            f'You have used your full {entitlement.effective_entitled_days:g}-day annual leave entitlement '
+            f'for {entitlement_year} (most recently ending {last_record.end_date:%d %b %Y}). '
             f'You can apply again from {eligible_date:%d %b %Y}, when your leave entitlement renews.')
     elif last_leave_days < SHORT_LEAVE_THRESHOLD_DAYS:
         eligible_date = _add_months(last_record.end_date, SHORT_LEAVE_COOLDOWN_MONTHS)
