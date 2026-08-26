@@ -174,3 +174,104 @@ def build_person_scorecard(period, user):
         'user': user,
         'departments': departments,
     }
+
+
+# ── Deals won ────────────────────────────────────────────────────────────────
+
+def build_deals_won(period, region=None):
+    """Deals that flipped to Won, who flipped them, and what they were worth.
+
+    Reads ProjectHistory rather than the project's year/quarter tags, because
+    the question is *when did this happen and who did it* - and the tags carry
+    neither a date nor a person. Each row is one transition into a won status:
+    the project, the moment, the person who made the change, and the value
+    through the shared ladder so the totals agree with the KPI tiles.
+
+    A project can flip to Won more than once (won, reopened, won again). The
+    FIRST transition in the window is the one kept: the deal was won once, and
+    counting a correction as a second win would inflate both the count and the
+    value.
+
+    Comes with a health figure, not just rows. ProjectHistory is only written
+    by ProjectUpdateView.form_valid, so a status changed by any other route -
+    bulk action, Django admin, a script - leaves no trace. `untracked` counts
+    projects currently sitting in a won status that this table cannot see,
+    which is the difference between "we won nothing this month" and "nobody
+    recorded it".
+    """
+    from decimal import Decimal
+    from projects.models import Project, ProjectHistory
+    from .periods import period_bounds
+    from .registry import _resolved_values
+
+    start, end = period_bounds(period)
+
+    history = (ProjectHistory.objects
+               .filter(new_status__category='won',
+                       changed_at__date__gte=start, changed_at__date__lt=end)
+               .select_related('project', 'project__region', 'project__owner',
+                               'changed_by', 'new_status', 'old_status')
+               .order_by('changed_at'))
+    if region is not None:
+        history = history.filter(project__region=region)
+
+    first = {}
+    for h in history:
+        if h.project_id not in first:
+            first[h.project_id] = h
+
+    values = {}
+    if first:
+        projects = Project.objects.filter(pk__in=first.keys())
+        for project, resolved in _resolved_values(projects):
+            values[project.pk] = resolved
+
+    rows = []
+    for pid, h in first.items():
+        resolved = values.get(pid) or {}
+        rows.append({
+            'project': h.project,
+            'won_at': h.changed_at,
+            'won_by': h.changed_by,
+            'from_status': h.old_status,
+            'owner': h.project.owner,
+            'region': h.project.region,
+            'amount': resolved.get('amount'),
+            'currency': resolved.get('currency'),
+            'source': resolved.get('source'),
+        })
+    rows.sort(key=lambda r: r['won_at'], reverse=True)
+
+    # Per-person roll-up: who is actually closing, and for how much.
+    people = {}
+    for r in rows:
+        key = r['won_by'].pk if r['won_by'] else None
+        entry = people.setdefault(key, {
+            'user': r['won_by'], 'count': 0, 'amount': Decimal('0'),
+            'currency': r['currency'],
+        })
+        entry['count'] += 1
+        if r['amount']:
+            entry['amount'] += Decimal(r['amount'])
+    people = sorted(people.values(), key=lambda p: (-p['count'], -p['amount']))
+
+    # How much of the truth this table can actually see.
+    won_now = Project.objects.filter(status__category='won')
+    if region is not None:
+        won_now = won_now.filter(region=region)
+    tracked_ever = set(ProjectHistory.objects
+                       .filter(new_status__category='won')
+                       .values_list('project_id', flat=True))
+    untracked = won_now.exclude(pk__in=tracked_ever).count()
+
+    total = sum((Decimal(r['amount']) for r in rows if r['amount']), Decimal('0'))
+    return {
+        'rows': rows,
+        'people': people,
+        'count': len(rows),
+        'total': total,
+        'currency': (region.currency if region is not None
+                     else (rows[0]['currency'] if rows else None)),
+        'untracked': untracked,
+        'won_now': won_now.count(),
+    }

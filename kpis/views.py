@@ -16,6 +16,7 @@ from .periods import current_period, period_options, period_bounds, label_for
 from .registry import KPI_DEFINITIONS, DEPARTMENTS, KPI_BY_KEY
 from .services import (
     build_dashboard, format_value, build_person_scorecard, attributable_users,
+    build_deals_won,
 )
 
 
@@ -104,8 +105,44 @@ def kpi_new(request):
     decorators. The nav entry is behind `kpis.manage`, which only hides the
     link; without these the URL itself answered 200 to anyone, signed in or
     not. Whatever else changes here, keep them."""
-    period = _resolve_period(request)
     region, regions = _resolve_region(request)
+    view = request.GET.get('view')
+    if view not in ('activity', 'won'):
+        view = 'kpis'
+
+    if view == 'activity':
+        # The Team Activity tab. Same data as the standalone Team Activity
+        # page, through the same builder and the same table partial, so the
+        # two cannot drift into showing different figures for one person.
+        # It keeps its own period vocabulary - activity allows 'all time',
+        # which the KPI tiles deliberately do not.
+        period = _resolve_activity_period(request)
+        return render(request, 'kpis/kpi_new.html', {
+            'view': view,
+            'activity': build_activity_overview(
+                period, region_id=region.pk if region else None),
+            'period': period,
+            'period_picker': _period_picker(period, include_all=True),
+            'regions': regions,
+            'selected_region': region,
+        })
+
+    if view == 'won':
+        # Deals Won: one row per transition into a won status - the deal, the
+        # moment, and the person who made the change. ProjectHistory is the
+        # only record of who and when; the project's year/quarter tags carry
+        # neither.
+        period = _resolve_period(request)
+        return render(request, 'kpis/kpi_new.html', {
+            'view': view,
+            'won': build_deals_won(period, region=region),
+            'period': period,
+            'period_picker': _period_picker(period),
+            'regions': regions,
+            'selected_region': region,
+        })
+
+    period = _resolve_period(request)
     data = build_dashboard(period, region=region)
 
     # Cards keyed by KPI key, so a partial can place one specific metric where
@@ -118,6 +155,7 @@ def kpi_new(request):
     }
 
     context = {
+        'view': view,
         'data': data,
         'cards': cards,
         'ytd': _ytd_revenue_card(period, region),
@@ -145,7 +183,14 @@ PERIOD_KINDS = (
 
 
 def _period_kind(period):
-    """'month' | 'quarter' | 'year' for a period string."""
+    """'all' | 'month' | 'quarter' | 'year' for a period string.
+
+    'all' is Team Activity's lifetime view. The KPI dashboard has no such
+    option - a KPI is a rate over a window, and an all-time revenue figure
+    would only ever grow - so the bar offers it only where the page asks.
+    """
+    if period == 'all':
+        return 'all'
     parts = (period or '').split('-')
     if len(parts) == 1:
         return 'year'
@@ -166,9 +211,17 @@ def _switch_period_kind(period, kind, today=None):
         from django.utils import timezone
         today = timezone.localdate()
 
+    if kind == 'all':
+        return 'all'
+
     parts = (period or '').split('-')
     year = parts[0] if parts and parts[0].isdigit() else str(today.year)
     src = _period_kind(period)
+    if src == 'all':
+        # Leaving the lifetime view: there is nowhere to "stay", so land on
+        # the current window of the requested granularity.
+        from .periods import current_period
+        return current_period(kind, today)
 
     if kind == 'year':
         return year
@@ -197,9 +250,13 @@ def _switch_period_kind(period, kind, today=None):
     return f'{year}-{month:02d}'
 
 
-def _period_picker(period, today=None):
+def _period_picker(period, today=None, include_all=False):
     """Everything the filter bar needs: the active granularity, the values
-    available within it, and where each granularity tab should link to."""
+    available within it, and where each granularity tab should link to.
+
+    `include_all` adds Team Activity's lifetime view to the granularity
+    switch. The KPI dashboard leaves it off for the reason in _period_kind().
+    """
     from .periods import label_for, current_period
     if today is None:
         from django.utils import timezone
@@ -207,7 +264,9 @@ def _period_picker(period, today=None):
 
     kind = _period_kind(period)
 
-    if kind == 'month':
+    if kind == 'all':
+        values = []
+    elif kind == 'month':
         # The last 12 months, newest first.
         values = []
         cur = datetime.date(today.year, today.month, 1)
@@ -221,12 +280,16 @@ def _period_picker(period, today=None):
     else:
         values = [str(today.year - n) for n in range(3)]
 
+    kinds = list(PERIOD_KINDS)
+    if include_all:
+        kinds = [('all', 'All time')] + kinds
+
     return {
         'kind': kind,
         'kinds': [
             {'key': k, 'label': lbl, 'active': k == kind,
              'period': _switch_period_kind(period, k, today)}
-            for k, lbl in PERIOD_KINDS
+            for k, lbl in kinds
         ],
         'values': [
             {'period': v, 'label': label_for(v), 'active': v == period,
@@ -377,17 +440,18 @@ def _resolve_activity_period(request):
 @require_capability('kpis.activity')
 def activity_overview(request):
     period = _resolve_activity_period(request)
-    from projects.models import Region
-    regions = Region.objects.order_by('name')
-    selected_region = (request.GET.get('region') or '').strip()
-    region_id = int(selected_region) if selected_region.isdigit() else None
-    data = build_activity_overview(period, region_id=region_id)
+    # Region by CODE, matching the KPI dashboard, so both pages share one
+    # filter bar and a link can carry its region across between them. This
+    # used to read a raw Region pk from the querystring - opaque in a URL, and
+    # a different vocabulary from every other page.
+    region, regions = _resolve_region(request)
+    data = build_activity_overview(period, region_id=region.pk if region else None)
     return render(request, 'kpis/activity_overview.html', {
         'data': data,
         'period': period,
-        'period_options': activity_period_options(),
+        'period_picker': _period_picker(period, include_all=True),
         'regions': regions,
-        'selected_region': selected_region,
+        'selected_region': region,
     })
 
 

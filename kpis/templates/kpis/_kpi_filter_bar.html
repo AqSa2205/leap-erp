@@ -98,13 +98,13 @@
   <div class="kpi-filter__label">Region</div>
   <div class="kpi-chiprow mb-1">
     <a class="kpi-chip {% if not selected_region %}is-active{% endif %}"
-       href="?period={{ period }}"
+       href="?period={{ period }}{% if view and view != 'kpis' %}&amp;view={{ view }}{% endif %}"
        title="All regions — money KPIs blend currencies, so pick a region for a clean figure">
       All regions
     </a>
     {% for r in regions %}
     <a class="kpi-chip {% if selected_region and selected_region.pk == r.pk %}is-active{% endif %}"
-       href="?period={{ period }}&amp;region={{ r.code }}">
+       href="?period={{ period }}&amp;region={{ r.code }}{% if view and view != 'kpis' %}&amp;view={{ view }}{% endif %}">
       {{ r.name }}
     </a>
     {% endfor %}
@@ -117,7 +117,7 @@
     <div class="kpi-seg">
       {% for k in period_picker.kinds %}
       <a class="kpi-seg__btn {% if k.active %}is-active{% endif %}"
-         href="?period={{ k.period }}{% if selected_region %}&amp;region={{ selected_region.code }}{% endif %}">
+         href="?period={{ k.period }}{% if selected_region %}&amp;region={{ selected_region.code }}{% endif %}{% if view and view != 'kpis' %}&amp;view={{ view }}{% endif %}">
         {{ k.label }}
       </a>
       {% endfor %}
@@ -127,7 +127,7 @@
   <div class="kpi-chiprow">
     {% for v in period_picker.values %}
     <a class="kpi-chip {% if v.active %}is-active{% endif %}"
-       href="?period={{ v.period }}{% if selected_region %}&amp;region={{ selected_region.code }}{% endif %}"
+       href="?period={{ v.period }}{% if selected_region %}&amp;region={{ selected_region.code }}{% endif %}{% if view and view != 'kpis' %}&amp;view={{ view }}{% endif %}"
        {% if v.is_current %}title="Current {{ period_picker.kind }}"{% endif %}>
       {% if v.is_current %}<span class="kpi-chip__now"></span>{% endif %}
       {{ v.label }}
