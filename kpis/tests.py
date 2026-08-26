@@ -1304,3 +1304,132 @@ class BomBufferOverdueTests(ComputeFixtureMixin, TestCase):
             _val('proposal_rfqs_overdue', '2026-Q2', region=self.region), Decimal('0'))
         self.assertEqual(
             _val('proposal_rfqs_pending', '2026-Q2', region=self.region), Decimal('1'))
+
+
+class PeriodPickerTests(TestCase):
+    """The filter bar chooses granularity first, then value, so only one
+    granularity's options are on screen at a time. The old flat dropdown put
+    12 months, 4 quarters and 2 years in one list, where "June 2026" and
+    "Q2 2026" looked like the same kind of choice."""
+
+    TODAY = datetime.date(2026, 6, 17)      # a Wednesday in Q2
+
+    def test_kind_is_read_from_the_period_string(self):
+        from kpis.views import _period_kind
+        self.assertEqual(_period_kind('2026-06'), 'month')
+        self.assertEqual(_period_kind('2026-Q2'), 'quarter')
+        self.assertEqual(_period_kind('2026'), 'year')
+
+    def test_switching_granularity_keeps_the_reader_in_place(self):
+        """June -> Quarter must give Q2 of the SAME year, not whichever
+        quarter it happens to be today. Jumping to now would silently move
+        the reader off the period they were studying."""
+        from kpis.views import _switch_period_kind
+        other_year = datetime.date(2027, 11, 3)
+        self.assertEqual(
+            _switch_period_kind('2026-06', 'quarter', other_year), '2026-Q2')
+        self.assertEqual(
+            _switch_period_kind('2026-06', 'year', other_year), '2026')
+        self.assertEqual(
+            _switch_period_kind('2026-Q2', 'year', other_year), '2026')
+
+    def test_going_to_a_finer_grain_lands_on_today_when_it_fits(self):
+        from kpis.views import _switch_period_kind
+        self.assertEqual(
+            _switch_period_kind('2026-Q2', 'month', self.TODAY), '2026-06')
+        self.assertEqual(
+            _switch_period_kind('2026', 'quarter', self.TODAY), '2026-Q2')
+
+    def test_going_to_a_finer_grain_falls_back_when_today_is_outside(self):
+        """Q1 2026 viewed in June: there is no single right month, so it
+        lands on the quarter's first rather than one outside it."""
+        from kpis.views import _switch_period_kind
+        self.assertEqual(
+            _switch_period_kind('2026-Q1', 'month', self.TODAY), '2026-01')
+        self.assertEqual(
+            _switch_period_kind('2025', 'quarter', self.TODAY), '2025-Q1')
+
+    def test_switching_to_the_same_kind_is_a_no_op(self):
+        from kpis.views import _switch_period_kind
+        for period, kind in (('2026-06', 'month'), ('2026-Q2', 'quarter'),
+                             ('2026', 'year')):
+            with self.subTest(period=period):
+                self.assertEqual(
+                    _switch_period_kind(period, kind, self.TODAY), period)
+
+    def test_picker_offers_only_the_active_granularity(self):
+        from kpis.views import _period_picker
+        month = _period_picker('2026-06', self.TODAY)
+        self.assertEqual(month['kind'], 'month')
+        self.assertEqual(len(month['values']), 12)
+        self.assertTrue(all(len(v['period']) == 7 and 'Q' not in v['period']
+                            for v in month['values']))
+
+        quarter = _period_picker('2026-Q2', self.TODAY)
+        self.assertEqual([v['period'] for v in quarter['values']],
+                         ['2026-Q1', '2026-Q2', '2026-Q3', '2026-Q4'])
+
+        year = _period_picker('2026', self.TODAY)
+        self.assertEqual([v['period'] for v in year['values']],
+                         ['2026', '2025', '2024'])
+
+    def test_the_active_value_and_the_current_one_are_both_marked(self):
+        """Active drives the highlight; is_current drives the dot that makes
+        "this month" findable in a row of twelve without reading every label.
+        They are different things - a reader on March still needs to see where
+        June is."""
+        from kpis.views import _period_picker
+        picker = _period_picker('2026-03', self.TODAY)
+        active = [v for v in picker['values'] if v['active']]
+        current = [v for v in picker['values'] if v['is_current']]
+        self.assertEqual([v['period'] for v in active], ['2026-03'])
+        self.assertEqual([v['period'] for v in current], ['2026-06'])
+
+    def test_quarter_values_follow_the_period_year_not_today(self):
+        from kpis.views import _period_picker
+        picker = _period_picker('2024-Q3', self.TODAY)
+        self.assertTrue(all(v['period'].startswith('2024')
+                            for v in picker['values']))
+
+
+class FilterBarRenderTests(ComputeFixtureMixin, TestCase):
+    """The bar is plain links, so every state is a real URL and it works with
+    JavaScript disabled. The old version submitted a <select> on change, which
+    meant no state was addressable."""
+
+    def setUp(self):
+        super().setUp()
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.user = User.objects.create_user(
+            username='gm_filter', password='pw',
+            role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.client.force_login(self.user)
+
+    def test_bar_renders_regions_and_granularities(self):
+        body = self.client.get(reverse('kpis:kpi_new')).content.decode()
+        self.assertIn('kpi-filter', body)
+        for label in ('All regions', 'Month', 'Quarter', 'Year'):
+            with self.subTest(label=label):
+                self.assertIn(label, body)
+        self.assertIn(self.region.name, body)
+
+    def test_every_control_is_a_link_not_a_select(self):
+        """No <select> and no onchange submit — each state must be a URL."""
+        body = self.client.get(reverse('kpis:kpi_new')).content.decode()
+        bar = body[body.index('kpi-filter mb-4'):body.index('kpi_new_sales')]             if 'kpi_new_sales' in body else body[body.index('kpi-filter mb-4'):]
+        self.assertNotIn('<select', bar)
+        self.assertNotIn('onchange', bar)
+
+    def test_region_links_preserve_the_period(self):
+        resp = self.client.get(reverse('kpis:kpi_new') + '?period=2026-Q2')
+        body = resp.content.decode()
+        self.assertIn(f'?period=2026-Q2&amp;region={self.region.code}', body)
+
+    def test_granularity_links_preserve_the_region(self):
+        resp = self.client.get(
+            reverse('kpis:kpi_new') + f'?period=2026-06&region={self.region.code}')
+        body = resp.content.decode()
+        # Month -> Quarter must keep both the region and the containing quarter.
+        self.assertIn(f'?period=2026-Q2&amp;region={self.region.code}', body)

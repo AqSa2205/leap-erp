@@ -4,30 +4,15 @@
 
 {% block content %}
 <div class="container-fluid">
-    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
-        <div>
-            <h1 class="h3 mb-1">GM KPI Dashboard</h1>
-            <p class="text-muted mb-0">
-                {{ data.period_label }}
-                · {% if selected_region %}{{ selected_region.name }}{% else %}<span title="Money KPIs blend currencies across regions — pick a region for a clean figure">All regions</span>{% endif %}
-            </p>
-        </div>
-        <div class="d-flex gap-2 align-items-center">
-            <form method="get" class="d-flex gap-2 align-items-center">
-                <select name="region" class="form-select form-select-sm" onchange="this.form.submit()" style="min-width:150px;" title="Region">
-                    <option value="all" {% if not selected_region %}selected{% endif %}>All regions</option>
-                    {% for r in regions %}
-                    <option value="{{ r.code }}" {% if selected_region and selected_region.pk == r.pk %}selected{% endif %}>{{ r.name }}</option>
-                    {% endfor %}
-                </select>
-                <select name="period" class="form-select form-select-sm" onchange="this.form.submit()" style="min-width:150px;" title="Period">
-                    {% for val, lbl in period_options %}
-                    <option value="{{ val }}" {% if val == period %}selected{% endif %}>{{ lbl }}</option>
-                    {% endfor %}
-                </select>
-            </form>
-        </div>
+    <div class="mb-3">
+        <h1 class="h3 mb-1">GM KPI Dashboard</h1>
+        <p class="text-muted mb-0">
+            {{ data.period_label }}
+            · {% if selected_region %}{{ selected_region.name }}{% else %}<span title="Money KPIs blend currencies across regions — pick a region for a clean figure">All regions</span>{% endif %}
+        </p>
     </div>
+
+    {% include 'kpis/_kpi_filter_bar.html' %}
 
     {% comment %}
       Working sandbox tab: if it looks good, we keep it. Each section below is
