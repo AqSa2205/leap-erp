@@ -420,7 +420,12 @@ class Project(models.Model):
         # None = not enough data yet (missing deadline or not reached).
         if not deadline or not actual_datetime:
             return None
-        actual_date = actual_datetime.date() if hasattr(actual_datetime, 'date') else actual_datetime
+        from django.utils import timezone
+        # localtime, not .date(): stamps are stored UTC and Riyadh is UTC+3,
+        # so a milestone finished after 21:00 local reads as the previous day
+        # in UTC and shows a day more ahead of schedule than it really was.
+        actual_date = (timezone.localtime(actual_datetime).date()
+                       if hasattr(actual_datetime, 'date') else actual_datetime)
         return (deadline - actual_date).days
 
     @property
