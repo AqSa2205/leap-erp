@@ -544,15 +544,20 @@ def compute_proposal_win_rate(ctx):
 # in for a tender to be counted.
 #
 # "Submitted" here is the INTERNAL handoff - the proposal team marking a BOM
-# ready and sending it to sales for costing (CostingSheet.handed_over_at,
-# against Project.handed_over_deadline) - NOT the client-facing technical
-# proposal. Overdue therefore means the BOM has not reached sales yet, and
-# pending means the RFQ is still at the BOM stage.
+# ready and sending it to sales for costing (CostingSheet.handed_over_at) -
+# NOT the client-facing technical proposal. Pending means the RFQ is still at
+# the BOM stage; once the BOM is across it has left the proposal team's queue,
+# whether or not sales has picked it up.
+#
+# Overdue is measured against the CLIENT submission deadline less two working
+# days, not against handed_over_deadline: sales cannot cost and submit in no
+# time, so a BOM arriving inside that window is already late even though the
+# client deadline has not passed.
 #
 # The trade-off, made deliberately, is that a project with no
-# handed_over_deadline can never be overdue - it has no due date to be late
-# against. The overdue tile reports how many are invisible to it for that
-# reason rather than quietly leaving them out.
+# submission_deadline can never be overdue - it has no date to be late
+# against. The tiles report how many are invisible for that reason rather than
+# quietly treating them as on time.
 
 
 def _handed_over_map(region=None, user=None):
@@ -619,10 +624,10 @@ def compute_rfqs_received(ctx):
     n = qs.count()
     if not n:
         return KPIResult(Decimal('0'), 'none received in this period')
-    dated = qs.filter(handed_over_deadline__isnull=False).count()
+    dated = qs.filter(submission_deadline__isnull=False).count()
     cov = f'{n} received'
     if dated < n:
-        cov += f' · {n - dated} with no handover deadline set'
+        cov += f' · {n - dated} with no submission deadline set'
     return KPIResult(Decimal(n), cov)
 
 
@@ -642,30 +647,93 @@ def compute_rfqs_submitted(ctx):
     return KPIResult(Decimal(n), f'{n} BOM{"s" if n != 1 else ""} sent to sales')
 
 
+# Working days sales need between receiving the BOM and the client deadline.
+# A BOM that arrives later than this leaves no usable time to cost and submit,
+# so it counts as late even though the client deadline itself has not passed.
+BOM_TO_SALES_BUFFER_WORKING_DAYS = 2
+
+
+def _minus_working_days(day, count):
+    """`count` working days before `day`, skipping the KSA Fri/Sat weekend.
+
+    The mirror of costing.models.working_days_between(), which counts forward
+    over the same weekend, so the dashboard measures a working day the same way
+    everywhere. A plain calendar subtraction would put the buffer on the
+    weekend whenever a deadline falls early in the week, giving sales no usable
+    time at all.
+    """
+    out = day
+    remaining = count
+    while remaining > 0:
+        out -= datetime.timedelta(days=1)
+        if out.weekday() not in (4, 5):     # Mon=0 … Fri=4, Sat=5
+            remaining -= 1
+    return out
+
+
+def _bom_due_date(submission_deadline):
+    """When the BOM must be with sales: the client submission deadline less
+    the buffer. None if no submission deadline is recorded."""
+    if not submission_deadline:
+        return None
+    return _minus_working_days(submission_deadline,
+                               BOM_TO_SALES_BUFFER_WORKING_DAYS)
+
+
+def _overdue_and_pending(ctx):
+    """Split the open BOM queue into (overdue, pending, undated).
+
+    Computed together so the two tiles cannot disagree: every open RFQ whose
+    BOM has not reached sales lands in exactly one of the three, and the tiles
+    reconcile by construction.
+
+    An RFQ is overdue once the BOM is due with sales - the client submission
+    deadline less BOM_TO_SALES_BUFFER_WORKING_DAYS - and it still has not been
+    sent. Without a submission deadline there is no date to be late against, so
+    those are counted separately rather than silently treated as on time.
+
+    Done in Python rather than a queryset filter because working-day
+    arithmetic is not expressible in SQL here, and the open queue is small.
+    """
+    from django.utils import timezone
+    today = timezone.localdate()
+    overdue = pending = undated = 0
+    due_soon = 0
+    for deadline in _open_rfqs(ctx).values_list('submission_deadline', flat=True):
+        due = _bom_due_date(deadline)
+        if due is None:
+            undated += 1
+            pending += 1          # still outstanding, just not datable
+            continue
+        if today > due:
+            overdue += 1
+        else:
+            pending += 1
+            if due < today + datetime.timedelta(days=7):
+                due_soon += 1
+    return overdue, pending, undated, due_soon
+
+
 def compute_rfqs_overdue(ctx):
-    """Open RFQs past their handover deadline with the BOM still not sent to
-    sales.
+    """Open RFQs whose BOM is past due with sales and still not sent.
+
+    Due date is the client submission deadline less two working days: sales
+    cannot cost and submit in no time, so a BOM arriving inside that window is
+    already late even though the client deadline has not passed.
 
     A snapshot of what is late RIGHT NOW, not a period total - an RFQ does not
     stop being late because the month ended. Changing the period does not
     change this number, and the section says so.
     """
-    from django.utils import timezone
-    today = timezone.localdate()
-    open_rfqs = _open_rfqs(ctx)
-    overdue = open_rfqs.filter(handed_over_deadline__lt=today).count()
-    # Deliberate blind spot, surfaced rather than hidden: with no handover
-    # deadline there is nothing to be late against.
-    undated = open_rfqs.filter(handed_over_deadline__isnull=True).count()
-
+    overdue, _pending, undated, _soon = _overdue_and_pending(ctx)
     if not overdue:
         cov = 'nothing overdue'
         if undated:
-            cov += f' · {undated} open with no handover deadline'
+            cov += f' · {undated} open with no submission deadline'
         return KPIResult(Decimal('0'), cov)
-    cov = f'{overdue} past handover deadline, not sent to sales'
+    cov = f'{overdue} past due to sales, BOM not sent'
     if undated:
-        cov += f' · {undated} more with no deadline set'
+        cov += f' · {undated} more with no submission deadline'
     return KPIResult(Decimal(overdue), cov)
 
 
@@ -676,19 +744,14 @@ def compute_rfqs_pending(ctx):
     together cover every open RFQ whose BOM has not gone to sales, so the two
     tiles reconcile against each other.
     """
-    from django.utils import timezone
-    today = timezone.localdate()
-    open_rfqs = _open_rfqs(ctx)
-    pending = open_rfqs.exclude(handed_over_deadline__lt=today).count()
+    _overdue, pending, undated, due_soon = _overdue_and_pending(ctx)
     if not pending:
         return KPIResult(Decimal('0'), 'nothing pending')
-
-    due_soon = open_rfqs.filter(
-        handed_over_deadline__gte=today,
-        handed_over_deadline__lt=today + datetime.timedelta(days=7)).count()
     cov = f'{pending} still at BOM stage'
     if due_soon:
         cov += f' · {due_soon} due to sales within 7 days'
+    if undated:
+        cov += f' · {undated} with no submission deadline'
     return KPIResult(Decimal(pending), cov)
 
 
@@ -843,9 +906,9 @@ KPI_DEFINITIONS = [
         target_help='BOMs you aim to send to sales per period'),
     KPI('proposal_rfqs_overdue', PROPOSAL, 'RFQs overdue', COUNT, 'lower',
         target=Decimal('0'), source='auto', compute=compute_rfqs_overdue,
-        help='Open RFQs past their handover deadline whose BOM has still not '
-             'gone to sales. A snapshot of what is late now - it does not '
-             'change with the period.',
+        help='Open RFQs whose BOM is past due with sales and still not sent. '
+             'Due is the client submission deadline less two working days. A '
+             'snapshot of what is late now - it does not change with the period.',
         target_help='Most you would accept being late to sales'),
     KPI('proposal_rfqs_pending', PROPOSAL, 'RFQs pending', COUNT, 'lower',
         target=None, source='auto', compute=compute_rfqs_pending,

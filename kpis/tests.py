@@ -1017,13 +1017,15 @@ class RFQActivityTests(ComputeFixtureMixin, TestCase):
 
     def _rfq(self, ref, deadline_offset=None, status=None, created=None,
              owner=None, region=None):
-        """An RFQ. `deadline_offset` = days from today for the HANDOVER
-        deadline; None = no deadline set."""
+        """An RFQ. `deadline_offset` = days from today for the CLIENT
+        submission deadline; None = no deadline set. The BOM is due with sales
+        two WORKING days before that, so an offset of +1 or +2 can already be
+        overdue depending on the weekday."""
         p = self._project(ref, status or self.active, est='100000',
                           owner=owner, region=region)
         fields = {}
         if deadline_offset is not None:
-            fields['handed_over_deadline'] = (
+            fields['submission_deadline'] = (
                 self.today + datetime.timedelta(days=deadline_offset))
         if created is not None:
             fields['created_at'] = timezone.make_aware(created)
@@ -1049,13 +1051,13 @@ class RFQActivityTests(ComputeFixtureMixin, TestCase):
         self.assertEqual(_val('proposal_rfqs_received', '2026-05'), Decimal('1'))
         self.assertEqual(_val('proposal_rfqs_received', '2026-Q2'), Decimal('2'))
 
-    def test_received_flags_rfqs_with_no_handover_deadline(self):
+    def test_received_flags_rfqs_with_no_submission_deadline(self):
         self._rfq('A', deadline_offset=10, created=datetime.datetime(2026, 5, 1, 9, 0))
         self._rfq('B', created=datetime.datetime(2026, 5, 2, 9, 0))
         res = KPI_BY_KEY['proposal_rfqs_received'].compute(
             make_context('2026-05', region=self.region))
         self.assertEqual(res.value, Decimal('2'))
-        self.assertIn('1 with no handover deadline set', res.coverage)
+        self.assertIn('1 with no submission deadline set', res.coverage)
 
     def test_received_matches_the_sales_new_opportunities_tile(self):
         """Same underlying event seen by two audiences. They must agree -- if
@@ -1105,7 +1107,7 @@ class RFQActivityTests(ComputeFixtureMixin, TestCase):
         res = KPI_BY_KEY['proposal_rfqs_overdue'].compute(
             make_context('2026-Q2', region=self.region))
         self.assertEqual(res.value, Decimal('1'))
-        self.assertIn('not sent to sales', res.coverage)
+        self.assertIn('past due to sales', res.coverage)
 
     def test_a_handed_over_bom_is_not_overdue_however_late_the_deadline(self):
         """Once the BOM has gone across, the RFQ has left the proposal desk --
@@ -1130,7 +1132,7 @@ class RFQActivityTests(ComputeFixtureMixin, TestCase):
         res = KPI_BY_KEY['proposal_rfqs_overdue'].compute(
             make_context('2026-Q2', region=self.region))
         self.assertEqual(res.value, Decimal('1'))
-        self.assertIn('no deadline set', res.coverage)
+        self.assertIn('no submission deadline', res.coverage)
 
     def test_overdue_is_a_snapshot_not_a_period_total(self):
         self._rfq('LATE', deadline_offset=-5)
@@ -1143,18 +1145,17 @@ class RFQActivityTests(ComputeFixtureMixin, TestCase):
     # ── pending ─────────────────────────────────────────────────────────────
 
     def test_pending_means_still_at_bom_stage(self):
-        self._rfq('SOON', deadline_offset=3)
-        self._rfq('LATER', deadline_offset=40)
+        self._rfq('SOON', deadline_offset=8)           # BOM due in a few days
+        self._rfq('LATER', deadline_offset=60)
         self._rfq('LATE', deadline_offset=-5)          # overdue, not pending
         res = KPI_BY_KEY['proposal_rfqs_pending'].compute(
             make_context('2026-Q2', region=self.region))
         self.assertEqual(res.value, Decimal('2'))
         self.assertIn('still at BOM stage', res.coverage)
-        self.assertIn('1 due to sales within 7 days', res.coverage)
 
     def test_a_project_with_no_costing_sheet_is_pending(self):
         """No sheet means no BOM started, let alone handed over."""
-        self._rfq('NO_SHEET', deadline_offset=10)
+        self._rfq('NO_SHEET', deadline_offset=30)
         self.assertEqual(
             _val('proposal_rfqs_pending', '2026-Q2', region=self.region), Decimal('1'))
 
@@ -1171,7 +1172,7 @@ class RFQActivityTests(ComputeFixtureMixin, TestCase):
         has not gone to sales."""
         self._rfq('LATE1', deadline_offset=-9)
         self._rfq('LATE2', deadline_offset=-1)
-        self._rfq('SOON', deadline_offset=2)
+        self._rfq('SOON', deadline_offset=20)
         self._rfq('NO_DEADLINE')
         sent = self._rfq('SENT', deadline_offset=-3)
         self._hand_over(sent)
@@ -1227,7 +1228,79 @@ class ProposalSectionRenderTests(ComputeFixtureMixin, TestCase):
     def test_a_real_figure_reaches_the_page(self):
         p = self._project('LATE', self.active, est='100000')
         Project.objects.filter(pk=p.pk).update(
-            handed_over_deadline=timezone.localdate() - datetime.timedelta(days=3))
+            submission_deadline=timezone.localdate() - datetime.timedelta(days=3))
         body = self.client.get(
             reverse('kpis:kpi_new') + f'?region={self.region.code}').content.decode()
-        self.assertIn('not sent to sales', body)
+        self.assertIn('past due to sales', body)
+
+
+class BomDueDateTests(TestCase):
+    """The BOM is due with sales two WORKING days before the client submission
+    deadline. Sales cannot cost and submit in no time, so a BOM arriving
+    inside that window is already late even though the client deadline has not
+    passed.
+
+    Working days, not calendar days, and on the KSA Fri/Sat weekend -- the same
+    weekend costing.models.working_days_between() counts forward over, so the
+    dashboard measures a working day the same way everywhere. A calendar
+    subtraction would put the whole buffer on the weekend whenever a deadline
+    falls early in the week, leaving sales no usable time at all."""
+
+    def test_buffer_skips_the_ksa_weekend(self):
+        """A Sunday deadline loses Fri and Sat, so the BOM is due the
+        Wednesday before -- four calendar days, two working ones."""
+        from kpis.registry import _bom_due_date
+        due = _bom_due_date(datetime.date(2026, 6, 14))     # Sunday
+        self.assertEqual(due, datetime.date(2026, 6, 10))   # Wednesday
+        self.assertEqual(due.weekday(), 2)
+
+    def test_a_midweek_deadline_loses_no_weekend(self):
+        """Thursday deadline -> Tuesday, a plain two calendar days, because
+        nothing in between is a weekend."""
+        from kpis.registry import _bom_due_date
+        self.assertEqual(_bom_due_date(datetime.date(2026, 6, 11)),
+                         datetime.date(2026, 6, 9))
+
+    def test_the_due_date_is_never_itself_a_weekend_day(self):
+        from kpis.registry import _bom_due_date
+        for offset in range(21):
+            day = datetime.date(2026, 6, 1) + datetime.timedelta(days=offset)
+            with self.subTest(deadline=day.isoformat()):
+                self.assertNotIn(_bom_due_date(day).weekday(), (4, 5))
+
+    def test_no_submission_deadline_means_no_due_date(self):
+        """Nothing to be late against -- the tiles count these separately
+        rather than treating them as on time."""
+        from kpis.registry import _bom_due_date
+        self.assertIsNone(_bom_due_date(None))
+
+
+class BomBufferOverdueTests(ComputeFixtureMixin, TestCase):
+    """The buffer applied through the overdue tile: a deadline that has not
+    passed can still be overdue, because the BOM was due before it."""
+
+    def setUp(self):
+        super().setUp()
+        self.today = timezone.localdate()
+
+    def _rfq_due_in(self, ref, days):
+        p = self._project(ref, self.active, est='100000')
+        Project.objects.filter(pk=p.pk).update(
+            submission_deadline=self.today + datetime.timedelta(days=days))
+        return p
+
+    def test_a_deadline_still_ahead_can_already_be_overdue(self):
+        """The point of the buffer. The client deadline is tomorrow, so the
+        BOM was due with sales days ago and has not been sent."""
+        self._rfq_due_in('TOMORROW', 1)
+        res = KPI_BY_KEY['proposal_rfqs_overdue'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('1'))
+        self.assertIn('past due to sales', res.coverage)
+
+    def test_a_distant_deadline_is_pending_not_overdue(self):
+        self._rfq_due_in('FAR', 60)
+        self.assertEqual(
+            _val('proposal_rfqs_overdue', '2026-Q2', region=self.region), Decimal('0'))
+        self.assertEqual(
+            _val('proposal_rfqs_pending', '2026-Q2', region=self.region), Decimal('1'))
