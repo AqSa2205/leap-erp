@@ -1280,7 +1280,18 @@ def add_project_document(request, pk):
     project = get_object_or_404(Project, pk=pk)
 
     if request.method == 'POST':
-        form = DocumentForm(request.POST, request.FILES)
+        post_data = request.POST.copy()
+        if not post_data.get('name', '').strip() and request.FILES.get('file'):
+            # Document.name is required with no default. The bulk-upload
+            # flow (add_project_documents_bulk) always derives it from the
+            # uploaded filename and never asks the user to type one — this
+            # form asked for it but the field is easy to skip, and a
+            # required field silently blocks the browser's native submit
+            # with no visible error most people notice ("the button doesn't
+            # do anything"). Falling back to the filename here, matching
+            # the bulk flow, means this can never block a submit.
+            post_data['name'] = request.FILES['file'].name
+        form = DocumentForm(post_data, request.FILES)
         if form.is_valid():
             document = form.save(commit=False)
             document.project = project

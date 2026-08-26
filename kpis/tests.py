@@ -15,7 +15,7 @@ from .models import KPIEntry
 from .periods import period_bounds, label_for
 from .registry import (
     KPI_DEFINITIONS, KPI_BY_KEY, make_context, evaluate, achievement_pct,
-    kpis_for_department, SALES, PROPOSAL, PROCUREMENT,
+    kpis_for_department, SALES, PROPOSAL, PROCUREMENT, _outcome_projects,
 )
 from .services import build_dashboard, build_person_scorecard, format_value
 
@@ -50,14 +50,14 @@ class PeriodTests(TestCase):
 
 class RegistryTests(TestCase):
     def test_counts_per_department(self):
-        self.assertEqual(len(kpis_for_department(SALES)), 5)
-        self.assertEqual(len(kpis_for_department(PROPOSAL)), 6)
+        self.assertEqual(len(kpis_for_department(SALES)), 8)
+        self.assertEqual(len(kpis_for_department(PROPOSAL)), 10)
         self.assertEqual(len(kpis_for_department(PROCUREMENT)), 10)
-        self.assertEqual(len(KPI_DEFINITIONS), 22)
+        self.assertEqual(len(KPI_DEFINITIONS), 29)
 
-    def test_eleven_auto_ten_manual(self):
+    def test_auto_manual_split(self):
         auto = [k for k in KPI_DEFINITIONS if k.is_auto]
-        self.assertEqual(len(auto), 12)
+        self.assertEqual(len(auto), 19)
         self.assertEqual(len(KPI_DEFINITIONS) - len(auto), 10)
 
     def test_evaluate_higher(self):
@@ -211,7 +211,7 @@ class PerUserComputeTests(ComputeFixtureMixin, TestCase):
     def test_scorecard_excludes_manual_and_dept_only(self):
         card = build_person_scorecard('2026-Q2', self.alice)
         keys = [c['key'] for d in card['departments'] for c in d['cards']]
-        self.assertEqual(len(keys), 11)
+        self.assertEqual(len(keys), 18)
         self.assertNotIn('proc_supplier_performance', keys)   # manual excluded
         self.assertNotIn('sales_pipeline_coverage', keys)     # dept-only excluded
 
@@ -221,7 +221,7 @@ class ServiceTests(ComputeFixtureMixin, TestCase):
         data = build_dashboard('2026-Q2')
         self.assertEqual(len(data['departments']), 4)
         counts = {d['key']: len(d['cards']) for d in data['departments']}
-        self.assertEqual(counts, {SALES: 5, PROPOSAL: 6, PROCUREMENT: 10, 'hr': 1})
+        self.assertEqual(counts, {SALES: 8, PROPOSAL: 10, PROCUREMENT: 10, 'hr': 1})
 
     def test_manual_value_flows_into_card(self):
         KPIEntry.objects.create(
@@ -625,3 +625,603 @@ class KpiNewAccessTests(TestCase):
         body = self.client.get(reverse('kpis:kpi_new')).content.decode()
         self.assertNotIn('owner: this dev', body)
         self.assertNotIn('Working sandbox tab', body)
+
+
+class MonthBucketingTests(ComputeFixtureMixin, TestCase):
+    """A month period must mean that month.
+
+    `po_award_quarter` cannot express a month, so `_period_year_quarter()`
+    widens June to Q2. Bucketing a month on the tags therefore returned April,
+    May and June under a tile labelled "June" -- and worse, the old
+    tag-primary/history-fallback pair applied *both* rules inside one number:
+    a quarter-tagged deal counted in all three months while an untagged one
+    counted only in its own, with nothing on the tile revealing which deal got
+    which treatment.
+
+    Month periods now bucket purely on the transition date. Year and quarter
+    periods keep the tag basis, which is what those fields are for."""
+
+    def _won_on(self, ref, when, year='2026', quarter='Q2'):
+        """A won deal tagged for `quarter`, whose transition happened on `when`."""
+        p = self._project(ref, self.won, est='100000', year=year, quarter=quarter)
+        h = ProjectHistory.objects.create(project=p, new_status=self.won)
+        ProjectHistory.objects.filter(pk=h.pk).update(
+            changed_at=timezone.make_aware(when))
+        return p
+
+    def test_month_counts_only_that_month(self):
+        self._won_on('APR', datetime.datetime(2026, 4, 10, 9, 0))
+        self._won_on('MAY', datetime.datetime(2026, 5, 10, 9, 0))
+        self._won_on('JUN', datetime.datetime(2026, 6, 10, 9, 0))
+        # All three are tagged Q2. Before the fix, each month returned all three.
+        for period, expected in (('2026-04', 'APR'), ('2026-05', 'MAY'),
+                                 ('2026-06', 'JUN')):
+            with self.subTest(period=period):
+                qs = _outcome_projects(make_context(period))
+                self.assertEqual([p.project_name for p in qs], [expected])
+
+    def test_quarter_still_uses_the_tags(self):
+        """The tag basis is deliberate at quarter granularity -- a deal tagged
+        Q2 belongs to Q2 whether or not a transition was ever logged."""
+        self._project('TAGGED', self.won, est='100000', quarter='Q2')
+        qs = _outcome_projects(make_context('2026-Q2'))
+        self.assertEqual([p.project_name for p in qs], ['TAGGED'])
+
+    def test_month_ignores_a_tag_with_no_transition(self):
+        """A deal tagged Q2 but with no recorded transition cannot be placed in
+        a month -- there is no date to place it by. It must not silently land
+        in every month of the quarter."""
+        self._project('TAGGED_ONLY', self.won, est='100000', quarter='Q2')
+        for period in ('2026-04', '2026-05', '2026-06'):
+            with self.subTest(period=period):
+                self.assertEqual(list(_outcome_projects(make_context(period))), [])
+        # Still counted at quarter granularity, where the tag is the basis.
+        self.assertEqual(len(_outcome_projects(make_context('2026-Q2'))), 1)
+
+    def test_one_rule_per_period_tagged_and_untagged_alike(self):
+        """The mixed-basis bug: a tagged and an untagged deal, both won in May,
+        must both appear in May and neither in April."""
+        self._won_on('TAGGED', datetime.datetime(2026, 5, 5, 9, 0), quarter='Q2')
+        self._won_on('UNTAGGED', datetime.datetime(2026, 5, 6, 9, 0),
+                     year='', quarter='')
+        may = sorted(p.project_name for p in _outcome_projects(make_context('2026-05')))
+        self.assertEqual(may, ['TAGGED', 'UNTAGGED'])
+        self.assertEqual(list(_outcome_projects(make_context('2026-04'))), [])
+
+
+class ValueLadderTests(ComputeFixtureMixin, TestCase):
+    """Revenue and pipeline value must resolve a deal the same way the home
+    dashboard's Won tile does -- costing sheet, then actual_sales, then
+    estimated_value.
+
+    The KPI used to sum `actual_sales` alone while the tile resolved through
+    costing, so the two pages reported different revenue for the same deals and
+    the KPI ignored every costing sheet on record."""
+
+    def _priced_sheet(self, project, unit_cost, currency='SAR'):
+        """A sheet whose contract_total is non-zero, via one line item."""
+        sheet = CostingSheet.objects.create(
+            title=f'S-{project.project_name}', project=project,
+            margin=Decimal('0'), workflow_stage='finalized',
+            output_currency=currency)
+        section = CostingSection.objects.create(
+            costing_sheet=sheet, section_number='1', title='Works', order=0)
+        CostingLineItem.objects.create(
+            section=section, item_number='1', description='Item',
+            quantity=Decimal('1'), base_unit_cost=Decimal(unit_cost),
+            supplier_currency='SAR', margin=Decimal('0'))
+        return sheet
+
+    def test_costing_outranks_actual_sales(self):
+        """The rule chosen for the whole ERP: a live costing sheet wins."""
+        p = self._project('W1', self.won, actual='500000')
+        self._priced_sheet(p, '900000')
+        res = KPI_BY_KEY['sales_revenue_achievement'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('900000.00'))
+
+    def test_falls_back_to_actual_then_estimate(self):
+        self._project('A', self.won, actual='500000', est='111')
+        self._project('B', self.won, actual='0', est='250000')
+        res = KPI_BY_KEY['sales_revenue_achievement'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('750000'))
+
+    def test_agrees_with_the_home_dashboard_resolver(self):
+        """The invariant worth keeping: whatever the tile resolves per deal is
+        what the KPI totals. Pinned against the resolver itself, so the two
+        cannot drift apart again."""
+        from projects.views import _resolve_project_sales_value
+        p1 = self._project('A', self.won, actual='500000')
+        self._priced_sheet(p1, '900000')
+        p2 = self._project('B', self.won, est='250000')
+        expected = sum(
+            (_resolve_project_sales_value(p, list(p.costing_sheets.all()))['amount']
+             or Decimal('0')) for p in (p1, p2))
+        res = KPI_BY_KEY['sales_revenue_achievement'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, expected)
+
+    def test_coverage_reports_deals_with_no_value(self):
+        self._project('A', self.won, actual='500000')
+        self._project('B', self.won, actual='0', est='0')
+        res = KPI_BY_KEY['sales_revenue_achievement'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('500000'))
+        self.assertIn('1 with no value recorded', res.coverage)
+
+    def test_coverage_flags_a_sheet_in_another_currency(self):
+        """Region-scoped totals assume every sheet is raised in the region's
+        currency. If one is not, the tile says so instead of adding GBP to SAR
+        in silence."""
+        p = self._project('W1', self.won)
+        self._priced_sheet(p, '1000', currency='GBP')
+        res = KPI_BY_KEY['sales_revenue_achievement'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertIn('mixed currency', res.coverage)
+        self.assertIn('GBP', res.coverage)
+
+    def test_pipeline_coverage_counts_a_costed_open_deal_at_its_costing(self):
+        """Open pipeline read `estimated_value`, so a fully costed deal counted
+        at the estimate it was raised with -- the pipeline understated itself
+        precisely on the deals it knew most about."""
+        p = self._project('OPEN', self.active, est='100000')
+        self._priced_sheet(p, '400000')
+        res = KPI_BY_KEY['sales_pipeline_coverage'].compute(
+            make_context('2026-Q2', region=self.region,
+                         targets={'sales_revenue_achievement': Decimal('200000')}))
+        self.assertEqual(res.value, Decimal('2.00'))   # 400k costed / 200k goal
+        self.assertIn('1 costed', res.coverage)
+
+
+class NewOpportunityTests(ComputeFixtureMixin, TestCase):
+    """Deals created during the period.
+
+    `created_at` is set automatically on every row, so unlike the outcome KPIs
+    this needs no tagging discipline and no status history. That makes it the
+    one Sales metric whose answer does not depend on how well the pipeline is
+    maintained -- which is why it is the first one built."""
+
+    def _created_on(self, ref, when, est='100000', region=None, owner=None):
+        p = self._project(ref, self.active, est=est, region=region, owner=owner)
+        Project.objects.filter(pk=p.pk).update(
+            created_at=timezone.make_aware(when))
+        return p
+
+    def test_counts_only_deals_created_in_the_window(self):
+        self._created_on('MAY', datetime.datetime(2026, 5, 20, 9, 0))
+        self._created_on('JUN', datetime.datetime(2026, 6, 2, 9, 0))
+        self.assertEqual(_val('sales_new_opportunities', '2026-05'), Decimal('1'))
+        self.assertEqual(_val('sales_new_opportunities', '2026-06'), Decimal('1'))
+        self.assertEqual(_val('sales_new_opportunities', '2026-Q2'), Decimal('2'))
+
+    def test_value_rides_in_the_coverage_line(self):
+        """The count is the headline; ten small enquiries and one large tender
+        are not the same month, so both numbers have to be visible."""
+        self._created_on('A', datetime.datetime(2026, 5, 1, 9, 0), est='400000')
+        self._created_on('B', datetime.datetime(2026, 5, 2, 9, 0), est='600000')
+        res = KPI_BY_KEY['sales_new_opportunities'].compute(
+            make_context('2026-05', region=self.region))
+        self.assertEqual(res.value, Decimal('2'))
+        self.assertIn('1,000,000', res.coverage)
+        self.assertIn('SAR', res.coverage)
+
+    def test_flags_deals_carrying_no_value(self):
+        self._created_on('A', datetime.datetime(2026, 5, 1, 9, 0), est='400000')
+        self._created_on('B', datetime.datetime(2026, 5, 2, 9, 0), est='0')
+        res = KPI_BY_KEY['sales_new_opportunities'].compute(
+            make_context('2026-05', region=self.region))
+        self.assertIn('1 with no value', res.coverage)
+
+    def test_empty_period_says_so_rather_than_looking_broken(self):
+        res = KPI_BY_KEY['sales_new_opportunities'].compute(make_context('2026-05'))
+        self.assertEqual(res.value, Decimal('0'))
+        self.assertIn('nothing added', res.coverage)
+
+    def test_scoped_by_region_and_owner(self):
+        other = User.objects.create_user(username='rep_no', password='pw')
+        mine = User.objects.create_user(username='rep_me', password='pw')
+        self._created_on('MINE', datetime.datetime(2026, 5, 1, 9, 0), owner=mine)
+        self._created_on('THEIRS', datetime.datetime(2026, 5, 2, 9, 0), owner=other)
+        self._created_on('OTHERREGION', datetime.datetime(2026, 5, 3, 9, 0),
+                         region=self.region2)
+        self.assertEqual(
+            _val('sales_new_opportunities', '2026-05', region=self.region),
+            Decimal('2'))
+        self.assertEqual(
+            _val('sales_new_opportunities', '2026-05', user=mine), Decimal('1'))
+
+
+class LostOpportunityTests(ComputeFixtureMixin, TestCase):
+    """Deals lost during the period, with the leading reason."""
+
+    def _lost(self, ref, est, reason):
+        p = self._project(ref, self.lost, est=est)
+        Project.objects.filter(pk=p.pk).update(lost_reason=reason)
+        return p
+
+    def test_counts_lost_and_reports_the_leading_reason(self):
+        self._lost('L1', '100000', 'price')
+        self._lost('L2', '200000', 'price')
+        self._lost('L3', '50000', 'competitor')
+        res = KPI_BY_KEY['sales_lost_opportunities'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('3'))
+        self.assertIn('350,000', res.coverage)
+        self.assertIn('mostly', res.coverage)
+        self.assertIn('too expensive', res.coverage)
+
+    def test_no_bid_still_counts_as_leaving_the_pipeline(self):
+        """A tender we declined did leave the pipeline, so it belongs in this
+        count. The distinction matters for WIN RATE -- a measure of competitive
+        performance that should not move when workload changes -- not here."""
+        self._lost('NB', '100000', 'no_bid')
+        res = KPI_BY_KEY['sales_lost_opportunities'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('1'))
+        self.assertIn('did not bid', res.coverage.lower())
+
+    def test_says_when_no_reasons_were_recorded(self):
+        self._project('L1', self.lost, est='100000')
+        res = KPI_BY_KEY['sales_lost_opportunities'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertIn('no reasons recorded', res.coverage)
+
+    def test_direction_is_lower_is_better(self):
+        self.assertEqual(KPI_BY_KEY['sales_lost_opportunities'].direction, 'lower')
+
+    def test_empty_period(self):
+        res = KPI_BY_KEY['sales_lost_opportunities'].compute(make_context('2026-Q2'))
+        self.assertEqual(res.value, Decimal('0'))
+        self.assertIn('none lost', res.coverage)
+
+
+class PipelineValueTests(ComputeFixtureMixin, TestCase):
+    """Total value of everything still open -- the companion to pipeline
+    coverage. Same deals, same ladder, so the ratio and the amount can never
+    tell different stories."""
+
+    def test_sums_open_deals_only(self):
+        self._project('OPEN1', self.active, est='300000')
+        self._project('OPEN2', self.active, est='200000')
+        self._project('WON', self.won, est='999999')
+        self._project('LOST', self.lost, est='888888')
+        res = KPI_BY_KEY['sales_pipeline_value'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('500000'))
+        self.assertIn('2 open deals', res.coverage)
+
+    def test_is_a_snapshot_not_a_period_total(self):
+        """Pipeline is what is open right now. Changing the period must not
+        change it -- a deal does not leave the pipeline because the month did."""
+        self._project('OPEN', self.active, est='300000')
+        first = _val('sales_pipeline_value', '2026-05', region=self.region)
+        for period in ('2026-06', '2026-Q1', '2026-Q2', '2026'):
+            with self.subTest(period=period):
+                self.assertEqual(
+                    _val('sales_pipeline_value', period, region=self.region), first)
+
+    def test_agrees_with_pipeline_coverage(self):
+        """value / goal must equal the coverage ratio, or the two tiles are
+        telling different stories about the same deals."""
+        self._project('OPEN1', self.active, est='300000')
+        self._project('OPEN2', self.active, est='300000')
+        goal = Decimal('200000')
+        value = _val('sales_pipeline_value', '2026-Q2', region=self.region)
+        ratio = _val('sales_pipeline_coverage', '2026-Q2', region=self.region,
+                     targets={'sales_revenue_achievement': goal})
+        self.assertEqual((value / goal).quantize(Decimal('0.01')), ratio)
+
+    def test_empty_pipeline(self):
+        res = KPI_BY_KEY['sales_pipeline_value'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('0'))
+        self.assertIn('no open deals', res.coverage)
+
+
+class SalesSectionRenderTests(ComputeFixtureMixin, TestCase):
+    """The Sales partial renders real figures on the page.
+
+    Worth having as a view test rather than only compute tests: a template
+    typo raises at render time, not import time, so a broken partial 500s the
+    whole dashboard and no amount of registry testing notices."""
+
+    def setUp(self):
+        super().setUp()
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.user = User.objects.create_user(
+            username='gm', password='pw', role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.client.force_login(self.user)
+
+    def _get(self, **params):
+        url = reverse('kpis:kpi_new')
+        if params:
+            url += '?' + '&'.join(f'{k}={v}' for k, v in params.items())
+        return self.client.get(url)
+
+    def test_page_renders_with_the_sales_section(self):
+        resp = self._get()
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode()
+        self.assertIn('Sales &amp; Pipeline', body)
+        self.assertIn('Sales Performance', body)
+        self.assertIn('Pipeline Overview', body)
+
+    def test_every_sales_tile_is_present(self):
+        body = self._get().content.decode()
+        for label in ('Revenue secured', 'YTD revenue', 'Revenue forecast',
+                      'Total pipeline value', 'Pipeline coverage',
+                      'New opportunities', 'Lost opportunities'):
+            with self.subTest(tile=label):
+                self.assertIn(label, body)
+
+    def test_figures_reach_the_page(self):
+        """Not just that the tiles exist -- that a real number lands in one."""
+        self._project('OPEN1', self.active, est='750000')
+        body = self._get(region=self.region.code).content.decode()
+        self.assertIn('750,000', body)
+        self.assertIn('1 open deal', body)
+
+    def test_ytd_is_computed_against_the_year_not_the_selected_period(self):
+        """A deal won in Q1 must not appear in a Q2 revenue tile, but must
+        still be inside YTD -- which is the whole reason YTD is computed
+        separately from the dashboard's single period."""
+        self._project('Q1WIN', self.won, est='400000', quarter='Q1')
+        resp = self._get(period='2026-Q2', region=self.region.code)
+        self.assertEqual(resp.status_code, 200)
+        ytd = resp.context['ytd']
+        self.assertEqual(ytd['value'], Decimal('400000'))
+        self.assertEqual(ytd['period_label'], 'FY 2026')
+        # ...while the selected-period tile for Q2 saw nothing.
+        q2 = resp.context['cards']['sales']['sales_revenue_achievement']
+        self.assertEqual(q2['value'], Decimal('0'))
+
+    def test_cards_lookup_covers_every_sales_kpi(self):
+        """The partial addresses cards by key. A key that stops existing would
+        silently render an empty tile, so pin the lookup itself."""
+        resp = self._get()
+        sales = resp.context['cards']['sales']
+        for key in ('sales_revenue_achievement', 'sales_pipeline_value',
+                    'sales_pipeline_coverage', 'sales_new_opportunities',
+                    'sales_lost_opportunities'):
+            with self.subTest(key=key):
+                self.assertIn(key, sales)
+
+    def test_malformed_period_does_not_break_the_ytd_figure(self):
+        """_resolve_period falls back to the current quarter on garbage, so the
+        page must still render rather than propagating the bad string."""
+        resp = self._get(period='not-a-period')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNotNone(resp.context['ytd'])
+
+
+class RFQActivityTests(ComputeFixtureMixin, TestCase):
+    """RFQ Activity: received, submitted, overdue, pending.
+
+    Every pipeline project counts as an RFQ - a project is raised when a
+    tender arrives, so the two are the same event and nothing has to be filled
+    in for a tender to be counted. The accepted trade-off is that a project
+    with no submission_deadline can never be overdue; the tile reports how many
+    it cannot see rather than quietly dropping them."""
+
+    def setUp(self):
+        super().setUp()
+        self.today = timezone.localdate()
+
+    def _rfq(self, ref, deadline_offset=None, status=None, created=None,
+             owner=None, region=None):
+        """An RFQ. `deadline_offset` in days from today; None = no deadline."""
+        p = self._project(ref, status or self.active, est='100000',
+                          owner=owner, region=region)
+        fields = {}
+        if deadline_offset is not None:
+            fields['submission_deadline'] = (
+                self.today + datetime.timedelta(days=deadline_offset))
+        if created is not None:
+            fields['created_at'] = timezone.make_aware(created)
+        if fields:
+            Project.objects.filter(pk=p.pk).update(**fields)
+        return p
+
+    def _submit(self, project, days_ago=1, by=None):
+        from proposals.models import TechnicalProposal
+        # proposal_reference is unique, so revisions of the same proposal each
+        # need their own -- which is exactly why the compute counts distinct
+        # projects rather than rows.
+        n = TechnicalProposal.objects.count() + 1
+        return TechnicalProposal.objects.create(
+            project=project, title=f'TP-{project.project_name}',
+            proposal_reference=f'TP-REF-{n:04d}',
+            status='submitted',
+            revision_date=self.today - datetime.timedelta(days=days_ago),
+            created_by=by)
+
+    # ── received ────────────────────────────────────────────────────────────
+
+    def test_received_counts_projects_created_in_the_window(self):
+        self._rfq('MAY', created=datetime.datetime(2026, 5, 10, 9, 0))
+        self._rfq('JUN', created=datetime.datetime(2026, 6, 10, 9, 0))
+        self.assertEqual(_val('proposal_rfqs_received', '2026-05'), Decimal('1'))
+        self.assertEqual(_val('proposal_rfqs_received', '2026-Q2'), Decimal('2'))
+
+    def test_received_flags_rfqs_with_no_deadline(self):
+        self._rfq('A', deadline_offset=10, created=datetime.datetime(2026, 5, 1, 9, 0))
+        self._rfq('B', created=datetime.datetime(2026, 5, 2, 9, 0))
+        res = KPI_BY_KEY['proposal_rfqs_received'].compute(
+            make_context('2026-05', region=self.region))
+        self.assertEqual(res.value, Decimal('2'))
+        self.assertIn('1 with no deadline set', res.coverage)
+
+    def test_received_matches_the_sales_new_opportunities_tile(self):
+        """Same underlying event seen by two audiences. They must agree -- if
+        they ever diverge, one of them has quietly changed its definition."""
+        for i in range(3):
+            self._rfq(f'R{i}', created=datetime.datetime(2026, 5, i + 1, 9, 0))
+        ctx = ('2026-05',)
+        self.assertEqual(
+            _val('proposal_rfqs_received', *ctx, region=self.region),
+            _val('sales_new_opportunities', *ctx, region=self.region))
+
+    # ── submitted ───────────────────────────────────────────────────────────
+
+    def test_submitted_counts_once_per_project_not_per_revision(self):
+        """A proposal revised three times is one RFQ answered. Counting rows
+        would let re-work inflate the figure."""
+        p = self._rfq('MULTI', deadline_offset=5)
+        for d in (9, 5, 2):
+            self._submit(p, days_ago=d)
+        period = f'{self.today.year}-{self.today.month:02d}'
+        res = KPI_BY_KEY['proposal_rfqs_submitted'].compute(
+            make_context(period, region=self.region))
+        self.assertEqual(res.value, Decimal('1'))
+
+    def test_submitted_uses_the_latest_revision_for_the_period(self):
+        p = self._rfq('LATE_REV', deadline_offset=5)
+        self._submit(p, days_ago=400)          # last year
+        self._submit(p, days_ago=1)            # this month -> counts here
+        period = f'{self.today.year}-{self.today.month:02d}'
+        self.assertEqual(
+            _val('proposal_rfqs_submitted', period, region=self.region), Decimal('1'))
+
+    def test_submitted_ignores_drafts(self):
+        from proposals.models import TechnicalProposal
+        p = self._rfq('DRAFT', deadline_offset=5)
+        TechnicalProposal.objects.create(
+            project=p, title='D', proposal_reference='TP-DRAFT-1',
+            status='draft', revision_date=self.today)
+        period = f'{self.today.year}-{self.today.month:02d}'
+        res = KPI_BY_KEY['proposal_rfqs_submitted'].compute(
+            make_context(period, region=self.region))
+        self.assertEqual(res.value, Decimal('0'))
+        self.assertIn('none submitted', res.coverage)
+
+    # ── overdue ─────────────────────────────────────────────────────────────
+
+    def test_overdue_counts_past_deadline_with_nothing_submitted(self):
+        self._rfq('LATE', deadline_offset=-5)
+        self._rfq('FUTURE', deadline_offset=5)
+        res = KPI_BY_KEY['proposal_rfqs_overdue'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('1'))
+        self.assertIn('past deadline', res.coverage)
+
+    def test_a_submitted_rfq_is_not_overdue_however_late_the_deadline(self):
+        """Answered is answered. A proposal submitted last quarter still
+        answers the RFQ today, so it must not resurface as overdue."""
+        p = self._rfq('ANSWERED', deadline_offset=-30)
+        self._submit(p, days_ago=200)
+        self.assertEqual(
+            _val('proposal_rfqs_overdue', '2026-Q2', region=self.region), Decimal('0'))
+
+    def test_won_and_lost_rfqs_drop_out(self):
+        """A decided deal is no longer awaiting a proposal. Counting it forever
+        would make the tile grow without bound."""
+        self._rfq('WON_LATE', deadline_offset=-10, status=self.won)
+        self._rfq('LOST_LATE', deadline_offset=-10, status=self.lost)
+        self.assertEqual(
+            _val('proposal_rfqs_overdue', '2026-Q2', region=self.region), Decimal('0'))
+
+    def test_overdue_reports_what_it_cannot_see(self):
+        """The accepted blind spot: no deadline means nothing to be late
+        against. It has to be visible on the tile, not silently dropped."""
+        self._rfq('LATE', deadline_offset=-5)
+        self._rfq('NO_DEADLINE')
+        res = KPI_BY_KEY['proposal_rfqs_overdue'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('1'))
+        self.assertIn('no deadline set', res.coverage)
+
+    def test_overdue_is_a_snapshot_not_a_period_total(self):
+        self._rfq('LATE', deadline_offset=-5)
+        first = _val('proposal_rfqs_overdue', '2026-05', region=self.region)
+        for period in ('2026-06', '2026-Q1', '2026-Q2', '2026'):
+            with self.subTest(period=period):
+                self.assertEqual(
+                    _val('proposal_rfqs_overdue', period, region=self.region), first)
+
+    # ── pending ─────────────────────────────────────────────────────────────
+
+    def test_pending_counts_unanswered_and_not_yet_late(self):
+        self._rfq('SOON', deadline_offset=3)
+        self._rfq('LATER', deadline_offset=40)
+        self._rfq('LATE', deadline_offset=-5)          # overdue, not pending
+        res = KPI_BY_KEY['proposal_rfqs_pending'].compute(
+            make_context('2026-Q2', region=self.region))
+        self.assertEqual(res.value, Decimal('2'))
+        self.assertIn('1 due within 7 days', res.coverage)
+
+    def test_an_rfq_with_no_deadline_is_pending_not_overdue(self):
+        self._rfq('NO_DEADLINE')
+        self.assertEqual(
+            _val('proposal_rfqs_pending', '2026-Q2', region=self.region), Decimal('1'))
+        self.assertEqual(
+            _val('proposal_rfqs_overdue', '2026-Q2', region=self.region), Decimal('0'))
+
+    def test_overdue_and_pending_reconcile(self):
+        """The invariant that makes the two tiles trustworthy together: they
+        are mutually exclusive and between them cover every open RFQ with
+        nothing submitted."""
+        self._rfq('LATE1', deadline_offset=-9)
+        self._rfq('LATE2', deadline_offset=-1)
+        self._rfq('SOON', deadline_offset=2)
+        self._rfq('NO_DEADLINE')
+        answered = self._rfq('ANSWERED', deadline_offset=-3)
+        self._submit(answered)
+
+        overdue = _val('proposal_rfqs_overdue', '2026-Q2', region=self.region)
+        pending = _val('proposal_rfqs_pending', '2026-Q2', region=self.region)
+        unanswered = Project.objects.filter(
+            status__category__in=['active', 'hot_lead'], region=self.region
+        ).exclude(pk=answered.pk).count()
+        self.assertEqual(overdue + pending, Decimal(unanswered))
+
+    def test_scoped_by_region(self):
+        self._rfq('MINE', deadline_offset=-5, region=self.region)
+        self._rfq('THEIRS', deadline_offset=-5, region=self.region2)
+        self.assertEqual(
+            _val('proposal_rfqs_overdue', '2026-Q2', region=self.region), Decimal('1'))
+        self.assertEqual(
+            _val('proposal_rfqs_overdue', '2026-Q2', region=self.region2), Decimal('1'))
+
+
+class ProposalSectionRenderTests(ComputeFixtureMixin, TestCase):
+    """The RFQ / Proposal partial renders. A template typo raises at render
+    time, so a broken partial 500s the whole dashboard and no amount of
+    registry testing notices."""
+
+    def setUp(self):
+        super().setUp()
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.user = User.objects.create_user(
+            username='gm_prop', password='pw',
+            role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.client.force_login(self.user)
+
+    def test_every_rfq_tile_is_present(self):
+        resp = self.client.get(reverse('kpis:kpi_new'))
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode()
+        for label in ('RFQ / Proposal Activity', 'RFQs received', 'RFQs submitted',
+                      'RFQs overdue', 'RFQs pending'):
+            with self.subTest(tile=label):
+                self.assertIn(label, body)
+
+    def test_cards_lookup_covers_every_rfq_kpi(self):
+        resp = self.client.get(reverse('kpis:kpi_new'))
+        proposal = resp.context['cards']['proposal']
+        for key in ('proposal_rfqs_received', 'proposal_rfqs_submitted',
+                    'proposal_rfqs_overdue', 'proposal_rfqs_pending'):
+            with self.subTest(key=key):
+                self.assertIn(key, proposal)
+
+    def test_a_real_figure_reaches_the_page(self):
+        p = self._project('LATE', self.active, est='100000')
+        Project.objects.filter(pk=p.pk).update(
+            submission_deadline=timezone.localdate() - datetime.timedelta(days=3))
+        body = self.client.get(
+            reverse('kpis:kpi_new') + f'?region={self.region.code}').content.decode()
+        self.assertIn('past deadline, unanswered', body)
