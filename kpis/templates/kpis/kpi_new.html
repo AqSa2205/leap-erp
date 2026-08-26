@@ -7,9 +7,7 @@
     <div class="mb-3">
         <h1 class="h3 mb-1">GM KPI Dashboard</h1>
         <p class="text-muted mb-0">
-            {% if view == 'won' %}
-    {% include 'kpis/_deals_won.html' %}
-    {% elif view == 'activity' %}{{ activity.period_label }}{% else %}{{ data.period_label }}{% endif %}
+            {{ period_label }}
             · {% if selected_region %}{{ selected_region.name }}{% else %}<span title="Money KPIs blend currencies across regions — pick a region for a clean figure">All regions</span>{% endif %}
         </p>
     </div>
@@ -19,7 +17,7 @@
     resets the filters. {% endcomment %}
     <ul class="nav nav-tabs mb-3">
       <li class="nav-item">
-        <a class="nav-link {% if view != 'activity' %}active{% endif %}"
+        <a class="nav-link {% if view == 'kpis' %}active{% endif %}"
            href="?period={{ period }}{% if selected_region %}&amp;region={{ selected_region.code }}{% endif %}">
           <i class="bi bi-speedometer2 me-1"></i> KPIs
         </a>
@@ -56,18 +54,26 @@
       would ship in the page source. The partials do the same.
     {% endcomment %}
 
-    {% if view == 'activity' %}
-    {% comment %} The same builder and the same table partial the standalone
-    Team Activity page uses, so one person's figures cannot differ between the
-    two pages. `activity` is what build_activity_overview() returned. {% endcomment %}
-    {% with data=activity %}
-      {% include 'kpis/_activity_table.html' %}
-    {% endwith %}
+    {% comment %} Exactly one branch renders. Each tab is a separate request,
+    so only its own data is in context — the KPI sections would otherwise draw
+    a full set of empty tiles underneath whichever tab you were on. {% endcomment %}
+    {% if view == 'won' %}
+      {% include 'kpis/_deals_won.html' %}
+
+    {% elif view == 'activity' %}
+      {% comment %} The same builder and the same table partial the standalone
+      Team Activity page uses, so one person's figures cannot differ between
+      the two pages. `activity` is what build_activity_overview() returned.
+      {% endcomment %}
+      {% with data=activity %}
+        {% include 'kpis/_activity_table.html' %}
+      {% endwith %}
+
     {% else %}
-    {% include 'kpis/kpi_new_sales.html' %}
-    {% include 'kpis/kpi_new_proposal.html' %}
-    {% include 'kpis/kpi_new_procurement.html' %}
-    {% include 'kpis/kpi_new_pmo.html' %}
+      {% include 'kpis/kpi_new_sales.html' %}
+      {% include 'kpis/kpi_new_proposal.html' %}
+      {% include 'kpis/kpi_new_procurement.html' %}
+      {% include 'kpis/kpi_new_pmo.html' %}
     {% endif %}
 
 </div>
