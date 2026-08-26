@@ -541,34 +541,54 @@ def compute_proposal_win_rate(ctx):
 # ── RFQ activity ─────────────────────────────────────────────────────────────
 # Every pipeline project counts as an RFQ: in this ERP a project is raised when
 # a tender arrives, so the two are the same event and nothing has to be filled
-# in for a tender to be counted. The trade-off, made deliberately, is that a
-# project with no submission_deadline can never be overdue - it has no due date
-# to be late against. The overdue tile reports how many are invisible to it for
-# that reason rather than quietly leaving them out.
+# in for a tender to be counted.
+#
+# "Submitted" here is the INTERNAL handoff - the proposal team marking a BOM
+# ready and sending it to sales for costing (CostingSheet.handed_over_at,
+# against Project.handed_over_deadline) - NOT the client-facing technical
+# proposal. Overdue therefore means the BOM has not reached sales yet, and
+# pending means the RFQ is still at the BOM stage.
+#
+# The trade-off, made deliberately, is that a project with no
+# handed_over_deadline can never be overdue - it has no due date to be late
+# against. The overdue tile reports how many are invisible to it for that
+# reason rather than quietly leaving them out.
 
 
-def _submitted_project_ids(region=None, user=None):
-    """Projects that have at least one SUBMITTED technical proposal.
+def _handed_over_map(region=None, user=None):
+    """{project_id: earliest handed_over_at} for projects whose BOM has gone
+    to sales.
 
-    Used as the "already answered" set for the overdue/pending tiles. Not
-    period-filtered: a proposal submitted last quarter still answers the RFQ
-    today, so it must not reappear as pending.
+    ``CostingSheet.handed_over_at`` is stamped when the proposal team marks a
+    BOM ready for sales - the internal handoff, not the client-facing proposal
+    submission. A project can carry several sheets, so the EARLIEST stamp wins:
+    the RFQ left the proposal desk the first time a BOM went across, and a
+    later revision does not send it again.
     """
-    from proposals.models import TechnicalProposal
-    qs = TechnicalProposal.objects.filter(status='submitted', project__isnull=False)
+    from costing.models import CostingSheet
+    qs = CostingSheet.objects.filter(
+        handed_over_at__isnull=False, project__isnull=False)
     if region is not None:
         qs = qs.filter(project__region=region)
     if user is not None:
-        qs = qs.filter(created_by=user)
-    return set(qs.values_list('project_id', flat=True))
+        qs = qs.filter(project__owner=user)
+    out = {}
+    for pid, when in qs.values_list('project_id', 'handed_over_at'):
+        if pid not in out or when < out[pid]:
+            out[pid] = when
+    return out
 
 
 def _open_rfqs(ctx):
-    """RFQs still awaiting an answer, scoped to region/owner.
+    """Open RFQs whose BOM has NOT yet gone to sales - the proposal team's
+    live queue.
 
-    Restricted to open projects. A deal that has been won or lost is no longer
-    awaiting a proposal - counting it as pending forever would make the tile
-    grow without bound and describe nothing anyone can act on.
+    Restricted to open projects: a won or lost deal is no longer waiting on a
+    handoff, and counting decided deals forever would make the tile grow
+    without bound and describe nothing anyone can act on.
+
+    A project with no costing sheet at all is included by definition - no
+    sheet means no BOM has been started, let alone handed over.
     """
     from projects.models import Project
     qs = Project.objects.filter(status__category__in=['active', 'hot_lead'])
@@ -576,7 +596,7 @@ def _open_rfqs(ctx):
         qs = qs.filter(region=ctx.region)
     if ctx.user is not None:
         qs = qs.filter(owner=ctx.user)
-    return qs.exclude(pk__in=_submitted_project_ids(ctx.region))
+    return qs.exclude(pk__in=_handed_over_map(ctx.region).keys())
 
 
 def compute_rfqs_received(ctx):
@@ -599,84 +619,76 @@ def compute_rfqs_received(ctx):
     n = qs.count()
     if not n:
         return KPIResult(Decimal('0'), 'none received in this period')
-    dated = qs.filter(submission_deadline__isnull=False).count()
+    dated = qs.filter(handed_over_deadline__isnull=False).count()
     cov = f'{n} received'
     if dated < n:
-        cov += f' · {n - dated} with no deadline set'
+        cov += f' · {n - dated} with no handover deadline set'
     return KPIResult(Decimal(n), cov)
 
 
 def compute_rfqs_submitted(ctx):
-    """RFQs answered during the period.
+    """RFQs whose BOM went to sales during the period.
 
-    Counted by PROJECT, not by proposal row: a proposal revised three times is
-    one RFQ answered, and counting revisions would let re-work inflate the
-    figure. The latest revision decides which period it lands in.
+    This is the INTERNAL handoff - the proposal team marking a BOM ready and
+    passing it to sales for costing - not the client-facing proposal
+    submission. Counted once per project on the earliest handover, so a
+    revised sheet crossing again does not count as a second RFQ answered.
     """
-    from proposals.models import TechnicalProposal
-    qs = TechnicalProposal.objects.filter(
-        status='submitted', project__isnull=False, revision_date__isnull=False)
-    if ctx.region is not None:
-        qs = qs.filter(project__region=ctx.region)
-    if ctx.user is not None:
-        qs = qs.filter(created_by=ctx.user)
-
-    latest = {}
-    for pid, rev in qs.values_list('project_id', 'revision_date'):
-        if pid not in latest or rev > latest[pid]:
-            latest[pid] = rev
-    n = sum(1 for rev in latest.values() if ctx.start <= rev < ctx.end)
+    handed = _handed_over_map(ctx.region, ctx.user)
+    n = sum(1 for when in handed.values()
+            if ctx.start <= when.date() < ctx.end)
     if not n:
-        return KPIResult(Decimal('0'), 'none submitted in this period')
-    return KPIResult(Decimal(n), f'{n} submitted')
+        return KPIResult(Decimal('0'), 'no BOMs sent to sales in this period')
+    return KPIResult(Decimal(n), f'{n} BOM{"s" if n != 1 else ""} sent to sales')
 
 
 def compute_rfqs_overdue(ctx):
-    """RFQs whose deadline has passed with nothing submitted.
+    """Open RFQs past their handover deadline with the BOM still not sent to
+    sales.
 
     A snapshot of what is late RIGHT NOW, not a period total - an RFQ does not
-    stop being overdue because the month ended. Changing the period does not
+    stop being late because the month ended. Changing the period does not
     change this number, and the section says so.
     """
     from django.utils import timezone
     today = timezone.localdate()
     open_rfqs = _open_rfqs(ctx)
-    overdue = open_rfqs.filter(submission_deadline__lt=today).count()
-    # Deliberate blind spot, surfaced rather than hidden: with no deadline
-    # there is nothing to be late against.
-    undated = open_rfqs.filter(submission_deadline__isnull=True).count()
+    overdue = open_rfqs.filter(handed_over_deadline__lt=today).count()
+    # Deliberate blind spot, surfaced rather than hidden: with no handover
+    # deadline there is nothing to be late against.
+    undated = open_rfqs.filter(handed_over_deadline__isnull=True).count()
 
     if not overdue:
         cov = 'nothing overdue'
         if undated:
-            cov += f' · {undated} open with no deadline set'
+            cov += f' · {undated} open with no handover deadline'
         return KPIResult(Decimal('0'), cov)
-    cov = f'{overdue} past deadline, unanswered'
+    cov = f'{overdue} past handover deadline, not sent to sales'
     if undated:
         cov += f' · {undated} more with no deadline set'
     return KPIResult(Decimal(overdue), cov)
 
 
 def compute_rfqs_pending(ctx):
-    """RFQs still awaiting a submission and not yet late.
+    """Open RFQs still at the BOM stage and not yet late.
 
     Snapshot, like overdue. Pending and overdue are mutually exclusive and
-    together cover every open RFQ with nothing submitted, so the two tiles
-    reconcile against each other.
+    together cover every open RFQ whose BOM has not gone to sales, so the two
+    tiles reconcile against each other.
     """
     from django.utils import timezone
     today = timezone.localdate()
     open_rfqs = _open_rfqs(ctx)
-    pending = open_rfqs.exclude(submission_deadline__lt=today).count()
+    pending = open_rfqs.exclude(handed_over_deadline__lt=today).count()
     if not pending:
         return KPIResult(Decimal('0'), 'nothing pending')
 
     due_soon = open_rfqs.filter(
-        submission_deadline__gte=today,
-        submission_deadline__lt=today + datetime.timedelta(days=7)).count()
-    cov = f'{pending} awaiting submission'
+        handed_over_deadline__gte=today,
+        handed_over_deadline__lt=today + datetime.timedelta(days=7)).count()
+    cov = f'{pending} still at BOM stage'
     if due_soon:
-        cov += f' · {due_soon} due within 7 days'
+        cov += f' · {due_soon} due to sales within 7 days'
     return KPIResult(Decimal(pending), cov)
 
 
@@ -825,19 +837,22 @@ KPI_DEFINITIONS = [
         target_help='RFQs you expect to receive per period'),
     KPI('proposal_rfqs_submitted', PROPOSAL, 'RFQs submitted', COUNT, 'higher',
         target=None, source='auto', compute=compute_rfqs_submitted,
-        help='RFQs answered during the period, counted once per project - a '
-             'proposal revised three times is one RFQ answered.',
-        target_help='RFQs you aim to answer per period'),
+        help='BOMs sent to sales during the period - the internal handoff, not '
+             'the client proposal. Counted once per project on the first '
+             'handover, so a revised sheet does not count twice.',
+        target_help='BOMs you aim to send to sales per period'),
     KPI('proposal_rfqs_overdue', PROPOSAL, 'RFQs overdue', COUNT, 'lower',
         target=Decimal('0'), source='auto', compute=compute_rfqs_overdue,
-        help='Open RFQs past their deadline with nothing submitted. A snapshot '
-             'of what is late now - it does not change with the period.',
-        target_help='Most you would accept being late'),
+        help='Open RFQs past their handover deadline whose BOM has still not '
+             'gone to sales. A snapshot of what is late now - it does not '
+             'change with the period.',
+        target_help='Most you would accept being late to sales'),
     KPI('proposal_rfqs_pending', PROPOSAL, 'RFQs pending', COUNT, 'lower',
         target=None, source='auto', compute=compute_rfqs_pending,
-        help='Open RFQs awaiting a submission and not yet late. A snapshot, '
-             'like overdue; the two together cover every unanswered RFQ.',
-        target_help='Comfortable size for the open queue'),
+        help='Open RFQs still at the BOM stage and not yet late. A snapshot, '
+             'like overdue; the two together cover every RFQ whose BOM has '
+             'not reached sales.',
+        target_help='Comfortable size for the BOM queue'),
     KPI('proposal_submission_ontime', PROPOSAL, 'Submission on-time', PERCENT, 'higher',
         target=Decimal('100'), source='auto', compute=compute_proposal_submission_ontime,
         help='Proposals submitted this period vs their RFQ deadline.'),

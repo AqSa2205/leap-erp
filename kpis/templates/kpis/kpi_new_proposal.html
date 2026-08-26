@@ -13,9 +13,15 @@
    "New opportunities" tile by construction — same event, two audiences — and
    a test pins them together so a silent redefinition of either is caught.
 
+   "Submitted" is the INTERNAL handoff: the proposal team marking a BOM ready
+   and sending it to sales for costing (CostingSheet.handed_over_at, against
+   Project.handed_over_deadline). It is NOT the client-facing technical
+   proposal. So overdue means the BOM has not reached sales yet, and pending
+   means the RFQ is still at the BOM stage.
+
    Received and submitted are period figures. Overdue and pending are
    snapshots of the queue right now, and are mutually exclusive: between them
-   they cover every open RFQ with nothing submitted.
+   they cover every open RFQ whose BOM has not gone to sales.
 
    STILL TO BUILD — the original note here also listed "RFQs no work yet done
    / BOM stage (project_stage='building')". Not in this pass; it was not among
@@ -46,7 +52,7 @@
       {% with c=cards.proposal.proposal_rfqs_submitted %}
       <div class="col-md-3">
         <div class="border rounded p-3 h-100">
-          <div class="text-muted small text-uppercase">RFQs submitted</div>
+          <div class="text-muted small text-uppercase">BOMs sent to sales</div>
           <div class="fs-4 fw-bold">{{ c.value_display|default:"—" }}</div>
           <div class="text-muted small mt-1">{{ c.coverage|default:"—" }}</div>
         </div>
@@ -80,9 +86,11 @@
     overdue and pending. Saying so stops that reading as a bug — the same note
     the Sales section carries about pipeline value. {% endcomment %}
     <p class="text-muted small mt-3 mb-0">
-      Received and submitted cover the selected period. Overdue and pending
-      show the queue <em>now</em> and do not change with it; together they
-      account for every open RFQ with nothing submitted.
+      &ldquo;BOMs sent to sales&rdquo; is the internal handoff from the
+      proposal desk, not the client proposal. Received and sent cover the
+      selected period; overdue and pending show the BOM queue <em>now</em> and
+      do not change with it. Together they account for every open RFQ whose
+      BOM has not yet reached sales.
     </p>
   </div>
 </div>
