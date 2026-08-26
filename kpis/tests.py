@@ -1728,6 +1728,7 @@ class TabExclusivityTests(ComputeFixtureMixin, TestCase):
     BLOCKS = {
         'kpis': 'Sales &amp; Pipeline',
         'won': 'Marked won by',
+        'deadlines': 'By milestone',
         'activity': 'ta-region-head',
     }
 
@@ -1741,6 +1742,7 @@ class TabExclusivityTests(ComputeFixtureMixin, TestCase):
         # Give the activity tab something to draw, so its marker is real.
         self._project('SEED', self.active, est='100000')
         for view, expected in (('kpis', 'kpis'), ('won', 'won'),
+                               ('deadlines', 'deadlines'),
                                ('activity', 'activity')):
             body = self._body(None if view == 'kpis' else view)
             for key, marker in self.BLOCKS.items():
@@ -1756,7 +1758,7 @@ class TabExclusivityTests(ComputeFixtureMixin, TestCase):
 
     def test_exactly_one_tab_is_marked_active(self):
         import re
-        for view in (None, 'won', 'activity'):
+        for view in (None, 'won', 'deadlines', 'activity'):
             body = self._body(view)
             start = body.index('nav nav-tabs')
             tabs = body[start:body.index('</ul>', start)]
@@ -1766,7 +1768,7 @@ class TabExclusivityTests(ComputeFixtureMixin, TestCase):
     def test_the_kpis_tab_is_not_lit_on_the_other_tabs(self):
         """It was tested as "not activity", so it stayed lit on Deals Won."""
         import re
-        for view in ('won', 'activity'):
+        for view in ('won', 'deadlines', 'activity'):
             body = self._body(view)
             start = body.index('nav nav-tabs')
             tabs = body[start:body.index('</ul>', start)]
@@ -1779,7 +1781,9 @@ class TabExclusivityTests(ComputeFixtureMixin, TestCase):
     def test_content_comes_after_the_tabs_and_filter_bar(self):
         """The break put a whole table inside the page subtitle. Assert the
         document order rather than mere presence."""
-        for view, marker in (('won', 'Marked won by'), (None, 'Sales &amp; Pipeline')):
+        for view, marker in (('won', 'Marked won by'),
+                             ('deadlines', 'By milestone'),
+                             (None, 'Sales &amp; Pipeline')):
             body = self._body(view)
             with self.subTest(tab=view or 'kpis'):
                 self.assertLess(body.index('nav nav-tabs'), body.index(marker))
@@ -1788,10 +1792,196 @@ class TabExclusivityTests(ComputeFixtureMixin, TestCase):
     def test_the_subtitle_shows_a_period_label_on_every_tab(self):
         """Only the KPI branch has `data`, so the subtitle reads a dedicated
         period_label rather than reaching into one tab's payload."""
-        for view, expected in ((None, 'Q2 2026'), ('won', 'Q2 2026')):
+        for view, expected in ((None, 'Q2 2026'), ('won', 'Q2 2026'),
+                               ('deadlines', 'Q2 2026')):
             with self.subTest(tab=view or 'kpis'):
                 self.assertIn(expected, self._body(view))
         # Activity defaults to the lifetime view.
         body = self.client.get(
             reverse('kpis:kpi_new') + '?view=activity').content.decode()
         self.assertIn('All time', body)
+
+
+class DeadlineReliabilityTests(ComputeFixtureMixin, TestCase):
+    """Who hits their dates, per person and per milestone.
+
+    Every pipeline milestone carries a deadline (on the Project), an actual
+    (on the CostingSheet) and the person who did it. Nothing aggregated them
+    per person before - Team Activity shows how LONG a stage took, which is a
+    different question from whether the date was met."""
+
+    def setUp(self):
+        super().setUp()
+        self.alice = User.objects.create_user(username='alice', password='pw')
+        self.bob = User.objects.create_user(username='bob', password='pw')
+
+    def _milestone(self, ref, deadline, done_on=None, by=None, region=None,
+                   field='handed_over'):
+        """A project whose `field` milestone is due on `deadline` and, if
+        `done_on` is given, was completed then by `by`."""
+        p = self._project(ref, self.active, est='100000', region=region)
+        Project.objects.filter(pk=p.pk).update(
+            **{f'{field}_deadline': deadline})
+        sheet = CostingSheet.objects.create(title=f'S-{ref}', project=p)
+        if done_on is not None:
+            CostingSheet.objects.filter(pk=sheet.pk).update(**{
+                f'{field}_at': timezone.make_aware(
+                    datetime.datetime.combine(done_on, datetime.time(9, 0))),
+                f'{field}_by': by or self.alice,
+            })
+        return p
+
+    D = datetime.date
+
+    # ── scoring ─────────────────────────────────────────────────────────────
+
+    def test_on_or_before_the_deadline_is_on_time(self):
+        from kpis.services import build_deadline_reliability
+        self._milestone('EARLY', self.D(2026, 5, 20), done_on=self.D(2026, 5, 18))
+        self._milestone('EXACT', self.D(2026, 5, 21), done_on=self.D(2026, 5, 21))
+        self._milestone('LATE', self.D(2026, 5, 22), done_on=self.D(2026, 5, 25))
+        d = build_deadline_reliability('2026-Q2', region=self.region)
+        self.assertEqual((d['on_time'], d['total']), (2, 3))
+        self.assertEqual(d['people'][0]['user'], self.alice)
+        self.assertEqual(d['people'][0]['on_time'], 2)
+
+    def test_anchored_on_the_deadline_not_on_when_it_was_done(self):
+        """"Of the milestones due this quarter, how many were met" - so a Q2
+        deadline met late in Q3 is still a Q2 miss. Anchoring on the actual
+        date would quietly drop everything nobody got round to."""
+        from kpis.services import build_deadline_reliability
+        self._milestone('SLIPPED', self.D(2026, 6, 29), done_on=self.D(2026, 7, 10))
+        q2 = build_deadline_reliability('2026-Q2', region=self.region)
+        q3 = build_deadline_reliability('2026-Q3', region=self.region)
+        self.assertEqual((q2['on_time'], q2['total']), (0, 1))
+        self.assertEqual(q3['total'], 0)
+
+    def test_median_is_used_not_mean(self):
+        """One catastrophic slip must not define someone otherwise reliable.
+        Four milestones 1 day early and one 100 days late: the mean says late,
+        the median says early. The worst case is carried separately so it is
+        not hidden either."""
+        from kpis.services import build_deadline_reliability
+        for i in range(4):
+            self._milestone(f'OK{i}', self.D(2026, 5, 10 + i),
+                            done_on=self.D(2026, 5, 9 + i))
+        self._milestone('DISASTER', self.D(2026, 5, 20),
+                        done_on=self.D(2026, 8, 28))
+        row = build_deadline_reliability('2026-Q2', region=self.region)['people'][0]
+        self.assertEqual(row['median'], 1)
+        self.assertLess(row['worst'], -90)
+
+    # ── the unattributable case ─────────────────────────────────────────────
+
+    def test_an_overdue_unfinished_milestone_is_not_charged_to_anyone(self):
+        """Nobody performed it, so there is no actor to charge. Blaming the
+        previous stage's actor would blame the wrong person. It shows per
+        milestone instead - where work is stuck, even when the system cannot
+        say who is holding it."""
+        from kpis.services import build_deadline_reliability
+        self._milestone('STUCK', self.D(2026, 5, 1))          # never done
+        d = build_deadline_reliability('2026-Q2', region=self.region)
+        self.assertEqual(d['overdue_open'], 1)
+        self.assertEqual(d['total'], 0)
+        self.assertEqual(d['people'], [])
+        handed = next(m for m in d['milestones'] if m['key'] == 'handed_over')
+        self.assertEqual(handed['overdue_open'], 1)
+
+    def test_a_milestone_due_later_in_the_period_is_not_yet_a_miss(self):
+        """Not yet due is not late."""
+        from kpis.services import build_deadline_reliability
+        future = timezone.localdate() + datetime.timedelta(days=20)
+        self._milestone('SOON', future)
+        period = f'{future.year}-{future.month:02d}'
+        d = build_deadline_reliability(period, region=self.region)
+        self.assertEqual(d['overdue_open'], 0)
+        self.assertEqual(d['total'], 0)
+
+    def test_a_milestone_with_no_deadline_is_never_counted(self):
+        """It cannot be judged, so it must not silently score as a pass."""
+        from kpis.services import build_deadline_reliability
+        p = self._project('NO_DEADLINE', self.active, est='100000')
+        sheet = CostingSheet.objects.create(title='S', project=p)
+        CostingSheet.objects.filter(pk=sheet.pk).update(
+            handed_over_at=timezone.make_aware(
+                datetime.datetime(2026, 5, 5, 9, 0)),
+            handed_over_by=self.alice)
+        d = build_deadline_reliability('2026-Q2', region=self.region)
+        self.assertEqual(d['total'], 0)
+        self.assertEqual(d['people'], [])
+
+    def test_done_but_with_no_recorded_actor_counts_only_in_the_totals(self):
+        from kpis.services import build_deadline_reliability
+        p = self._project('ANON', self.active, est='100000')
+        Project.objects.filter(pk=p.pk).update(
+            handed_over_deadline=self.D(2026, 5, 10))
+        sheet = CostingSheet.objects.create(title='S', project=p)
+        CostingSheet.objects.filter(pk=sheet.pk).update(
+            handed_over_at=timezone.make_aware(
+                datetime.datetime(2026, 5, 8, 9, 0)))     # no _by
+        d = build_deadline_reliability('2026-Q2', region=self.region)
+        self.assertEqual((d['on_time'], d['total']), (1, 1))
+        self.assertEqual(d['people'], [])
+
+    # ── per milestone ───────────────────────────────────────────────────────
+
+    def test_each_milestone_is_scored_separately(self):
+        from kpis.services import build_deadline_reliability
+        self._milestone('A', self.D(2026, 5, 5), done_on=self.D(2026, 5, 4),
+                        field='bom_started')
+        self._milestone('B', self.D(2026, 5, 6), done_on=self.D(2026, 5, 9),
+                        field='handed_over')
+        self._milestone('C', self.D(2026, 5, 7), done_on=self.D(2026, 5, 7),
+                        field='costing_started')
+        self._milestone('D', self.D(2026, 5, 8), done_on=self.D(2026, 5, 20),
+                        field='finalized')
+        d = build_deadline_reliability('2026-Q2', region=self.region)
+        got = {m['key']: (m['on_time'], m['total']) for m in d['milestones']}
+        self.assertEqual(got['bom_started'], (1, 1))
+        self.assertEqual(got['handed_over'], (0, 1))
+        self.assertEqual(got['costing_started'], (1, 1))
+        self.assertEqual(got['finalized'], (0, 1))
+        self.assertEqual(len(d['milestones']), 4)
+
+    def test_a_persons_row_breaks_down_by_milestone(self):
+        from kpis.services import build_deadline_reliability
+        self._milestone('A', self.D(2026, 5, 5), done_on=self.D(2026, 5, 4),
+                        by=self.alice, field='bom_started')
+        self._milestone('B', self.D(2026, 5, 6), done_on=self.D(2026, 5, 9),
+                        by=self.alice, field='handed_over')
+        row = build_deadline_reliability('2026-Q2', region=self.region)['people'][0]
+        breakdown = {m['key']: (m['on_time'], m['total']) for m in row['per_milestone']}
+        self.assertEqual(breakdown['bom_started'], (1, 1))
+        self.assertEqual(breakdown['handed_over'], (0, 1))
+
+    # ── ranking and scoping ─────────────────────────────────────────────────
+
+    def test_most_reliable_first_with_sample_size_breaking_ties(self):
+        """20 of 20 outranks 1 of 1 - the same percentage is not the same
+        achievement."""
+        from kpis.services import build_deadline_reliability
+        for i in range(3):
+            self._milestone(f'AL{i}', self.D(2026, 5, 10 + i),
+                            done_on=self.D(2026, 5, 9 + i), by=self.alice)
+        self._milestone('BO', self.D(2026, 5, 20),
+                        done_on=self.D(2026, 5, 19), by=self.bob)
+        people = build_deadline_reliability('2026-Q2', region=self.region)['people']
+        self.assertEqual([p['user'] for p in people], [self.alice, self.bob])
+        self.assertEqual(people[0]['pct'], people[1]['pct'])
+
+    def test_scoped_by_region(self):
+        from kpis.services import build_deadline_reliability
+        self._milestone('MINE', self.D(2026, 5, 5), done_on=self.D(2026, 5, 4),
+                        region=self.region)
+        self._milestone('THEIRS', self.D(2026, 5, 6), done_on=self.D(2026, 5, 5),
+                        region=self.region2)
+        self.assertEqual(
+            build_deadline_reliability('2026-Q2', region=self.region)['total'], 1)
+        self.assertEqual(build_deadline_reliability('2026-Q2')['total'], 2)
+
+    def test_an_empty_period_returns_none_percent_not_zero(self):
+        """No milestones due is not the same as missing all of them."""
+        from kpis.services import build_deadline_reliability
+        d = build_deadline_reliability('2026-Q2', region=self.region)
+        self.assertEqual(d['total'], 0)
+        self.assertIsNone(d['pct'])

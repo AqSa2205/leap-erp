@@ -275,3 +275,181 @@ def build_deals_won(period, region=None):
         'untracked': untracked,
         'won_now': won_now.count(),
     }
+
+
+# ── Deadline reliability ─────────────────────────────────────────────────────
+
+# Each pipeline milestone carries all three things a punctuality measure needs:
+# a deadline on the Project, an actual timestamp on the CostingSheet, and the
+# person who did it. Nothing aggregated them per person until now - the Team
+# Activity page shows how LONG a stage took (cycle time), which is a different
+# question from whether the date was met.
+DEADLINE_MILESTONES = [
+    ('bom_started', 'BOM started',
+     'bom_started_deadline', 'bom_started_at', 'bom_started_by'),
+    ('handed_over', 'Handed to sales',
+     'handed_over_deadline', 'handed_over_at', 'handed_over_by'),
+    ('costing_started', 'Costing started',
+     'costing_started_deadline', 'costing_started_at', 'costing_started_by'),
+    ('finalized', 'Finalised',
+     'finalized_deadline', 'finalized_at', 'finalized_by'),
+]
+
+
+def _cycle_sheet(sheets):
+    """The furthest-along sheet on a project, matching what the Commercial
+    Pipeline list already treats as the one driving cycle time. Tie-break on
+    the most recently updated."""
+    from costing.models import WORKFLOW_STAGE_SEQUENCE
+    if not sheets:
+        return None
+
+    def rank(s):
+        try:
+            return WORKFLOW_STAGE_SEQUENCE.index(s.workflow_stage)
+        except ValueError:
+            return -1
+
+    return max(sheets, key=lambda s: (rank(s), s.updated_at))
+
+
+def build_deadline_reliability(period, region=None):
+    """Who hits their dates, per person and per milestone.
+
+    Anchored on the DEADLINE falling in the window, not on when the work was
+    done. "Of the milestones due this quarter, how many were met" is the
+    question a deadline measure should answer, and it keeps finished and
+    unfinished work comparable - anchoring on the actual date would quietly
+    drop everything nobody got round to.
+
+    Scoring:
+
+    * A milestone with no deadline recorded cannot be judged and is counted
+      separately, never as a pass.
+    * A completed milestone scores against the person who completed it. On
+      time means on or before the deadline; the variance is whole days, +ve
+      for early, matching Project._milestone_variance().
+    * A milestone past its deadline that NOBODY has done is late, but it is
+      not attributable: there is no actor recorded, because no one performed
+      it. Charging it to the previous stage's actor would blame the wrong
+      person, so these are reported per milestone instead - showing where work
+      is stuck even when the system cannot say who is holding it.
+
+    Per person the headline is on-time percentage, with the MEDIAN variance
+    beside it rather than the mean: one catastrophic slip should not define
+    someone otherwise reliable. The worst case is carried separately so it is
+    not hidden either.
+    """
+    import statistics
+    from decimal import Decimal
+    from django.utils import timezone
+    from projects.models import Project
+    from .periods import period_bounds
+
+    start, end = period_bounds(period)
+    today = timezone.localdate()
+
+    projects = (Project.objects
+                .select_related('region')
+                .prefetch_related('costing_sheets'))
+    if region is not None:
+        projects = projects.filter(region=region)
+
+    people = {}
+    per_milestone = {
+        key: {'key': key, 'label': label, 'total': 0, 'on_time': 0,
+              'overdue_open': 0, 'undated': 0}
+        for key, label, _dl, _at, _by in DEADLINE_MILESTONES
+    }
+    undated = 0
+    overdue_open = 0
+
+    for project in projects:
+        sheet = _cycle_sheet(list(project.costing_sheets.all()))
+        for key, _label, deadline_field, actual_field, actor_field in DEADLINE_MILESTONES:
+            deadline = getattr(project, deadline_field, None)
+            if not deadline:
+                continue
+            if not (start <= deadline < end):
+                continue
+
+            actual = getattr(sheet, actual_field, None) if sheet else None
+            bucket = per_milestone[key]
+
+            if actual is None:
+                # Not done. Only counts as a miss once the date has passed -
+                # a milestone due later this period is simply not yet due.
+                if today > deadline:
+                    bucket['overdue_open'] += 1
+                    overdue_open += 1
+                continue
+
+            actor = getattr(sheet, actor_field, None)
+            actual_date = actual.date() if hasattr(actual, 'date') else actual
+            variance = (deadline - actual_date).days
+            on_time = variance >= 0
+
+            bucket['total'] += 1
+            if on_time:
+                bucket['on_time'] += 1
+
+            if actor is None:
+                # Done, but the doer was never recorded - countable in the
+                # milestone totals, not chargeable to anyone.
+                continue
+            entry = people.setdefault(actor.pk, {
+                'user': actor, 'total': 0, 'on_time': 0,
+                'variances': [], 'per_milestone': {},
+            })
+            entry['total'] += 1
+            entry['on_time'] += int(on_time)
+            entry['variances'].append(variance)
+            m = entry['per_milestone'].setdefault(
+                key, {'key': key, 'total': 0, 'on_time': 0})
+            m['total'] += 1
+            m['on_time'] += int(on_time)
+
+    def pct(on_time, total):
+        if not total:
+            return None
+        return (Decimal(on_time) / Decimal(total) * 100).quantize(Decimal('0.1'))
+
+    rows = []
+    for entry in people.values():
+        variances = entry['variances']
+        rows.append({
+            'user': entry['user'],
+            'total': entry['total'],
+            'on_time': entry['on_time'],
+            'pct': pct(entry['on_time'], entry['total']),
+            'median': int(statistics.median(variances)) if variances else None,
+            'worst': min(variances) if variances else None,
+            'per_milestone': [
+                {**entry['per_milestone'][k],
+                 'label': label,
+                 'pct': pct(entry['per_milestone'][k]['on_time'],
+                            entry['per_milestone'][k]['total'])}
+                for k, label, _d, _a, _b in DEADLINE_MILESTONES
+                if k in entry['per_milestone']
+            ],
+        })
+    # Most reliable first; a bigger sample breaks a tie, since 1-of-1 is not
+    # the same achievement as 20-of-20.
+    rows.sort(key=lambda r: (r['pct'] or 0, r['total']), reverse=True)
+
+    milestones = []
+    for key, label, _d, _a, _b in DEADLINE_MILESTONES:
+        b = per_milestone[key]
+        milestones.append({**b, 'pct': pct(b['on_time'], b['total'])})
+
+    total = sum(m['total'] for m in milestones)
+    on_time = sum(m['on_time'] for m in milestones)
+    return {
+        'people': rows,
+        'milestones': milestones,
+        'total': total,
+        'on_time': on_time,
+        'pct': pct(on_time, total),
+        'overdue_open': overdue_open,
+        'undated': undated,
+    }
