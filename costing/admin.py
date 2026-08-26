@@ -1,5 +1,13 @@
 from django.contrib import admin
-from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem
+from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, RevisionMailbox
+
+
+@admin.register(RevisionMailbox)
+class RevisionMailboxAdmin(admin.ModelAdmin):
+    list_display = ['owner', 'email_address', 'is_active', 'created_at']
+    list_filter = ['is_active']
+    search_fields = ['owner__username', 'owner__first_name', 'owner__last_name', 'email_address']
+    autocomplete_fields = ['owner']
 
 
 @admin.register(ExchangeRate)

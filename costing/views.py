@@ -1169,7 +1169,7 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
                 rev.size_bytes = None
         context['pdf_revisions'] = revisions
         context['pdf_revisions_total_size'] = total_rev_size
-        context['revision_email_mailbox'] = settings.REVISION_EMAIL_MAILBOX
+        context['revision_email_mailbox'] = _user_revision_mailbox(self.request.user)
 
         # Recent change log (for cross-team visibility).
         # The UI lets the user dial how many entries are shown via ?change_log_limit=N.
@@ -3117,6 +3117,39 @@ def cleanup_costing_revisions(request, pk):
 
 # ─── Revision → Client Email Thread ──────────────────────────
 
+def _user_revision_mailbox(user):
+    """The ONE mailbox `user` is allowed to send costing-revision emails
+    from / browse the reply thread through — never taken from a request
+    parameter, always derived here from who's actually logged in, so
+    there is no value anywhere (URL, POST field, hidden JSON) that could
+    be tampered with to reach someone else's mailbox. Returns '' if this
+    user has no mailbox to use — callers must treat that as "nothing to
+    show", not fall back to guessing one. Mirrors
+    projects.views._user_mailbox() exactly (see RevisionMailbox's
+    docstring for why this is a separate copy rather than a shared
+    import).
+
+    Resolution order:
+    1. This user's own RevisionMailbox, if an admin has linked one and
+       left it active.
+    2. The legacy single REVISION_EMAIL_MAILBOX setting, but ONLY while
+       the RevisionMailbox table has never had a single row created in
+       it — so the feature doesn't go dark for everyone the moment this
+       ships. The instant even one row has EVER existed (checked by
+       existence, not by is_active — deactivating someone's row must
+       revoke their access, not hand it to whoever the legacy setting
+       points at instead), this fallback stops applying for everyone
+       else too."""
+    from .models import RevisionMailbox
+    try:
+        return RevisionMailbox.objects.get(owner=user, is_active=True).email_address
+    except RevisionMailbox.DoesNotExist:
+        pass
+    if not RevisionMailbox.objects.exists():
+        return settings.REVISION_EMAIL_MAILBOX or ''
+    return ''
+
+
 @require_POST
 def send_costing_revision_email(request, pk):
     """Email a CostingSheetRevision's file to a client and start tracking
@@ -3144,9 +3177,9 @@ def send_costing_revision_email(request, pk):
         messages.error(request, 'To, subject, and message are all required.')
         return redirect('costing:detail', pk=sheet.pk)
 
-    mailbox = settings.REVISION_EMAIL_MAILBOX
+    mailbox = _user_revision_mailbox(request.user)
     if not mailbox:
-        messages.error(request, 'REVISION_EMAIL_MAILBOX is not configured.')
+        messages.error(request, 'No mailbox is linked to your account — ask an admin to link one.')
         return redirect('costing:detail', pk=sheet.pk)
 
     rev.file.open('rb')
@@ -3204,7 +3237,7 @@ def revision_email_thread(request, pk):
         'rev': rev,
         'sheet': sheet,
         'can_edit': _user_can_edit_sheet(request.user, sheet),
-        'mailbox': settings.REVISION_EMAIL_MAILBOX,
+        'mailbox': _user_revision_mailbox(request.user),
     }
     if hasattr(rev, 'email_thread'):
         context['thread'] = rev.email_thread
@@ -3254,61 +3287,108 @@ def download_revision_email_attachment(request, message_pk, attachment_id):
     return response
 
 
-def browse_revision_mailbox(request, pk):
-    """List recent inbox messages for one thread's mailbox, so a person can
-    manually pick a reply that didn't thread automatically (e.g. the client
-    composed a fresh email instead of hitting Reply)."""
+def browse_link_revision_email(request, pk):
+    """One combined, Outlook-style recent-messages list (Inbox + Sent
+    Items) for the current user's tracked mailbox, for the 'link an email'
+    picker: pick a message, then say whether it was sent to the client or
+    received from them (see link_revision_email) — used both to establish
+    a revision's thread for the first time and to attach further messages
+    (either direction) to one that already exists."""
     from . import graph_thread
-    from .models import RevisionEmailThread
+    from .models import CostingSheetRevision
 
-    thread = get_object_or_404(RevisionEmailThread, pk=pk)
-    sheet = thread.revision.sheet
-    if not (_user_can_see_pricing(request.user) and _user_can_view_sheet(request.user, sheet)):
+    rev = get_object_or_404(CostingSheetRevision, pk=pk)
+    sheet = rev.sheet
+    if not (_user_can_see_pricing(request.user) and _user_can_edit_sheet(request.user, sheet)):
         return HttpResponse('Permission denied.', status=403)
 
-    already_linked = set(thread.messages.values_list('graph_message_id', flat=True))
+    mailbox = _user_revision_mailbox(request.user)
+    if not mailbox:
+        return render(request, 'costing/_revision_link_browser.html',
+                       {'rev': rev, 'error': 'No mailbox is linked to your account — ask an admin to link one.'})
+
+    already_linked = set()
+    if hasattr(rev, 'email_thread'):
+        already_linked = set(rev.email_thread.messages.values_list('graph_message_id', flat=True))
+
     try:
-        candidates = graph_thread.list_recent_messages(thread.mailbox)
+        inbox = graph_thread.list_recent_messages(mailbox)
+        sent = graph_thread.list_recent_sent_messages(mailbox)
     except graph_thread.GraphThreadError as exc:
-        return render(request, 'costing/_revision_mailbox_browser.html',
-                       {'thread': thread, 'error': str(exc)})
-    for c in candidates:
-        c['already_linked'] = c['id'] in already_linked
-    return render(request, 'costing/_revision_mailbox_browser.html',
-                  {'thread': thread, 'candidates': candidates})
+        return render(request, 'costing/_revision_link_browser.html', {'rev': rev, 'error': str(exc)})
+
+    candidates = [
+        {
+            'id': m['id'], 'subject': m['subject'],
+            'counterpart': m['sender_name'] or m['sender_email'],
+            'date': m['received_at'], 'preview': m['body_preview'],
+            'already_linked': m['id'] in already_linked,
+        }
+        for m in inbox
+    ] + [
+        {
+            'id': m['id'], 'subject': m['subject'],
+            'counterpart': m['to'],
+            'date': m['sent_at'], 'preview': m['body_preview'],
+            'already_linked': m['id'] in already_linked,
+        }
+        for m in sent
+    ]
+    candidates.sort(key=lambda c: c['date'] or '', reverse=True)
+    return render(request, 'costing/_revision_link_browser.html', {'rev': rev, 'candidates': candidates})
 
 
 @require_POST
-def link_reply_message(request, pk):
-    """Manually attach one Graph message (picked via browse_revision_mailbox)
-    onto a thread as a RevisionEmailMessage, bypassing conversationId
-    matching entirely — the fallback for replies that didn't thread."""
+def link_revision_email(request, pk):
+    """Attach one Graph message to a revision's client thread, with the
+    sent/received classification the person picked in the UI rather than
+    an inferred one — creates the thread if this is the first message
+    linked for this revision, or appends to an existing one either way.
+    Explicit classification (not sender-address inference) matters here
+    specifically because this is the manual path for messages composed
+    outside the ERP, where inference is the least reliable."""
     from django.utils.dateparse import parse_datetime
-    from django.utils.html import strip_tags as _strip_tags
     from . import graph_thread
-    from .models import RevisionEmailThread, RevisionEmailMessage
+    from .models import CostingSheetRevision, RevisionEmailThread, RevisionEmailMessage
 
-    thread = get_object_or_404(RevisionEmailThread, pk=pk)
-    sheet = thread.revision.sheet
+    rev = get_object_or_404(CostingSheetRevision, pk=pk)
+    sheet = rev.sheet
     if not (_user_can_see_pricing(request.user) and _user_can_edit_sheet(request.user, sheet)):
         messages.error(request, 'Permission denied.')
         return redirect('costing:detail', pk=sheet.pk)
 
+    mailbox = _user_revision_mailbox(request.user)
+    if not mailbox:
+        messages.error(request, 'No mailbox is linked to your account — ask an admin to link one.')
+        return redirect('costing:detail', pk=sheet.pk)
+
     message_id = request.POST.get('message_id')
-    if not message_id:
-        messages.error(request, 'No message selected.')
+    direction = request.POST.get('direction')
+    if not message_id or direction not in ('out', 'in'):
+        messages.error(request, 'Pick a message and whether it was sent or received first.')
         return redirect('costing:detail', pk=sheet.pk)
     if RevisionEmailMessage.objects.filter(graph_message_id=message_id).exists():
         messages.info(request, 'That email is already linked to a thread.')
         return redirect('costing:detail', pk=sheet.pk)
 
     try:
-        msg = graph_thread.get_message_detail(thread.mailbox, message_id)
+        msg = graph_thread.get_message_detail(mailbox, message_id)
     except graph_thread.GraphThreadError as exc:
         messages.error(request, f'Could not fetch that email: {exc}')
         return redirect('costing:detail', pk=sheet.pk)
 
-    direction = 'out' if msg['sender_email'].lower() == thread.mailbox.lower() else 'in'
+    thread = getattr(rev, 'email_thread', None)
+    if thread is None:
+        thread = RevisionEmailThread.objects.create(
+            revision=rev,
+            mailbox=mailbox,
+            graph_conversation_id=msg['conversation_id'],
+            client_to=msg['to'] if direction == 'out' else msg['sender_email'],
+            client_cc=msg['cc'] if direction == 'out' else '',
+            subject=msg['subject'],
+            sent_by=request.user if request.user.is_authenticated else None,
+        )
+
     RevisionEmailMessage.objects.create(
         thread=thread,
         graph_message_id=msg['id'],
@@ -3319,7 +3399,7 @@ def link_reply_message(request, pk):
         cc_recipients=msg['cc'],
         subject=msg['subject'],
         body_html=msg['body_html'],
-        body_text=_strip_tags(msg['body_html']),
+        body_text=graph_thread.html_to_text(msg['body_html']),
         sent_at=parse_datetime(msg['sent_at']) if msg['sent_at'] else None,
         has_attachments=msg['has_attachments'],
         attachment_meta=msg['attachments'] or None,
@@ -3327,7 +3407,13 @@ def link_reply_message(request, pk):
     if direction == 'in':
         thread.status = 'replied'
         thread.save(update_fields=['status'])
-    messages.success(request, 'Email linked to the thread.')
+
+    try:
+        graph_thread.sync_thread(thread)
+    except graph_thread.GraphThreadError:
+        pass  # the message we cared about is already linked; Refresh can backfill the rest later
+
+    messages.success(request, f'Revision {rev.revision_label} — email linked.')
     return redirect('costing:detail', pk=sheet.pk)
 
 

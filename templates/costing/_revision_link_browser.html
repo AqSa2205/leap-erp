@@ -1,0 +1,43 @@
+{% if error %}
+<div class="alert alert-danger small">{{ error }}</div>
+{% else %}
+<p class="small text-muted">
+    Recent messages in your mailbox &mdash; pick the one for revision {{ rev.revision_label }},
+    then say whether it was <strong>sent to</strong> the client or <strong>received from</strong> them.
+</p>
+<div style="max-height: 440px; overflow-y: auto;">
+    {% for c in candidates %}
+    <div class="border rounded p-2 mb-2">
+        <div class="d-flex justify-content-between align-items-start">
+            <div>
+                <div class="fw-bold small">{{ c.subject }}</div>
+                <div class="small text-muted">{{ c.counterpart }}</div>
+                <div class="small text-muted">{{ c.date|date:"d M Y H:i" }}</div>
+                {% if c.preview %}<div class="small mt-1 text-muted">{{ c.preview|truncatechars:120 }}</div>{% endif %}
+            </div>
+        </div>
+        <div class="mt-2">
+            {% if c.already_linked %}
+            <span class="badge bg-secondary">Already linked</span>
+            {% else %}
+            <div class="btn-group btn-group-sm" role="group">
+                <button type="button" class="btn btn-outline-primary js-link-classified"
+                        data-url="{% url 'costing:link_revision_email' rev.pk %}"
+                        data-message-id="{{ c.id }}" data-direction="out">
+                    <i class="bi bi-arrow-up-right me-1"></i>Sent by us
+                </button>
+                <button type="button" class="btn btn-outline-success js-link-classified"
+                        data-url="{% url 'costing:link_revision_email' rev.pk %}"
+                        data-message-id="{{ c.id }}" data-direction="in">
+                    <i class="bi bi-arrow-down-left me-1"></i>Received from client
+                </button>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% empty %}
+    <div class="text-center text-muted py-3 small">No recent messages found.</div>
+    {% endfor %}
+</div>
+{% endif %}
+<button type="button" class="btn btn-sm btn-outline-secondary mt-2" data-bs-dismiss="modal">Close</button>

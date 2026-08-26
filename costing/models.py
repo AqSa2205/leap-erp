@@ -1279,6 +1279,39 @@ class CostingSheetRevision(models.Model):
             return f'R{int(label[1:]) + 1:02d}'
         return f'R{cls.objects.filter(sheet=sheet).count():02d}'
 
+
+class RevisionMailbox(models.Model):
+    """One employee's own mailbox for sending costing-revision emails to
+    clients and tracking replies — never shared. Same exact design as
+    projects.MonitoredMailbox (one row per user, OneToOne both ways, an
+    admin links each employee to their own real mailbox address) — kept
+    as a separate, self-contained copy in this app rather than a cross-app
+    import, since that model currently lives on a different, not-yet-merged
+    branch and this app shouldn't depend on that branch's migration state.
+
+    The privacy guarantee is identical: only the linked employee can ever
+    send or browse from their own mailbox through this feature, and which
+    mailbox to use is always derived from request.user server-side (see
+    costing/views.py:_user_revision_mailbox) — never from anything the
+    client sends."""
+
+    owner = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='revision_mailbox',
+        help_text='The employee this mailbox belongs to. Only they can send/browse from it.',
+    )
+    email_address = models.EmailField(unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['owner__username']
+
+    def __str__(self):
+        return f'{self.owner} — {self.email_address}'
+
+
 class RevisionEmailThread(models.Model):
     """Tracks that a costing sheet was emailed to the client and also
     carries the full reply thread (RevisionEmailMessage rows to it)."""

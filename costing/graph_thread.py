@@ -5,6 +5,8 @@ reply thread by its conversation id.
 
 """
 import base64
+import html as _html_entities
+import re
 from email.utils import parseaddr
 from urllib.parse import quote
 import requests
@@ -108,6 +110,27 @@ def _recipients_str(addresses):
     return ', '.join(out)
 
 
+_BLOCK_BREAK_RE = re.compile(r'(?i)<\s*(br\s*/?|/p|/div|/li|/tr|/h[1-6])\s*>')
+
+
+def html_to_text(html_content):
+    """Best-effort HTML->plain-text for a message body. strip_tags() alone
+    collapses an entire paragraph-formatted email onto one unreadable
+    run-on line, since it removes tags without leaving anything behind
+    where a line break used to be — this converts block-level breaks to
+    real newlines first, then strips tags and unescapes entities
+    (&nbsp;, &amp;, ...). Not a full HTML renderer, just enough for a
+    readable plain-text reading pane."""
+    if not html_content:
+        return ''
+    text = _BLOCK_BREAK_RE.sub('\n', html_content)
+    text = strip_tags(text)
+    text = _html_entities.unescape(text)
+    lines = [line.rstrip() for line in text.splitlines()]
+    text = '\n'.join(lines)
+    return re.sub(r'\n{3,}', '\n\n', text).strip()
+
+
 def _list_message_attachments(mailbox, message_id, headers):
     """Metadata only (no bytes) for one message's real attachments —
     inline content (signature logos etc.) is left out."""
@@ -134,7 +157,12 @@ def _list_message_attachments(mailbox, message_id, headers):
 def list_thread_messages(mailbox, conversation_id):
     """Every message in `conversation_id`, oldest first, as plain dicts:
     id, subject, sender_name, sender_email, to, cc, sent_at, body_html,
-    has_attachments, attachments (list of {id, name, content_type, size})."""
+    has_attachments, attachments (list of {id, name, content_type, size}).
+
+    Follows @odata.nextLink until Graph stops paginating — a real client
+    conversation can run well past Graph's default page size (~10) once
+    there's been enough back-and-forth, and without this a long thread
+    would silently lose its oldest messages."""
     access_token = _get_access_token()
     headers = {'Authorization': f'Bearer {access_token}'}
     url = f'{GRAPH_BASE}/users/{quote(mailbox, safe="")}/messages'
@@ -142,37 +170,45 @@ def list_thread_messages(mailbox, conversation_id):
         '$filter': f"conversationId eq '{conversation_id}'",
         '$select': 'id,subject,from,toRecipients,ccRecipients,sentDateTime,body,hasAttachments',
         '$orderby': 'sentDateTime asc',
+        '$top': 50,
     }
-    try:
-        resp = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
-    except requests.RequestException as exc:
-        raise GraphThreadError(f'Could not reach the mailbox: {exc}')
-    if resp.status_code != 200:
-        raise GraphThreadError(f'Graph thread lookup failed ({resp.status_code}): {resp.text}')
 
     messages = []
-    for item in resp.json().get('value', []):
-        sender = (item.get('from') or {}).get('emailAddress') or {}
-        sender_name, sender_email = sender.get('name', ''), sender.get('address', '')
-        if not sender_name:
-            sender_name, sender_email = parseaddr(sender_email)
-        body = item.get('body') or {}
-        attachments = (
-            _list_message_attachments(mailbox, item['id'], {'Authorization': f'Bearer {access_token}'})
-            if item.get('hasAttachments') else []
-        )
-        messages.append({
-            'id': item.get('id'),
-            'subject': item.get('subject') or '',
-            'sender_name': sender_name,
-            'sender_email': sender_email,
-            'to': _recipients_str(item.get('toRecipients')),
-            'cc': _recipients_str(item.get('ccRecipients')),
-            'sent_at': item.get('sentDateTime'),
-            'body_html': body.get('content') or '',
-            'has_attachments': bool(item.get('hasAttachments')),
-            'attachments': attachments,
-        })
+    next_url, next_params = url, params
+    while next_url:
+        try:
+            resp = requests.get(next_url, headers=headers, params=next_params, timeout=REQUEST_TIMEOUT)
+        except requests.RequestException as exc:
+            raise GraphThreadError(f'Could not reach the mailbox: {exc}')
+        if resp.status_code != 200:
+            raise GraphThreadError(f'Graph thread lookup failed ({resp.status_code}): {resp.text}')
+
+        data = resp.json()
+        for item in data.get('value', []):
+            sender = (item.get('from') or {}).get('emailAddress') or {}
+            sender_name, sender_email = sender.get('name', ''), sender.get('address', '')
+            if not sender_name:
+                sender_name, sender_email = parseaddr(sender_email)
+            body = item.get('body') or {}
+            attachments = (
+                _list_message_attachments(mailbox, item['id'], {'Authorization': f'Bearer {access_token}'})
+                if item.get('hasAttachments') else []
+            )
+            messages.append({
+                'id': item.get('id'),
+                'subject': item.get('subject') or '',
+                'sender_name': sender_name,
+                'sender_email': sender_email,
+                'to': _recipients_str(item.get('toRecipients')),
+                'cc': _recipients_str(item.get('ccRecipients')),
+                'sent_at': item.get('sentDateTime'),
+                'body_html': body.get('content') or '',
+                'has_attachments': bool(item.get('hasAttachments')),
+                'attachments': attachments,
+            })
+        # @odata.nextLink already carries the full query string — no params on the follow-up request.
+        next_url = data.get('@odata.nextLink')
+        next_params = None
     return messages
 
 
@@ -231,7 +267,7 @@ def sync_thread(thread):
             cc_recipients=msg['cc'],
             subject=msg['subject'],
             body_html=msg['body_html'],
-            body_text=strip_tags(msg['body_html']),
+            body_text=html_to_text(msg['body_html']),
             sent_at=parse_datetime(msg['sent_at']) if msg['sent_at'] else None,
             has_attachments=msg['has_attachments'],
             attachment_meta=msg['attachments'] or None,
@@ -286,11 +322,14 @@ def list_recent_messages(mailbox, top=25):
 def get_message_detail(mailbox, message_id):
     """One specific message's full detail (not just the inbox preview),
     for after a user has picked it from list_recent_messages() to attach.
-    Same dict shape as one entry from list_thread_messages()."""
+    Same dict shape as one entry from list_thread_messages(), plus
+    conversation_id (needed to start a RevisionEmailThread from a message
+    that was composed and sent outside the ERP — see link_revision_email
+    in costing/views.py)."""
     access_token = _get_access_token()
     headers = {'Authorization': f'Bearer {access_token}'}
     url = f'{GRAPH_BASE}/users/{quote(mailbox, safe="")}/messages/{quote(message_id, safe="")}'
-    params = {'$select': 'id,subject,from,toRecipients,ccRecipients,sentDateTime,body,hasAttachments'}
+    params = {'$select': 'id,conversationId,subject,from,toRecipients,ccRecipients,sentDateTime,body,hasAttachments'}
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
     except requests.RequestException as exc:
@@ -310,6 +349,7 @@ def get_message_detail(mailbox, message_id):
     )
     return {
         'id': item.get('id'),
+        'conversation_id': item.get('conversationId'),
         'subject': item.get('subject') or '',
         'sender_name': sender_name,
         'sender_email': sender_email,
@@ -320,3 +360,36 @@ def get_message_detail(mailbox, message_id):
         'has_attachments': bool(item.get('hasAttachments')),
         'attachments': attachments,
     }
+
+
+def list_recent_sent_messages(mailbox, top=25):
+    """The most recent messages in `mailbox`'s Sent Items — half of the
+    unified 'link a sent/received email' picker (see
+    browse_link_revision_email in costing/views.py, which merges this with
+    list_recent_messages()'s Inbox listing into one Outlook-style list).
+    Plain dicts: id, subject, to, sent_at, body_preview."""
+    access_token = _get_access_token()
+    headers = {'Authorization': f'Bearer {access_token}'}
+    url = f'{GRAPH_BASE}/users/{quote(mailbox, safe="")}/mailFolders/SentItems/messages'
+    params = {
+        '$top': top,
+        '$orderby': 'sentDateTime desc',
+        '$select': 'id,subject,toRecipients,sentDateTime,bodyPreview',
+    }
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
+    except requests.RequestException as exc:
+        raise GraphThreadError(f'Could not reach the mailbox: {exc}')
+    if resp.status_code != 200:
+        raise GraphThreadError(f'Graph sent-items listing failed ({resp.status_code}): {resp.text}')
+
+    return [
+        {
+            'id': item.get('id'),
+            'subject': item.get('subject') or '(no subject)',
+            'to': _recipients_str(item.get('toRecipients')),
+            'sent_at': item.get('sentDateTime'),
+            'body_preview': item.get('bodyPreview') or '',
+        }
+        for item in resp.json().get('value', [])
+    ]
