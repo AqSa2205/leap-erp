@@ -48,82 +48,13 @@
                     </div>
                     <div class="d-flex align-items-center gap-3 flex-wrap">
                         <div class="ta-stat text-center"><div class="lbl">Total actions</div><div class="val">{{ data.grand_total|default:0 }}</div></div>
-                        <form method="get" class="d-flex gap-2 align-items-center">
-                            <select name="region" class="form-select form-select-sm" onchange="this.form.submit()" style="min-width:170px;" aria-label="Filter by region">
-                                <option value="">All regions</option>
-                                {% for r in regions %}
-                                <option value="{{ r.pk }}" {% if selected_region == r.pk|stringformat:'s' %}selected{% endif %}>{{ r.name }}</option>
-                                {% endfor %}
-                            </select>
-                            <select name="period" class="form-select form-select-sm" onchange="this.form.submit()" style="min-width:150px;">
-                                {% for val, lbl in period_options %}
-                                <option value="{{ val }}" {% if val == period %}selected{% endif %}>{{ lbl }}</option>
-                                {% endfor %}
-                            </select>
-                        </form>
                     </div>
                 </div>
             </div>
 
-            {% for reg in data.regions %}
-            <!-- Region -->
-            <div class="ta-region-head">
-                <i class="bi bi-geo-alt-fill text-secondary"></i>
-                <h2>{{ reg.name }}</h2>
-                <span class="badge rounded-pill text-bg-light border">{{ reg.people }} {{ reg.people|pluralize:"person,people" }}</span>
-                <span class="badge rounded-pill" style="background:#e7eaf1;color:#29344d;">{{ reg.total }} actions</span>
-                <span class="ta-line"></span>
-            </div>
+            {% include 'kpis/_kpi_filter_bar.html' %}
 
-            {% for dept in reg.departments %}
-            <div class="card ta-dept-card">
-                <div class="card-header">
-                    <i class="bi bi-people-fill" style="color:#3d4d6a"></i>{{ dept.label }}
-                    <span class="badge rounded-pill text-bg-light border ms-1">{{ dept.rows|length }}</span>
-                    <span class="ms-auto small text-muted">{{ dept.total }} actions</span>
-                </div>
-                <div class="card-body p-0">
-                    <div class="table-responsive">
-                        <table class="table table-sm ta-table align-middle mb-0">
-                            <thead>
-                                <tr>
-                                    <th>Person</th>
-                                    {% for col in dept.columns %}
-                                    <th class="text-end {% if col.kind == 'cycle' %}ta-cyc-head{% endif %}">{{ col.label }}</th>
-                                    {% endfor %}
-                                    <th class="text-end">Total</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for row in dept.rows %}
-                                <tr>
-                                    <td>
-                                        <a href="{% url 'kpis:activity_detail' row.user.pk %}?period={{ period }}" class="text-decoration-none fw-semibold">
-                                            {{ row.user.get_full_name|default:row.user.username }}
-                                        </a>
-                                        {% if not row.is_home %}<span class="badge ta-cross ms-1" title="Contributing outside their own department">cross-dept</span>{% endif %}
-                                        {% if row.user.role %}<span class="text-muted d-block ta-role">{{ row.user.role.get_name_display }}</span>{% endif %}
-                                    </td>
-                                    {% for cell in row.cells %}
-                                    <td class="text-end {% if cell.kind == 'cycle' %}ta-cyc{% endif %}">{{ cell.display }}</td>
-                                    {% endfor %}
-                                    <td class="text-end fw-bold">{{ row.total }}</td>
-                                </tr>
-                                {% empty %}
-                                <tr><td colspan="{{ dept.columns|length|add:2 }}" class="text-center text-muted py-3">No one in this department.</td></tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-            {% endfor %}
-
-            {% empty %}
-            <div class="card"><div class="card-body text-center text-muted py-5">
-                <i class="bi bi-people fs-3 d-block mb-2 opacity-50"></i>No active users to report on.
-            </div></div>
-            {% endfor %}
+            {% include 'kpis/_activity_table.html' %}
         </div>
     </div>
 </div>
