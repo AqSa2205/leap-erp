@@ -1433,3 +1433,268 @@ class FilterBarRenderTests(ComputeFixtureMixin, TestCase):
         body = resp.content.decode()
         # Month -> Quarter must keep both the region and the containing quarter.
         self.assertIn(f'?period=2026-Q2&amp;region={self.region.code}', body)
+
+
+class ActivityTabTests(ComputeFixtureMixin, TestCase):
+    """Team Activity as a tab on the KPI dashboard, rendered from the same
+    builder and the same table partial as the standalone page -- so one
+    person's figures cannot differ depending on which page you opened."""
+
+    def setUp(self):
+        super().setUp()
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.user = User.objects.create_user(
+            username='gm_tab', password='pw',
+            role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.client.force_login(self.user)
+
+    def test_default_tab_shows_the_kpi_tiles(self):
+        body = self.client.get(reverse('kpis:kpi_new')).content.decode()
+        self.assertIn('Sales &amp; Pipeline', body)
+        self.assertIn('Team Activity', body)          # the tab is offered
+
+    def test_activity_tab_shows_the_table_instead_of_the_tiles(self):
+        body = self.client.get(
+            reverse('kpis:kpi_new') + '?view=activity').content.decode()
+        self.assertNotIn('Sales &amp; Pipeline', body)
+        self.assertIn('Person', body)
+
+    def test_tabs_carry_the_region(self):
+        """Switching tab must not silently reset the filters."""
+        body = self.client.get(
+            reverse('kpis:kpi_new') + f'?region={self.region.code}').content.decode()
+        self.assertIn(f'?view=activity&amp;region={self.region.code}', body)
+
+    def test_the_filter_bar_keeps_you_on_the_activity_tab(self):
+        """Picking a region from the activity tab must not bounce you back to
+        the KPI tiles."""
+        body = self.client.get(
+            reverse('kpis:kpi_new') + '?view=activity').content.decode()
+        self.assertIn(f'region={self.region.code}&amp;view=activity', body)
+
+    def test_only_the_activity_tab_offers_all_time(self):
+        """A KPI is a rate over a window: an all-time revenue figure would
+        only ever grow, so the tiles deliberately do not offer it."""
+        kpis_body = self.client.get(reverse('kpis:kpi_new')).content.decode()
+        act_body = self.client.get(
+            reverse('kpis:kpi_new') + '?view=activity').content.decode()
+        bar_of = lambda b: b[b.index('kpi-filter mb-4'):b.index('kpi-filter mb-4') + 4000]
+        self.assertNotIn('All time', bar_of(kpis_body))
+        self.assertIn('All time', bar_of(act_body))
+
+    def test_an_unknown_view_falls_back_to_the_tiles(self):
+        body = self.client.get(
+            reverse('kpis:kpi_new') + '?view=nonsense').content.decode()
+        self.assertIn('Sales &amp; Pipeline', body)
+
+
+class ActivityPageFilterTests(ComputeFixtureMixin, TestCase):
+    """The standalone Team Activity page now uses the shared filter bar, and
+    scopes by region CODE like every other page rather than a raw Region pk."""
+
+    def setUp(self):
+        super().setUp()
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.user = User.objects.create_user(
+            username='gm_act', password='pw',
+            role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.client.force_login(self.user)
+
+    def test_page_renders_with_the_shared_bar(self):
+        resp = self.client.get(reverse('kpis:activity'))
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode()
+        self.assertIn('kpi-filter', body)
+        self.assertIn('All time', body)
+
+    def test_region_is_scoped_by_code(self):
+        resp = self.client.get(
+            reverse('kpis:activity') + f'?region={self.region.code}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context['selected_region'], self.region)
+
+    def test_an_unknown_region_code_falls_back_to_all_regions(self):
+        resp = self.client.get(reverse('kpis:activity') + '?region=NOPE')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(resp.context['selected_region'])
+
+    def test_the_old_select_controls_are_gone(self):
+        body = self.client.get(reverse('kpis:activity')).content.decode()
+        self.assertNotIn('onchange="this.form.submit()"', body)
+
+    def test_period_defaults_to_all_time(self):
+        """Activity is a lifetime review by default; that behaviour predates
+        the new bar and must survive it."""
+        resp = self.client.get(reverse('kpis:activity'))
+        self.assertEqual(resp.context['period'], 'all')
+        self.assertEqual(resp.context['period_picker']['kind'], 'all')
+
+    def test_leaving_all_time_lands_on_the_current_window(self):
+        """There is nowhere to "stay" when leaving the lifetime view, so each
+        granularity tab points at the current one."""
+        from kpis.views import _switch_period_kind
+        from kpis.periods import current_period
+        today = datetime.date(2026, 6, 17)
+        for kind in ('month', 'quarter', 'year'):
+            with self.subTest(kind=kind):
+                self.assertEqual(_switch_period_kind('all', kind, today),
+                                 current_period(kind, today))
+
+
+class DealsWonTests(ComputeFixtureMixin, TestCase):
+    """Deals Won: which deal, when it flipped to Won, and who flipped it.
+
+    Read from ProjectHistory, because the question is *when* and *by whom* and
+    the project's year/quarter tags carry neither."""
+
+    def setUp(self):
+        super().setUp()
+        self.closer = User.objects.create_user(username='closer', password='pw')
+        self.other = User.objects.create_user(username='other', password='pw')
+
+    def _win(self, ref, when, by=None, est='100000', from_status=None, region=None):
+        p = self._project(ref, self.won, est=est, region=region)
+        h = ProjectHistory.objects.create(
+            project=p, old_status=from_status or self.active,
+            new_status=self.won, changed_by=by or self.closer)
+        ProjectHistory.objects.filter(pk=h.pk).update(
+            changed_at=timezone.make_aware(when))
+        return p
+
+    def test_rows_carry_the_deal_the_moment_and_the_person(self):
+        from kpis.services import build_deals_won
+        self._win('ALPHA', datetime.datetime(2026, 5, 12, 10, 0), est='500000')
+        won = build_deals_won('2026-Q2', region=self.region)
+        self.assertEqual(won['count'], 1)
+        row = won['rows'][0]
+        self.assertEqual(row['project'].project_name, 'ALPHA')
+        self.assertEqual(row['won_at'].date(), datetime.date(2026, 5, 12))
+        self.assertEqual(row['won_by'], self.closer)
+        self.assertEqual(row['amount'], Decimal('500000'))
+
+    def test_only_transitions_inside_the_window_count(self):
+        from kpis.services import build_deals_won
+        self._win('APR', datetime.datetime(2026, 4, 3, 9, 0))
+        self._win('JUL', datetime.datetime(2026, 7, 3, 9, 0))
+        self.assertEqual(build_deals_won('2026-Q2', region=self.region)['count'], 1)
+        self.assertEqual(build_deals_won('2026-Q3', region=self.region)['count'], 1)
+        self.assertEqual(build_deals_won('2026', region=self.region)['count'], 2)
+
+    def test_a_deal_won_twice_counts_once_on_its_first_win(self):
+        """Won, reopened, won again is one deal won. Counting the correction
+        would inflate both the count and the value."""
+        from kpis.services import build_deals_won
+        p = self._win('REDO', datetime.datetime(2026, 5, 1, 9, 0), est='300000')
+        h = ProjectHistory.objects.create(
+            project=p, old_status=self.active, new_status=self.won,
+            changed_by=self.other)
+        ProjectHistory.objects.filter(pk=h.pk).update(
+            changed_at=timezone.make_aware(datetime.datetime(2026, 5, 20, 9, 0)))
+        won = build_deals_won('2026-Q2', region=self.region)
+        self.assertEqual(won['count'], 1)
+        self.assertEqual(won['total'], Decimal('300000'))
+        self.assertEqual(won['rows'][0]['won_at'].date(), datetime.date(2026, 5, 1))
+        self.assertEqual(won['rows'][0]['won_by'], self.closer)
+
+    def test_people_rollup_groups_by_who_marked_it(self):
+        from kpis.services import build_deals_won
+        self._win('A', datetime.datetime(2026, 5, 1, 9, 0), by=self.closer, est='100000')
+        self._win('B', datetime.datetime(2026, 5, 2, 9, 0), by=self.closer, est='200000')
+        self._win('C', datetime.datetime(2026, 5, 3, 9, 0), by=self.other, est='50000')
+        people = build_deals_won('2026-Q2', region=self.region)['people']
+        self.assertEqual(people[0]['user'], self.closer)
+        self.assertEqual(people[0]['count'], 2)
+        self.assertEqual(people[0]['amount'], Decimal('300000'))
+        self.assertEqual(people[1]['user'], self.other)
+
+    def test_untracked_counts_won_deals_with_no_transition(self):
+        """The health figure. ProjectHistory is written by one view only, so an
+        empty table has to be distinguishable from "nobody recorded it"."""
+        from kpis.services import build_deals_won
+        self._win('TRACKED', datetime.datetime(2026, 5, 1, 9, 0))
+        self._project('SILENT', self.won, est='400000')      # no history row
+        won = build_deals_won('2026-Q2', region=self.region)
+        self.assertEqual(won['count'], 1)
+        self.assertEqual(won['untracked'], 1)
+        self.assertEqual(won['won_now'], 2)
+
+    def test_a_deal_won_in_another_period_is_not_untracked(self):
+        """Untracked means "no transition ever recorded", not "not won in this
+        window" - otherwise every past win would look like a data gap."""
+        from kpis.services import build_deals_won
+        self._win('LASTYEAR', datetime.datetime(2025, 3, 1, 9, 0))
+        won = build_deals_won('2026-Q2', region=self.region)
+        self.assertEqual(won['count'], 0)
+        self.assertEqual(won['untracked'], 0)
+
+    def test_scoped_by_region(self):
+        from kpis.services import build_deals_won
+        self._win('MINE', datetime.datetime(2026, 5, 1, 9, 0), region=self.region)
+        self._win('THEIRS', datetime.datetime(2026, 5, 2, 9, 0), region=self.region2)
+        self.assertEqual(build_deals_won('2026-Q2', region=self.region)['count'], 1)
+        self.assertEqual(build_deals_won('2026-Q2')['count'], 2)
+
+    def test_total_agrees_with_the_shared_value_ladder(self):
+        """The rows must total what the KPI tiles would say for the same
+        deals, or the tab and the dashboard disagree about one number."""
+        from kpis.services import build_deals_won
+        from projects.views import _resolve_project_sales_value
+        a = self._win('A', datetime.datetime(2026, 5, 1, 9, 0), est='120000')
+        b = self._win('B', datetime.datetime(2026, 5, 2, 9, 0), est='340000')
+        expected = sum(
+            (_resolve_project_sales_value(p, list(p.costing_sheets.all()))['amount']
+             or Decimal('0')) for p in (a, b))
+        self.assertEqual(build_deals_won('2026-Q2', region=self.region)['total'],
+                         expected)
+
+
+class DealsWonTabTests(ComputeFixtureMixin, TestCase):
+    """The Deals Won tab on the KPI dashboard."""
+
+    def setUp(self):
+        super().setUp()
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.user = User.objects.create_user(
+            username='gm_won', password='pw',
+            role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.client.force_login(self.user)
+
+    def test_tab_renders_the_deal_rows(self):
+        p = self._project('ALPHA', self.won, est='500000')
+        h = ProjectHistory.objects.create(
+            project=p, old_status=self.active, new_status=self.won,
+            changed_by=self.user)
+        ProjectHistory.objects.filter(pk=h.pk).update(
+            changed_at=timezone.make_aware(datetime.datetime(2026, 5, 12, 10, 0)))
+        body = self.client.get(
+            reverse('kpis:kpi_new')
+            + '?view=won&period=2026-Q2&region=' + self.region.code).content.decode()
+        self.assertIn('ALPHA', body)
+        self.assertIn('Marked won by', body)
+        self.assertIn('Who closed them', body)
+
+    def test_an_empty_period_explains_itself(self):
+        """An empty table must not be mistaken for "we won nothing"."""
+        self._project('SILENT', self.won, est='400000')     # won, never logged
+        body = self.client.get(
+            reverse('kpis:kpi_new')
+            + '?view=won&period=2026-Q2&region=' + self.region.code).content.decode()
+        self.assertIn('No deals were marked won', body)
+        self.assertIn('no recorded transition', body)
+
+    def test_the_tab_is_offered_and_keeps_the_filters(self):
+        body = self.client.get(
+            reverse('kpis:kpi_new') + '?region=' + self.region.code).content.decode()
+        self.assertIn('Deals Won', body)
+        self.assertIn('?view=won&amp;period=', body)
+
+    def test_filter_bar_keeps_you_on_the_deals_won_tab(self):
+        body = self.client.get(
+            reverse('kpis:kpi_new') + '?view=won').content.decode()
+        self.assertIn('&amp;view=won', body)

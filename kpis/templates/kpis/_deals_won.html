@@ -1,0 +1,133 @@
+{% comment %} ============================================================
+   Deals Won — which deals, when they flipped to Won, and who flipped them.
+
+   Read from ProjectHistory rather than the project's year/quarter tags,
+   because the question is *when* and *by whom* and the tags carry neither.
+
+   The health line at the top is not decoration. ProjectHistory is written by
+   ProjectUpdateView.form_valid only, so a status changed by any other route
+   leaves no trace — and an empty table would otherwise be indistinguishable
+   from "we won nothing this period".
+   ============================================================ {% endcomment %}
+
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="border rounded p-3 h-100">
+      <div class="text-muted small text-uppercase">Deals won</div>
+      <div class="fs-3 fw-bold">{{ won.count }}</div>
+      <div class="text-muted small mt-1">in {{ data.period_label|default:period }}</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="border rounded p-3 h-100">
+      <div class="text-muted small text-uppercase">Value won</div>
+      <div class="fs-3 fw-bold">
+        {% if won.currency %}<span class="fs-6 fw-normal text-muted">{{ won.currency }}</span> {% endif %}{{ won.total|floatformat:0 }}
+      </div>
+      <div class="text-muted small mt-1">costing sheet, then actual, then estimate</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="border rounded p-3 h-100 {% if won.untracked %}border-warning{% endif %}">
+      <div class="text-muted small text-uppercase">Not recorded</div>
+      <div class="fs-3 fw-bold {% if won.untracked %}text-warning{% endif %}">{{ won.untracked }}</div>
+      <div class="text-muted small mt-1">
+        {% if won.untracked %}
+          of {{ won.won_now }} currently-won deals have no recorded transition,
+          so this table cannot see when or by whom they were won
+        {% else %}
+          every won deal has a recorded transition
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if won.people %}
+<div class="card mb-4">
+  <div class="card-header"><h6 class="mb-0"><i class="bi bi-person-check me-1"></i> Who closed them</h6></div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Person</th>
+          <th class="text-end">Deals</th>
+          <th class="text-end">Value</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in won.people %}
+        <tr>
+          <td class="fw-semibold">
+            {% if p.user %}{{ p.user.get_full_name|default:p.user.username }}
+            {% else %}<span class="text-muted fst-italic">not recorded</span>{% endif %}
+          </td>
+          <td class="text-end">{{ p.count }}</td>
+          <td class="text-end">{{ p.amount|floatformat:0 }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-header"><h6 class="mb-0"><i class="bi bi-trophy me-1"></i> Deals won</h6></div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Deal</th>
+          <th>Region</th>
+          <th>Owner</th>
+          <th>Won on</th>
+          <th>Marked won by</th>
+          <th>From</th>
+          <th class="text-end">Value</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in won.rows %}
+        <tr>
+          <td class="fw-semibold">{{ r.project.project_name }}</td>
+          <td class="text-muted">{{ r.region.name|default:"—" }}</td>
+          <td class="text-muted">
+            {% if r.owner %}{{ r.owner.get_full_name|default:r.owner.username }}{% else %}—{% endif %}
+          </td>
+          <td>{{ r.won_at|date:"d M Y" }}</td>
+          <td>
+            {% if r.won_by %}{{ r.won_by.get_full_name|default:r.won_by.username }}
+            {% else %}<span class="text-muted fst-italic">not recorded</span>{% endif %}
+          </td>
+          {% comment %} Which status it came from says whether the deal ran the
+          full course or was jumped straight to Won. {% endcomment %}
+          <td class="text-muted small">{{ r.from_status.name|default:"—" }}</td>
+          <td class="text-end">
+            {% if r.amount %}
+              {{ r.amount|floatformat:0 }}
+              {% if r.source and r.source != 'costing' %}
+              <span class="badge bg-secondary-subtle text-secondary-emphasis ms-1"
+                    title="Value came from {{ r.source }}, not a costing sheet">{{ r.source }}</span>
+              {% endif %}
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="7" class="text-center text-muted py-4">
+            No deals were marked won in this period.
+            {% if won.untracked %}
+            <div class="small mt-1">
+              {{ won.untracked }} deal{{ won.untracked|pluralize }} sit{{ won.untracked|pluralize:"s," }} in a won
+              status with no recorded transition — they may have been won here
+              and simply not logged.
+            </div>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
