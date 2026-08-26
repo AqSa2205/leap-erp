@@ -313,6 +313,20 @@ def _cycle_sheet(sheets):
     return max(sheets, key=lambda s: (rank(s), s.updated_at))
 
 
+def _earliest_sheet_for(sheets, actual_field):
+    """The sheet that reached `actual_field` first, or None if none did.
+
+    A project can carry more than one costing sheet, and a milestone may have
+    been reached on any of them. Taking the earliest matches how the RFQ
+    Activity tab reads a handover: the work happened the first time it
+    happened, and a later revision does not undo it.
+    """
+    done = [s for s in sheets if getattr(s, actual_field, None)]
+    if not done:
+        return None
+    return min(done, key=lambda s: getattr(s, actual_field))
+
+
 def build_deadline_reliability(period, region=None):
     """Who hits their dates, per person and per milestone.
 
@@ -365,7 +379,7 @@ def build_deadline_reliability(period, region=None):
     overdue_open = 0
 
     for project in projects:
-        sheet = _cycle_sheet(list(project.costing_sheets.all()))
+        sheets = list(project.costing_sheets.all())
         for key, _label, deadline_field, actual_field, actor_field in DEADLINE_MILESTONES:
             deadline = getattr(project, deadline_field, None)
             if not deadline:
@@ -373,6 +387,13 @@ def build_deadline_reliability(period, region=None):
             if not (start <= deadline < end):
                 continue
 
+            # EARLIEST across every sheet on the project, not just the
+            # furthest-along one. A project can carry several sheets and the
+            # milestone may have been reached on any of them - reading only
+            # the cycle sheet made this disagree with the RFQ Activity tab,
+            # which scans them all: one tab could say a BOM went to sales
+            # while the other called the same project overdue.
+            sheet = _earliest_sheet_for(sheets, actual_field)
             actual = getattr(sheet, actual_field, None) if sheet else None
             bucket = per_milestone[key]
 
@@ -385,7 +406,13 @@ def build_deadline_reliability(period, region=None):
                 continue
 
             actor = getattr(sheet, actor_field, None)
-            actual_date = actual.date() if hasattr(actual, 'date') else actual
+            # localtime, not .date(): the stamp is stored UTC and Riyadh is
+            # UTC+3, so anything finished after 21:00 local reads as the
+            # PREVIOUS day in UTC and scores a day more punctual than it was.
+            # working_days_between() in costing/models.py converts the same
+            # way, so a working day means one thing across the pipeline.
+            actual_date = (timezone.localtime(actual).date()
+                           if hasattr(actual, 'date') else actual)
             variance = (deadline - actual_date).days
             on_time = variance >= 0
 
