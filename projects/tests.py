@@ -1906,3 +1906,109 @@ class InlineAttachmentAlignmentTests(TestCase):
             for i, a in enumerate(attachments)
         }
         self.assertEqual(resolved, {'quotation.pdf': 'client_rfq'})
+
+
+class HiddenContainerNestingTests(TestCase):
+    """Nothing may be trapped inside the Commercial Pipeline form's
+    ``display:none`` Lost-reason container except the Lost fields themselves.
+
+    This regression shipped once and survived two releases unnoticed. The
+    Opportunity Lost card was added with its closing ``</div>`` in the wrong
+    place, so the hidden wrapper swallowed the five fields that followed it —
+    Customer, End User, Project Stage, Priority and Contact With were
+    invisible on every project whose status was not a Lost one, which is
+    almost all of them. A sales rep could not set a customer.
+
+    It went unnoticed because nothing asserted the *structure* of the form:
+    the fields were present in the HTML and in the POST handler, so every
+    existing test passed. Only a human opening the page could see it, and the
+    field that gives it away (Customer) is one people fill in early and rarely
+    revisit.
+
+    So this parses the rendered form and checks nesting directly, rather than
+    checking a field merely exists."""
+
+    def setUp(self):
+        from accounts.permissions import seed_default_permissions
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        Region.objects.get_or_create(name='KSA', code='LNA',
+                                     defaults={'currency': 'SAR'})
+        ProjectStatus.objects.get_or_create(name='Open',
+                                            defaults={'category': 'active'})
+        self.user = User.objects.create_user(
+            username='nest_probe', password='pw',
+            role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.client.force_login(self.user)
+
+    # Fields that must NEVER be inside the hidden container.
+    ALWAYS_VISIBLE = ['customer', 'end_user', 'project_stage', 'priority',
+                      'contact_with']
+    # Fields that SHOULD be inside it — the container is theirs.
+    LOST_ONLY = ['lost_reason', 'lost_comment']
+
+    def _fields_inside_hidden_row(self, html):
+        """Names of form fields nested inside <div id="lostReasonRow">."""
+        from html.parser import HTMLParser
+
+        class Nesting(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.depth = 0
+                self.opened_at = None
+                self.inside = []
+
+            def handle_starttag(self, tag, attrs):
+                a = dict(attrs)
+                if tag == 'div':
+                    self.depth += 1
+                    if a.get('id') == 'lostReasonRow' and self.opened_at is None:
+                        self.opened_at = self.depth
+                elif tag in ('input', 'select', 'textarea'):
+                    if self.opened_at is not None and a.get('name'):
+                        self.inside.append(a['name'])
+
+            def handle_endtag(self, tag):
+                if tag == 'div':
+                    if self.opened_at is not None and self.depth == self.opened_at:
+                        self.opened_at = None
+                    self.depth -= 1
+
+        parser = Nesting()
+        parser.feed(html)
+        return parser.inside
+
+    def _form_html(self):
+        resp = self.client.get(reverse('projects:create'))
+        self.assertEqual(resp.status_code, 200)
+        return resp.content.decode()
+
+    def test_no_ordinary_field_is_trapped_in_the_hidden_row(self):
+        inside = self._fields_inside_hidden_row(self._form_html())
+        trapped = [f for f in self.ALWAYS_VISIBLE if f in inside]
+        self.assertEqual(
+            trapped, [],
+            f'These fields are inside the display:none Lost-reason container '
+            f'and are therefore invisible on any non-Lost project: {trapped}. '
+            f'A closing </div> is in the wrong place.')
+
+    def test_the_lost_fields_are_still_inside_it(self):
+        """The other half of the invariant: moving the fields out must not
+        move the Lost card out with them, or the show/hide toggle stops
+        governing anything."""
+        inside = self._fields_inside_hidden_row(self._form_html())
+        for field in self.LOST_ONLY:
+            with self.subTest(field=field):
+                self.assertIn(
+                    field, inside,
+                    f'{field} must stay inside lostReasonRow — the JS toggle '
+                    f'only shows/hides that container.')
+
+    def test_the_hidden_container_still_exists_and_is_hidden_by_default(self):
+        """If the container were ever removed or left visible, the Lost fields
+        would flash into view on every project on page load."""
+        html = self._form_html()
+        self.assertIn('id="lostReasonRow"', html)
+        row = html.split('id="lostReasonRow"', 1)[1][:200]
+        self.assertIn('display:none', row.replace(' ', ''))

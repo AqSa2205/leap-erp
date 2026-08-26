@@ -108,6 +108,14 @@
                         </div>
                     </div>
                 </div>
+            </div>
+
+            <!-- Customer, stage, priority — always visible; these were
+                 accidentally nested inside id="lostReasonRow" above (a
+                 style="display:none" container meant only for the Lost
+                 reason/comment card), which hid every field below it
+                 unless the status happened to be a Lost one. -->
+            <div class="row mb-4">
                 <div class="col-md-6 mb-3">
                     <label class="form-label">Customer</label>
                     {{ form.customer }}

@@ -178,6 +178,21 @@
 <script>
     const fileInput = document.querySelector('input[type="file"]');
     const uploadArea = document.querySelector('.upload-area');
+    const nameInput = document.getElementById('id_name');
+
+    // Document Name is a required field with nothing pre-filled on the
+    // CREATE form — easy to pick a file, skip typing a name, and have the
+    // browser silently block the submit (looks like "the button does
+    // nothing"). Auto-fill it from the chosen file, same as the bulk-upload
+    // flow already does server-side.
+    //
+    // This template is also reused by DocumentUpdateView (edit an existing
+    // document, optionally replacing its file) — there this field starts
+    // pre-filled with the document's current name. Checking the field's
+    // value AT THE MOMENT a file is chosen (rather than "has the user
+    // typed into it this session") gets both cases right with one rule:
+    // empty → fill it in; already has something (typed, or pre-filled from
+    // an existing document) → leave it alone.
 
     if (fileInput && uploadArea) {
         // Replacing innerHTML drops the FileList because file inputs can't
@@ -199,6 +214,9 @@
                     <small class="text-muted">${fileSize} MB</small>
                 `;
                 defaults.forEach(el => el.style.display = 'none');
+                if (nameInput && !nameInput.value.trim()) {
+                    nameInput.value = fileName;
+                }
             } else {
                 preview.innerHTML = '';
                 defaults.forEach(el => el.style.display = '');
