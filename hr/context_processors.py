@@ -1,4 +1,5 @@
-"""Sidebar pending-count badges — Leave Requests and Team Exceptions.
+"""Sidebar pending-count badges — Leave Requests, Team Exceptions and the
+Pending Approvals inbox.
 Reuses the exact querysets the real pages themselves filter by, so a badge
 number can never drift from what the page shows when you open it."""
 from .models import LeaveRequest, AttendanceException
@@ -16,6 +17,17 @@ def pending_counts(request):
         ctx['leave_requests_pending_count'] = (
             LeaveRequest.objects.filter(status='pending').count()
             + LeaveRevokeRequest.objects.filter(status='pending').count())
+
+    # The Pending Approvals inbox. Built by the same function the page uses,
+    # for the same reason as everything else here - a badge that counted
+    # differently from the page would send people looking for work that is not
+    # there. The sources it walks are already narrowed to unreleased or
+    # undecided rows, so this stays a handful of indexed lookups.
+    from .approvals import pending_approvals_count
+    try:
+        ctx['my_approvals_count'] = pending_approvals_count(user)
+    except Exception:      # noqa: BLE001 - a badge must never break every page
+        ctx['my_approvals_count'] = 0
 
     if can_view_team_exceptions(user):
         from .models import AttendanceExceptionRevokeRequest
