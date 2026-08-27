@@ -63,6 +63,60 @@
           </div>
         </div>
         <div class="card-body">
+          {% comment %} The same totals the Attendance Register ranks people
+          on, built by the same function — so what you see about yourself here
+          and what HR sees about you there cannot be two different numbers.
+          {% endcomment %}
+          <div class="row g-2 mb-3">
+            <div class="col-4 col-md">
+              <div class="border rounded p-2 text-center h-100">
+                <div class="text-muted" style="font-size:.7rem;">ON TIME</div>
+                <div class="fs-5 fw-bold">{{ my_attendance_totals.on_time }}</div>
+              </div>
+            </div>
+            <div class="col-4 col-md">
+              <div class="border rounded p-2 text-center h-100">
+                <div class="text-muted" style="font-size:.7rem;">LATE</div>
+                <div class="fs-5 fw-bold {% if my_attendance_totals.late %}text-warning{% endif %}">{{ my_attendance_totals.late }}</div>
+              </div>
+            </div>
+            <div class="col-4 col-md">
+              <div class="border rounded p-2 text-center h-100">
+                <div class="text-muted" style="font-size:.7rem;">ABSENT</div>
+                <div class="fs-5 fw-bold {% if my_attendance_totals.absent %}text-danger{% endif %}">{{ my_attendance_totals.absent }}</div>
+              </div>
+            </div>
+            <div class="col-6 col-md">
+              {% comment %} No assessed day is no rate — being on leave all
+              month is not a failed month. {% endcomment %}
+              <div class="border rounded p-2 text-center h-100"
+                   title="On-time share of the days your arrival was assessed. Leave, holidays, weekends and WFH carry no check-in time.">
+                <div class="text-muted" style="font-size:.7rem;">ON-TIME RATE</div>
+                <div class="fs-5 fw-bold">
+                  {% if my_attendance_totals.rate is not None %}{{ my_attendance_totals.rate }}%{% else %}<span class="text-muted fw-normal">—</span>{% endif %}
+                </div>
+              </div>
+            </div>
+            <div class="col-6 col-md">
+              <div class="border rounded p-2 text-center h-100 {% if my_attendance_totals.warnings %}border-danger{% endif %}"
+                   title="A warning is {{ late_warning_threshold }} lates in a calendar month.">
+                <div class="text-muted" style="font-size:.7rem;">WARNINGS</div>
+                <div class="fs-5 fw-bold {% if my_attendance_totals.warnings %}text-danger{% endif %}">
+                  {% if my_attendance_totals.warnings %}{{ my_attendance_totals.warnings }}{% else %}<span class="text-muted fw-normal">—</span>{% endif %}
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="text-muted small mb-3">
+            Your rate counts only days your arrival was assessed — leave,
+            holidays, weekends and working from home carry no check-in time.
+            A warning is {{ late_warning_threshold }} lates in one calendar month.
+            {% if my_attendance_totals.late %}
+            If a day is marked late in error, raise it below and it stops
+            counting against you once approved.
+            {% endif %}
+          </p>
+
           {% if attendance_summary %}
           <div class="d-flex flex-wrap gap-2 mb-3">
             {% for status, count in attendance_summary.items %}
@@ -569,14 +623,11 @@
               {% for e in my_attendance_exceptions %}
               <tr>
                 <td>{{ e.event_date }} {{ e.event_start_time|time:"H:i" }}</td>
-                <td>
-                  {{ e.get_reason_category_display }}{% if e.reason_category == 'other' %} — {{ e.custom_reason }}{% endif %}
-                  {% if e.is_backdated %}
-                  <div class="small text-muted" data-bs-toggle="tooltip" title="This event happened before the exception was submitted">
-                    <i class="bi bi-clock-history"></i> Backdated
-                  </div>
-                  {% endif %}
-                </td>
+                {% comment %} Same partial the manager queue uses, so an
+                employee and their manager read the same record of why a day
+                was excused - including the decision note, which the employee
+                could not see at all before. {% endcomment %}
+                <td>{% include 'hr/_exception_reason.html' with exc=e %}</td>
                 <td>
                   <div class="d-flex flex-column gap-2 py-1">
                     {% if e.status == 'approved' %}<span class="badge bg-success align-self-start">Approved</span>

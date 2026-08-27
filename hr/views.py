@@ -630,6 +630,14 @@ def my_profile(request):
             summary[rec.status] = summary.get(rec.status, 0) + 1
         context['attendance_summary'] = summary
         context['attendance_month'] = month_start
+        # The same totals the Attendance Register ranks people on, for this
+        # employee's own month. Built by the same function, so what someone
+        # sees about themselves here and what HR sees about them there can
+        # never be two different numbers.
+        from hr.attendance_summary import build_attendance_summary
+        context['my_attendance_totals'] = build_attendance_summary(
+            [emp], month_start, month_end)[emp.pk]
+        context['late_warning_threshold'] = _late_warning_threshold()
         # Day-by-day list for the full month view + PDF export.
         from hr.models import AttendanceSettings, WorkingDay
         weekend_days = AttendanceSettings.load().weekend_day_set()
@@ -774,6 +782,40 @@ def build_attendance_pdf(emp, month_start, month_end):
     styles = getSampleStyleSheet()
     elements = [Paragraph(f'{emp.full_name} - Attendance ({month_start.strftime("%B %Y")})', styles['Title'])]
     reason_style = ParagraphStyle('reason', parent=styles['Normal'], fontSize=8, leading=10)
+
+    # The same totals My Profile and the Attendance Register show, from the
+    # same function. This PDF is also what the automatic late-threshold email
+    # attaches, so it is often the first place someone reads their own figures
+    # - it must not be the one place they are computed differently.
+    from hr.attendance_summary import build_attendance_summary
+    from hr.models import LATE_WARNING_THRESHOLD
+    totals = build_attendance_summary([emp], month_start, month_end)[emp.pk]
+    rate = f"{totals['rate']}%" if totals['rate'] is not None else '-'
+    summary_style = ParagraphStyle('sum', parent=styles['Normal'], fontSize=8,
+                                   leading=10, textColor=colors.HexColor('#555555'))
+    summary = Table(
+        [['On time', 'Late', 'Absent', 'On-time rate', 'Warnings'],
+         [str(totals['on_time']), str(totals['late']), str(totals['absent']),
+          rate, str(totals['warnings'])]],
+        colWidths=[89, 89, 89, 89, 89])
+    summary.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F4E79')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    elements.append(summary)
+    elements.append(Paragraph(
+        'The on-time rate counts only days an arrival was assessed - leave, '
+        'holidays, weekends and working from home carry no check-in time. '
+        f'A warning is {LATE_WARNING_THRESHOLD} lates in one calendar month. '
+        'If a day below is marked Late in error, raise a query from My Profile.',
+        summary_style))
+    elements.append(Paragraph('&nbsp;', summary_style))
 
     data = [['Date', 'Day', 'Status', 'Check In', 'Check Out', 'Reason']]
     bg_commands = []
@@ -2844,6 +2886,13 @@ def attendance_grid(request):
         'day': day, 'rows': rows, 'location': location})
 
 
+def _late_warning_threshold():
+    """Lates in a month that earn a warning - read from the model so the
+    register's explanation cannot drift from the rule that sends them."""
+    from hr.models import LATE_WARNING_THRESHOLD
+    return LATE_WARNING_THRESHOLD
+
+
 @login_required
 def attendance_settings(request):
     if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
@@ -2902,7 +2951,18 @@ def attendance_matrix(request):
         location = 'office'
         emp_qs = emp_qs.exclude(work_location='site')
     employees = list(emp_qs.order_by('full_name'))
+    # Filter bar: which people to show, and how to rank them. Applied before
+    # build_matrix so the grid draws only the rows that survive, in order.
+    from hr.attendance_summary import (
+        apply_register_filters, resolve_register_filters,
+        SHOW_CHOICES, ORDER_CHOICES,
+    )
+    show, order = resolve_register_filters(request.GET)
+    employees, totals, filter_counts = apply_register_filters(
+        employees, start, end, show, order)
     days, rows, weekend_dates = build_matrix(employees, start, end, with_weekend_dates=True)
+    for row in rows:
+        row['totals'] = totals[row['employee'].pk]
     prev_anchor = start - timedelta(days=1)
     next_anchor = end + timedelta(days=1)
     return render(request, 'hr/attendance_matrix.html', {
@@ -2912,6 +2972,10 @@ def attendance_matrix(request):
         'today': timezone.now().date(),
         'leave_types': LeaveType.objects.filter(is_active=True).order_by('name'),
         'weekend_dates': weekend_dates,
+        'show': show, 'order': order,
+        'show_choices': SHOW_CHOICES, 'order_choices': ORDER_CHOICES,
+        'filter_counts': filter_counts,
+        'late_warning_threshold': _late_warning_threshold(),
     })
 
 
@@ -2936,6 +3000,12 @@ def attendance_matrix_export_excel(request):
         location = 'office'
         emp_qs = emp_qs.exclude(work_location='site')
     employees = list(emp_qs.order_by('full_name'))
+    # Same filter bar as the register: an export that quietly ignored it would
+    # hand back a different population from the one on screen.
+    from hr.attendance_summary import apply_register_filters, resolve_register_filters
+    show, order = resolve_register_filters(request.GET)
+    employees, _totals, _counts = apply_register_filters(
+        employees, start, end, show, order)
     days, rows = build_matrix(employees, start, end)
 
     status_labels = {'': '-', 'leave': 'L', 'holiday': 'H', 'weekend': 'WE', 'wfh': 'WFH', 'present': 'P', 'absent': 'A'}
@@ -3067,6 +3137,12 @@ def attendance_matrix_export_pdf(request):
         location = 'office'
         emp_qs = emp_qs.exclude(work_location='site')
     employees = list(emp_qs.order_by('full_name'))
+    # Same filter bar as the register: an export that quietly ignored it would
+    # hand back a different population from the one on screen.
+    from hr.attendance_summary import apply_register_filters, resolve_register_filters
+    show, order = resolve_register_filters(request.GET)
+    employees, _totals, _counts = apply_register_filters(
+        employees, start, end, show, order)
     days, rows = build_matrix(employees, start, end)
 
     status_labels = {'': '-', 'leave': 'L', 'holiday': 'H', 'weekend': 'WE', 'wfh': 'WFH', 'present': 'P', 'absent': 'A'}

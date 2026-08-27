@@ -15,12 +15,12 @@
     <!-- Office / Site tabs -->
     <ul class="nav nav-tabs mb-3">
         <li class="nav-item">
-            <a class="nav-link {% if location == 'office' %}active{% endif %}" href="?period={{ period }}&date={{ anchor|date:'Y-m-d' }}&location=office">
+            <a class="nav-link {% if location == 'office' %}active{% endif %}" href="?period={{ period }}&date={{ anchor|date:'Y-m-d' }}&location=office&show={{ show }}&order={{ order }}">
                 <i class="bi bi-building me-1"></i>Office
             </a>
         </li>
         <li class="nav-item">
-            <a class="nav-link {% if location == 'site' %}active{% endif %}" href="?period={{ period }}&date={{ anchor|date:'Y-m-d' }}&location=site">
+            <a class="nav-link {% if location == 'site' %}active{% endif %}" href="?period={{ period }}&date={{ anchor|date:'Y-m-d' }}&location=site&show={{ show }}&order={{ order }}">
                 <i class="bi bi-geo-alt me-1"></i>Site
             </a>
         </li>
@@ -29,18 +29,18 @@
     <div class="card mb-3"><div class="card-body py-2 d-flex flex-wrap gap-2 align-items-center">
         <div class="btn-group">
             <a class="btn btn-sm {% if period == 'week' %}btn-primary{% else %}btn-outline-primary{% endif %}"
-               href="?period=week&date={{ anchor|date:'Y-m-d' }}&location={{ location }}">Week</a>
+               href="?period=week&date={{ anchor|date:'Y-m-d' }}&location={{ location }}&show={{ show }}&order={{ order }}">Week</a>
             <a class="btn btn-sm {% if period == 'month' %}btn-primary{% else %}btn-outline-primary{% endif %}"
-               href="?period=month&date={{ anchor|date:'Y-m-d' }}&location={{ location }}">Month</a>
+               href="?period=month&date={{ anchor|date:'Y-m-d' }}&location={{ location }}&show={{ show }}&order={{ order }}">Month</a>
         </div>
         <div class="btn-group ms-2">
-            <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ prev_anchor|date:'Y-m-d' }}&location={{ location }}">&lsaquo; Prev</a>
-            <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ today|date:'Y-m-d' }}&location={{ location }}">Today</a>
-            <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ next_anchor|date:'Y-m-d' }}&location={{ location }}">Next &rsaquo;</a>
+            <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ prev_anchor|date:'Y-m-d' }}&location={{ location }}&show={{ show }}&order={{ order }}">&lsaquo; Prev</a>
+            <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ today|date:'Y-m-d' }}&location={{ location }}&show={{ show }}&order={{ order }}">Today</a>
+            <a class="btn btn-sm btn-outline-secondary" href="?period={{ period }}&date={{ next_anchor|date:'Y-m-d' }}&location={{ location }}&show={{ show }}&order={{ order }}">Next &rsaquo;</a>
         </div>
         <div class="btn-group ms-2">
-            <a class="btn btn-sm btn-outline-success" href="{% url 'hr:attendance_matrix_export_excel' %}?period={{ period }}&date={{ anchor|date:'Y-m-d' }}&location={{ location }}"><i class="bi bi-file-earmark-excel"></i> Excel</a>
-            <a class="btn btn-sm btn-outline-danger" href="{% url 'hr:attendance_matrix_export_pdf' %}?period={{ period }}&date={{ anchor|date:'Y-m-d' }}&location={{ location }}" target="_blank"><i class="bi bi-file-earmark-pdf"></i> PDF</a>
+            <a class="btn btn-sm btn-outline-success" href="{% url 'hr:attendance_matrix_export_excel' %}?period={{ period }}&date={{ anchor|date:'Y-m-d' }}&location={{ location }}&show={{ show }}&order={{ order }}"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+            <a class="btn btn-sm btn-outline-danger" href="{% url 'hr:attendance_matrix_export_pdf' %}?period={{ period }}&date={{ anchor|date:'Y-m-d' }}&location={{ location }}&show={{ show }}&order={{ order }}" target="_blank"><i class="bi bi-file-earmark-pdf"></i> PDF</a>
         </div>
         <div class="ms-auto d-flex align-items-center gap-2">
             <label for="leaveType" class="small text-muted mb-0">Mark-leave type</label>
@@ -50,11 +50,45 @@
         </div>
     </div></div>
 
+    <div class="card mb-3"><div class="card-body py-2 d-flex flex-wrap gap-2 align-items-center">
+        {% comment %} Counts live on the chips so a filter that would empty the
+        register says so before it is clicked. {% endcomment %}
+        <span class="small text-muted me-1">Show</span>
+        <div class="btn-group">
+            {% for key, label in show_choices %}
+            <a class="btn btn-sm {% if show == key %}btn-primary{% else %}btn-outline-primary{% endif %}"
+               href="?period={{ period }}&date={{ anchor|date:'Y-m-d' }}&location={{ location }}&show={{ key }}&order={{ order }}">
+                {{ label }}
+                <span class="badge {% if show == key %}bg-light text-dark{% else %}bg-secondary{% endif %} ms-1">{% if key == 'all' %}{{ filter_counts.all }}{% elif key == 'late' %}{{ filter_counts.late }}{% else %}{{ filter_counts.absent }}{% endif %}</span>
+            </a>
+            {% endfor %}
+        </div>
+
+        <span class="small text-muted ms-3 me-1">Order by</span>
+        <div class="btn-group">
+            {% for key, label in order_choices %}
+            <a class="btn btn-sm {% if order == key %}btn-dark{% else %}btn-outline-secondary{% endif %}"
+               href="?period={{ period }}&date={{ anchor|date:'Y-m-d' }}&location={{ location }}&show={{ show }}&order={{ key }}">{{ label }}</a>
+            {% endfor %}
+        </div>
+
+        <span class="ms-auto small text-muted">
+            Punctuality is scored on days an arrival was assessed — leave,
+            holidays, weekends and WFH carry no check-in time.
+            A warning is {{ late_warning_threshold }} lates in a calendar month.
+        </span>
+    </div></div>
+
     <div class="card"><div class="card-body p-0"><div class="table-responsive">
         <table class="table table-bordered table-sm align-middle mb-0" style="white-space:nowrap;">
             <thead class="table-light">
                 <tr>
                     <th class="ps-3" style="position:sticky;left:0;background:#f8f9fa;z-index:2;">Employee</th>
+                    <th class="text-center small" title="Days you were assessed and arrived on time">On time</th>
+                    <th class="text-center small">Late</th>
+                    <th class="text-center small">Absent</th>
+                    <th class="text-center small" title="On-time share of the days an arrival was assessed">Rate</th>
+                    <th class="text-center small" title="Months in this period with {{ late_warning_threshold }} or more lates">Warnings</th>
                     {% for d in days %}
                     <th class="text-center small {% if d in weekend_dates %}table-secondary{% endif %}">
                         {{ d|date:"D" }}<br>{{ d|date:"j" }}
@@ -66,6 +100,17 @@
                 {% for row in rows %}
                 <tr>
                     <td class="ps-3 fw-semibold" style="position:sticky;left:0;background:#fff;z-index:1;">{{ row.employee.full_name }}</td>
+                    <td class="text-center">{{ row.totals.on_time }}</td>
+                    <td class="text-center {% if row.totals.late %}text-warning fw-semibold{% endif %}">{{ row.totals.late|default_if_none:0 }}</td>
+                    <td class="text-center {% if row.totals.absent %}text-danger fw-semibold{% endif %}">{{ row.totals.absent|default_if_none:0 }}</td>
+                    {% comment %} No rate at all is not a bad rate — somebody
+                    on leave all period has nothing to be judged on. {% endcomment %}
+                    <td class="text-center fw-semibold">
+                        {% if row.totals.rate is not None %}{{ row.totals.rate }}%{% else %}<span class="text-muted fw-normal">—</span>{% endif %}
+                    </td>
+                    <td class="text-center {% if row.totals.warnings %}text-danger fw-bold{% endif %}">
+                        {% if row.totals.warnings %}{{ row.totals.warnings }}{% else %}<span class="text-muted">—</span>{% endif %}
+                    </td>
                     {% for c in row.cells %}
                     <td class="text-center attend-cell {% if c.locked %}table-secondary{% endif %}"
                         data-emp="{{ row.employee.pk }}" data-date="{{ c.date|date:'Y-m-d' }}"
@@ -76,7 +121,7 @@
                     {% endfor %}
                 </tr>
                 {% empty %}
-                <tr><td colspan="{{ days|length|add:1 }}" class="text-center text-muted py-4">No active employees.</td></tr>
+                <tr><td colspan="{{ days|length|add:6 }}" class="text-center text-muted py-4">No employees match this filter.</td></tr>
                 {% endfor %}
             </tbody>
         </table>

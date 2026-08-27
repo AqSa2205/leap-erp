@@ -165,15 +165,8 @@
             <td class="small text-muted">{{ exc.employee.main_manager.full_name|default:"—" }}</td>
             <td class="small">{{ exc.event_date }} {{ exc.event_start_time|time:"H:i" }}</td>
             <td class="small">
-              {{ exc.get_reason_category_display }}
-              {% if exc.status == 'expired' %}<span class="badge bg-secondary ms-1">Expired</span>{% endif %}
-              {% if exc.is_backdated %}
-              <span class="badge bg-light text-dark border ms-1" data-bs-toggle="tooltip" title="This event happened before the exception was submitted">
-                <i class="bi bi-clock-history"></i> Backdated
-              </span>
-              {% endif %}
-              {% if exc.reason_category == 'other' and exc.custom_reason %}<div class="text-muted">{{ exc.custom_reason }}</div>{% endif %}
-              {% if exc.employee_comment %}<div class="text-muted fst-italic">"{{ exc.employee_comment }}"</div>{% endif %}
+              {% if exc.status == 'expired' %}<span class="badge bg-secondary mb-1">Expired</span>{% endif %}
+              {% include 'hr/_exception_reason.html' %}
             </td>
             <td>
               {% if exc.event_has_started %}
@@ -307,7 +300,7 @@
       </div>
       <div class="table-responsive" style="max-height: 480px; overflow-y: auto;">
       <table class="table table-sm mb-0">
-        <thead class="table-light"><tr><th>Employee</th><th>Manager</th><th>Event</th><th>Status</th><th>Decided At</th></tr></thead>
+        <thead class="table-light"><tr><th>Employee</th><th>Manager</th><th>Event</th><th>Reason</th><th>Status</th><th>Decided At</th></tr></thead>
         <tbody>
           {% for exc in decided_exceptions %}
           <tr>
@@ -321,6 +314,9 @@
             </td>
             <td class="small text-muted">{{ exc.employee.main_manager.full_name|default:"—" }}</td>
             <td class="small">{{ exc.event_date }} {{ exc.event_start_time|time:"H:i" }}</td>
+            {% comment %} The reason the day was excused. Missing here until
+            now, so an approved exception became an unexplained one. {% endcomment %}
+            <td>{% include 'hr/_exception_reason.html' %}</td>
             <td>
               {% if exc.status == 'approved' %}<span class="badge bg-success">Approved</span>
               {% elif exc.status == 'rejected' %}<span class="badge bg-danger">Rejected</span>
@@ -378,7 +374,7 @@
             </td>
           </tr>
           {% empty %}
-          <tr><td colspan="5" class="text-center text-muted py-3">No decided requests yet.</td></tr>
+          <tr><td colspan="6" class="text-center text-muted py-3">No decided requests yet.</td></tr>
           {% endfor %}
         </tbody>
       </table>
