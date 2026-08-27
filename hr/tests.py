@@ -10071,3 +10071,231 @@ class SelfWFHViewTests(TestCase):
         body = self.client.get(reverse('hr:my_profile')).content.decode()
         self.assertIn('At home in Riyadh', body)
         self.assertIn('Withdraw', body)
+
+
+class PendingApprovalsTests(TestCase):
+    """The Pending Approvals inbox on My Profile.
+
+    The risk in gathering approvals from half the system into one list is that
+    the list becomes a second opinion about who may decide what. So the thing
+    worth testing is not that rows appear - it is that a row never appears for
+    somebody the real page would turn away."""
+
+    def setUp(self):
+        from accounts.models import Role, User
+        self.approver_user = _login_user('pa_approver')
+        self.approver = make_employee(iqama='PA-MGR', name='Pending Manager')
+        self.approver.user = self.approver_user
+        self.approver.save(update_fields=['user'])
+
+        self.report = make_employee(iqama='PA-REP', name='Pending Report')
+        self.report.main_manager = self.approver
+        self.report.save(update_fields=['main_manager'])
+        self.report_user = _login_user('pa_report')
+        self.report.user = self.report_user
+        self.report.save(update_fields=['user'])
+
+        self.stranger_user = _login_user('pa_stranger')
+        self.stranger = make_employee(iqama='PA-STR', name='Pending Stranger')
+        self.stranger.user = self.stranger_user
+        self.stranger.save(update_fields=['user'])
+
+    def _groups(self, user):
+        from hr.approvals import pending_approvals
+        return {g['key']: g for g in pending_approvals(user)}
+
+    def _exception_for(self, employee):
+        return _submit_aex(
+            employee=employee, event_date=_date(2026, 7, 20),
+            event_start_time=_time(9, 0), reason_category='site_visit',
+            created_by=self.approver_user)
+
+    # ── it shows what is genuinely yours ────────────────────────────────────
+
+    def test_a_managers_own_reports_exception_appears(self):
+        self._exception_for(self.report)
+        groups = self._groups(self.approver_user)
+        self.assertIn('attendance_exceptions', groups)
+        self.assertEqual(
+            [i['title'] for i in groups['attendance_exceptions']['items']],
+            ['Pending Report'])
+
+    def test_it_does_not_show_somebody_elses_queue(self):
+        """A stranger to that employee must not be handed their decision."""
+        self._exception_for(self.report)
+        self.assertNotIn('attendance_exceptions', self._groups(self.stranger_user))
+
+    def test_your_own_request_is_not_yours_to_approve(self):
+        """The Team Exceptions queue excludes the viewer's own request rather
+        than merely disabling the buttons, so the inbox must too - otherwise it
+        sends someone to a page that will not show it.
+
+        Set up through a secondary-manager self-assignment, which is the shape
+        that actually reaches this branch: Employee.clean() guards against
+        main-manager cycles but says in so many words that secondary-manager
+        self-assignment is out of its scope, so nothing stops the data
+        existing.
+        """
+        self.approver.secondary_managers.add(self.approver)
+        self._exception_for(self.approver)
+        groups = self._groups(self.approver_user)
+        titles = [i['title'] for g in groups.values() for i in g['items']]
+        self.assertNotIn('Pending Manager', titles)
+
+    def test_a_leave_request_reaches_its_named_approver(self):
+        from hr.models import LeaveRequest, LeaveRequestApproval
+        annual, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+        req = LeaveRequest.objects.create(
+            employee=self.report, leave_type=annual,
+            start_date=_date(2026, 7, 1), end_date=_date(2026, 7, 2),
+            days=Decimal('2'), status='pending', created_by=self.report_user)
+        LeaveRequestApproval.objects.create(
+            leave_request=req, approver=self.approver_user, decision='pending')
+        groups = self._groups(self.approver_user)
+        self.assertIn('leave', groups)
+        self.assertEqual(groups['leave']['count'], 1)
+
+    def test_seeing_the_leave_queue_is_not_the_same_as_approving_a_request(self):
+        """Keyed off the approval row, not the dashboard access gate. Listing
+        somebody else's decision as yours would send you to a page with no
+        buttons on it."""
+        from hr.models import LeaveRequest, LeaveRequestApproval
+        annual, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+        req = LeaveRequest.objects.create(
+            employee=self.report, leave_type=annual,
+            start_date=_date(2026, 7, 1), end_date=_date(2026, 7, 2),
+            days=Decimal('2'), status='pending', created_by=self.report_user)
+        LeaveRequestApproval.objects.create(
+            leave_request=req, approver=self.approver_user, decision='pending')
+        self.assertNotIn('leave', self._groups(self.stranger_user))
+
+    def test_an_already_decided_item_drops_off(self):
+        from hr.models import LeaveRequest, LeaveRequestApproval
+        annual, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+        req = LeaveRequest.objects.create(
+            employee=self.report, leave_type=annual,
+            start_date=_date(2026, 7, 1), end_date=_date(2026, 7, 2),
+            days=Decimal('2'), status='pending', created_by=self.report_user)
+        approval = LeaveRequestApproval.objects.create(
+            leave_request=req, approver=self.approver_user, decision='pending')
+        self.assertIn('leave', self._groups(self.approver_user))
+        approval.decision = 'approved'
+        approval.save()
+        self.assertNotIn('leave', self._groups(self.approver_user))
+
+    def test_late_queries_are_hr_only(self):
+        """TeamExceptionsView silently downgrades a non-HR user off that tab,
+        so listing one for them would be a dead link."""
+        from hr.models import LateQuery
+        from accounts.models import Role
+        record = AttendanceRecord.objects.create(
+            employee=self.report, date=_date(2026, 6, 10), status='late')
+        LateQuery.objects.create(
+            employee=self.report, attendance_record=record, message='Gate was shut')
+        self.assertNotIn('late_queries', self._groups(self.approver_user))
+        hr_user = _make_role_user('pa_hr', Role.SUPER_ADMIN)
+        self.assertIn('late_queries', self._groups(hr_user))
+
+    # ── empty groups do not clutter it ──────────────────────────────────────
+
+    def test_an_empty_group_is_left_out_entirely(self):
+        """A page of headings each saying zero is a page nobody reads."""
+        self.assertEqual(self._groups(self.stranger_user), {})
+
+    def test_the_count_is_the_sum_of_what_is_listed(self):
+        from hr.approvals import pending_approvals, pending_approvals_count
+        self._exception_for(self.report)
+        groups = pending_approvals(self.approver_user)
+        self.assertEqual(pending_approvals_count(self.approver_user),
+                         sum(len(g['items']) for g in groups))
+
+    # ── one broken source must not take the page down ───────────────────────
+
+    def test_a_failing_source_does_not_lose_the_others(self):
+        """This aggregates over half the system. One module's problem should
+        not cost somebody the view of their other queues."""
+        from unittest.mock import patch
+        import hr.approvals as approvals
+
+        def boom(_user):
+            raise RuntimeError('procurement is having a day')
+
+        self._exception_for(self.report)
+        with patch.object(approvals, 'SOURCES',
+                          (boom, approvals.attendance_exceptions)):
+            groups = approvals.pending_approvals(self.approver_user)
+        self.assertEqual([g['key'] for g in groups], ['attendance_exceptions'])
+
+
+class PendingApprovalsViewTests(TestCase):
+    """The tab itself."""
+
+    def setUp(self):
+        self.user = _login_user('pav_user')
+        self.emp = make_employee(iqama='PAV-1', name='Tab Person')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        self.report = make_employee(iqama='PAV-2', name='Tab Report')
+        self.report.main_manager = self.emp
+        self.report.save(update_fields=['main_manager'])
+        self.client.login(username='pav_user', password='testpass123')
+
+    def _profile(self):
+        return self.client.get(reverse('hr:my_profile'))
+
+    def _approvals(self):
+        return self.client.get(reverse('hr:my_profile'), {'tab': 'approvals'})
+
+    def test_the_tab_is_on_the_profile_page(self):
+        self.assertContains(self._profile(), 'Pending Approvals')
+
+    def test_the_tab_opens(self):
+        resp = self._approvals()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTemplateUsed(resp, 'hr/my_approvals.html')
+
+    def test_an_empty_inbox_says_what_it_checked(self):
+        """"You're all caught up" over a queue that was never looked at is
+        worse than no page at all."""
+        resp = self._approvals()
+        self.assertContains(resp, 'Nothing is waiting on you')
+        self.assertContains(resp, 'purchase-order approvals')
+
+    def test_a_waiting_item_is_listed_with_a_way_to_act_on_it(self):
+        _submit_aex(
+            employee=self.report, event_date=_date(2026, 7, 20),
+            event_start_time=_time(9, 0), reason_category='site_visit',
+            created_by=self.user)
+        resp = self._approvals()
+        self.assertContains(resp, 'Tab Report')
+        self.assertContains(resp, reverse('hr:team_exceptions'))
+
+    def test_the_badge_counts_what_is_waiting(self):
+        _submit_aex(
+            employee=self.report, event_date=_date(2026, 7, 20),
+            event_start_time=_time(9, 0), reason_category='site_visit',
+            created_by=self.user)
+        self.assertEqual(self._profile().context['my_approvals_count'], 1)
+        self.assertEqual(self._approvals().context['my_approvals_count'], 1)
+
+    def test_the_profile_tab_still_works(self):
+        """The inbox is answered before the profile context is built; the
+        profile itself must be untouched by that."""
+        resp = self._profile()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTemplateUsed(resp, 'hr/my_profile.html')
+        self.assertIn('my_attendance_totals', resp.context)
+
+    def test_the_inbox_does_not_build_the_profile_context(self):
+        """It is answered early on purpose - opening the inbox should not pay
+        for a month of attendance, a leave balance and an asset list nobody is
+        looking at."""
+        self.assertNotIn('my_attendance_totals', self._approvals().context)
+
+    def test_it_needs_a_login(self):
+        self.client.logout()
+        resp = self.client.get(reverse('hr:my_profile'), {'tab': 'approvals'})
+        self.assertNotEqual(resp.status_code, 200)

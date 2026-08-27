@@ -1,0 +1,87 @@
+{% extends 'base.html' %}
+{% block title %}Pending Approvals{% endblock %}
+{% block content %}
+{% comment %} ============================================================
+   Everything waiting on this person's decision, across the system.
+
+   Every row links out to the page that can actually decide it — this is an
+   index, not a second set of Approve buttons. Deciding in two places is how
+   two places end up disagreeing about who may decide, and the real pages
+   already carry the permission checks, the race guards and the audit trail.
+   ============================================================ {% endcomment %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <h1 class="h3 mb-1">Pending Approvals</h1>
+      <p class="text-muted mb-0">
+        {% if my_approvals_count %}
+          {{ my_approvals_count }} item{{ my_approvals_count|pluralize }} waiting on you
+        {% else %}
+          Nothing is waiting on you
+        {% endif %}
+      </p>
+    </div>
+  </div>
+
+  {% include 'hr/_my_profile_tabs.html' %}
+
+  {% if approval_groups %}
+  <div class="row g-3">
+    {% for group in approval_groups %}
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span class="fw-semibold">
+            <i class="bi {{ group.icon }} me-1"></i> {{ group.label }}
+            <span class="badge bg-secondary ms-1">{{ group.count }}</span>
+          </span>
+          <a href="{{ group.url }}" class="btn btn-sm btn-outline-secondary">
+            Open {{ group.label|lower }} <i class="bi bi-box-arrow-up-right ms-1"></i>
+          </a>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm table-hover align-middle mb-0">
+            <tbody>
+              {% for item in group.items %}
+              <tr>
+                <td class="ps-3">
+                  <a href="{{ item.url }}" class="text-decoration-none fw-semibold">{{ item.title }}</a>
+                  {% if item.meta %}<span class="text-muted small ms-2">{{ item.meta }}</span>{% endif %}
+                  {% if item.subtitle %}
+                  <div class="text-muted small">{{ item.subtitle|truncatechars:140 }}</div>
+                  {% endif %}
+                </td>
+                <td class="text-end text-nowrap text-muted small">
+                  {% comment %} How long it has been sitting there is the thing
+                  that decides what to open first. {% endcomment %}
+                  {% if item.when %}waiting {{ item.when|timesince }}{% endif %}
+                </td>
+                <td class="text-end pe-3" style="width:1%;">
+                  <a href="{{ item.url }}" class="btn btn-sm btn-primary text-nowrap">Review</a>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card">
+    <div class="card-body text-center py-5">
+      <div class="display-6 text-success mb-2"><i class="bi bi-check2-circle"></i></div>
+      <p class="mb-1 fw-semibold">Nothing is waiting on you</p>
+      {% comment %} Say what was actually checked. "You're all caught up" over
+      a queue that was never looked at is worse than no page at all. {% endcomment %}
+      <p class="text-muted small mb-0">
+        Checked leave requests and cancellations, attendance exceptions,
+        late-mark queries, asset handovers and purchase-order approvals —
+        for the ones your role takes part in.
+      </p>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

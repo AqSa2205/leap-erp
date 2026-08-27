@@ -393,6 +393,21 @@ def my_profile(request):
     from .forms import LeaveRequestForm
 
     emp = getattr(request.user, 'employee_profile', None)
+
+    # ?tab=approvals is its own page. Answered here, before the profile's own
+    # context is assembled, so opening the inbox does not pay for a month of
+    # attendance, a leave balance and an asset list nobody is looking at.
+    # Nothing posts with tab=approvals, so no form handling is skipped.
+    if request.GET.get('tab') == 'approvals':
+        from hr.approvals import pending_approvals
+        groups = pending_approvals(request.user)
+        return render(request, 'hr/my_approvals.html', {
+            'employee': emp,
+            'active_tab': 'approvals',
+            'approval_groups': groups,
+            'my_approvals_count': sum(g['count'] for g in groups),
+        })
+
     context = {'employee': emp}
 
     is_leave_request_post = (
@@ -790,6 +805,13 @@ def my_profile(request):
         from hr.models import AssetHandover
         context['asset_handovers'] = AssetHandover.objects.filter(
             employee=emp).select_related('asset', 'vehicle').order_by('-created_at')[:20]
+
+    # Drives the badge on the Pending Approvals tab. Computed for anyone signed
+    # in, not only linked employees: a super admin with no Employee record
+    # still has purchase orders and leave waiting on them.
+    from hr.approvals import pending_approvals_count
+    context['active_tab'] = 'profile'
+    context['my_approvals_count'] = pending_approvals_count(request.user)
     return render(request, 'hr/my_profile.html', context)
 
 
