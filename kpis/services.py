@@ -277,206 +277,393 @@ def build_deals_won(period, region=None):
     }
 
 
-# ── Deadline reliability ─────────────────────────────────────────────────────
+# ── Milestone reliability ────────────────────────────────────────────────────
+#
+# The unit of work is a COSTING SHEET milestone - the same four columns the
+# Costing list shows (BOM started / Handed to sales / Costing started /
+# Finalised), read from the same sheet stamps, so any figure here can be
+# reconciled against /costing/ row by row. Duration is the same working-day
+# figure that list shows too.
+#
+# Everything is judged against the project's SUBMISSION DEADLINE. Project also
+# carries a per-milestone deadline field, but those are optional planning dates
+# that are rarely filled, and scoring against them left nearly every milestone
+# unjudged. The submission deadline is the date the client actually holds us
+# to, it is captured on the pipeline entry itself, and every milestone in the
+# chain exists to meet it.
 
-# Each pipeline milestone carries all three things a punctuality measure needs:
-# a deadline on the Project, an actual timestamp on the CostingSheet, and the
-# person who did it. Nothing aggregated them per person until now - the Team
-# Activity page shows how LONG a stage took (cycle time), which is a different
-# question from whether the date was met.
-DEADLINE_MILESTONES = [
-    ('bom_started', 'BOM started',
-     'bom_started_deadline', 'bom_started_at', 'bom_started_by'),
-    ('handed_over', 'Handed to sales',
-     'handed_over_deadline', 'handed_over_at', 'handed_over_by'),
-    ('costing_started', 'Costing started',
-     'costing_started_deadline', 'costing_started_at', 'costing_started_by'),
-    ('finalized', 'Finalised',
-     'finalized_deadline', 'finalized_at', 'finalized_by'),
+# key, column label, stamp, actor, which team owns it.
+MILESTONES = [
+    ('bom_started',     'BOM started',     'bom_started_at',     'bom_started_by',     'proposal'),
+    ('handed_over',     'Handed to sales', 'handed_over_at',     'handed_over_by',     'proposal'),
+    ('costing_started', 'Costing started', 'costing_started_at', 'costing_started_by', 'sales'),
+    ('finalized',       'Finalised',       'finalized_at',       'finalized_by',       'sales'),
 ]
 
 
-def _cycle_sheet(sheets):
-    """The furthest-along sheet on a project, matching what the Commercial
-    Pipeline list already treats as the one driving cycle time. Tie-break on
-    the most recently updated."""
-    from costing.models import WORKFLOW_STAGE_SEQUENCE
-    if not sheets:
-        return None
+def _milestone_due(submission_deadline, team):
+    """The date a milestone owned by `team` has to be met, worked back from the
+    client submission deadline.
 
-    def rank(s):
-        try:
-            return WORKFLOW_STAGE_SEQUENCE.index(s.workflow_stage)
-        except ValueError:
-            return -1
+    Proposal work - starting the BOM and handing it to sales - is due
+    BOM_TO_SALES_BUFFER_WORKING_DAYS before submission, the same rule the RFQ
+    Activity tiles already use: a BOM that lands later than that leaves sales
+    no usable time to cost and submit, so it is late even though the client
+    date has not passed. A BOM cannot be handed over before it is started, so
+    the same bar applies to both.
 
-    return max(sheets, key=lambda s: (rank(s), s.updated_at))
+    Sales work - starting the costing and finalising it - is due on the
+    submission deadline itself, which is the moment it has to be ready by.
 
-
-def _earliest_sheet_for(sheets, actual_field):
-    """The sheet that reached `actual_field` first, or None if none did.
-
-    A project can carry more than one costing sheet, and a milestone may have
-    been reached on any of them. Taking the earliest matches how the RFQ
-    Activity tab reads a handover: the work happened the first time it
-    happened, and a later revision does not undo it.
+    Returns None when no submission deadline is recorded; those milestones are
+    counted as work done but never scored.
     """
-    done = [s for s in sheets if getattr(s, actual_field, None)]
-    if not done:
+    from .registry import _bom_due_date
+    if not submission_deadline:
         return None
-    return min(done, key=lambda s: getattr(s, actual_field))
+    if team == 'proposal':
+        return _bom_due_date(submission_deadline)
+    return submission_deadline
+
+
+def _backwards_moves(region=None):
+    """How many times a sheet was pushed back to an earlier stage.
+
+    Rework does not show up in the milestone stamps at all: `reopen` rewinds
+    workflow_stage WITHOUT clearing them, so re-advancing simply overwrites the
+    old stamp and the sheet ends up looking as though it only ever went
+    forward. CostingSheetChangeLog keeps every move, so a backwards step is
+    visible there and nowhere else.
+
+    Counted by comparing consecutive stages per sheet against
+    WORKFLOW_STAGE_SEQUENCE rather than by guessing from labels - a reopen
+    records exactly the same label a genuine first pass does.
+    """
+    from costing.models import CostingSheet, CostingSheetChangeLog, WORKFLOW_STAGE_SEQUENCE
+    order = {code: i for i, code in enumerate(WORKFLOW_STAGE_SEQUENCE)}
+    to_code = {label: code for code, label in CostingSheet.WORKFLOW_STAGE_CHOICES}
+
+    entries = CostingSheetChangeLog.objects.filter(field='workflow_stage')
+    if region is not None:
+        entries = entries.filter(sheet__project__region=region)
+    entries = entries.order_by('sheet_id', 'created_at').values_list(
+        'sheet_id', 'after')
+
+    moves = 0
+    last = {}
+    for sheet_id, after in entries:
+        idx = order.get(to_code.get((after or '').strip()))
+        if idx is None:
+            continue
+        if sheet_id in last and idx < last[sheet_id]:
+            moves += 1
+        last[sheet_id] = idx
+    return moves
 
 
 def build_deadline_reliability(period, region=None):
-    """Who hits their dates, per person and per milestone.
+    """Milestone throughput, punctuality and cycle time for the period.
 
-    Anchored on the DEADLINE falling in the window, not on when the work was
-    done. "Of the milestones due this quarter, how many were met" is the
-    question a deadline measure should answer, and it keeps finished and
-    unfinished work comparable - anchoring on the actual date would quietly
-    drop everything nobody got round to.
+    Every milestone reached in the window becomes one row in `rows`, carrying
+    its own date, due date, variance and verdict. Every headline figure is then
+    counted OFF those rows, so the number on a tile and the list of sheets
+    behind it cannot drift apart - the drill-down is the same data, filtered,
+    not a second query that has to be kept in step.
 
-    Scoring:
+    Throughput and punctuality are reported separately on purpose. A milestone
+    on a project with no submission deadline is real work and is counted, but
+    there is no date to judge it against, so it must never score as a pass;
+    `undated` says how many were set aside for that reason.
 
-    * A milestone with no deadline recorded cannot be judged and is counted
-      separately, never as a pass.
-    * A completed milestone scores against the person who completed it. On
-      time means on or before the deadline; the variance is whole days, +ve
-      for early, matching Project._milestone_variance().
-    * A milestone past its deadline that NOBODY has done is late, but it is
-      not attributable: there is no actor recorded, because no one performed
-      it. Charging it to the previous stage's actor would blame the wrong
-      person, so these are reported per milestone instead - showing where work
-      is stuck even when the system cannot say who is holding it.
-
-    Per person the headline is on-time percentage, with the MEDIAN variance
-    beside it rather than the mean: one catastrophic slip should not define
-    someone otherwise reliable. The worst case is carried separately so it is
-    not hidden either.
+    `overdue_rows` is deliberately outside the period: it holds milestones
+    still not reached on live projects whose due date has already passed.
+    Nobody performed them, so there is no one to attribute them to, and an
+    overdue item does not stop being overdue because the month ended.
     """
     import statistics
     from decimal import Decimal
     from django.utils import timezone
-    from projects.models import Project
+    from costing.models import CostingSheet, working_days_between
     from .periods import period_bounds
 
     start, end = period_bounds(period)
     today = timezone.localdate()
 
-    projects = (Project.objects
-                .select_related('region')
-                .prefetch_related('costing_sheets'))
+    sheets = (CostingSheet.objects
+              .select_related('project', 'project__status', 'project__region',
+                              'project__owner',
+                              'created_by', 'bom_started_by', 'handed_over_by',
+                              'costing_started_by', 'finalized_by'))
     if region is not None:
-        projects = projects.filter(region=region)
+        sheets = sheets.filter(project__region=region)
 
+    rows = []               # one per milestone reached in the period
+    overdue_rows = []       # one per live sheet stuck past its due date
+    open_durations = []     # working days so far, sheets still running
+
+    for sheet in sheets:
+        project = sheet.project
+        deadline = getattr(project, 'submission_deadline', None) if project else None
+        live = bool(project and project.status_id
+                    and project.status.category in ('active', 'hot_lead'))
+
+        for key, label, at_field, by_field, team in MILESTONES:
+            stamp = getattr(sheet, at_field)
+            derived = False
+            if key == 'bom_started' and stamp is None:
+                # Raising the sheet IS starting the BOM - cycle_rows() and
+                # _current_stage_start() both already read
+                # `bom_started_at or created_at`. Reading the stamp alone made
+                # every sheet imported before the stamp existed look like a BOM
+                # that never began.
+                stamp, derived = sheet.created_at, True
+            if stamp is None:
+                continue
+
+            when = timezone.localtime(stamp).date()
+            if not (start <= when < end):
+                continue
+
+            due = _milestone_due(deadline, team)
+            variance = (due - when).days if due is not None else None
+            rows.append({
+                'sheet': sheet,
+                'project': project,
+                'key': key,
+                'label': label,
+                'team': team,
+                'when': when,
+                'due': due,
+                'variance': variance,
+                'verdict': ('undated' if variance is None
+                            else 'on_time' if variance >= 0 else 'late'),
+                'derived': derived,
+                'actor': sheet.created_by if derived else getattr(sheet, by_field, None),
+                # Only meaningful once the sheet is finished; the Costing
+                # list's own Duration figure.
+                'duration': sheet.total_cycle_days if key == 'finalized' else None,
+            })
+
+        # Overdue and not done: the milestone the sheet is actually stuck on.
+        # Only the FIRST unreached one is charged, so a sheet that stalled
+        # before the handover is counted once - as a missing handover - rather
+        # than three times for every later stage it also has not reached. Each
+        # stuck sheet therefore appears exactly once, and the column totals to
+        # the number of stuck sheets.
+        if live:
+            for key, label, at_field, _by, team in MILESTONES:
+                # bom_started is never "unreached": raising the sheet starts
+                # the BOM, same as above.
+                if key == 'bom_started' or getattr(sheet, at_field) is not None:
+                    continue
+                due = _milestone_due(deadline, team)
+                if due is not None and today > due:
+                    overdue_rows.append({
+                        'sheet': sheet, 'project': project, 'key': key,
+                        'label': label, 'due': due,
+                        'days_over': (today - due).days,
+                    })
+                break
+
+        # A sheet that has run for months and one that took a week to finish
+        # are not the same thing, and averaging them describes neither.
+        if sheet.finalized_at is None and live:
+            days = working_days_between(sheet.created_at, timezone.now())
+            if days is not None:
+                open_durations.append(days)
+
+    def pct(on_time, judged):
+        if not judged:
+            return None
+        return (Decimal(on_time) / Decimal(judged) * 100).quantize(Decimal('0.1'))
+
+    per_ms = {key: {'key': key, 'label': label, 'team': team, 'done': 0,
+                    'on_time': 0, 'undated': 0, 'derived': 0, 'overdue_open': 0,
+                    'variances': []}
+              for key, label, _at, _by, team in MILESTONES}
     people = {}
-    per_milestone = {
-        key: {'key': key, 'label': label, 'total': 0, 'on_time': 0,
-              'overdue_open': 0, 'undated': 0}
-        for key, label, _dl, _at, _by in DEADLINE_MILESTONES
-    }
-    undated = 0
-    overdue_open = 0
 
-    for project in projects:
-        sheets = list(project.costing_sheets.all())
-        for key, _label, deadline_field, actual_field, actor_field in DEADLINE_MILESTONES:
-            deadline = getattr(project, deadline_field, None)
-            if not deadline:
-                continue
-            if not (start <= deadline < end):
-                continue
+    for row in rows:
+        bucket = per_ms[row['key']]
+        bucket['done'] += 1
+        if row['derived']:
+            bucket['derived'] += 1
 
-            # EARLIEST across every sheet on the project, not just the
-            # furthest-along one. A project can carry several sheets and the
-            # milestone may have been reached on any of them - reading only
-            # the cycle sheet made this disagree with the RFQ Activity tab,
-            # which scans them all: one tab could say a BOM went to sales
-            # while the other called the same project overdue.
-            sheet = _earliest_sheet_for(sheets, actual_field)
-            actual = getattr(sheet, actual_field, None) if sheet else None
-            bucket = per_milestone[key]
-
-            if actual is None:
-                # Not done. Only counts as a miss once the date has passed -
-                # a milestone due later this period is simply not yet due.
-                if today > deadline:
-                    bucket['overdue_open'] += 1
-                    overdue_open += 1
-                continue
-
-            actor = getattr(sheet, actor_field, None)
-            # localtime, not .date(): the stamp is stored UTC and Riyadh is
-            # UTC+3, so anything finished after 21:00 local reads as the
-            # PREVIOUS day in UTC and scores a day more punctual than it was.
-            # working_days_between() in costing/models.py converts the same
-            # way, so a working day means one thing across the pipeline.
-            actual_date = (timezone.localtime(actual).date()
-                           if hasattr(actual, 'date') else actual)
-            variance = (deadline - actual_date).days
-            on_time = variance >= 0
-
-            bucket['total'] += 1
-            if on_time:
-                bucket['on_time'] += 1
-
-            if actor is None:
-                # Done, but the doer was never recorded - countable in the
-                # milestone totals, not chargeable to anyone.
-                continue
-            entry = people.setdefault(actor.pk, {
-                'user': actor, 'total': 0, 'on_time': 0,
+        actor = row['actor']
+        person = None
+        if actor is not None:
+            person = people.setdefault(actor.pk, {
+                'user': actor, 'count': 0, 'on_time': 0, 'undated': 0,
                 'variances': [], 'per_milestone': {},
             })
-            entry['total'] += 1
-            entry['on_time'] += int(on_time)
-            entry['variances'].append(variance)
-            m = entry['per_milestone'].setdefault(
-                key, {'key': key, 'total': 0, 'on_time': 0})
-            m['total'] += 1
-            m['on_time'] += int(on_time)
+            person['count'] += 1
+            pm = person['per_milestone'].setdefault(
+                row['key'], {'key': row['key'], 'label': row['label'], 'count': 0})
+            pm['count'] += 1
 
-    def pct(on_time, total):
-        if not total:
-            return None
-        return (Decimal(on_time) / Decimal(total) * 100).quantize(Decimal('0.1'))
+        if row['verdict'] == 'undated':
+            bucket['undated'] += 1
+            if person is not None:
+                person['undated'] += 1
+            continue
 
-    rows = []
+        bucket['variances'].append(row['variance'])
+        if person is not None:
+            person['variances'].append(row['variance'])
+        if row['verdict'] == 'on_time':
+            bucket['on_time'] += 1
+            if person is not None:
+                person['on_time'] += 1
+
+    for row in overdue_rows:
+        per_ms[row['key']]['overdue_open'] += 1
+
+    person_rows = []
     for entry in people.values():
         variances = entry['variances']
-        rows.append({
+        person_rows.append({
             'user': entry['user'],
-            'total': entry['total'],
+            'count': entry['count'],
+            'judged': len(variances),
+            'undated': entry['undated'],
             'on_time': entry['on_time'],
-            'pct': pct(entry['on_time'], entry['total']),
+            'pct': pct(entry['on_time'], len(variances)),
+            # Median, not mean: one catastrophic slip should not define
+            # someone otherwise reliable. `worst` sits beside it so the slip is
+            # not hidden either.
             'median': int(statistics.median(variances)) if variances else None,
             'worst': min(variances) if variances else None,
-            'per_milestone': [
-                {**entry['per_milestone'][k],
-                 'label': label,
-                 'pct': pct(entry['per_milestone'][k]['on_time'],
-                            entry['per_milestone'][k]['total'])}
-                for k, label, _d, _a, _b in DEADLINE_MILESTONES
-                if k in entry['per_milestone']
-            ],
+            'per_milestone': [entry['per_milestone'][k]
+                              for k, _l, _a, _b, _t in MILESTONES
+                              if k in entry['per_milestone']],
         })
-    # Most reliable first; a bigger sample breaks a tie, since 1-of-1 is not
-    # the same achievement as 20-of-20.
-    rows.sort(key=lambda r: (r['pct'] or 0, r['total']), reverse=True)
+    # Measured and reliable first; someone with nothing judgeable should not
+    # outrank someone who hit their dates, however busy they were.
+    person_rows.sort(
+        key=lambda r: (r['pct'] is not None, r['pct'] or 0, r['count']),
+        reverse=True)
 
     milestones = []
-    for key, label, _d, _a, _b in DEADLINE_MILESTONES:
-        b = per_milestone[key]
-        milestones.append({**b, 'pct': pct(b['on_time'], b['total'])})
+    for key, _label, _at, _by, _team in MILESTONES:
+        b = per_ms[key]
+        variances = b.pop('variances')
+        milestones.append({
+            **b,
+            'judged': len(variances),
+            'late': len(variances) - b['on_time'],
+            'pct': pct(b['on_time'], len(variances)),
+            'median': int(statistics.median(variances)) if variances else None,
+        })
 
-    total = sum(m['total'] for m in milestones)
+    durations = [r['duration'] for r in rows
+                 if r['key'] == 'finalized' and r['duration'] is not None]
+    total = len(rows)
+    judged = sum(m['judged'] for m in milestones)
     on_time = sum(m['on_time'] for m in milestones)
     return {
-        'people': rows,
         'milestones': milestones,
+        'people': person_rows,
+        'rows': rows,
+        'overdue_rows': overdue_rows,
         'total': total,
+        'judged': judged,
         'on_time': on_time,
-        'pct': pct(on_time, total),
-        'overdue_open': overdue_open,
-        'undated': undated,
+        'late': judged - on_time,
+        'undated': total - judged,
+        'pct': pct(on_time, judged),
+        'overdue_open': len(overdue_rows),
+        'reopens': _backwards_moves(region),
+        'duration': {
+            'count': len(durations),
+            'median': int(statistics.median(durations)) if durations else None,
+            'longest': max(durations) if durations else None,
+            'open_count': len(open_durations),
+            'open_median': (int(statistics.median(open_durations))
+                            if open_durations else None),
+        },
+        'buffer_days': _buffer_days(),
+    }
+
+
+def _buffer_days():
+    from .registry import BOM_TO_SALES_BUFFER_WORKING_DAYS
+    return BOM_TO_SALES_BUFFER_WORKING_DAYS
+
+
+# ── Drill-down ───────────────────────────────────────────────────────────────
+#
+# Every figure on the tab is a filter over the rows build_deadline_reliability()
+# already produced, so clicking a number shows exactly the sheets that were
+# counted into it - not a second query that could answer differently.
+
+DRILL_OUTCOMES = {
+    'done':      'reached the milestone',
+    'on_time':   'met the date',
+    'late':      'missed the date',
+    'undated':   'had no submission deadline to be judged against',
+    'overdue':   'past due and still not done',
+    'finalised': 'finalised in this period',
+}
+
+
+def reliability_drilldown(data, milestone=None, outcome=None, person=None):
+    """The sheets behind one figure, or None when nothing was asked for.
+
+    `milestone` is a MILESTONES key, or None/'all' for every milestone;
+    `person` narrows to one actor's own work. Unknown values return None
+    rather than silently widening the selection to everything - a mistyped
+    link should show nothing, not a number that looks authoritative and
+    answers a different question.
+    """
+    if outcome not in DRILL_OUTCOMES:
+        return None
+    keys = {k for k, _l, _a, _b, _t in MILESTONES}
+    if milestone in ('', None, 'all'):
+        milestone = None
+    elif milestone not in keys:
+        return None
+
+    labels = {k: label for k, label, _a, _b, _t in MILESTONES}
+
+    if outcome == 'overdue':
+        rows = [r for r in data['overdue_rows']
+                if milestone is None or r['key'] == milestone]
+        rows.sort(key=lambda r: -r['days_over'])
+    elif outcome == 'finalised':
+        rows = [r for r in data['rows'] if r['key'] == 'finalized']
+        rows.sort(key=lambda r: -(r['duration'] or 0))
+        milestone = 'finalized'
+    else:
+        rows = [r for r in data['rows']
+                if (milestone is None or r['key'] == milestone)
+                and (outcome == 'done' or r['verdict'] == outcome)]
+        # Worst first when the point is who slipped; newest first otherwise.
+        if outcome == 'late':
+            rows.sort(key=lambda r: r['variance'])
+        else:
+            rows.sort(key=lambda r: r['when'], reverse=True)
+
+    person_label = None
+    if person not in ('', None):
+        # Overdue rows have no actor by definition - nobody performed them -
+        # so narrowing to a person correctly empties that bucket.
+        rows = [r for r in rows
+                if r.get('actor') is not None and str(r['actor'].pk) == str(person)]
+        match = next((p for p in data['people'] if str(p['user'].pk) == str(person)),
+                     None)
+        if match is None:
+            return None
+        person_label = (match['user'].get_full_name() or match['user'].username)
+
+    return {
+        'milestone': milestone,
+        'milestone_label': labels.get(milestone, 'All milestones'),
+        'outcome': outcome,
+        'outcome_label': DRILL_OUTCOMES[outcome],
+        'person': person,
+        'person_label': person_label,
+        'rows': rows,
+        'count': len(rows),
+        'is_overdue': outcome == 'overdue',
+        'shows_duration': outcome == 'finalised',
     }
