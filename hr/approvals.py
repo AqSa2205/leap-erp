@@ -207,8 +207,14 @@ def asset_handovers(user):
 def purchase_orders(user):
     """POs sitting on a stage this user is the one allowed to sign.
 
-    Decided by the PO's own can_user_approve_stage() against its current
-    stage, so this cannot list a PO whose Approve button would refuse them.
+    Decided by the PO's own is_designated_approver() against its current
+    stage - the role mapping WITHOUT the super-admin override that
+    can_user_approve_stage() carries. The override is right for the button on
+    the PO page, so work never stalls; it is wrong here, where it would put
+    every open PO at every stage into one person's inbox when almost none of
+    them are theirs. A super admin still sees the CEO stage, which is
+    super-admin-only by design and so genuinely their own.
+
     The stage walk is Python-side because it depends on the value threshold
     that decides whether CEO sign-off is required; the queryset first cuts the
     set down to POs that cannot possibly be released.
@@ -228,7 +234,7 @@ def purchase_orders(user):
     items = []
     for po in open_pos:
         stage = po.current_stage
-        if not stage or not po.can_user_approve_stage(user, stage['key']):
+        if not stage or not po.is_designated_approver(user, stage['key']):
             continue
         items.append(_item(
             title=po.po_number or f'PO #{po.pk}',

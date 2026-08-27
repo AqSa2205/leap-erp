@@ -10299,3 +10299,162 @@ class PendingApprovalsViewTests(TestCase):
         self.client.logout()
         resp = self.client.get(reverse('hr:my_profile'), {'tab': 'approvals'})
         self.assertNotEqual(resp.status_code, 200)
+
+
+class PendingApprovalsPurchaseOrderTests(TestCase):
+    """Purchase orders reach an inbox only when the signature is that
+    person's own.
+
+    can_user_approve_stage() lets a super admin sign anything, which is right
+    for the button on the PO page - an override exists so work never stalls.
+    It is wrong for a personal inbox: it would drop every open PO at every
+    stage into one person's list of things waiting on them."""
+
+    def setUp(self):
+        from accounts.models import Role
+        from procurement.models import PurchaseOrder
+        self.super_admin = _make_role_user('po_super', Role.SUPER_ADMIN)
+        self.admin = _make_role_user('po_admin', Role.ADMIN)
+        self.proc_mgr = _make_role_user('po_scm', Role.PROCUREMENT_MGR)
+        self.po = PurchaseOrder.objects.create(
+            po_number='PO-INBOX-1', po_date=_date(2026, 6, 1),
+            created_by=self.proc_mgr)
+
+    def _po_items(self, user):
+        from hr.approvals import pending_approvals
+        for group in pending_approvals(user):
+            if group['key'] == 'purchase_orders':
+                return group['items']
+        return []
+
+    def _sign(self, *stages):
+        """Walk the PO forward through the stages already signed."""
+        from django.utils import timezone
+        from procurement.models import PurchaseOrder
+        updates = {f'{s}_approved_at': timezone.now() for s in stages}
+        PurchaseOrder.objects.filter(pk=self.po.pk).update(**updates)
+        self.po.refresh_from_db()
+
+    # ── whose signature is it ───────────────────────────────────────────────
+
+    def test_the_first_stage_is_the_procurement_managers(self):
+        self.assertEqual(self.po.current_stage['key'], 'scm')
+        self.assertEqual(len(self._po_items(self.proc_mgr)), 1)
+
+    def test_a_super_admin_does_not_get_somebody_elses_stage(self):
+        """The whole point: an override is not an assignment."""
+        self.assertEqual(self.po.current_stage['key'], 'scm')
+        self.assertEqual(self._po_items(self.super_admin), [])
+
+    def test_a_super_admin_can_still_sign_it_on_the_po_page(self):
+        """The inbox narrows what is shown; it must not narrow what is
+        allowed. The override still stands where it belongs."""
+        self.assertTrue(self.po.can_user_approve_stage(self.super_admin, 'scm'))
+
+    def test_the_middle_stages_are_the_admins(self):
+        self._sign('scm')
+        self.assertEqual(self.po.current_stage['key'], 'pm')
+        self.assertEqual(len(self._po_items(self.admin)), 1)
+        self.assertEqual(self._po_items(self.super_admin), [])
+        self.assertEqual(self._po_items(self.proc_mgr), [])
+
+    def test_a_stage_that_is_not_current_yet_is_nobodys_inbox_item(self):
+        """Strict sequencing - only the current stage can be signed, so only
+        the current stage is waiting on anyone."""
+        self.assertEqual(self.po.current_stage['key'], 'scm')
+        self.assertEqual(self._po_items(self.admin), [])
+
+    def test_a_signed_stage_drops_off_the_signers_inbox(self):
+        self.assertEqual(len(self._po_items(self.proc_mgr)), 1)
+        self._sign('scm')
+        self.assertEqual(self._po_items(self.proc_mgr), [])
+
+    def test_a_released_po_is_waiting_on_nobody(self):
+        self._sign('scm', 'pm', 'coo')
+        self.assertIsNone(self.po.current_stage)
+        for user in (self.proc_mgr, self.admin, self.super_admin):
+            with self.subTest(user=user.username):
+                self.assertEqual(self._po_items(user), [])
+
+    # ── the named signer ────────────────────────────────────────────────────
+
+    def test_a_super_admin_who_is_the_named_pm_does_see_it(self):
+        """APPROVAL_STAGES names a person per stage, and that name is the only
+        individual identity this model carries. A super admin who IS the PM is
+        the person the work is waiting on, unlike every other super admin."""
+        from procurement.models import PurchaseOrder
+        pm_name = PurchaseOrder.stage_signer_name('pm')
+        first, _, last = pm_name.partition(' ')
+        self.super_admin.first_name, self.super_admin.last_name = first, last
+        self.super_admin.save(update_fields=['first_name', 'last_name'])
+        self._sign('scm')
+        self.assertEqual(self.po.current_stage['key'], 'pm')
+        self.assertEqual(len(self._po_items(self.super_admin)), 1)
+
+    def test_that_same_super_admin_still_does_not_get_the_other_stages(self):
+        """Being the PM makes the PM stage theirs, not the whole pipeline."""
+        from procurement.models import PurchaseOrder
+        pm_name = PurchaseOrder.stage_signer_name('pm')
+        first, _, last = pm_name.partition(' ')
+        self.super_admin.first_name, self.super_admin.last_name = first, last
+        self.super_admin.save(update_fields=['first_name', 'last_name'])
+        self.assertEqual(self.po.current_stage['key'], 'scm')
+        self.assertEqual(self._po_items(self.super_admin), [])
+
+    def test_the_name_match_forgives_case_and_spacing(self):
+        """Those names are typed constants and a user record is typed
+        separately; an exact comparison would fail on a double space."""
+        from procurement.models import PurchaseOrder
+        pm_name = PurchaseOrder.stage_signer_name('pm')
+        first, _, last = pm_name.partition(' ')
+        self.super_admin.first_name = f'  {first.upper()} '
+        self.super_admin.last_name = f' {last.lower()}  '
+        self.super_admin.save(update_fields=['first_name', 'last_name'])
+        self._sign('scm')
+        self.assertEqual(len(self._po_items(self.super_admin)), 1)
+
+    def test_the_named_signer_never_widens_what_is_allowed(self):
+        """Three layers, and the name only touches the middle one.
+
+        Visibility decides which POs a user can see at all; designation
+        decides whose inbox a stage belongs in; permission decides who may
+        press Approve. Sharing a name with the PM moves the middle one and
+        neither of the others - a stranger still cannot see the PO, and still
+        cannot sign it.
+        """
+        from procurement.models import PurchaseOrder
+        from procurement.views import _visible_pos_for
+        plain = _login_user('po_plain')
+        pm_name = PurchaseOrder.stage_signer_name('pm')
+        first, _, last = pm_name.partition(' ')
+        plain.first_name, plain.last_name = first, last
+        plain.save(update_fields=['first_name', 'last_name'])
+        self._sign('scm')
+
+        # Designation: the stage is mapped to that name.
+        self.assertTrue(self.po.is_designated_approver(plain, 'pm'))
+        # Permission: untouched, and still refuses them.
+        self.assertFalse(self.po.can_user_approve_stage(plain, 'pm'))
+        # Visibility: they cannot see this PO, so it reaches no inbox of
+        # theirs regardless of the name.
+        self.assertFalse(_visible_pos_for(plain).filter(pk=self.po.pk).exists())
+        self.assertEqual(self._po_items(plain), [])
+
+    def test_the_ceo_stage_stays_with_the_super_admins(self):
+        """CEO is super-admin-only by design, so excluding it would leave that
+        stage in nobody's inbox at all.
+
+        total_value is a property summing the PO's items, so the threshold is
+        dropped rather than the value inflated - the point under test is the
+        stage mapping, not how the value is arrived at.
+        """
+        from decimal import Decimal as _D
+        from unittest.mock import patch
+        from procurement.models import PurchaseOrder
+        with patch.object(PurchaseOrder, 'CEO_APPROVAL_THRESHOLD', _D('0')):
+            self.po.refresh_from_db()
+            self.assertIn('ceo', self.po.required_stages)
+            self._sign('scm', 'pm', 'coo')
+            self.assertEqual(self.po.current_stage['key'], 'ceo')
+            self.assertEqual(len(self._po_items(self.super_admin)), 1)
+            self.assertEqual(self._po_items(self.admin), [])
