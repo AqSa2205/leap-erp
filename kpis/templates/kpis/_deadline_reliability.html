@@ -15,6 +15,17 @@
    disagree.
    ============================================================ {% endcomment %}
 
+<div class="d-flex justify-content-end mb-2">
+  {% comment %} Carries the whole query string, so the PDF is of what is on
+  screen - period, region and any open drill-down - rather than a default that
+  quietly answers a different question. {% endcomment %}
+  <a href="{% url 'kpis:deadlines_pdf' %}?{{ request.GET.urlencode }}"
+     target="_blank" rel="noopener" class="btn btn-sm btn-outline-danger"
+     title="Open this view as a PDF in a new tab">
+    <i class="bi bi-file-earmark-pdf me-1"></i> Export PDF
+  </a>
+</div>
+
 <div class="row g-3 mb-4">
   <div class="col-md-3">
     <div class="border rounded p-3 h-100">
@@ -181,7 +192,13 @@
 </div>
 
 <div class="card">
-  <div class="card-header"><h6 class="mb-0"><i class="bi bi-person-check me-1"></i> By person</h6></div>
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <h6 class="mb-0"><i class="bi bi-person-check me-1"></i> By person</h6>
+    <span class="small text-muted">
+      The <i class="bi bi-file-earmark-pdf text-danger"></i> beside a name is that
+      person's own record — their work only, safe to send to them to check.
+    </span>
+  </div>
   <div class="table-responsive">
     <table class="table table-sm align-middle mb-0">
       <thead>
@@ -201,7 +218,16 @@
       <tbody>
         {% for r in reliability.people %}
         <tr>
-          <td class="fw-semibold">{{ r.user.get_full_name|default:r.user.username }}</td>
+          <td class="fw-semibold">
+            {{ r.user.get_full_name|default:r.user.username }}
+            {% comment %} Their own record, carrying nobody else's figures, so
+            it can be forwarded to them to check. {% endcomment %}
+            <a href="{% url 'kpis:deadlines_person_pdf' r.user.pk %}?period={{ period }}{% if selected_region %}&amp;region={{ selected_region.code }}{% endif %}"
+               target="_blank" rel="noopener" class="ms-1 text-danger"
+               title="Their own milestone record as a PDF — safe to send to them">
+              <i class="bi bi-file-earmark-pdf"></i>
+            </a>
+          </td>
           <td class="text-end">
             <a href="{{ drill_base }}&amp;ms=all&amp;outcome=done&amp;by={{ r.user.pk }}" class="text-reset">{{ r.count }}</a>
           </td>
@@ -227,10 +253,15 @@
               <a href="{{ drill_base }}&amp;ms=all&amp;outcome=late&amp;by={{ r.user.pk }}" class="text-danger">{{ r.worst|cut:"-" }}d late</a>
             {% else %}<span class="text-muted">never late</span>{% endif %}
           </td>
+          {% comment %} Per milestone, not just a count: "reliable" can hide
+          someone punctual handing over and consistently late finalising, which
+          the overall rate averages away. {% endcomment %}
           <td class="small text-muted">
             {% for m in r.per_milestone %}
             <a href="{{ drill_base }}&amp;ms={{ m.key }}&amp;outcome=done&amp;by={{ r.user.pk }}"
-               class="me-2 text-nowrap text-reset">{{ m.label }} {{ m.count }}</a>
+               class="me-2 text-nowrap text-reset">{{ m.label }} {{ m.count }}{% if m.pct is not None %}
+              <span class="{% if m.pct >= 80 %}text-success{% else %}text-danger{% endif %}">({{ m.pct }}%)</span>
+            {% endif %}</a>
             {% endfor %}
           </td>
         </tr>
