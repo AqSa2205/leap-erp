@@ -1,69 +1,110 @@
 {% comment %} ============================================================
-   Deadline reliability — who hits their dates, per person and per milestone.
+   Milestone reliability — the four Costing-list milestones (BOM started,
+   Handed to sales, Costing started, Finalised) plus Duration, judged against
+   the project's submission deadline.
 
-   Anchored on the DEADLINE falling in the period, not on when the work was
-   done, so finished and unfinished work stay comparable: "of the milestones
-   due this quarter, how many were met".
+   Same stamps, same working-day arithmetic as /costing/, so every figure
+   here can be reconciled against that list rather than argued about.
 
-   Two things are deliberately kept apart. A completed milestone scores
-   against the person who completed it. A milestone past its deadline that
-   nobody has done is late but has NO actor — charging it to the previous
-   stage's actor would blame the wrong person — so it shows per milestone
-   instead, revealing where work is stuck even when the system cannot say who
-   is holding it.
+   Throughput and punctuality are separate columns on purpose: a milestone on
+   a project with no submission deadline is real work, but it cannot be judged
+   and must never score as a pass.
+
+   Every figure is a link into the sheets behind it. The drill-down filters
+   the rows this summary was counted from, so the list and the number cannot
+   disagree.
    ============================================================ {% endcomment %}
 
 <div class="row g-3 mb-4">
-  <div class="col-md-4">
+  <div class="col-md-3">
+    <div class="border rounded p-3 h-100">
+      <div class="text-muted small text-uppercase">Milestones hit</div>
+      <div class="fs-3 fw-bold">
+        <a href="{{ drill_base }}&amp;ms=all&amp;outcome=done" class="text-reset text-decoration-none border-bottom border-2">{{ reliability.total }}</a>
+      </div>
+      <div class="text-muted small mt-1">across all four stages in {{ period_label }}</div>
+    </div>
+  </div>
+  <div class="col-md-3">
     <div class="border rounded p-3 h-100">
       <div class="text-muted small text-uppercase">On time</div>
       <div class="fs-3 fw-bold">
         {% if reliability.pct is not None %}{{ reliability.pct }}%{% else %}—{% endif %}
       </div>
       <div class="text-muted small mt-1">
-        {% if reliability.total %}
-          {{ reliability.on_time }} of {{ reliability.total }} milestones due in {{ period_label }}
+        {% if reliability.judged %}
+          <a href="{{ drill_base }}&amp;ms=all&amp;outcome=on_time" class="text-reset">{{ reliability.on_time }}</a>
+          of {{ reliability.judged }} with a submission deadline
+          {% if reliability.late %}
+          · <a href="{{ drill_base }}&amp;ms=all&amp;outcome=late" class="text-danger">{{ reliability.late }} missed</a>
+          {% endif %}
         {% else %}
-          no milestones were due in {{ period_label }}
+          no submission deadline to judge against
         {% endif %}
       </div>
     </div>
   </div>
-  <div class="col-md-4">
+  <div class="col-md-3">
     <div class="border rounded p-3 h-100 {% if reliability.overdue_open %}border-warning{% endif %}">
       <div class="text-muted small text-uppercase">Overdue, not done</div>
       <div class="fs-3 fw-bold {% if reliability.overdue_open %}text-warning{% endif %}">
-        {{ reliability.overdue_open }}
+        <a href="{{ drill_base }}&amp;ms=all&amp;outcome=overdue" class="text-reset text-decoration-none border-bottom border-2">{{ reliability.overdue_open }}</a>
       </div>
+      {% comment %} Outside the period on purpose — nobody performed these, so
+      there is no one to charge them to, and an overdue item does not stop
+      being overdue because the month ended. {% endcomment %}
       <div class="text-muted small mt-1">
         {% if reliability.overdue_open %}
-          past their date with nobody having done them — no one to attribute
-          these to, so they are not in anyone's score below
+          past due on live deals right now
         {% else %}
-          nothing past its date and unstarted
+          nothing live is past its date
         {% endif %}
       </div>
     </div>
   </div>
-  <div class="col-md-4">
+  <div class="col-md-3">
     <div class="border rounded p-3 h-100">
-      <div class="text-muted small text-uppercase">People measured</div>
-      <div class="fs-3 fw-bold">{{ reliability.people|length }}</div>
-      <div class="text-muted small mt-1">with at least one milestone completed</div>
+      <div class="text-muted small text-uppercase">Duration</div>
+      <div class="fs-3 fw-bold">
+        {% if reliability.duration.median is not None %}
+          <a href="{{ drill_base }}&amp;ms=all&amp;outcome=finalised" class="text-reset text-decoration-none border-bottom border-2">{{ reliability.duration.median }}d</a>
+        {% else %}—{% endif %}
+      </div>
+      <div class="text-muted small mt-1">
+        {% if reliability.duration.count %}
+          typical working days, creation → finalised
+          ({{ reliability.duration.count }} finalised, longest {{ reliability.duration.longest }}d)
+        {% else %}
+          nothing was finalised in this period
+        {% endif %}
+      </div>
     </div>
   </div>
 </div>
 
+{% if drill %}{% include 'kpis/_deadline_drilldown.html' %}{% endif %}
+
 <div class="card mb-4">
-  <div class="card-header"><h6 class="mb-0"><i class="bi bi-flag me-1"></i> By milestone</h6></div>
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <h6 class="mb-0"><i class="bi bi-flag me-1"></i> By milestone</h6>
+    <span class="small text-muted">
+      Proposal work is due {{ reliability.buffer_days }} working day{{ reliability.buffer_days|pluralize }}
+      before submission; sales work is due on the submission date.
+      Click any figure to see the sheets behind it.
+    </span>
+  </div>
   <div class="table-responsive">
     <table class="table table-sm align-middle mb-0">
       <thead>
         <tr>
           <th>Milestone</th>
+          <th>Owner</th>
+          <th class="text-end">Done</th>
+          <th class="text-end">Had a date</th>
           <th class="text-end">On time</th>
-          <th class="text-end">Due</th>
+          <th class="text-end">Late</th>
           <th class="text-end">Rate</th>
+          <th class="text-end">Typically</th>
           <th class="text-end">Overdue, not done</th>
         </tr>
       </thead>
@@ -71,30 +112,82 @@
         {% for m in reliability.milestones %}
         <tr>
           <td class="fw-semibold">{{ m.label }}</td>
-          <td class="text-end">{{ m.on_time }}</td>
-          <td class="text-end">{{ m.total }}</td>
+          <td class="text-muted small text-capitalize">{{ m.team }}</td>
           <td class="text-end">
-            {% if m.pct is not None %}{{ m.pct }}%{% else %}<span class="text-muted">—</span>{% endif %}
+            {% if m.done %}
+              <a href="{{ drill_base }}&amp;ms={{ m.key }}&amp;outcome=done" class="text-reset">{{ m.done }}</a>
+            {% else %}<span class="text-muted">0</span>{% endif %}
+            {% comment %} Raising the sheet is starting the BOM — the same
+            `bom_started_at or created_at` the rest of the pipeline reads.
+            Flagged so the number is not mistaken for an explicit stamp. {% endcomment %}
+            {% if m.derived %}
+            <span class="text-muted small fw-normal"
+                  title="{{ m.derived }} taken from the date the sheet was raised, which is when BOM work began">
+              ({{ m.derived }} from sheet creation)</span>
+            {% endif %}
           </td>
-          <td class="text-end {% if m.overdue_open %}text-warning fw-semibold{% endif %}">
-            {{ m.overdue_open }}
+          <td class="text-end">
+            {{ m.judged }}{% if m.undated %}
+            <a href="{{ drill_base }}&amp;ms={{ m.key }}&amp;outcome=undated" class="text-muted small">(+{{ m.undated }} without)</a>
+            {% endif %}
+          </td>
+          <td class="text-end">
+            {% if m.on_time %}
+              <a href="{{ drill_base }}&amp;ms={{ m.key }}&amp;outcome=on_time" class="text-reset">{{ m.on_time }}</a>
+            {% else %}<span class="text-muted">0</span>{% endif %}
+          </td>
+          <td class="text-end">
+            {% if m.late %}
+              <a href="{{ drill_base }}&amp;ms={{ m.key }}&amp;outcome=late" class="text-danger fw-semibold">{{ m.late }}</a>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td class="text-end fw-bold">
+            {% if m.pct is not None %}{{ m.pct }}%{% else %}<span class="text-muted fw-normal">—</span>{% endif %}
+          </td>
+          <td class="text-end">
+            {% if m.median is None %}<span class="text-muted">—</span>
+            {% elif m.median > 0 %}<span class="text-success">{{ m.median }}d early</span>
+            {% elif m.median < 0 %}<span class="text-danger">{{ m.median|cut:"-" }}d late</span>
+            {% else %}on the day{% endif %}
+          </td>
+          <td class="text-end">
+            {% if m.overdue_open %}
+              <a href="{{ drill_base }}&amp;ms={{ m.key }}&amp;outcome=overdue" class="text-warning fw-semibold">{{ m.overdue_open }}</a>
+            {% else %}<span class="text-muted">—</span>{% endif %}
           </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+  <div class="card-footer small text-muted d-flex flex-wrap gap-3">
+    <span>
+      <i class="bi bi-hourglass-split me-1"></i>
+      {% if reliability.duration.open_median is not None %}
+        {{ reliability.duration.open_count }} sheet{{ reliability.duration.open_count|pluralize }}
+        still running, {{ reliability.duration.open_median }}d so far (typical)
+      {% else %}
+        no sheets still running
+      {% endif %}
+    </span>
+    {% comment %} Rework is invisible in the stamps: `reopen` rewinds the stage
+    without clearing them, so a sheet that went back and forth still reads as
+    though it only ever moved forward. This comes from the change log. {% endcomment %}
+    <span class="{% if reliability.reopens %}text-warning{% endif %}">
+      <i class="bi bi-arrow-counterclockwise me-1"></i>
+      {{ reliability.reopens }} sheet move{{ reliability.reopens|pluralize }} backwards (all time)
+    </span>
+  </div>
 </div>
 
 <div class="card">
-  <div class="card-header">
-    <h6 class="mb-0"><i class="bi bi-person-check me-1"></i> By person</h6>
-  </div>
+  <div class="card-header"><h6 class="mb-0"><i class="bi bi-person-check me-1"></i> By person</h6></div>
   <div class="table-responsive">
     <table class="table table-sm align-middle mb-0">
       <thead>
         <tr>
           <th>Person</th>
+          <th class="text-end">Milestones</th>
           <th class="text-end">On time</th>
           <th class="text-end">Rate</th>
           {% comment %} Median, not mean: one catastrophic slip should not
@@ -109,32 +202,42 @@
         {% for r in reliability.people %}
         <tr>
           <td class="fw-semibold">{{ r.user.get_full_name|default:r.user.username }}</td>
-          <td class="text-end">{{ r.on_time }} / {{ r.total }}</td>
-          <td class="text-end fw-bold">{{ r.pct }}%</td>
           <td class="text-end">
-            {% if r.median > 0 %}<span class="text-success">{{ r.median }}d early</span>
+            <a href="{{ drill_base }}&amp;ms=all&amp;outcome=done&amp;by={{ r.user.pk }}" class="text-reset">{{ r.count }}</a>
+          </td>
+          <td class="text-end">
+            {% if r.judged %}
+              <a href="{{ drill_base }}&amp;ms=all&amp;outcome=on_time&amp;by={{ r.user.pk }}" class="text-reset">{{ r.on_time }}</a>
+              / {{ r.judged }}
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td class="text-end fw-bold">
+            {% if r.pct is not None %}{{ r.pct }}%
+            {% else %}<span class="text-muted fw-normal" title="None of their work had a submission deadline to be judged against">no dates</span>{% endif %}
+          </td>
+          <td class="text-end">
+            {% if r.median is None %}<span class="text-muted">—</span>
+            {% elif r.median > 0 %}<span class="text-success">{{ r.median }}d early</span>
             {% elif r.median < 0 %}<span class="text-danger">{{ r.median|cut:"-" }}d late</span>
             {% else %}on the day{% endif %}
           </td>
           <td class="text-end">
-            {% if r.worst < 0 %}<span class="text-danger">{{ r.worst|cut:"-" }}d late</span>
+            {% if r.worst is None %}<span class="text-muted">—</span>
+            {% elif r.worst < 0 %}
+              <a href="{{ drill_base }}&amp;ms=all&amp;outcome=late&amp;by={{ r.user.pk }}" class="text-danger">{{ r.worst|cut:"-" }}d late</a>
             {% else %}<span class="text-muted">never late</span>{% endif %}
           </td>
           <td class="small text-muted">
             {% for m in r.per_milestone %}
-            <span class="me-2 text-nowrap">{{ m.label }} {{ m.on_time }}/{{ m.total }}</span>
+            <a href="{{ drill_base }}&amp;ms={{ m.key }}&amp;outcome=done&amp;by={{ r.user.pk }}"
+               class="me-2 text-nowrap text-reset">{{ m.label }} {{ m.count }}</a>
             {% endfor %}
           </td>
         </tr>
         {% empty %}
         <tr>
-          <td colspan="6" class="text-center text-muted py-4">
-            Nobody completed a milestone with a deadline in this period.
-            <div class="small mt-1">
-              This measure needs milestone deadlines on the pipeline entry —
-              BOM started, handed to sales, costing started, finalised. Without
-              a date there is nothing to be measured against.
-            </div>
+          <td colspan="7" class="text-center text-muted py-4">
+            No milestone was reached in this period.
           </td>
         </tr>
         {% endfor %}

@@ -1802,319 +1802,598 @@ class TabExclusivityTests(ComputeFixtureMixin, TestCase):
         self.assertIn('All time', body)
 
 
-class DeadlineReliabilityTests(ComputeFixtureMixin, TestCase):
-    """Who hits their dates, per person and per milestone.
+# Sentinel so a test can ask for region=None explicitly and still get the
+# default fixture region when it says nothing.
+_UNSET = object()
 
-    Every pipeline milestone carries a deadline (on the Project), an actual
-    (on the CostingSheet) and the person who did it. Nothing aggregated them
-    per person before - Team Activity shows how LONG a stage took, which is a
-    different question from whether the date was met."""
+
+class MilestoneReliabilityTests(ComputeFixtureMixin, TestCase):
+    """The four Costing-list milestones, judged against the submission date.
+
+    The unit is a costing sheet milestone, read from the same stamps the
+    Costing list shows, so every figure reconciles against /costing/. An
+    earlier version scored against Project's per-milestone deadline fields;
+    those are optional planning dates that are rarely filled, so almost
+    nothing was judgeable. The submission deadline is the date the client
+    holds us to and it is captured on the pipeline entry itself.
+
+    Throughput and punctuality stay separate: a milestone on a project with no
+    submission deadline is work done, but it cannot be judged and must never
+    silently score as a pass.
+    """
 
     def setUp(self):
         super().setUp()
-        self.alice = User.objects.create_user(username='alice', password='pw')
-        self.bob = User.objects.create_user(username='bob', password='pw')
-
-    def _milestone(self, ref, deadline, done_on=None, by=None, region=None,
-                   field='handed_over'):
-        """A project whose `field` milestone is due on `deadline` and, if
-        `done_on` is given, was completed then by `by`."""
-        p = self._project(ref, self.active, est='100000', region=region)
-        Project.objects.filter(pk=p.pk).update(
-            **{f'{field}_deadline': deadline})
-        sheet = CostingSheet.objects.create(title=f'S-{ref}', project=p)
-        if done_on is not None:
-            CostingSheet.objects.filter(pk=sheet.pk).update(**{
-                f'{field}_at': timezone.make_aware(
-                    datetime.datetime.combine(done_on, datetime.time(9, 0))),
-                f'{field}_by': by or self.alice,
-            })
-        return p
+        self.alice = User.objects.create_user(username='rel_alice', password='pw')
+        self.bob = User.objects.create_user(username='rel_bob', password='pw')
 
     D = datetime.date
 
-    # ── scoring ─────────────────────────────────────────────────────────────
+    def _sheet(self, ref, submission=None, status=None, region=None):
+        p = self._project(ref, status or self.active, est='100000', region=region)
+        if submission is not None:
+            Project.objects.filter(pk=p.pk).update(submission_deadline=submission)
+            p.refresh_from_db()
+        return CostingSheet.objects.create(title=f'S-{ref}', project=p)
 
-    def test_on_or_before_the_deadline_is_on_time(self):
-        from kpis.services import build_deadline_reliability
-        self._milestone('EARLY', self.D(2026, 5, 20), done_on=self.D(2026, 5, 18))
-        self._milestone('EXACT', self.D(2026, 5, 21), done_on=self.D(2026, 5, 21))
-        self._milestone('LATE', self.D(2026, 5, 22), done_on=self.D(2026, 5, 25))
-        d = build_deadline_reliability('2026-Q2', region=self.region)
-        self.assertEqual((d['on_time'], d['total']), (2, 3))
-        self.assertEqual(d['people'][0]['user'], self.alice)
-        self.assertEqual(d['people'][0]['on_time'], 2)
+    def _hit(self, sheet, milestone, on, by=None, hour=9):
+        """Stamp a milestone the way costing.views.sheet_transition does."""
+        CostingSheet.objects.filter(pk=sheet.pk).update(**{
+            f'{milestone}_at': timezone.make_aware(
+                datetime.datetime.combine(on, datetime.time(hour, 0))),
+            f'{milestone}_by': by or self.alice,
+        })
+        sheet.refresh_from_db()
+        return sheet
 
-    def test_anchored_on_the_deadline_not_on_when_it_was_done(self):
-        """"Of the milestones due this quarter, how many were met" - so a Q2
-        deadline met late in Q3 is still a Q2 miss. Anchoring on the actual
-        date would quietly drop everything nobody got round to."""
+    def _ms(self, key, period='2026-Q2', region=_UNSET):
         from kpis.services import build_deadline_reliability
-        self._milestone('SLIPPED', self.D(2026, 6, 29), done_on=self.D(2026, 7, 10))
-        q2 = build_deadline_reliability('2026-Q2', region=self.region)
-        q3 = build_deadline_reliability('2026-Q3', region=self.region)
-        self.assertEqual((q2['on_time'], q2['total']), (0, 1))
-        self.assertEqual(q3['total'], 0)
+        data = build_deadline_reliability(
+            period, region=self.region if region is _UNSET else region)
+        return next(m for m in data['milestones'] if m['key'] == key)
+
+    # ── the four milestone classes ──────────────────────────────────────────
+
+    def test_all_four_costing_list_milestones_are_reported(self):
+        from kpis.services import build_deadline_reliability
+        keys = [m['key'] for m in build_deadline_reliability(
+            '2026-Q2', region=self.region)['milestones']]
+        self.assertEqual(
+            keys, ['bom_started', 'handed_over', 'costing_started', 'finalized'])
+
+    def test_counts_the_period_the_work_happened_in(self):
+        sheet = self._sheet('MAY')
+        self._hit(sheet, 'handed_over', self.D(2026, 5, 18))
+        other = self._sheet('JUL')
+        self._hit(other, 'handed_over', self.D(2026, 7, 18))
+        self.assertEqual(self._ms('handed_over', '2026-Q2')['done'], 1)
+        self.assertEqual(self._ms('handed_over', '2026-Q3')['done'], 1)
+        self.assertEqual(self._ms('handed_over', '2026')['done'], 2)
+
+    def test_raising_a_sheet_counts_as_starting_the_bom(self):
+        """cycle_rows() and _current_stage_start() already read
+        `bom_started_at or created_at`. Reading the stamp alone made a sheet
+        with no explicit start look like a BOM that never began, while the
+        rest of the pipeline showed it started."""
+        self._sheet('NOSTAMP')
+        bom = self._ms('bom_started', str(timezone.localdate().year))
+        self.assertEqual(bom['done'], 1)
+        self.assertEqual(bom['derived'], 1)   # flagged, not passed off as a stamp
+
+    def test_bom_started_reconciles_with_the_costing_sheet_count(self):
+        """The point of the sheet basis: BOM started equals the number of
+        sheets raised, which is what /costing/ shows."""
+        for i in range(4):
+            self._sheet(f'S{i}')
+        bom = self._ms('bom_started', str(timezone.localdate().year))
+        self.assertEqual(bom['done'], CostingSheet.objects.count())
+
+    def test_each_sheet_counts_separately(self):
+        """A project carrying two sheets is two units of work here, as it is
+        two rows on the Costing list."""
+        p = self._project('MULTI', self.active, est='100000')
+        for title, day in (('rev A', 18), ('rev B', 19)):
+            sheet = CostingSheet.objects.create(title=title, project=p)
+            self._hit(sheet, 'handed_over', self.D(2026, 5, day))
+        self.assertEqual(self._ms('handed_over')['done'], 2)
+
+    # ── judged against the submission deadline ──────────────────────────────
+
+    def test_proposal_work_is_due_two_working_days_before_submission(self):
+        """Sales need the buffer to cost and submit, so a BOM handed over
+        inside it is late even though the client date has not passed."""
+        from kpis.services import _milestone_due
+        # Sunday 17 May 2026; two working days back skips Sat 16 and Fri 15.
+        submission = self.D(2026, 5, 17)
+        self.assertEqual(submission.weekday(), 6)
+        self.assertEqual(_milestone_due(submission, 'proposal'), self.D(2026, 5, 13))
+
+        on_time = self._sheet('ONTIME', submission=submission)
+        self._hit(on_time, 'handed_over', self.D(2026, 5, 13))
+        late = self._sheet('LATE', submission=submission)
+        self._hit(late, 'handed_over', self.D(2026, 5, 14))
+        handed = self._ms('handed_over')
+        self.assertEqual((handed['on_time'], handed['judged']), (1, 2))
+
+    def test_sales_work_is_due_on_the_submission_date_itself(self):
+        from kpis.services import _milestone_due
+        submission = self.D(2026, 5, 17)
+        self.assertEqual(_milestone_due(submission, 'sales'), submission)
+
+        on_day = self._sheet('ONDAY', submission=submission)
+        self._hit(on_day, 'finalized', submission)
+        late = self._sheet('SLIPPED', submission=submission)
+        self._hit(late, 'finalized', self.D(2026, 5, 18))
+        fin = self._ms('finalized')
+        self.assertEqual((fin['on_time'], fin['judged']), (1, 2))
+
+    def test_the_buffer_is_working_days_not_calendar_days(self):
+        """A plain calendar subtraction would land the buffer on the KSA
+        Fri/Sat weekend and give sales no usable time at all."""
+        from kpis.services import _milestone_due
+        due = _milestone_due(self.D(2026, 5, 17), 'proposal')
+        self.assertEqual((self.D(2026, 5, 17) - due).days, 4)
+        self.assertNotIn(due.weekday(), (4, 5))
+
+    def test_no_submission_deadline_means_unjudged_not_on_time(self):
+        """Work done, nothing to judge it against. It must show as throughput
+        and be excluded from the rate, never counted as a pass."""
+        sheet = self._sheet('NODATE')
+        self._hit(sheet, 'handed_over', self.D(2026, 5, 18))
+        handed = self._ms('handed_over')
+        self.assertEqual(
+            (handed['done'], handed['judged'], handed['on_time'], handed['undated']),
+            (1, 0, 0, 1))
+        self.assertIsNone(handed['pct'])
 
     def test_median_is_used_not_mean(self):
-        """One catastrophic slip must not define someone otherwise reliable.
-        Four milestones 1 day early and one 100 days late: the mean says late,
-        the median says early. The worst case is carried separately so it is
-        not hidden either."""
+        """One catastrophic slip must not define someone otherwise reliable."""
         from kpis.services import build_deadline_reliability
         for i in range(4):
-            self._milestone(f'OK{i}', self.D(2026, 5, 10 + i),
-                            done_on=self.D(2026, 5, 9 + i))
-        self._milestone('DISASTER', self.D(2026, 5, 20),
-                        done_on=self.D(2026, 8, 28))
-        row = build_deadline_reliability('2026-Q2', region=self.region)['people'][0]
+            sheet = self._sheet(f'OK{i}', submission=self.D(2026, 5, 17))
+            self._hit(sheet, 'handed_over', self.D(2026, 5, 12))   # 1d early
+        disaster = self._sheet('DISASTER', submission=self.D(2026, 5, 17))
+        self._hit(disaster, 'handed_over', self.D(2026, 6, 28))
+        row = next(r for r in build_deadline_reliability(
+            '2026-Q2', region=self.region)['people'] if r['user'] == self.alice)
         self.assertEqual(row['median'], 1)
-        self.assertLess(row['worst'], -90)
+        self.assertLess(row['worst'], -30)
 
-    # ── the unattributable case ─────────────────────────────────────────────
+    # ── overdue and not done ────────────────────────────────────────────────
 
-    def test_an_overdue_unfinished_milestone_is_not_charged_to_anyone(self):
-        """Nobody performed it, so there is no actor to charge. Blaming the
-        previous stage's actor would blame the wrong person. It shows per
-        milestone instead - where work is stuck, even when the system cannot
-        say who is holding it."""
+    def test_overdue_and_unreached_is_a_live_figure_charged_to_nobody(self):
+        """Nobody performed it, so there is no actor to charge. It is also not
+        tied to the period - an overdue item does not stop being overdue
+        because the month ended."""
         from kpis.services import build_deadline_reliability
-        self._milestone('STUCK', self.D(2026, 5, 1))          # never done
-        d = build_deadline_reliability('2026-Q2', region=self.region)
-        self.assertEqual(d['overdue_open'], 1)
-        self.assertEqual(d['total'], 0)
-        self.assertEqual(d['people'], [])
-        handed = next(m for m in d['milestones'] if m['key'] == 'handed_over')
+        self._sheet('STUCK',
+                    submission=timezone.localdate() - datetime.timedelta(days=30))
+        data = build_deadline_reliability('2026-Q1', region=self.region)
+        handed = next(m for m in data['milestones'] if m['key'] == 'handed_over')
         self.assertEqual(handed['overdue_open'], 1)
+        self.assertEqual(handed['done'], 0)
+        self.assertEqual(data['people'], [])
 
-    def test_a_milestone_due_later_in_the_period_is_not_yet_a_miss(self):
-        """Not yet due is not late."""
+    def test_a_stuck_sheet_is_charged_once_to_the_stage_it_is_stuck_on(self):
+        """It has also not reached costing or finalising, but it is blocked on
+        the handover; counting it three times would make the tile describe
+        nothing anyone can act on."""
         from kpis.services import build_deadline_reliability
-        future = timezone.localdate() + datetime.timedelta(days=20)
-        self._milestone('SOON', future)
-        period = f'{future.year}-{future.month:02d}'
-        d = build_deadline_reliability(period, region=self.region)
-        self.assertEqual(d['overdue_open'], 0)
-        self.assertEqual(d['total'], 0)
+        self._sheet('STUCK',
+                    submission=timezone.localdate() - datetime.timedelta(days=30))
+        data = build_deadline_reliability('2026-Q1', region=self.region)
+        self.assertEqual(data['overdue_open'], 1)
+        self.assertEqual(
+            [m['overdue_open'] for m in data['milestones']], [0, 1, 0, 0])
 
-    def test_a_milestone_with_no_deadline_is_never_counted(self):
-        """It cannot be judged, so it must not silently score as a pass."""
+    def test_a_deadline_still_ahead_is_not_overdue(self):
         from kpis.services import build_deadline_reliability
-        p = self._project('NO_DEADLINE', self.active, est='100000')
-        sheet = CostingSheet.objects.create(title='S', project=p)
+        self._sheet('SOON',
+                    submission=timezone.localdate() + datetime.timedelta(days=30))
+        self.assertEqual(
+            build_deadline_reliability('2026-Q1', region=self.region)['overdue_open'], 0)
+
+    def test_a_decided_deal_is_not_still_overdue(self):
+        """A won or lost deal is not waiting on anything; counting decided
+        deals forever would make the tile grow without bound."""
+        from kpis.services import build_deadline_reliability
+        self._sheet('DONEDEAL', status=self.won,
+                    submission=timezone.localdate() - datetime.timedelta(days=30))
+        self.assertEqual(
+            build_deadline_reliability('2026-Q1', region=self.region)['overdue_open'], 0)
+
+    # ── duration ────────────────────────────────────────────────────────────
+
+    def test_duration_is_the_costing_lists_own_figure(self):
+        """Working days from the sheet being raised to it being finalised,
+        weekends excluded - the same number the Duration column shows."""
+        sheet = self._sheet('CYCLE', submission=self.D(2026, 5, 17))
         CostingSheet.objects.filter(pk=sheet.pk).update(
-            handed_over_at=timezone.make_aware(
-                datetime.datetime(2026, 5, 5, 9, 0)),
-            handed_over_by=self.alice)
-        d = build_deadline_reliability('2026-Q2', region=self.region)
-        self.assertEqual(d['total'], 0)
-        self.assertEqual(d['people'], [])
-
-    def test_done_but_with_no_recorded_actor_counts_only_in_the_totals(self):
+            created_at=timezone.make_aware(datetime.datetime(2026, 5, 11, 9, 0)))
+        self._hit(sheet, 'finalized', self.D(2026, 5, 20))
         from kpis.services import build_deadline_reliability
-        p = self._project('ANON', self.active, est='100000')
-        Project.objects.filter(pk=p.pk).update(
-            handed_over_deadline=self.D(2026, 5, 10))
-        sheet = CostingSheet.objects.create(title='S', project=p)
-        CostingSheet.objects.filter(pk=sheet.pk).update(
-            handed_over_at=timezone.make_aware(
-                datetime.datetime(2026, 5, 8, 9, 0)))     # no _by
-        d = build_deadline_reliability('2026-Q2', region=self.region)
-        self.assertEqual((d['on_time'], d['total']), (1, 1))
-        self.assertEqual(d['people'], [])
+        data = build_deadline_reliability('2026-Q2', region=self.region)
+        sheet.refresh_from_db()
+        # Mon 11 -> Wed 20 May 2026 is 7 working days: Fri 15 / Sat 16 are the
+        # KSA weekend and do not count.
+        self.assertEqual(sheet.total_cycle_days, 7)
+        self.assertEqual(data['duration']['count'], 1)
+        self.assertEqual(data['duration']['median'], 7)
 
-    # ── per milestone ───────────────────────────────────────────────────────
-
-    def test_each_milestone_is_scored_separately(self):
+    def test_a_running_sheet_is_not_mixed_into_the_finished_duration(self):
+        """A sheet that has run for months and a sheet that took a week to
+        finish are not the same thing, and averaging them says neither."""
+        self._sheet('STILLGOING')
         from kpis.services import build_deadline_reliability
-        self._milestone('A', self.D(2026, 5, 5), done_on=self.D(2026, 5, 4),
-                        field='bom_started')
-        self._milestone('B', self.D(2026, 5, 6), done_on=self.D(2026, 5, 9),
-                        field='handed_over')
-        self._milestone('C', self.D(2026, 5, 7), done_on=self.D(2026, 5, 7),
-                        field='costing_started')
-        self._milestone('D', self.D(2026, 5, 8), done_on=self.D(2026, 5, 20),
-                        field='finalized')
-        d = build_deadline_reliability('2026-Q2', region=self.region)
-        got = {m['key']: (m['on_time'], m['total']) for m in d['milestones']}
-        self.assertEqual(got['bom_started'], (1, 1))
-        self.assertEqual(got['handed_over'], (0, 1))
-        self.assertEqual(got['costing_started'], (1, 1))
-        self.assertEqual(got['finalized'], (0, 1))
-        self.assertEqual(len(d['milestones']), 4)
+        d = build_deadline_reliability(
+            str(timezone.localdate().year), region=self.region)['duration']
+        self.assertEqual(d['count'], 0)
+        self.assertIsNone(d['median'])
+        self.assertEqual(d['open_count'], 1)
+        self.assertIsNotNone(d['open_median'])
+
+    # ── rework ──────────────────────────────────────────────────────────────
+
+    def test_a_sheet_pushed_back_a_stage_is_counted_as_rework(self):
+        """Invisible in the stamps: `reopen` rewinds workflow_stage without
+        clearing them, so re-advancing overwrites the old stamp and the sheet
+        reads as though it only ever went forward. The change log keeps it."""
+        from kpis.services import build_deadline_reliability
+        sheet = self._sheet('BOUNCED')
+        self._log(sheet, 'ready_for_costing')
+        self._log(sheet, 'bom_in_progress')      # reopened
+        self._log(sheet, 'ready_for_costing')    # sent again
+        self.assertEqual(build_deadline_reliability(
+            '2026-Q2', region=self.region)['reopens'], 1)
+
+    def test_a_sheet_that_only_moved_forward_is_not_rework(self):
+        from kpis.services import build_deadline_reliability
+        sheet = self._sheet('CLEAN')
+        self._log(sheet, 'bom_in_progress')
+        self._log(sheet, 'ready_for_costing')
+        self._log(sheet, 'costing_in_progress')
+        self.assertEqual(build_deadline_reliability(
+            '2026-Q2', region=self.region)['reopens'], 0)
+
+    STAGE_LABEL = {
+        'bom_in_progress':     'BOM — in progress by Proposal',
+        'ready_for_costing':   'Ready for costing (handed over to Sales)',
+        'costing_in_progress': 'Costing — in progress by Sales',
+        'finalized':           'Finalized by Sales',
+    }
+
+    def _log(self, sheet, stage):
+        """Record a stage move exactly as sheet_transition() does — the
+        DISPLAY label in `after`, never the code."""
+        from costing.models import CostingSheetChangeLog
+        return CostingSheetChangeLog.objects.create(
+            sheet=sheet, actor=self.alice, field='workflow_stage',
+            before='', after=self.STAGE_LABEL[stage])
+
+    # ── people ──────────────────────────────────────────────────────────────
 
     def test_a_persons_row_breaks_down_by_milestone(self):
         from kpis.services import build_deadline_reliability
-        self._milestone('A', self.D(2026, 5, 5), done_on=self.D(2026, 5, 4),
-                        by=self.alice, field='bom_started')
-        self._milestone('B', self.D(2026, 5, 6), done_on=self.D(2026, 5, 9),
-                        by=self.alice, field='handed_over')
-        row = build_deadline_reliability('2026-Q2', region=self.region)['people'][0]
-        breakdown = {m['key']: (m['on_time'], m['total']) for m in row['per_milestone']}
-        self.assertEqual(breakdown['bom_started'], (1, 1))
-        self.assertEqual(breakdown['handed_over'], (0, 1))
+        sheet = self._sheet('A', submission=self.D(2026, 5, 17))
+        self._hit(sheet, 'handed_over', self.D(2026, 5, 12), by=self.alice)
+        self._hit(sheet, 'costing_started', self.D(2026, 5, 13), by=self.alice)
+        row = next(r for r in build_deadline_reliability(
+            '2026-Q2', region=self.region)['people'] if r['user'] == self.alice)
+        keys = {m['key'] for m in row['per_milestone']}
+        self.assertEqual(keys, {'handed_over', 'costing_started'})
 
-    # ── ranking and scoping ─────────────────────────────────────────────────
-
-    def test_most_reliable_first_with_sample_size_breaking_ties(self):
-        """20 of 20 outranks 1 of 1 - the same percentage is not the same
-        achievement."""
+    def test_each_milestone_is_charged_to_whoever_did_it(self):
         from kpis.services import build_deadline_reliability
-        for i in range(3):
-            self._milestone(f'AL{i}', self.D(2026, 5, 10 + i),
-                            done_on=self.D(2026, 5, 9 + i), by=self.alice)
-        self._milestone('BO', self.D(2026, 5, 20),
-                        done_on=self.D(2026, 5, 19), by=self.bob)
+        sheet = self._sheet('SPLIT', submission=self.D(2026, 5, 17))
+        self._hit(sheet, 'handed_over', self.D(2026, 5, 12), by=self.alice)
+        self._hit(sheet, 'finalized', self.D(2026, 5, 17), by=self.bob)
+        people = {r['user']: r for r in build_deadline_reliability(
+            '2026-Q2', region=self.region)['people']}
+        self.assertEqual(people[self.alice]['count'], 1)
+        self.assertEqual(people[self.bob]['count'], 1)
+
+    def test_someone_with_no_deadlines_does_not_outrank_someone_who_hit_theirs(self):
+        """A person whose work was never datable has no rate; they must not
+        sort above someone measured and reliable."""
+        from kpis.services import build_deadline_reliability
+        judged = self._sheet('JUDGED', submission=self.D(2026, 5, 17))
+        self._hit(judged, 'handed_over', self.D(2026, 5, 12), by=self.alice)
+        for i in range(5):
+            sheet = self._sheet(f'UNJUDGED{i}')
+            self._hit(sheet, 'handed_over', self.D(2026, 5, 12), by=self.bob)
         people = build_deadline_reliability('2026-Q2', region=self.region)['people']
-        self.assertEqual([p['user'] for p in people], [self.alice, self.bob])
-        self.assertEqual(people[0]['pct'], people[1]['pct'])
+        self.assertEqual(people[0]['user'], self.alice)
+        self.assertIsNone(people[1]['pct'])
+
+    # ── scoping ─────────────────────────────────────────────────────────────
 
     def test_scoped_by_region(self):
-        from kpis.services import build_deadline_reliability
-        self._milestone('MINE', self.D(2026, 5, 5), done_on=self.D(2026, 5, 4),
-                        region=self.region)
-        self._milestone('THEIRS', self.D(2026, 5, 6), done_on=self.D(2026, 5, 5),
-                        region=self.region2)
-        self.assertEqual(
-            build_deadline_reliability('2026-Q2', region=self.region)['total'], 1)
-        self.assertEqual(build_deadline_reliability('2026-Q2')['total'], 2)
+        for ref, region in (('MINE', self.region), ('THEIRS', self.region2)):
+            sheet = self._sheet(ref, submission=self.D(2026, 5, 17), region=region)
+            self._hit(sheet, 'handed_over', self.D(2026, 5, 12))
+        self.assertEqual(self._ms('handed_over', region=self.region)['done'], 1)
+        self.assertEqual(self._ms('handed_over', region=self.region2)['done'], 1)
 
     def test_an_empty_period_returns_none_percent_not_zero(self):
-        """No milestones due is not the same as missing all of them."""
+        """Nothing judged is not the same as everything missed."""
         from kpis.services import build_deadline_reliability
-        d = build_deadline_reliability('2026-Q2', region=self.region)
-        self.assertEqual(d['total'], 0)
-        self.assertIsNone(d['pct'])
+        data = build_deadline_reliability('2026-Q1', region=self.region)
+        self.assertEqual(data['judged'], 0)
+        self.assertIsNone(data['pct'])
 
 
-class DeadlineDateBoundaryTests(ComputeFixtureMixin, TestCase):
-    """Milestone dates are read in Riyadh time, not UTC.
+class MilestoneDateBoundaryTests(ComputeFixtureMixin, TestCase):
+    """Milestone stamps are read in Riyadh time, not UTC.
 
     Stamps are stored UTC and Riyadh is UTC+3, so anything finished after
-    21:00 local falls on the PREVIOUS day in UTC. Calling .date() on the
-    aware datetime therefore scored evening work a day more punctual than it
-    was - and quietly turned a milestone finished the evening after its
-    deadline into an on-time one.
-
-    The existing tests all used 09:00, which is the same date either way, so
-    none of them could see it."""
+    21:00 local falls on the PREVIOUS day in UTC and would score a day more
+    punctual than it was. Every other test uses 09:00, which is the same date
+    in either zone, so none of them could see it."""
 
     def setUp(self):
         super().setUp()
         self.alice = User.objects.create_user(username='tz_alice', password='pw')
 
-    def _at(self, ref, deadline, finished_local, by=None):
-        """finished_local is a naive Riyadh wall-clock datetime."""
+    def _at(self, ref, submission, finished_local):
         p = self._project(ref, self.active, est='100000')
-        Project.objects.filter(pk=p.pk).update(handed_over_deadline=deadline)
+        Project.objects.filter(pk=p.pk).update(submission_deadline=submission)
         sheet = CostingSheet.objects.create(title=f'S-{ref}', project=p)
         CostingSheet.objects.filter(pk=sheet.pk).update(
-            handed_over_at=timezone.make_aware(finished_local),
-            handed_over_by=by or self.alice)
-        return p
+            finalized_at=timezone.make_aware(finished_local),
+            finalized_by=self.alice)
+        sheet.refresh_from_db()
+        return p, sheet
 
-    def test_late_evening_work_counts_on_the_day_it_actually_happened(self):
-        """22:00 on the 11th Riyadh is 19:00 UTC on the 11th - same day. But
-        23:30 on the 11th is 20:30 UTC, still the 11th. Push to 02:00 on the
-        12th Riyadh and UTC says 23:00 on the 11th: that is the shift."""
+    def _finalized(self):
         from kpis.services import build_deadline_reliability
-        # Deadline the 11th; finished 02:00 on the 12th local = one day late.
-        self._at('MIDNIGHT', datetime.date(2026, 5, 11),
-                 datetime.datetime(2026, 5, 12, 2, 0))
-        d = build_deadline_reliability('2026-Q2', region=self.region)
-        self.assertEqual((d['on_time'], d['total']), (0, 1),
-                         'finished after midnight local is late, even though '
-                         'UTC still calls it the deadline day')
-        self.assertEqual(d['people'][0]['worst'], -1)
+        return next(m for m in build_deadline_reliability(
+            '2026-Q2', region=self.region)['milestones'] if m['key'] == 'finalized')
+
+    def test_after_midnight_local_is_late_even_though_utc_says_otherwise(self):
+        """02:00 on the 18th Riyadh is 23:00 on the 17th UTC. Judged in UTC it
+        would land on the submission date and score on time."""
+        self._at('MIDNIGHT', datetime.date(2026, 5, 17),
+                 datetime.datetime(2026, 5, 18, 2, 0))
+        fin = self._finalized()
+        self.assertEqual((fin['on_time'], fin['judged']), (0, 1))
 
     def test_the_deadline_evening_is_still_on_time(self):
-        from kpis.services import build_deadline_reliability
-        self._at('EVENING', datetime.date(2026, 5, 11),
-                 datetime.datetime(2026, 5, 11, 22, 30))
-        d = build_deadline_reliability('2026-Q2', region=self.region)
-        self.assertEqual((d['on_time'], d['total']), (1, 1))
+        self._at('EVENING', datetime.date(2026, 5, 17),
+                 datetime.datetime(2026, 5, 17, 22, 30))
+        fin = self._finalized()
+        self.assertEqual((fin['on_time'], fin['judged']), (1, 1))
 
     def test_project_milestone_variance_uses_local_time_too(self):
         """The same fix in projects.models, which drives the +/- day figure on
-        the pipeline detail page."""
-        p = self._at('VAR', datetime.date(2026, 5, 11),
-                     datetime.datetime(2026, 5, 12, 2, 0))
-        sheet = p.costing_sheets.first()
-        variance = p._milestone_variance(
-            datetime.date(2026, 5, 11), sheet.handed_over_at)
-        self.assertEqual(variance, -1)
+        the Commercial Pipeline detail page."""
+        p, sheet = self._at('VAR', datetime.date(2026, 5, 17),
+                            datetime.datetime(2026, 5, 18, 2, 0))
+        self.assertEqual(
+            p._milestone_variance(datetime.date(2026, 5, 17), sheet.finalized_at),
+            -1)
 
 
-class MultiSheetMilestoneTests(ComputeFixtureMixin, TestCase):
-    """A project can carry several costing sheets, and a milestone may have
-    been reached on any of them.
+class MilestoneDrilldownTests(ComputeFixtureMixin, TestCase):
+    """The sheets behind a figure on the Deadlines tab.
 
-    Deadline reliability used to read only the furthest-along sheet, which
-    made it disagree with the RFQ Activity tab - that one scans them all. The
-    same project could be 'handed to sales' on one tab and 'overdue, not done'
-    on the other."""
+    The drill-down filters the rows the summary was counted from rather than
+    running a second query, so the point of these tests is that the list and
+    the number can never answer differently."""
 
     def setUp(self):
         super().setUp()
-        self.alice = User.objects.create_user(username='ms_alice', password='pw')
+        self.alice = User.objects.create_user(username='dd_alice', password='pw')
+        self.bob = User.objects.create_user(username='dd_bob', password='pw')
 
-    def test_a_milestone_on_a_non_furthest_sheet_still_counts(self):
+    D = datetime.date
+    SUBMISSION = datetime.date(2026, 5, 17)      # Sunday; proposal due 13 May
+
+    def _sheet(self, ref, submission=SUBMISSION, status=None, region=None):
+        p = self._project(ref, status or self.active, est='100000',
+                          region=region)
+        if submission is not None:
+            Project.objects.filter(pk=p.pk).update(submission_deadline=submission)
+        return CostingSheet.objects.create(title=f'S-{ref}', project=p)
+
+    def _hit(self, sheet, milestone, on, by=None):
+        CostingSheet.objects.filter(pk=sheet.pk).update(**{
+            f'{milestone}_at': timezone.make_aware(
+                datetime.datetime.combine(on, datetime.time(9, 0))),
+            f'{milestone}_by': by or self.alice,
+        })
+        sheet.refresh_from_db()
+        return sheet
+
+    def _data(self):
         from kpis.services import build_deadline_reliability
-        p = self._project('MULTI', self.active, est='100000')
-        Project.objects.filter(pk=p.pk).update(
-            handed_over_deadline=datetime.date(2026, 5, 20))
+        return build_deadline_reliability('2026-Q2', region=self.region)
 
-        # The handover happened on an early sheet...
-        early = CostingSheet.objects.create(title='rev A', project=p)
-        CostingSheet.objects.filter(pk=early.pk).update(
-            workflow_stage='ready_for_costing',
+    def _drill(self, data, ms, outcome, by=None):
+        from kpis.services import reliability_drilldown
+        return reliability_drilldown(data, ms, outcome, by)
+
+    def _populate(self):
+        """One sheet per verdict, so every bucket has something in it."""
+        early = self._sheet('EARLY')
+        self._hit(early, 'handed_over', self.D(2026, 5, 12), by=self.alice)
+        late = self._sheet('LATE')
+        self._hit(late, 'handed_over', self.D(2026, 5, 14), by=self.bob)
+        undated = self._sheet('UNDATED', submission=None)
+        self._hit(undated, 'handed_over', self.D(2026, 5, 14), by=self.alice)
+        stuck = self._sheet('STUCK',
+                            submission=timezone.localdate() - datetime.timedelta(days=30))
+        return early, late, undated, stuck
+
+    # ── the reconciliation guarantee ────────────────────────────────────────
+
+    def test_every_figure_matches_the_list_behind_it(self):
+        """The whole point of the drill-down: click a number, get exactly that
+        many rows. Checked for every milestone and every bucket at once so a
+        new bucket cannot be added without being reconciled."""
+        self._populate()
+        data = self._data()
+        for m in data['milestones']:
+            for outcome, expected in (('done', m['done']),
+                                      ('on_time', m['on_time']),
+                                      ('late', m['late']),
+                                      ('undated', m['undated']),
+                                      ('overdue', m['overdue_open'])):
+                with self.subTest(milestone=m['key'], outcome=outcome):
+                    self.assertEqual(
+                        self._drill(data, m['key'], outcome)['count'], expected)
+
+    def test_the_headline_tiles_match_their_lists_too(self):
+        self._populate()
+        data = self._data()
+        for outcome, expected in (('done', data['total']),
+                                  ('on_time', data['on_time']),
+                                  ('late', data['late']),
+                                  ('undated', data['undated']),
+                                  ('overdue', data['overdue_open']),
+                                  ('finalised', data['duration']['count'])):
+            with self.subTest(outcome=outcome):
+                self.assertEqual(self._drill(data, 'all', outcome)['count'], expected)
+
+    def test_a_persons_figure_matches_their_list(self):
+        self._populate()
+        data = self._data()
+        for row in data['people']:
+            with self.subTest(person=row['user'].username):
+                drill = self._drill(data, 'all', 'done', row['user'].pk)
+                self.assertEqual(drill['count'], row['count'])
+
+    # ── what each bucket contains ───────────────────────────────────────────
+
+    def test_the_late_list_holds_the_sheets_that_missed_their_date(self):
+        early, late, _undated, _stuck = self._populate()
+        drill = self._drill(self._data(), 'handed_over', 'late')
+        self.assertEqual([r['sheet'].pk for r in drill['rows']], [late.pk])
+
+    def test_the_undated_list_is_separate_from_the_late_one(self):
+        """Work with no submission deadline is not a miss - it is unjudgeable,
+        and lumping it in with the misses would blame people for missing a
+        date nobody set."""
+        _early, late, undated, _stuck = self._populate()
+        data = self._data()
+        self.assertEqual(
+            [r['sheet'].pk for r in self._drill(data, 'handed_over', 'undated')['rows']],
+            [undated.pk])
+        self.assertNotIn(
+            undated.pk,
+            [r['sheet'].pk for r in self._drill(data, 'handed_over', 'late')['rows']])
+
+    def test_the_overdue_list_names_the_milestone_the_sheet_is_stuck_on(self):
+        """One row per stuck sheet, naming the stage it is blocked at - not
+        one row per stage it has not reached."""
+        _e, _l, _u, stuck = self._populate()
+        rows = self._drill(self._data(), 'all', 'overdue')['rows']
+        mine = [r for r in rows if r['sheet'].pk == stuck.pk]
+        self.assertEqual([r['key'] for r in mine], ['handed_over'])
+        self.assertGreater(mine[0]['days_over'], 0)
+        # Every sheet in the list appears exactly once.
+        pks = [r['sheet'].pk for r in rows]
+        self.assertEqual(len(pks), len(set(pks)))
+
+    def test_worst_first_when_the_question_is_who_slipped(self):
+        for ref, day in (('BIT', 14), ('BADLY', 30), ('ABIT', 15)):
+            sheet = self._sheet(ref)
+            self._hit(sheet, 'handed_over', self.D(2026, 5, day))
+        rows = self._drill(self._data(), 'handed_over', 'late')['rows']
+        self.assertEqual([r['sheet'].title for r in rows],
+                         ['S-BADLY', 'S-ABIT', 'S-BIT'])
+
+    def test_narrowing_to_a_person_drops_other_peoples_work(self):
+        early, late, _u, _s = self._populate()
+        drill = self._drill(self._data(), 'handed_over', 'done', self.bob.pk)
+        self.assertEqual([r['sheet'].pk for r in drill['rows']], [late.pk])
+
+    def test_overdue_narrowed_to_a_person_is_empty(self):
+        """Nobody performed them, so there is nobody to charge them to -
+        attributing them to a person would invent an accusation."""
+        self._populate()
+        drill = self._drill(self._data(), 'all', 'overdue', self.alice.pk)
+        self.assertEqual(drill['count'], 0)
+
+    def test_the_finalised_list_carries_the_duration(self):
+        sheet = self._sheet('CYCLE')
+        CostingSheet.objects.filter(pk=sheet.pk).update(
+            created_at=timezone.make_aware(datetime.datetime(2026, 5, 11, 9, 0)))
+        self._hit(sheet, 'finalized', self.D(2026, 5, 20))
+        drill = self._drill(self._data(), 'all', 'finalised')
+        self.assertTrue(drill['shows_duration'])
+        self.assertEqual(drill['rows'][0]['duration'], 7)
+
+    # ── bad input ───────────────────────────────────────────────────────────
+
+    def test_nothing_asked_for_means_no_drilldown(self):
+        self.assertIsNone(self._drill(self._data(), None, None))
+
+    def test_an_unknown_bucket_shows_nothing_rather_than_everything(self):
+        """A mistyped link must not silently widen to the whole set and hand
+        back a number that looks authoritative but answers something else."""
+        data = self._data()
+        self.assertIsNone(self._drill(data, 'handed_over', 'nonsense'))
+        self.assertIsNone(self._drill(data, 'no_such_milestone', 'done'))
+        self.assertIsNone(self._drill(data, 'all', 'done', 999999))
+
+    def test_scoped_by_region_like_the_summary(self):
+        mine = self._sheet('MINE', region=self.region)
+        self._hit(mine, 'handed_over', self.D(2026, 5, 12))
+        theirs = self._sheet('THEIRS', region=self.region2)
+        self._hit(theirs, 'handed_over', self.D(2026, 5, 12))
+        rows = self._drill(self._data(), 'handed_over', 'done')['rows']
+        self.assertEqual([r['sheet'].pk for r in rows], [mine.pk])
+
+
+class MilestoneDrilldownViewTests(TestCase):
+    """The Deadlines tab renders the drill-down and keeps the filters."""
+
+    def setUp(self):
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.region = Region.objects.create(name='KSA', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.user = User.objects.create_user(
+            username='gm_drill', password='pw',
+            role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.client.force_login(self.user)
+        p = Project.objects.create(
+            project_name='P', proposal_reference='P', status=self.status,
+            region=self.region, estimated_value=Decimal('1'),
+            actual_sales=Decimal('0'), year='2026', po_award_quarter='Q2',
+            submission_deadline=datetime.date(2026, 5, 17))
+        self.sheet = CostingSheet.objects.create(title='S-P', project=p)
+        CostingSheet.objects.filter(pk=self.sheet.pk).update(
             handed_over_at=timezone.make_aware(
-                datetime.datetime(2026, 5, 18, 9, 0)),
-            handed_over_by=self.alice)
-        # ...while a later sheet is further along the workflow but never
-        # carried a handover stamp of its own.
-        later = CostingSheet.objects.create(title='rev B', project=p)
-        CostingSheet.objects.filter(pk=later.pk).update(
-            workflow_stage='finance_approved')
+                datetime.datetime(2026, 5, 20, 9, 0)),
+            handed_over_by=self.user)
 
-        d = build_deadline_reliability('2026-Q2', region=self.region)
-        self.assertEqual((d['on_time'], d['total']), (1, 1))
-        self.assertEqual(d['overdue_open'], 0)
-        self.assertEqual(d['people'][0]['user'], self.alice)
+    def _get(self, qs=''):
+        return self.client.get(
+            reverse('kpis:kpi_new') + '?view=deadlines&period=2026-Q2' + qs
+        ).content.decode()
 
-    def test_the_earliest_handover_wins(self):
-        """The work happened the first time it happened; a later revision does
-        not undo it, and must not be the one scored."""
-        from kpis.services import build_deadline_reliability
-        p = self._project('TWICE', self.active, est='100000')
-        Project.objects.filter(pk=p.pk).update(
-            handed_over_deadline=datetime.date(2026, 5, 20))
-        for title, day in (('rev A', 18), ('rev B', 25)):
-            sheet = CostingSheet.objects.create(title=title, project=p)
-            CostingSheet.objects.filter(pk=sheet.pk).update(
-                handed_over_at=timezone.make_aware(
-                    datetime.datetime(2026, 5, day, 9, 0)),
-                handed_over_by=self.alice)
-        d = build_deadline_reliability('2026-Q2', region=self.region)
-        # The 18th is on time; the 25th would have been 5 days late.
-        self.assertEqual((d['on_time'], d['total']), (1, 1))
+    DRILL = 'data-drill="1"'      # marker on the drill-down card itself
 
-    def test_agrees_with_the_rfq_activity_tab_on_the_same_project(self):
-        """The invariant behind this fix: if RFQ Activity says the BOM went to
-        sales, Deadlines must not call the same project unfinished."""
-        from kpis.services import build_deadline_reliability
-        from kpis.registry import _handed_over_map
-        p = self._project('AGREE', self.active, est='100000')
-        Project.objects.filter(pk=p.pk).update(
-            handed_over_deadline=datetime.date(2026, 5, 20))
-        early = CostingSheet.objects.create(title='rev A', project=p)
-        CostingSheet.objects.filter(pk=early.pk).update(
-            handed_over_at=timezone.make_aware(
-                datetime.datetime(2026, 5, 18, 9, 0)),
-            handed_over_by=self.alice)
-        CostingSheet.objects.create(title='rev B', project=p)
+    def test_the_summary_alone_shows_no_drilldown(self):
+        self.assertNotIn(self.DRILL, self._get())
 
-        self.assertIn(p.pk, _handed_over_map(self.region))
-        d = build_deadline_reliability('2026-Q2', region=self.region)
-        self.assertEqual(d['overdue_open'], 0)
-        self.assertEqual(d['total'], 1)
+    def test_drilling_lists_the_sheet_behind_the_number(self):
+        body = self._get('&ms=handed_over&outcome=late')
+        self.assertIn(self.DRILL, body)
+        self.assertIn('S-P', body)
+        self.assertIn('missed the date', body)
+
+    def test_the_links_carry_the_period_and_region(self):
+        """A drill-down that quietly reset the filters would show a different
+        population from the number that was clicked."""
+        body = self._get(f'&region={self.region.code}')
+        self.assertIn(
+            f'?view=deadlines&amp;period=2026-Q2&amp;region={self.region.code}'
+            '&amp;ms=handed_over&amp;outcome=late', body)
+
+    def test_a_mistyped_bucket_falls_back_to_the_summary(self):
+        body = self._get('&ms=handed_over&outcome=nonsense')
+        self.assertNotIn(self.DRILL, body)
+        self.assertIn('By milestone', body)

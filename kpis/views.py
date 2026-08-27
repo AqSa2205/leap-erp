@@ -16,7 +16,7 @@ from .periods import current_period, period_options, period_bounds, label_for
 from .registry import KPI_DEFINITIONS, DEPARTMENTS, KPI_BY_KEY
 from .services import (
     build_dashboard, format_value, build_person_scorecard, attributable_users,
-    build_deals_won, build_deadline_reliability,
+    build_deals_won, build_deadline_reliability, reliability_drilldown,
 )
 
 
@@ -145,13 +145,24 @@ def kpi_new(request):
         })
 
     if view == 'deadlines':
-        # Deadline reliability: who hits their dates, per person and per
-        # milestone. Anchored on the deadline falling in the window, so
-        # finished and unfinished work stay comparable.
+        # Milestone reliability: the four Costing-list milestones plus
+        # Duration, judged against the project's submission deadline, per
+        # milestone and per person.
         period = _resolve_period(request)
+        reliability = build_deadline_reliability(period, region=region)
+        # ?ms=<milestone>&outcome=<bucket> drills into one figure. The rows
+        # come out of the summary that was just built, so the list can never
+        # answer differently from the number that was clicked.
+        drill = reliability_drilldown(
+            reliability, request.GET.get('ms'), request.GET.get('outcome'),
+            request.GET.get('by'))
         return render(request, 'kpis/kpi_new.html', {
             'view': view,
-            'reliability': build_deadline_reliability(period, region=region),
+            'reliability': reliability,
+            'drill': drill,
+            # Prefix every drill-down link, so period and region survive the
+            # click instead of silently resetting to the default view.
+            'drill_base': _deadline_base(period, region),
             'period': period,
             'period_label': label_for(period),
             'period_picker': _period_picker(period),
@@ -183,6 +194,15 @@ def kpi_new(request):
         'selected_region': region,
     }
     return render(request, 'kpis/kpi_new.html', context)
+
+
+def _deadline_base(period, region):
+    """Query string every Deadlines drill-down link hangs off - the tab, the
+    period and the region, with `ms`/`outcome` appended by the template."""
+    base = f'?view=deadlines&period={period}'
+    if region is not None:
+        base += f'&region={region.code}'
+    return base
 
 
 # ── Period picker ────────────────────────────────────────────────────────────
