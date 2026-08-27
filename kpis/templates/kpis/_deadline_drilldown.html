@@ -1,0 +1,115 @@
+{% comment %} ============================================================
+   The sheets behind one figure on the Deadlines tab.
+
+   These rows are the same ones the summary counted — filtered, not re-queried
+   — so the list can never disagree with the number that was clicked.
+   ============================================================ {% endcomment %}
+
+<div class="card mb-4 border-2" data-drill="1" style="border-color: var(--leap-red);">
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <h6 class="mb-0">
+      <i class="bi bi-list-ul me-1"></i>
+      {{ drill.count }} sheet{{ drill.count|pluralize }} ·
+      {{ drill.milestone_label }} · {{ drill.outcome_label }}
+      {% if drill.person_label %}· {{ drill.person_label }}{% endif %}
+      <span class="text-muted fw-normal">— {{ period_label }}</span>
+    </h6>
+    <a href="{{ drill_base }}" class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-x-lg me-1"></i> Close
+    </a>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Sheet</th>
+          <th>Reference</th>
+          <th>Project</th>
+          <th>Region</th>
+          {% if drill.is_overdue %}
+            <th>Stuck on</th>
+            <th>Was due</th>
+            <th class="text-end">Days over</th>
+            <th>Owner</th>
+          {% else %}
+            {% if not drill.milestone %}<th>Milestone</th>{% endif %}
+            <th>Done on</th>
+            <th>Due</th>
+            <th class="text-end">Variance</th>
+            {% if drill.shows_duration %}<th class="text-end">Duration</th>{% endif %}
+            <th>By</th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in drill.rows %}
+        <tr>
+          <td>
+            <a href="{% url 'costing:detail' r.sheet.pk %}" class="text-decoration-none fw-semibold">
+              {{ r.sheet.title }}
+            </a>
+          </td>
+          <td>
+            {% if r.project %}
+            <a href="{% url 'projects:detail' r.project.pk %}" class="text-decoration-none">
+              <code>{{ r.project.proposal_reference }}</code>
+            </a>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>{{ r.project.project_name|default:"—" }}</td>
+          <td>
+            {% if r.project.region %}<span class="badge bg-secondary">{{ r.project.region.name }}</span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+
+          {% if drill.is_overdue %}
+            <td class="fw-semibold">{{ r.label }}</td>
+            <td class="text-nowrap">{{ r.due|date:"d M y" }}</td>
+            <td class="text-end text-warning fw-semibold">{{ r.days_over }}d</td>
+            <td>
+              {% if r.project.owner %}{{ r.project.owner.get_full_name|default:r.project.owner.username }}
+              {% else %}<span class="text-muted">unassigned</span>{% endif %}
+            </td>
+          {% else %}
+            {% if not drill.milestone %}<td class="fw-semibold">{{ r.label }}</td>{% endif %}
+            <td class="text-nowrap">
+              {{ r.when|date:"d M y" }}
+              {% comment %} Raising the sheet is starting the BOM — flagged so
+              the date is not mistaken for an explicit stamp. {% endcomment %}
+              {% if r.derived %}
+              <span class="text-muted small" title="Taken from the date the sheet was raised, which is when BOM work began">
+                · from creation</span>
+              {% endif %}
+            </td>
+            <td class="text-nowrap">
+              {% if r.due %}{{ r.due|date:"d M y" }}
+              {% else %}<span class="text-muted">no submission date</span>{% endif %}
+            </td>
+            <td class="text-end">
+              {% if r.variance is None %}<span class="text-muted">—</span>
+              {% elif r.variance > 0 %}<span class="text-success">{{ r.variance }}d early</span>
+              {% elif r.variance < 0 %}<span class="text-danger">{{ r.variance|cut:"-" }}d late</span>
+              {% else %}on the day{% endif %}
+            </td>
+            {% if drill.shows_duration %}
+            <td class="text-end fw-semibold">
+              {% if r.duration is not None %}{{ r.duration }}d{% else %}<span class="text-muted">—</span>{% endif %}
+            </td>
+            {% endif %}
+            <td>
+              {% if r.actor %}{{ r.actor.get_full_name|default:r.actor.username }}
+              {% else %}<span class="text-muted">—</span>{% endif %}
+            </td>
+          {% endif %}
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="9" class="text-center text-muted py-4">
+            Nothing in this bucket for {{ period_label }}.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
