@@ -500,6 +500,52 @@ def my_profile(request):
         exception_form = AttendanceExceptionForm()
     context['attendance_exception_form'] = exception_form
 
+    # ── Marking your own work-from-home days ────────────────────────────────
+    is_wfh_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'mark_wfh')
+    if is_wfh_post:
+        from hr.forms import SelfWFHForm
+        from hr.wfh_services import mark_self_wfh, WFHError
+        wfh_form = SelfWFHForm(request.POST)
+        if wfh_form.is_valid():
+            try:
+                mark_self_wfh(
+                    employee=emp,
+                    start_date=wfh_form.cleaned_data['start_date'],
+                    end_date=wfh_form.cleaned_data.get('end_date'),
+                    note=wfh_form.cleaned_data.get('note', ''),
+                    created_by=request.user,
+                )
+                messages.success(request, 'Marked as working from home.')
+                return redirect('hr:my_profile')
+            except WFHError as exc:
+                # The service writes these to be read by the employee, so show
+                # the reason rather than a generic failure.
+                messages.error(request, str(exc))
+    else:
+        from hr.forms import SelfWFHForm
+        wfh_form = SelfWFHForm()
+    context['wfh_form'] = wfh_form
+
+    is_cancel_wfh_post = (
+        emp and request.method == 'POST' and request.POST.get('action') == 'cancel_wfh')
+    if is_cancel_wfh_post:
+        from hr.models import WFHRecord
+        from hr.wfh_services import cancel_self_wfh, WFHError
+        # Scoped to this employee's own records before anything else, so a
+        # guessed id cannot reach somebody else's day.
+        target = WFHRecord.objects.filter(
+            pk=request.POST.get('wfh_id'), employee=emp).first()
+        if target is None:
+            messages.error(request, 'That work-from-home entry could not be found.')
+        else:
+            try:
+                cancel_self_wfh(record=target, requested_by=request.user)
+                messages.success(request, 'Work-from-home entry withdrawn.')
+            except WFHError as exc:
+                messages.error(request, str(exc))
+        return redirect('hr:my_profile')
+
     is_edit_exception_post = (
         emp and request.method == 'POST' and request.POST.get('action') == 'edit_attendance_exception')
     if is_edit_exception_post:
@@ -686,6 +732,17 @@ def my_profile(request):
                 recipient=emp.user, verb='You were late 3 times this month').order_by('-created_at')[:20]
         context['my_late_queries'] = LateQuery.objects.filter(
             employee=emp).select_related('attendance_record').order_by('-created_at')[:20]
+        # Their own WFH periods, soonest first. `can_withdraw` mirrors
+        # cancel_self_wfh's rule so the button is only offered where the action
+        # would actually succeed.
+        from hr.models import WFHRecord
+        today = timezone.now().date()
+        my_wfh = list(WFHRecord.objects.filter(employee=emp).order_by('-start_date')[:10])
+        for w in my_wfh:
+            w.can_withdraw = bool(w.created_by_id == request.user.pk
+                                  and w.end_date >= today)
+            w.is_current = bool(w.start_date <= today <= w.end_date)
+        context['my_wfh_records'] = my_wfh
         next_month_first = (month_end + timedelta(days=1))
         context['attendance_next_month'] = next_month_first
         context['recent_leaves'] = emp.leave_records.select_related(

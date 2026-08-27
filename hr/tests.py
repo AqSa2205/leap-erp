@@ -9785,3 +9785,289 @@ class LateQueryDetailVisibilityTests(TestCase):
         self._decide(self._query(), 'approved')
         self.record.refresh_from_db()
         self.assertEqual(self.record.status, 'present')
+
+
+class SelfWFHServiceTests(TestCase):
+    """An employee marking their own remote days.
+
+    The rules here are what keep a self-declaration from being able to rewrite
+    a day somebody has already assessed."""
+
+    def setUp(self):
+        from accounts.models import User
+        self.user = User.objects.create_user('wfh_emp', password='x')
+        self.emp = Employee.objects.create(
+            iqama_number='WFH-1', full_name='Remote Worker', user=self.user)
+        # A Monday, so nothing in these ranges lands on the KSA weekend.
+        self.today = _date(2026, 6, 8)
+        self.assertEqual(self.today.weekday(), 0)
+
+    def _mark(self, start, end=None, note='', today=None):
+        from hr.wfh_services import mark_self_wfh
+        return mark_self_wfh(
+            employee=self.emp, start_date=start, end_date=end, note=note,
+            created_by=self.user, today=today or self.today)
+
+    # ── the happy path ──────────────────────────────────────────────────────
+
+    def test_an_employee_can_mark_today(self):
+        record = self._mark(self.today)
+        self.assertEqual(record.employee, self.emp)
+        self.assertEqual(record.start_date, self.today)
+        self.assertEqual(record.end_date, self.today)
+        self.assertEqual(record.created_by, self.user)
+
+    def test_a_blank_end_date_means_a_single_day(self):
+        record = self._mark(self.today, None)
+        self.assertEqual(record.end_date, self.today)
+
+    def test_a_future_range_is_allowed(self):
+        record = self._mark(self.today + timedelta(days=7),
+                            self.today + timedelta(days=9))
+        self.assertEqual((record.end_date - record.start_date).days, 2)
+
+    def test_marking_today_makes_the_day_read_as_wfh(self):
+        """The point of the feature: their attendance shows WFH rather than
+        absent, without waiting for HR to tick a box."""
+        from hr.attendance_services import derive_status
+        AttendanceRecord.objects.create(
+            employee=self.emp, date=self.today, status='absent')
+        self._mark(self.today)
+        status, _hours = derive_status(self.emp, self.today, None)
+        self.assertEqual(status, 'wfh')
+        self.assertEqual(
+            AttendanceRecord.objects.get(employee=self.emp, date=self.today).status,
+            'wfh')
+
+    # ── the rule that matters ───────────────────────────────────────────────
+
+    def test_it_cannot_be_backdated(self):
+        """derive_status() checks WFH BEFORE it looks at check_in, so a WFH day
+        is never late and never absent. Backdating one would let anybody erase
+        a Late that has already been assessed, with nobody reviewing it."""
+        from hr.wfh_services import WFHError
+        with self.assertRaises(WFHError) as caught:
+            self._mark(self.today - timedelta(days=1))
+        self.assertIn('today or a future date', str(caught.exception))
+
+    def test_backdating_cannot_clear_an_existing_late_mark(self):
+        """The concrete abuse the rule exists to stop."""
+        from hr.wfh_services import WFHError
+        yesterday = self.today - timedelta(days=1)
+        AttendanceRecord.objects.create(
+            employee=self.emp, date=yesterday, status='late',
+            check_in=_time(9, 30))
+        with self.assertRaises(WFHError):
+            self._mark(yesterday)
+        self.assertEqual(
+            AttendanceRecord.objects.get(employee=self.emp, date=yesterday).status,
+            'late')
+
+    def test_the_refusal_points_at_the_reviewed_path(self):
+        """A past day that genuinely needs correcting already has a route that
+        a manager sees."""
+        from hr.wfh_services import WFHError
+        with self.assertRaises(WFHError) as caught:
+            self._mark(self.today - timedelta(days=3))
+        self.assertIn('attendance exception', str(caught.exception))
+
+    # ── the other refusals ──────────────────────────────────────────────────
+
+    def test_an_end_before_the_start_is_refused(self):
+        from hr.wfh_services import WFHError
+        with self.assertRaises(WFHError):
+            self._mark(self.today + timedelta(days=5), self.today + timedelta(days=2))
+
+    def test_an_absurd_range_is_refused(self):
+        """A typo in a date field should not declare a year of remote work."""
+        from hr.wfh_services import WFHError, MAX_WFH_RANGE_DAYS
+        with self.assertRaises(WFHError) as caught:
+            self._mark(self.today, self.today + timedelta(days=MAX_WFH_RANGE_DAYS))
+        self.assertIn(str(MAX_WFH_RANGE_DAYS), str(caught.exception))
+
+    def test_a_range_that_is_all_weekend_is_refused(self):
+        """A WFH record on a weekend does nothing, so accepting it would be
+        telling the employee something was recorded when it was not."""
+        from hr.wfh_services import WFHError
+        friday = _date(2026, 6, 12)
+        self.assertEqual(friday.weekday(), 4)      # KSA weekend is Fri/Sat
+        with self.assertRaises(WFHError) as caught:
+            self._mark(friday, friday + timedelta(days=1))
+        self.assertIn('weekend or holiday', str(caught.exception))
+
+    def test_a_range_that_only_touches_a_weekend_is_fine(self):
+        record = self._mark(_date(2026, 6, 11), _date(2026, 6, 14))
+        self.assertIsNotNone(record.pk)
+
+    def test_it_is_refused_over_booked_leave(self):
+        """Leave outranks WFH in derive_status(), so the record would sit there
+        doing nothing."""
+        from hr.wfh_services import WFHError
+        annual, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+        LeaveRecord.objects.create(
+            employee=self.emp, leave_type=annual, start_date=self.today,
+            end_date=self.today, days=Decimal('1'))
+        with self.assertRaises(WFHError) as caught:
+            self._mark(self.today)
+        self.assertIn('leave booked', str(caught.exception))
+
+    def test_overlapping_an_existing_entry_is_refused(self):
+        from hr.wfh_services import WFHError
+        self._mark(self.today, self.today + timedelta(days=3))
+        with self.assertRaises(WFHError) as caught:
+            self._mark(self.today + timedelta(days=2))
+        self.assertIn('already marked', str(caught.exception))
+
+    # ── withdrawing ─────────────────────────────────────────────────────────
+
+    def test_they_can_withdraw_a_day_that_has_not_finished(self):
+        from hr.models import WFHRecord
+        from hr.wfh_services import cancel_self_wfh
+        record = self._mark(self.today + timedelta(days=2))
+        cancel_self_wfh(record=record, requested_by=self.user, today=self.today)
+        self.assertFalse(WFHRecord.objects.filter(pk=record.pk).exists())
+
+    def test_withdrawing_today_puts_the_day_back_as_it_was(self):
+        from hr.wfh_services import cancel_self_wfh
+        AttendanceRecord.objects.create(
+            employee=self.emp, date=self.today, status='absent')
+        record = self._mark(self.today)
+        cancel_self_wfh(record=record, requested_by=self.user, today=self.today)
+        self.assertEqual(
+            AttendanceRecord.objects.get(employee=self.emp, date=self.today).status,
+            'absent')
+
+    def test_a_finished_period_cannot_be_deleted(self):
+        """It is a record of what happened, not a plan - letting someone delete
+        it would put the same hole in the register that backdating would."""
+        from hr.models import WFHRecord
+        from hr.wfh_services import cancel_self_wfh, WFHError
+        record = self._mark(self.today)
+        later = self.today + timedelta(days=5)
+        with self.assertRaises(WFHError) as caught:
+            cancel_self_wfh(record=record, requested_by=self.user, today=later)
+        self.assertIn('already passed', str(caught.exception))
+        self.assertTrue(WFHRecord.objects.filter(pk=record.pk).exists())
+
+    def test_only_the_person_who_marked_it_can_withdraw_it(self):
+        """An HR-set WFH day is not the employee's to remove."""
+        from accounts.models import User
+        from hr.models import WFHRecord
+        from hr.wfh_services import cancel_self_wfh, WFHError
+        hr_user = User.objects.create_user('wfh_hr', password='x')
+        record = WFHRecord.objects.create(
+            employee=self.emp, start_date=self.today, end_date=self.today,
+            created_by=hr_user)
+        with self.assertRaises(WFHError):
+            cancel_self_wfh(record=record, requested_by=self.user, today=self.today)
+        self.assertTrue(WFHRecord.objects.filter(pk=record.pk).exists())
+
+    # ── future days are not attendance yet ──────────────────────────────────
+
+    def test_marking_a_future_range_does_not_write_attendance_rows(self):
+        """Re-deriving a future day would record an absence for a date nobody
+        could have attended yet, and the register would show a wall of them for
+        a fortnight of planned remote work."""
+        self._mark(self.today + timedelta(days=1), self.today + timedelta(days=4))
+        self.assertEqual(
+            AttendanceRecord.objects.filter(employee=self.emp).count(), 0)
+
+    def test_a_past_day_with_no_record_is_not_invented(self):
+        """A range starting today can still cover days the resync walks; it
+        must not create rows for days that were never recorded."""
+        self._mark(self.today, self.today + timedelta(days=2))
+        dates = set(AttendanceRecord.objects.filter(
+            employee=self.emp).values_list('date', flat=True))
+        self.assertEqual(dates, {self.today})
+
+
+class SelfWFHViewTests(TestCase):
+    """Marking work from home from My Profile."""
+
+    def setUp(self):
+        from accounts.models import User
+        self.user = User.objects.create_user('wfhv_emp', password='x')
+        self.emp = Employee.objects.create(
+            iqama_number='WFHV-1', full_name='View Worker', user=self.user)
+        self.client.force_login(self.user)
+
+    def _post(self, follow=False, **data):
+        payload = {'action': 'mark_wfh'}
+        payload.update(data)
+        return self.client.post(reverse('hr:my_profile'), payload, follow=follow)
+
+    def _next_working_day(self):
+        """The next day that is not the KSA Fri/Sat weekend.
+
+        These tests run against the real current date, so "tomorrow" lands on
+        a weekend two days in seven - and the service rightly refuses a range
+        with no working day in it. Walking to a working day keeps the test
+        about the view rather than about which day it happens to run on.
+        """
+        from django.utils import timezone
+        from hr.models import AttendanceSettings
+        weekend = AttendanceSettings.load().weekend_day_set()
+        day = timezone.localdate() + timedelta(days=1)
+        while day.weekday() in weekend:
+            day += timedelta(days=1)
+        return day
+
+    def test_the_form_is_on_the_page(self):
+        body = self.client.get(reverse('hr:my_profile')).content.decode()
+        self.assertIn('value="mark_wfh"', body)
+
+    def test_marking_creates_the_record(self):
+        from hr.models import WFHRecord
+        day = self._next_working_day()
+        self._post(start_date=day.isoformat())
+        self.assertTrue(WFHRecord.objects.filter(
+            employee=self.emp, start_date=day, created_by=self.user).exists())
+
+    def test_a_refusal_tells_the_employee_why(self):
+        """The service writes its messages to be read by the employee, so they
+        must reach the page rather than being swallowed."""
+        from django.utils import timezone
+        from hr.models import WFHRecord
+        yesterday = timezone.localdate() - timedelta(days=1)
+        resp = self._post(start_date=yesterday.isoformat(), follow=True)
+        self.assertFalse(WFHRecord.objects.filter(employee=self.emp).exists())
+        self.assertContains(resp, 'today or a future date')
+
+    def test_the_employee_cannot_mark_somebody_else(self):
+        """The form has no employee field on purpose; posting one must not
+        reach the record."""
+        from hr.models import WFHRecord
+        other = Employee.objects.create(iqama_number='WFHV-2', full_name='Someone Else')
+        day = self._next_working_day()
+        self._post(start_date=day.isoformat(), employee=other.pk)
+        self.assertFalse(WFHRecord.objects.filter(employee=other).exists())
+        self.assertTrue(WFHRecord.objects.filter(employee=self.emp).exists())
+
+    def test_withdrawing_from_the_page(self):
+        from hr.models import WFHRecord
+        day = self._next_working_day()
+        self._post(start_date=day.isoformat())
+        record = WFHRecord.objects.get(employee=self.emp)
+        self.client.post(reverse('hr:my_profile'),
+                         {'action': 'cancel_wfh', 'wfh_id': record.pk})
+        self.assertFalse(WFHRecord.objects.filter(pk=record.pk).exists())
+
+    def test_withdrawing_somebody_elses_entry_is_refused(self):
+        """A guessed id must not reach another employee's day."""
+        from hr.models import WFHRecord
+        from django.utils import timezone
+        other = Employee.objects.create(iqama_number='WFHV-3', full_name='Third Person')
+        day = timezone.localdate() + timedelta(days=1)
+        theirs = WFHRecord.objects.create(
+            employee=other, start_date=day, end_date=day, created_by=self.user)
+        self.client.post(reverse('hr:my_profile'),
+                         {'action': 'cancel_wfh', 'wfh_id': theirs.pk})
+        self.assertTrue(WFHRecord.objects.filter(pk=theirs.pk).exists())
+
+    def test_the_page_lists_their_marked_days(self):
+        day = self._next_working_day()
+        self._post(start_date=day.isoformat(), note='At home in Riyadh')
+        body = self.client.get(reverse('hr:my_profile')).content.decode()
+        self.assertIn('At home in Riyadh', body)
+        self.assertIn('Withdraw', body)
