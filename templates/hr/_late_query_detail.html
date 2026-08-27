@@ -1,0 +1,31 @@
+{% comment %} ============================================================
+   Everything that was said about one late-mark query.
+
+   One partial for the same reason the exception one exists: a decided query
+   drops out of the pending queue, and if each list writes its own version the
+   decided ones quietly lose fields. The decided table carried neither the
+   employee's message nor the decision note, so an answered query became an
+   unexplained one.
+
+   `q` is the LateQuery.
+   ============================================================ {% endcomment %}
+<div class="small">
+  {% comment %} Why the employee believes the Late mark was wrong. This is the
+  whole substance of the query and the decided list did not show it. {% endcomment %}
+  {% if q.message %}
+  <div class="fst-italic">&ldquo;{{ q.message }}&rdquo;</div>
+  {% endif %}
+
+  {% if q.decision_note %}
+  <div class="text-muted mt-1">
+    <i class="bi bi-chat-left-text me-1"></i>{{ q.decision_note }}
+    {% if q.decided_by %}
+    <span class="fst-italic">— {{ q.decided_by.get_full_name|default:q.decided_by.username }}</span>
+    {% endif %}
+  </div>
+  {% elif q.status == 'rejected' %}
+  {% comment %} A rejection with no note is the case people come back and ask
+  about, so say plainly that none was recorded rather than showing blank. {% endcomment %}
+  <div class="text-muted mt-1 fst-italic">No reason was recorded for this decision.</div>
+  {% endif %}
+</div>
