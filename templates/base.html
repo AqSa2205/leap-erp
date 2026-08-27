@@ -947,11 +947,11 @@
             {# nested item; everyone else gets the old plain direct link. #}
             {% if user.is_admin_user or user.is_super_admin_user or user.is_ai_head_user or user.is_finance_head_user or user.is_procurement_manager_user or user.is_proposal_head_user or user.employee_profile.main_reports.exists or user.employee_profile.secondary_reports.exists %}
             <li class="nav-item">
-                <a class="nav-link d-flex justify-content-between align-items-center {% if request.resolver_match.url_name == 'my_profile' or 'team_exceptions' in request.resolver_match.url_name %}active{% endif %}" data-bs-toggle="collapse" href="#myProfileSubmenu" role="button" aria-expanded="{% if request.resolver_match.url_name == 'my_profile' or 'team_exceptions' in request.resolver_match.url_name %}true{% else %}false{% endif %}">
-                    <span><i class="bi bi-person-badge"></i> <span>My Profile</span>{% if team_exceptions_pending_count %}<span class="nav-badge-dot"></span>{% endif %}</span>
+                <a class="nav-link d-flex justify-content-between align-items-center {% if request.resolver_match.url_name == 'my_profile' or request.resolver_match.url_name == 'my_approvals' or 'team_exceptions' in request.resolver_match.url_name %}active{% endif %}" data-bs-toggle="collapse" href="#myProfileSubmenu" role="button" aria-expanded="{% if request.resolver_match.url_name == 'my_profile' or request.resolver_match.url_name == 'my_approvals' or 'team_exceptions' in request.resolver_match.url_name %}true{% else %}false{% endif %}">
+                    <span><i class="bi bi-person-badge"></i> <span>My Profile</span>{% if team_exceptions_pending_count or my_approvals_count %}<span class="nav-badge-dot"></span>{% endif %}</span>
                     <i class="bi bi-chevron-down" style="font-size:0.7rem;"></i>
                 </a>
-                <div class="collapse {% if request.resolver_match.url_name == 'my_profile' or 'team_exceptions' in request.resolver_match.url_name %}show{% endif %}" id="myProfileSubmenu">
+                <div class="collapse {% if request.resolver_match.url_name == 'my_profile' or request.resolver_match.url_name == 'my_approvals' or 'team_exceptions' in request.resolver_match.url_name %}show{% endif %}" id="myProfileSubmenu">
                     <ul class="nav flex-column ms-3">
                         <li class="nav-item">
                             <a class="nav-link py-1 {% if request.resolver_match.url_name == 'my_profile' %}active{% endif %}" href="{% url 'hr:my_profile' %}">
@@ -964,6 +964,12 @@
                                 {% if team_exceptions_pending_count %}<span class="nav-badge-count">{{ team_exceptions_pending_count }}</span>{% endif %}
                             </a>
                         </li>
+                        <li class="nav-item">
+                            <a class="nav-link py-1 d-flex justify-content-between align-items-center {% if request.resolver_match.url_name == 'my_approvals' %}active{% endif %}" href="{% url 'hr:my_approvals' %}">
+                                <span><i class="bi bi-inbox"></i> <span>Pending Approvals</span></span>
+                                {% if my_approvals_count %}<span class="nav-badge-count">{{ my_approvals_count }}</span>{% endif %}
+                            </a>
+                        </li>
                     </ul>
                 </div>
             </li>
@@ -971,6 +977,12 @@
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.url_name == 'my_profile' %}active{% endif %}" href="{% url 'hr:my_profile' %}" data-title="My Profile">
                     <i class="bi bi-person-badge"></i> <span>My Profile</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link d-flex justify-content-between align-items-center {% if request.resolver_match.url_name == 'my_approvals' %}active{% endif %}" href="{% url 'hr:my_approvals' %}" data-title="Pending Approvals">
+                    <span><i class="bi bi-inbox"></i> <span>Pending Approvals</span></span>
+                    {% if my_approvals_count %}<span class="nav-badge-count">{{ my_approvals_count }}</span>{% endif %}
                 </a>
             </li>
             {% endif %}

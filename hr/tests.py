@@ -10247,7 +10247,7 @@ class PendingApprovalsViewTests(TestCase):
         return self.client.get(reverse('hr:my_profile'))
 
     def _approvals(self):
-        return self.client.get(reverse('hr:my_profile'), {'tab': 'approvals'})
+        return self.client.get(reverse('hr:my_approvals'))
 
     def test_the_tab_is_on_the_profile_page(self):
         self.assertContains(self._profile(), 'Pending Approvals')
@@ -10297,8 +10297,33 @@ class PendingApprovalsViewTests(TestCase):
 
     def test_it_needs_a_login(self):
         self.client.logout()
+        self.assertNotEqual(
+            self.client.get(reverse('hr:my_approvals')).status_code, 200)
+
+    def test_the_first_link_still_works(self):
+        """?tab=approvals shipped before the inbox had a URL of its own, so it
+        redirects rather than quietly showing the profile instead."""
         resp = self.client.get(reverse('hr:my_profile'), {'tab': 'approvals'})
-        self.assertNotEqual(resp.status_code, 200)
+        self.assertRedirects(resp, reverse('hr:my_approvals'))
+
+    def test_the_sidebar_carries_it(self):
+        """The point of the menu entry: reachable without going through My
+        Profile first."""
+        body = self.client.get(reverse('hr:my_profile')).content.decode()
+        self.assertIn(reverse('hr:my_approvals'), body)
+        self.assertIn('Pending Approvals', body)
+
+    def test_the_sidebar_badge_matches_the_page(self):
+        """Built by the same function as the page, so a badge cannot send
+        somebody looking for work that is not there."""
+        _submit_aex(
+            employee=self.report, event_date=_date(2026, 7, 20),
+            event_start_time=_time(9, 0), reason_category='site_visit',
+            created_by=self.user)
+        # Any page renders the sidebar, so the count must be there too.
+        elsewhere = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(elsewhere.context['my_approvals_count'],
+                         self._approvals().context['my_approvals_count'])
 
 
 class PendingApprovalsPurchaseOrderTests(TestCase):

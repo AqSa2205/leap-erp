@@ -394,19 +394,10 @@ def my_profile(request):
 
     emp = getattr(request.user, 'employee_profile', None)
 
-    # ?tab=approvals is its own page. Answered here, before the profile's own
-    # context is assembled, so opening the inbox does not pay for a month of
-    # attendance, a leave balance and an asset list nobody is looking at.
-    # Nothing posts with tab=approvals, so no form handling is skipped.
+    # The inbox has its own URL and its own sidebar entry. This kept working
+    # so the ?tab=approvals link that shipped first does not rot.
     if request.GET.get('tab') == 'approvals':
-        from hr.approvals import pending_approvals
-        groups = pending_approvals(request.user)
-        return render(request, 'hr/my_approvals.html', {
-            'employee': emp,
-            'active_tab': 'approvals',
-            'approval_groups': groups,
-            'my_approvals_count': sum(g['count'] for g in groups),
-        })
+        return redirect('hr:my_approvals')
 
     context = {'employee': emp}
 
@@ -816,6 +807,28 @@ def my_profile(request):
 
 
 @login_required
+@login_required
+def my_approvals(request):
+    """Everything waiting on this user's decision, across the system.
+
+    A page of its own rather than a section of My Profile: it is answered
+    without assembling the profile's context, so opening the inbox does not
+    pay for a month of attendance, a leave balance and an asset list nobody is
+    looking at.
+
+    It is an index, not a second set of Approve buttons - every row links out
+    to the page that decides it. See hr/approvals.py for why.
+    """
+    from hr.approvals import pending_approvals
+    groups = pending_approvals(request.user)
+    return render(request, 'hr/my_approvals.html', {
+        'employee': getattr(request.user, 'employee_profile', None),
+        'active_tab': 'approvals',
+        'approval_groups': groups,
+        'my_approvals_count': sum(g['count'] for g in groups),
+    })
+
+
 def build_attendance_pdf(emp, month_start, month_end):
     # Builds the same monthly attendance PDF used by my_attendance_export_pdf
     # (and reused for the automatic late-threshold email), returned as a
