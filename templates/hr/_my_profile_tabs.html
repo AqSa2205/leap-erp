@@ -1,0 +1,26 @@
+{% comment %} ============================================================
+   My Profile / Pending Approvals.
+
+   Included by both pages rather than duplicated, so the two tabs cannot end
+   up disagreeing about which of them is active.
+
+   The count is only shown when there is something in it: a grey "0" beside
+   every tab teaches people to stop reading the number.
+   ============================================================ {% endcomment %}
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item">
+    <a class="nav-link {% if active_tab != 'approvals' %}active{% endif %}"
+       href="{% url 'hr:my_profile' %}">
+      <i class="bi bi-person-vcard me-1"></i> My Profile
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if active_tab == 'approvals' %}active{% endif %}"
+       href="{% url 'hr:my_approvals' %}">
+      <i class="bi bi-inbox me-1"></i> Pending Approvals
+      {% if my_approvals_count %}
+      <span class="badge bg-danger ms-1">{{ my_approvals_count }}</span>
+      {% endif %}
+    </a>
+  </li>
+</ul>

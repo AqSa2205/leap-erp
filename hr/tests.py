@@ -10071,3 +10071,415 @@ class SelfWFHViewTests(TestCase):
         body = self.client.get(reverse('hr:my_profile')).content.decode()
         self.assertIn('At home in Riyadh', body)
         self.assertIn('Withdraw', body)
+
+
+class PendingApprovalsTests(TestCase):
+    """The Pending Approvals inbox on My Profile.
+
+    The risk in gathering approvals from half the system into one list is that
+    the list becomes a second opinion about who may decide what. So the thing
+    worth testing is not that rows appear - it is that a row never appears for
+    somebody the real page would turn away."""
+
+    def setUp(self):
+        from accounts.models import Role, User
+        self.approver_user = _login_user('pa_approver')
+        self.approver = make_employee(iqama='PA-MGR', name='Pending Manager')
+        self.approver.user = self.approver_user
+        self.approver.save(update_fields=['user'])
+
+        self.report = make_employee(iqama='PA-REP', name='Pending Report')
+        self.report.main_manager = self.approver
+        self.report.save(update_fields=['main_manager'])
+        self.report_user = _login_user('pa_report')
+        self.report.user = self.report_user
+        self.report.save(update_fields=['user'])
+
+        self.stranger_user = _login_user('pa_stranger')
+        self.stranger = make_employee(iqama='PA-STR', name='Pending Stranger')
+        self.stranger.user = self.stranger_user
+        self.stranger.save(update_fields=['user'])
+
+    def _groups(self, user):
+        from hr.approvals import pending_approvals
+        return {g['key']: g for g in pending_approvals(user)}
+
+    def _exception_for(self, employee):
+        return _submit_aex(
+            employee=employee, event_date=_date(2026, 7, 20),
+            event_start_time=_time(9, 0), reason_category='site_visit',
+            created_by=self.approver_user)
+
+    # ── it shows what is genuinely yours ────────────────────────────────────
+
+    def test_a_managers_own_reports_exception_appears(self):
+        self._exception_for(self.report)
+        groups = self._groups(self.approver_user)
+        self.assertIn('attendance_exceptions', groups)
+        self.assertEqual(
+            [i['title'] for i in groups['attendance_exceptions']['items']],
+            ['Pending Report'])
+
+    def test_it_does_not_show_somebody_elses_queue(self):
+        """A stranger to that employee must not be handed their decision."""
+        self._exception_for(self.report)
+        self.assertNotIn('attendance_exceptions', self._groups(self.stranger_user))
+
+    def test_your_own_request_is_not_yours_to_approve(self):
+        """The Team Exceptions queue excludes the viewer's own request rather
+        than merely disabling the buttons, so the inbox must too - otherwise it
+        sends someone to a page that will not show it.
+
+        Set up through a secondary-manager self-assignment, which is the shape
+        that actually reaches this branch: Employee.clean() guards against
+        main-manager cycles but says in so many words that secondary-manager
+        self-assignment is out of its scope, so nothing stops the data
+        existing.
+        """
+        self.approver.secondary_managers.add(self.approver)
+        self._exception_for(self.approver)
+        groups = self._groups(self.approver_user)
+        titles = [i['title'] for g in groups.values() for i in g['items']]
+        self.assertNotIn('Pending Manager', titles)
+
+    def test_a_leave_request_reaches_its_named_approver(self):
+        from hr.models import LeaveRequest, LeaveRequestApproval
+        annual, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+        req = LeaveRequest.objects.create(
+            employee=self.report, leave_type=annual,
+            start_date=_date(2026, 7, 1), end_date=_date(2026, 7, 2),
+            days=Decimal('2'), status='pending', created_by=self.report_user)
+        LeaveRequestApproval.objects.create(
+            leave_request=req, approver=self.approver_user, decision='pending')
+        groups = self._groups(self.approver_user)
+        self.assertIn('leave', groups)
+        self.assertEqual(groups['leave']['count'], 1)
+
+    def test_seeing_the_leave_queue_is_not_the_same_as_approving_a_request(self):
+        """Keyed off the approval row, not the dashboard access gate. Listing
+        somebody else's decision as yours would send you to a page with no
+        buttons on it."""
+        from hr.models import LeaveRequest, LeaveRequestApproval
+        annual, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+        req = LeaveRequest.objects.create(
+            employee=self.report, leave_type=annual,
+            start_date=_date(2026, 7, 1), end_date=_date(2026, 7, 2),
+            days=Decimal('2'), status='pending', created_by=self.report_user)
+        LeaveRequestApproval.objects.create(
+            leave_request=req, approver=self.approver_user, decision='pending')
+        self.assertNotIn('leave', self._groups(self.stranger_user))
+
+    def test_an_already_decided_item_drops_off(self):
+        from hr.models import LeaveRequest, LeaveRequestApproval
+        annual, _ = LeaveType.objects.get_or_create(
+            code='annual', defaults={'name': 'Annual', 'default_annual_days': 30})
+        req = LeaveRequest.objects.create(
+            employee=self.report, leave_type=annual,
+            start_date=_date(2026, 7, 1), end_date=_date(2026, 7, 2),
+            days=Decimal('2'), status='pending', created_by=self.report_user)
+        approval = LeaveRequestApproval.objects.create(
+            leave_request=req, approver=self.approver_user, decision='pending')
+        self.assertIn('leave', self._groups(self.approver_user))
+        approval.decision = 'approved'
+        approval.save()
+        self.assertNotIn('leave', self._groups(self.approver_user))
+
+    def test_late_queries_are_hr_only(self):
+        """TeamExceptionsView silently downgrades a non-HR user off that tab,
+        so listing one for them would be a dead link."""
+        from hr.models import LateQuery
+        from accounts.models import Role
+        record = AttendanceRecord.objects.create(
+            employee=self.report, date=_date(2026, 6, 10), status='late')
+        LateQuery.objects.create(
+            employee=self.report, attendance_record=record, message='Gate was shut')
+        self.assertNotIn('late_queries', self._groups(self.approver_user))
+        hr_user = _make_role_user('pa_hr', Role.SUPER_ADMIN)
+        self.assertIn('late_queries', self._groups(hr_user))
+
+    # ── empty groups do not clutter it ──────────────────────────────────────
+
+    def test_an_empty_group_is_left_out_entirely(self):
+        """A page of headings each saying zero is a page nobody reads."""
+        self.assertEqual(self._groups(self.stranger_user), {})
+
+    def test_the_count_is_the_sum_of_what_is_listed(self):
+        from hr.approvals import pending_approvals, pending_approvals_count
+        self._exception_for(self.report)
+        groups = pending_approvals(self.approver_user)
+        self.assertEqual(pending_approvals_count(self.approver_user),
+                         sum(len(g['items']) for g in groups))
+
+    # ── one broken source must not take the page down ───────────────────────
+
+    def test_a_failing_source_does_not_lose_the_others(self):
+        """This aggregates over half the system. One module's problem should
+        not cost somebody the view of their other queues."""
+        from unittest.mock import patch
+        import hr.approvals as approvals
+
+        def boom(_user):
+            raise RuntimeError('procurement is having a day')
+
+        self._exception_for(self.report)
+        with patch.object(approvals, 'SOURCES',
+                          (boom, approvals.attendance_exceptions)):
+            groups = approvals.pending_approvals(self.approver_user)
+        self.assertEqual([g['key'] for g in groups], ['attendance_exceptions'])
+
+
+class PendingApprovalsViewTests(TestCase):
+    """The tab itself."""
+
+    def setUp(self):
+        self.user = _login_user('pav_user')
+        self.emp = make_employee(iqama='PAV-1', name='Tab Person')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+        self.report = make_employee(iqama='PAV-2', name='Tab Report')
+        self.report.main_manager = self.emp
+        self.report.save(update_fields=['main_manager'])
+        self.client.login(username='pav_user', password='testpass123')
+
+    def _profile(self):
+        return self.client.get(reverse('hr:my_profile'))
+
+    def _approvals(self):
+        return self.client.get(reverse('hr:my_approvals'))
+
+    def test_the_tab_is_on_the_profile_page(self):
+        self.assertContains(self._profile(), 'Pending Approvals')
+
+    def test_the_tab_opens(self):
+        resp = self._approvals()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTemplateUsed(resp, 'hr/my_approvals.html')
+
+    def test_an_empty_inbox_says_what_it_checked(self):
+        """"You're all caught up" over a queue that was never looked at is
+        worse than no page at all."""
+        resp = self._approvals()
+        self.assertContains(resp, 'Nothing is waiting on you')
+        self.assertContains(resp, 'purchase-order approvals')
+
+    def test_a_waiting_item_is_listed_with_a_way_to_act_on_it(self):
+        _submit_aex(
+            employee=self.report, event_date=_date(2026, 7, 20),
+            event_start_time=_time(9, 0), reason_category='site_visit',
+            created_by=self.user)
+        resp = self._approvals()
+        self.assertContains(resp, 'Tab Report')
+        self.assertContains(resp, reverse('hr:team_exceptions'))
+
+    def test_the_badge_counts_what_is_waiting(self):
+        _submit_aex(
+            employee=self.report, event_date=_date(2026, 7, 20),
+            event_start_time=_time(9, 0), reason_category='site_visit',
+            created_by=self.user)
+        self.assertEqual(self._profile().context['my_approvals_count'], 1)
+        self.assertEqual(self._approvals().context['my_approvals_count'], 1)
+
+    def test_the_profile_tab_still_works(self):
+        """The inbox is answered before the profile context is built; the
+        profile itself must be untouched by that."""
+        resp = self._profile()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTemplateUsed(resp, 'hr/my_profile.html')
+        self.assertIn('my_attendance_totals', resp.context)
+
+    def test_the_inbox_does_not_build_the_profile_context(self):
+        """It is answered early on purpose - opening the inbox should not pay
+        for a month of attendance, a leave balance and an asset list nobody is
+        looking at."""
+        self.assertNotIn('my_attendance_totals', self._approvals().context)
+
+    def test_it_needs_a_login(self):
+        self.client.logout()
+        self.assertNotEqual(
+            self.client.get(reverse('hr:my_approvals')).status_code, 200)
+
+    def test_the_first_link_still_works(self):
+        """?tab=approvals shipped before the inbox had a URL of its own, so it
+        redirects rather than quietly showing the profile instead."""
+        resp = self.client.get(reverse('hr:my_profile'), {'tab': 'approvals'})
+        self.assertRedirects(resp, reverse('hr:my_approvals'))
+
+    def test_the_sidebar_carries_it(self):
+        """The point of the menu entry: reachable without going through My
+        Profile first."""
+        body = self.client.get(reverse('hr:my_profile')).content.decode()
+        self.assertIn(reverse('hr:my_approvals'), body)
+        self.assertIn('Pending Approvals', body)
+
+    def test_the_sidebar_badge_matches_the_page(self):
+        """Built by the same function as the page, so a badge cannot send
+        somebody looking for work that is not there."""
+        _submit_aex(
+            employee=self.report, event_date=_date(2026, 7, 20),
+            event_start_time=_time(9, 0), reason_category='site_visit',
+            created_by=self.user)
+        # Any page renders the sidebar, so the count must be there too.
+        elsewhere = self.client.get(reverse('hr:my_profile'))
+        self.assertEqual(elsewhere.context['my_approvals_count'],
+                         self._approvals().context['my_approvals_count'])
+
+
+class PendingApprovalsPurchaseOrderTests(TestCase):
+    """Purchase orders reach an inbox only when the signature is that
+    person's own.
+
+    can_user_approve_stage() lets a super admin sign anything, which is right
+    for the button on the PO page - an override exists so work never stalls.
+    It is wrong for a personal inbox: it would drop every open PO at every
+    stage into one person's list of things waiting on them."""
+
+    def setUp(self):
+        from accounts.models import Role
+        from procurement.models import PurchaseOrder
+        self.super_admin = _make_role_user('po_super', Role.SUPER_ADMIN)
+        self.admin = _make_role_user('po_admin', Role.ADMIN)
+        self.proc_mgr = _make_role_user('po_scm', Role.PROCUREMENT_MGR)
+        self.po = PurchaseOrder.objects.create(
+            po_number='PO-INBOX-1', po_date=_date(2026, 6, 1),
+            created_by=self.proc_mgr)
+
+    def _po_items(self, user):
+        from hr.approvals import pending_approvals
+        for group in pending_approvals(user):
+            if group['key'] == 'purchase_orders':
+                return group['items']
+        return []
+
+    def _sign(self, *stages):
+        """Walk the PO forward through the stages already signed."""
+        from django.utils import timezone
+        from procurement.models import PurchaseOrder
+        updates = {f'{s}_approved_at': timezone.now() for s in stages}
+        PurchaseOrder.objects.filter(pk=self.po.pk).update(**updates)
+        self.po.refresh_from_db()
+
+    # ── whose signature is it ───────────────────────────────────────────────
+
+    def test_the_first_stage_is_the_procurement_managers(self):
+        self.assertEqual(self.po.current_stage['key'], 'scm')
+        self.assertEqual(len(self._po_items(self.proc_mgr)), 1)
+
+    def test_a_super_admin_does_not_get_somebody_elses_stage(self):
+        """The whole point: an override is not an assignment."""
+        self.assertEqual(self.po.current_stage['key'], 'scm')
+        self.assertEqual(self._po_items(self.super_admin), [])
+
+    def test_a_super_admin_can_still_sign_it_on_the_po_page(self):
+        """The inbox narrows what is shown; it must not narrow what is
+        allowed. The override still stands where it belongs."""
+        self.assertTrue(self.po.can_user_approve_stage(self.super_admin, 'scm'))
+
+    def test_the_middle_stages_are_the_admins(self):
+        self._sign('scm')
+        self.assertEqual(self.po.current_stage['key'], 'pm')
+        self.assertEqual(len(self._po_items(self.admin)), 1)
+        self.assertEqual(self._po_items(self.super_admin), [])
+        self.assertEqual(self._po_items(self.proc_mgr), [])
+
+    def test_a_stage_that_is_not_current_yet_is_nobodys_inbox_item(self):
+        """Strict sequencing - only the current stage can be signed, so only
+        the current stage is waiting on anyone."""
+        self.assertEqual(self.po.current_stage['key'], 'scm')
+        self.assertEqual(self._po_items(self.admin), [])
+
+    def test_a_signed_stage_drops_off_the_signers_inbox(self):
+        self.assertEqual(len(self._po_items(self.proc_mgr)), 1)
+        self._sign('scm')
+        self.assertEqual(self._po_items(self.proc_mgr), [])
+
+    def test_a_released_po_is_waiting_on_nobody(self):
+        self._sign('scm', 'pm', 'coo')
+        self.assertIsNone(self.po.current_stage)
+        for user in (self.proc_mgr, self.admin, self.super_admin):
+            with self.subTest(user=user.username):
+                self.assertEqual(self._po_items(user), [])
+
+    # ── the named signer ────────────────────────────────────────────────────
+
+    def test_a_super_admin_who_is_the_named_pm_does_see_it(self):
+        """APPROVAL_STAGES names a person per stage, and that name is the only
+        individual identity this model carries. A super admin who IS the PM is
+        the person the work is waiting on, unlike every other super admin."""
+        from procurement.models import PurchaseOrder
+        pm_name = PurchaseOrder.stage_signer_name('pm')
+        first, _, last = pm_name.partition(' ')
+        self.super_admin.first_name, self.super_admin.last_name = first, last
+        self.super_admin.save(update_fields=['first_name', 'last_name'])
+        self._sign('scm')
+        self.assertEqual(self.po.current_stage['key'], 'pm')
+        self.assertEqual(len(self._po_items(self.super_admin)), 1)
+
+    def test_that_same_super_admin_still_does_not_get_the_other_stages(self):
+        """Being the PM makes the PM stage theirs, not the whole pipeline."""
+        from procurement.models import PurchaseOrder
+        pm_name = PurchaseOrder.stage_signer_name('pm')
+        first, _, last = pm_name.partition(' ')
+        self.super_admin.first_name, self.super_admin.last_name = first, last
+        self.super_admin.save(update_fields=['first_name', 'last_name'])
+        self.assertEqual(self.po.current_stage['key'], 'scm')
+        self.assertEqual(self._po_items(self.super_admin), [])
+
+    def test_the_name_match_forgives_case_and_spacing(self):
+        """Those names are typed constants and a user record is typed
+        separately; an exact comparison would fail on a double space."""
+        from procurement.models import PurchaseOrder
+        pm_name = PurchaseOrder.stage_signer_name('pm')
+        first, _, last = pm_name.partition(' ')
+        self.super_admin.first_name = f'  {first.upper()} '
+        self.super_admin.last_name = f' {last.lower()}  '
+        self.super_admin.save(update_fields=['first_name', 'last_name'])
+        self._sign('scm')
+        self.assertEqual(len(self._po_items(self.super_admin)), 1)
+
+    def test_the_named_signer_never_widens_what_is_allowed(self):
+        """Three layers, and the name only touches the middle one.
+
+        Visibility decides which POs a user can see at all; designation
+        decides whose inbox a stage belongs in; permission decides who may
+        press Approve. Sharing a name with the PM moves the middle one and
+        neither of the others - a stranger still cannot see the PO, and still
+        cannot sign it.
+        """
+        from procurement.models import PurchaseOrder
+        from procurement.views import _visible_pos_for
+        plain = _login_user('po_plain')
+        pm_name = PurchaseOrder.stage_signer_name('pm')
+        first, _, last = pm_name.partition(' ')
+        plain.first_name, plain.last_name = first, last
+        plain.save(update_fields=['first_name', 'last_name'])
+        self._sign('scm')
+
+        # Designation: the stage is mapped to that name.
+        self.assertTrue(self.po.is_designated_approver(plain, 'pm'))
+        # Permission: untouched, and still refuses them.
+        self.assertFalse(self.po.can_user_approve_stage(plain, 'pm'))
+        # Visibility: they cannot see this PO, so it reaches no inbox of
+        # theirs regardless of the name.
+        self.assertFalse(_visible_pos_for(plain).filter(pk=self.po.pk).exists())
+        self.assertEqual(self._po_items(plain), [])
+
+    def test_the_ceo_stage_stays_with_the_super_admins(self):
+        """CEO is super-admin-only by design, so excluding it would leave that
+        stage in nobody's inbox at all.
+
+        total_value is a property summing the PO's items, so the threshold is
+        dropped rather than the value inflated - the point under test is the
+        stage mapping, not how the value is arrived at.
+        """
+        from decimal import Decimal as _D
+        from unittest.mock import patch
+        from procurement.models import PurchaseOrder
+        with patch.object(PurchaseOrder, 'CEO_APPROVAL_THRESHOLD', _D('0')):
+            self.po.refresh_from_db()
+            self.assertIn('ceo', self.po.required_stages)
+            self._sign('scm', 'pm', 'coo')
+            self.assertEqual(self.po.current_stage['key'], 'ceo')
+            self.assertEqual(len(self._po_items(self.super_admin)), 1)
+            self.assertEqual(self._po_items(self.admin), [])

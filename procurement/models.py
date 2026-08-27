@@ -16,6 +16,32 @@ def validate_not_numeric_only(value):
         )
 
 
+def _same_person(user, signer_name):
+    """Loose match of a signed-in user against a name written in
+    APPROVAL_STAGES.
+
+    Deliberately forgiving about case and spacing: those names are typed
+    constants and a user record's own name is typed separately, so an exact
+    comparison would fail on nothing more than a double space. It is only ever
+    used to WIDEN what somebody sees in their own inbox, never to grant a
+    permission — can_user_approve_stage() remains the gate on the button.
+    """
+    if not signer_name:
+        return False
+
+    def norm(value):
+        return ' '.join((value or '').split()).casefold()
+
+    target = norm(signer_name)
+    if not target:
+        return False
+    candidates = [
+        norm(user.get_full_name()),
+        norm(f'{user.first_name} {user.last_name}'),
+    ]
+    return target in [c for c in candidates if c]
+
+
 class PurchaseOrder(models.Model):
     """Purchase Order header with vendor info, project details, and terms."""
 
@@ -362,6 +388,53 @@ class PurchaseOrder(models.Model):
         if stage_key in ('pm', 'coo'):
             return user.is_admin_user
         # CEO stays super-admin-only.
+        return False
+
+    @classmethod
+    def stage_signer_name(cls, stage_key):
+        """The person named against a stage in APPROVAL_STAGES, or ''."""
+        for key, _label, signer in cls.APPROVAL_STAGES:
+            if key == stage_key:
+                return signer or ''
+        return ''
+
+    def is_designated_approver(self, user, stage_key):
+        """Whether this stage is actually THIS user's to sign, as opposed to
+        something they are merely allowed to sign.
+
+        can_user_approve_stage() above lets a super admin sign anything, which
+        is right for the button on the PO page — an override exists so work
+        does not stall. It is wrong for a personal inbox: it would put every
+        open PO at every stage into one person's list of things waiting on
+        them, when almost none of them are.
+
+        Three steps, in order:
+
+        1. The named signer always counts. APPROVAL_STAGES carries a person's
+           name per stage, and that name is the only individual identity this
+           model holds — there is no FK to a user. It is what lets a super
+           admin who happens to BE the PM see the PM stage, while other super
+           admins do not.
+        2. Otherwise a super admin is not treated as assigned. Holding an
+           override is not the same as the work being yours.
+        3. Otherwise fall back to the role mapping, so the ordinary role
+           holders keep seeing their own stages even where their user record's
+           name does not match the one written here.
+        """
+        if not user or not user.is_authenticated:
+            return False
+
+        signer = self.stage_signer_name(stage_key)
+        if signer and _same_person(user, signer):
+            return True
+        if user.is_super_admin_user:
+            # CEO is super-admin-only by design, so nobody else could hold it;
+            # falling through would leave that stage in no inbox at all.
+            return stage_key == 'ceo'
+        if stage_key == 'scm':
+            return getattr(user, 'is_procurement_manager_user', False)
+        if stage_key in ('pm', 'coo'):
+            return bool(user.is_admin_user)
         return False
 
     def can_user_edit_signature(self, user, stage_key):
