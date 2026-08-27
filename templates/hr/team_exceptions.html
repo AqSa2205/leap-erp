@@ -398,14 +398,19 @@
           <tr>
             <td>{{ q.employee.full_name }}</td>
             <td>{{ q.attendance_record.date|date:"d M Y" }}</td>
-            <td>{{ q.message }}</td>
+            <td>{% include 'hr/_late_query_detail.html' %}</td>
             <td>{{ q.created_at|date:"d M Y H:i" }}</td>
             <td>
-              <form method="post" class="d-inline">
+              <form method="post">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="decide_late_query">
                 <input type="hidden" name="query_id" value="{{ q.pk }}">
                 <input type="hidden" name="tab" value="late_queries">
+                {% comment %} The employee sees this on their own profile, so
+                a rejection can be explained rather than just delivered.
+                Optional, so a decision is never blocked on typing. {% endcomment %}
+                <textarea name="comment" rows="2" class="form-control form-control-sm mb-1"
+                          placeholder="Reason for the decision — the employee will see this"></textarea>
                 <button type="submit" name="decision" value="approved" class="btn btn-sm btn-success">Approve</button>
                 <button type="submit" name="decision" value="rejected" class="btn btn-sm btn-outline-danger">Reject</button>
               </form>
@@ -427,14 +432,20 @@
       {% if decided_late_queries %}
       <div class="table-responsive">
       <table class="table table-sm mb-0">
-        <thead class="table-light"><tr><th>Employee</th><th>Date</th><th>Status</th><th>Decided by</th></tr></thead>
+        <thead class="table-light"><tr><th>Employee</th><th>Date</th><th>Query &amp; decision</th><th>Status</th><th>Decided by</th><th>Decided at</th></tr></thead>
         <tbody>
           {% for q in decided_late_queries %}
           <tr>
             <td>{{ q.employee.full_name }}</td>
             <td>{{ q.attendance_record.date|date:"d M Y" }}</td>
-            <td>{{ q.get_status_display }}</td>
-            <td>{{ q.decided_by.get_full_name|default:q.decided_by.username }}</td>
+            <td>{% include 'hr/_late_query_detail.html' %}</td>
+            <td>
+              {% if q.status == 'approved' %}<span class="badge bg-success">Approved</span>
+              {% elif q.status == 'rejected' %}<span class="badge bg-danger">Rejected</span>
+              {% else %}<span class="badge bg-secondary">{{ q.get_status_display }}</span>{% endif %}
+            </td>
+            <td class="small text-muted">{{ q.decided_by.get_full_name|default:q.decided_by.username }}</td>
+            <td class="small text-muted">{% if q.decided_at %}{{ q.decided_at|date:'d M Y, H:i' }}{% else %}—{% endif %}</td>
           </tr>
           {% endfor %}
         </tbody>

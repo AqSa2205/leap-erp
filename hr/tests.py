@@ -9672,3 +9672,116 @@ class ExceptionReasonVisibilityTests(TestCase):
         body = self.client.get(reverse('hr:my_profile')).content.decode()
         self.assertIn('Client site in Dammam', body)
         self.assertIn('Approved, site confirmed', body)
+
+
+class LateQueryDetailVisibilityTests(TestCase):
+    """A decided late-mark query has to keep the question and the answer.
+
+    Same defect as the attendance exceptions: the decided table showed only
+    the status and who decided it, so an answered query became an unexplained
+    one. Worse here — the decide form never sent a comment, so the
+    decision_note field the view reads was never written at all."""
+
+    def setUp(self):
+        self.emp = make_employee(iqama='LQ-1', name='Query Person')
+        self.emp_user = _login_user('lq_emp')
+        self.emp.user = self.emp_user
+        self.emp.save(update_fields=['user'])
+        self.hr_user = _make_role_user('lq_hr', Role.SUPER_ADMIN)
+        self.record = AttendanceRecord.objects.create(
+            employee=self.emp, date=_date(2026, 6, 10), status='late',
+            check_in=_time(9, 15))
+
+    def _query(self, message='The gate was closed, I was in the car park'):
+        from hr.models import LateQuery
+        return LateQuery.objects.create(
+            employee=self.emp, attendance_record=self.record, message=message)
+
+    def _decide(self, query, decision='approved', comment=''):
+        self.client.login(username='lq_hr', password='testpass123')
+        return self.client.post(
+            reverse('hr:team_exceptions'),
+            {'action': 'decide_late_query', 'query_id': query.pk,
+             'tab': 'late_queries', 'decision': decision, 'comment': comment})
+
+    def _hr_page(self):
+        self.client.login(username='lq_hr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'),
+                               {'tab': 'late_queries'})
+        self.assertEqual(resp.status_code, 200)
+        return resp.content.decode()
+
+    def _my_profile(self):
+        self.client.login(username='lq_emp', password='testpass123')
+        return self.client.get(reverse('hr:my_profile')).content.decode()
+
+    # ── the decision note was unreachable ───────────────────────────────────
+
+    def test_the_decide_form_records_the_reason(self):
+        """The view already read request.POST['comment'] into decision_note,
+        but no form ever sent one, so the field was dead and every decided
+        query displayed an empty note."""
+        from hr.models import LateQuery
+        query = self._query()
+        self._decide(query, 'rejected', comment='Gate logs show 09:14 arrival')
+        query = LateQuery.objects.get(pk=query.pk)
+        self.assertEqual(query.status, 'rejected')
+        self.assertEqual(query.decision_note, 'Gate logs show 09:14 arrival')
+
+    def test_the_form_offers_somewhere_to_type_it(self):
+        self._query()
+        self.assertIn('name="comment"', self._hr_page())
+
+    def test_a_decision_is_not_blocked_on_typing_a_reason(self):
+        """Optional on purpose - an approval that needs no explanation should
+        stay one click."""
+        from hr.models import LateQuery
+        query = self._query()
+        self._decide(query, 'approved')
+        self.assertEqual(LateQuery.objects.get(pk=query.pk).status, 'approved')
+
+    # ── the record survives the decision ────────────────────────────────────
+
+    def test_a_decided_query_still_shows_what_was_asked(self):
+        self._decide(self._query(), 'approved', comment='Confirmed with reception')
+        body = self._hr_page()
+        self.assertIn('The gate was closed', body)
+
+    def test_a_decided_query_shows_why_it_was_decided(self):
+        self._decide(self._query(), 'rejected', comment='Gate logs show 09:14')
+        self.assertIn('Gate logs show 09:14', self._hr_page())
+
+    def test_the_decided_table_carries_the_detail_columns(self):
+        self._decide(self._query())
+        self.assertIn(
+            '<th>Employee</th><th>Date</th><th>Query &amp; decision</th>'
+            '<th>Status</th><th>Decided by</th><th>Decided at</th>',
+            self._hr_page())
+
+    def test_a_rejection_with_no_reason_says_so_rather_than_showing_blank(self):
+        """The case people come back and ask about; a blank cell reads as a
+        rendering fault rather than as nothing having been written."""
+        self._decide(self._query(), 'rejected')
+        self.assertIn('No reason was recorded', self._hr_page())
+
+    def test_an_approval_with_no_reason_is_not_nagged_about(self):
+        """An approval needs no justification - the employee got what they
+        asked for."""
+        self._decide(self._query(), 'approved')
+        self.assertNotIn('No reason was recorded', self._hr_page())
+
+    # ── the employee sees their own ─────────────────────────────────────────
+
+    def test_the_employee_sees_their_own_query_and_its_answer(self):
+        self._decide(self._query(), 'rejected', comment='Gate logs show 09:14')
+        body = self._my_profile()
+        self.assertIn('The gate was closed', body)
+        self.assertIn('Gate logs show 09:14', body)
+
+    def test_an_approved_query_actually_clears_the_late_mark(self):
+        """The reason the detail matters: an approved query re-derives the day.
+        If it did not, the employee would be reading an answer that changed
+        nothing."""
+        self._decide(self._query(), 'approved')
+        self.record.refresh_from_db()
+        self.assertEqual(self.record.status, 'present')
