@@ -482,6 +482,39 @@ class WFHRecordForm(forms.ModelForm):
         }
 
 
+class SelfWFHForm(forms.Form):
+    """An employee marking their own remote days from My Profile.
+
+    Not a ModelForm on WFHRecord: that form exposes `employee`, which is
+    exactly the field a self-service page must not accept from the browser.
+    The dates are validated in hr.wfh_services, which is also what the
+    register and any future entry point go through, so the rules cannot be
+    enforced in one place and skipped in another.
+    """
+    start_date = forms.DateField(
+        label='From',
+        widget=forms.DateInput(attrs={'class': 'form-control form-control-sm',
+                                      'type': 'date'}))
+    end_date = forms.DateField(
+        label='To', required=False,
+        help_text='Leave blank for a single day.',
+        widget=forms.DateInput(attrs={'class': 'form-control form-control-sm',
+                                      'type': 'date'}))
+    note = forms.CharField(
+        label='Note', required=False, max_length=300,
+        widget=forms.TextInput(attrs={
+            'class': 'form-control form-control-sm',
+            'placeholder': 'Optional — e.g. where you are working from'}))
+
+    def clean(self):
+        cleaned = super().clean()
+        start = cleaned.get('start_date')
+        end = cleaned.get('end_date')
+        if start and end and end < start:
+            self.add_error('end_date', 'The end date cannot be before the start date.')
+        return cleaned
+
+
 def check_leave_balance(employee, leave_type, start_date, end_date, exclude_request_id=None):
     """Form-level fast-fail check: block a leave submission that would
     exceed the employee's remaining balance, or overlaps another leave they
