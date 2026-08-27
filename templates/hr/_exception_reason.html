@@ -1,0 +1,52 @@
+{% comment %} ============================================================
+   Everything that was said about one attendance exception.
+
+   One partial rather than markup repeated per table, because this is the
+   record of WHY a day was excused: once a request is decided, the pending
+   queue stops showing it, and if each list writes its own version the
+   decided ones quietly lose fields. That is exactly what happened before —
+   the history table carried no reason at all.
+
+   `custom_reason` is rendered whenever it is present, not only when the
+   category is "Other". The form requires it for "Other" but accepts it
+   against every category, so gating the display on 'other' silently
+   discarded what people had actually typed.
+   ============================================================ {% endcomment %}
+<div class="small">
+  <span class="fw-semibold">{{ exc.get_reason_category_display }}</span>
+  {% if exc.is_backdated %}
+  <span class="badge bg-light text-dark border ms-1" data-bs-toggle="tooltip"
+        title="This event happened before the exception was submitted">
+    <i class="bi bi-clock-history"></i> Backdated
+  </span>
+  {% endif %}
+
+  {% if exc.custom_reason %}
+  <div class="text-muted">{{ exc.custom_reason }}</div>
+  {% endif %}
+
+  {% if exc.employee_comment %}
+  <div class="text-muted fst-italic">&ldquo;{{ exc.employee_comment }}&rdquo;</div>
+  {% endif %}
+
+  {% comment %} The decider's own words. Part of the record of why the day was
+  allowed, and the only place the reasoning survives once the row leaves the
+  pending queue. {% endcomment %}
+  {% if exc.decision_note %}
+  <div class="text-muted mt-1">
+    <i class="bi bi-chat-left-text me-1"></i>{{ exc.decision_note }}
+    {% if exc.decided_by %}
+    <span class="fst-italic">— {{ exc.decided_by.get_full_name|default:exc.decided_by.username }}</span>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if exc.is_overridden and exc.override_reason %}
+  <div class="text-warning mt-1">
+    <i class="bi bi-shield-exclamation me-1"></i>{{ exc.override_reason }}
+    {% if exc.overridden_by %}
+    <span class="fst-italic">— {{ exc.overridden_by.get_full_name|default:exc.overridden_by.username }}</span>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>

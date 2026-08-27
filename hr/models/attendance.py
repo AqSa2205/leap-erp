@@ -52,6 +52,13 @@ class AttendanceSettings(models.Model):
         return out
 
 
+# Lates in one calendar month that earn a warning. Named because the
+# Attendance Register recomputes warnings from the same rule - if this moves,
+# both have to move together or the register will report warnings that were
+# never sent.
+LATE_WARNING_THRESHOLD = 3
+
+
 class AttendanceRecord(models.Model):
     STATUS_CHOICES = [
         ('present', 'Present'), ('absent', 'Absent'), ('leave', 'Leave'),
@@ -105,7 +112,7 @@ class AttendanceRecord(models.Model):
         late_count = AttendanceRecord.objects.filter(
             employee=self.employee, status='late',
             date__gte=month_start, date__lt=next_month).count()
-        if late_count == 3:
+        if late_count == LATE_WARNING_THRESHOLD:
             self._notify_late_threshold(late_count, month_start)
 
     def _notify_late_threshold(self, late_count, month_start):
@@ -113,10 +120,13 @@ class AttendanceRecord(models.Model):
         from accounts.models import User
         emp = self.employee
         month_label = month_start.strftime('%B %Y')
-        employee_verb = 'You were late 3 times this month'
-        employee_description = 'You were late thrice this month. An email has been sent to you.'
-        hr_verb = f'{emp.full_name} was late 3 times this month'
-        hr_description = f'{emp.full_name} was late 3 times this month. An email has been sent.'
+        n = LATE_WARNING_THRESHOLD
+        employee_verb = f'You were late {n} times this month'
+        employee_description = (
+            f'You were late {n} times this month. An email has been sent to you.')
+        hr_verb = f'{emp.full_name} was late {n} times this month'
+        hr_description = (
+            f'{emp.full_name} was late {n} times this month. An email has been sent.')
         from django.urls import reverse
         if emp.user_id:
             create_notification(
