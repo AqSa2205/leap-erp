@@ -201,9 +201,19 @@
           {% endif %}
           {% if my_late_queries %}
           <p class="text-muted small mb-1">Queries I have raised:</p>
+          {% comment %} The same partial the HR queue uses, so the employee
+          reads the same record of their own query — including what they wrote
+          and why it was decided that way. {% endcomment %}
           <ul class="small mb-2 ps-3">
             {% for q in my_late_queries %}
-            <li>{{ q.attendance_record.date|date:"d M Y" }} - {{ q.get_status_display }}{% if q.decision_note %} ({{ q.decision_note }}){% endif %}</li>
+            <li class="mb-2">
+              <span class="fw-semibold">{{ q.attendance_record.date|date:"d M Y" }}</span>
+              {% if q.status == 'approved' %}<span class="badge bg-success ms-1">Approved</span>
+              {% elif q.status == 'rejected' %}<span class="badge bg-danger ms-1">Rejected</span>
+              {% else %}<span class="badge bg-warning text-dark ms-1">Pending</span>{% endif %}
+              {% if q.decided_at %}<span class="text-muted">· {{ q.decided_at|date:"d M Y" }}</span>{% endif %}
+              {% include 'hr/_late_query_detail.html' %}
+            </li>
             {% endfor %}
           </ul>
           {% endif %}
