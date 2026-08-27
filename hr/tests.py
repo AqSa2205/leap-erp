@@ -9094,3 +9094,581 @@ class AssetHandoverEdgeCaseTests(TestCase):
     def test_asset_handover_item_property_returns_asset(self):
         self.assertEqual(self.handover.item, self.asset)
         self.assertIsNone(self.handover.vehicle)
+
+
+class AttendanceRegisterSummaryTests(TestCase):
+    """Per-employee totals behind the register's filter bar.
+
+    Kept in one module so the numbers the register ranks on, prints, and
+    exports are the same numbers - a ranking computed twice is a ranking that
+    will eventually disagree with itself."""
+
+    def setUp(self):
+        self.alice = Employee.objects.create(iqama_number='REG-A', full_name='Alice')
+        self.bob = Employee.objects.create(iqama_number='REG-B', full_name='Bob')
+        self.start = _date(2026, 6, 1)
+        self.end = _date(2026, 6, 30)
+
+    def _rec(self, emp, day, status):
+        return AttendanceRecord.objects.create(
+            employee=emp, date=_date(2026, 6, day), status=status)
+
+    def _totals(self, employees=None):
+        from hr.attendance_summary import build_attendance_summary
+        return build_attendance_summary(employees or [self.alice, self.bob],
+                                        self.start, self.end)
+
+    # ── counting ────────────────────────────────────────────────────────────
+
+    def test_it_counts_each_status_separately(self):
+        self._rec(self.alice, 1, 'present')
+        self._rec(self.alice, 2, 'late')
+        self._rec(self.alice, 3, 'absent')
+        t = self._totals()[self.alice.pk]
+        self.assertEqual((t['on_time'], t['late'], t['absent']), (1, 1, 1))
+
+    def test_the_rate_is_only_over_days_an_arrival_was_assessed(self):
+        """derive_status() returns 'wfh' before it ever looks at check_in, and
+        leave, holidays and weekends never carry one. Counting those days
+        would let time off improve somebody's punctuality."""
+        self._rec(self.alice, 1, 'present')
+        self._rec(self.alice, 2, 'late')
+        for day, status in ((3, 'wfh'), (4, 'leave'), (5, 'holiday'), (6, 'weekend')):
+            self._rec(self.alice, day, status)
+        t = self._totals()[self.alice.pk]
+        self.assertEqual(t['judged'], 2)
+        self.assertEqual(t['rate'], Decimal('50.0'))
+
+    def test_absence_is_not_folded_into_the_punctuality_rate(self):
+        """Not turning up at all is a different failure from turning up late;
+        averaging them would let a run of absences look like punctuality."""
+        self._rec(self.alice, 1, 'present')
+        for day in range(2, 12):
+            self._rec(self.alice, day, 'absent')
+        t = self._totals()[self.alice.pk]
+        self.assertEqual(t['rate'], Decimal('100.0'))
+        self.assertEqual(t['absent'], 10)
+
+    def test_no_assessed_day_is_no_rate_rather_than_zero(self):
+        """Somebody on leave all month has nothing to be judged on, which is
+        not the same as having failed."""
+        self._rec(self.alice, 1, 'leave')
+        self.assertIsNone(self._totals()[self.alice.pk]['rate'])
+
+    # ── warnings ────────────────────────────────────────────────────────────
+
+    def test_a_warning_is_the_threshold_reached_in_a_calendar_month(self):
+        from hr.models import LATE_WARNING_THRESHOLD
+        for day in range(1, LATE_WARNING_THRESHOLD + 1):
+            self._rec(self.alice, day, 'late')
+        self.assertEqual(self._totals()[self.alice.pk]['warnings'], 1)
+
+    def test_one_short_of_the_threshold_is_no_warning(self):
+        from hr.models import LATE_WARNING_THRESHOLD
+        for day in range(1, LATE_WARNING_THRESHOLD):
+            self._rec(self.alice, day, 'late')
+        self.assertEqual(self._totals()[self.alice.pk]['warnings'], 0)
+
+    def test_more_lates_in_the_same_month_is_still_one_warning(self):
+        """The notifier fires once, when the count reaches the threshold - not
+        on every late after it. The register must not invent extra ones."""
+        from hr.models import LATE_WARNING_THRESHOLD
+        for day in range(1, LATE_WARNING_THRESHOLD + 5):
+            self._rec(self.alice, day, 'late')
+        self.assertEqual(self._totals()[self.alice.pk]['warnings'], 1)
+
+    def test_each_month_earns_its_own_warning(self):
+        from hr.attendance_summary import build_attendance_summary
+        from hr.models import LATE_WARNING_THRESHOLD
+        for month in (6, 7):
+            for day in range(1, LATE_WARNING_THRESHOLD + 1):
+                AttendanceRecord.objects.create(
+                    employee=self.alice, date=_date(2026, month, day), status='late')
+        totals = build_attendance_summary(
+            [self.alice], _date(2026, 6, 1), _date(2026, 7, 31))
+        self.assertEqual(totals[self.alice.pk]['warnings'], 2)
+
+    def test_a_warning_is_counted_over_the_whole_month_not_the_window(self):
+        """It was earned by a whole month of lates. Clipping it to a week view
+        would show a fraction of something that never happened - the person
+        either got the warning that month or did not."""
+        from hr.attendance_summary import build_attendance_summary
+        from hr.models import LATE_WARNING_THRESHOLD
+        for day in range(1, LATE_WARNING_THRESHOLD + 1):
+            self._rec(self.alice, day, 'late')
+        # A one-week window covering only the first of those lates.
+        totals = build_attendance_summary(
+            [self.alice], _date(2026, 6, 1), _date(2026, 6, 7))
+        self.assertEqual(totals[self.alice.pk]['warnings'], 1)
+
+    def test_the_register_and_the_notifier_share_one_threshold(self):
+        """Recomputed from the same constant the notification fires on, so the
+        register cannot report warnings that were never sent."""
+        from unittest.mock import patch
+        for day in range(1, 5):
+            self._rec(self.alice, day, 'late')
+        with patch('hr.models.attendance.LATE_WARNING_THRESHOLD', 5), \
+             patch('hr.models.LATE_WARNING_THRESHOLD', 5):
+            self.assertEqual(self._totals()[self.alice.pk]['warnings'], 0)
+        self.assertEqual(self._totals()[self.alice.pk]['warnings'], 1)
+
+    # ── filtering ───────────────────────────────────────────────────────────
+
+    def test_the_lates_filter_keeps_only_people_with_a_late(self):
+        from hr.attendance_summary import filter_employees
+        self._rec(self.alice, 1, 'late')
+        self._rec(self.bob, 1, 'present')
+        totals = self._totals()
+        kept = filter_employees([self.alice, self.bob], totals, 'late')
+        self.assertEqual([e.pk for e in kept], [self.alice.pk])
+
+    def test_the_absents_filter_keeps_only_people_with_an_absence(self):
+        from hr.attendance_summary import filter_employees
+        self._rec(self.alice, 1, 'late')
+        self._rec(self.bob, 1, 'absent')
+        totals = self._totals()
+        kept = filter_employees([self.alice, self.bob], totals, 'absent')
+        self.assertEqual([e.pk for e in kept], [self.bob.pk])
+
+    def test_full_attendance_keeps_everybody(self):
+        from hr.attendance_summary import filter_employees
+        kept = filter_employees([self.alice, self.bob], self._totals(), 'all')
+        self.assertEqual(len(kept), 2)
+
+    # ── ordering ────────────────────────────────────────────────────────────
+
+    def test_most_punctual_puts_the_better_rate_first(self):
+        from hr.attendance_summary import order_employees
+        self._rec(self.alice, 1, 'present')
+        self._rec(self.bob, 1, 'present')
+        self._rec(self.bob, 2, 'late')
+        totals = self._totals()
+        ordered = order_employees([self.bob, self.alice], totals, 'punctual')
+        self.assertEqual([e.pk for e in ordered], [self.alice.pk, self.bob.pk])
+
+    def test_a_longer_clean_record_beats_a_shorter_one(self):
+        """One perfect day must not outrank a month of them."""
+        from hr.attendance_summary import order_employees
+        self._rec(self.alice, 1, 'present')
+        for day in range(1, 15):
+            self._rec(self.bob, day, 'present')
+        ordered = order_employees([self.alice, self.bob], self._totals(), 'punctual')
+        self.assertEqual([e.pk for e in ordered], [self.bob.pk, self.alice.pk])
+
+    def test_someone_with_no_assessed_day_sorts_last_not_first(self):
+        """No record at all is not a perfect record. A missing rate must not
+        be treated as an unbeatable one."""
+        from hr.attendance_summary import order_employees
+        self._rec(self.alice, 1, 'present')
+        self._rec(self.alice, 2, 'late')
+        self._rec(self.bob, 1, 'leave')
+        ordered = order_employees([self.bob, self.alice], self._totals(), 'punctual')
+        self.assertEqual([e.pk for e in ordered], [self.alice.pk, self.bob.pk])
+
+    def test_a_measured_failure_still_outranks_no_measurement(self):
+        """Somebody late every single day has a rate of 0%, which is a worse
+        record than an unmeasured one - but it is still a record, so they
+        belong in the ranking above the person who has none."""
+        from hr.attendance_summary import order_employees
+        self._rec(self.alice, 1, 'late')
+        self._rec(self.bob, 1, 'leave')
+        totals = self._totals()
+        self.assertEqual(totals[self.alice.pk]['rate'], Decimal('0.0'))
+        self.assertIsNone(totals[self.bob.pk]['rate'])
+        ordered = order_employees([self.bob, self.alice], totals, 'punctual')
+        self.assertEqual([e.pk for e in ordered], [self.alice.pk, self.bob.pk])
+
+    def test_most_late_puts_the_worst_first(self):
+        from hr.attendance_summary import order_employees
+        self._rec(self.alice, 1, 'late')
+        self._rec(self.bob, 1, 'late')
+        self._rec(self.bob, 2, 'late')
+        ordered = order_employees([self.alice, self.bob], self._totals(), 'late')
+        self.assertEqual([e.pk for e in ordered], [self.bob.pk, self.alice.pk])
+
+    def test_warnings_orders_by_warnings_received(self):
+        from hr.attendance_summary import order_employees
+        from hr.models import LATE_WARNING_THRESHOLD
+        for day in range(1, LATE_WARNING_THRESHOLD + 1):
+            self._rec(self.bob, day, 'late')
+        self._rec(self.alice, 1, 'late')
+        ordered = order_employees([self.alice, self.bob], self._totals(), 'warnings')
+        self.assertEqual([e.pk for e in ordered], [self.bob.pk, self.alice.pk])
+
+    def test_name_order_is_the_default_and_is_alphabetical(self):
+        from hr.attendance_summary import order_employees
+        ordered = order_employees([self.bob, self.alice], self._totals(), 'name')
+        self.assertEqual([e.full_name for e in ordered], ['Alice', 'Bob'])
+
+    # ── bad input ───────────────────────────────────────────────────────────
+
+    def test_an_unknown_filter_falls_back_to_the_full_register(self):
+        """A stale or hand-edited link must still show the register, not an
+        empty page that looks like nobody turned up."""
+        from hr.attendance_summary import resolve_register_filters
+        self.assertEqual(resolve_register_filters({}), ('all', 'name'))
+        self.assertEqual(
+            resolve_register_filters({'show': 'nonsense', 'order': 'nonsense'}),
+            ('all', 'name'))
+
+    def test_the_chip_counts_say_what_each_filter_would_show(self):
+        from hr.attendance_summary import apply_register_filters
+        self._rec(self.alice, 1, 'late')
+        self._rec(self.bob, 1, 'absent')
+        _rows, _totals, counts = apply_register_filters(
+            [self.alice, self.bob], self.start, self.end, 'all', 'name')
+        self.assertEqual(counts, {'all': 2, 'late': 1, 'absent': 1})
+
+
+class AttendanceRegisterViewTests(TestCase):
+    """The register page and its two exports, which must agree."""
+
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
+        self.admin = User.objects.create_user('reg_adm', password='x')
+        self.admin.role = role
+        self.admin.save()
+        self.client.force_login(self.admin)
+        self.punctual = Employee.objects.create(
+            iqama_number='RV-P', full_name='Punctual Person')
+        self.tardy = Employee.objects.create(
+            iqama_number='RV-T', full_name='Tardy Person')
+        AttendanceRecord.objects.create(
+            employee=self.punctual, date=_date(2026, 6, 1), status='present')
+        for day in (1, 2, 3):
+            AttendanceRecord.objects.create(
+                employee=self.tardy, date=_date(2026, 6, day), status='late')
+
+    def _get(self, qs=''):
+        return self.client.get(
+            reverse('hr:attendance_matrix') + '?period=month&date=2026-06-15' + qs)
+
+    def test_the_register_shows_everybody_by_default(self):
+        body = self._get().content.decode()
+        self.assertIn('Punctual Person', body)
+        self.assertIn('Tardy Person', body)
+
+    def test_the_lates_filter_drops_people_with_no_late(self):
+        body = self._get('&show=late').content.decode()
+        self.assertIn('Tardy Person', body)
+        self.assertNotIn('Punctual Person', body)
+
+    def test_ordering_by_lates_puts_the_worst_first(self):
+        body = self._get('&order=late').content.decode()
+        self.assertLess(body.index('Tardy Person'), body.index('Punctual Person'))
+
+    def test_ordering_by_punctuality_puts_the_best_first(self):
+        body = self._get('&order=punctual').content.decode()
+        self.assertLess(body.index('Punctual Person'), body.index('Tardy Person'))
+
+    def test_the_totals_are_printed_so_the_ranking_can_be_checked(self):
+        """A ranking whose numbers are not on the page can only be trusted,
+        not verified."""
+        body = self._get().content.decode()
+        for header in ('On time', 'Late', 'Absent', 'Rate', 'Warnings'):
+            self.assertIn(header, body)
+
+    def test_the_filters_survive_the_period_and_location_links(self):
+        """A filter that silently resets on the next click is worse than no
+        filter - the page would quietly change population."""
+        body = self._get('&show=late&order=warnings').content.decode()
+        # This page writes its query strings as literal template text, so the
+        # ampersands reach the browser unescaped - same as every link already
+        # on it.
+        self.assertIn('location=site&show=late&order=warnings', body)
+        self.assertIn('period=week&date=2026-06-15&location=office'
+                      '&show=late&order=warnings', body)
+        # The exports too, or "export what I am looking at" is not true.
+        self.assertIn('export/excel/?period=month&date=2026-06-15'
+                      '&location=office&show=late&order=warnings', body)
+
+    def test_the_exports_carry_the_same_filters(self):
+        """An export that ignored the filter bar would hand back a different
+        population from the one on screen.
+
+        Asserted on the employee list the export hands to build_matrix, not on
+        the bytes: xlsx is a zip and reportlab compresses its streams, so a
+        name search over the response body passes whether or not the filter
+        was applied."""
+        from unittest.mock import patch
+        import hr.views as hr_views
+        real = hr_views.build_matrix
+        for name in ('hr:attendance_matrix_export_excel',
+                     'hr:attendance_matrix_export_pdf'):
+            with self.subTest(export=name):
+                seen = []
+
+                def spy(employees, *args, **kwargs):
+                    seen.append([e.full_name for e in employees])
+                    return real(employees, *args, **kwargs)
+
+                with patch.object(hr_views, 'build_matrix', spy):
+                    resp = self.client.get(
+                        reverse(name) + '?period=month&date=2026-06-15&show=late')
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(seen, [['Tardy Person']])
+
+    def test_an_empty_filter_says_so_rather_than_looking_broken(self):
+        AttendanceRecord.objects.all().delete()
+        body = self._get('&show=absent').content.decode()
+        self.assertIn('No employees match this filter', body)
+
+
+class MyProfileAttendanceTotalsTests(TestCase):
+    """An employee sees their own attendance figures on My Profile.
+
+    The point of these is that they are the SAME figures the Attendance
+    Register ranks them on. Two places computing punctuality separately is how
+    an employee and HR end up looking at different numbers for the same
+    month."""
+
+    def setUp(self):
+        from accounts.models import User
+        self.user = User.objects.create_user('mp_worker', password='x')
+        self.emp = Employee.objects.create(
+            iqama_number='MP-1', full_name='Mine Worker', user=self.user)
+        self.client.force_login(self.user)
+
+    def _rec(self, day, status):
+        return AttendanceRecord.objects.create(
+            employee=self.emp, date=_date(2026, 6, day), status=status)
+
+    def _get(self):
+        return self.client.get(reverse('hr:my_profile') + '?date=2026-06-15')
+
+    def test_it_shows_their_own_totals(self):
+        self._rec(1, 'present')
+        self._rec(2, 'late')
+        self._rec(3, 'absent')
+        totals = self._get().context['my_attendance_totals']
+        self.assertEqual((totals['on_time'], totals['late'], totals['absent']),
+                         (1, 1, 1))
+        self.assertEqual(totals['rate'], Decimal('50.0'))
+
+    def test_the_figures_match_what_the_register_shows_hr(self):
+        """Same function, so an employee querying their rate and HR reading it
+        off the register cannot be looking at two different numbers."""
+        from hr.attendance_summary import build_attendance_summary
+        self._rec(1, 'present')
+        self._rec(2, 'late')
+        self._rec(3, 'wfh')
+        mine = self._get().context['my_attendance_totals']
+        theirs = build_attendance_summary(
+            [self.emp], _date(2026, 6, 1), _date(2026, 6, 30))[self.emp.pk]
+        self.assertEqual(mine, theirs)
+
+    def test_warnings_are_shown_to_the_person_who_earned_them(self):
+        from hr.models import LATE_WARNING_THRESHOLD
+        for day in range(1, LATE_WARNING_THRESHOLD + 1):
+            self._rec(day, 'late')
+        resp = self._get()
+        self.assertEqual(resp.context['my_attendance_totals']['warnings'], 1)
+        self.assertContains(resp, 'WARNINGS')
+
+    def test_the_page_explains_how_a_warning_is_earned(self):
+        """A number nobody can explain is a number people argue about."""
+        self._rec(1, 'late')
+        resp = self._get()
+        self.assertEqual(resp.context['late_warning_threshold'],
+                         resp.context['late_warning_threshold'])
+        self.assertContains(resp, 'lates in one calendar month')
+
+    def test_a_month_with_no_assessed_day_shows_no_rate_not_zero(self):
+        self._rec(1, 'leave')
+        self.assertIsNone(self._get().context['my_attendance_totals']['rate'])
+
+    def test_the_month_navigation_moves_the_totals_too(self):
+        """The tiles sit above a month the user can page through; totals that
+        stayed on the current month would silently describe a different period
+        from the table under them."""
+        self._rec(1, 'late')
+        AttendanceRecord.objects.create(
+            employee=self.emp, date=_date(2026, 7, 1), status='present')
+        june = self.client.get(
+            reverse('hr:my_profile') + '?date=2026-06-15').context['my_attendance_totals']
+        july = self.client.get(
+            reverse('hr:my_profile') + '?date=2026-07-15').context['my_attendance_totals']
+        self.assertEqual((june['late'], june['on_time']), (1, 0))
+        self.assertEqual((july['late'], july['on_time']), (0, 1))
+
+    def test_someone_elses_figures_are_not_reachable(self):
+        """?date is the only knob on this page; it must not become a way to
+        read a colleague's month."""
+        other_user = get_user_model().objects.create_user('mp_other', password='x')
+        other = Employee.objects.create(
+            iqama_number='MP-2', full_name='Other Worker', user=other_user)
+        AttendanceRecord.objects.create(
+            employee=other, date=_date(2026, 6, 1), status='absent')
+        self._rec(1, 'present')
+        totals = self._get().context['my_attendance_totals']
+        self.assertEqual(totals['absent'], 0)
+        self.assertEqual(totals['on_time'], 1)
+
+
+class MyAttendancePdfTotalsTests(TestCase):
+    """The employee's own monthly PDF carries the same figures as the page.
+
+    It is also what the automatic late-threshold email attaches, so for a lot
+    of people it is the first place they read their own numbers."""
+
+    def setUp(self):
+        from accounts.models import User
+        self.user = User.objects.create_user('pdf_worker', password='x')
+        self.emp = Employee.objects.create(
+            iqama_number='PDF-1', full_name='Pdf Worker', user=self.user)
+        self.client.force_login(self.user)
+        AttendanceRecord.objects.create(
+            employee=self.emp, date=_date(2026, 6, 1), status='present')
+        AttendanceRecord.objects.create(
+            employee=self.emp, date=_date(2026, 6, 2), status='late')
+
+    def test_the_pdf_builds_and_is_a_pdf(self):
+        resp = self.client.get(
+            reverse('hr:my_attendance_export_pdf') + '?date=2026-06-15')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+        self.assertTrue(resp.content.startswith(b'%PDF'))
+
+    def test_the_summary_row_is_built_from_the_shared_totals(self):
+        """Asserted on the table handed to reportlab rather than on the bytes:
+        reportlab compresses its streams, so searching the response body for a
+        number passes whether or not it was ever put there."""
+        from unittest.mock import patch
+        import hr.views as hr_views
+        captured = []
+        real_table = None
+
+        from reportlab.platypus import Table as RLTable
+        real_table = RLTable
+
+        def spy(data, *args, **kwargs):
+            captured.append(data)
+            return real_table(data, *args, **kwargs)
+
+        with patch('reportlab.platypus.Table', spy):
+            hr_views.build_attendance_pdf(
+                self.emp, _date(2026, 6, 1), _date(2026, 6, 30))
+
+        header = ['On time', 'Late', 'Absent', 'On-time rate', 'Warnings']
+        summary = next(d for d in captured if d and d[0] == header)
+        self.assertEqual(summary[1], ['1', '1', '0', '50.0%', '0'])
+
+
+class ExceptionReasonVisibilityTests(TestCase):
+    """Why a day was excused has to survive the decision.
+
+    The pending queue stops showing a request once it is decided, and the
+    history table carried no reason column at all — so an approved exception
+    became an unexplained one, which is precisely when the record matters."""
+
+    def setUp(self):
+        self.top = make_employee(iqama='ERV-TOP', name='Top Manager')
+        self.top_user = _login_user('erv_top')
+        self.top.user = self.top_user
+        self.top.save(update_fields=['user'])
+
+        self.report = make_employee(iqama='ERV-REP', name='Report Person')
+        self.report.main_manager = self.top
+        self.report.save(update_fields=['main_manager'])
+        self.report_user = _login_user('erv_rep')
+        self.report.user = self.report_user
+        self.report.save(update_fields=['user'])
+
+        self.hr_user = _make_role_user('erv_hr', Role.SUPER_ADMIN)
+
+    def _exception(self, **kwargs):
+        opts = dict(
+            employee=self.report, event_date=_date(2026, 7, 20),
+            event_start_time=_time(9, 0), reason_category='site_visit',
+            created_by=self.top_user)
+        opts.update(kwargs)
+        return _submit_aex(**opts)
+
+    def _decide(self, exc, status='approved', note=''):
+        from django.utils import timezone
+        exc.status = status
+        exc.decision_note = note
+        exc.decided_by = self.top_user
+        exc.decided_at = timezone.now()
+        exc.save()
+        return exc
+
+    def _history(self):
+        self.client.login(username='erv_hr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions'), {'tab': 'all'})
+        self.assertEqual(resp.status_code, 200)
+        return resp.content.decode()
+
+    # ── the record survives the decision ────────────────────────────────────
+
+    def test_an_approved_exception_still_shows_its_reason(self):
+        self._decide(self._exception(custom_reason='Client site in Dammam'))
+        body = self._history()
+        self.assertIn('Client site in Dammam', body)
+
+    def test_the_history_table_has_a_reason_column(self):
+        """It had none, which is how the reason disappeared on approval."""
+        self._decide(self._exception())
+        self.assertIn(
+            '<th>Employee</th><th>Manager</th><th>Event</th><th>Reason</th>'
+            '<th>Status</th><th>Decided At</th>',
+            self._history())
+
+    def test_a_rejected_exception_keeps_its_reason_too(self):
+        """Rejections are the ones people come back and ask about."""
+        self._decide(self._exception(custom_reason='Dentist appointment'),
+                     status='rejected')
+        self.assertIn('Dentist appointment', self._history())
+
+    def test_the_decision_note_is_part_of_the_record(self):
+        """The only place the decider's reasoning survives once the row leaves
+        the pending queue."""
+        self._decide(self._exception(), note='Confirmed with the site lead')
+        self.assertIn('Confirmed with the site lead', self._history())
+
+    def test_the_employees_own_comment_survives(self):
+        self._decide(self._exception(employee_comment='Left at 6am to travel'))
+        self.assertIn('Left at 6am to travel', self._history())
+
+    def test_an_override_shows_what_justified_it(self):
+        exc = self._decide(self._exception())
+        exc.is_overridden = True
+        exc.overridden_by = self.hr_user
+        exc.override_reason = 'HR corrected the category'
+        exc.save()
+        self.assertIn('HR corrected the category', self._history())
+
+    # ── the custom reason is not gated on the category ──────────────────────
+
+    def test_a_custom_reason_shows_against_any_category(self):
+        """The form requires a custom reason only for 'Other' but accepts one
+        against every category, so gating the DISPLAY on 'other' silently
+        discarded what people had actually typed."""
+        self._decide(self._exception(
+            reason_category='site_visit', custom_reason='Aramco plant walkdown'))
+        self.assertIn('Aramco plant walkdown', self._history())
+
+    def test_a_custom_reason_still_shows_for_other(self):
+        self._decide(self._exception(
+            reason_category='other', custom_reason='Passport renewal'))
+        self.assertIn('Passport renewal', self._history())
+
+    def test_a_pending_request_shows_the_same_fields(self):
+        """Pending and decided read from one partial, so a field cannot be
+        present on one list and missing from the other."""
+        self._exception(custom_reason='Site handover',
+                        employee_comment='Back by noon')
+        body = self._history()
+        self.assertIn('Site handover', body)
+        self.assertIn('Back by noon', body)
+
+    # ── the employee sees their own record ──────────────────────────────────
+
+    def test_the_employee_sees_the_reason_and_decision_on_my_profile(self):
+        self._decide(self._exception(custom_reason='Client site in Dammam'),
+                     note='Approved, site confirmed')
+        self.client.login(username='erv_rep', password='testpass123')
+        body = self.client.get(reverse('hr:my_profile')).content.decode()
+        self.assertIn('Client site in Dammam', body)
+        self.assertIn('Approved, site confirmed', body)
