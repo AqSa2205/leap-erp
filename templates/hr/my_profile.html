@@ -189,6 +189,72 @@
           </div>
           {% endif %}
           {% endfor %}
+          {% comment %} Marking your own remote days. Deliberately today or
+          later only — a WFH record beats the late/absent check in
+          derive_status(), so backdating one would let anyone clear a Late
+          nobody had reviewed. The reviewed path for a past day is the
+          attendance exception form further down. {% endcomment %}
+          <div class="fw-semibold small mb-2 mt-3">
+            <i class="bi bi-house-door me-1"></i> Working from home
+          </div>
+          <form method="post" class="border rounded p-2 mb-2">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="mark_wfh">
+            <div class="row g-2 align-items-end">
+              <div class="col-6 col-md-3">
+                <label class="form-label small mb-1" for="{{ wfh_form.start_date.id_for_label }}">From</label>
+                {{ wfh_form.start_date }}
+                {% if wfh_form.start_date.errors %}
+                <div class="small text-danger">{{ wfh_form.start_date.errors|join:", " }}</div>
+                {% endif %}
+              </div>
+              <div class="col-6 col-md-3">
+                <label class="form-label small mb-1" for="{{ wfh_form.end_date.id_for_label }}">To</label>
+                {{ wfh_form.end_date }}
+                {% if wfh_form.end_date.errors %}
+                <div class="small text-danger">{{ wfh_form.end_date.errors|join:", " }}</div>
+                {% endif %}
+              </div>
+              <div class="col-12 col-md-4">
+                <label class="form-label small mb-1" for="{{ wfh_form.note.id_for_label }}">Note</label>
+                {{ wfh_form.note }}
+              </div>
+              <div class="col-12 col-md-2 d-grid">
+                <button type="submit" class="btn btn-sm btn-primary">Mark</button>
+              </div>
+            </div>
+            <div class="form-text small">
+              Leave &ldquo;To&rdquo; blank for a single day. You can mark today or
+              any day ahead. For a day that has already passed, raise an
+              attendance exception below instead.
+            </div>
+          </form>
+
+          {% if my_wfh_records %}
+          <ul class="small mb-3 ps-3">
+            {% for w in my_wfh_records %}
+            <li class="mb-1">
+              {{ w.start_date|date:"d M Y" }}{% if w.end_date != w.start_date %} &ndash; {{ w.end_date|date:"d M Y" }}{% endif %}
+              {% if w.is_current %}<span class="badge bg-success ms-1">Today</span>{% endif %}
+              {% if w.note %}<span class="text-muted">&mdash; {{ w.note }}</span>{% endif %}
+              {% if w.can_withdraw %}
+              <form method="post" class="d-inline ms-1"
+                    onsubmit="return confirm('Withdraw this work-from-home entry?');">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="cancel_wfh">
+                <input type="hidden" name="wfh_id" value="{{ w.pk }}">
+                <button type="submit" class="btn btn-link btn-sm p-0 align-baseline text-danger">Withdraw</button>
+              </form>
+              {% comment %} No button once the period has passed: it is a record
+              of what happened, not a plan. {% endcomment %}
+              {% elif w.created_by_id != request.user.pk %}
+              <span class="text-muted">&middot; set by HR</span>
+              {% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+
           {% if my_late_emails or my_late_queries %}
           <div class="fw-semibold small mb-2 mt-3"><i class="bi bi-envelope-exclamation me-1"></i> My Late Records</div>
           {% if my_late_emails %}
