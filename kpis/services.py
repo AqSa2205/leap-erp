@@ -498,8 +498,13 @@ def build_deadline_reliability(period, region=None):
             })
             person['count'] += 1
             pm = person['per_milestone'].setdefault(
-                row['key'], {'key': row['key'], 'label': row['label'], 'count': 0})
+                row['key'], {'key': row['key'], 'label': row['label'],
+                             'count': 0, 'on_time': 0, 'variances': []})
             pm['count'] += 1
+            if row['verdict'] != 'undated':
+                pm['variances'].append(row['variance'])
+                if row['verdict'] == 'on_time':
+                    pm['on_time'] += 1
 
         if row['verdict'] == 'undated':
             bucket['undated'] += 1
@@ -533,9 +538,17 @@ def build_deadline_reliability(period, region=None):
             # not hidden either.
             'median': int(statistics.median(variances)) if variances else None,
             'worst': min(variances) if variances else None,
-            'per_milestone': [entry['per_milestone'][k]
-                              for k, _l, _a, _b, _t in MILESTONES
-                              if k in entry['per_milestone']],
+            # Per milestone as well as overall: "reliable" can hide someone
+            # who is punctual handing over and consistently late finalising.
+            'per_milestone': [
+                {**pm,
+                 'judged': len(pm['variances']),
+                 'pct': pct(pm['on_time'], len(pm['variances'])),
+                 'median': (int(statistics.median(pm['variances']))
+                            if pm['variances'] else None)}
+                for pm in (entry['per_milestone'][k]
+                           for k, _l, _a, _b, _t in MILESTONES
+                           if k in entry['per_milestone'])],
         })
     # Measured and reliable first; someone with nothing judgeable should not
     # outrank someone who hit their dates, however busy they were.
@@ -667,3 +680,298 @@ def reliability_drilldown(data, milestone=None, outcome=None, person=None):
         'is_overdue': outcome == 'overdue',
         'shows_duration': outcome == 'finalised',
     }
+
+
+
+# ── Export ───────────────────────────────────────────────────────────────────
+#
+# The PDF is shaped here, as plain strings, and rendered in kpis/pdf.py. Two
+# reasons to split it: the shaping is the part worth testing and it can be
+# tested without ReportLab, and a second renderer (Excel, CSV) can reuse it
+# without the layout coming along.
+
+
+def _variance_str(days):
+    """A signed day count as words. `None` means there was nothing to judge
+    against, which is not the same as being on the day."""
+    if days is None:
+        return '—'
+    if days > 0:
+        return f'{days}d early'
+    if days < 0:
+        return f'{abs(days)}d late'
+    return 'on the day'
+
+
+def _pct_str(value):
+    return '—' if value is None else f'{value}%'
+
+
+def _name(user):
+    if user is None:
+        return '—'
+    return user.get_full_name() or user.username
+
+
+def deadline_export_tables(data, drill=None):
+    """The Deadlines tab as a list of {'title', 'note', 'columns', 'rows'}.
+
+    Rows are strings, in the order they are shown on screen, so the export and
+    the page cannot describe the same period differently.
+
+    Three tables always: by milestone, by person, and person x milestone -
+    the last one because "reliable" can hide someone who is punctual handing
+    over and consistently late finalising, which the overall rate averages
+    away. A fourth is appended when a drill-down is open, so exporting from a
+    filtered view carries the sheets that were on screen.
+    """
+    tables = [{
+        'title': 'By milestone',
+        'note': ('Proposal work is due {n} working day{s} before the submission '
+                 'date; sales work is due on it.').format(
+                     n=data['buffer_days'],
+                     s='' if data['buffer_days'] == 1 else 's'),
+        'columns': ['Milestone', 'Owner', 'Done', 'Had a date', 'On time',
+                    'Late', 'Rate', 'Typically', 'Overdue, not done'],
+        'rows': [[
+            m['label'],
+            m['team'].title(),
+            str(m['done']),
+            str(m['judged']) + (f" (+{m['undated']} without)" if m['undated'] else ''),
+            str(m['on_time']),
+            str(m['late']) if m['late'] else '—',
+            _pct_str(m['pct']),
+            _variance_str(m['median']),
+            str(m['overdue_open']) if m['overdue_open'] else '—',
+        ] for m in data['milestones']],
+    }, {
+        'title': 'By person',
+        'note': ('Typically is the median, not the mean - one slip should not '
+                 'define someone otherwise reliable. Worst sits beside it so '
+                 'it is not hidden either.'),
+        'columns': ['Person', 'Milestones', 'On time', 'Rate', 'Typically',
+                    'Worst'],
+        'rows': [[
+            _name(r['user']),
+            str(r['count']),
+            f"{r['on_time']} / {r['judged']}" if r['judged'] else '—',
+            _pct_str(r['pct']) if r['pct'] is not None else 'no dates',
+            _variance_str(r['median']),
+            _variance_str(r['worst']) if r['worst'] is not None and r['worst'] < 0
+            else ('never late' if r['judged'] else '—'),
+        ] for r in data['people']],
+    }]
+
+    # Person x milestone: one row per person per milestone they touched.
+    matrix = []
+    for person in data['people']:
+        for pm in person['per_milestone']:
+            matrix.append([
+                _name(person['user']),
+                pm['label'],
+                str(pm['count']),
+                str(pm['judged']) if pm['judged'] else '—',
+                str(pm['on_time']),
+                _pct_str(pm['pct']) if pm['pct'] is not None else 'no dates',
+                _variance_str(pm['median']),
+            ])
+    tables.append({
+        'title': 'Each person, each milestone',
+        'note': ('Only milestones a person actually moved appear; a blank row '
+                 'would claim they were responsible for work that was never '
+                 'theirs.'),
+        'columns': ['Person', 'Milestone', 'Done', 'Had a date', 'On time',
+                    'Rate', 'Typically'],
+        'rows': matrix,
+    })
+
+    if drill:
+        if drill['is_overdue']:
+            columns = ['Sheet', 'Reference', 'Project', 'Region', 'Stuck on',
+                       'Was due', 'Days over', 'Owner']
+            rows = [[
+                r['sheet'].title or '—',
+                (r['project'].proposal_reference if r['project'] else '—') or '—',
+                (r['project'].project_name if r['project'] else '—') or '—',
+                (r['project'].region.name if r['project'] and r['project'].region
+                 else '—'),
+                r['label'],
+                r['due'].strftime('%d %b %y'),
+                f"{r['days_over']}d",
+                _name(r['project'].owner if r['project'] else None),
+            ] for r in drill['rows']]
+        else:
+            columns = ['Sheet', 'Reference', 'Project', 'Region', 'Milestone',
+                       'Done on', 'Due', 'Variance']
+            if drill['shows_duration']:
+                columns.append('Duration')
+            columns.append('By')
+            rows = []
+            for r in drill['rows']:
+                row = [
+                    r['sheet'].title or '—',
+                    (r['project'].proposal_reference if r['project'] else '—') or '—',
+                    (r['project'].project_name if r['project'] else '—') or '—',
+                    (r['project'].region.name if r['project'] and r['project'].region
+                     else '—'),
+                    r['label'],
+                    r['when'].strftime('%d %b %y')
+                    + (' (from creation)' if r['derived'] else ''),
+                    r['due'].strftime('%d %b %y') if r['due'] else 'no submission date',
+                    _variance_str(r['variance']),
+                ]
+                if drill['shows_duration']:
+                    row.append(f"{r['duration']}d" if r['duration'] is not None else '—')
+                row.append(_name(r['actor']))
+                rows.append(row)
+
+        title = f"{drill['milestone_label']} — {drill['outcome_label']}"
+        if drill['person_label']:
+            title += f" — {drill['person_label']}"
+        tables.append({'title': title, 'note': '', 'columns': columns,
+                       'rows': rows})
+
+    return tables
+
+
+def deadline_export_summary(data):
+    """The four headline tiles as (label, value, note) - the same figures the
+    page leads with, so a reader of the PDF starts where the page does."""
+    duration = data['duration']
+    return [
+        ('Milestones hit', str(data['total']),
+         'across all four stages'),
+        ('On time', _pct_str(data['pct']),
+         (f"{data['on_time']} of {data['judged']} with a submission deadline"
+          if data['judged'] else 'no submission deadline to judge against')),
+        ('Overdue, not done', str(data['overdue_open']),
+         'past due on live deals right now'),
+        ('Duration',
+         f"{duration['median']}d" if duration['median'] is not None else '—',
+         (f"typical, creation to finalised ({duration['count']} finalised)"
+          if duration['count'] else 'nothing finalised in this period')),
+    ]
+
+
+def _row_note(row):
+    """Why a row might not say what the person expects.
+
+    The two ways a row can look wrong to the person named on it are a missing
+    submission deadline and a date that was inferred rather than stamped.
+    Saying so on the row is the difference between a report someone can check
+    and one they can only dispute.
+    """
+    notes = []
+    if row['derived']:
+        notes.append('date taken from when the sheet was raised')
+    if row['due'] is None:
+        notes.append('no submission deadline on the pipeline entry')
+    return '; '.join(notes) or ''
+
+
+def deadline_person_report(data, user_id):
+    """One person's own milestone record, or None if they moved nothing.
+
+    Separate from deadline_export_tables() because a report meant to be sent
+    to the person it describes must not carry everybody else's figures. This
+    holds their work, their rates, and one team-wide percentage for context -
+    no other individual is named.
+
+    The detail table is the point of it: a rate alone cannot be checked, so
+    every milestone is listed with the date it was recorded, the deadline it
+    was judged against and why, so the person can see which record is wrong
+    and go and fix it.
+    """
+    person = next((p for p in data['people'] if str(p['user'].pk) == str(user_id)),
+                  None)
+    if person is None:
+        return None
+
+    rows = [r for r in data['rows']
+            if r['actor'] is not None and r['actor'].pk == person['user'].pk]
+    # Worst first, then unjudged, then the ones that went fine: what needs
+    # checking should not be on the last page.
+    rows.sort(key=lambda r: (r['variance'] is None, r['variance'] or 0))
+
+    detail = {
+        'title': 'Every milestone, in detail',
+        'note': ('Listed worst first. If a date here is wrong, see the note at '
+                 'the end of this report.'),
+        'columns': ['Sheet', 'Reference', 'Project', 'Milestone', 'Recorded on',
+                    'Submission date', 'Due', 'Variance', 'Note'],
+        'rows': [[
+            r['sheet'].title or '—',
+            (r['project'].proposal_reference if r['project'] else '—') or '—',
+            (r['project'].project_name if r['project'] else '—') or '—',
+            r['label'],
+            r['when'].strftime('%d %b %y'),
+            (r['project'].submission_deadline.strftime('%d %b %y')
+             if r['project'] and r['project'].submission_deadline else '—'),
+            r['due'].strftime('%d %b %y') if r['due'] else '—',
+            _variance_str(r['variance']),
+            _row_note(r),
+        ] for r in rows],
+    }
+
+    by_stage = {
+        'title': 'Your milestones by stage',
+        'note': ('A single overall rate can hide being punctual at one stage '
+                 'and late at another, so each stage is scored on its own.'),
+        'columns': ['Milestone', 'Done', 'Had a date', 'On time', 'Rate',
+                    'Typically'],
+        'rows': [[
+            pm['label'],
+            str(pm['count']),
+            str(pm['judged']) if pm['judged'] else '—',
+            str(pm['on_time']),
+            _pct_str(pm['pct']) if pm['pct'] is not None else 'no dates',
+            _variance_str(pm['median']),
+        ] for pm in person['per_milestone']],
+    }
+
+    tiles = [
+        ('Milestones moved', str(person['count']),
+         'stages you advanced in this period'),
+        ('On time', _pct_str(person['pct']) if person['pct'] is not None else '—',
+         (f"{person['on_time']} of {person['judged']} that had a deadline"
+          if person['judged']
+          else 'none of your work had a submission deadline set')),
+        ('Typically', _variance_str(person['median']),
+         'your median, not your average'),
+        ('Worst', _variance_str(person['worst']) if person['worst'] is not None
+         and person['worst'] < 0 else 'never late',
+         'your single latest milestone'),
+    ]
+
+    return {
+        'user': person['user'],
+        'name': _name(person['user']),
+        'tiles': tiles,
+        'tables': [by_stage, detail],
+        # One team figure for context. Without a denominator a percentage
+        # means nothing; no other individual is named.
+        'team_pct': _pct_str(data['pct']),
+        'team_judged': data['judged'],
+        'undated': person['undated'],
+    }
+
+
+# How the deadline for each milestone is arrived at, in the person's own
+# terms. Printed on their report so the arithmetic can be checked rather than
+# taken on trust.
+PERSON_REPORT_RULES = (
+    'Every milestone is judged against the project’s submission date. '
+    'Starting the BOM and handing it to sales are due {n} working day{s} '
+    'before submission, because sales need that time to cost and submit. '
+    'Starting the costing and finalising are due on the submission date '
+    'itself. Weekends (Friday and Saturday) are not counted. Work on a '
+    'project with no submission date recorded is listed but not scored.'
+)
+
+PERSON_REPORT_FOOTER = (
+    'If something here is wrong: a wrong or missing submission date can be '
+    'corrected on the pipeline entry for that reference, and this report will '
+    'follow it. A milestone date is recorded at the moment the stage was '
+    'moved and cannot be edited afterwards — if one is wrong, raise it '
+    'with the reference and the date you expected.'
+)

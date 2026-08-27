@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views
+from . import pdf, views
 
 app_name = 'kpis'
 
@@ -11,4 +11,8 @@ urlpatterns = [
     path('activity/', views.activity_overview, name='activity'),
     path('activity/<int:user_id>/', views.activity_detail, name='activity_detail'),
     path('new/', views.kpi_new, name='kpi_new'),
+    path('new/deadlines.pdf', pdf.deadline_reliability_pdf,
+         name='deadlines_pdf'),
+    path('new/deadlines/<int:user_id>.pdf', pdf.deadline_person_pdf,
+         name='deadlines_person_pdf'),
 ]
