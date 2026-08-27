@@ -393,6 +393,12 @@ def my_profile(request):
     from .forms import LeaveRequestForm
 
     emp = getattr(request.user, 'employee_profile', None)
+
+    # The inbox has its own URL and its own sidebar entry. This kept working
+    # so the ?tab=approvals link that shipped first does not rot.
+    if request.GET.get('tab') == 'approvals':
+        return redirect('hr:my_approvals')
+
     context = {'employee': emp}
 
     is_leave_request_post = (
@@ -790,10 +796,39 @@ def my_profile(request):
         from hr.models import AssetHandover
         context['asset_handovers'] = AssetHandover.objects.filter(
             employee=emp).select_related('asset', 'vehicle').order_by('-created_at')[:20]
+
+    # Drives the badge on the Pending Approvals tab. Computed for anyone signed
+    # in, not only linked employees: a super admin with no Employee record
+    # still has purchase orders and leave waiting on them.
+    from hr.approvals import pending_approvals_count
+    context['active_tab'] = 'profile'
+    context['my_approvals_count'] = pending_approvals_count(request.user)
     return render(request, 'hr/my_profile.html', context)
 
 
 @login_required
+@login_required
+def my_approvals(request):
+    """Everything waiting on this user's decision, across the system.
+
+    A page of its own rather than a section of My Profile: it is answered
+    without assembling the profile's context, so opening the inbox does not
+    pay for a month of attendance, a leave balance and an asset list nobody is
+    looking at.
+
+    It is an index, not a second set of Approve buttons - every row links out
+    to the page that decides it. See hr/approvals.py for why.
+    """
+    from hr.approvals import pending_approvals
+    groups = pending_approvals(request.user)
+    return render(request, 'hr/my_approvals.html', {
+        'employee': getattr(request.user, 'employee_profile', None),
+        'active_tab': 'approvals',
+        'approval_groups': groups,
+        'my_approvals_count': sum(g['count'] for g in groups),
+    })
+
+
 def build_attendance_pdf(emp, month_start, month_end):
     # Builds the same monthly attendance PDF used by my_attendance_export_pdf
     # (and reused for the automatic late-threshold email), returned as a
