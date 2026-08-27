@@ -2397,3 +2397,427 @@ class MilestoneDrilldownViewTests(TestCase):
         body = self._get('&ms=handed_over&outcome=nonsense')
         self.assertNotIn(self.DRILL, body)
         self.assertIn('By milestone', body)
+
+
+class MilestoneExportShapeTests(ComputeFixtureMixin, TestCase):
+    """The Deadlines tab shaped for export.
+
+    Shaping is separated from rendering so the part worth testing - which
+    figures land in which column - can be tested without ReportLab, and so a
+    second renderer could reuse it."""
+
+    def setUp(self):
+        super().setUp()
+        self.alice = User.objects.create_user(
+            username='ex_alice', password='pw', first_name='Alice', last_name='A')
+        self.bob = User.objects.create_user(username='ex_bob', password='pw')
+
+    D = datetime.date
+    SUBMISSION = datetime.date(2026, 5, 17)      # Sunday; proposal due 13 May
+
+    def _sheet(self, ref, submission=SUBMISSION):
+        p = self._project(ref, self.active, est='100000')
+        if submission is not None:
+            Project.objects.filter(pk=p.pk).update(submission_deadline=submission)
+        return CostingSheet.objects.create(title=f'S-{ref}', project=p)
+
+    def _hit(self, sheet, milestone, on, by=None):
+        CostingSheet.objects.filter(pk=sheet.pk).update(**{
+            f'{milestone}_at': timezone.make_aware(
+                datetime.datetime.combine(on, datetime.time(9, 0))),
+            f'{milestone}_by': by or self.alice,
+        })
+        sheet.refresh_from_db()
+        return sheet
+
+    def _data(self):
+        from kpis.services import build_deadline_reliability
+        return build_deadline_reliability('2026-Q2', region=self.region)
+
+    def _tables(self, drill=None):
+        from kpis.services import deadline_export_tables
+        return deadline_export_tables(self._data(), drill)
+
+    def _by_title(self, tables, title):
+        return next(t for t in tables if t['title'] == title)
+
+    def _populate(self):
+        good = self._sheet('GOOD')
+        self._hit(good, 'handed_over', self.D(2026, 5, 12), by=self.alice)
+        self._hit(good, 'finalized', self.D(2026, 5, 20), by=self.alice)
+        other = self._sheet('OTHER')
+        self._hit(other, 'handed_over', self.D(2026, 5, 14), by=self.bob)
+        return good, other
+
+    # ── structure ───────────────────────────────────────────────────────────
+
+    def test_three_tables_without_a_drilldown(self):
+        titles = [t['title'] for t in self._tables()]
+        self.assertEqual(titles, ['By milestone', 'By person',
+                                  'Each person, each milestone'])
+
+    def test_a_drilldown_appends_the_sheets_that_were_on_screen(self):
+        from kpis.services import reliability_drilldown
+        _good, other = self._populate()
+        data = self._data()
+        drill = reliability_drilldown(data, 'handed_over', 'late')
+        from kpis.services import deadline_export_tables
+        tables = deadline_export_tables(data, drill)
+        self.assertEqual(len(tables), 4)
+        self.assertIn('missed the date', tables[-1]['title'])
+        self.assertEqual([r[0] for r in tables[-1]['rows']], [other.title])
+
+    def test_every_row_has_a_cell_for_every_column(self):
+        """A short row silently shifts every later column left, which in a PDF
+        looks like data rather than a bug."""
+        from kpis.services import reliability_drilldown
+        self._populate()
+        data = self._data()
+        from kpis.services import deadline_export_tables
+        for outcome in ('done', 'late', 'overdue', 'finalised'):
+            drill = reliability_drilldown(data, 'all', outcome)
+            for table in deadline_export_tables(data, drill):
+                for row in table['rows']:
+                    with self.subTest(table=table['title'], outcome=outcome):
+                        self.assertEqual(len(row), len(table['columns']))
+
+    # ── each person, each milestone ─────────────────────────────────────────
+
+    def test_a_person_gets_a_row_per_milestone_they_moved(self):
+        self._populate()
+        rows = self._by_title(self._tables(), 'Each person, each milestone')['rows']
+        alice = [r for r in rows if r[0] == 'Alice A']
+        self.assertEqual({r[1] for r in alice}, {'Handed to sales', 'Finalised'})
+        # Rows are in pipeline order, not whatever order the data arrived in.
+        self.assertEqual([r[1] for r in alice], ['Handed to sales', 'Finalised'])
+
+    def test_a_milestone_a_person_never_touched_is_absent_not_blank(self):
+        """A blank row would claim they were responsible for work that was
+        never theirs."""
+        self._populate()
+        rows = self._by_title(self._tables(), 'Each person, each milestone')['rows']
+        bob = [r[1] for r in rows if r[0] == 'ex_bob']
+        self.assertEqual(bob, ['Handed to sales'])
+
+    def test_the_matrix_reconciles_with_the_person_summary(self):
+        self._populate()
+        tables = self._tables()
+        people = {r[0]: int(r[1])
+                  for r in self._by_title(tables, 'By person')['rows']}
+        totals = {}
+        for row in self._by_title(tables, 'Each person, each milestone')['rows']:
+            totals[row[0]] = totals.get(row[0], 0) + int(row[2])
+        self.assertEqual(totals, people)
+
+    def test_a_persons_milestone_rate_is_its_own_not_their_average(self):
+        """Punctual handing over and late finalising must not average into one
+        reassuring number."""
+        sheet = self._sheet('SPLIT')
+        self._hit(sheet, 'handed_over', self.D(2026, 5, 12), by=self.alice)   # early
+        self._hit(sheet, 'finalized', self.D(2026, 5, 25), by=self.alice)     # late
+        rows = self._by_title(self._tables(), 'Each person, each milestone')['rows']
+        rates = {r[1]: r[5] for r in rows if r[0] == 'Alice A'}
+        self.assertEqual(rates['Handed to sales'], '100.0%')
+        self.assertEqual(rates['Finalised'], '0.0%')
+
+    # ── wording ─────────────────────────────────────────────────────────────
+
+    def test_undated_work_is_not_written_up_as_on_time(self):
+        sheet = self._sheet('NODATE', submission=None)
+        self._hit(sheet, 'handed_over', self.D(2026, 5, 12), by=self.alice)
+        row = next(r for r in self._by_title(self._tables(), 'By milestone')['rows']
+                   if r[0] == 'Handed to sales')
+        self.assertEqual(row[2], '1')            # done
+        self.assertIn('without', row[3])         # had a date
+        self.assertEqual(row[4], '0')            # on time
+        self.assertEqual(row[6], '—')            # rate
+
+    def test_a_variance_of_zero_reads_as_on_the_day_not_a_dash(self):
+        """'—' means there was nothing to judge against, which is a different
+        statement from hitting the date exactly."""
+        from kpis.services import _variance_str
+        self.assertEqual(_variance_str(0), 'on the day')
+        self.assertEqual(_variance_str(None), '—')
+        self.assertEqual(_variance_str(-3), '3d late')
+        self.assertEqual(_variance_str(3), '3d early')
+
+
+class MilestoneExportPdfViewTests(TestCase):
+    """The PDF endpoint itself."""
+
+    def setUp(self):
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.region = Region.objects.create(name='KSA', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.user = User.objects.create_user(
+            username='gm_pdf', password='pw',
+            role=Role.objects.get(name=Role.SUPER_ADMIN))
+        p = Project.objects.create(
+            project_name='P', proposal_reference='P', status=self.status,
+            region=self.region, estimated_value=Decimal('1'),
+            actual_sales=Decimal('0'), year='2026', po_award_quarter='Q2',
+            submission_deadline=datetime.date(2026, 5, 17))
+        self.sheet = CostingSheet.objects.create(title='S-P', project=p)
+        CostingSheet.objects.filter(pk=self.sheet.pk).update(
+            handed_over_at=timezone.make_aware(datetime.datetime(2026, 5, 20, 9, 0)),
+            handed_over_by=self.user)
+
+    def _url(self, qs=''):
+        return reverse('kpis:deadlines_pdf') + '?period=2026-Q2' + qs
+
+    def test_it_returns_a_pdf(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(self._url())
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+        self.assertTrue(resp.content.startswith(b'%PDF'))
+        self.assertGreater(len(resp.content), 2000)
+
+    def test_the_filename_says_what_was_exported(self):
+        """A folder of PDFs all called the same thing is worse than useless -
+        the period, region and drill-down have to survive into the name."""
+        self.client.force_login(self.user)
+        resp = self.client.get(
+            self._url(f'&region={self.region.code}&ms=handed_over&outcome=late'))
+        disposition = resp['Content-Disposition']
+        self.assertIn('2026-Q2', disposition)
+        self.assertIn('LNA', disposition)
+        self.assertIn('handed_over_late', disposition)
+
+    def test_an_empty_period_still_renders(self):
+        """A period with nothing in it must produce a PDF saying so, not a
+        500 - it is the most likely thing to be exported by accident."""
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('kpis:deadlines_pdf') + '?period=2026-Q1')
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.content.startswith(b'%PDF'))
+
+    def test_it_is_gated_like_the_dashboard_it_exports(self):
+        """kpi_new once answered 200 to anonymous users because it had no
+        decorators. This renders the same company-wide figures."""
+        resp = self.client.get(self._url())
+        self.assertNotEqual(resp.status_code, 200)
+
+    def test_a_signed_in_user_without_the_capability_is_refused(self):
+        role = Role.objects.get(name=Role.DOCUMENT_CONTROLLER)
+        RolePermission.objects.update_or_create(
+            role=role, codename='kpis.access', defaults={'allowed': False})
+        plain = User.objects.create_user(username='nokpi', password='pw', role=role)
+        self.client.force_login(plain)
+        self.assertNotEqual(self.client.get(self._url()).status_code, 200)
+
+
+class MilestonePersonReportTests(ComputeFixtureMixin, TestCase):
+    """One person's own milestone record, meant to be sent to them.
+
+    Two things make this different from the management export: it must not
+    carry anyone else's figures, and it must show enough of each record for
+    the person to tell which one is wrong and go and fix it."""
+
+    def setUp(self):
+        super().setUp()
+        self.alice = User.objects.create_user(
+            username='pr_alice', password='pw', first_name='Alice', last_name='Ahmed')
+        self.bob = User.objects.create_user(
+            username='pr_bob', password='pw', first_name='Bob', last_name='Baker')
+
+    D = datetime.date
+    SUBMISSION = datetime.date(2026, 5, 17)      # Sunday; proposal due 13 May
+
+    def _sheet(self, ref, submission=SUBMISSION):
+        p = self._project(ref, self.active, est='100000')
+        if submission is not None:
+            Project.objects.filter(pk=p.pk).update(submission_deadline=submission)
+        return CostingSheet.objects.create(title=f'S-{ref}', project=p)
+
+    def _hit(self, sheet, milestone, on, by=None):
+        CostingSheet.objects.filter(pk=sheet.pk).update(**{
+            f'{milestone}_at': timezone.make_aware(
+                datetime.datetime.combine(on, datetime.time(9, 0))),
+            f'{milestone}_by': by or self.alice,
+        })
+        sheet.refresh_from_db()
+        return sheet
+
+    def _report(self, user=None):
+        from kpis.services import build_deadline_reliability, deadline_person_report
+        data = build_deadline_reliability('2026-Q2', region=self.region)
+        return deadline_person_report(data, (user or self.alice).pk)
+
+    def _detail(self, report):
+        return next(t for t in report['tables']
+                    if t['title'] == 'Every milestone, in detail')
+
+    def _populate(self):
+        mine = self._sheet('MINE')
+        self._hit(mine, 'handed_over', self.D(2026, 5, 12), by=self.alice)
+        theirs = self._sheet('THEIRS')
+        self._hit(theirs, 'handed_over', self.D(2026, 5, 14), by=self.bob)
+        return mine, theirs
+
+    # ── it is safe to send ──────────────────────────────────────────────────
+
+    def test_it_carries_nobody_elses_figures(self):
+        """It is meant to be forwarded to the person it describes, so anything
+        of a colleague's appearing in it is a leak - their name, and equally
+        their work, which identifies them just as well to anyone who knows who
+        handled which job."""
+        _mine, theirs = self._populate()
+        report = self._report()
+        printed = ' '.join(
+            str(cell)
+            for table in report['tables'] for row in table['rows'] for cell in row)
+        for leak in ('Bob', 'pr_bob', 'Baker', theirs.title,
+                     theirs.project.proposal_reference):
+            with self.subTest(leak=leak):
+                self.assertNotIn(leak, printed)
+
+    def test_only_their_own_milestones_are_listed(self):
+        mine, _theirs = self._populate()
+        rows = self._detail(self._report())['rows']
+        self.assertEqual([r[0] for r in rows], [mine.title])
+
+    def test_one_team_figure_is_given_for_context(self):
+        """A percentage with no denominator says nothing, so the team rate is
+        included - but it names no individual."""
+        self._populate()
+        report = self._report()
+        self.assertEqual(report['team_judged'], 2)
+        self.assertIn('%', report['team_pct'])
+
+    def test_someone_who_moved_nothing_gets_no_report(self):
+        """A blank report with someone's name at the top reads as an
+        accusation of doing nothing, which is not what it means."""
+        self._populate()
+        stranger = User.objects.create_user(username='pr_nobody', password='pw')
+        self.assertIsNone(self._report(stranger))
+
+    # ── it can be checked ───────────────────────────────────────────────────
+
+    def test_every_row_shows_the_submission_date_it_was_judged_against(self):
+        """Without the date it was measured against, a variance can only be
+        disputed, not checked."""
+        self._populate()
+        table = self._detail(self._report())
+        self.assertEqual(table['columns'][5], 'Submission date')
+        self.assertEqual(table['columns'][6], 'Due')
+        row = table['rows'][0]
+        self.assertEqual(row[5], '17 May 26')     # submission date
+        self.assertEqual(row[6], '13 May 26')     # due: two working days before
+
+    def test_worst_first_so_what_needs_checking_is_not_on_the_last_page(self):
+        for ref, day in (('FINE', 12), ('BAD', 30), ('SLIGHT', 14)):
+            sheet = self._sheet(ref)
+            self._hit(sheet, 'handed_over', self.D(2026, 5, day))
+        rows = self._detail(self._report())['rows']
+        self.assertEqual([r[0] for r in rows], ['S-BAD', 'S-SLIGHT', 'S-FINE'])
+
+    def test_unjudged_work_sorts_after_the_judged_work(self):
+        judged = self._sheet('JUDGED')
+        self._hit(judged, 'handed_over', self.D(2026, 5, 12))
+        undated = self._sheet('UNDATED', submission=None)
+        self._hit(undated, 'handed_over', self.D(2026, 5, 12))
+        rows = self._detail(self._report())['rows']
+        self.assertEqual([r[0] for r in rows], ['S-JUDGED', 'S-UNDATED'])
+
+    def test_a_missing_submission_date_is_named_as_the_reason(self):
+        """The likeliest thing a person will want corrected, so the row has to
+        say what is missing rather than just showing a dash."""
+        sheet = self._sheet('NODATE', submission=None)
+        self._hit(sheet, 'handed_over', self.D(2026, 5, 12))
+        row = self._detail(self._report())['rows'][0]
+        self.assertIn('no submission deadline', row[8])
+
+    def test_an_inferred_date_says_so(self):
+        """BOM started falls back to when the sheet was raised. Presented as a
+        stamp it looks like a date the person chose."""
+        self._sheet('DERIVED')
+        from kpis.services import build_deadline_reliability, deadline_person_report
+        # The sheet was raised today, so look in the period that covers it.
+        data = build_deadline_reliability(str(timezone.localdate().year),
+                                          region=self.region)
+        report = deadline_person_report(data, self.alice.pk)
+        if report is None:          # created_by is unset in this fixture
+            return
+        notes = [r[8] for r in self._detail(report)['rows']]
+        self.assertTrue(any('sheet was raised' in n for n in notes))
+
+    def test_each_stage_is_scored_on_its_own(self):
+        sheet = self._sheet('SPLIT')
+        self._hit(sheet, 'handed_over', self.D(2026, 5, 12))   # early
+        self._hit(sheet, 'finalized', self.D(2026, 5, 25))     # late
+        by_stage = next(t for t in self._report()['tables']
+                        if t['title'] == 'Your milestones by stage')
+        rates = {r[0]: r[4] for r in by_stage['rows']}
+        self.assertEqual(rates['Handed to sales'], '100.0%')
+        self.assertEqual(rates['Finalised'], '0.0%')
+
+    def test_the_stage_table_reconciles_with_the_detail_list(self):
+        self._populate()
+        report = self._report()
+        by_stage = next(t for t in report['tables']
+                        if t['title'] == 'Your milestones by stage')
+        self.assertEqual(sum(int(r[1]) for r in by_stage['rows']),
+                         len(self._detail(report)['rows']))
+
+
+class MilestonePersonPdfViewTests(TestCase):
+    """The per-person PDF endpoint."""
+
+    def setUp(self):
+        for name, _ in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+        self.region = Region.objects.create(name='KSA', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.gm = User.objects.create_user(
+            username='gm_person', password='pw',
+            role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.worker = User.objects.create_user(
+            username='worker', password='pw', first_name='Wafa', last_name='Worker',
+            role=Role.objects.get(name=Role.PROPOSAL_REP))
+        p = Project.objects.create(
+            project_name='P', proposal_reference='P', status=self.status,
+            region=self.region, estimated_value=Decimal('1'),
+            actual_sales=Decimal('0'), year='2026', po_award_quarter='Q2',
+            submission_deadline=datetime.date(2026, 5, 17))
+        self.sheet = CostingSheet.objects.create(title='S-P', project=p)
+        CostingSheet.objects.filter(pk=self.sheet.pk).update(
+            handed_over_at=timezone.make_aware(datetime.datetime(2026, 5, 20, 9, 0)),
+            handed_over_by=self.worker)
+
+    def _url(self, user=None, qs='&period=2026-Q2'):
+        return reverse('kpis:deadlines_person_pdf',
+                       args=[(user or self.worker).pk]) + '?' + qs.lstrip('&')
+
+    def test_it_returns_that_persons_pdf(self):
+        self.client.force_login(self.gm)
+        resp = self.client.get(self._url())
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+        self.assertTrue(resp.content.startswith(b'%PDF'))
+
+    def test_the_filename_names_the_person_and_the_period(self):
+        """These get forwarded and saved, so the name has to survive."""
+        self.client.force_login(self.gm)
+        disposition = self.client.get(self._url())['Content-Disposition']
+        self.assertIn('Wafa_Worker', disposition)
+        self.assertIn('2026-Q2', disposition)
+
+    def test_someone_with_no_milestones_is_a_404_not_a_blank_report(self):
+        self.client.force_login(self.gm)
+        idle = User.objects.create_user(username='idle', password='pw')
+        self.assertEqual(self.client.get(self._url(idle)).status_code, 404)
+
+    def test_it_is_gated_like_the_dashboard(self):
+        self.assertNotEqual(self.client.get(self._url()).status_code, 200)
+
+    def test_a_signed_in_user_without_the_capability_is_refused(self):
+        role = Role.objects.get(name=Role.DOCUMENT_CONTROLLER)
+        RolePermission.objects.update_or_create(
+            role=role, codename='kpis.access', defaults={'allowed': False})
+        plain = User.objects.create_user(username='nokpi2', password='pw', role=role)
+        self.client.force_login(plain)
+        self.assertNotEqual(self.client.get(self._url()).status_code, 200)
