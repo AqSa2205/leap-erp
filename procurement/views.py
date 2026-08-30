@@ -429,16 +429,22 @@ def _po_project_groups(user, include_empty=True):
         groups.setdefault(po.project_id, {'project': po.project, 'rows': []})
         groups[po.project_id]['rows'].append(po)
 
-    # Projects with nothing ordered against them are a real answer to "what has
-    # been procured for this job". Only for viewers with region-or-wider reach:
-    # for anyone else, listing every project name would disclose projects they
-    # cannot otherwise see.
+    # Projects with nothing ordered yet, but only where finance has approved a
+    # budget. Procurement works from approved budgets - the same rule the
+    # Approved Budgets page uses - so a project still in the pipeline is not
+    # their business and would bury the ones that are.
+    #
+    # Restricted to viewers with region-or-wider reach: for anyone else,
+    # listing project names would disclose projects they cannot otherwise see.
     if include_empty and _can_see_all_projects(user):
         from projects.models import Project
-        empties = Project.objects.select_related('region')
+        approved = (Project.objects
+                    .filter(costing_sheets__workflow_stage='finance_approved')
+                    .select_related('region')
+                    .distinct())
         if not (user.is_super_admin_user or getattr(user, 'is_procurement_user', False)):
-            empties = empties.filter(region=user.region)
-        for project in empties.exclude(pk__in=list(groups)):
+            approved = approved.filter(region=user.region)
+        for project in approved.exclude(pk__in=list(groups)):
             groups[project.pk] = {'project': project, 'rows': []}
 
     out = []

@@ -10,19 +10,20 @@
       <p class="text-muted mb-0 small">
         {{ groups|length }} project{{ groups|length|pluralize }} ·
         {{ total_pos }} purchase order{{ total_pos|pluralize }}
+        <span class="ms-1">— projects with a finance-approved budget, or with orders already raised</span>
       </p>
     </div>
     <div class="d-flex gap-2">
       {% if empty_count or not include_empty %}
-      {% comment %} Projects with nothing ordered are worth seeing — they are
-      the ones not yet procured — but they are noise once you are chasing a
+      {% comment %} Approved budgets with nothing ordered yet are worth seeing —
+      they are the work not started — but they are noise once you are chasing a
       specific order, so they can be dropped. {% endcomment %}
       <a href="?{% if include_empty %}empty=hide{% endif %}"
          class="btn btn-sm {% if include_empty %}btn-outline-secondary{% else %}btn-secondary{% endif %}">
         {% if include_empty %}
-          Hide projects with no POs{% if empty_count %} ({{ empty_count }}){% endif %}
+          Hide budgets with no POs{% if empty_count %} ({{ empty_count }}){% endif %}
         {% else %}
-          Show projects with no POs
+          Show approved budgets with no POs
         {% endif %}
       </a>
       {% endif %}
@@ -130,7 +131,8 @@
         {% comment %} Not an error state — it is the answer to "what has been
         procured for this job". {% endcomment %}
         <div class="p-3 text-muted small">
-          Nothing has been ordered against this project yet.
+          Finance has approved a budget for this project, but nothing has been
+          ordered against it yet.
           {% if g.project %}
           <a href="{% url 'procurement:po_create' %}" class="ms-1">Raise a purchase order</a>.
           {% endif %}

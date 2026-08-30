@@ -1819,6 +1819,20 @@ class POByProjectTests(TestCase):
         self.ghazlan = project('Ghazlan Substation', 'LNA-2026-0417', self.region)
         self.quiet = project('Nothing Ordered Yet', 'LNA-2026-0500', self.region)
         self.abroad = project('London Job', 'LNUK-2026-0001', self.other_region)
+        # Still in the pipeline: no approved budget and no orders. Procurement
+        # has no business with it and it must not appear.
+        self.pipeline = project('Still Bidding', 'LNA-2026-0900', self.region)
+
+        from costing.models import CostingSheet
+        # Finance has approved a budget for these, which is what puts a project
+        # in front of procurement at all.
+        CostingSheet.objects.create(title='Budget', project=self.quiet,
+                                    workflow_stage='finance_approved')
+        CostingSheet.objects.create(title='Budget', project=self.abroad,
+                                    workflow_stage='finance_approved')
+        # An unapproved sheet must not be enough.
+        CostingSheet.objects.create(title='Draft budget', project=self.pipeline,
+                                    workflow_stage='costing_in_progress')
 
         self.po = self._po('PO-BP-1', self.ghazlan, self.super_admin)
         self.po.items.create(description='Camera', quantity=Decimal('2'),
@@ -1844,10 +1858,28 @@ class POByProjectTests(TestCase):
                      if g['project'] == self.ghazlan)
         self.assertEqual([p.po_number for p in group['rows']], ['PO-BP-1'])
 
-    def test_a_project_with_nothing_ordered_is_still_listed(self):
+    def test_an_approved_budget_with_nothing_ordered_is_still_listed(self):
         """'What has been procured for this job' has 'nothing' as a real
-        answer, and often the more interesting one."""
+        answer, and often the more interesting one — but only once finance has
+        approved a budget, which is what hands the job to procurement."""
         self.assertIn('Nothing Ordered Yet', self._named(self._groups(self.super_admin)))
+
+    def test_a_project_with_no_approved_budget_and_no_pos_is_not_listed(self):
+        """Procurement works from approved budgets. A project still in the
+        pipeline is not their business and would bury the ones that are."""
+        self.assertNotIn('Still Bidding', self._named(self._groups(self.super_admin)))
+
+    def test_an_unapproved_budget_is_not_enough_to_list_a_project(self):
+        """The stage matters, not merely having a costing sheet."""
+        from costing.models import CostingSheet
+        self.assertTrue(CostingSheet.objects.filter(project=self.pipeline).exists())
+        self.assertNotIn('Still Bidding', self._named(self._groups(self.super_admin)))
+
+    def test_a_project_with_a_po_is_listed_even_without_an_approved_budget(self):
+        """Money has already been committed against it, so it belongs here
+        whatever the budget stage says."""
+        self._po('PO-BP-NOBUDGET', self.pipeline, self.super_admin)
+        self.assertIn('Still Bidding', self._named(self._groups(self.super_admin)))
 
     def test_empty_projects_can_be_hidden(self):
         names = self._named(self._groups(self.super_admin, include_empty=False))

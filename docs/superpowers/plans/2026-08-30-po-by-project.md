@@ -42,7 +42,8 @@ Unassigned; the query count does not grow with the number of POs.
 ### Task 2: Scope — DONE
 
 - Projects come from the same rule as `_visible_pos_for()`.
-- Zero-PO projects included **only** for viewers with region-or-wider reach.
+- Zero-PO projects included **only** where finance has approved a budget,
+  and **only** for viewers with region-or-wider reach.
 
 **Tests:** each tier sees the right project set; a restricted viewer sees no
 project they have no PO against.

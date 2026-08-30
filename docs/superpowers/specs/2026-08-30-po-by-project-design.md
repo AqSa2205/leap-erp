@@ -36,9 +36,20 @@ they started with.
 
 ## Which projects appear
 
-All projects in the viewer's scope, including those with **no** purchase
-orders. A project with nothing ordered against it is a real answer to "what
-has been procured for this job" and often the more interesting one.
+Not every project — only the ones that are procurement's business:
+
+- projects whose budget **finance has approved**, and
+- projects that already have **purchase orders** against them.
+
+A project still being bid is not procurement's work, and listing the whole
+pipeline buries the jobs that are. The approved-budget rule is the same one
+the Approved Budgets page already uses, so the two pages agree about what
+procurement is looking at.
+
+An approved budget with nothing ordered yet still appears: that is a real
+answer to "what has been procured for this job", and the more interesting one
+— it is work not started. A project with orders appears whatever its budget
+stage says, because money has already been committed against it.
 
 Scope follows `_visible_pos_for()` rather than inventing a second rule:
 
