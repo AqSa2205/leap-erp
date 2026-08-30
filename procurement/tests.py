@@ -1782,3 +1782,205 @@ class POStageApproverScreenTests(TestCase):
         self.client.force_login(self.proc)
         self.client.post(self._url(), {'stage': 'scm', 'user': self.proc.pk})
         self.assertFalse(POStageApprover.objects.exists())
+
+
+class POByProjectTests(TestCase):
+    """Purchase orders arranged under the projects they belong to."""
+
+    def setUp(self):
+        from projects.models import Region, ProjectStatus, Project
+        from accounts.permissions import seed_default_permissions
+        for name, _label in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+
+        self.region = Region.objects.create(name='KSA', code='LNA', currency='SAR')
+        self.other_region = Region.objects.create(name='UK', code='LNUK', currency='GBP')
+        status = ProjectStatus.objects.create(name='Open', category='active')
+
+        self.super_admin = User.objects.create_user(
+            'bp_super', password='x', role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.regional = User.objects.create_user(
+            'bp_admin', password='x', role=Role.objects.get(name=Role.ADMIN),
+            region=self.region)
+        # Deliberately given a region. Without one, the region filter empties
+        # the project list on its own and the disclosure guard this fixture
+        # exists to test is never actually exercised.
+        self.outsider = User.objects.create_user(
+            'bp_out', password='x', region=self.region,
+            role=Role.objects.get(name=Role.DOCUMENT_CONTROLLER))
+
+        def project(name, ref, region):
+            return Project.objects.create(
+                project_name=name, proposal_reference=ref, status=status,
+                region=region, estimated_value=Decimal('1'),
+                actual_sales=Decimal('0'), year='2026', po_award_quarter='Q2')
+
+        self.ghazlan = project('Ghazlan Substation', 'LNA-2026-0417', self.region)
+        self.quiet = project('Nothing Ordered Yet', 'LNA-2026-0500', self.region)
+        self.abroad = project('London Job', 'LNUK-2026-0001', self.other_region)
+
+        self.po = self._po('PO-BP-1', self.ghazlan, self.super_admin)
+        self.po.items.create(description='Camera', quantity=Decimal('2'),
+                             rate_per_unit=Decimal('100'))
+
+    def _po(self, number, project, creator, currency='SAR'):
+        return PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number=number, vendor_name='ACME',
+            po_issued_by='Tester', project=project, created_by=creator,
+            currency=currency)
+
+    def _groups(self, user, **kwargs):
+        from procurement.views import _po_project_groups
+        return _po_project_groups(user, **kwargs)
+
+    def _named(self, groups):
+        return [g['project_name'] for g in groups]
+
+    # ── grouping ────────────────────────────────────────────────────────────
+
+    def test_a_po_appears_under_its_project(self):
+        group = next(g for g in self._groups(self.super_admin)
+                     if g['project'] == self.ghazlan)
+        self.assertEqual([p.po_number for p in group['rows']], ['PO-BP-1'])
+
+    def test_a_project_with_nothing_ordered_is_still_listed(self):
+        """'What has been procured for this job' has 'nothing' as a real
+        answer, and often the more interesting one."""
+        self.assertIn('Nothing Ordered Yet', self._named(self._groups(self.super_admin)))
+
+    def test_empty_projects_can_be_hidden(self):
+        names = self._named(self._groups(self.super_admin, include_empty=False))
+        self.assertNotIn('Nothing Ordered Yet', names)
+        self.assertIn('Ghazlan Substation', names)
+
+    def test_a_po_with_no_project_is_grouped_not_dropped(self):
+        """Nullable project plus free-text project_name means these exist.
+        Hiding them would lose spend from every report."""
+        self._po('PO-BP-ORPHAN', None, self.super_admin)
+        groups = self._groups(self.super_admin)
+        orphan = groups[-1]
+        self.assertIsNone(orphan['project'])
+        self.assertEqual([p.po_number for p in orphan['rows']], ['PO-BP-ORPHAN'])
+
+    def test_unlinked_pos_are_not_guessed_into_a_project_by_name(self):
+        """A fuzzy name match would quietly attribute spend to the wrong job."""
+        po = self._po('PO-BP-NAMED', None, self.super_admin)
+        PurchaseOrder.objects.filter(pk=po.pk).update(
+            project_name='Ghazlan Substation')
+        ghazlan = next(g for g in self._groups(self.super_admin)
+                       if g['project'] == self.ghazlan)
+        self.assertNotIn('PO-BP-NAMED', [p.po_number for p in ghazlan['rows']])
+
+    def test_projects_with_orders_sort_before_empty_ones(self):
+        groups = self._groups(self.super_admin)
+        first_empty = next(i for i, g in enumerate(groups) if g['po_count'] == 0)
+        last_filled = max(i for i, g in enumerate(groups) if g['po_count'] > 0)
+        self.assertLess(last_filled, first_empty)
+
+    # ── scope ───────────────────────────────────────────────────────────────
+
+    def test_a_regional_admin_sees_only_their_region(self):
+        names = self._named(self._groups(self.regional))
+        self.assertIn('Ghazlan Substation', names)
+        self.assertNotIn('London Job', names)
+
+    def test_a_restricted_viewer_is_shown_no_project_they_have_no_po_against(self):
+        """The disclosure risk in this page: listing every project name to
+        somebody who can only see their own POs."""
+        self.assertEqual(self._groups(self.outsider), [])
+
+    def test_a_restricted_viewer_still_sees_their_own_po(self):
+        own = self._po('PO-BP-MINE', self.ghazlan, self.outsider)
+        groups = self._groups(self.outsider)
+        self.assertEqual(self._named(groups), ['Ghazlan Substation'])
+        self.assertEqual([p.po_number for p in groups[0]['rows']], [own.po_number])
+
+    # ── totals ──────────────────────────────────────────────────────────────
+
+    def test_the_total_matches_the_purchase_orders(self):
+        group = next(g for g in self._groups(self.super_admin)
+                     if g['project'] == self.ghazlan)
+        self.assertEqual(dict(group['totals'])['SAR'], self.po.total_value)
+
+    def test_currencies_are_kept_apart(self):
+        """One number across currencies looks like an answer and is not."""
+        usd = self._po('PO-BP-USD', self.ghazlan, self.super_admin, currency='USD')
+        usd.items.create(description='Cable', quantity=Decimal('1'),
+                         rate_per_unit=Decimal('500'))
+        group = next(g for g in self._groups(self.super_admin)
+                     if g['project'] == self.ghazlan)
+        self.assertEqual({c for c, _ in group['totals']}, {'SAR', 'USD'})
+
+    def test_the_awaiting_count_matches_the_workflow_status(self):
+        group = next(g for g in self._groups(self.super_admin)
+                     if g['project'] == self.ghazlan)
+        expected = sum(1 for p in group['rows']
+                       if p.workflow_status['stage_key'] is not None)
+        self.assertEqual(group['awaiting'], expected)
+
+    def test_a_released_po_is_not_counted_as_awaiting(self):
+        from django.utils import timezone
+        PurchaseOrder.objects.filter(pk=self.po.pk).update(
+            scm_approved_at=timezone.now(), pm_approved_at=timezone.now(),
+            coo_approved_at=timezone.now())
+        group = next(g for g in self._groups(self.super_admin)
+                     if g['project'] == self.ghazlan)
+        self.assertEqual(group['awaiting'], 0)
+
+    # ── cost ────────────────────────────────────────────────────────────────
+
+    def test_the_query_count_does_not_grow_with_the_purchase_orders(self):
+        """total_value walks items, so without a prefetch this issues a query
+        per PO and degrades quietly as the data grows.
+
+        Asserts the count is UNCHANGED between two data sizes rather than
+        pinning a magic number. A fixed number breaks on any unrelated query
+        change and, worse, can be updated to whatever the code happens to do —
+        which is how an N+1 gets accepted rather than fixed.
+        """
+        from django.test.utils import CaptureQueriesContext
+        from django.db import connection
+
+        def count_queries():
+            with CaptureQueriesContext(connection) as ctx:
+                self._groups(self.super_admin)
+            return len(ctx)
+
+        for i in range(3):
+            po = self._po(f'PO-BP-BULK-{i}', self.ghazlan, self.super_admin)
+            po.items.create(description='Thing', quantity=Decimal('1'),
+                            rate_per_unit=Decimal('10'))
+        with_few = count_queries()
+
+        for i in range(3, 12):
+            po = self._po(f'PO-BP-BULK-{i}', self.ghazlan, self.super_admin)
+            po.items.create(description='Thing', quantity=Decimal('1'),
+                            rate_per_unit=Decimal('10'))
+        with_many = count_queries()
+
+        self.assertEqual(with_few, with_many,
+                         f'{with_few} queries for 4 POs but {with_many} for 13 '
+                         '— the items prefetch is not doing its job')
+
+    # ── page ────────────────────────────────────────────────────────────────
+
+    def test_the_page_renders_with_the_summary_visible(self):
+        self.client.force_login(self.super_admin)
+        body = self.client.get(reverse('procurement:po_by_project')).content.decode()
+        self.assertIn('Ghazlan Substation', body)
+        self.assertIn('LNA-2026-0417', body)
+        # The collapsed header has to say enough to be worth not opening.
+        self.assertIn('1 PO', body)
+
+    def test_the_page_can_hide_empty_projects(self):
+        self.client.force_login(self.super_admin)
+        body = self.client.get(
+            reverse('procurement:po_by_project') + '?empty=hide').content.decode()
+        self.assertNotIn('Nothing Ordered Yet', body)
+
+    def test_the_sidebar_links_to_it(self):
+        self.client.force_login(self.super_admin)
+        body = self.client.get(reverse('procurement:po_list')).content.decode()
+        self.assertIn(reverse('procurement:po_by_project'), body)
+        self.assertIn('POs by Project', body)

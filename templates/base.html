@@ -1154,8 +1154,15 @@
                 {% comment %} Exclude the routing page from this item's active
                 state — its url_name also contains 'po_', so without this both
                 entries light up at once. {% endcomment %}
-                <a class="nav-link {% if 'po_' in request.resolver_match.url_name and request.resolver_match.url_name != 'po_stage_approvers' %}active{% endif %}" href="{% url 'procurement:po_list' %}" data-title="Purchase Orders">
+                <a class="nav-link {% if 'po_' in request.resolver_match.url_name and request.resolver_match.url_name != 'po_stage_approvers' and request.resolver_match.url_name != 'po_by_project' %}active{% endif %}" href="{% url 'procurement:po_list' %}" data-title="Purchase Orders">
                     <i class="bi bi-box-seam"></i> <span>Purchase Orders</span>
+                </a>
+            </li>
+            {% endif %}
+            {% if user|can:'po.nav' %}
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'po_by_project' %}active{% endif %}" href="{% url 'procurement:po_by_project' %}" data-title="POs by Project">
+                    <i class="bi bi-diagram-3"></i> <span>POs by Project</span>
                 </a>
             </li>
             {% endif %}

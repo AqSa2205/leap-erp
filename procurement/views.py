@@ -400,6 +400,110 @@ def locked_po_json(po):
     return None
 
 
+def _po_project_groups(user, include_empty=True):
+    """Purchase orders arranged under the projects they belong to.
+
+    Returns a list of groups, each
+    {project, project_name, reference, po_count, rows, totals, awaiting}.
+    The Unassigned group, if any, is last.
+
+    Visibility comes from _visible_pos_for() rather than a rule of its own —
+    this page must show exactly the POs the flat list would, arranged
+    differently.
+    """
+    from collections import OrderedDict
+
+    # Prefetch items: total_value walks them, so grouping without this issues a
+    # query per PO and the page degrades quietly as the PO count grows.
+    pos = (_visible_pos_for(user)
+           .select_related('project', 'project__region')
+           .prefetch_related('items')
+           .order_by('-po_date', '-id'))
+
+    groups = OrderedDict()
+    unassigned = []
+    for po in pos:
+        if po.project_id is None:
+            unassigned.append(po)
+            continue
+        groups.setdefault(po.project_id, {'project': po.project, 'rows': []})
+        groups[po.project_id]['rows'].append(po)
+
+    # Projects with nothing ordered against them are a real answer to "what has
+    # been procured for this job". Only for viewers with region-or-wider reach:
+    # for anyone else, listing every project name would disclose projects they
+    # cannot otherwise see.
+    if include_empty and _can_see_all_projects(user):
+        from projects.models import Project
+        empties = Project.objects.select_related('region')
+        if not (user.is_super_admin_user or getattr(user, 'is_procurement_user', False)):
+            empties = empties.filter(region=user.region)
+        for project in empties.exclude(pk__in=list(groups)):
+            groups[project.pk] = {'project': project, 'rows': []}
+
+    out = []
+    for entry in groups.values():
+        out.append(_build_group(entry['project'], entry['rows']))
+    # Projects with orders first, then the empty ones, each newest-first.
+    out.sort(key=lambda g: (g['po_count'] == 0,
+                            -(g['rows'][0].po_date.toordinal() if g['rows'] else 0),
+                            (g['project_name'] or '').lower()))
+    if unassigned:
+        out.append(_build_group(None, unassigned))
+    return out
+
+
+def _can_see_all_projects(user):
+    """Whether this viewer may be shown projects they have no PO against."""
+    return bool(user.is_super_admin_user
+                or getattr(user, 'is_procurement_user', False)
+                or user.is_admin_user or user.is_manager_user)
+
+
+def _build_group(project, rows):
+    """One project's card: its POs, per-currency totals and what is waiting."""
+    from collections import defaultdict
+
+    totals = defaultdict(Decimal)
+    awaiting = 0
+    for po in rows:
+        # Never summed across currencies: one number over mixed currencies is
+        # worse than no number, because it looks like an answer.
+        totals[po.currency] += po.total_value
+        if po.workflow_status['stage_key'] is not None:
+            awaiting += 1
+
+    return {
+        'project': project,
+        'project_name': (project.project_name if project
+                         else 'Not linked to a project'),
+        'reference': project.proposal_reference if project else '',
+        'region': project.region if project else None,
+        'po_count': len(rows),
+        'rows': rows,
+        'totals': sorted(totals.items()),
+        'awaiting': awaiting,
+    }
+
+
+@login_required
+def po_by_project(request):
+    """Purchase orders grouped under their projects, collapsible.
+
+    The flat PO list answers "what came in this week". This answers "what has
+    been ordered for this job", which is the question procurement actually
+    starts from, and which the flat list makes you search for.
+    """
+    include_empty = request.GET.get('empty') != 'hide'
+    groups = _po_project_groups(request.user, include_empty=include_empty)
+    return render(request, 'procurement/po_by_project.html', {
+        'groups': groups,
+        'include_empty': include_empty,
+        'total_pos': sum(g['po_count'] for g in groups),
+        'empty_count': sum(1 for g in groups if g['po_count'] == 0),
+    })
+
+
 class POListView(CapabilityRequiredMixin, ProcurementPermissionMixin, ListView):
     capability = 'po.access'
     model = PurchaseOrder
