@@ -1151,8 +1151,21 @@
             </li>
             {% if user|can:'po.nav' %}
             <li class="nav-item">
-                <a class="nav-link {% if 'po_' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'procurement:po_list' %}" data-title="Purchase Orders">
+                {% comment %} Exclude the routing page from this item's active
+                state — its url_name also contains 'po_', so without this both
+                entries light up at once. {% endcomment %}
+                <a class="nav-link {% if 'po_' in request.resolver_match.url_name and request.resolver_match.url_name != 'po_stage_approvers' %}active{% endif %}" href="{% url 'procurement:po_list' %}" data-title="Purchase Orders">
                     <i class="bi bi-box-seam"></i> <span>Purchase Orders</span>
+                </a>
+            </li>
+            {% endif %}
+            {% comment %} Gated to match the view, which is super-admin only —
+            a visible link that bounces you to the dashboard is worse than no
+            link. {% endcomment %}
+            {% if user.is_super_admin_user %}
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'po_stage_approvers' %}active{% endif %}" href="{% url 'procurement:po_stage_approvers' %}" data-title="PO Approval Routing">
+                    <i class="bi bi-signpost-split"></i> <span>Approval Routing</span>
                 </a>
             </li>
             {% endif %}

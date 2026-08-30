@@ -1280,15 +1280,16 @@ def po_edit_signature(request, pk, stage):
 def po_stage_approvers(request):
     """Who signs each approval stage — the mapping the approval emails use.
 
-    Admin only: naming somebody as an approver decides who gets asked to sign
-    company purchase orders, which is not a self-service setting.
+    Super admin only: naming somebody as an approver decides who gets asked to
+    sign company purchase orders, which is not a self-service setting and not
+    one the ordinary admin tier changes either.
     """
     from .forms import POStageApproverForm
     from .models import POStageApprover
 
     user = request.user
-    if not (user.is_super_admin_user or user.is_admin_user):
-        messages.error(request, 'Only an administrator can set approval routing.')
+    if not user.is_super_admin_user:
+        messages.error(request, 'Only a super admin can set approval routing.')
         return redirect('procurement:dashboard')
 
     if request.method == 'POST':

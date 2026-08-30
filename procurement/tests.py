@@ -1688,41 +1688,92 @@ class POStageApproverScreenTests(TestCase):
     """The routing screen."""
 
     def setUp(self):
-        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
-        self.proc_role, _ = Role.objects.get_or_create(name=Role.PROCUREMENT_MGR)
+        # Seed the capability grants, or a plain Administrator cannot reach the
+        # procurement pages at all and the nav assertions below fail for a
+        # fixture reason rather than a real one.
+        from accounts.permissions import seed_default_permissions
+        for name, _label in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+
+        self.sa_role = Role.objects.get(name=Role.SUPER_ADMIN)
+        self.admin_role = Role.objects.get(name=Role.ADMIN)
+        self.proc_role = Role.objects.get(name=Role.PROCUREMENT_MGR)
+        # Named for what it holds. An earlier version called the super admin
+        # 'admin', which left the plain Administrator tier - allowed by the
+        # view - covered by nothing.
+        self.super_admin = User.objects.create_user('sa_super', password='x',
+                                                    role=self.sa_role)
         self.admin = User.objects.create_user('sa_admin', password='x',
-                                              role=self.sa_role)
+                                              role=self.admin_role)
         self.proc = User.objects.create_user('sa_proc', password='x',
                                              role=self.proc_role)
 
     def _url(self):
         return reverse('procurement:po_stage_approvers')
 
+    def test_a_super_admin_can_reach_it(self):
+        self.client.force_login(self.super_admin)
+        self.assertEqual(self.client.get(self._url()).status_code, 200)
+
+    def test_a_plain_admin_cannot_reach_it(self):
+        """Super admin only. Naming an approver decides who is asked to sign
+        company purchase orders, which is not a change the ordinary admin tier
+        makes."""
+        self.client.force_login(self.admin)
+        self.assertNotEqual(self.client.get(self._url()).status_code, 200)
+
+    def test_a_plain_admin_cannot_set_an_approver(self):
+        from procurement.models import POStageApprover
+        self.client.force_login(self.admin)
+        self.client.post(self._url(), {'stage': 'pm', 'user': self.proc.pk})
+        self.assertFalse(POStageApprover.objects.exists())
+
+    def test_the_link_is_hidden_from_a_plain_admin(self):
+        self.client.force_login(self.admin)
+        body = self.client.get(reverse('procurement:po_list')).content.decode()
+        self.assertNotIn('Approval Routing', body)
+
     def test_every_stage_is_listed_even_when_unset(self):
         """An unset stage has to be visible as a gap, not simply absent."""
-        self.client.force_login(self.admin)
+        self.client.force_login(self.super_admin)
         body = self.client.get(self._url()).content.decode()
         for _key, label, _signer in PurchaseOrder.APPROVAL_STAGES:
             self.assertIn(label, body)
         self.assertIn('Everyone with the role', body)
 
-    def test_an_admin_can_set_an_approver(self):
+    def test_a_super_admin_can_set_an_approver(self):
         from procurement.models import POStageApprover
-        self.client.force_login(self.admin)
+        self.client.force_login(self.super_admin)
         self.client.post(self._url(), {'stage': 'scm', 'user': self.proc.pk})
         row = POStageApprover.objects.get(stage='scm')
         self.assertEqual(row.user, self.proc)
-        self.assertEqual(row.updated_by, self.admin)
+        self.assertEqual(row.updated_by, self.super_admin)
 
     def test_setting_a_stage_twice_replaces_rather_than_duplicates(self):
         from procurement.models import POStageApprover
         other = User.objects.create_user('sa_other', password='x',
                                          role=self.proc_role)
-        self.client.force_login(self.admin)
+        self.client.force_login(self.super_admin)
         self.client.post(self._url(), {'stage': 'scm', 'user': self.proc.pk})
         self.client.post(self._url(), {'stage': 'scm', 'user': other.pk})
         self.assertEqual(POStageApprover.objects.filter(stage='scm').count(), 1)
         self.assertEqual(POStageApprover.objects.get(stage='scm').user, other)
+
+    def test_the_sidebar_links_to_it(self):
+        """It was built without a link and reachable only by typing the URL,
+        which is the same as not shipping it."""
+        self.client.force_login(self.super_admin)
+        body = self.client.get(reverse('procurement:po_list')).content.decode()
+        self.assertIn(reverse('procurement:po_stage_approvers'), body)
+        self.assertIn('Approval Routing', body)
+
+    def test_the_link_is_hidden_from_people_it_would_refuse(self):
+        """A visible link that bounces you to the dashboard is worse than no
+        link."""
+        self.client.force_login(self.proc)
+        body = self.client.get(reverse('procurement:po_list')).content.decode()
+        self.assertNotIn('Approval Routing', body)
 
     def test_procurement_cannot_change_the_routing(self):
         """Naming an approver decides who is asked to sign company purchase

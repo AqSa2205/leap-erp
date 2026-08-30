@@ -61,7 +61,9 @@ leaves the endpoints open.
 address to email. `can_user_approve_stage()` works on roles, which is fine for
 a permission gate and useless for a recipient.
 
-A new `POStageApprover` model maps a stage key to a user, editable by admins.
+A new `POStageApprover` model maps a stage key to a user, editable by **super
+admins only** — naming an approver decides who is asked to sign company
+purchase orders, which is not a change the ordinary admin tier makes.
 Where a stage has no mapping, the notification falls back to every user holding
 that stage's role, so the feature degrades to "someone is told" rather than
 "nobody is told".
