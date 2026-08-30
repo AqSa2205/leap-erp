@@ -10,14 +10,19 @@ urlpatterns = [
     # Purchase Orders
     path('po/', views.POListView.as_view(), name='po_list'),
     path('po/create/', views.POCreateView.as_view(), name='po_create'),
+    path('po/by-project/', views.po_by_project, name='po_by_project'),
+    path('po/by-project/add/', views.po_board_add, name='po_board_add'),
+    path('po/by-project/<int:pk>/remove/', views.po_board_remove, name='po_board_remove'),
     # Import a supplier quotation PDF → AI extract → review → create PO.
     path('quotations/import/', views.quotation_import, name='quotation_import'),
     path('quotations/<int:pk>/review/', views.quotation_review, name='quotation_review'),
     path('quotations/<int:pk>/retry/', views.quotation_retry, name='quotation_retry'),
     path('budgets/', views.approved_budgets, name='approved_budgets'),
+    path('approval-routing/', views.po_stage_approvers, name='po_stage_approvers'),
     path('po/from-bom/<int:sheet_pk>/', views.po_create_from_bom, name='po_create_from_bom'),
     path('po/bom/<int:sheet_pk>/tracker/', views.bom_procurement_tracker, name='bom_procurement_tracker'),
     path('po/import/', views.po_import_excel, name='po_import'),
+    path('po/<int:pk>/import-items/', views.po_import_items, name='po_import_items'),
     path('po/<int:pk>/', views.PODetailView.as_view(), name='po_detail'),
     path('po/<int:pk>/edit/', views.POUpdateView.as_view(), name='po_update'),
     path('po/<int:pk>/delete/', views.PODeleteView.as_view(), name='po_delete'),
@@ -25,6 +30,7 @@ urlpatterns = [
     path('po/<int:pk>/export-pdf/', views.po_export_pdf, name='po_export_pdf'),
     path('po/<int:pk>/export-pdf-unpriced/', views.po_export_pdf_unpriced, name='po_export_pdf_unpriced'),
     path('po/<int:pk>/toggle-term/', views.ajax_po_toggle_term, name='po_toggle_term'),
+    path('po/<int:pk>/release-lock/', views.po_release_lock, name='po_release_lock'),
     path('po/<int:pk>/approve/<str:stage>/', views.po_approve_stage, name='po_approve_stage'),
     path('po/<int:pk>/signature/<str:stage>/edit/', views.po_edit_signature, name='po_edit_signature'),
 
