@@ -41,6 +41,13 @@ class PurchaseOrderForm(forms.ModelForm):
             else:
                 field.widget.attrs['class'] = 'form-control'
 
+        # A client-acknowledged PO is read-only. The fields are disabled so the
+        # page reads honestly, and clean() refuses regardless — a disabled
+        # widget is a hint to the browser, not a rule the server keeps.
+        if self.instance.pk and self.instance.is_locked:
+            for field in self.fields.values():
+                field.disabled = True
+
         # On create, prefill PO Issuer with the current user's name + email so
         # the common case is a single click. Update mode preserves whatever
         # was saved before.
@@ -66,6 +73,47 @@ class PurchaseOrderForm(forms.ModelForm):
                     region=self.user.region
                 ).select_related('region')
 
+    def clean(self):
+        """Refuse every edit to a locked PO.
+
+        Belt and braces with the disabled widgets above: a POST can arrive
+        without ever rendering the form.
+        """
+        cleaned = super().clean()
+        if self.instance.pk and self.instance.is_locked:
+            raise forms.ValidationError(
+                'This purchase order has been acknowledged by the client and '
+                'is locked. A super admin must release it before it can be '
+                'edited.'
+            )
+        return cleaned
+
+
+class POStageApproverForm(forms.ModelForm):
+    """Map one approval stage to the person who signs it.
+
+    Exists because APPROVAL_STAGES names its signers as plain text, which is
+    enough to print on a PDF and useless for sending them an email.
+    """
+    class Meta:
+        from .models import POStageApprover
+        model = POStageApprover
+        fields = ['stage', 'user']
+        widgets = {
+            'stage': forms.Select(attrs={'class': 'form-select'}),
+            'user': forms.Select(attrs={'class': 'form-select'}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from accounts.models import User
+        self.fields['user'].queryset = User.objects.filter(
+            is_active=True).order_by('first_name', 'last_name', 'username')
+        # Naming somebody who cannot sign the stage would produce an email
+        # inviting them to press a button that refuses them.
+        self.fields['user'].help_text = (
+            'They must also hold the role that may sign this stage — this '
+            'decides who is told, not who is allowed.')
 
 class PurchaseOrderItemForm(forms.ModelForm):
     class Meta:

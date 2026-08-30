@@ -1,0 +1,238 @@
+{% extends 'base.html' %}
+{% load humanize %}
+{% block title %}POs by Project{% endblock %}
+{% block content %}
+<div class="container-fluid py-3">
+
+  <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div>
+      <h4 class="mb-1"><i class="bi bi-diagram-3 me-2"></i>Purchase Orders by Project</h4>
+      <p class="text-muted mb-0 small">
+        {{ groups|length }} project{{ groups|length|pluralize }} ·
+        {{ total_pos }} purchase order{{ total_pos|pluralize }}
+        <span class="ms-1">— finance-approved budgets, projects procurement has selected, and anything with orders raised</span>
+      </p>
+    </div>
+    <div class="d-flex gap-2">
+      {% if empty_count or not include_empty %}
+      {% comment %} Approved budgets with nothing ordered yet are worth seeing —
+      they are the work not started — but they are noise once you are chasing a
+      specific order, so they can be dropped. {% endcomment %}
+      <a href="?{% if include_empty %}empty=hide{% endif %}"
+         class="btn btn-sm {% if include_empty %}btn-outline-secondary{% else %}btn-secondary{% endif %}">
+        {% if include_empty %}
+          Hide budgets with no POs{% if empty_count %} ({{ empty_count }}){% endif %}
+        {% else %}
+          Show approved budgets with no POs
+        {% endif %}
+      </a>
+      {% endif %}
+      {% if can_manage_board %}
+      <button class="btn btn-sm btn-outline-danger" type="button"
+              data-bs-toggle="collapse" data-bs-target="#addToBoard">
+        <i class="bi bi-plus-lg me-1"></i> Add a project
+      </button>
+      {% endif %}
+      <a href="{% url 'procurement:po_list' %}" class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-list-ul me-1"></i> Flat list
+      </a>
+    </div>
+  </div>
+
+  {% if can_manage_board %}
+  <div class="collapse mb-3" id="addToBoard">
+    <div class="card card-body">
+      {% comment %} The second door onto the board: work that needs procuring
+      before a budget exists, or that never goes through one. {% endcomment %}
+      <form method="post" action="{% url 'procurement:po_board_add' %}" class="row g-2 align-items-end">
+        {% csrf_token %}
+        <div class="col-md-5">
+          <label class="form-label small mb-1" for="boardProject">Project</label>
+          <select name="project" id="boardProject" class="form-select form-select-sm" required>
+            <option value="">Choose a project…</option>
+            {% for p in addable_projects %}
+            <option value="{{ p.pk }}">{{ p.project_name }}{% if p.proposal_reference %} — {{ p.proposal_reference }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-5">
+          <label class="form-label small mb-1" for="boardNote">Why (optional)</label>
+          <input type="text" name="note" id="boardNote" maxlength="300"
+                 class="form-control form-control-sm"
+                 placeholder="For whoever finds it later">
+        </div>
+        <div class="col-md-2 d-grid">
+          <button type="submit" class="btn btn-sm btn-danger">Add</button>
+        </div>
+        <div class="col-12">
+          <div class="form-text">
+            Projects with a finance-approved budget are already here — this is
+            for work that needs procuring before a budget exists, or that never
+            goes through one.
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if off_board_count %}
+  {% comment %} Committed spend against something nobody put on the board. Not
+  hidden, because hiding it loses the spend; flagged, because that is how the
+  gap gets closed. {% endcomment %}
+  <div class="alert alert-warning py-2 small">
+    <i class="bi bi-exclamation-triangle me-1"></i>
+    {{ off_board_count }} project{{ off_board_count|pluralize }} here
+    {{ off_board_count|pluralize:"has,have" }} purchase orders but no approved
+    budget and no procurement selection. Shown so the spend is not lost — add
+    them to the board, or chase the budget.
+  </div>
+  {% endif %}
+
+  {% for g in groups %}
+  <div class="card mb-2">
+    {% comment %} Collapsed by default: at the real number of projects an
+    all-open page cannot be read. That makes the header the whole design — it
+    has to answer "is anything here, and is any of it stuck" without being
+    opened. {% endcomment %}
+    <div class="card-header d-flex align-items-center gap-3 flex-wrap"
+         role="button" data-bs-toggle="collapse" data-bs-target="#proj{{ forloop.counter }}"
+         style="cursor:pointer;">
+      <i class="bi bi-chevron-right"></i>
+      <div class="flex-grow-1">
+        <span class="fw-semibold">{{ g.project_name }}</span>
+        {% if g.reference %}
+        <code class="ms-2 small">{{ g.reference }}</code>
+        {% endif %}
+        {% if not g.project %}
+        <span class="badge bg-warning text-dark ms-2" title="These POs have no project linked, so they cannot be reported against a job">
+          <i class="bi bi-exclamation-triangle"></i> Unassigned
+        </span>
+        {% endif %}
+        {% if g.region %}<span class="badge bg-light text-dark border ms-2">{{ g.region.name }}</span>{% endif %}
+        {% comment %} Why this project is on the page at all. {% endcomment %}
+        {% if g.selected %}
+        <span class="badge bg-info text-dark ms-2" title="Put here by the procurement team">
+          <i class="bi bi-pin-angle"></i> Selected
+        </span>
+        {% elif g.approved and g.project %}
+        <span class="badge bg-success ms-2" title="Finance has approved a budget for this project">
+          <i class="bi bi-check2-circle"></i> Budget approved
+        </span>
+        {% elif g.off_board %}
+        <span class="badge bg-warning text-dark ms-2" title="Orders exist against this project, but no approved budget and no procurement selection">
+          <i class="bi bi-exclamation-triangle"></i> Not on the board
+        </span>
+        {% endif %}
+      </div>
+
+      <span class="badge {% if g.po_count %}bg-dark{% else %}bg-light text-muted border{% endif %}">
+        {{ g.po_count }} PO{{ g.po_count|pluralize }}
+      </span>
+
+      {% comment %} Per currency, never added together — one number across
+      currencies looks like an answer and is not. {% endcomment %}
+      {% for currency, amount in g.totals %}
+      <span class="small fw-semibold text-nowrap">{{ amount|floatformat:2|intcomma }} {{ currency }}</span>
+      {% endfor %}
+
+      {% if g.awaiting %}
+      <span class="badge bg-warning text-dark text-nowrap">
+        <i class="bi bi-hourglass-split"></i> {{ g.awaiting }} awaiting approval
+      </span>
+      {% endif %}
+    </div>
+
+    <div class="collapse" id="proj{{ forloop.counter }}">
+      <div class="table-responsive">
+        {% if g.rows %}
+        <table class="table table-sm table-hover align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>PO Number</th>
+              <th>Vendor</th>
+              <th>Date</th>
+              <th>Status</th>
+              <th>Approval</th>
+              <th class="text-end">Value</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for po in g.rows %}
+            <tr>
+              <td>
+                <a href="{% url 'procurement:po_detail' po.pk %}" class="text-decoration-none fw-semibold">
+                  {{ po.po_number }}
+                </a>
+              </td>
+              <td>{{ po.vendor_name|truncatechars:28 }}</td>
+              <td class="text-nowrap small">{{ po.po_date|date:"d M Y" }}</td>
+              <td>
+                {% if po.status == 'draft' %}<span class="badge bg-warning text-dark">Draft</span>
+                {% elif po.status == 'issued' %}<span class="badge bg-dark">Issued</span>
+                {% elif po.status == 'client_acknowledged' %}<span class="badge bg-secondary"><i class="bi bi-lock-fill"></i> Client Acknowledged</span>
+                {% elif po.status == 'completed' %}<span class="badge bg-success">Completed</span>
+                {% elif po.status == 'cancelled' %}<span class="badge bg-danger">Cancelled</span>
+                {% endif %}
+              </td>
+              {% comment %} The reason to open a card at all: whether anything
+              for this job is stuck. Same source as the flat list. {% endcomment %}
+              <td class="small text-nowrap">
+                {% with w=po.workflow_status %}
+                {% if w.tone == 'warning' %}<span class="badge bg-warning text-dark">{{ w.label }}</span>
+                {% elif w.tone == 'success' %}<span class="badge bg-success">{{ w.label }}</span>
+                {% elif w.tone == 'locked' %}<span class="badge bg-secondary"><i class="bi bi-lock-fill"></i> Locked</span>
+                {% elif w.tone == 'muted' %}<span class="text-muted">{{ w.label }}</span>
+                {% else %}<span class="badge bg-light text-dark border">{{ w.label }}</span>{% endif %}
+                {% endwith %}
+              </td>
+              <td class="text-end text-nowrap">{{ po.total_value|floatformat:2|intcomma }} {{ po.currency }}</td>
+              <td class="text-end pe-3">
+                <a href="{% url 'procurement:po_detail' po.pk %}" class="btn btn-sm btn-outline-primary" title="Open">
+                  <i class="bi bi-eye"></i>
+                </a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        {% comment %} Not an error state — it is the answer to "what has been
+        procured for this job". {% endcomment %}
+        <div class="p-3 text-muted small">
+          Finance has approved a budget for this project, but nothing has been
+          ordered against it yet.
+          {% if g.project %}
+          <a href="{% url 'procurement:po_create' %}" class="ms-1">Raise a purchase order</a>.
+          {% endif %}
+        </div>
+        {% endif %}
+        {% comment %} Outside the has-orders branch on purpose: a selected
+        project usually has no orders yet, which is exactly when somebody wants
+        to take it back off. {% endcomment %}
+        {% if can_manage_board and g.selected %}
+        <div class="p-2 border-top bg-light text-end">
+          <form method="post" action="{% url 'procurement:po_board_remove' g.project.pk %}"
+                onsubmit="return confirm('Take this project off the procurement board?');">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-outline-secondary">
+              <i class="bi bi-pin-angle-fill me-1"></i> Remove from board
+            </button>
+          </form>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% empty %}
+  <div class="card">
+    <div class="card-body text-center text-muted py-5">
+      <i class="bi bi-inbox fs-3 d-block mb-2 opacity-50"></i>
+      No projects or purchase orders in your scope.
+    </div>
+  </div>
+  {% endfor %}
+
+</div>
+{% endblock %}
