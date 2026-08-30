@@ -48,7 +48,9 @@ class PurchaseOrder(models.Model):
     STATUS_CHOICES = [
         ('draft', 'Draft'),
         ('issued', 'Issued'),
-        ('acknowledged', 'Acknowledged'),
+        # Renamed from 'acknowledged', which carried no behaviour beyond a badge
+        # colour. This one locks the PO — see is_locked below.
+        ('client_acknowledged', 'Client Acknowledged'),
         ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
     ]
@@ -109,6 +111,14 @@ class PurchaseOrder(models.Model):
         verbose_name="Cost Center"
     )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    # Stamped when the PO enters Client Acknowledged. Kept on the PO as well as
+    # in POStatusChange so the common question — when was this accepted — does
+    # not need a join.
+    client_acknowledged_at = models.DateTimeField(null=True, blank=True)
+    client_acknowledged_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='client_acknowledged_pos',
+    )
 
     # Vendor Information
     vendor_name = models.CharField(max_length=255, verbose_name="Vendor")
@@ -275,6 +285,76 @@ class PurchaseOrder(models.Model):
     @property
     def total_value(self):
         return self.gross_value + self.vat_amount
+
+    LOCKED_STATUS = 'client_acknowledged'
+
+    def record_status_change(self, *, to_status, changed_by=None, reason=''):
+        """Move the PO to a new status, logging it and stamping acknowledgement.
+
+        The single place status changes, so the log cannot be bypassed by
+        remembering to write it at each call site. A no-op transition writes
+        nothing rather than filling the log with rows that say nothing changed.
+        """
+        from django.utils import timezone
+        from_status = self.status
+        if from_status == to_status:
+            return None
+
+        self.status = to_status
+        fields = ['status']
+        if to_status == self.LOCKED_STATUS:
+            self.client_acknowledged_at = timezone.now()
+            self.client_acknowledged_by = changed_by
+            fields += ['client_acknowledged_at', 'client_acknowledged_by']
+        elif from_status == self.LOCKED_STATUS:
+            # Released. Clear the stamps so they always describe the CURRENT
+            # acknowledgement rather than a historical one; POStatusChange
+            # keeps the history.
+            self.client_acknowledged_at = None
+            self.client_acknowledged_by = None
+            fields += ['client_acknowledged_at', 'client_acknowledged_by']
+        self.save(update_fields=fields)
+
+        return POStatusChange.objects.create(
+            purchase_order=self, from_status=from_status, to_status=to_status,
+            reason=reason or '', changed_by=changed_by,
+        )
+
+    @property
+    def is_locked(self):
+        """Client has acknowledged the PO, so nothing about it may change.
+
+        Read by every write path — the form, the item and term endpoints, the
+        signature endpoints and both imports. Deliberately not a template
+        concern: hiding a button does not close an endpoint.
+        """
+        return self.status == self.LOCKED_STATUS
+
+    @property
+    def workflow_status(self):
+        """What this PO is waiting on right now: {label, tone, stage_key}.
+
+        Derived from current_stage rather than stored. A stored copy would go
+        stale the moment somebody signs, and then the list and the Approve
+        button would disagree about the same PO.
+        """
+        if self.status == 'cancelled':
+            return {'label': 'Cancelled', 'tone': 'muted', 'stage_key': None}
+        if self.is_locked:
+            return {'label': 'Client acknowledged — locked',
+                    'tone': 'locked', 'stage_key': None}
+        stage = self.current_stage
+        if stage is None:
+            return {'label': 'Approved — released', 'tone': 'success',
+                    'stage_key': None}
+        # Name the stage that is actually next, taken from the same source the
+        # Approve button validates against, so the two cannot drift.
+        label = stage['label'].replace(' Approval', '')
+        if not self.approved_stages:
+            return {'label': f'Draft — awaiting {label} approval',
+                    'tone': 'neutral', 'stage_key': stage['key']}
+        return {'label': f'Awaiting {label} approval', 'tone': 'warning',
+                'stage_key': stage['key']}
 
     @property
     def requires_ceo_approval(self):
@@ -450,6 +530,64 @@ class PurchaseOrder(models.Model):
         if user.is_super_admin_user:
             return True
         return getattr(self, f'{stage_key}_approved_by_id') == user.id
+
+
+class POStatusChange(models.Model):
+    """Every status transition a PO makes, with who and why.
+
+    The audit trail behind the Client Acknowledged lock: releasing a locked PO
+    is a super-admin action that has to be answerable for. Logging every
+    transition rather than only unlocks costs nothing extra and answers "when
+    did this PO go live" as a side effect.
+    """
+    purchase_order = models.ForeignKey(
+        'procurement.PurchaseOrder', on_delete=models.CASCADE,
+        related_name='status_changes')
+    from_status = models.CharField(max_length=20, blank=True)
+    to_status = models.CharField(max_length=20)
+    reason = models.TextField(
+        blank=True,
+        help_text='Required when releasing a Client Acknowledged PO.')
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+')
+    changed_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-changed_at']
+        verbose_name = 'PO status change'
+
+    def __str__(self):
+        return f'{self.purchase_order_id}: {self.from_status or "-"} -> {self.to_status}'
+
+
+class POStageApprover(models.Model):
+    """Which user signs a given approval stage.
+
+    PurchaseOrder.APPROVAL_STAGES names its signers as plain text, which is
+    enough to print on a PDF and useless for sending an email. This maps a
+    stage to a real account so the person waiting on a PO can be told about it.
+
+    It decides who is NOTIFIED, never who is ALLOWED — can_user_approve_stage()
+    remains the only permission gate.
+    """
+    STAGE_CHOICES = [(k, l) for k, l, _signer in PurchaseOrder.APPROVAL_STAGES]
+
+    stage = models.CharField(max_length=8, choices=STAGE_CHOICES, unique=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='po_stages_to_approve')
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['stage']
+        verbose_name = 'PO stage approver'
+
+    def __str__(self):
+        return f'{self.get_stage_display()} -> {self.user}'
 
 
 class PurchaseOrderItem(models.Model):

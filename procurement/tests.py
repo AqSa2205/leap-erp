@@ -981,3 +981,306 @@ class TermsSanitizeTests(TestCase):
         joined = ' '.join(m for m, _ in lines)
         self.assertNotIn('<script', joined.lower())
         self.assertIn('&amp;', joined)
+
+
+class POClientAcknowledgedLockTests(TestCase):
+    """Once the client acknowledges a PO, nothing about it may change.
+
+    The lock has many doors — the PO form, line items, terms, signatures, the
+    summary editor, both imports and delete are all separate endpoints. Each
+    test below asserts the DATA is unchanged, not merely that the response was
+    a refusal: a view that writes and then returns 423 passes a status-code
+    test and still loses the guarantee."""
+
+    def setUp(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.super_admin = User.objects.create_user('lock_super', password='x')
+        self.super_admin.role = role
+        self.super_admin.save()
+
+        proc, _ = Role.objects.get_or_create(name=Role.PROCUREMENT_MGR)
+        self.procurement = User.objects.create_user('lock_proc', password='x')
+        self.procurement.role = proc
+        self.procurement.save()
+
+        self.po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-LOCK-1',
+            vendor_name='ACME', po_issued_by='Tester',
+            created_by=self.procurement, status='issued')
+        self.item = self.po.items.create(
+            description='Widget', quantity=Decimal('2'),
+            rate_per_unit=Decimal('100'))
+
+    def _lock(self):
+        self.po.record_status_change(
+            to_status='client_acknowledged', changed_by=self.procurement)
+        self.po.refresh_from_db()
+
+    # ── the status itself ───────────────────────────────────────────────────
+
+    def test_only_the_new_status_locks(self):
+        for status in ('draft', 'issued', 'completed', 'cancelled'):
+            self.po.status = status
+            with self.subTest(status=status):
+                self.assertFalse(self.po.is_locked)
+        self.po.status = 'client_acknowledged'
+        self.assertTrue(self.po.is_locked)
+
+    def test_acknowledging_stamps_who_and_when(self):
+        self._lock()
+        self.assertIsNotNone(self.po.client_acknowledged_at)
+        self.assertEqual(self.po.client_acknowledged_by, self.procurement)
+
+    def test_every_status_change_is_logged(self):
+        self._lock()
+        change = self.po.status_changes.first()
+        self.assertEqual((change.from_status, change.to_status),
+                         ('issued', 'client_acknowledged'))
+        self.assertEqual(change.changed_by, self.procurement)
+
+    def test_a_no_op_transition_writes_nothing(self):
+        """A log full of rows saying nothing changed is a log nobody reads."""
+        self.po.record_status_change(to_status='issued',
+                                     changed_by=self.procurement)
+        self.assertEqual(self.po.status_changes.count(), 0)
+
+    # ── the doors ───────────────────────────────────────────────────────────
+
+    def test_the_edit_form_refuses(self):
+        self._lock()
+        self.client.force_login(self.procurement)
+        resp = self.client.post(
+            reverse('procurement:po_update', args=[self.po.pk]),
+            {'po_date': '2026-02-02', 'po_number': 'PO-LOCK-CHANGED',
+             'vendor_name': 'OTHER', 'po_issued_by': 'Tester',
+             'cost_center': 'projects', 'status': 'issued',
+             'items-TOTAL_FORMS': '0', 'items-INITIAL_FORMS': '0'})
+        self.po.refresh_from_db()
+        self.assertEqual(self.po.po_number, 'PO-LOCK-1')
+        self.assertEqual(self.po.vendor_name, 'ACME')
+        self.assertEqual(resp.status_code, 302)
+
+    def test_deleting_refuses(self):
+        self._lock()
+        self.client.force_login(self.super_admin)
+        self.client.post(reverse('procurement:po_delete', args=[self.po.pk]))
+        self.assertTrue(PurchaseOrder.objects.filter(pk=self.po.pk).exists())
+
+    def test_editing_a_line_item_refuses(self):
+        self._lock()
+        self.client.force_login(self.procurement)
+        resp = self.client.post(
+            reverse('procurement:po_item_update_field', args=[self.item.pk]),
+            {'field': 'delivery_status', 'value': 'Tampered'})
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.delivery_status, '')
+        self.assertEqual(resp.status_code, 423)
+
+    def test_editing_a_po_header_field_inline_refuses(self):
+        """The same endpoint writes PO-level fields as well as item fields, so
+        the guard has to cover both branches."""
+        self._lock()
+        self.client.force_login(self.procurement)
+        resp = self.client.post(
+            reverse('procurement:po_item_update_field', args=[self.item.pk]),
+            {'field': 'lead_time', 'value': '99 weeks'})
+        self.po.refresh_from_db()
+        self.assertNotEqual(self.po.lead_time, '99 weeks')
+        self.assertEqual(resp.status_code, 423)
+
+    def test_toggling_a_term_refuses(self):
+        self._lock()
+        self.client.force_login(self.procurement)
+        before = list(self.po.selected_terms.values_list('pk', flat=True))
+        resp = self.client.post(
+            reverse('procurement:po_toggle_term', args=[self.po.pk]),
+            {'term_id': '1', 'enabled': '1'})
+        self.assertEqual(
+            list(self.po.selected_terms.values_list('pk', flat=True)), before)
+        self.assertEqual(resp.status_code, 423)
+
+    def test_signing_an_approval_stage_refuses(self):
+        """A signature added after the client accepted the document would be a
+        signature on something that was already agreed.
+
+        Sends a VALID signature on purpose: an empty one is rejected by the
+        signature validator whether or not the lock exists, so the test would
+        pass against no lock at all.
+        """
+        self._lock()
+        self.client.force_login(self.super_admin)
+        resp = self.client.post(
+            reverse('procurement:po_approve_stage', args=[self.po.pk, 'scm']),
+            {'signature_data': _png_data_url()})
+        self.po.refresh_from_db()
+        self.assertIsNone(self.po.scm_approved_at)
+        self.assertEqual(resp.status_code, 423)
+
+    def test_replacing_a_signature_image_refuses(self):
+        """po_edit_signature is a separate endpoint from po_approve_stage and
+        needs its own guard."""
+        from django.utils import timezone
+        PurchaseOrder.objects.filter(pk=self.po.pk).update(
+            scm_approved_at=timezone.now(), scm_approved_by=self.super_admin)
+        self._lock()
+        self.client.force_login(self.super_admin)
+        resp = self.client.post(
+            reverse('procurement:po_edit_signature', args=[self.po.pk, 'scm']),
+            {'signature_data': _png_data_url()})
+        self.assertEqual(resp.status_code, 423)
+
+    def test_an_unlocked_po_still_accepts_edits(self):
+        """The guard must refuse the locked case only — a lock that blocks
+        everything is indistinguishable from a broken page."""
+        self.client.force_login(self.procurement)
+        resp = self.client.post(
+            reverse('procurement:po_item_update_field', args=[self.item.pk]),
+            {'field': 'delivery_status', 'value': 'Shipped'})
+        self.assertEqual(resp.status_code, 200)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.delivery_status, 'Shipped')
+
+    # ── the way out ─────────────────────────────────────────────────────────
+
+    def test_a_super_admin_can_release_it_with_a_reason(self):
+        self._lock()
+        self.client.force_login(self.super_admin)
+        self.client.post(
+            reverse('procurement:po_release_lock', args=[self.po.pk]),
+            {'reason': 'Wrong delivery address, client asked us to reissue'})
+        self.po.refresh_from_db()
+        self.assertFalse(self.po.is_locked)
+        self.assertEqual(self.po.status, 'issued')
+
+    def test_releasing_records_who_and_why(self):
+        self._lock()
+        self.client.force_login(self.super_admin)
+        self.client.post(
+            reverse('procurement:po_release_lock', args=[self.po.pk]),
+            {'reason': 'Wrong delivery address'})
+        change = self.po.status_changes.first()
+        self.assertEqual(change.to_status, 'issued')
+        self.assertEqual(change.changed_by, self.super_admin)
+        self.assertIn('delivery address', change.reason)
+
+    def test_releasing_without_a_reason_is_refused(self):
+        """This is the only door out of the lock; an unexplained release is
+        worth less than no record at all."""
+        self._lock()
+        self.client.force_login(self.super_admin)
+        self.client.post(
+            reverse('procurement:po_release_lock', args=[self.po.pk]),
+            {'reason': '   '})
+        self.po.refresh_from_db()
+        self.assertTrue(self.po.is_locked)
+
+    def test_procurement_cannot_release_it(self):
+        self._lock()
+        self.client.force_login(self.procurement)
+        self.client.post(
+            reverse('procurement:po_release_lock', args=[self.po.pk]),
+            {'reason': 'Let me back in'})
+        self.po.refresh_from_db()
+        self.assertTrue(self.po.is_locked)
+
+    def test_releasing_clears_the_acknowledgement_stamps(self):
+        """They describe the CURRENT acknowledgement. Leaving them behind would
+        show a PO as accepted on a date it is no longer accepted."""
+        self._lock()
+        self.client.force_login(self.super_admin)
+        self.client.post(
+            reverse('procurement:po_release_lock', args=[self.po.pk]),
+            {'reason': 'Reissuing'})
+        self.po.refresh_from_db()
+        self.assertIsNone(self.po.client_acknowledged_at)
+        self.assertIsNone(self.po.client_acknowledged_by)
+        # The history still knows it happened.
+        self.assertEqual(self.po.status_changes.count(), 2)
+
+
+class POWorkflowStatusTests(TestCase):
+    """What a PO is waiting on, derived rather than stored."""
+
+    def setUp(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('wf_user', password='x')
+        self.user.role = role
+        self.user.save()
+        self.po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-WF-1', vendor_name='ACME',
+            po_issued_by='Tester', created_by=self.user)
+
+    def _sign(self, *stages):
+        from django.utils import timezone
+        PurchaseOrder.objects.filter(pk=self.po.pk).update(
+            **{f'{s}_approved_at': timezone.now() for s in stages})
+        self.po.refresh_from_db()
+
+    def test_an_untouched_po_names_its_first_stage(self):
+        w = self.po.workflow_status
+        self.assertIn('SCM', w['label'])
+        self.assertEqual(w['stage_key'], 'scm')
+
+    def test_signing_moves_the_label_to_the_next_stage(self):
+        self._sign('scm')
+        w = self.po.workflow_status
+        self.assertEqual(w['label'], 'Awaiting PM approval')
+        self.assertEqual(w['tone'], 'warning')
+
+    def test_a_fully_signed_po_reads_as_released(self):
+        self._sign('scm', 'pm', 'coo')
+        w = self.po.workflow_status
+        self.assertEqual(w['tone'], 'success')
+        self.assertIsNone(w['stage_key'])
+
+    def test_a_locked_po_says_locked_rather_than_a_stage(self):
+        self.po.record_status_change(to_status='client_acknowledged',
+                                     changed_by=self.user)
+        self.assertEqual(self.po.workflow_status['tone'], 'locked')
+
+    def test_a_cancelled_po_is_waiting_on_nobody(self):
+        self.po.record_status_change(to_status='cancelled', changed_by=self.user)
+        w = self.po.workflow_status
+        self.assertEqual(w['label'], 'Cancelled')
+        self.assertIsNone(w['stage_key'])
+
+    def test_the_label_matches_the_stage_the_button_accepts(self):
+        """Derived from current_stage precisely so the list and the Approve
+        endpoint cannot disagree about the same PO."""
+        self._sign('scm')
+        self.assertEqual(self.po.workflow_status['stage_key'],
+                         self.po.current_stage['key'])
+
+    def test_the_list_shows_the_approval_column(self):
+        self.client.force_login(self.user)
+        body = self.client.get(reverse('procurement:po_list')).content.decode()
+        self.assertIn('Approval', body)
+        self.assertIn('SCM approval', body)
+
+
+class ApprovedBudgetsReferenceTests(TestCase):
+    """Procurement can see the LNA reference without opening the budget."""
+
+    def setUp(self):
+        from projects.models import Region, ProjectStatus, Project
+        from costing.models import CostingSheet
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('bud_user', password='x')
+        self.user.role = role
+        self.user.save()
+        region = Region.objects.create(name='KSA', code='LNA', currency='SAR')
+        status = ProjectStatus.objects.create(name='Open', category='active')
+        self.project = Project.objects.create(
+            project_name='Ghazlan Substation', proposal_reference='LNA-2026-0417',
+            status=status, region=region, estimated_value=Decimal('1'),
+            actual_sales=Decimal('0'), year='2026', po_award_quarter='Q2')
+        self.sheet = CostingSheet.objects.create(
+            title='Budget', project=self.project,
+            workflow_stage='finance_approved')
+
+    def test_the_reference_is_on_the_page(self):
+        self.client.force_login(self.user)
+        body = self.client.get(
+            reverse('procurement:approved_budgets')).content.decode()
+        self.assertIn('LNA Reference', body)
+        self.assertIn('LNA-2026-0417', body)

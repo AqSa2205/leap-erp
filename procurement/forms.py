@@ -41,6 +41,13 @@ class PurchaseOrderForm(forms.ModelForm):
             else:
                 field.widget.attrs['class'] = 'form-control'
 
+        # A client-acknowledged PO is read-only. The fields are disabled so the
+        # page reads honestly, and clean() refuses regardless — a disabled
+        # widget is a hint to the browser, not a rule the server keeps.
+        if self.instance.pk and self.instance.is_locked:
+            for field in self.fields.values():
+                field.disabled = True
+
         # On create, prefill PO Issuer with the current user's name + email so
         # the common case is a single click. Update mode preserves whatever
         # was saved before.
@@ -65,6 +72,21 @@ class PurchaseOrderForm(forms.ModelForm):
                 self.fields['project'].queryset = Project.objects.filter(
                     region=self.user.region
                 ).select_related('region')
+
+    def clean(self):
+        """Refuse every edit to a locked PO.
+
+        Belt and braces with the disabled widgets above: a POST can arrive
+        without ever rendering the form.
+        """
+        cleaned = super().clean()
+        if self.instance.pk and self.instance.is_locked:
+            raise forms.ValidationError(
+                'This purchase order has been acknowledged by the client and '
+                'is locked. A super admin must release it before it can be '
+                'edited.'
+            )
+        return cleaned
 
 
 class PurchaseOrderItemForm(forms.ModelForm):

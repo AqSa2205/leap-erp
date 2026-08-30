@@ -250,7 +250,7 @@ def procurement_dashboard(request):
 
     po_total = po_qs.count()
     po_by_status = {}
-    for s in ['draft', 'issued', 'acknowledged', 'completed', 'cancelled']:
+    for s in ['draft', 'issued', 'client_acknowledged', 'completed', 'cancelled']:
         po_by_status[s] = po_qs.filter(status=s).count()
 
     # DN stats
@@ -381,6 +381,24 @@ class ProcurementPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
 
 
 # ─── PO CRUD ─────────────────────────────────────────────────
+
+LOCKED_PO_MESSAGE = (
+    'This purchase order has been acknowledged by the client and is locked. '
+    'A super admin must release it before anything can change.'
+)
+
+
+def locked_po_json(po):
+    """JSON refusal for a locked PO, or None when the PO may be changed.
+
+    Every endpoint that writes to a PO, its items, its terms or its signatures
+    calls this BEFORE writing. Hiding the control in the template is not a
+    lock — the endpoint is still there for anyone who knows the URL.
+    """
+    if po.is_locked:
+        return JsonResponse({'error': LOCKED_PO_MESSAGE}, status=423)
+    return None
+
 
 class POListView(CapabilityRequiredMixin, ProcurementPermissionMixin, ListView):
     capability = 'po.access'
@@ -782,6 +800,16 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
             return True
         return obj.created_by == user
 
+    def post(self, request, *args, **kwargs):
+        # Refuse before the formsets get a chance to save. The form's clean()
+        # covers the PO's own fields; the item formset and the terms are saved
+        # separately in form_valid and would otherwise write anyway.
+        self.object = self.get_object()
+        if self.object.is_locked:
+            messages.error(request, LOCKED_PO_MESSAGE)
+            return redirect('procurement:po_detail', pk=self.object.pk)
+        return super().post(request, *args, **kwargs)
+
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs['user'] = self.request.user
@@ -812,7 +840,19 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
         context = self.get_context_data()
         item_formset = context['item_formset']
         if item_formset.is_valid():
+            # Capture the status before the form writes it, so the transition
+            # can be logged with a from/to rather than guessed at afterwards.
+            previous_status = PurchaseOrder.objects.filter(
+                pk=self.object.pk).values_list('status', flat=True).first()
             self.object = form.save()
+            new_status = self.object.status
+            if new_status != previous_status:
+                # Put it back and go through the one method that logs and
+                # stamps, so a status set from the form is recorded the same
+                # way one set from the unlock view is.
+                self.object.status = previous_status
+                self.object.record_status_change(
+                    to_status=new_status, changed_by=self.request.user)
             item_formset.instance = self.object
             item_formset.save()
             _apply_po_terms(self.object, self.request.POST)
@@ -1114,6 +1154,11 @@ def po_approve_stage(request, pk, stage):
             if not _visible_pos_for(request.user).filter(pk=pk).exists():
                 return JsonResponse({'error': 'PO not found or not in your scope.'}, status=404)
 
+            if po.is_locked:
+                # A client-acknowledged PO is finished. Signing one would add a
+                # signature to a document the client has already accepted.
+                return JsonResponse({'error': LOCKED_PO_MESSAGE}, status=423)
+
             if stage not in po.required_stages:
                 return JsonResponse({'error': 'This stage is not required for this PO.'}, status=400)
 
@@ -1166,6 +1211,10 @@ def po_edit_signature(request, pk, stage):
     if stage not in ('scm', 'pm', 'coo', 'ceo'):
         return JsonResponse({'error': 'Unknown approval stage.'}, status=400)
 
+    locked = locked_po_json(get_object_or_404(PurchaseOrder, pk=pk))
+    if locked is not None:
+        return locked
+
     clean, err = _read_and_validate_signature(request)
     if err is not None:
         return err
@@ -1213,6 +1262,38 @@ def po_edit_signature(request, pk, stage):
         }, status=500)
 
 
+@login_required
+@require_POST
+def po_release_lock(request, pk):
+    """Release a client-acknowledged PO so it can be corrected.
+
+    Super admin only, and a reason is required — this is the one door out of
+    the lock, so it has to leave a record of who opened it and why. The PO
+    returns to Issued rather than Draft: it was issued to the client, and
+    pretending otherwise would lose that.
+    """
+    po = get_object_or_404(PurchaseOrder, pk=pk)
+    if not request.user.is_super_admin_user:
+        messages.error(request, 'Only a super admin can release a locked purchase order.')
+        return redirect('procurement:po_detail', pk=po.pk)
+    if not po.is_locked:
+        messages.info(request, 'That purchase order is not locked.')
+        return redirect('procurement:po_detail', pk=po.pk)
+
+    reason = (request.POST.get('reason') or '').strip()
+    if not reason:
+        messages.error(request, 'Give a reason for releasing this purchase order.')
+        return redirect('procurement:po_detail', pk=po.pk)
+
+    po.record_status_change(
+        to_status='issued', changed_by=request.user, reason=reason)
+    messages.success(
+        request,
+        f'Purchase Order {po.po_number} released for editing. The reason has '
+        'been recorded against it.')
+    return redirect('procurement:po_detail', pk=po.pk)
+
+
 class PODeleteView(ProcurementPermissionMixin, DeleteView):
     model = PurchaseOrder
     template_name = 'procurement/po_confirm_delete.html'
@@ -1221,6 +1302,9 @@ class PODeleteView(ProcurementPermissionMixin, DeleteView):
     def test_func(self):
         user = self.request.user
         obj = self.get_object()
+        if obj.is_locked:
+            # Deleting is the most complete change of all. Release it first.
+            return False
         # Audit-trail protection: once *any* approval stage has been signed,
         # only super admin can delete the PO. Without this gate the original
         # creator could erase a fully-signed PO and destroy the audit chain
@@ -2366,6 +2450,9 @@ def ajax_summary_entry_update(request, pk):
     )
     if not can_edit:
         return JsonResponse({'error': 'Permission denied'}, status=403)
+    locked = locked_po_json(po)
+    if locked is not None:
+        return locked
 
     field = request.POST.get('field', '').strip()
     raw = (request.POST.get('value') or '').strip()
@@ -2444,6 +2531,9 @@ def ajax_po_item_field_update(request, pk):
     )
     if not can_edit:
         return JsonResponse({'error': 'Permission denied'}, status=403)
+    locked = locked_po_json(po)
+    if locked is not None:
+        return locked
 
     field = request.POST.get('field', '').strip()
     raw = request.POST.get('value', '')
@@ -4493,6 +4583,9 @@ def ajax_po_toggle_term(request, pk):
     )
     if not can_edit:
         return JsonResponse({'error': 'Permission denied'}, status=403)
+    locked = locked_po_json(po)
+    if locked is not None:
+        return locked
 
     term_id = request.POST.get('term_id')
     if not term_id:
