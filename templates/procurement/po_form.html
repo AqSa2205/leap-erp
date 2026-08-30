@@ -283,6 +283,16 @@
                 <div class="card mb-4">
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <h5 class="mb-0"><i class="bi bi-list-ol"></i> Line Items</h5>
+                        {% comment %} Only when the PO exists: there is nothing
+                        to import into until it has been saved once. type=button
+                        matters — a bare <button> inside a form submits it.
+                        {% endcomment %}
+                        {% if object.pk and not object.is_locked %}
+                        <button type="button" class="btn btn-sm btn-outline-success"
+                                data-bs-toggle="modal" data-bs-target="#importItemsModal">
+                            <i class="bi bi-file-earmark-excel me-1"></i> Import from Excel
+                        </button>
+                        {% endif %}
                     </div>
                     <div class="card-body p-0">
                         {{ item_formset.management_form }}
@@ -513,6 +523,52 @@
         </div>
     </div>
 </div>
+
+{% if object.pk and not object.is_locked %}
+<!-- Import Items Modal — OUTSIDE the main PO <form> for the same reason as -->
+<!-- the terms modal below: nested forms are dropped by browsers. -->
+<div class="modal fade" id="importItemsModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-file-earmark-excel me-2"></i>Import line items</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="post" enctype="multipart/form-data"
+            action="{% url 'procurement:po_import_items' object.pk %}">
+        {% csrf_token %}
+        <div class="modal-body">
+          {% comment %} Importing posts and reloads, so anything typed into the
+          form behind this modal goes with it. Say so before they click, not
+          after. {% endcomment %}
+          <div class="alert alert-warning py-2 small">
+            <i class="bi bi-exclamation-triangle me-1"></i>
+            Save your changes first — importing reloads the page and any unsaved
+            edits on this form will be lost.
+          </div>
+          <label class="form-label fw-bold">Excel files (.xlsx)</label>
+          <input type="file" name="item_files" class="form-control"
+                 accept=".xlsx,.xls" multiple required>
+          <div class="form-text mt-2">
+            Columns are matched by name, so their order does not matter, and a
+            title block above the table is skipped. The sheet needs a
+            <strong>Description</strong> column; Quantity, UOM, Rate, Make and
+            Remarks are read when present.
+            Items are <strong>added</strong> to the ones already here, never
+            replaced.
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-success">
+            <i class="bi bi-upload me-1"></i> Import
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 <!-- Quick-Add Terms Template Modal — kept OUTSIDE the main PO <form>. -->
 <!-- Nested forms aren't allowed in HTML; the inner <form> tag would be -->

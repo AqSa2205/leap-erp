@@ -981,3 +981,1245 @@ class TermsSanitizeTests(TestCase):
         joined = ' '.join(m for m, _ in lines)
         self.assertNotIn('<script', joined.lower())
         self.assertIn('&amp;', joined)
+
+
+class POClientAcknowledgedLockTests(TestCase):
+    """Once the client acknowledges a PO, nothing about it may change.
+
+    The lock has many doors — the PO form, line items, terms, signatures, the
+    summary editor, both imports and delete are all separate endpoints. Each
+    test below asserts the DATA is unchanged, not merely that the response was
+    a refusal: a view that writes and then returns 423 passes a status-code
+    test and still loses the guarantee."""
+
+    def setUp(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.super_admin = User.objects.create_user('lock_super', password='x')
+        self.super_admin.role = role
+        self.super_admin.save()
+
+        proc, _ = Role.objects.get_or_create(name=Role.PROCUREMENT_MGR)
+        self.procurement = User.objects.create_user('lock_proc', password='x')
+        self.procurement.role = proc
+        self.procurement.save()
+
+        self.po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-LOCK-1',
+            vendor_name='ACME', po_issued_by='Tester',
+            created_by=self.procurement, status='issued')
+        self.item = self.po.items.create(
+            description='Widget', quantity=Decimal('2'),
+            rate_per_unit=Decimal('100'))
+
+    def _lock(self):
+        self.po.record_status_change(
+            to_status='client_acknowledged', changed_by=self.procurement)
+        self.po.refresh_from_db()
+
+    # ── the status itself ───────────────────────────────────────────────────
+
+    def test_only_the_new_status_locks(self):
+        for status in ('draft', 'issued', 'completed', 'cancelled'):
+            self.po.status = status
+            with self.subTest(status=status):
+                self.assertFalse(self.po.is_locked)
+        self.po.status = 'client_acknowledged'
+        self.assertTrue(self.po.is_locked)
+
+    def test_acknowledging_stamps_who_and_when(self):
+        self._lock()
+        self.assertIsNotNone(self.po.client_acknowledged_at)
+        self.assertEqual(self.po.client_acknowledged_by, self.procurement)
+
+    def test_every_status_change_is_logged(self):
+        self._lock()
+        change = self.po.status_changes.first()
+        self.assertEqual((change.from_status, change.to_status),
+                         ('issued', 'client_acknowledged'))
+        self.assertEqual(change.changed_by, self.procurement)
+
+    def test_a_no_op_transition_writes_nothing(self):
+        """A log full of rows saying nothing changed is a log nobody reads."""
+        self.po.record_status_change(to_status='issued',
+                                     changed_by=self.procurement)
+        self.assertEqual(self.po.status_changes.count(), 0)
+
+    # ── the doors ───────────────────────────────────────────────────────────
+
+    def test_the_edit_form_refuses(self):
+        self._lock()
+        self.client.force_login(self.procurement)
+        resp = self.client.post(
+            reverse('procurement:po_update', args=[self.po.pk]),
+            {'po_date': '2026-02-02', 'po_number': 'PO-LOCK-CHANGED',
+             'vendor_name': 'OTHER', 'po_issued_by': 'Tester',
+             'cost_center': 'projects', 'status': 'issued',
+             'items-TOTAL_FORMS': '0', 'items-INITIAL_FORMS': '0'})
+        self.po.refresh_from_db()
+        self.assertEqual(self.po.po_number, 'PO-LOCK-1')
+        self.assertEqual(self.po.vendor_name, 'ACME')
+        self.assertEqual(resp.status_code, 302)
+
+    def test_deleting_refuses(self):
+        self._lock()
+        self.client.force_login(self.super_admin)
+        self.client.post(reverse('procurement:po_delete', args=[self.po.pk]))
+        self.assertTrue(PurchaseOrder.objects.filter(pk=self.po.pk).exists())
+
+    def test_editing_a_line_item_refuses(self):
+        self._lock()
+        self.client.force_login(self.procurement)
+        resp = self.client.post(
+            reverse('procurement:po_item_update_field', args=[self.item.pk]),
+            {'field': 'delivery_status', 'value': 'Tampered'})
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.delivery_status, '')
+        self.assertEqual(resp.status_code, 423)
+
+    def test_editing_a_po_header_field_inline_refuses(self):
+        """The same endpoint writes PO-level fields as well as item fields, so
+        the guard has to cover both branches."""
+        self._lock()
+        self.client.force_login(self.procurement)
+        resp = self.client.post(
+            reverse('procurement:po_item_update_field', args=[self.item.pk]),
+            {'field': 'lead_time', 'value': '99 weeks'})
+        self.po.refresh_from_db()
+        self.assertNotEqual(self.po.lead_time, '99 weeks')
+        self.assertEqual(resp.status_code, 423)
+
+    def test_toggling_a_term_refuses(self):
+        self._lock()
+        self.client.force_login(self.procurement)
+        before = list(self.po.selected_terms.values_list('pk', flat=True))
+        resp = self.client.post(
+            reverse('procurement:po_toggle_term', args=[self.po.pk]),
+            {'term_id': '1', 'enabled': '1'})
+        self.assertEqual(
+            list(self.po.selected_terms.values_list('pk', flat=True)), before)
+        self.assertEqual(resp.status_code, 423)
+
+    def test_signing_an_approval_stage_refuses(self):
+        """A signature added after the client accepted the document would be a
+        signature on something that was already agreed.
+
+        Sends a VALID signature on purpose: an empty one is rejected by the
+        signature validator whether or not the lock exists, so the test would
+        pass against no lock at all.
+        """
+        self._lock()
+        self.client.force_login(self.super_admin)
+        resp = self.client.post(
+            reverse('procurement:po_approve_stage', args=[self.po.pk, 'scm']),
+            {'signature_data': _png_data_url()})
+        self.po.refresh_from_db()
+        self.assertIsNone(self.po.scm_approved_at)
+        self.assertEqual(resp.status_code, 423)
+
+    def test_replacing_a_signature_image_refuses(self):
+        """po_edit_signature is a separate endpoint from po_approve_stage and
+        needs its own guard."""
+        from django.utils import timezone
+        PurchaseOrder.objects.filter(pk=self.po.pk).update(
+            scm_approved_at=timezone.now(), scm_approved_by=self.super_admin)
+        self._lock()
+        self.client.force_login(self.super_admin)
+        resp = self.client.post(
+            reverse('procurement:po_edit_signature', args=[self.po.pk, 'scm']),
+            {'signature_data': _png_data_url()})
+        self.assertEqual(resp.status_code, 423)
+
+    def test_an_unlocked_po_still_accepts_edits(self):
+        """The guard must refuse the locked case only — a lock that blocks
+        everything is indistinguishable from a broken page."""
+        self.client.force_login(self.procurement)
+        resp = self.client.post(
+            reverse('procurement:po_item_update_field', args=[self.item.pk]),
+            {'field': 'delivery_status', 'value': 'Shipped'})
+        self.assertEqual(resp.status_code, 200)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.delivery_status, 'Shipped')
+
+    # ── the way out ─────────────────────────────────────────────────────────
+
+    def test_a_super_admin_can_release_it_with_a_reason(self):
+        self._lock()
+        self.client.force_login(self.super_admin)
+        self.client.post(
+            reverse('procurement:po_release_lock', args=[self.po.pk]),
+            {'reason': 'Wrong delivery address, client asked us to reissue'})
+        self.po.refresh_from_db()
+        self.assertFalse(self.po.is_locked)
+        self.assertEqual(self.po.status, 'issued')
+
+    def test_releasing_records_who_and_why(self):
+        self._lock()
+        self.client.force_login(self.super_admin)
+        self.client.post(
+            reverse('procurement:po_release_lock', args=[self.po.pk]),
+            {'reason': 'Wrong delivery address'})
+        change = self.po.status_changes.first()
+        self.assertEqual(change.to_status, 'issued')
+        self.assertEqual(change.changed_by, self.super_admin)
+        self.assertIn('delivery address', change.reason)
+
+    def test_releasing_without_a_reason_is_refused(self):
+        """This is the only door out of the lock; an unexplained release is
+        worth less than no record at all."""
+        self._lock()
+        self.client.force_login(self.super_admin)
+        self.client.post(
+            reverse('procurement:po_release_lock', args=[self.po.pk]),
+            {'reason': '   '})
+        self.po.refresh_from_db()
+        self.assertTrue(self.po.is_locked)
+
+    def test_procurement_cannot_release_it(self):
+        self._lock()
+        self.client.force_login(self.procurement)
+        self.client.post(
+            reverse('procurement:po_release_lock', args=[self.po.pk]),
+            {'reason': 'Let me back in'})
+        self.po.refresh_from_db()
+        self.assertTrue(self.po.is_locked)
+
+    def test_releasing_clears_the_acknowledgement_stamps(self):
+        """They describe the CURRENT acknowledgement. Leaving them behind would
+        show a PO as accepted on a date it is no longer accepted."""
+        self._lock()
+        self.client.force_login(self.super_admin)
+        self.client.post(
+            reverse('procurement:po_release_lock', args=[self.po.pk]),
+            {'reason': 'Reissuing'})
+        self.po.refresh_from_db()
+        self.assertIsNone(self.po.client_acknowledged_at)
+        self.assertIsNone(self.po.client_acknowledged_by)
+        # The history still knows it happened.
+        self.assertEqual(self.po.status_changes.count(), 2)
+
+
+class POWorkflowStatusTests(TestCase):
+    """What a PO is waiting on, derived rather than stored."""
+
+    def setUp(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('wf_user', password='x')
+        self.user.role = role
+        self.user.save()
+        self.po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-WF-1', vendor_name='ACME',
+            po_issued_by='Tester', created_by=self.user)
+
+    def _sign(self, *stages):
+        from django.utils import timezone
+        PurchaseOrder.objects.filter(pk=self.po.pk).update(
+            **{f'{s}_approved_at': timezone.now() for s in stages})
+        self.po.refresh_from_db()
+
+    def test_an_untouched_po_names_its_first_stage(self):
+        w = self.po.workflow_status
+        self.assertIn('SCM', w['label'])
+        self.assertEqual(w['stage_key'], 'scm')
+
+    def test_signing_moves_the_label_to_the_next_stage(self):
+        self._sign('scm')
+        w = self.po.workflow_status
+        self.assertEqual(w['label'], 'Awaiting PM approval')
+        self.assertEqual(w['tone'], 'warning')
+
+    def test_a_fully_signed_po_reads_as_released(self):
+        self._sign('scm', 'pm', 'coo')
+        w = self.po.workflow_status
+        self.assertEqual(w['tone'], 'success')
+        self.assertIsNone(w['stage_key'])
+
+    def test_a_locked_po_says_locked_rather_than_a_stage(self):
+        self.po.record_status_change(to_status='client_acknowledged',
+                                     changed_by=self.user)
+        self.assertEqual(self.po.workflow_status['tone'], 'locked')
+
+    def test_a_cancelled_po_is_waiting_on_nobody(self):
+        self.po.record_status_change(to_status='cancelled', changed_by=self.user)
+        w = self.po.workflow_status
+        self.assertEqual(w['label'], 'Cancelled')
+        self.assertIsNone(w['stage_key'])
+
+    def test_the_label_matches_the_stage_the_button_accepts(self):
+        """Derived from current_stage precisely so the list and the Approve
+        endpoint cannot disagree about the same PO."""
+        self._sign('scm')
+        self.assertEqual(self.po.workflow_status['stage_key'],
+                         self.po.current_stage['key'])
+
+    def test_the_list_shows_the_approval_column(self):
+        self.client.force_login(self.user)
+        body = self.client.get(reverse('procurement:po_list')).content.decode()
+        self.assertIn('Approval', body)
+        self.assertIn('SCM approval', body)
+
+
+class ApprovedBudgetsReferenceTests(TestCase):
+    """Procurement can see the LNA reference without opening the budget."""
+
+    def setUp(self):
+        from projects.models import Region, ProjectStatus, Project
+        from costing.models import CostingSheet
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('bud_user', password='x')
+        self.user.role = role
+        self.user.save()
+        region = Region.objects.create(name='KSA', code='LNA', currency='SAR')
+        status = ProjectStatus.objects.create(name='Open', category='active')
+        self.project = Project.objects.create(
+            project_name='Ghazlan Substation', proposal_reference='LNA-2026-0417',
+            status=status, region=region, estimated_value=Decimal('1'),
+            actual_sales=Decimal('0'), year='2026', po_award_quarter='Q2')
+        self.sheet = CostingSheet.objects.create(
+            title='Budget', project=self.project,
+            workflow_stage='finance_approved')
+
+    def test_the_reference_is_on_the_page(self):
+        self.client.force_login(self.user)
+        body = self.client.get(
+            reverse('procurement:approved_budgets')).content.decode()
+        self.assertIn('LNA Reference', body)
+        self.assertIn('LNA-2026-0417', body)
+
+
+def _items_workbook(rows, headers=None, preamble=0):
+    """A spreadsheet shaped like something a vendor would actually send."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for _ in range(preamble):
+        ws.append(['Quotation', None, None])      # title block above the table
+    ws.append(headers or ['S.No', 'Description', 'Qty', 'UOM', 'Rate/Unit (SAR)', 'Remarks'])
+    for row in rows:
+        ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+class ExcelItemParserTests(TestCase):
+    """Reading line items out of somebody else's spreadsheet.
+
+    Column positions cannot be relied on in a file we did not generate, so the
+    parser matches headers by name. These tests are mostly about the shapes
+    real quotations arrive in."""
+
+    def _parse(self, *args, **kwargs):
+        from procurement.excel_import import parse_items
+        return parse_items(_items_workbook(*args, **kwargs))
+
+    def test_it_reads_a_plain_table(self):
+        rows, skipped = self._parse([[1, 'Camera', 4, 'Nos', 250, 'Outdoor']])
+        self.assertEqual(skipped, [])
+        self.assertEqual(rows[0]['description'], 'Camera')
+        self.assertEqual(rows[0]['quantity'], Decimal('4'))
+        self.assertEqual(rows[0]['rate_per_unit'], Decimal('250'))
+        self.assertEqual(rows[0]['uom'], 'Nos')
+
+    def test_column_order_does_not_matter(self):
+        """The point of matching on names: nobody sends columns in our order."""
+        rows, _ = self._parse(
+            [['Nos', 250, 'Camera', 4]],
+            headers=['UOM', 'Unit Price', 'Item Description', 'Quantity'])
+        self.assertEqual(rows[0]['description'], 'Camera')
+        self.assertEqual(rows[0]['quantity'], Decimal('4'))
+        self.assertEqual(rows[0]['rate_per_unit'], Decimal('250'))
+
+    def test_a_title_block_above_the_table_is_skipped(self):
+        """Quotations open with a logo and an address, not a header row."""
+        rows, _ = self._parse([[1, 'Camera', 4, 'Nos', 250, '']], preamble=5)
+        self.assertEqual(len(rows), 1)
+
+    def test_units_in_the_header_are_ignored(self):
+        rows, _ = self._parse(
+            [['Camera', 2, 300]],
+            headers=['Description', 'Qty', 'Rate / Unit (USD)'])
+        self.assertEqual(rows[0]['rate_per_unit'], Decimal('300'))
+
+    def test_extra_columns_are_left_alone(self):
+        rows, _ = self._parse(
+            [['Camera', 1, 100, 'irrelevant']],
+            headers=['Description', 'Qty', 'Rate', 'HS Code'])
+        self.assertEqual(len(rows), 1)
+
+    def test_totals_rows_are_skipped_and_reported(self):
+        """A totals line imported as an item silently doubles the PO value."""
+        rows, skipped = self._parse([
+            [1, 'Camera', 4, 'Nos', 250, ''],
+            [None, 'Total', None, None, 1000, ''],
+        ])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(skipped), 1)
+        self.assertIn('totals', skipped[0][1])
+
+    def test_a_row_with_no_quantity_is_reported_not_guessed(self):
+        rows, skipped = self._parse([[1, 'Camera', 0, 'Nos', 250, '']])
+        self.assertEqual(rows, [])
+        self.assertEqual(len(skipped), 1)
+
+    def test_blank_rows_are_not_reported_as_problems(self):
+        """Every quotation has spacer rows. Reporting them as skips would bury
+        the real problems."""
+        rows, skipped = self._parse([
+            [1, 'Camera', 4, 'Nos', 250, ''],
+            [None, None, None, None, None, None],
+        ])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(skipped, [])
+
+    def test_numbers_written_as_text_still_read(self):
+        rows, _ = self._parse([[1, 'Camera', '4 nos', 'Nos', 'SAR 1,250.50', '']])
+        self.assertEqual(rows[0]['quantity'], Decimal('4'))
+        self.assertEqual(rows[0]['rate_per_unit'], Decimal('1250.50'))
+
+    def test_a_sheet_with_no_description_column_says_so(self):
+        from procurement.excel_import import ExcelImportError
+        with self.assertRaises(ExcelImportError) as caught:
+            self._parse([[1, 2]], headers=['Foo', 'Bar'])
+        self.assertIn('Description', str(caught.exception))
+
+    def test_a_file_that_is_not_a_spreadsheet_fails_readably(self):
+        """A traceback tells the user nothing they can act on."""
+        from procurement.excel_import import ExcelImportError, parse_items
+        with self.assertRaises(ExcelImportError):
+            parse_items(io.BytesIO(b'this is not a workbook'))
+
+
+class POImportItemsTests(TestCase):
+    """Adding items to a PO that already exists."""
+
+    def setUp(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('imp_user', password='x')
+        self.user.role = role
+        self.user.save()
+        self.client.force_login(self.user)
+        self.po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-IMP-1', vendor_name='ACME',
+            po_issued_by='Tester', created_by=self.user, status='draft')
+        self.existing = self.po.items.create(
+            description='Existing line', quantity=Decimal('1'),
+            rate_per_unit=Decimal('50'), serial_number=1)
+
+    def _post(self, *workbooks, follow=False):
+        return self.client.post(
+            reverse('procurement:po_import_items', args=[self.po.pk]),
+            {'item_files': list(workbooks)}, follow=follow)
+
+    def test_items_are_added_not_replaced(self):
+        """There is no undo. An import that wiped hand-entered lines would be
+        unrecoverable; a duplicated line is obvious and deletable."""
+        self._post(_items_workbook([[1, 'Camera', 2, 'Nos', 100, '']]))
+        descriptions = list(self.po.items.values_list('description', flat=True))
+        self.assertIn('Existing line', descriptions)
+        self.assertIn('Camera', descriptions)
+        self.assertEqual(self.po.items.count(), 2)
+
+    def test_serial_numbers_continue_from_what_is_there(self):
+        self._post(_items_workbook([[1, 'Camera', 2, 'Nos', 100, '']]))
+        new = self.po.items.get(description='Camera')
+        self.assertEqual(new.serial_number, 2)
+
+    def test_several_files_all_import(self):
+        self._post(_items_workbook([[1, 'Camera', 1, 'Nos', 100, '']]),
+                   _items_workbook([[1, 'Cable', 5, 'M', 10, '']]))
+        self.assertEqual(self.po.items.count(), 3)
+
+    def test_one_bad_file_does_not_lose_the_good_one(self):
+        self._post(_items_workbook([[1, 'Camera', 1, 'Nos', 100, '']]),
+                   io.BytesIO(b'not a workbook'))
+        self.assertTrue(self.po.items.filter(description='Camera').exists())
+
+    def test_the_totals_reflect_the_imported_lines(self):
+        before = self.po.total_value
+        self._post(_items_workbook([[1, 'Camera', 2, 'Nos', 100, '']]))
+        self.po.refresh_from_db()
+        self.assertGreater(self.po.total_value, before)
+
+    def test_it_reports_what_was_skipped(self):
+        """An import that reads 8 of 12 rows without saying so is worse than
+        one that fails outright."""
+        resp = self._post(_items_workbook([
+            [1, 'Camera', 2, 'Nos', 100, ''],
+            [None, 'Total', None, None, 200, ''],
+        ]), follow=True)
+        text = ' '.join(str(m) for m in resp.context['messages'])
+        self.assertIn('skipped', text)
+
+    def test_a_locked_po_refuses_the_import(self):
+        self.po.record_status_change(to_status='client_acknowledged',
+                                     changed_by=self.user)
+        self._post(_items_workbook([[1, 'Camera', 2, 'Nos', 100, '']]))
+        self.assertEqual(self.po.items.count(), 1)
+
+    def test_the_panel_is_hidden_on_a_locked_po(self):
+        self.po.record_status_change(to_status='client_acknowledged',
+                                     changed_by=self.user)
+        body = self.client.get(
+            reverse('procurement:po_detail', args=[self.po.pk])).content.decode()
+        self.assertNotIn('Import items', body)
+
+    def test_the_edit_page_offers_the_import_too(self):
+        """Same action, reachable from where people are already editing the
+        items rather than only from the detail page."""
+        body = self.client.get(
+            reverse('procurement:po_update', args=[self.po.pk])).content.decode()
+        self.assertIn('Import from Excel', body)
+        self.assertIn(
+            reverse('procurement:po_import_items', args=[self.po.pk]), body)
+
+    def test_the_edit_page_import_form_is_not_nested(self):
+        """A <form> inside a <form> is dropped by browsers, which would make
+        the Import button post the PO form instead.
+
+        Anchored on the PO form specifically. An earlier version of this test
+        compared against the FIRST </form> on the page, which belongs to the
+        navigation bar — so it passed with the modal nested and proved nothing.
+        """
+        body = self.client.get(
+            reverse('procurement:po_update', args=[self.po.pk])).content.decode()
+        po_form_opens = body.index('<form method="post" novalidate>')
+        po_form_closes = body.index('</form>', po_form_opens)
+        import_at = body.index(
+            reverse('procurement:po_import_items', args=[self.po.pk]))
+        self.assertFalse(
+            po_form_opens < import_at < po_form_closes,
+            'the import form is nested inside the PO form')
+
+    def test_a_locked_po_offers_no_import_on_the_edit_page(self):
+        self.po.record_status_change(to_status='client_acknowledged',
+                                     changed_by=self.user)
+        resp = self.client.get(
+            reverse('procurement:po_update', args=[self.po.pk]), follow=True)
+        self.assertNotIn('Import from Excel', resp.content.decode())
+
+    def test_the_create_page_offers_no_import(self):
+        """There is nothing to import into until the PO has been saved once."""
+        body = self.client.get(
+            reverse('procurement:po_create')).content.decode()
+        self.assertNotIn('Import from Excel', body)
+
+    def test_submitting_no_file_says_so(self):
+        resp = self.client.post(
+            reverse('procurement:po_import_items', args=[self.po.pk]),
+            {}, follow=True)
+        text = ' '.join(str(m) for m in resp.context['messages'])
+        self.assertIn('at least one', text)
+
+
+class POStageRecipientTests(TestCase):
+    """Who gets told a PO is waiting on them.
+
+    Separate from who may sign it: can_user_approve_stage() is the permission
+    gate and is untouched. This decides the recipient list, which needs a real
+    account because the stages name their signers as plain text."""
+
+    def setUp(self):
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.admin_role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.proc_role, _ = Role.objects.get_or_create(name=Role.PROCUREMENT_MGR)
+        self.super_admin = User.objects.create_user(
+            'nr_super', password='x', email='super@example.com',
+            role=self.sa_role)
+        self.admin = User.objects.create_user(
+            'nr_admin', password='x', email='admin@example.com',
+            role=self.admin_role)
+        self.proc = User.objects.create_user(
+            'nr_proc', password='x', email='proc@example.com',
+            role=self.proc_role)
+
+    def _recipients(self, stage):
+        from procurement.notifications import stage_recipients
+        return stage_recipients(stage)
+
+    def test_a_configured_approver_wins(self):
+        from procurement.models import POStageApprover
+        POStageApprover.objects.create(stage='scm', user=self.admin)
+        self.assertEqual(self._recipients('scm'), [self.admin])
+
+    def test_without_a_mapping_it_falls_back_to_the_role(self):
+        """An unconfigured system should still tell somebody. A missed
+        approval costs more than a redundant email."""
+        self.assertIn(self.proc, self._recipients('scm'))
+        self.assertIn(self.admin, self._recipients('pm'))
+        self.assertIn(self.super_admin, self._recipients('ceo'))
+
+    def test_the_mapping_replaces_the_role_holders_rather_than_adding_to_them(self):
+        """The point of configuring one is to stop emailing everybody."""
+        from procurement.models import POStageApprover
+        POStageApprover.objects.create(stage='pm', user=self.admin)
+        second_admin = User.objects.create_user(
+            'nr_admin2', password='x', role=self.admin_role)
+        self.assertNotIn(second_admin, self._recipients('pm'))
+
+    def test_an_inactive_mapped_user_is_not_emailed(self):
+        from procurement.models import POStageApprover
+        leaver = User.objects.create_user('nr_gone', password='x',
+                                          role=self.admin_role)
+        POStageApprover.objects.create(stage='coo', user=leaver)
+        leaver.is_active = False
+        leaver.save()
+        self.assertNotIn(leaver, self._recipients('coo'))
+
+    def test_a_stage_nobody_can_fill_resolves_to_nobody_not_an_error(self):
+        """A PO must still be creatable on a system where the roles have not
+        been set up."""
+        User.objects.all().update(is_active=False)
+        self.assertEqual(self._recipients('scm'), [])
+
+
+class POApprovalNotificationTests(TestCase):
+    """Telling the approver, and not telling anyone who is not waiting."""
+
+    def setUp(self):
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.admin_role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.proc_role, _ = Role.objects.get_or_create(name=Role.PROCUREMENT_MGR)
+        self.raiser = User.objects.create_user(
+            'an_raiser', password='x', email='raiser@example.com',
+            role=self.sa_role)
+        self.scm = User.objects.create_user(
+            'an_scm', password='x', email='scm@example.com', role=self.proc_role)
+        self.pm = User.objects.create_user(
+            'an_pm', password='x', email='pm@example.com', role=self.admin_role)
+        from procurement.models import POStageApprover
+        POStageApprover.objects.create(stage='scm', user=self.scm)
+        POStageApprover.objects.create(stage='pm', user=self.pm)
+        self.po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-NOTIFY-1',
+            vendor_name='ACME', po_issued_by='Tester', created_by=self.raiser)
+
+    def _notify(self, **kwargs):
+        from procurement.notifications import notify_stage_approver
+        return notify_stage_approver(self.po, **kwargs)
+
+    def _sign(self, *stages):
+        from django.utils import timezone
+        PurchaseOrder.objects.filter(pk=self.po.pk).update(
+            **{f'{s}_approved_at': timezone.now() for s in stages})
+        self.po.refresh_from_db()
+
+    def test_the_current_stages_approver_is_told(self):
+        notes = self._notify()
+        self.assertEqual([n.recipient for n in notes], [self.scm])
+
+    def test_signing_moves_the_notification_to_the_next_approver(self):
+        """Not to the person who just signed — they know."""
+        self._sign('scm')
+        notes = self._notify()
+        self.assertEqual([n.recipient for n in notes], [self.pm])
+
+    def test_a_released_po_tells_nobody(self):
+        self._sign('scm', 'pm', 'coo')
+        self.assertEqual(self._notify(), [])
+
+    def test_a_cancelled_po_tells_nobody(self):
+        self.po.record_status_change(to_status='cancelled', changed_by=self.raiser)
+        self.assertEqual(self._notify(), [])
+
+    def test_a_locked_po_tells_nobody(self):
+        """Nothing can be signed on it, so an email asking for a signature
+        would send somebody to a page that refuses them."""
+        self.po.record_status_change(to_status='client_acknowledged',
+                                     changed_by=self.raiser)
+        self.assertEqual(self._notify(), [])
+
+    def test_the_signer_is_not_told_about_their_own_signature(self):
+        notes = self._notify(actor=self.scm)
+        self.assertEqual(notes, [])
+
+    def test_the_notification_links_to_the_po(self):
+        note = self._notify()[0]
+        self.assertIn(
+            reverse('procurement:po_detail', args=[self.po.pk]), note.target_url)
+
+    def test_an_absolute_link_is_used_when_the_host_is_known(self):
+        """A relative link in an email goes nowhere."""
+        note = self._notify(base_url='https://erp.example.com/')[0]
+        self.assertTrue(note.target_url.startswith('https://erp.example.com/'))
+
+    def test_the_message_says_what_and_who_it_is_waiting_on(self):
+        note = self._notify()[0]
+        self.assertIn('PO-NOTIFY-1', note.verb)
+        self.assertIn('ACME', note.description)
+        self.assertIn('SCM', note.description)
+
+    # ── wiring ──────────────────────────────────────────────────────────────
+
+    def test_approving_a_stage_notifies_the_next_approver(self):
+        """captureOnCommitCallbacks because the notification is queued with
+        transaction.on_commit — which is the point. TestCase wraps each test in
+        a transaction it rolls back, so those callbacks never fire on their own
+        and asserting without this would test nothing."""
+        from notifications.models import Notification
+        self.client.force_login(self.raiser)
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                reverse('procurement:po_approve_stage', args=[self.po.pk, 'scm']),
+                {'signature_data': _png_data_url()})
+        self.assertTrue(
+            Notification.objects.filter(recipient=self.pm,
+                                        verb__contains='PO-NOTIFY-1').exists())
+        # And not to the person who just signed it.
+        self.assertFalse(
+            Notification.objects.filter(recipient=self.raiser,
+                                        verb__contains='PO-NOTIFY-1').exists())
+
+    def test_a_failed_approval_sends_nothing(self):
+        """Queued on commit, so an email never describes a signature that
+        rolled back."""
+        from notifications.models import Notification
+        self.client.force_login(self.raiser)
+        # Out of sequence: 'pm' before 'scm' is refused.
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                reverse('procurement:po_approve_stage', args=[self.po.pk, 'pm']),
+                {'signature_data': _png_data_url()})
+        self.assertFalse(
+            Notification.objects.filter(verb__contains='PO-NOTIFY-1').exists())
+
+
+class POStageApproverScreenTests(TestCase):
+    """The routing screen."""
+
+    def setUp(self):
+        # Seed the capability grants, or a plain Administrator cannot reach the
+        # procurement pages at all and the nav assertions below fail for a
+        # fixture reason rather than a real one.
+        from accounts.permissions import seed_default_permissions
+        for name, _label in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+
+        self.sa_role = Role.objects.get(name=Role.SUPER_ADMIN)
+        self.admin_role = Role.objects.get(name=Role.ADMIN)
+        self.proc_role = Role.objects.get(name=Role.PROCUREMENT_MGR)
+        # Named for what it holds. An earlier version called the super admin
+        # 'admin', which left the plain Administrator tier - allowed by the
+        # view - covered by nothing.
+        self.super_admin = User.objects.create_user('sa_super', password='x',
+                                                    role=self.sa_role)
+        self.admin = User.objects.create_user('sa_admin', password='x',
+                                              role=self.admin_role)
+        self.proc = User.objects.create_user('sa_proc', password='x',
+                                             role=self.proc_role)
+
+    def _url(self):
+        return reverse('procurement:po_stage_approvers')
+
+    def test_a_super_admin_can_reach_it(self):
+        self.client.force_login(self.super_admin)
+        self.assertEqual(self.client.get(self._url()).status_code, 200)
+
+    def test_a_plain_admin_cannot_reach_it(self):
+        """Super admin only. Naming an approver decides who is asked to sign
+        company purchase orders, which is not a change the ordinary admin tier
+        makes."""
+        self.client.force_login(self.admin)
+        self.assertNotEqual(self.client.get(self._url()).status_code, 200)
+
+    def test_a_plain_admin_cannot_set_an_approver(self):
+        from procurement.models import POStageApprover
+        self.client.force_login(self.admin)
+        self.client.post(self._url(), {'stage': 'pm', 'user': self.proc.pk})
+        self.assertFalse(POStageApprover.objects.exists())
+
+    def test_the_link_is_hidden_from_a_plain_admin(self):
+        self.client.force_login(self.admin)
+        body = self.client.get(reverse('procurement:po_list')).content.decode()
+        self.assertNotIn('Approval Routing', body)
+
+    def test_every_stage_is_listed_even_when_unset(self):
+        """An unset stage has to be visible as a gap, not simply absent."""
+        self.client.force_login(self.super_admin)
+        body = self.client.get(self._url()).content.decode()
+        for _key, label, _signer in PurchaseOrder.APPROVAL_STAGES:
+            self.assertIn(label, body)
+        self.assertIn('Everyone with the role', body)
+
+    def test_a_super_admin_can_set_an_approver(self):
+        from procurement.models import POStageApprover
+        self.client.force_login(self.super_admin)
+        self.client.post(self._url(), {'stage': 'scm', 'user': self.proc.pk})
+        row = POStageApprover.objects.get(stage='scm')
+        self.assertEqual(row.user, self.proc)
+        self.assertEqual(row.updated_by, self.super_admin)
+
+    def test_setting_a_stage_twice_replaces_rather_than_duplicates(self):
+        from procurement.models import POStageApprover
+        other = User.objects.create_user('sa_other', password='x',
+                                         role=self.proc_role)
+        self.client.force_login(self.super_admin)
+        self.client.post(self._url(), {'stage': 'scm', 'user': self.proc.pk})
+        self.client.post(self._url(), {'stage': 'scm', 'user': other.pk})
+        self.assertEqual(POStageApprover.objects.filter(stage='scm').count(), 1)
+        self.assertEqual(POStageApprover.objects.get(stage='scm').user, other)
+
+    def test_the_sidebar_links_to_it(self):
+        """It was built without a link and reachable only by typing the URL,
+        which is the same as not shipping it."""
+        self.client.force_login(self.super_admin)
+        body = self.client.get(reverse('procurement:po_list')).content.decode()
+        self.assertIn(reverse('procurement:po_stage_approvers'), body)
+        self.assertIn('Approval Routing', body)
+
+    def test_the_link_is_hidden_from_people_it_would_refuse(self):
+        """A visible link that bounces you to the dashboard is worse than no
+        link."""
+        self.client.force_login(self.proc)
+        body = self.client.get(reverse('procurement:po_list')).content.decode()
+        self.assertNotIn('Approval Routing', body)
+
+    def test_procurement_cannot_change_the_routing(self):
+        """Naming an approver decides who is asked to sign company purchase
+        orders — not a self-service setting."""
+        from procurement.models import POStageApprover
+        self.client.force_login(self.proc)
+        self.client.post(self._url(), {'stage': 'scm', 'user': self.proc.pk})
+        self.assertFalse(POStageApprover.objects.exists())
+
+
+class POByProjectTests(TestCase):
+    """Purchase orders arranged under the projects they belong to."""
+
+    def setUp(self):
+        from projects.models import Region, ProjectStatus, Project
+        from accounts.permissions import seed_default_permissions
+        for name, _label in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+
+        self.region = Region.objects.create(name='KSA', code='LNA', currency='SAR')
+        self.other_region = Region.objects.create(name='UK', code='LNUK', currency='GBP')
+        status = ProjectStatus.objects.create(name='Open', category='active')
+
+        self.super_admin = User.objects.create_user(
+            'bp_super', password='x', role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.regional = User.objects.create_user(
+            'bp_admin', password='x', role=Role.objects.get(name=Role.ADMIN),
+            region=self.region)
+        # Deliberately given a region. Without one, the region filter empties
+        # the project list on its own and the disclosure guard this fixture
+        # exists to test is never actually exercised.
+        self.outsider = User.objects.create_user(
+            'bp_out', password='x', region=self.region,
+            role=Role.objects.get(name=Role.DOCUMENT_CONTROLLER))
+
+        def project(name, ref, region):
+            return Project.objects.create(
+                project_name=name, proposal_reference=ref, status=status,
+                region=region, estimated_value=Decimal('1'),
+                actual_sales=Decimal('0'), year='2026', po_award_quarter='Q2')
+
+        self.ghazlan = project('Ghazlan Substation', 'LNA-2026-0417', self.region)
+        self.quiet = project('Nothing Ordered Yet', 'LNA-2026-0500', self.region)
+        self.abroad = project('London Job', 'LNUK-2026-0001', self.other_region)
+        # Still in the pipeline: no approved budget and no orders. Procurement
+        # has no business with it and it must not appear.
+        self.pipeline = project('Still Bidding', 'LNA-2026-0900', self.region)
+
+        from costing.models import CostingSheet
+        # Finance has approved a budget for these, which is what puts a project
+        # in front of procurement at all.
+        CostingSheet.objects.create(title='Budget', project=self.quiet,
+                                    workflow_stage='finance_approved')
+        CostingSheet.objects.create(title='Budget', project=self.abroad,
+                                    workflow_stage='finance_approved')
+        # An unapproved sheet must not be enough.
+        CostingSheet.objects.create(title='Draft budget', project=self.pipeline,
+                                    workflow_stage='costing_in_progress')
+
+        self.po = self._po('PO-BP-1', self.ghazlan, self.super_admin)
+        self.po.items.create(description='Camera', quantity=Decimal('2'),
+                             rate_per_unit=Decimal('100'))
+
+    def _po(self, number, project, creator, currency='SAR'):
+        return PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number=number, vendor_name='ACME',
+            po_issued_by='Tester', project=project, created_by=creator,
+            currency=currency)
+
+    def _groups(self, user, **kwargs):
+        from procurement.views import _po_project_groups
+        return _po_project_groups(user, **kwargs)
+
+    def _named(self, groups):
+        return [g['project_name'] for g in groups]
+
+    # ── grouping ────────────────────────────────────────────────────────────
+
+    def test_a_po_appears_under_its_project(self):
+        group = next(g for g in self._groups(self.super_admin)
+                     if g['project'] == self.ghazlan)
+        self.assertEqual([p.po_number for p in group['rows']], ['PO-BP-1'])
+
+    def test_an_approved_budget_with_nothing_ordered_is_still_listed(self):
+        """'What has been procured for this job' has 'nothing' as a real
+        answer, and often the more interesting one — but only once finance has
+        approved a budget, which is what hands the job to procurement."""
+        self.assertIn('Nothing Ordered Yet', self._named(self._groups(self.super_admin)))
+
+    def test_a_project_with_no_approved_budget_and_no_pos_is_not_listed(self):
+        """Procurement works from approved budgets. A project still in the
+        pipeline is not their business and would bury the ones that are."""
+        self.assertNotIn('Still Bidding', self._named(self._groups(self.super_admin)))
+
+    def test_an_unapproved_budget_is_not_enough_to_list_a_project(self):
+        """The stage matters, not merely having a costing sheet."""
+        from costing.models import CostingSheet
+        self.assertTrue(CostingSheet.objects.filter(project=self.pipeline).exists())
+        self.assertNotIn('Still Bidding', self._named(self._groups(self.super_admin)))
+
+    def test_a_project_with_a_po_is_listed_even_without_an_approved_budget(self):
+        """Money has already been committed against it, so it belongs here
+        whatever the budget stage says."""
+        self._po('PO-BP-NOBUDGET', self.pipeline, self.super_admin)
+        self.assertIn('Still Bidding', self._named(self._groups(self.super_admin)))
+
+    def test_empty_projects_can_be_hidden(self):
+        names = self._named(self._groups(self.super_admin, include_empty=False))
+        self.assertNotIn('Nothing Ordered Yet', names)
+        self.assertIn('Ghazlan Substation', names)
+
+    def test_a_po_with_no_project_is_grouped_not_dropped(self):
+        """Nullable project plus free-text project_name means these exist.
+        Hiding them would lose spend from every report."""
+        self._po('PO-BP-ORPHAN', None, self.super_admin)
+        groups = self._groups(self.super_admin)
+        orphan = groups[-1]
+        self.assertIsNone(orphan['project'])
+        self.assertEqual([p.po_number for p in orphan['rows']], ['PO-BP-ORPHAN'])
+
+    def test_unlinked_pos_are_not_guessed_into_a_project_by_name(self):
+        """A fuzzy name match would quietly attribute spend to the wrong job."""
+        po = self._po('PO-BP-NAMED', None, self.super_admin)
+        PurchaseOrder.objects.filter(pk=po.pk).update(
+            project_name='Ghazlan Substation')
+        ghazlan = next(g for g in self._groups(self.super_admin)
+                       if g['project'] == self.ghazlan)
+        self.assertNotIn('PO-BP-NAMED', [p.po_number for p in ghazlan['rows']])
+
+    def test_projects_with_orders_sort_before_empty_ones(self):
+        groups = self._groups(self.super_admin)
+        first_empty = next(i for i, g in enumerate(groups) if g['po_count'] == 0)
+        last_filled = max(i for i, g in enumerate(groups) if g['po_count'] > 0)
+        self.assertLess(last_filled, first_empty)
+
+    # ── scope ───────────────────────────────────────────────────────────────
+
+    def test_a_regional_admin_sees_only_their_region(self):
+        names = self._named(self._groups(self.regional))
+        self.assertIn('Ghazlan Substation', names)
+        self.assertNotIn('London Job', names)
+
+    def test_a_restricted_viewer_is_shown_no_project_they_have_no_po_against(self):
+        """The disclosure risk in this page: listing every project name to
+        somebody who can only see their own POs."""
+        self.assertEqual(self._groups(self.outsider), [])
+
+    def test_a_restricted_viewer_still_sees_their_own_po(self):
+        own = self._po('PO-BP-MINE', self.ghazlan, self.outsider)
+        groups = self._groups(self.outsider)
+        self.assertEqual(self._named(groups), ['Ghazlan Substation'])
+        self.assertEqual([p.po_number for p in groups[0]['rows']], [own.po_number])
+
+    # ── totals ──────────────────────────────────────────────────────────────
+
+    def test_the_total_matches_the_purchase_orders(self):
+        group = next(g for g in self._groups(self.super_admin)
+                     if g['project'] == self.ghazlan)
+        self.assertEqual(dict(group['totals'])['SAR'], self.po.total_value)
+
+    def test_currencies_are_kept_apart(self):
+        """One number across currencies looks like an answer and is not."""
+        usd = self._po('PO-BP-USD', self.ghazlan, self.super_admin, currency='USD')
+        usd.items.create(description='Cable', quantity=Decimal('1'),
+                         rate_per_unit=Decimal('500'))
+        group = next(g for g in self._groups(self.super_admin)
+                     if g['project'] == self.ghazlan)
+        self.assertEqual({c for c, _ in group['totals']}, {'SAR', 'USD'})
+
+    def test_the_awaiting_count_matches_the_workflow_status(self):
+        group = next(g for g in self._groups(self.super_admin)
+                     if g['project'] == self.ghazlan)
+        expected = sum(1 for p in group['rows']
+                       if p.workflow_status['stage_key'] is not None)
+        self.assertEqual(group['awaiting'], expected)
+
+    def test_a_released_po_is_not_counted_as_awaiting(self):
+        from django.utils import timezone
+        PurchaseOrder.objects.filter(pk=self.po.pk).update(
+            scm_approved_at=timezone.now(), pm_approved_at=timezone.now(),
+            coo_approved_at=timezone.now())
+        group = next(g for g in self._groups(self.super_admin)
+                     if g['project'] == self.ghazlan)
+        self.assertEqual(group['awaiting'], 0)
+
+    # ── cost ────────────────────────────────────────────────────────────────
+
+    def test_the_query_count_does_not_grow_with_the_purchase_orders(self):
+        """total_value walks items, so without a prefetch this issues a query
+        per PO and degrades quietly as the data grows.
+
+        Asserts the count is UNCHANGED between two data sizes rather than
+        pinning a magic number. A fixed number breaks on any unrelated query
+        change and, worse, can be updated to whatever the code happens to do —
+        which is how an N+1 gets accepted rather than fixed.
+        """
+        from django.test.utils import CaptureQueriesContext
+        from django.db import connection
+
+        def count_queries():
+            with CaptureQueriesContext(connection) as ctx:
+                self._groups(self.super_admin)
+            return len(ctx)
+
+        for i in range(3):
+            po = self._po(f'PO-BP-BULK-{i}', self.ghazlan, self.super_admin)
+            po.items.create(description='Thing', quantity=Decimal('1'),
+                            rate_per_unit=Decimal('10'))
+        with_few = count_queries()
+
+        for i in range(3, 12):
+            po = self._po(f'PO-BP-BULK-{i}', self.ghazlan, self.super_admin)
+            po.items.create(description='Thing', quantity=Decimal('1'),
+                            rate_per_unit=Decimal('10'))
+        with_many = count_queries()
+
+        self.assertEqual(with_few, with_many,
+                         f'{with_few} queries for 4 POs but {with_many} for 13 '
+                         '— the items prefetch is not doing its job')
+
+    # ── page ────────────────────────────────────────────────────────────────
+
+    def test_the_page_renders_with_the_summary_visible(self):
+        self.client.force_login(self.super_admin)
+        body = self.client.get(reverse('procurement:po_by_project')).content.decode()
+        self.assertIn('Ghazlan Substation', body)
+        self.assertIn('LNA-2026-0417', body)
+        # The collapsed header has to say enough to be worth not opening.
+        self.assertIn('1 PO', body)
+
+    def test_the_page_can_hide_empty_projects(self):
+        """Asserted on the rendered cards, not the whole body: the add-project
+        picker also lists project names, and matching anywhere in the page
+        would pass or fail for the wrong reason."""
+        self.client.force_login(self.super_admin)
+        resp = self.client.get(
+            reverse('procurement:po_by_project') + '?empty=hide')
+        shown = [g['project_name'] for g in resp.context['groups']]
+        self.assertNotIn('Nothing Ordered Yet', shown)
+        self.assertIn('Ghazlan Substation', shown)
+
+    def test_hiding_empty_projects_does_not_offer_them_for_adding(self):
+        """Board membership must not depend on a display toggle — hiding a
+        project once made it offerable again, as though it were not there."""
+        self.client.force_login(self.super_admin)
+        resp = self.client.get(
+            reverse('procurement:po_by_project') + '?empty=hide')
+        offered = [p.pk for p in resp.context['addable_projects']]
+        self.assertNotIn(self.quiet.pk, offered)
+
+    def test_the_sidebar_links_to_it(self):
+        self.client.force_login(self.super_admin)
+        body = self.client.get(reverse('procurement:po_list')).content.decode()
+        self.assertIn(reverse('procurement:po_by_project'), body)
+        self.assertIn('POs by Project', body)
+
+
+class ProcurementBoardTests(TestCase):
+    """Which projects reach procurement's board, and who decides.
+
+    Three doors: finance approved the budget, procurement selected it, or
+    orders already exist against it. The third is shown but flagged."""
+
+    def setUp(self):
+        from projects.models import Region, ProjectStatus, Project
+        from accounts.permissions import seed_default_permissions
+        for name, _label in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+
+        self.region = Region.objects.create(name='KSA', code='LNA', currency='SAR')
+        status = ProjectStatus.objects.create(name='Open', category='active')
+        self.super_admin = User.objects.create_user(
+            'bd_super', password='x', role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.procurement = User.objects.create_user(
+            'bd_proc', password='x', region=self.region,
+            role=Role.objects.get(name=Role.PROCUREMENT_MGR))
+        self.outsider = User.objects.create_user(
+            'bd_out', password='x', region=self.region,
+            role=Role.objects.get(name=Role.DOCUMENT_CONTROLLER))
+
+        def project(name, ref):
+            return Project.objects.create(
+                project_name=name, proposal_reference=ref, status=status,
+                region=self.region, estimated_value=Decimal('1'),
+                actual_sales=Decimal('0'), year='2026', po_award_quarter='Q2')
+
+        self.approved = project('Approved Budget Job', 'LNA-2026-0001')
+        self.chosen = project('Picked By Procurement', 'LNA-2026-0002')
+        self.bidding = project('Still Bidding', 'LNA-2026-0003')
+        self.with_po = project('Has Orders Only', 'LNA-2026-0004')
+
+        from costing.models import CostingSheet
+        CostingSheet.objects.create(title='Budget', project=self.approved,
+                                    workflow_stage='finance_approved')
+        PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-BD-1', vendor_name='ACME',
+            po_issued_by='T', project=self.with_po, created_by=self.super_admin)
+
+    def _groups(self, user=None):
+        from procurement.views import _po_project_groups
+        return _po_project_groups(user or self.super_admin)
+
+    def _named(self, groups=None):
+        return [g['project_name'] for g in (groups or self._groups())]
+
+    def _group_for(self, project):
+        return next(g for g in self._groups() if g['project'] == project)
+
+    def _select(self, project, user=None):
+        from procurement.models import ProcurementProject
+        return ProcurementProject.objects.create(
+            project=project, added_by=user or self.procurement)
+
+    # ── the three doors ─────────────────────────────────────────────────────
+
+    def test_an_approved_budget_is_on_the_board(self):
+        self.assertIn('Approved Budget Job', self._named())
+
+    def test_a_selected_project_is_on_the_board(self):
+        """The second door: work that needs procuring before a budget exists,
+        or that never goes through one."""
+        self.assertNotIn('Picked By Procurement', self._named())
+        self._select(self.chosen)
+        self.assertIn('Picked By Procurement', self._named())
+
+    def test_a_project_with_orders_is_shown_even_though_it_is_on_neither(self):
+        """Money is committed against it. Hiding it would lose the spend from
+        this page entirely."""
+        self.assertIn('Has Orders Only', self._named())
+
+    def test_that_project_is_flagged_rather_than_shown_as_normal(self):
+        """Flagged is how the gap gets closed — somebody adds it or chases the
+        budget."""
+        group = self._group_for(self.with_po)
+        self.assertTrue(group['off_board'])
+        self.assertFalse(group['approved'])
+        self.assertFalse(group['selected'])
+
+    def test_a_project_on_none_of_the_three_is_not_listed(self):
+        self.assertNotIn('Still Bidding', self._named())
+
+    # ── why each project is here ────────────────────────────────────────────
+
+    def test_an_approved_project_is_not_flagged(self):
+        group = self._group_for(self.approved)
+        self.assertTrue(group['approved'])
+        self.assertFalse(group['off_board'])
+
+    def test_a_selected_project_is_not_flagged(self):
+        self._select(self.chosen)
+        group = self._group_for(self.chosen)
+        self.assertTrue(group['selected'])
+        self.assertFalse(group['off_board'])
+
+    def test_selecting_a_project_that_has_orders_clears_the_flag(self):
+        """The whole point of the flag: it should be actionable and then go
+        away."""
+        self.assertTrue(self._group_for(self.with_po)['off_board'])
+        self._select(self.with_po)
+        self.assertFalse(self._group_for(self.with_po)['off_board'])
+
+    # ── who maintains it ────────────────────────────────────────────────────
+
+    def test_procurement_can_add_a_project(self):
+        from procurement.models import ProcurementProject
+        self.client.force_login(self.procurement)
+        self.client.post(reverse('procurement:po_board_add'),
+                         {'project': self.chosen.pk, 'note': 'Long lead items'})
+        entry = ProcurementProject.objects.get(project=self.chosen)
+        self.assertEqual(entry.added_by, self.procurement)
+        self.assertEqual(entry.note, 'Long lead items')
+
+    def test_adding_twice_does_not_duplicate(self):
+        from procurement.models import ProcurementProject
+        self.client.force_login(self.procurement)
+        for _ in range(2):
+            self.client.post(reverse('procurement:po_board_add'),
+                             {'project': self.chosen.pk})
+        self.assertEqual(
+            ProcurementProject.objects.filter(project=self.chosen).count(), 1)
+
+    def test_procurement_can_remove_a_project(self):
+        from procurement.models import ProcurementProject
+        self._select(self.chosen)
+        self.client.force_login(self.procurement)
+        self.client.post(
+            reverse('procurement:po_board_remove', args=[self.chosen.pk]))
+        self.assertFalse(ProcurementProject.objects.filter(project=self.chosen).exists())
+
+    def test_removing_a_selection_does_not_hide_an_approved_budget(self):
+        """Removal undoes a choice. It cannot undo finance approving a budget
+        or orders existing."""
+        self._select(self.approved)
+        self.client.force_login(self.procurement)
+        self.client.post(
+            reverse('procurement:po_board_remove', args=[self.approved.pk]))
+        self.assertIn('Approved Budget Job', self._named())
+
+    def test_someone_outside_procurement_cannot_change_the_board(self):
+        from procurement.models import ProcurementProject
+        self.client.force_login(self.outsider)
+        self.client.post(reverse('procurement:po_board_add'),
+                         {'project': self.chosen.pk})
+        self.assertFalse(ProcurementProject.objects.exists())
+
+    def test_a_super_admin_can_change_the_board(self):
+        from procurement.models import ProcurementProject
+        self.client.force_login(self.super_admin)
+        self.client.post(reverse('procurement:po_board_add'),
+                         {'project': self.chosen.pk})
+        self.assertTrue(ProcurementProject.objects.filter(project=self.chosen).exists())
+
+    def test_a_missing_project_is_reported_not_a_crash(self):
+        self.client.force_login(self.procurement)
+        resp = self.client.post(reverse('procurement:po_board_add'),
+                                {'project': 999999}, follow=True)
+        self.assertEqual(resp.status_code, 200)
+
+    # ── page ────────────────────────────────────────────────────────────────
+
+    def test_the_page_flags_the_off_board_projects(self):
+        self.client.force_login(self.procurement)
+        body = self.client.get(reverse('procurement:po_by_project')).content.decode()
+        self.assertIn('Not on the board', body)
+        self.assertIn('no approved budget and no procurement selection', body)
+
+    def test_the_picker_is_hidden_from_people_who_cannot_use_it(self):
+        self.client.force_login(self.outsider)
+        body = self.client.get(reverse('procurement:po_by_project')).content.decode()
+        self.assertNotIn('Add a project', body)
+
+    def test_the_picker_does_not_offer_projects_already_on_the_board(self):
+        """An option that does nothing is worse than a shorter list."""
+        self.client.force_login(self.procurement)
+        resp = self.client.get(reverse('procurement:po_by_project'))
+        offered = [p.pk for p in resp.context['addable_projects']]
+        self.assertNotIn(self.approved.pk, offered)
+        self.assertIn(self.chosen.pk, offered)
+
+    def test_a_selected_project_offers_removal_even_with_no_orders(self):
+        """The usual case for a selection is having no orders yet, which is
+        exactly when somebody wants to take it back off."""
+        self._select(self.chosen)
+        self.client.force_login(self.procurement)
+        body = self.client.get(reverse('procurement:po_by_project')).content.decode()
+        self.assertIn(
+            reverse('procurement:po_board_remove', args=[self.chosen.pk]), body)

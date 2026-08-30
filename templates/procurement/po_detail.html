@@ -66,13 +66,33 @@
                                 <span class="status-pill bg-warning text-dark">Draft</span>
                                 {% elif po.status == 'issued' %}
                                 <span class="status-pill bg-white text-danger">Issued</span>
-                                {% elif po.status == 'acknowledged' %}
-                                <span class="status-pill bg-secondary text-white">Acknowledged</span>
+                                {% elif po.status == 'client_acknowledged' %}
+                                <span class="status-pill bg-secondary text-white">
+                                  <i class="bi bi-lock-fill"></i> Client Acknowledged
+                                </span>
                                 {% elif po.status == 'completed' %}
                                 <span class="status-pill bg-success text-white">Completed</span>
                                 {% elif po.status == 'cancelled' %}
                                 <span class="status-pill bg-danger text-white">Cancelled</span>
                                 {% endif %}
+                            </div>
+                            {% comment %} Says what the PO is waiting on
+                            without opening the approval timeline further down.
+                            {% endcomment %}
+                            <div class="mb-2">
+                              {% with w=po.workflow_status %}
+                              {% if w.tone == 'warning' %}
+                              <span class="badge bg-warning text-dark"><i class="bi bi-hourglass-split me-1"></i>{{ w.label }}</span>
+                              {% elif w.tone == 'success' %}
+                              <span class="badge bg-success"><i class="bi bi-check2-circle me-1"></i>{{ w.label }}</span>
+                              {% elif w.tone == 'locked' %}
+                              <span class="badge bg-secondary"><i class="bi bi-lock-fill me-1"></i>{{ w.label }}</span>
+                              {% elif w.tone == 'muted' %}
+                              <span class="badge bg-dark">{{ w.label }}</span>
+                              {% else %}
+                              <span class="badge bg-light text-dark">{{ w.label }}</span>
+                              {% endif %}
+                              {% endwith %}
                             </div>
                             <p class="mb-0 opacity-75">{{ po.vendor_name }}</p>
                             {% if po.project_name %}<p class="mb-0 opacity-50" style="font-size:0.85rem;">{{ po.project_name }}</p>{% endif %}
@@ -132,10 +152,52 @@
                             </div>
 
                             <a href="{% url 'procurement:dn_create_from_po' po.pk %}" class="btn btn-outline-light"><i class="bi bi-truck me-1"></i>Delivery Note</a>
+                            {% comment %} The endpoints refuse a locked PO on
+                            their own; the buttons go too, because offering an
+                            action that always fails is its own bug. {% endcomment %}
+                            {% if not po.is_locked %}
                             <a href="{% url 'procurement:po_update' po.pk %}" class="btn btn-light text-danger fw-semibold"><i class="bi bi-pencil me-1"></i>Edit</a>
                             <a href="{% url 'procurement:po_delete' po.pk %}" class="btn btn-outline-light text-danger border-danger" title="Delete this PO"><i class="bi bi-trash"></i></a>
+                            {% endif %}
                         </div>
                     </div>
+
+                    {% if po.is_locked %}
+                    <div class="alert alert-secondary d-flex flex-wrap align-items-start gap-3 mt-4 mb-0">
+                        <i class="bi bi-lock-fill fs-4"></i>
+                        <div class="flex-grow-1">
+                            <div class="fw-semibold">Locked — the client has acknowledged this purchase order</div>
+                            <div class="small">
+                                Nothing on it can change: not the details, not the terms and
+                                conditions, not the line items, not the signatures.
+                                {% if po.client_acknowledged_at %}
+                                Acknowledged {{ po.client_acknowledged_at|date:"d M Y" }}{% if po.client_acknowledged_by %}
+                                by {{ po.client_acknowledged_by.get_full_name|default:po.client_acknowledged_by.username }}{% endif %}.
+                                {% endif %}
+                            </div>
+                            {% if request.user.is_super_admin_user %}
+                            <button class="btn btn-sm btn-outline-danger mt-2" type="button"
+                                    data-bs-toggle="collapse" data-bs-target="#releaseLock">
+                                Release for editing
+                            </button>
+                            <div class="collapse mt-2" id="releaseLock">
+                                <form method="post" action="{% url 'procurement:po_release_lock' po.pk %}"
+                                      class="border rounded p-2 bg-white"
+                                      onsubmit="return confirm('Release this purchase order for editing?');">
+                                    {% csrf_token %}
+                                    {% comment %} The reason is required, not
+                                    optional: this is the only door out of the
+                                    lock and it has to leave a record. {% endcomment %}
+                                    <textarea name="reason" rows="2" required
+                                              class="form-control form-control-sm mb-2"
+                                              placeholder="Why is this being released? Recorded against the PO."></textarea>
+                                    <button type="submit" class="btn btn-sm btn-danger">Confirm release</button>
+                                </form>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endif %}
 
                     <!-- Quick Stats -->
                     <div class="row mt-4 g-3">
@@ -330,8 +392,46 @@
                     <div class="card info-card">
                         <div class="card-header d-flex justify-content-between align-items-center">
                             <h6 class="mb-0"><i class="bi bi-list-ol me-2 text-danger"></i>Line Items</h6>
-                            <span class="badge bg-dark">{{ items.count }} item{{ items.count|pluralize }}</span>
+                            <div class="d-flex align-items-center gap-2">
+                              <span class="badge bg-dark">{{ items.count }} item{{ items.count|pluralize }}</span>
+                              {% comment %} Import is offered only where it
+                              would work: a locked PO refuses it server-side
+                              anyway. {% endcomment %}
+                              {% if not po.is_locked %}
+                              <button class="btn btn-sm btn-outline-success" type="button"
+                                      data-bs-toggle="collapse" data-bs-target="#importItems">
+                                <i class="bi bi-file-earmark-excel me-1"></i> Import items
+                              </button>
+                              {% endif %}
+                            </div>
                         </div>
+                        {% if not po.is_locked %}
+                        <div class="collapse" id="importItems">
+                          <div class="card-body border-bottom bg-light">
+                            <form method="post" enctype="multipart/form-data"
+                                  action="{% url 'procurement:po_import_items' po.pk %}">
+                              {% csrf_token %}
+                              <label class="form-label fw-semibold mb-1">Add line items from a spreadsheet</label>
+                              <input type="file" name="item_files" class="form-control form-control-sm mb-2"
+                                     accept=".xlsx,.xls" multiple required>
+                              <div class="form-text mb-2">
+                                Any spreadsheet with a header row will do — columns are matched
+                                by name, so the order does not matter. It needs a
+                                <strong>Description</strong> column; Quantity, UOM, Rate, Make
+                                and Remarks are read when present.
+                                {% comment %} Say plainly that this adds rather
+                                than replaces, so nobody imports a corrected
+                                sheet expecting it to overwrite. {% endcomment %}
+                                Items are <strong>added</strong> to the ones already here, never
+                                replaced.
+                              </div>
+                              <button type="submit" class="btn btn-sm btn-success">
+                                <i class="bi bi-upload me-1"></i> Import
+                              </button>
+                            </form>
+                          </div>
+                        </div>
+                        {% endif %}
                         <div class="card-body p-0">
                             <div class="table-responsive">
                                 <table class="table line-item-table mb-0">

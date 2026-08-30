@@ -44,6 +44,7 @@
                         <thead>
                             <tr>
                                 <th>Project</th>
+                                <th>LNA Reference</th>
                                 <th>Budget</th>
                                 <th>Region</th>
                                 <th>Approved</th>
@@ -54,6 +55,16 @@
                             {% for s in sheets %}
                             <tr>
                                 <td><strong>{{ s.project.project_name|default:"—" }}</strong></td>
+                                {% comment %} The reference the rest of the
+                                business uses for this job — procurement had to
+                                open the budget to find it. {% endcomment %}
+                                <td>
+                                  {% if s.project %}
+                                  <a href="{% url 'projects:detail' s.project.pk %}" class="text-decoration-none">
+                                    <code>{{ s.project.proposal_reference|default:"—" }}</code>
+                                  </a>
+                                  {% else %}<span class="text-muted">—</span>{% endif %}
+                                </td>
                                 <td>{{ s.title }}</td>
                                 <td>{{ s.project.region.name|default:"—" }}</td>
                                 <td class="small text-muted">
@@ -67,7 +78,7 @@
                                 </td>
                             </tr>
                             {% empty %}
-                            <tr><td colspan="5" class="text-center text-muted py-5"><i class="bi bi-inbox fs-3 d-block mb-2 opacity-50"></i>No finance-approved budgets in your scope yet.</td></tr>
+                            <tr><td colspan="6" class="text-center text-muted py-5"><i class="bi bi-inbox fs-3 d-block mb-2 opacity-50"></i>No finance-approved budgets in your scope yet.</td></tr>
                             {% endfor %}
                         </tbody>
                     </table>

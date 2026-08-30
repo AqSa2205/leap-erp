@@ -250,7 +250,7 @@ def procurement_dashboard(request):
 
     po_total = po_qs.count()
     po_by_status = {}
-    for s in ['draft', 'issued', 'acknowledged', 'completed', 'cancelled']:
+    for s in ['draft', 'issued', 'client_acknowledged', 'completed', 'cancelled']:
         po_by_status[s] = po_qs.filter(status=s).count()
 
     # DN stats
@@ -381,6 +381,236 @@ class ProcurementPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
 
 
 # ─── PO CRUD ─────────────────────────────────────────────────
+
+LOCKED_PO_MESSAGE = (
+    'This purchase order has been acknowledged by the client and is locked. '
+    'A super admin must release it before anything can change.'
+)
+
+
+def locked_po_json(po):
+    """JSON refusal for a locked PO, or None when the PO may be changed.
+
+    Every endpoint that writes to a PO, its items, its terms or its signatures
+    calls this BEFORE writing. Hiding the control in the template is not a
+    lock — the endpoint is still there for anyone who knows the URL.
+    """
+    if po.is_locked:
+        return JsonResponse({'error': LOCKED_PO_MESSAGE}, status=423)
+    return None
+
+
+def _po_project_groups(user, include_empty=True):
+    """Purchase orders arranged under the projects they belong to.
+
+    Returns a list of groups, each
+    {project, project_name, reference, po_count, rows, totals, awaiting}.
+    The Unassigned group, if any, is last.
+
+    Visibility comes from _visible_pos_for() rather than a rule of its own —
+    this page must show exactly the POs the flat list would, arranged
+    differently.
+    """
+    from collections import OrderedDict
+
+    # Prefetch items: total_value walks them, so grouping without this issues a
+    # query per PO and the page degrades quietly as the PO count grows.
+    pos = (_visible_pos_for(user)
+           .select_related('project', 'project__region')
+           .prefetch_related('items')
+           .order_by('-po_date', '-id'))
+
+    groups = OrderedDict()
+    unassigned = []
+    for po in pos:
+        if po.project_id is None:
+            unassigned.append(po)
+            continue
+        groups.setdefault(po.project_id, {'project': po.project, 'rows': []})
+        groups[po.project_id]['rows'].append(po)
+
+    # A project reaches procurement's board three ways: finance approved its
+    # budget, procurement put it there deliberately, or orders already exist
+    # against it. The third is recorded but flagged - see _build_group.
+    #
+    # Restricted to viewers with region-or-wider reach: for anyone else,
+    # listing project names would disclose projects they cannot otherwise see.
+    from projects.models import Project
+    approved_ids, selected_ids = set(), set()
+    if _can_see_all_projects(user):
+        approved = (Project.objects
+                    .filter(costing_sheets__workflow_stage='finance_approved')
+                    .select_related('region').distinct())
+        selected = (Project.objects
+                    .filter(procurement_selection__isnull=False)
+                    .select_related('region').distinct())
+        if not (user.is_super_admin_user or getattr(user, 'is_procurement_user', False)):
+            approved = approved.filter(region=user.region)
+            selected = selected.filter(region=user.region)
+        approved_ids = set(approved.values_list('pk', flat=True))
+        selected_ids = set(selected.values_list('pk', flat=True))
+        if include_empty:
+            for project in list(approved) + list(selected):
+                groups.setdefault(project.pk, {'project': project, 'rows': []})
+
+    out = []
+    for pk, entry in groups.items():
+        out.append(_build_group(
+            entry['project'], entry['rows'],
+            approved=pk in approved_ids, selected=pk in selected_ids))
+    # Projects with orders first, then the empty ones, each newest-first.
+    out.sort(key=lambda g: (g['po_count'] == 0,
+                            -(g['rows'][0].po_date.toordinal() if g['rows'] else 0),
+                            (g['project_name'] or '').lower()))
+    if unassigned:
+        out.append(_build_group(None, unassigned))
+    return out
+
+
+def _can_see_all_projects(user):
+    """Whether this viewer may be shown projects they have no PO against."""
+    return bool(user.is_super_admin_user
+                or getattr(user, 'is_procurement_user', False)
+                or user.is_admin_user or user.is_manager_user)
+
+
+def _build_group(project, rows, *, approved=False, selected=False):
+    """One project's card: its POs, per-currency totals and what is waiting.
+
+    `off_board` marks a project that is here only because orders exist against
+    it - finance has not approved a budget and procurement has not chosen it.
+    Hiding those would lose committed spend from the page, so they are shown
+    and flagged, which is also how somebody notices and fixes the gap.
+    """
+    from collections import defaultdict
+
+    totals = defaultdict(Decimal)
+    awaiting = 0
+    for po in rows:
+        # Never summed across currencies: one number over mixed currencies is
+        # worse than no number, because it looks like an answer.
+        totals[po.currency] += po.total_value
+        if po.workflow_status['stage_key'] is not None:
+            awaiting += 1
+
+    return {
+        'project': project,
+        'approved': approved,
+        'selected': selected,
+        'off_board': bool(project) and not approved and not selected,
+        'project_name': (project.project_name if project
+                         else 'Not linked to a project'),
+        'reference': project.proposal_reference if project else '',
+        'region': project.region if project else None,
+        'po_count': len(rows),
+        'rows': rows,
+        'totals': sorted(totals.items()),
+        'awaiting': awaiting,
+    }
+
+
+def _can_manage_board(user):
+    """Who maintains procurement's project board. It is their working list, so
+    procurement keeps it, alongside the admin tiers."""
+    return bool(user.is_super_admin_user or user.is_admin_user
+                or getattr(user, 'is_procurement_user', False))
+
+
+@login_required
+@require_POST
+def po_board_add(request):
+    """Put a project on procurement's board.
+
+    For work that needs procuring before a budget is approved, or that never
+    goes through one.
+    """
+    from projects.models import Project
+    from .models import ProcurementProject
+
+    if not _can_manage_board(request.user):
+        messages.error(request, 'Only the procurement team can change the board.')
+        return redirect('procurement:po_by_project')
+
+    project = Project.objects.filter(pk=request.POST.get('project')).first()
+    if project is None:
+        messages.error(request, 'That project could not be found.')
+        return redirect('procurement:po_by_project')
+
+    _entry, created = ProcurementProject.objects.get_or_create(
+        project=project,
+        defaults={'added_by': request.user,
+                  'note': (request.POST.get('note') or '').strip()[:300]})
+    if created:
+        messages.success(request, f'{project.project_name} added to the board.')
+    else:
+        messages.info(request, f'{project.project_name} is already on the board.')
+    return redirect('procurement:po_by_project')
+
+
+@login_required
+@require_POST
+def po_board_remove(request, pk):
+    """Take a project off the board.
+
+    Only removes the deliberate selection. A project whose budget is approved,
+    or which has orders against it, still appears - those are not somebody's
+    choice to undo.
+    """
+    from .models import ProcurementProject
+
+    if not _can_manage_board(request.user):
+        messages.error(request, 'Only the procurement team can change the board.')
+        return redirect('procurement:po_by_project')
+
+    entry = ProcurementProject.objects.filter(project_id=pk).first()
+    if entry is None:
+        messages.info(request, 'That project was not on the board.')
+    else:
+        name = entry.project.project_name
+        entry.delete()
+        messages.success(request, f'{name} removed from the board.')
+    return redirect('procurement:po_by_project')
+
+
+@login_required
+def po_by_project(request):
+    """Purchase orders grouped under their projects, collapsible.
+
+    The flat PO list answers "what came in this week". This answers "what has
+    been ordered for this job", which is the question procurement actually
+    starts from, and which the flat list makes you search for.
+    """
+    include_empty = request.GET.get('empty') != 'hide'
+    can_manage = _can_manage_board(request.user)
+
+    # Build the whole board once, then filter for display. Deriving the picker
+    # from the FILTERED list made board membership depend on a display toggle:
+    # hiding empty projects offered them for adding again, as though they were
+    # not already there.
+    all_groups = _po_project_groups(request.user, include_empty=True)
+    groups = all_groups if include_empty else [g for g in all_groups if g['po_count']]
+
+    addable = []
+    if can_manage:
+        from projects.models import Project
+        on_board = [g['project'].pk for g in all_groups if g['project']]
+        addable = (Project.objects
+                   .exclude(pk__in=on_board)
+                   .order_by('project_name')
+                   .only('pk', 'project_name', 'proposal_reference'))
+
+    return render(request, 'procurement/po_by_project.html', {
+        'groups': groups,
+        'include_empty': include_empty,
+        'can_manage_board': can_manage,
+        'addable_projects': addable,
+        'total_pos': sum(g['po_count'] for g in groups),
+        # Counted off the whole board, so the toggle still says how many it
+        # would reveal once they are hidden.
+        'empty_count': sum(1 for g in all_groups if g['po_count'] == 0),
+        'off_board_count': sum(1 for g in groups if g['off_board']),
+    })
+
 
 class POListView(CapabilityRequiredMixin, ProcurementPermissionMixin, ListView):
     capability = 'po.access'
@@ -567,6 +797,12 @@ class POCreateView(ProcurementPermissionMixin, CreateView):
             item_formset.save()
             _apply_po_terms(self.object, self.request.POST)
             _save_po_term_overrides(self.object, self.request.POST, self.request.user)
+            # A new PO is immediately waiting on its first stage, so the person
+            # who signs that stage is told now rather than when somebody
+            # happens to look at the list.
+            from .notifications import notify_stage_approver_on_commit
+            notify_stage_approver_on_commit(
+                self.object, actor=self.request.user, request=self.request)
             messages.success(self.request, f'Purchase Order {self.object.po_number} created successfully.')
             return redirect(self.get_success_url())
         else:
@@ -782,6 +1018,16 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
             return True
         return obj.created_by == user
 
+    def post(self, request, *args, **kwargs):
+        # Refuse before the formsets get a chance to save. The form's clean()
+        # covers the PO's own fields; the item formset and the terms are saved
+        # separately in form_valid and would otherwise write anyway.
+        self.object = self.get_object()
+        if self.object.is_locked:
+            messages.error(request, LOCKED_PO_MESSAGE)
+            return redirect('procurement:po_detail', pk=self.object.pk)
+        return super().post(request, *args, **kwargs)
+
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs['user'] = self.request.user
@@ -812,7 +1058,19 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
         context = self.get_context_data()
         item_formset = context['item_formset']
         if item_formset.is_valid():
+            # Capture the status before the form writes it, so the transition
+            # can be logged with a from/to rather than guessed at afterwards.
+            previous_status = PurchaseOrder.objects.filter(
+                pk=self.object.pk).values_list('status', flat=True).first()
             self.object = form.save()
+            new_status = self.object.status
+            if new_status != previous_status:
+                # Put it back and go through the one method that logs and
+                # stamps, so a status set from the form is recorded the same
+                # way one set from the unlock view is.
+                self.object.status = previous_status
+                self.object.record_status_change(
+                    to_status=new_status, changed_by=self.request.user)
             item_formset.instance = self.object
             item_formset.save()
             _apply_po_terms(self.object, self.request.POST)
@@ -1114,6 +1372,11 @@ def po_approve_stage(request, pk, stage):
             if not _visible_pos_for(request.user).filter(pk=pk).exists():
                 return JsonResponse({'error': 'PO not found or not in your scope.'}, status=404)
 
+            if po.is_locked:
+                # A client-acknowledged PO is finished. Signing one would add a
+                # signature to a document the client has already accepted.
+                return JsonResponse({'error': LOCKED_PO_MESSAGE}, status=423)
+
             if stage not in po.required_stages:
                 return JsonResponse({'error': 'This stage is not required for this PO.'}, status=400)
 
@@ -1136,6 +1399,14 @@ def po_approve_stage(request, pk, stage):
             po.save(update_fields=[
                 f'{stage}_approved_at', f'{stage}_approved_by', sig_field, 'updated_at',
             ])
+
+            # Tell whoever the PO has just moved on to. Queued for after the
+            # commit: sending from inside the atomic block risks an email
+            # describing a signature that then rolls back, and an email cannot
+            # be recalled. The signer is passed as the actor so they are not
+            # told about their own signature.
+            from .notifications import notify_stage_approver_on_commit
+            notify_stage_approver_on_commit(po, actor=request.user, request=request)
 
         new_cur = po.current_stage
         return JsonResponse({
@@ -1165,6 +1436,10 @@ def po_edit_signature(request, pk, stage):
     already signed."""
     if stage not in ('scm', 'pm', 'coo', 'ceo'):
         return JsonResponse({'error': 'Unknown approval stage.'}, status=400)
+
+    locked = locked_po_json(get_object_or_404(PurchaseOrder, pk=pk))
+    if locked is not None:
+        return locked
 
     clean, err = _read_and_validate_signature(request)
     if err is not None:
@@ -1213,6 +1488,89 @@ def po_edit_signature(request, pk, stage):
         }, status=500)
 
 
+@login_required
+def po_stage_approvers(request):
+    """Who signs each approval stage — the mapping the approval emails use.
+
+    Super admin only: naming somebody as an approver decides who gets asked to
+    sign company purchase orders, which is not a self-service setting and not
+    one the ordinary admin tier changes either.
+    """
+    from .forms import POStageApproverForm
+    from .models import POStageApprover
+
+    user = request.user
+    if not user.is_super_admin_user:
+        messages.error(request, 'Only a super admin can set approval routing.')
+        return redirect('procurement:dashboard')
+
+    if request.method == 'POST':
+        stage = request.POST.get('stage')
+        existing = POStageApprover.objects.filter(stage=stage).first()
+        form = POStageApproverForm(request.POST, instance=existing)
+        if form.is_valid():
+            row = form.save(commit=False)
+            row.updated_by = user
+            row.save()
+            messages.success(
+                request,
+                f'{row.get_stage_display()} will now be sent to '
+                f'{row.user.get_full_name() or row.user.username}.')
+            return redirect('procurement:po_stage_approvers')
+        messages.error(request, 'That approver could not be saved.')
+    else:
+        form = POStageApproverForm()
+
+    # Every stage listed, mapped or not, so an unset one is visible as a gap
+    # rather than simply absent from the page.
+    mapped = {row.stage: row for row in
+              POStageApprover.objects.select_related('user', 'updated_by')}
+    rows = []
+    for key, label, signer in PurchaseOrder.APPROVAL_STAGES:
+        row = mapped.get(key)
+        rows.append({
+            'key': key, 'label': label, 'signer_name': signer,
+            'approver': row.user if row else None,
+            'updated_at': row.updated_at if row else None,
+            'updated_by': row.updated_by if row else None,
+        })
+    return render(request, 'procurement/stage_approvers.html', {
+        'rows': rows, 'form': form,
+    })
+
+
+@login_required
+@require_POST
+def po_release_lock(request, pk):
+    """Release a client-acknowledged PO so it can be corrected.
+
+    Super admin only, and a reason is required — this is the one door out of
+    the lock, so it has to leave a record of who opened it and why. The PO
+    returns to Issued rather than Draft: it was issued to the client, and
+    pretending otherwise would lose that.
+    """
+    po = get_object_or_404(PurchaseOrder, pk=pk)
+    if not request.user.is_super_admin_user:
+        messages.error(request, 'Only a super admin can release a locked purchase order.')
+        return redirect('procurement:po_detail', pk=po.pk)
+    if not po.is_locked:
+        messages.info(request, 'That purchase order is not locked.')
+        return redirect('procurement:po_detail', pk=po.pk)
+
+    reason = (request.POST.get('reason') or '').strip()
+    if not reason:
+        messages.error(request, 'Give a reason for releasing this purchase order.')
+        return redirect('procurement:po_detail', pk=po.pk)
+
+    po.record_status_change(
+        to_status='issued', changed_by=request.user, reason=reason)
+    messages.success(
+        request,
+        f'Purchase Order {po.po_number} released for editing. The reason has '
+        'been recorded against it.')
+    return redirect('procurement:po_detail', pk=po.pk)
+
+
 class PODeleteView(ProcurementPermissionMixin, DeleteView):
     model = PurchaseOrder
     template_name = 'procurement/po_confirm_delete.html'
@@ -1221,6 +1579,9 @@ class PODeleteView(ProcurementPermissionMixin, DeleteView):
     def test_func(self):
         user = self.request.user
         obj = self.get_object()
+        if obj.is_locked:
+            # Deleting is the most complete change of all. Release it first.
+            return False
         # Audit-trail protection: once *any* approval stage has been signed,
         # only super admin can delete the PO. Without this gate the original
         # creator could erase a fully-signed PO and destroy the audit chain
@@ -2013,16 +2374,146 @@ def po_export_pdf_unpriced(request, pk):
 # ─── Import from Excel ────────────────────────────────────────
 
 @login_required
+def _import_po_batch(request, uploads):
+    """Run the single-file importer once per file, keeping each file's outcome.
+
+    Calls the real view rather than reimplementing its parsing, so the batch
+    path cannot drift from the single path — one parser, one set of rules.
+    """
+    from django.http import QueryDict
+
+    imported, failed = [], []
+    for upload in uploads:
+        # Swap request.FILES for one holding a single file, call the real view,
+        # then put it back. Re-entering the view is deliberate: the template
+        # parser is 250 lines with its own error handling, and duplicating it
+        # for the batch path is how the two would drift apart.
+        original_files = request._files
+        request._files = _single_file_dict(upload)
+        before = set(PurchaseOrder.objects.values_list('pk', flat=True))
+        try:
+            po_import_excel(request)
+        finally:
+            request._files = original_files
+        added = set(PurchaseOrder.objects.values_list('pk', flat=True)) - before
+        if added:
+            imported.append(upload.name)
+        else:
+            failed.append(upload.name)
+
+    if imported:
+        messages.success(
+            request,
+            f'Imported {len(imported)} purchase order'
+            f'{"" if len(imported) == 1 else "s"}: {", ".join(imported)}.')
+    if failed:
+        messages.warning(
+            request,
+            f'{len(failed)} file{"" if len(failed) == 1 else "s"} did not '
+            f'import: {", ".join(failed)}. The reason for each is above.')
+    return redirect('procurement:po_list')
+
+
+def _single_file_dict(upload):
+    from django.utils.datastructures import MultiValueDict
+    return MultiValueDict({'excel_file': [upload]})
+
+
+@login_required
+@require_POST
+def po_import_items(request, pk):
+    """Append line items to an existing PO from one or more spreadsheets.
+
+    Append-only by design. Replacing the items would quietly destroy anything
+    entered by hand since the PO was raised, and there is no undo — a second
+    import of the same file is easy to spot and delete, an erased line is not.
+
+    Refuses a locked PO like every other write path.
+    """
+    from .excel_import import ExcelImportError, parse_items, summarise
+
+    po = get_object_or_404(PurchaseOrder, pk=pk)
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user
+            or user.is_procurement_user or po.created_by_id == user.id):
+        messages.error(request, 'You cannot change this purchase order.')
+        return redirect('procurement:po_detail', pk=po.pk)
+    if po.is_locked:
+        messages.error(request, LOCKED_PO_MESSAGE)
+        return redirect('procurement:po_detail', pk=po.pk)
+
+    files = request.FILES.getlist('item_files')
+    if not files:
+        messages.error(request, 'Choose at least one spreadsheet to import.')
+        return redirect('procurement:po_detail', pk=po.pk)
+
+    # Continue numbering from what is already there rather than restarting, so
+    # imported lines do not collide with the existing serial numbers.
+    next_serial = (po.items.order_by('-serial_number')
+                   .values_list('serial_number', flat=True).first() or 0) + 1
+    next_order = (po.items.order_by('-order')
+                  .values_list('order', flat=True).first() or 0) + 1
+
+    total_added = 0
+    for upload in files:
+        try:
+            rows, skipped = parse_items(upload)
+        except ExcelImportError as exc:
+            # One bad file must not lose the rows a good one already added.
+            messages.error(request, f'{upload.name}: {exc}')
+            continue
+
+        created = []
+        for row in rows:
+            created.append(PurchaseOrderItem(
+                purchase_order=po, serial_number=next_serial,
+                order=next_order, **row))
+            next_serial += 1
+            next_order += 1
+        if created:
+            PurchaseOrderItem.objects.bulk_create(created)
+        total_added += len(created)
+
+        level = messages.warning if skipped else messages.success
+        level(request, summarise(len(created), skipped, upload.name))
+        for row_no, reason in skipped[:5]:
+            messages.info(request, f'{upload.name} row {row_no}: {reason}')
+        if len(skipped) > 5:
+            messages.info(
+                request,
+                f'{upload.name}: {len(skipped) - 5} further skipped rows not listed.')
+
+    if total_added:
+        messages.success(
+            request,
+            f'{total_added} item{"" if total_added == 1 else "s"} added to '
+            f'{po.po_number}. Check the totals before issuing.')
+    return redirect('procurement:po_detail', pk=po.pk)
+
+
 def po_import_excel(request):
-    """Import a Purchase Order from an Excel file matching the PO template format."""
+    """Import Purchase Orders from files matching the PO export template.
+
+    Several files may be sent at once and are applied in order. Each is
+    independent: a file that fails is reported and the rest still import, so a
+    single bad sheet in a batch does not cost the user the others.
+
+    This reads OUR export layout, whose cell positions are fixed because we
+    write them. Spreadsheets from anyone else go through excel_import.py, which
+    maps columns by name instead.
+    """
     if request.method != 'POST':
         return redirect('procurement:po_list')
 
-    excel_file = request.FILES.get('excel_file')
-    if not excel_file:
+    uploads = request.FILES.getlist('excel_file')
+    if not uploads:
         messages.error(request, 'Please select an Excel file.')
         return redirect('procurement:po_list')
 
+    if len(uploads) > 1:
+        return _import_po_batch(request, uploads)
+
+    excel_file = uploads[0]
     try:
         wb = openpyxl.load_workbook(excel_file, data_only=True)
         ws = wb.active
@@ -2366,6 +2857,9 @@ def ajax_summary_entry_update(request, pk):
     )
     if not can_edit:
         return JsonResponse({'error': 'Permission denied'}, status=403)
+    locked = locked_po_json(po)
+    if locked is not None:
+        return locked
 
     field = request.POST.get('field', '').strip()
     raw = (request.POST.get('value') or '').strip()
@@ -2444,6 +2938,9 @@ def ajax_po_item_field_update(request, pk):
     )
     if not can_edit:
         return JsonResponse({'error': 'Permission denied'}, status=403)
+    locked = locked_po_json(po)
+    if locked is not None:
+        return locked
 
     field = request.POST.get('field', '').strip()
     raw = request.POST.get('value', '')
@@ -4493,6 +4990,9 @@ def ajax_po_toggle_term(request, pk):
     )
     if not can_edit:
         return JsonResponse({'error': 'Permission denied'}, status=403)
+    locked = locked_po_json(po)
+    if locked is not None:
+        return locked
 
     term_id = request.POST.get('term_id')
     if not term_id:
