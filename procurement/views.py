@@ -585,6 +585,12 @@ class POCreateView(ProcurementPermissionMixin, CreateView):
             item_formset.save()
             _apply_po_terms(self.object, self.request.POST)
             _save_po_term_overrides(self.object, self.request.POST, self.request.user)
+            # A new PO is immediately waiting on its first stage, so the person
+            # who signs that stage is told now rather than when somebody
+            # happens to look at the list.
+            from .notifications import notify_stage_approver_on_commit
+            notify_stage_approver_on_commit(
+                self.object, actor=self.request.user, request=self.request)
             messages.success(self.request, f'Purchase Order {self.object.po_number} created successfully.')
             return redirect(self.get_success_url())
         else:
@@ -1182,6 +1188,14 @@ def po_approve_stage(request, pk, stage):
                 f'{stage}_approved_at', f'{stage}_approved_by', sig_field, 'updated_at',
             ])
 
+            # Tell whoever the PO has just moved on to. Queued for after the
+            # commit: sending from inside the atomic block risks an email
+            # describing a signature that then rolls back, and an email cannot
+            # be recalled. The signer is passed as the actor so they are not
+            # told about their own signature.
+            from .notifications import notify_stage_approver_on_commit
+            notify_stage_approver_on_commit(po, actor=request.user, request=request)
+
         new_cur = po.current_stage
         return JsonResponse({
             'ok': True,
@@ -1260,6 +1274,56 @@ def po_edit_signature(request, pk, stage):
         return JsonResponse({
             'error': f'Edit failed: {type(e).__name__}: {e}',
         }, status=500)
+
+
+@login_required
+def po_stage_approvers(request):
+    """Who signs each approval stage — the mapping the approval emails use.
+
+    Admin only: naming somebody as an approver decides who gets asked to sign
+    company purchase orders, which is not a self-service setting.
+    """
+    from .forms import POStageApproverForm
+    from .models import POStageApprover
+
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user):
+        messages.error(request, 'Only an administrator can set approval routing.')
+        return redirect('procurement:dashboard')
+
+    if request.method == 'POST':
+        stage = request.POST.get('stage')
+        existing = POStageApprover.objects.filter(stage=stage).first()
+        form = POStageApproverForm(request.POST, instance=existing)
+        if form.is_valid():
+            row = form.save(commit=False)
+            row.updated_by = user
+            row.save()
+            messages.success(
+                request,
+                f'{row.get_stage_display()} will now be sent to '
+                f'{row.user.get_full_name() or row.user.username}.')
+            return redirect('procurement:po_stage_approvers')
+        messages.error(request, 'That approver could not be saved.')
+    else:
+        form = POStageApproverForm()
+
+    # Every stage listed, mapped or not, so an unset one is visible as a gap
+    # rather than simply absent from the page.
+    mapped = {row.stage: row for row in
+              POStageApprover.objects.select_related('user', 'updated_by')}
+    rows = []
+    for key, label, signer in PurchaseOrder.APPROVAL_STAGES:
+        row = mapped.get(key)
+        rows.append({
+            'key': key, 'label': label, 'signer_name': signer,
+            'approver': row.user if row else None,
+            'updated_at': row.updated_at if row else None,
+            'updated_by': row.updated_by if row else None,
+        })
+    return render(request, 'procurement/stage_approvers.html', {
+        'rows': rows, 'form': form,
+    })
 
 
 @login_required

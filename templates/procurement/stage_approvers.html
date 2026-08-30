@@ -1,0 +1,119 @@
+{% extends 'base.html' %}
+{% block title %}PO Approval Routing{% endblock %}
+{% block content %}
+<div class="container-fluid py-3">
+
+  <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div>
+      <h4 class="mb-1"><i class="bi bi-signpost-split me-2"></i>PO Approval Routing</h4>
+      <p class="text-muted mb-0 small">
+        Who is emailed when a purchase order reaches each approval stage.
+      </p>
+    </div>
+    <a href="{% url 'procurement:po_list' %}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-arrow-left me-1"></i> Purchase Orders
+    </a>
+  </div>
+
+  {% comment %} The distinction that stops this page being misread as a
+  permission screen. Naming somebody here does not let them sign anything.
+  {% endcomment %}
+  <div class="alert alert-info d-flex gap-3 align-items-start">
+    <i class="bi bi-info-circle fs-5"></i>
+    <div class="small mb-0">
+      This decides <strong>who is told</strong>, not <strong>who is allowed</strong>.
+      Permission to sign a stage still comes from the person's role, so naming
+      somebody here who cannot sign would email them an invitation to press a
+      button that refuses them.
+      <br>
+      Where a stage has nobody set, everyone holding that stage's role is
+      emailed instead — noisier, but a missed approval costs more than a
+      redundant email.
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header fw-semibold">
+      <i class="bi bi-list-check me-2"></i>Stages
+    </div>
+    <div class="table-responsive">
+      <table class="table table-sm align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Stage</th>
+            <th>Named on the PO</th>
+            <th>Emailed</th>
+            <th>Last changed</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td class="fw-semibold">{{ row.label }}</td>
+            {% comment %} The plain-text signer printed on the document, shown
+            beside the account so a mismatch is obvious. {% endcomment %}
+            <td class="text-muted small">{{ row.signer_name|default:"—" }}</td>
+            <td>
+              {% if row.approver %}
+                {{ row.approver.get_full_name|default:row.approver.username }}
+                {% if row.approver.email %}
+                <div class="text-muted small">{{ row.approver.email }}</div>
+                {% else %}
+                <div class="text-warning small">
+                  <i class="bi bi-exclamation-triangle"></i>
+                  No email address on this account — they will only see the
+                  in-app notification.
+                </div>
+                {% endif %}
+              {% else %}
+                <span class="badge bg-light text-dark border">Everyone with the role</span>
+              {% endif %}
+            </td>
+            <td class="text-muted small text-nowrap">
+              {% if row.updated_at %}
+                {{ row.updated_at|date:"d M Y" }}
+                {% if row.updated_by %}<br>by {{ row.updated_by.get_full_name|default:row.updated_by.username }}{% endif %}
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card mt-3">
+    <div class="card-header fw-semibold"><i class="bi bi-person-plus me-2"></i>Set an approver</div>
+    <div class="card-body">
+      <form method="post" class="row g-2 align-items-end">
+        {% csrf_token %}
+        <div class="col-md-4">
+          <label class="form-label small mb-1" for="{{ form.stage.id_for_label }}">Stage</label>
+          {{ form.stage }}
+          {% if form.stage.errors %}
+          <div class="small text-danger">{{ form.stage.errors|join:", " }}</div>
+          {% endif %}
+        </div>
+        <div class="col-md-5">
+          <label class="form-label small mb-1" for="{{ form.user.id_for_label }}">Person</label>
+          {{ form.user }}
+          {% if form.user.errors %}
+          <div class="small text-danger">{{ form.user.errors|join:", " }}</div>
+          {% endif %}
+        </div>
+        <div class="col-md-3 d-grid">
+          <button type="submit" class="btn btn-danger">Save</button>
+        </div>
+        <div class="col-12">
+          <div class="form-text">
+            {% comment %} Says plainly that saving an already-mapped stage
+            replaces it, since the form looks like it only adds. {% endcomment %}
+            Setting a stage that already has someone replaces them.
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

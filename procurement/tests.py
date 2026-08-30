@@ -1510,3 +1510,224 @@ class POImportItemsTests(TestCase):
             {}, follow=True)
         text = ' '.join(str(m) for m in resp.context['messages'])
         self.assertIn('at least one', text)
+
+
+class POStageRecipientTests(TestCase):
+    """Who gets told a PO is waiting on them.
+
+    Separate from who may sign it: can_user_approve_stage() is the permission
+    gate and is untouched. This decides the recipient list, which needs a real
+    account because the stages name their signers as plain text."""
+
+    def setUp(self):
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.admin_role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.proc_role, _ = Role.objects.get_or_create(name=Role.PROCUREMENT_MGR)
+        self.super_admin = User.objects.create_user(
+            'nr_super', password='x', email='super@example.com',
+            role=self.sa_role)
+        self.admin = User.objects.create_user(
+            'nr_admin', password='x', email='admin@example.com',
+            role=self.admin_role)
+        self.proc = User.objects.create_user(
+            'nr_proc', password='x', email='proc@example.com',
+            role=self.proc_role)
+
+    def _recipients(self, stage):
+        from procurement.notifications import stage_recipients
+        return stage_recipients(stage)
+
+    def test_a_configured_approver_wins(self):
+        from procurement.models import POStageApprover
+        POStageApprover.objects.create(stage='scm', user=self.admin)
+        self.assertEqual(self._recipients('scm'), [self.admin])
+
+    def test_without_a_mapping_it_falls_back_to_the_role(self):
+        """An unconfigured system should still tell somebody. A missed
+        approval costs more than a redundant email."""
+        self.assertIn(self.proc, self._recipients('scm'))
+        self.assertIn(self.admin, self._recipients('pm'))
+        self.assertIn(self.super_admin, self._recipients('ceo'))
+
+    def test_the_mapping_replaces_the_role_holders_rather_than_adding_to_them(self):
+        """The point of configuring one is to stop emailing everybody."""
+        from procurement.models import POStageApprover
+        POStageApprover.objects.create(stage='pm', user=self.admin)
+        second_admin = User.objects.create_user(
+            'nr_admin2', password='x', role=self.admin_role)
+        self.assertNotIn(second_admin, self._recipients('pm'))
+
+    def test_an_inactive_mapped_user_is_not_emailed(self):
+        from procurement.models import POStageApprover
+        leaver = User.objects.create_user('nr_gone', password='x',
+                                          role=self.admin_role)
+        POStageApprover.objects.create(stage='coo', user=leaver)
+        leaver.is_active = False
+        leaver.save()
+        self.assertNotIn(leaver, self._recipients('coo'))
+
+    def test_a_stage_nobody_can_fill_resolves_to_nobody_not_an_error(self):
+        """A PO must still be creatable on a system where the roles have not
+        been set up."""
+        User.objects.all().update(is_active=False)
+        self.assertEqual(self._recipients('scm'), [])
+
+
+class POApprovalNotificationTests(TestCase):
+    """Telling the approver, and not telling anyone who is not waiting."""
+
+    def setUp(self):
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.admin_role, _ = Role.objects.get_or_create(name=Role.ADMIN)
+        self.proc_role, _ = Role.objects.get_or_create(name=Role.PROCUREMENT_MGR)
+        self.raiser = User.objects.create_user(
+            'an_raiser', password='x', email='raiser@example.com',
+            role=self.sa_role)
+        self.scm = User.objects.create_user(
+            'an_scm', password='x', email='scm@example.com', role=self.proc_role)
+        self.pm = User.objects.create_user(
+            'an_pm', password='x', email='pm@example.com', role=self.admin_role)
+        from procurement.models import POStageApprover
+        POStageApprover.objects.create(stage='scm', user=self.scm)
+        POStageApprover.objects.create(stage='pm', user=self.pm)
+        self.po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-NOTIFY-1',
+            vendor_name='ACME', po_issued_by='Tester', created_by=self.raiser)
+
+    def _notify(self, **kwargs):
+        from procurement.notifications import notify_stage_approver
+        return notify_stage_approver(self.po, **kwargs)
+
+    def _sign(self, *stages):
+        from django.utils import timezone
+        PurchaseOrder.objects.filter(pk=self.po.pk).update(
+            **{f'{s}_approved_at': timezone.now() for s in stages})
+        self.po.refresh_from_db()
+
+    def test_the_current_stages_approver_is_told(self):
+        notes = self._notify()
+        self.assertEqual([n.recipient for n in notes], [self.scm])
+
+    def test_signing_moves_the_notification_to_the_next_approver(self):
+        """Not to the person who just signed — they know."""
+        self._sign('scm')
+        notes = self._notify()
+        self.assertEqual([n.recipient for n in notes], [self.pm])
+
+    def test_a_released_po_tells_nobody(self):
+        self._sign('scm', 'pm', 'coo')
+        self.assertEqual(self._notify(), [])
+
+    def test_a_cancelled_po_tells_nobody(self):
+        self.po.record_status_change(to_status='cancelled', changed_by=self.raiser)
+        self.assertEqual(self._notify(), [])
+
+    def test_a_locked_po_tells_nobody(self):
+        """Nothing can be signed on it, so an email asking for a signature
+        would send somebody to a page that refuses them."""
+        self.po.record_status_change(to_status='client_acknowledged',
+                                     changed_by=self.raiser)
+        self.assertEqual(self._notify(), [])
+
+    def test_the_signer_is_not_told_about_their_own_signature(self):
+        notes = self._notify(actor=self.scm)
+        self.assertEqual(notes, [])
+
+    def test_the_notification_links_to_the_po(self):
+        note = self._notify()[0]
+        self.assertIn(
+            reverse('procurement:po_detail', args=[self.po.pk]), note.target_url)
+
+    def test_an_absolute_link_is_used_when_the_host_is_known(self):
+        """A relative link in an email goes nowhere."""
+        note = self._notify(base_url='https://erp.example.com/')[0]
+        self.assertTrue(note.target_url.startswith('https://erp.example.com/'))
+
+    def test_the_message_says_what_and_who_it_is_waiting_on(self):
+        note = self._notify()[0]
+        self.assertIn('PO-NOTIFY-1', note.verb)
+        self.assertIn('ACME', note.description)
+        self.assertIn('SCM', note.description)
+
+    # ── wiring ──────────────────────────────────────────────────────────────
+
+    def test_approving_a_stage_notifies_the_next_approver(self):
+        """captureOnCommitCallbacks because the notification is queued with
+        transaction.on_commit — which is the point. TestCase wraps each test in
+        a transaction it rolls back, so those callbacks never fire on their own
+        and asserting without this would test nothing."""
+        from notifications.models import Notification
+        self.client.force_login(self.raiser)
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                reverse('procurement:po_approve_stage', args=[self.po.pk, 'scm']),
+                {'signature_data': _png_data_url()})
+        self.assertTrue(
+            Notification.objects.filter(recipient=self.pm,
+                                        verb__contains='PO-NOTIFY-1').exists())
+        # And not to the person who just signed it.
+        self.assertFalse(
+            Notification.objects.filter(recipient=self.raiser,
+                                        verb__contains='PO-NOTIFY-1').exists())
+
+    def test_a_failed_approval_sends_nothing(self):
+        """Queued on commit, so an email never describes a signature that
+        rolled back."""
+        from notifications.models import Notification
+        self.client.force_login(self.raiser)
+        # Out of sequence: 'pm' before 'scm' is refused.
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                reverse('procurement:po_approve_stage', args=[self.po.pk, 'pm']),
+                {'signature_data': _png_data_url()})
+        self.assertFalse(
+            Notification.objects.filter(verb__contains='PO-NOTIFY-1').exists())
+
+
+class POStageApproverScreenTests(TestCase):
+    """The routing screen."""
+
+    def setUp(self):
+        self.sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.proc_role, _ = Role.objects.get_or_create(name=Role.PROCUREMENT_MGR)
+        self.admin = User.objects.create_user('sa_admin', password='x',
+                                              role=self.sa_role)
+        self.proc = User.objects.create_user('sa_proc', password='x',
+                                             role=self.proc_role)
+
+    def _url(self):
+        return reverse('procurement:po_stage_approvers')
+
+    def test_every_stage_is_listed_even_when_unset(self):
+        """An unset stage has to be visible as a gap, not simply absent."""
+        self.client.force_login(self.admin)
+        body = self.client.get(self._url()).content.decode()
+        for _key, label, _signer in PurchaseOrder.APPROVAL_STAGES:
+            self.assertIn(label, body)
+        self.assertIn('Everyone with the role', body)
+
+    def test_an_admin_can_set_an_approver(self):
+        from procurement.models import POStageApprover
+        self.client.force_login(self.admin)
+        self.client.post(self._url(), {'stage': 'scm', 'user': self.proc.pk})
+        row = POStageApprover.objects.get(stage='scm')
+        self.assertEqual(row.user, self.proc)
+        self.assertEqual(row.updated_by, self.admin)
+
+    def test_setting_a_stage_twice_replaces_rather_than_duplicates(self):
+        from procurement.models import POStageApprover
+        other = User.objects.create_user('sa_other', password='x',
+                                         role=self.proc_role)
+        self.client.force_login(self.admin)
+        self.client.post(self._url(), {'stage': 'scm', 'user': self.proc.pk})
+        self.client.post(self._url(), {'stage': 'scm', 'user': other.pk})
+        self.assertEqual(POStageApprover.objects.filter(stage='scm').count(), 1)
+        self.assertEqual(POStageApprover.objects.get(stage='scm').user, other)
+
+    def test_procurement_cannot_change_the_routing(self):
+        """Naming an approver decides who is asked to sign company purchase
+        orders — not a self-service setting."""
+        from procurement.models import POStageApprover
+        self.client.force_login(self.proc)
+        self.client.post(self._url(), {'stage': 'scm', 'user': self.proc.pk})
+        self.assertFalse(POStageApprover.objects.exists())

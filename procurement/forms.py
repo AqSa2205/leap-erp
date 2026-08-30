@@ -89,6 +89,32 @@ class PurchaseOrderForm(forms.ModelForm):
         return cleaned
 
 
+class POStageApproverForm(forms.ModelForm):
+    """Map one approval stage to the person who signs it.
+
+    Exists because APPROVAL_STAGES names its signers as plain text, which is
+    enough to print on a PDF and useless for sending them an email.
+    """
+    class Meta:
+        from .models import POStageApprover
+        model = POStageApprover
+        fields = ['stage', 'user']
+        widgets = {
+            'stage': forms.Select(attrs={'class': 'form-select'}),
+            'user': forms.Select(attrs={'class': 'form-select'}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from accounts.models import User
+        self.fields['user'].queryset = User.objects.filter(
+            is_active=True).order_by('first_name', 'last_name', 'username')
+        # Naming somebody who cannot sign the stage would produce an email
+        # inviting them to press a button that refuses them.
+        self.fields['user'].help_text = (
+            'They must also hold the role that may sign this stage — this '
+            'decides who is told, not who is allowed.')
+
 class PurchaseOrderItemForm(forms.ModelForm):
     class Meta:
         model = PurchaseOrderItem

@@ -140,7 +140,7 @@ good one's rows.
 **Tests:** items append rather than replace; totals recalculate; locked PO
 refused; a partial file reports which rows were skipped.
 
-### Task 9: `POStageApprover` + admin screen
+### Task 9: `POStageApprover` + admin screen — DONE
 
 - Model, form, list/edit screen for admins.
 - Resolution helper: mapped user, else every user holding the stage's role.
@@ -148,7 +148,7 @@ refused; a partial file reports which rows were skipped.
 **Tests:** the mapping resolves; the role fallback fires when unmapped; an
 unmapped stage with no role holder resolves to nobody rather than erroring.
 
-### Task 10: Approver notification
+### Task 10: Approver notification — DONE
 
 - `notify_stage_approver(po)` — in-app notification plus email with a deep link
   to the PO.
@@ -166,10 +166,46 @@ sent if the approval fails.
 
 **Tests:** the reference is rendered; search by reference finds the budget.
 
-### Task 12: Full verification
+### Task 12: Full verification — DONE
 
 - Full suite, mutation-check the lock guards and the notification target,
   update this plan with anything learned, and list both documents in the PR.
+
+## What the build taught us
+
+Four things worth carrying into the next piece of procurement work.
+
+**A real bug the tests caught.** The Excel column aliases were written the way
+a header reads — `rate/unit`, `make/model` — but compared against normalised
+text where the slash has already become a space. `Rate/Unit (SAR)` silently
+failed to match its own alias, so every imported rate was zero and a PO would
+have looked complete and been worth nothing. Normalise both sides of a
+comparison, not one.
+
+**Three tests passed against broken code before being fixed.** Each was the
+same shape: the assertion was satisfied by something other than the behaviour
+under test.
+
+- An item-edit test used a field outside the inline-editable allowlist, so it
+  got a 400 whether or not the lock existed.
+- The signature test posted an empty signature, which the validator rejects
+  independently of the lock.
+- The form-nesting test compared against the first `</form>` on the page,
+  which belongs to the navigation bar.
+
+The lesson is mechanical: after writing a guard, remove it and check the test
+actually fails. Two of these were only found that way.
+
+**Mutations interact.** Removing three notification rules at once masked one
+of them — the role fallback filtered out the inactive user that the broken
+mapping had let through. Mutate one rule at a time when a result looks too
+good.
+
+**`transaction.on_commit` does not fire under `TestCase`.** It wraps each test
+in a transaction it rolls back, so a queued notification never runs and a test
+asserting on it passes vacuously. `self.captureOnCommitCallbacks(execute=True)`
+is the fix, and the deferral is deliberate — an email describing a signature
+that rolled back cannot be recalled.
 
 ## Risks
 
