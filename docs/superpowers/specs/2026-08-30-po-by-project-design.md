@@ -55,8 +55,8 @@ Scope follows `_visible_pos_for()` rather than inventing a second rule:
 
 | Viewer | Projects listed |
 |---|---|
-| Super admin, procurement | Every project |
-| Admin, manager | Projects in their region |
+| Super admin, procurement | Every approved budget, plus anything with POs |
+| Admin, manager | The same, limited to their region |
 | Anyone else | Only projects they have raised a PO against |
 
 That last row matters. A user who can only see their own POs must not be shown
