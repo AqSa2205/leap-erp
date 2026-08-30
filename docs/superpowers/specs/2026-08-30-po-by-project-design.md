@@ -36,20 +36,36 @@ they started with.
 
 ## Which projects appear
 
-Not every project — only the ones that are procurement's business:
+Not every project — only the ones that are procurement's business. Three doors
+onto the board:
 
-- projects whose budget **finance has approved**, and
-- projects that already have **purchase orders** against them.
+1. **Finance approved its budget.** The same rule the Approved Budgets page
+   uses, so the two pages agree about what is in front of procurement.
+2. **Procurement selected it.** For work that needs procuring before a budget
+   exists, or that never goes through one. Recorded as a `ProcurementProject`
+   with who added it and why.
+3. **Orders already exist against it** — shown, but **flagged**.
 
 A project still being bid is not procurement's work, and listing the whole
-pipeline buries the jobs that are. The approved-budget rule is the same one
-the Approved Budgets page already uses, so the two pages agree about what
-procurement is looking at.
+pipeline buries the jobs that are.
+
+The third door needs explaining. A PO against a project with no approved
+budget and no selection is an anomaly, but hiding it would lose committed
+spend from the page entirely. So it appears with a "Not on the board" marker
+and a banner counting them — which is also how the gap gets closed, since
+somebody can then add it properly or chase the budget. Selecting it clears the
+flag.
 
 An approved budget with nothing ordered yet still appears: that is a real
 answer to "what has been procured for this job", and the more interesting one
-— it is work not started. A project with orders appears whatever its budget
-stage says, because money has already been committed against it.
+— it is work not started.
+
+**Removal only undoes a selection.** Taking a project off the board cannot
+un-approve a budget or un-raise a purchase order, so a project that qualifies
+by either of the other two doors stays.
+
+Who maintains it: the procurement team plus the admin tiers. It is their own
+working list, matching who can already reach Approved Budgets.
 
 Scope follows `_visible_pos_for()` rather than inventing a second rule:
 

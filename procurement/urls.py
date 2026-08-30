@@ -11,6 +11,8 @@ urlpatterns = [
     path('po/', views.POListView.as_view(), name='po_list'),
     path('po/create/', views.POCreateView.as_view(), name='po_create'),
     path('po/by-project/', views.po_by_project, name='po_by_project'),
+    path('po/by-project/add/', views.po_board_add, name='po_board_add'),
+    path('po/by-project/<int:pk>/remove/', views.po_board_remove, name='po_board_remove'),
     # Import a supplier quotation PDF → AI extract → review → create PO.
     path('quotations/import/', views.quotation_import, name='quotation_import'),
     path('quotations/<int:pk>/review/', views.quotation_review, name='quotation_review'),

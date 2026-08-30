@@ -96,3 +96,11 @@ guard, make sure the fixture actually reaches it.
 unrelated query change and, worse, invites being updated to whatever the code
 happens to do — which is how an N+1 gets accepted rather than fixed. It now
 compares the count at two data sizes and asserts they are equal.
+
+**Board membership must not depend on a display toggle.** The add-project
+picker excluded whatever was on screen, so hiding empty projects offered them
+for adding again as though they were not already there. The board is now built
+once and the display filter applied afterwards. The test that caught it had to
+be rewritten too — it matched a project name anywhere in the page body, and
+the picker lists names as well, so it would have passed or failed for the
+wrong reason.

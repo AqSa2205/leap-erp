@@ -429,27 +429,35 @@ def _po_project_groups(user, include_empty=True):
         groups.setdefault(po.project_id, {'project': po.project, 'rows': []})
         groups[po.project_id]['rows'].append(po)
 
-    # Projects with nothing ordered yet, but only where finance has approved a
-    # budget. Procurement works from approved budgets - the same rule the
-    # Approved Budgets page uses - so a project still in the pipeline is not
-    # their business and would bury the ones that are.
+    # A project reaches procurement's board three ways: finance approved its
+    # budget, procurement put it there deliberately, or orders already exist
+    # against it. The third is recorded but flagged - see _build_group.
     #
     # Restricted to viewers with region-or-wider reach: for anyone else,
     # listing project names would disclose projects they cannot otherwise see.
-    if include_empty and _can_see_all_projects(user):
-        from projects.models import Project
+    from projects.models import Project
+    approved_ids, selected_ids = set(), set()
+    if _can_see_all_projects(user):
         approved = (Project.objects
                     .filter(costing_sheets__workflow_stage='finance_approved')
-                    .select_related('region')
-                    .distinct())
+                    .select_related('region').distinct())
+        selected = (Project.objects
+                    .filter(procurement_selection__isnull=False)
+                    .select_related('region').distinct())
         if not (user.is_super_admin_user or getattr(user, 'is_procurement_user', False)):
             approved = approved.filter(region=user.region)
-        for project in approved.exclude(pk__in=list(groups)):
-            groups[project.pk] = {'project': project, 'rows': []}
+            selected = selected.filter(region=user.region)
+        approved_ids = set(approved.values_list('pk', flat=True))
+        selected_ids = set(selected.values_list('pk', flat=True))
+        if include_empty:
+            for project in list(approved) + list(selected):
+                groups.setdefault(project.pk, {'project': project, 'rows': []})
 
     out = []
-    for entry in groups.values():
-        out.append(_build_group(entry['project'], entry['rows']))
+    for pk, entry in groups.items():
+        out.append(_build_group(
+            entry['project'], entry['rows'],
+            approved=pk in approved_ids, selected=pk in selected_ids))
     # Projects with orders first, then the empty ones, each newest-first.
     out.sort(key=lambda g: (g['po_count'] == 0,
                             -(g['rows'][0].po_date.toordinal() if g['rows'] else 0),
@@ -466,8 +474,14 @@ def _can_see_all_projects(user):
                 or user.is_admin_user or user.is_manager_user)
 
 
-def _build_group(project, rows):
-    """One project's card: its POs, per-currency totals and what is waiting."""
+def _build_group(project, rows, *, approved=False, selected=False):
+    """One project's card: its POs, per-currency totals and what is waiting.
+
+    `off_board` marks a project that is here only because orders exist against
+    it - finance has not approved a budget and procurement has not chosen it.
+    Hiding those would lose committed spend from the page, so they are shown
+    and flagged, which is also how somebody notices and fixes the gap.
+    """
     from collections import defaultdict
 
     totals = defaultdict(Decimal)
@@ -481,6 +495,9 @@ def _build_group(project, rows):
 
     return {
         'project': project,
+        'approved': approved,
+        'selected': selected,
+        'off_board': bool(project) and not approved and not selected,
         'project_name': (project.project_name if project
                          else 'Not linked to a project'),
         'reference': project.proposal_reference if project else '',
@@ -492,6 +509,69 @@ def _build_group(project, rows):
     }
 
 
+def _can_manage_board(user):
+    """Who maintains procurement's project board. It is their working list, so
+    procurement keeps it, alongside the admin tiers."""
+    return bool(user.is_super_admin_user or user.is_admin_user
+                or getattr(user, 'is_procurement_user', False))
+
+
+@login_required
+@require_POST
+def po_board_add(request):
+    """Put a project on procurement's board.
+
+    For work that needs procuring before a budget is approved, or that never
+    goes through one.
+    """
+    from projects.models import Project
+    from .models import ProcurementProject
+
+    if not _can_manage_board(request.user):
+        messages.error(request, 'Only the procurement team can change the board.')
+        return redirect('procurement:po_by_project')
+
+    project = Project.objects.filter(pk=request.POST.get('project')).first()
+    if project is None:
+        messages.error(request, 'That project could not be found.')
+        return redirect('procurement:po_by_project')
+
+    _entry, created = ProcurementProject.objects.get_or_create(
+        project=project,
+        defaults={'added_by': request.user,
+                  'note': (request.POST.get('note') or '').strip()[:300]})
+    if created:
+        messages.success(request, f'{project.project_name} added to the board.')
+    else:
+        messages.info(request, f'{project.project_name} is already on the board.')
+    return redirect('procurement:po_by_project')
+
+
+@login_required
+@require_POST
+def po_board_remove(request, pk):
+    """Take a project off the board.
+
+    Only removes the deliberate selection. A project whose budget is approved,
+    or which has orders against it, still appears - those are not somebody's
+    choice to undo.
+    """
+    from .models import ProcurementProject
+
+    if not _can_manage_board(request.user):
+        messages.error(request, 'Only the procurement team can change the board.')
+        return redirect('procurement:po_by_project')
+
+    entry = ProcurementProject.objects.filter(project_id=pk).first()
+    if entry is None:
+        messages.info(request, 'That project was not on the board.')
+    else:
+        name = entry.project.project_name
+        entry.delete()
+        messages.success(request, f'{name} removed from the board.')
+    return redirect('procurement:po_by_project')
+
+
 @login_required
 def po_by_project(request):
     """Purchase orders grouped under their projects, collapsible.
@@ -501,12 +581,34 @@ def po_by_project(request):
     starts from, and which the flat list makes you search for.
     """
     include_empty = request.GET.get('empty') != 'hide'
-    groups = _po_project_groups(request.user, include_empty=include_empty)
+    can_manage = _can_manage_board(request.user)
+
+    # Build the whole board once, then filter for display. Deriving the picker
+    # from the FILTERED list made board membership depend on a display toggle:
+    # hiding empty projects offered them for adding again, as though they were
+    # not already there.
+    all_groups = _po_project_groups(request.user, include_empty=True)
+    groups = all_groups if include_empty else [g for g in all_groups if g['po_count']]
+
+    addable = []
+    if can_manage:
+        from projects.models import Project
+        on_board = [g['project'].pk for g in all_groups if g['project']]
+        addable = (Project.objects
+                   .exclude(pk__in=on_board)
+                   .order_by('project_name')
+                   .only('pk', 'project_name', 'proposal_reference'))
+
     return render(request, 'procurement/po_by_project.html', {
         'groups': groups,
         'include_empty': include_empty,
+        'can_manage_board': can_manage,
+        'addable_projects': addable,
         'total_pos': sum(g['po_count'] for g in groups),
-        'empty_count': sum(1 for g in groups if g['po_count'] == 0),
+        # Counted off the whole board, so the toggle still says how many it
+        # would reveal once they are hidden.
+        'empty_count': sum(1 for g in all_groups if g['po_count'] == 0),
+        'off_board_count': sum(1 for g in groups if g['off_board']),
     })
 
 

@@ -10,7 +10,7 @@
       <p class="text-muted mb-0 small">
         {{ groups|length }} project{{ groups|length|pluralize }} ·
         {{ total_pos }} purchase order{{ total_pos|pluralize }}
-        <span class="ms-1">— projects with a finance-approved budget, or with orders already raised</span>
+        <span class="ms-1">— finance-approved budgets, projects procurement has selected, and anything with orders raised</span>
       </p>
     </div>
     <div class="d-flex gap-2">
@@ -27,11 +27,67 @@
         {% endif %}
       </a>
       {% endif %}
+      {% if can_manage_board %}
+      <button class="btn btn-sm btn-outline-danger" type="button"
+              data-bs-toggle="collapse" data-bs-target="#addToBoard">
+        <i class="bi bi-plus-lg me-1"></i> Add a project
+      </button>
+      {% endif %}
       <a href="{% url 'procurement:po_list' %}" class="btn btn-sm btn-outline-secondary">
         <i class="bi bi-list-ul me-1"></i> Flat list
       </a>
     </div>
   </div>
+
+  {% if can_manage_board %}
+  <div class="collapse mb-3" id="addToBoard">
+    <div class="card card-body">
+      {% comment %} The second door onto the board: work that needs procuring
+      before a budget exists, or that never goes through one. {% endcomment %}
+      <form method="post" action="{% url 'procurement:po_board_add' %}" class="row g-2 align-items-end">
+        {% csrf_token %}
+        <div class="col-md-5">
+          <label class="form-label small mb-1" for="boardProject">Project</label>
+          <select name="project" id="boardProject" class="form-select form-select-sm" required>
+            <option value="">Choose a project…</option>
+            {% for p in addable_projects %}
+            <option value="{{ p.pk }}">{{ p.project_name }}{% if p.proposal_reference %} — {{ p.proposal_reference }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-5">
+          <label class="form-label small mb-1" for="boardNote">Why (optional)</label>
+          <input type="text" name="note" id="boardNote" maxlength="300"
+                 class="form-control form-control-sm"
+                 placeholder="For whoever finds it later">
+        </div>
+        <div class="col-md-2 d-grid">
+          <button type="submit" class="btn btn-sm btn-danger">Add</button>
+        </div>
+        <div class="col-12">
+          <div class="form-text">
+            Projects with a finance-approved budget are already here — this is
+            for work that needs procuring before a budget exists, or that never
+            goes through one.
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if off_board_count %}
+  {% comment %} Committed spend against something nobody put on the board. Not
+  hidden, because hiding it loses the spend; flagged, because that is how the
+  gap gets closed. {% endcomment %}
+  <div class="alert alert-warning py-2 small">
+    <i class="bi bi-exclamation-triangle me-1"></i>
+    {{ off_board_count }} project{{ off_board_count|pluralize }} here
+    {{ off_board_count|pluralize:"has,have" }} purchase orders but no approved
+    budget and no procurement selection. Shown so the spend is not lost — add
+    them to the board, or chase the budget.
+  </div>
+  {% endif %}
 
   {% for g in groups %}
   <div class="card mb-2">
@@ -54,6 +110,20 @@
         </span>
         {% endif %}
         {% if g.region %}<span class="badge bg-light text-dark border ms-2">{{ g.region.name }}</span>{% endif %}
+        {% comment %} Why this project is on the page at all. {% endcomment %}
+        {% if g.selected %}
+        <span class="badge bg-info text-dark ms-2" title="Put here by the procurement team">
+          <i class="bi bi-pin-angle"></i> Selected
+        </span>
+        {% elif g.approved and g.project %}
+        <span class="badge bg-success ms-2" title="Finance has approved a budget for this project">
+          <i class="bi bi-check2-circle"></i> Budget approved
+        </span>
+        {% elif g.off_board %}
+        <span class="badge bg-warning text-dark ms-2" title="Orders exist against this project, but no approved budget and no procurement selection">
+          <i class="bi bi-exclamation-triangle"></i> Not on the board
+        </span>
+        {% endif %}
       </div>
 
       <span class="badge {% if g.po_count %}bg-dark{% else %}bg-light text-muted border{% endif %}">
@@ -136,6 +206,20 @@
           {% if g.project %}
           <a href="{% url 'procurement:po_create' %}" class="ms-1">Raise a purchase order</a>.
           {% endif %}
+        </div>
+        {% endif %}
+        {% comment %} Outside the has-orders branch on purpose: a selected
+        project usually has no orders yet, which is exactly when somebody wants
+        to take it back off. {% endcomment %}
+        {% if can_manage_board and g.selected %}
+        <div class="p-2 border-top bg-light text-end">
+          <form method="post" action="{% url 'procurement:po_board_remove' g.project.pk %}"
+                onsubmit="return confirm('Take this project off the procurement board?');">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-outline-secondary">
+              <i class="bi bi-pin-angle-fill me-1"></i> Remove from board
+            </button>
+          </form>
         </div>
         {% endif %}
       </div>

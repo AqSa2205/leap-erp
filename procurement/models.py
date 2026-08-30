@@ -590,6 +590,37 @@ class POStageApprover(models.Model):
         return f'{self.get_stage_display()} -> {self.user}'
 
 
+class ProcurementProject(models.Model):
+    """A project procurement has taken onto their board deliberately.
+
+    The POs-by-project page normally lists projects whose budget finance has
+    approved. This is the other door: work procurement needs to see before a
+    budget exists, or that never goes through one at all.
+
+    Kept as its own table rather than a flag on Project because it records a
+    procurement decision - who put it there and when - and because Project
+    belongs to the sales pipeline, which should not grow fields for another
+    team's working list.
+    """
+    project = models.OneToOneField(
+        'projects.Project', on_delete=models.CASCADE,
+        related_name='procurement_selection')
+    note = models.CharField(
+        max_length=300, blank=True,
+        help_text='Why this is on the board, for whoever finds it later.')
+    added_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+')
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-added_at']
+        verbose_name = 'procurement project'
+
+    def __str__(self):
+        return f'{self.project} on the procurement board'
+
+
 class PurchaseOrderItem(models.Model):
     """Individual line item in a Purchase Order."""
 

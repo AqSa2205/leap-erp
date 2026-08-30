@@ -2006,13 +2006,220 @@ class POByProjectTests(TestCase):
         self.assertIn('1 PO', body)
 
     def test_the_page_can_hide_empty_projects(self):
+        """Asserted on the rendered cards, not the whole body: the add-project
+        picker also lists project names, and matching anywhere in the page
+        would pass or fail for the wrong reason."""
         self.client.force_login(self.super_admin)
-        body = self.client.get(
-            reverse('procurement:po_by_project') + '?empty=hide').content.decode()
-        self.assertNotIn('Nothing Ordered Yet', body)
+        resp = self.client.get(
+            reverse('procurement:po_by_project') + '?empty=hide')
+        shown = [g['project_name'] for g in resp.context['groups']]
+        self.assertNotIn('Nothing Ordered Yet', shown)
+        self.assertIn('Ghazlan Substation', shown)
+
+    def test_hiding_empty_projects_does_not_offer_them_for_adding(self):
+        """Board membership must not depend on a display toggle — hiding a
+        project once made it offerable again, as though it were not there."""
+        self.client.force_login(self.super_admin)
+        resp = self.client.get(
+            reverse('procurement:po_by_project') + '?empty=hide')
+        offered = [p.pk for p in resp.context['addable_projects']]
+        self.assertNotIn(self.quiet.pk, offered)
 
     def test_the_sidebar_links_to_it(self):
         self.client.force_login(self.super_admin)
         body = self.client.get(reverse('procurement:po_list')).content.decode()
         self.assertIn(reverse('procurement:po_by_project'), body)
         self.assertIn('POs by Project', body)
+
+
+class ProcurementBoardTests(TestCase):
+    """Which projects reach procurement's board, and who decides.
+
+    Three doors: finance approved the budget, procurement selected it, or
+    orders already exist against it. The third is shown but flagged."""
+
+    def setUp(self):
+        from projects.models import Region, ProjectStatus, Project
+        from accounts.permissions import seed_default_permissions
+        for name, _label in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        seed_default_permissions()
+
+        self.region = Region.objects.create(name='KSA', code='LNA', currency='SAR')
+        status = ProjectStatus.objects.create(name='Open', category='active')
+        self.super_admin = User.objects.create_user(
+            'bd_super', password='x', role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.procurement = User.objects.create_user(
+            'bd_proc', password='x', region=self.region,
+            role=Role.objects.get(name=Role.PROCUREMENT_MGR))
+        self.outsider = User.objects.create_user(
+            'bd_out', password='x', region=self.region,
+            role=Role.objects.get(name=Role.DOCUMENT_CONTROLLER))
+
+        def project(name, ref):
+            return Project.objects.create(
+                project_name=name, proposal_reference=ref, status=status,
+                region=self.region, estimated_value=Decimal('1'),
+                actual_sales=Decimal('0'), year='2026', po_award_quarter='Q2')
+
+        self.approved = project('Approved Budget Job', 'LNA-2026-0001')
+        self.chosen = project('Picked By Procurement', 'LNA-2026-0002')
+        self.bidding = project('Still Bidding', 'LNA-2026-0003')
+        self.with_po = project('Has Orders Only', 'LNA-2026-0004')
+
+        from costing.models import CostingSheet
+        CostingSheet.objects.create(title='Budget', project=self.approved,
+                                    workflow_stage='finance_approved')
+        PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-BD-1', vendor_name='ACME',
+            po_issued_by='T', project=self.with_po, created_by=self.super_admin)
+
+    def _groups(self, user=None):
+        from procurement.views import _po_project_groups
+        return _po_project_groups(user or self.super_admin)
+
+    def _named(self, groups=None):
+        return [g['project_name'] for g in (groups or self._groups())]
+
+    def _group_for(self, project):
+        return next(g for g in self._groups() if g['project'] == project)
+
+    def _select(self, project, user=None):
+        from procurement.models import ProcurementProject
+        return ProcurementProject.objects.create(
+            project=project, added_by=user or self.procurement)
+
+    # ── the three doors ─────────────────────────────────────────────────────
+
+    def test_an_approved_budget_is_on_the_board(self):
+        self.assertIn('Approved Budget Job', self._named())
+
+    def test_a_selected_project_is_on_the_board(self):
+        """The second door: work that needs procuring before a budget exists,
+        or that never goes through one."""
+        self.assertNotIn('Picked By Procurement', self._named())
+        self._select(self.chosen)
+        self.assertIn('Picked By Procurement', self._named())
+
+    def test_a_project_with_orders_is_shown_even_though_it_is_on_neither(self):
+        """Money is committed against it. Hiding it would lose the spend from
+        this page entirely."""
+        self.assertIn('Has Orders Only', self._named())
+
+    def test_that_project_is_flagged_rather_than_shown_as_normal(self):
+        """Flagged is how the gap gets closed — somebody adds it or chases the
+        budget."""
+        group = self._group_for(self.with_po)
+        self.assertTrue(group['off_board'])
+        self.assertFalse(group['approved'])
+        self.assertFalse(group['selected'])
+
+    def test_a_project_on_none_of_the_three_is_not_listed(self):
+        self.assertNotIn('Still Bidding', self._named())
+
+    # ── why each project is here ────────────────────────────────────────────
+
+    def test_an_approved_project_is_not_flagged(self):
+        group = self._group_for(self.approved)
+        self.assertTrue(group['approved'])
+        self.assertFalse(group['off_board'])
+
+    def test_a_selected_project_is_not_flagged(self):
+        self._select(self.chosen)
+        group = self._group_for(self.chosen)
+        self.assertTrue(group['selected'])
+        self.assertFalse(group['off_board'])
+
+    def test_selecting_a_project_that_has_orders_clears_the_flag(self):
+        """The whole point of the flag: it should be actionable and then go
+        away."""
+        self.assertTrue(self._group_for(self.with_po)['off_board'])
+        self._select(self.with_po)
+        self.assertFalse(self._group_for(self.with_po)['off_board'])
+
+    # ── who maintains it ────────────────────────────────────────────────────
+
+    def test_procurement_can_add_a_project(self):
+        from procurement.models import ProcurementProject
+        self.client.force_login(self.procurement)
+        self.client.post(reverse('procurement:po_board_add'),
+                         {'project': self.chosen.pk, 'note': 'Long lead items'})
+        entry = ProcurementProject.objects.get(project=self.chosen)
+        self.assertEqual(entry.added_by, self.procurement)
+        self.assertEqual(entry.note, 'Long lead items')
+
+    def test_adding_twice_does_not_duplicate(self):
+        from procurement.models import ProcurementProject
+        self.client.force_login(self.procurement)
+        for _ in range(2):
+            self.client.post(reverse('procurement:po_board_add'),
+                             {'project': self.chosen.pk})
+        self.assertEqual(
+            ProcurementProject.objects.filter(project=self.chosen).count(), 1)
+
+    def test_procurement_can_remove_a_project(self):
+        from procurement.models import ProcurementProject
+        self._select(self.chosen)
+        self.client.force_login(self.procurement)
+        self.client.post(
+            reverse('procurement:po_board_remove', args=[self.chosen.pk]))
+        self.assertFalse(ProcurementProject.objects.filter(project=self.chosen).exists())
+
+    def test_removing_a_selection_does_not_hide_an_approved_budget(self):
+        """Removal undoes a choice. It cannot undo finance approving a budget
+        or orders existing."""
+        self._select(self.approved)
+        self.client.force_login(self.procurement)
+        self.client.post(
+            reverse('procurement:po_board_remove', args=[self.approved.pk]))
+        self.assertIn('Approved Budget Job', self._named())
+
+    def test_someone_outside_procurement_cannot_change_the_board(self):
+        from procurement.models import ProcurementProject
+        self.client.force_login(self.outsider)
+        self.client.post(reverse('procurement:po_board_add'),
+                         {'project': self.chosen.pk})
+        self.assertFalse(ProcurementProject.objects.exists())
+
+    def test_a_super_admin_can_change_the_board(self):
+        from procurement.models import ProcurementProject
+        self.client.force_login(self.super_admin)
+        self.client.post(reverse('procurement:po_board_add'),
+                         {'project': self.chosen.pk})
+        self.assertTrue(ProcurementProject.objects.filter(project=self.chosen).exists())
+
+    def test_a_missing_project_is_reported_not_a_crash(self):
+        self.client.force_login(self.procurement)
+        resp = self.client.post(reverse('procurement:po_board_add'),
+                                {'project': 999999}, follow=True)
+        self.assertEqual(resp.status_code, 200)
+
+    # ── page ────────────────────────────────────────────────────────────────
+
+    def test_the_page_flags_the_off_board_projects(self):
+        self.client.force_login(self.procurement)
+        body = self.client.get(reverse('procurement:po_by_project')).content.decode()
+        self.assertIn('Not on the board', body)
+        self.assertIn('no approved budget and no procurement selection', body)
+
+    def test_the_picker_is_hidden_from_people_who_cannot_use_it(self):
+        self.client.force_login(self.outsider)
+        body = self.client.get(reverse('procurement:po_by_project')).content.decode()
+        self.assertNotIn('Add a project', body)
+
+    def test_the_picker_does_not_offer_projects_already_on_the_board(self):
+        """An option that does nothing is worse than a shorter list."""
+        self.client.force_login(self.procurement)
+        resp = self.client.get(reverse('procurement:po_by_project'))
+        offered = [p.pk for p in resp.context['addable_projects']]
+        self.assertNotIn(self.approved.pk, offered)
+        self.assertIn(self.chosen.pk, offered)
+
+    def test_a_selected_project_offers_removal_even_with_no_orders(self):
+        """The usual case for a selection is having no orders yet, which is
+        exactly when somebody wants to take it back off."""
+        self._select(self.chosen)
+        self.client.force_login(self.procurement)
+        body = self.client.get(reverse('procurement:po_by_project')).content.decode()
+        self.assertIn(
+            reverse('procurement:po_board_remove', args=[self.chosen.pk]), body)
