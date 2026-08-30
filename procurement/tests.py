@@ -1464,6 +1464,46 @@ class POImportItemsTests(TestCase):
             reverse('procurement:po_detail', args=[self.po.pk])).content.decode()
         self.assertNotIn('Import items', body)
 
+    def test_the_edit_page_offers_the_import_too(self):
+        """Same action, reachable from where people are already editing the
+        items rather than only from the detail page."""
+        body = self.client.get(
+            reverse('procurement:po_update', args=[self.po.pk])).content.decode()
+        self.assertIn('Import from Excel', body)
+        self.assertIn(
+            reverse('procurement:po_import_items', args=[self.po.pk]), body)
+
+    def test_the_edit_page_import_form_is_not_nested(self):
+        """A <form> inside a <form> is dropped by browsers, which would make
+        the Import button post the PO form instead.
+
+        Anchored on the PO form specifically. An earlier version of this test
+        compared against the FIRST </form> on the page, which belongs to the
+        navigation bar — so it passed with the modal nested and proved nothing.
+        """
+        body = self.client.get(
+            reverse('procurement:po_update', args=[self.po.pk])).content.decode()
+        po_form_opens = body.index('<form method="post" novalidate>')
+        po_form_closes = body.index('</form>', po_form_opens)
+        import_at = body.index(
+            reverse('procurement:po_import_items', args=[self.po.pk]))
+        self.assertFalse(
+            po_form_opens < import_at < po_form_closes,
+            'the import form is nested inside the PO form')
+
+    def test_a_locked_po_offers_no_import_on_the_edit_page(self):
+        self.po.record_status_change(to_status='client_acknowledged',
+                                     changed_by=self.user)
+        resp = self.client.get(
+            reverse('procurement:po_update', args=[self.po.pk]), follow=True)
+        self.assertNotIn('Import from Excel', resp.content.decode())
+
+    def test_the_create_page_offers_no_import(self):
+        """There is nothing to import into until the PO has been saved once."""
+        body = self.client.get(
+            reverse('procurement:po_create')).content.decode()
+        self.assertNotIn('Import from Excel', body)
+
     def test_submitting_no_file_says_so(self):
         resp = self.client.post(
             reverse('procurement:po_import_items', args=[self.po.pk]),
