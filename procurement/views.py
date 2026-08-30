@@ -2097,16 +2097,146 @@ def po_export_pdf_unpriced(request, pk):
 # ─── Import from Excel ────────────────────────────────────────
 
 @login_required
+def _import_po_batch(request, uploads):
+    """Run the single-file importer once per file, keeping each file's outcome.
+
+    Calls the real view rather than reimplementing its parsing, so the batch
+    path cannot drift from the single path — one parser, one set of rules.
+    """
+    from django.http import QueryDict
+
+    imported, failed = [], []
+    for upload in uploads:
+        # Swap request.FILES for one holding a single file, call the real view,
+        # then put it back. Re-entering the view is deliberate: the template
+        # parser is 250 lines with its own error handling, and duplicating it
+        # for the batch path is how the two would drift apart.
+        original_files = request._files
+        request._files = _single_file_dict(upload)
+        before = set(PurchaseOrder.objects.values_list('pk', flat=True))
+        try:
+            po_import_excel(request)
+        finally:
+            request._files = original_files
+        added = set(PurchaseOrder.objects.values_list('pk', flat=True)) - before
+        if added:
+            imported.append(upload.name)
+        else:
+            failed.append(upload.name)
+
+    if imported:
+        messages.success(
+            request,
+            f'Imported {len(imported)} purchase order'
+            f'{"" if len(imported) == 1 else "s"}: {", ".join(imported)}.')
+    if failed:
+        messages.warning(
+            request,
+            f'{len(failed)} file{"" if len(failed) == 1 else "s"} did not '
+            f'import: {", ".join(failed)}. The reason for each is above.')
+    return redirect('procurement:po_list')
+
+
+def _single_file_dict(upload):
+    from django.utils.datastructures import MultiValueDict
+    return MultiValueDict({'excel_file': [upload]})
+
+
+@login_required
+@require_POST
+def po_import_items(request, pk):
+    """Append line items to an existing PO from one or more spreadsheets.
+
+    Append-only by design. Replacing the items would quietly destroy anything
+    entered by hand since the PO was raised, and there is no undo — a second
+    import of the same file is easy to spot and delete, an erased line is not.
+
+    Refuses a locked PO like every other write path.
+    """
+    from .excel_import import ExcelImportError, parse_items, summarise
+
+    po = get_object_or_404(PurchaseOrder, pk=pk)
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user
+            or user.is_procurement_user or po.created_by_id == user.id):
+        messages.error(request, 'You cannot change this purchase order.')
+        return redirect('procurement:po_detail', pk=po.pk)
+    if po.is_locked:
+        messages.error(request, LOCKED_PO_MESSAGE)
+        return redirect('procurement:po_detail', pk=po.pk)
+
+    files = request.FILES.getlist('item_files')
+    if not files:
+        messages.error(request, 'Choose at least one spreadsheet to import.')
+        return redirect('procurement:po_detail', pk=po.pk)
+
+    # Continue numbering from what is already there rather than restarting, so
+    # imported lines do not collide with the existing serial numbers.
+    next_serial = (po.items.order_by('-serial_number')
+                   .values_list('serial_number', flat=True).first() or 0) + 1
+    next_order = (po.items.order_by('-order')
+                  .values_list('order', flat=True).first() or 0) + 1
+
+    total_added = 0
+    for upload in files:
+        try:
+            rows, skipped = parse_items(upload)
+        except ExcelImportError as exc:
+            # One bad file must not lose the rows a good one already added.
+            messages.error(request, f'{upload.name}: {exc}')
+            continue
+
+        created = []
+        for row in rows:
+            created.append(PurchaseOrderItem(
+                purchase_order=po, serial_number=next_serial,
+                order=next_order, **row))
+            next_serial += 1
+            next_order += 1
+        if created:
+            PurchaseOrderItem.objects.bulk_create(created)
+        total_added += len(created)
+
+        level = messages.warning if skipped else messages.success
+        level(request, summarise(len(created), skipped, upload.name))
+        for row_no, reason in skipped[:5]:
+            messages.info(request, f'{upload.name} row {row_no}: {reason}')
+        if len(skipped) > 5:
+            messages.info(
+                request,
+                f'{upload.name}: {len(skipped) - 5} further skipped rows not listed.')
+
+    if total_added:
+        messages.success(
+            request,
+            f'{total_added} item{"" if total_added == 1 else "s"} added to '
+            f'{po.po_number}. Check the totals before issuing.')
+    return redirect('procurement:po_detail', pk=po.pk)
+
+
 def po_import_excel(request):
-    """Import a Purchase Order from an Excel file matching the PO template format."""
+    """Import Purchase Orders from files matching the PO export template.
+
+    Several files may be sent at once and are applied in order. Each is
+    independent: a file that fails is reported and the rest still import, so a
+    single bad sheet in a batch does not cost the user the others.
+
+    This reads OUR export layout, whose cell positions are fixed because we
+    write them. Spreadsheets from anyone else go through excel_import.py, which
+    maps columns by name instead.
+    """
     if request.method != 'POST':
         return redirect('procurement:po_list')
 
-    excel_file = request.FILES.get('excel_file')
-    if not excel_file:
+    uploads = request.FILES.getlist('excel_file')
+    if not uploads:
         messages.error(request, 'Please select an Excel file.')
         return redirect('procurement:po_list')
 
+    if len(uploads) > 1:
+        return _import_po_batch(request, uploads)
+
+    excel_file = uploads[0]
     try:
         wb = openpyxl.load_workbook(excel_file, data_only=True)
         ws = wb.active

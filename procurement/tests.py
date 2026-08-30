@@ -1284,3 +1284,189 @@ class ApprovedBudgetsReferenceTests(TestCase):
             reverse('procurement:approved_budgets')).content.decode()
         self.assertIn('LNA Reference', body)
         self.assertIn('LNA-2026-0417', body)
+
+
+def _items_workbook(rows, headers=None, preamble=0):
+    """A spreadsheet shaped like something a vendor would actually send."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for _ in range(preamble):
+        ws.append(['Quotation', None, None])      # title block above the table
+    ws.append(headers or ['S.No', 'Description', 'Qty', 'UOM', 'Rate/Unit (SAR)', 'Remarks'])
+    for row in rows:
+        ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+class ExcelItemParserTests(TestCase):
+    """Reading line items out of somebody else's spreadsheet.
+
+    Column positions cannot be relied on in a file we did not generate, so the
+    parser matches headers by name. These tests are mostly about the shapes
+    real quotations arrive in."""
+
+    def _parse(self, *args, **kwargs):
+        from procurement.excel_import import parse_items
+        return parse_items(_items_workbook(*args, **kwargs))
+
+    def test_it_reads_a_plain_table(self):
+        rows, skipped = self._parse([[1, 'Camera', 4, 'Nos', 250, 'Outdoor']])
+        self.assertEqual(skipped, [])
+        self.assertEqual(rows[0]['description'], 'Camera')
+        self.assertEqual(rows[0]['quantity'], Decimal('4'))
+        self.assertEqual(rows[0]['rate_per_unit'], Decimal('250'))
+        self.assertEqual(rows[0]['uom'], 'Nos')
+
+    def test_column_order_does_not_matter(self):
+        """The point of matching on names: nobody sends columns in our order."""
+        rows, _ = self._parse(
+            [['Nos', 250, 'Camera', 4]],
+            headers=['UOM', 'Unit Price', 'Item Description', 'Quantity'])
+        self.assertEqual(rows[0]['description'], 'Camera')
+        self.assertEqual(rows[0]['quantity'], Decimal('4'))
+        self.assertEqual(rows[0]['rate_per_unit'], Decimal('250'))
+
+    def test_a_title_block_above_the_table_is_skipped(self):
+        """Quotations open with a logo and an address, not a header row."""
+        rows, _ = self._parse([[1, 'Camera', 4, 'Nos', 250, '']], preamble=5)
+        self.assertEqual(len(rows), 1)
+
+    def test_units_in_the_header_are_ignored(self):
+        rows, _ = self._parse(
+            [['Camera', 2, 300]],
+            headers=['Description', 'Qty', 'Rate / Unit (USD)'])
+        self.assertEqual(rows[0]['rate_per_unit'], Decimal('300'))
+
+    def test_extra_columns_are_left_alone(self):
+        rows, _ = self._parse(
+            [['Camera', 1, 100, 'irrelevant']],
+            headers=['Description', 'Qty', 'Rate', 'HS Code'])
+        self.assertEqual(len(rows), 1)
+
+    def test_totals_rows_are_skipped_and_reported(self):
+        """A totals line imported as an item silently doubles the PO value."""
+        rows, skipped = self._parse([
+            [1, 'Camera', 4, 'Nos', 250, ''],
+            [None, 'Total', None, None, 1000, ''],
+        ])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(skipped), 1)
+        self.assertIn('totals', skipped[0][1])
+
+    def test_a_row_with_no_quantity_is_reported_not_guessed(self):
+        rows, skipped = self._parse([[1, 'Camera', 0, 'Nos', 250, '']])
+        self.assertEqual(rows, [])
+        self.assertEqual(len(skipped), 1)
+
+    def test_blank_rows_are_not_reported_as_problems(self):
+        """Every quotation has spacer rows. Reporting them as skips would bury
+        the real problems."""
+        rows, skipped = self._parse([
+            [1, 'Camera', 4, 'Nos', 250, ''],
+            [None, None, None, None, None, None],
+        ])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(skipped, [])
+
+    def test_numbers_written_as_text_still_read(self):
+        rows, _ = self._parse([[1, 'Camera', '4 nos', 'Nos', 'SAR 1,250.50', '']])
+        self.assertEqual(rows[0]['quantity'], Decimal('4'))
+        self.assertEqual(rows[0]['rate_per_unit'], Decimal('1250.50'))
+
+    def test_a_sheet_with_no_description_column_says_so(self):
+        from procurement.excel_import import ExcelImportError
+        with self.assertRaises(ExcelImportError) as caught:
+            self._parse([[1, 2]], headers=['Foo', 'Bar'])
+        self.assertIn('Description', str(caught.exception))
+
+    def test_a_file_that_is_not_a_spreadsheet_fails_readably(self):
+        """A traceback tells the user nothing they can act on."""
+        from procurement.excel_import import ExcelImportError, parse_items
+        with self.assertRaises(ExcelImportError):
+            parse_items(io.BytesIO(b'this is not a workbook'))
+
+
+class POImportItemsTests(TestCase):
+    """Adding items to a PO that already exists."""
+
+    def setUp(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('imp_user', password='x')
+        self.user.role = role
+        self.user.save()
+        self.client.force_login(self.user)
+        self.po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-IMP-1', vendor_name='ACME',
+            po_issued_by='Tester', created_by=self.user, status='draft')
+        self.existing = self.po.items.create(
+            description='Existing line', quantity=Decimal('1'),
+            rate_per_unit=Decimal('50'), serial_number=1)
+
+    def _post(self, *workbooks, follow=False):
+        return self.client.post(
+            reverse('procurement:po_import_items', args=[self.po.pk]),
+            {'item_files': list(workbooks)}, follow=follow)
+
+    def test_items_are_added_not_replaced(self):
+        """There is no undo. An import that wiped hand-entered lines would be
+        unrecoverable; a duplicated line is obvious and deletable."""
+        self._post(_items_workbook([[1, 'Camera', 2, 'Nos', 100, '']]))
+        descriptions = list(self.po.items.values_list('description', flat=True))
+        self.assertIn('Existing line', descriptions)
+        self.assertIn('Camera', descriptions)
+        self.assertEqual(self.po.items.count(), 2)
+
+    def test_serial_numbers_continue_from_what_is_there(self):
+        self._post(_items_workbook([[1, 'Camera', 2, 'Nos', 100, '']]))
+        new = self.po.items.get(description='Camera')
+        self.assertEqual(new.serial_number, 2)
+
+    def test_several_files_all_import(self):
+        self._post(_items_workbook([[1, 'Camera', 1, 'Nos', 100, '']]),
+                   _items_workbook([[1, 'Cable', 5, 'M', 10, '']]))
+        self.assertEqual(self.po.items.count(), 3)
+
+    def test_one_bad_file_does_not_lose_the_good_one(self):
+        self._post(_items_workbook([[1, 'Camera', 1, 'Nos', 100, '']]),
+                   io.BytesIO(b'not a workbook'))
+        self.assertTrue(self.po.items.filter(description='Camera').exists())
+
+    def test_the_totals_reflect_the_imported_lines(self):
+        before = self.po.total_value
+        self._post(_items_workbook([[1, 'Camera', 2, 'Nos', 100, '']]))
+        self.po.refresh_from_db()
+        self.assertGreater(self.po.total_value, before)
+
+    def test_it_reports_what_was_skipped(self):
+        """An import that reads 8 of 12 rows without saying so is worse than
+        one that fails outright."""
+        resp = self._post(_items_workbook([
+            [1, 'Camera', 2, 'Nos', 100, ''],
+            [None, 'Total', None, None, 200, ''],
+        ]), follow=True)
+        text = ' '.join(str(m) for m in resp.context['messages'])
+        self.assertIn('skipped', text)
+
+    def test_a_locked_po_refuses_the_import(self):
+        self.po.record_status_change(to_status='client_acknowledged',
+                                     changed_by=self.user)
+        self._post(_items_workbook([[1, 'Camera', 2, 'Nos', 100, '']]))
+        self.assertEqual(self.po.items.count(), 1)
+
+    def test_the_panel_is_hidden_on_a_locked_po(self):
+        self.po.record_status_change(to_status='client_acknowledged',
+                                     changed_by=self.user)
+        body = self.client.get(
+            reverse('procurement:po_detail', args=[self.po.pk])).content.decode()
+        self.assertNotIn('Import items', body)
+
+    def test_submitting_no_file_says_so(self):
+        resp = self.client.post(
+            reverse('procurement:po_import_items', args=[self.po.pk]),
+            {}, follow=True)
+        text = ' '.join(str(m) for m in resp.context['messages'])
+        self.assertIn('at least one', text)

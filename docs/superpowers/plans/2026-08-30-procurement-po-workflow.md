@@ -42,7 +42,7 @@ templates/procurement/
 
 ---
 
-### Task 1: Status rename + locking fields on `PurchaseOrder`
+### Task 1: Status rename + locking fields on `PurchaseOrder` — DONE
 
 - Rename `('acknowledged', 'Acknowledged')` to
   `('client_acknowledged', 'Client Acknowledged')` in `STATUS_CHOICES`.
@@ -56,7 +56,7 @@ templates/procurement/
 
 **Tests:** existing rows migrate; `is_locked` is true only for the new status.
 
-### Task 2: `POStatusChange` log
+### Task 2: `POStatusChange` log — DONE
 
 - Model per the design.
 - Record a row on every status transition, from wherever status changes
@@ -66,7 +66,7 @@ templates/procurement/
 **Tests:** a status change writes exactly one row with the correct from/to; the
 acknowledgement stamps are set.
 
-### Task 3: Lock enforcement
+### Task 3: Lock enforcement — DONE
 
 Guard every write path. At minimum:
 
@@ -82,7 +82,7 @@ Each returns a clear refusal naming the reason, not a generic 403.
 unchanged** — a test that only checks the status code passes against a view
 that refuses after writing.
 
-### Task 4: Super-admin unlock
+### Task 4: Super-admin unlock — DONE
 
 - View accepting a reason, super admin only, writing a `POStatusChange`.
 - Control on PO detail, visible only to a super admin, only when locked.
@@ -90,7 +90,7 @@ that refuses after writing.
 **Tests:** super admin can unlock with a reason; the reason is required; an
 admin and a procurement user cannot; the unlock is logged.
 
-### Task 5: Workflow status
+### Task 5: Workflow status — DONE
 
 - `workflow_status` property returning `{label, tone, stage_key}`.
 - Column on the PO list, banner on PO detail.
@@ -99,7 +99,7 @@ admin and a procurement user cannot; the unlock is logged.
 **Tests:** each PO state produces the right label; a signed stage moves the
 label to the next stage; a released PO reads as released.
 
-### Task 6: Shared Excel parser
+### Task 6: Shared Excel parser — DONE, scope narrowed
 
 - `excel_import.py` with header-row detection and column mapping, following
   `ProjectImportView`'s approach.
@@ -109,14 +109,30 @@ label to the next stage; a released PO reads as released.
 reported by name; a junk file fails with a readable message rather than a
 traceback.
 
-### Task 7: Multi-file import on create
+**Deviation from the plan, decided while building.** The plan said to move the
+existing template importer onto header mapping too. It was left on fixed cell
+positions, and the new parser is used only for the item import.
+
+The reason is that the two importers read different kinds of file. The
+template importer reads **our own export**, whose cell positions are fixed
+because we write them, and it is already covered by tests. Header mapping
+solves a problem it does not have, and rewriting 250 lines of working parsing
+to gain nothing is how a regression gets introduced. The new parser reads
+**someone else's spreadsheet** — a vendor quotation, a client BOQ — where
+column order genuinely cannot be relied on. That is where the mapping earns
+its place.
+
+The plan's own risk note ("keep the old template working and covered by a
+test") pointed at this; narrowing the scope is the cheaper way to honour it.
+
+### Task 7: Multi-file import on create — DONE
 
 - `po_import_excel` accepts several files, applied in order, reporting per file.
 
 **Tests:** two files produce the combined result; one bad file does not lose the
 good one's rows.
 
-### Task 8: Import items into an existing PO
+### Task 8: Import items into an existing PO — DONE
 
 - `po_import_items` appending line items; refuses a locked PO.
 - Panel on PO detail with a preview of what will be added before committing.
@@ -144,7 +160,7 @@ unmapped stage with no role holder resolves to nobody rather than erroring.
 the next approver, not the previous; a released PO notifies nobody; nothing is
 sent if the approval fails.
 
-### Task 11: LNA reference on Approved Budgets
+### Task 11: LNA reference on Approved Budgets — DONE
 
 - Reference column linking to the project; add it to the page search.
 

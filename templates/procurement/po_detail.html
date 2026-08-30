@@ -392,8 +392,46 @@
                     <div class="card info-card">
                         <div class="card-header d-flex justify-content-between align-items-center">
                             <h6 class="mb-0"><i class="bi bi-list-ol me-2 text-danger"></i>Line Items</h6>
-                            <span class="badge bg-dark">{{ items.count }} item{{ items.count|pluralize }}</span>
+                            <div class="d-flex align-items-center gap-2">
+                              <span class="badge bg-dark">{{ items.count }} item{{ items.count|pluralize }}</span>
+                              {% comment %} Import is offered only where it
+                              would work: a locked PO refuses it server-side
+                              anyway. {% endcomment %}
+                              {% if not po.is_locked %}
+                              <button class="btn btn-sm btn-outline-success" type="button"
+                                      data-bs-toggle="collapse" data-bs-target="#importItems">
+                                <i class="bi bi-file-earmark-excel me-1"></i> Import items
+                              </button>
+                              {% endif %}
+                            </div>
                         </div>
+                        {% if not po.is_locked %}
+                        <div class="collapse" id="importItems">
+                          <div class="card-body border-bottom bg-light">
+                            <form method="post" enctype="multipart/form-data"
+                                  action="{% url 'procurement:po_import_items' po.pk %}">
+                              {% csrf_token %}
+                              <label class="form-label fw-semibold mb-1">Add line items from a spreadsheet</label>
+                              <input type="file" name="item_files" class="form-control form-control-sm mb-2"
+                                     accept=".xlsx,.xls" multiple required>
+                              <div class="form-text mb-2">
+                                Any spreadsheet with a header row will do — columns are matched
+                                by name, so the order does not matter. It needs a
+                                <strong>Description</strong> column; Quantity, UOM, Rate, Make
+                                and Remarks are read when present.
+                                {% comment %} Say plainly that this adds rather
+                                than replaces, so nobody imports a corrected
+                                sheet expecting it to overwrite. {% endcomment %}
+                                Items are <strong>added</strong> to the ones already here, never
+                                replaced.
+                              </div>
+                              <button type="submit" class="btn btn-sm btn-success">
+                                <i class="bi bi-upload me-1"></i> Import
+                              </button>
+                            </form>
+                          </div>
+                        </div>
+                        {% endif %}
                         <div class="card-body p-0">
                             <div class="table-responsive">
                                 <table class="table line-item-table mb-0">

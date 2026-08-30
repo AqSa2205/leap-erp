@@ -18,6 +18,7 @@ urlpatterns = [
     path('po/from-bom/<int:sheet_pk>/', views.po_create_from_bom, name='po_create_from_bom'),
     path('po/bom/<int:sheet_pk>/tracker/', views.bom_procurement_tracker, name='bom_procurement_tracker'),
     path('po/import/', views.po_import_excel, name='po_import'),
+    path('po/<int:pk>/import-items/', views.po_import_items, name='po_import_items'),
     path('po/<int:pk>/', views.PODetailView.as_view(), name='po_detail'),
     path('po/<int:pk>/edit/', views.POUpdateView.as_view(), name='po_update'),
     path('po/<int:pk>/delete/', views.PODeleteView.as_view(), name='po_delete'),

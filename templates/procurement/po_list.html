@@ -184,10 +184,12 @@
             <form method="post" action="{% url 'procurement:po_import' %}" enctype="multipart/form-data">
                 {% csrf_token %}
                 <div class="modal-body">
-                    <p class="text-muted small">Upload an Excel file in the standard PO format. The PO number, vendor info, line items, and terms will be imported automatically.</p>
+                    <p class="text-muted small">Upload one or more Excel files in the standard PO format. The PO number, vendor info, line items and terms are read from each. Files are imported one at a time — if one fails, the rest still import and the reason for the failure is shown.</p>
                     <div class="mb-3">
-                        <label class="form-label fw-bold">Excel File (.xlsx)</label>
-                        <input type="file" name="excel_file" class="form-control" accept=".xlsx,.xls" required>
+                        <label class="form-label fw-bold">Excel files (.xlsx)</label>
+                        <input type="file" name="excel_file" class="form-control"
+                               accept=".xlsx,.xls" multiple required>
+                        <div class="form-text">Select several at once to create several purchase orders.</div>
                     </div>
                 </div>
                 <div class="modal-footer">
