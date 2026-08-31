@@ -73,3 +73,9 @@ bleach[css]==6.4.0
 # otherwise fails every outbound call — Zoho, Anthropic, R2 — with
 # CERTIFICATE_VERIFY_FAILED. See USE_SYSTEM_CERT_STORE in settings.py.
 truststore==0.10.4
+
+# Legacy .xls (BIFF/OLE2) support for the chart-of-accounts import. Finance's
+# workbook arrives in both formats and openpyxl reads only .xlsx; the importer
+# sniffs the magic bytes and picks a reader, so an extension being wrong does
+# not matter. xlrd 2.x is .xls-only by design.
+xlrd==2.0.2
