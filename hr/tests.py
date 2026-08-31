@@ -10805,3 +10805,47 @@ class EmployeeExportTests(TestCase):
         self.assertEqual(
             resp['Content-Type'],
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+class EmployeeListAndExportQueryScalingTests(TestCase):
+    """Guards against N+1 regressions on the list and export views: query
+    count must not grow as the number of employees grows. This wouldn't
+    catch an N+1 from grade/picture today (both are plain columns, not
+    relations), but it's exactly the test that catches one the day
+    someone adds a related-field lookup (e.g. emp.manager.full_name)
+    to either view without select_related."""
+
+    def setUp(self):
+        _make_role_user('query-admin', Role.SUPER_ADMIN)
+        self.client.login(username='query-admin', password='testpass123')
+
+    def _query_count_for_n_employees(self, url_name, n):
+        from django.test.utils import CaptureQueriesContext
+        from django.db import connection
+        Employee.objects.all().delete()
+        for i in range(n):
+            make_employee(iqama=f'QRY-{url_name}-{i}', name=f'Query Test {i}')
+        with CaptureQueriesContext(connection) as ctx:
+            resp = self.client.get(reverse(url_name))
+            self.assertEqual(resp.status_code, 200)
+            # For a paginated list, force the page to actually render/consume
+            # the queryset within the captured block.
+            if hasattr(resp, 'content'):
+                _ = resp.content
+        return len(ctx.captured_queries)
+
+    def test_employee_list_query_count_does_not_scale_with_row_count(self):
+        small = self._query_count_for_n_employees('hr:employee_list', 3)
+        large = self._query_count_for_n_employees('hr:employee_list', 15)
+        self.assertEqual(
+            small, large,
+            f"Query count grew from {small} (3 employees) to {large} (15 employees) - "
+            "likely an N+1 introduced in the list view or template.")
+
+    def test_employee_export_query_count_does_not_scale_with_row_count(self):
+        small = self._query_count_for_n_employees('hr:employee_export', 3)
+        large = self._query_count_for_n_employees('hr:employee_export', 15)
+        self.assertEqual(
+            small, large,
+            f"Query count grew from {small} (3 employees) to {large} (15 employees) - "
+            "likely an N+1 introduced in the export view.")
