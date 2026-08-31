@@ -1,6 +1,8 @@
 from datetime import datetime
 from decimal import Decimal
+from io import BytesIO
 from urllib.parse import urlencode
+from uuid import uuid4
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -13,6 +15,12 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
+from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
+
+from .chart_import import (
+    ChartImportError, apply as apply_chart, parse_rows, plan, read_grid,
+)
 from .mapping import certain_matches, index_accounts, suggest
 from .models import (
     Account, Voucher, VoucherLine, ZohoAccountMap, build_tree, descendant_ids,
@@ -406,3 +414,130 @@ def _stamp(note, line):
     """Append an audit line, keeping whatever was already there."""
     stamped = f'{timezone.now():%Y-%m-%d %H:%M} — {line}'
     return f'{note}\n{stamped}'.strip() if note else stamped
+
+
+# ── Chart of accounts import ────────────────────────────────────────────────
+
+CHART_UPLOAD_SESSION_KEY = 'chart_import_pending'
+CHART_UPLOAD_DIR = 'chart_imports'
+MAX_CHART_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+@login_required
+def chart_import(request):
+    """Upload a chart-of-accounts revision, see what it would change, then apply.
+
+    Finance owns this chart and revises it — this is already the second
+    revision — so publishing one should not need a developer or a shell. The
+    preview step is the whole safety story: every ledger entry is coded against
+    this structure, and the difference between "4 new accounts" and "200
+    renamed" is the difference between a routine revision and a wrong file.
+
+    Nothing is ever deleted. Accounts absent from a new revision can be
+    deactivated, which keeps their postings and history intact.
+    """
+    if not _can_view_accounting(request.user):
+        raise PermissionDenied
+
+    if request.method != 'POST':
+        request.session.pop(CHART_UPLOAD_SESSION_KEY, None)
+        return render(request, 'accounting/chart_import.html',
+                      {'current_count': Account.objects.count(),
+                       'active_count': Account.objects.active().count()})
+
+    upload = request.FILES.get('workbook')
+    if not upload:
+        messages.error(request, 'Choose a workbook to upload.')
+        return redirect('accounting:chart_import')
+
+    if upload.size > MAX_CHART_UPLOAD_BYTES:
+        messages.error(request, 'That file is larger than 10 MB — this chart is '
+                                'a few hundred rows, so that is almost certainly '
+                                'the wrong file.')
+        return redirect('accounting:chart_import')
+
+    payload = upload.read()
+    try:
+        sheet_name, rows = read_grid(BytesIO(payload),
+                                     sheet_name=(request.POST.get('sheet') or '').strip() or None)
+        parsed, duplicates, bad_types = parse_rows(rows)
+    except ChartImportError as exc:
+        messages.error(request, str(exc))
+        return redirect('accounting:chart_import')
+
+    if not parsed:
+        messages.error(
+            request,
+            f'No account rows found in sheet {sheet_name!r}. The importer expects '
+            f'the finance layout — codes in column D, names in E, internal type '
+            f'in F, data starting at row 3.')
+        return redirect('accounting:chart_import')
+
+    # Held in storage rather than the session so the confirm step works on the
+    # bytes that were actually previewed — re-uploading between the two steps
+    # would let the preview describe one file and the apply run another.
+    stored = default_storage.save(
+        f'{CHART_UPLOAD_DIR}/{uuid4().hex}', ContentFile(payload))
+    request.session[CHART_UPLOAD_SESSION_KEY] = {
+        'path': stored,
+        'sheet': sheet_name,
+        'filename': upload.name,
+    }
+
+    return render(request, 'accounting/chart_import.html', {
+        'plan': plan(parsed),
+        'sheet_name': sheet_name,
+        'filename': upload.name,
+        'duplicates': duplicates,
+        'bad_types': bad_types,
+        'current_count': Account.objects.count(),
+        'active_count': Account.objects.active().count(),
+    })
+
+
+@login_required
+@require_POST
+def chart_import_apply(request):
+    """Apply the revision that was previewed."""
+    if not _can_view_accounting(request.user):
+        raise PermissionDenied
+
+    pending = request.session.get(CHART_UPLOAD_SESSION_KEY)
+    if not pending:
+        messages.error(request, 'Nothing to apply — upload a workbook first.')
+        return redirect('accounting:chart_import')
+
+    try:
+        with default_storage.open(pending['path'], 'rb') as handle:
+            sheet_name, rows = read_grid(handle, sheet_name=pending.get('sheet'))
+        parsed, _duplicates, _bad = parse_rows(rows)
+    except (ChartImportError, FileNotFoundError, OSError) as exc:
+        messages.error(request, f'Could not re-read the uploaded workbook: {exc}. '
+                                f'Please upload it again.')
+        request.session.pop(CHART_UPLOAD_SESSION_KEY, None)
+        return redirect('accounting:chart_import')
+
+    deactivate = request.POST.get('deactivate_missing') == 'on'
+    with transaction.atomic():
+        result = apply_chart(parsed, deactivate_missing=deactivate)
+
+    # The upload has served its purpose; leaving copies of the chart lying in
+    # storage is a slow leak nobody would think to look for.
+    try:
+        default_storage.delete(pending['path'])
+    except (OSError, NotImplementedError):
+        pass
+    request.session.pop(CHART_UPLOAD_SESSION_KEY, None)
+
+    parts = [f"{result['created']} added", f"{result['updated']} updated"]
+    if result['deactivated']:
+        parts.append(f"{result['deactivated']} deactivated")
+    messages.success(request, f"Chart of accounts updated from {pending['filename']}: "
+                              f"{', '.join(parts)}.")
+    if result['orphans']:
+        messages.warning(
+            request,
+            f"{len(result['orphans'])} account(s) had no parent in the file and sit "
+            f"at the top level: {', '.join(result['orphans'][:8])}"
+            + ('…' if len(result['orphans']) > 8 else ''))
+    return redirect('accounting:chart')
