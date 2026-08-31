@@ -19,6 +19,7 @@ never disturbed.
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
+from accounting.management.commands._console import use_utf8_console
 from accounting.models import Account, ZohoAccountMap
 from accounting.zoho import ZohoClient, ZohoError
 
@@ -35,6 +36,7 @@ class Command(BaseCommand):
                                  'blanks; never rewrites a mapping finance has set.')
 
     def handle(self, *args, **options):
+        use_utf8_console()   # Zoho names are Arabic; cp1252 cannot print them
         try:
             client = ZohoClient.from_settings()
         except ZohoError as exc:
