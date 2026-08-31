@@ -1,0 +1,304 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Accounting — Zoho Account Mapping{% endblock %}
+{% block page_title %}Zoho Account Mapping{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <span>Accounting</span>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">Zoho Account Mapping</span>
+</nav>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .zm-hero { background: linear-gradient(135deg, #5b3fa0 0%, #402c73 100%); color:#fff; border:none; border-radius:14px; }
+    .zm-stat { font-size:1.4rem; font-weight:600; line-height:1; }
+    .zm-table td, .zm-table th { vertical-align: middle; }
+    .zm-table thead th { font-size:0.74rem; text-transform:uppercase; letter-spacing:0.3px; color:#402c73; border-bottom:2px solid #5b3fa0; }
+    .zm-zoho-name { font-weight:600; }
+    .zm-type { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:0.74rem; color:#6c757d; }
+    /* Progress bar doubles as the answer to "are we nearly done" — the single
+       thing somebody grinding through 322 rows actually wants to know. */
+    .zm-progress { height:8px; border-radius:4px; background:#ece7f6; overflow:hidden; }
+    .zm-progress-bar { height:100%; background:#5b3fa0; }
+    /* A row that has been changed but not yet saved. Losing edits to a stray
+       page click is the obvious failure mode of a bulk-edit screen. */
+    .zm-row.zm-dirty { background:#fffbea; }
+    .zm-candidate { font-size:0.74rem; padding:0.1rem 0.45rem; }
+    .zm-reason { font-size:0.72rem; color:#6c757d; }
+    .zm-ambiguous { border-left:3px solid #ffc107; }
+    [data-theme="dark"] .zm-progress { background:#3a3357; }
+    [data-theme="dark"] .zm-row.zm-dirty { background:#332f1f; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+  <div class="row justify-content-center">
+    <div class="col-xxl-11">
+
+      <div class="card zm-hero mb-4">
+        <div class="card-body p-4 d-flex justify-content-between align-items-center flex-wrap gap-3">
+          <div>
+            <h1 class="h3 mb-1 text-white"><i class="bi bi-shuffle me-2"></i>Zoho Account Mapping</h1>
+            <div class="opacity-75 small">
+              Which ERP account each Zoho Books account lands in. Zoho stays the book of record;
+              nothing here is ever written back to it.
+            </div>
+          </div>
+          <div class="d-flex gap-4 text-center">
+            <div>
+              <div class="zm-stat">{{ mapped_count|intcomma }}</div>
+              <div class="small opacity-75">Mapped</div>
+            </div>
+            <div>
+              <div class="zm-stat">{{ unmapped_count|intcomma }}</div>
+              <div class="small opacity-75">Need mapping</div>
+            </div>
+            <div>
+              <div class="zm-stat">{{ ignored_count|intcomma }}</div>
+              <div class="small opacity-75">Ignored</div>
+            </div>
+            <div>
+              <div class="zm-stat">{{ total_count|intcomma }}</div>
+              <div class="small opacity-75">From Zoho</div>
+            </div>
+          </div>
+        </div>
+        <div class="px-4 pb-4">
+          <div class="zm-progress">
+            <div class="zm-progress-bar" style="width: {% widthratio mapped_count total_count 100 %}%"></div>
+          </div>
+        </div>
+      </div>
+
+      {% if ready_count %}
+      {% comment %} The bulk lever. Restricted to names that match exactly one
+      ERP account — a name matching several is excluded however obvious it
+      looks, because that is the case most likely to be wrong and least likely
+      to be noticed. {% endcomment %}
+      <div class="alert alert-success d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div>
+          <i class="bi bi-magic me-1"></i>
+          <strong>{{ ready_count }}</strong> unmapped account{{ ready_count|pluralize }}
+          match{{ ready_count|pluralize:"es," }} exactly one ERP account by name.
+          <div class="small text-muted mt-1">
+            Only unambiguous matches are included. Anything whose name matches several ERP
+            accounts is left for you — that is where a wrong guess hides. Each one is stamped
+            in its notes, so this is reversible.
+          </div>
+        </div>
+        <form method="post" action="{% url 'accounting:zoho_mapping_apply_certain' %}"
+              onsubmit="return confirm('Map {{ ready_count }} account(s) on an exact name match?');">
+          {% csrf_token %}
+          <input type="hidden" name="back" value="{{ querystring }}">
+          <button type="submit" class="btn btn-success btn-sm text-nowrap">
+            Apply {{ ready_count }} exact match{{ ready_count|pluralize:"es," }}
+          </button>
+        </form>
+      </div>
+      {% endif %}
+
+      <div class="card">
+        <div class="card-header bg-white py-3">
+          <form method="get" class="row g-2 align-items-center">
+            <div class="col-md-4">
+              <div class="input-group input-group-sm">
+                <span class="input-group-text bg-white border-end-0" style="color:#5b3fa0"><i class="bi bi-search"></i></span>
+                <input type="search" name="q" value="{{ search }}" class="form-control border-start-0"
+                       placeholder="Search Zoho or ERP account…" aria-label="Search accounts">
+              </div>
+            </div>
+            <div class="col-md-3">
+              <select name="state" class="form-select form-select-sm" aria-label="Filter by state">
+                {% for value, label in state_choices %}
+                <option value="{{ value }}" {% if state == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-3">
+              <select name="type" class="form-select form-select-sm" aria-label="Filter by Zoho type">
+                <option value="">All Zoho types</option>
+                {% for value in type_choices %}
+                <option value="{{ value }}" {% if selected_type == value %}selected{% endif %}>{{ value }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-2 d-grid">
+              <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+            </div>
+          </form>
+        </div>
+
+        <form method="post" action="{% url 'accounting:zoho_mapping_save' %}" id="zmForm">
+          {% csrf_token %}
+          <input type="hidden" name="back" value="{{ querystring }}{% if page.number > 1 %}&page={{ page.number }}{% endif %}">
+
+          <div class="table-responsive">
+            <table class="table table-sm zm-table mb-0">
+              <thead>
+                <tr>
+                  <th style="min-width:16rem;">Zoho account</th>
+                  <th style="width:9rem;">Type</th>
+                  <th style="min-width:20rem;">Maps to ERP account</th>
+                  <th style="width:6rem;" class="text-center">Ignore</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in rows %}
+                {% with s=row.suggestion %}
+                <tr class="zm-row {% if s.kind == 'ambiguous' %}zm-ambiguous{% endif %}">
+                  <td>
+                    <input type="hidden" name="row" value="{{ row.pk }}">
+                    <div class="zm-zoho-name">{{ row.zoho_account_name }}</div>
+                    {% if row.zoho_parent_name %}
+                    <div class="zm-reason">under {{ row.zoho_parent_name }}</div>
+                    {% endif %}
+                    {% if not row.zoho_is_active %}
+                    <span class="badge bg-secondary">inactive in Zoho</span>
+                    {% endif %}
+                  </td>
+                  <td><span class="zm-type">{{ row.zoho_account_type|default:"—" }}</span></td>
+                  <td>
+                    <select name="account_{{ row.pk }}" class="form-select form-select-sm zm-select">
+                      <option value="">— not mapped —</option>
+                      {% for account in accounts %}
+                      <option value="{{ account.pk }}"
+                        {% if row.account_id == account.pk %}selected{% elif not row.account_id and s.is_certain and s.account.pk == account.pk %}selected{% endif %}>
+                        {{ account.code }} — {{ account.name }}
+                      </option>
+                      {% endfor %}
+                    </select>
+
+                    {% comment %} Why this row is showing what it is showing.
+                    A suggestion the reader cannot interrogate is one they
+                    either accept blindly or ignore entirely. {% endcomment %}
+                    {% if not row.account_id and s.reason %}
+                    <div class="zm-reason mt-1">
+                      {% if s.kind == 'certain' %}<i class="bi bi-check-circle text-success"></i>
+                      {% elif s.kind == 'ambiguous' %}<i class="bi bi-exclamation-triangle text-warning"></i>
+                      {% else %}<i class="bi bi-lightbulb text-muted"></i>{% endif %}
+                      {{ s.reason }}
+                    </div>
+                    {% endif %}
+
+                    {% if not row.account_id and s.kind != 'certain' and s.candidates %}
+                    <div class="mt-1 d-flex flex-wrap gap-1">
+                      {% for candidate in s.candidates %}
+                      <button type="button" class="btn btn-outline-secondary zm-candidate zm-pick"
+                              data-target="account_{{ row.pk }}" data-value="{{ candidate.pk }}">
+                        {{ candidate.code }} — {{ candidate.name|truncatechars:34 }}
+                      </button>
+                      {% endfor %}
+                    </div>
+                    {% endif %}
+                  </td>
+                  <td class="text-center">
+                    {% comment %} Not the same as unmapped: it says somebody
+                    looked and decided this one has no home, so it stops
+                    counting as outstanding work. {% endcomment %}
+                    <input type="checkbox" class="form-check-input zm-ignore"
+                           name="ignore_{{ row.pk }}" {% if row.is_ignored %}checked{% endif %}
+                           aria-label="Ignore {{ row.zoho_account_name }}">
+                  </td>
+                </tr>
+                {% endwith %}
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-5">
+                  <i class="bi bi-inbox fs-3 d-block mb-2 opacity-50"></i>
+                  {% if state == 'unmapped' %}
+                  Nothing left needing a mapping{% if search or selected_type %} with these filters{% endif %}.
+                  {% else %}
+                  No accounts match these filters.
+                  {% endif %}
+                </td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          {% if rows %}
+          <div class="card-footer bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div class="small text-muted">
+              Showing {{ page.start_index }}–{{ page.end_index }} of {{ page.paginator.count }}
+              <span id="zmDirty" class="ms-2 text-warning fw-semibold d-none">
+                <i class="bi bi-pencil-fill"></i> <span id="zmDirtyCount">0</span> unsaved
+              </span>
+            </div>
+            <div class="d-flex gap-2 align-items-center">
+              {% if page.has_previous %}
+              <a class="btn btn-sm btn-outline-secondary"
+                 href="?{{ querystring }}&page={{ page.previous_page_number }}">Previous</a>
+              {% endif %}
+              {% if page.has_next %}
+              <a class="btn btn-sm btn-outline-secondary"
+                 href="?{{ querystring }}&page={{ page.next_page_number }}">Next</a>
+              {% endif %}
+              <button type="submit" class="btn btn-sm btn-primary">
+                <i class="bi bi-save me-1"></i>Save this page
+              </button>
+            </div>
+          </div>
+          {% endif %}
+        </form>
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const form = document.getElementById('zmForm');
+  if (!form) return;
+
+  // Quick-pick buttons write into the row's select rather than submitting, so
+  // a candidate is a shortcut to an answer and never an answer by itself.
+  form.querySelectorAll('.zm-pick').forEach(function (button) {
+    button.addEventListener('click', function () {
+      const select = form.querySelector('[name="' + button.dataset.target + '"]');
+      if (!select) return;
+      select.value = button.dataset.value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  });
+
+  // Track edits so leaving the page with unsaved mappings is deliberate. On a
+  // screen whose whole job is bulk editing, silently discarding twenty
+  // decisions is the failure people would never forgive.
+  const initial = new Map();
+  form.querySelectorAll('.zm-select, .zm-ignore').forEach(function (field) {
+    initial.set(field, field.type === 'checkbox' ? field.checked : field.value);
+  });
+
+  const banner = document.getElementById('zmDirty');
+  const counter = document.getElementById('zmDirtyCount');
+  let dirty = false;
+
+  function refresh() {
+    let count = 0;
+    initial.forEach(function (was, field) {
+      const now = field.type === 'checkbox' ? field.checked : field.value;
+      const changed = now !== was;
+      field.closest('tr').classList.toggle('zm-dirty', changed);
+      if (changed) count += 1;
+    });
+    dirty = count > 0;
+    if (counter) counter.textContent = count;
+    if (banner) banner.classList.toggle('d-none', !dirty);
+  }
+
+  form.addEventListener('change', refresh);
+  form.addEventListener('submit', function () { dirty = false; });
+  window.addEventListener('beforeunload', function (event) {
+    if (!dirty) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+})();
+</script>
+{% endblock %}
