@@ -1251,8 +1251,15 @@
         <div class="nav-section" data-section="accounting"><span>Accounting</span><i class="bi bi-chevron-down section-chevron"></i></div>
         <ul class="nav flex-column nav-section-items" data-section-items="accounting">
             <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.app_name == 'accounting' %}active{% endif %}" href="{% url 'accounting:chart' %}" data-title="Accounting — Chart of Accounts">
+                {# Matched on url_name rather than app_name: with two entries in #}
+                {# this section, app_name would light both of them at once.       #}
+                <a class="nav-link {% if request.resolver_match.url_name == 'chart' or request.resolver_match.url_name == 'account_detail' or request.resolver_match.url_name == 'account_ledger' %}active{% endif %}" href="{% url 'accounting:chart' %}" data-title="Accounting — Chart of Accounts">
                     <i class="bi bi-diagram-3"></i> <span>Chart of Accounts</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if 'zoho_mapping' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'accounting:zoho_mapping' %}" data-title="Accounting — Zoho Account Mapping">
+                    <i class="bi bi-shuffle"></i> <span>Zoho Mapping</span>
                 </a>
             </li>
         </ul>

@@ -32,6 +32,39 @@ IS_PRODUCTION = (
 )
 
 
+# Outbound TLS trust.
+#
+# `requests` verifies certificates against the bundle pinned inside certifi,
+# which knows nothing about private root CAs. Corporate TLS inspection
+# (Netskope, Zscaler and friends) terminates every HTTPS connection and
+# re-signs it with exactly such a CA — trusted by Windows, invisible to
+# certifi — so on an inspected machine every outbound call dies with
+# CERTIFICATE_VERIFY_FAILED before a byte reaches the far end. That is a
+# property of the developer's laptop, not of the code.
+#
+# truststore points Python at the operating system's own store, which is where
+# the interception CA already lives, so no bundle has to be exported or kept up
+# to date by hand.
+#
+# Off in production by default and deliberately: Render does not intercept TLS,
+# so there is nothing to solve there, and quietly changing how a live service
+# validates certificates to fix a laptop is not a trade worth making. Set
+# USE_SYSTEM_CERT_STORE explicitly to override in either direction.
+USE_SYSTEM_CERT_STORE = os.environ.get(
+    'USE_SYSTEM_CERT_STORE', 'False' if IS_PRODUCTION else 'True'
+).lower() == 'true'
+
+if USE_SYSTEM_CERT_STORE:
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+    except ImportError:
+        # Optional: without it, verification falls back to certifi. Fine on an
+        # uninspected network, and the failure it produces elsewhere names the
+        # certificate as the problem, so it is not worth failing startup over.
+        pass
+
+
 # Security settings — fail fast in production if SECRET_KEY is missing.
 SECRET_KEY = os.environ.get('SECRET_KEY')
 if not SECRET_KEY:
