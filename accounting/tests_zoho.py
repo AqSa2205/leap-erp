@@ -369,3 +369,63 @@ class SyncAccountsCommandTests(TestCase):
         with self.assertRaises(CommandError) as ctx:
             call_command('sync_zoho_accounts')
         self.assertIn('not configured', str(ctx.exception).lower())
+
+
+class Utf8ConsoleTests(TestCase):
+    """Reporting must not be able to fail the work it reports on.
+
+    Zoho holds this company's names in Arabic. On a Windows console — cp1252 —
+    printing one raises UnicodeEncodeError, and because the print happens
+    *after* the sync it reports on, a completed run reads as a crash. This is
+    the guard that stops that.
+    """
+
+    ARABIC = 'شركة لييب نتوركس أرابيا'
+
+    def _cp1252_stream(self):
+        import io
+        return io.TextIOWrapper(io.BytesIO(), encoding='cp1252')
+
+    def _patched(self, stream):
+        from unittest import mock
+        import sys
+        return mock.patch.multiple(sys, stdout=stream, stderr=stream)
+
+    def test_arabic_kills_a_cp1252_stream(self):
+        """Guards the guard. If this ever stops raising, every other test in
+        this class passes for the wrong reason."""
+        stream = self._cp1252_stream()
+        with self.assertRaises(UnicodeEncodeError):
+            stream.write(self.ARABIC)
+            stream.flush()
+
+    def test_the_stream_is_switched_to_utf8(self):
+        from accounting.management.commands._console import use_utf8_console
+        stream = self._cp1252_stream()
+        with self._patched(stream):
+            use_utf8_console()
+        self.assertEqual(stream.encoding, 'utf-8')
+
+    def test_arabic_survives_afterwards(self):
+        from accounting.management.commands._console import use_utf8_console
+        stream = self._cp1252_stream()
+        with self._patched(stream):
+            use_utf8_console()
+            stream.write(self.ARABIC)
+            stream.flush()
+
+    def test_a_stream_that_cannot_be_reconfigured_is_left_alone(self):
+        """Test runners and pipes replace stdout with objects that have no
+        reconfigure(). Losing the run to a failed cosmetic fix would be worse
+        than the problem it fixes."""
+        from accounting.management.commands._console import use_utf8_console
+
+        class Bare:
+            def write(self, text):
+                return len(text)
+
+            def flush(self):
+                pass
+
+        with self._patched(Bare()):
+            use_utf8_console()          # must not raise
