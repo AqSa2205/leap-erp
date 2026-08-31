@@ -1,0 +1,253 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Accounting — Import Chart of Accounts{% endblock %}
+{% block page_title %}Import Chart of Accounts{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <span>Accounting</span>
+    <span class="crumb-sep">›</span>
+    <a href="{% url 'accounting:chart' %}">Chart of Accounts</a>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">Import</span>
+</nav>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .ci-hero { background: linear-gradient(135deg, #5b3fa0 0%, #402c73 100%); color:#fff; border:none; border-radius:14px; }
+    .ci-stat { font-size:1.4rem; font-weight:600; line-height:1; }
+    .ci-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:0.84rem; white-space:nowrap; }
+    .ci-table thead th { font-size:0.74rem; text-transform:uppercase; letter-spacing:0.3px; color:#402c73; border-bottom:2px solid #5b3fa0; }
+    .ci-was { text-decoration:line-through; opacity:0.6; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+  <div class="row justify-content-center">
+    <div class="col-xxl-10">
+
+      <div class="card ci-hero mb-4">
+        <div class="card-body p-4 d-flex justify-content-between align-items-center flex-wrap gap-3">
+          <div>
+            <h1 class="h3 mb-1 text-white"><i class="bi bi-upload me-2"></i>Import Chart of Accounts</h1>
+            <div class="opacity-75 small">
+              Publish a new revision of the finance workbook. You see what it would change before anything happens.
+            </div>
+          </div>
+          <div class="d-flex gap-4 text-center">
+            <div>
+              <div class="ci-stat">{{ current_count|intcomma }}</div>
+              <div class="small opacity-75">Accounts now</div>
+            </div>
+            <div>
+              <div class="ci-stat">{{ active_count|intcomma }}</div>
+              <div class="small opacity-75">Active</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {% if not plan %}
+      {# ── step one: choose a workbook ─────────────────────────────────── #}
+      <div class="card">
+        <div class="card-body">
+          <form method="post" enctype="multipart/form-data">
+            {% csrf_token %}
+            <div class="mb-3">
+              <label class="form-label fw-semibold" for="workbook">Finance workbook</label>
+              <input type="file" name="workbook" id="workbook" required
+                     accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                     class="form-control">
+              <div class="form-text">
+                Either format — <code>.xlsx</code> or the older <code>.xls</code>. The file is
+                identified by its actual contents, so a wrong extension does not matter.
+              </div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="sheet">Sheet <span class="text-muted">(optional)</span></label>
+              <input type="text" name="sheet" id="sheet" class="form-control" placeholder="First sheet by default">
+            </div>
+
+            <div class="alert alert-light border small">
+              <div class="fw-semibold mb-1"><i class="bi bi-info-circle me-1"></i>Expected layout</div>
+              Column <strong>B</strong> reporting code · <strong>C</strong> reporting description ·
+              <strong>D</strong> G/L code · <strong>E</strong> G/L description ·
+              <strong>F</strong> internal type. Data starts on row 3.
+              <div class="mt-2">
+                Accounts are matched on their code, so re-importing updates rather than duplicating.
+                <strong>Nothing is ever deleted</strong> — an account missing from a new revision can be
+                deactivated, which keeps its postings and history intact.
+              </div>
+            </div>
+
+            <div class="d-flex gap-2">
+              <button type="submit" class="btn btn-primary">
+                <i class="bi bi-eye me-1"></i>Preview changes
+              </button>
+              <a href="{% url 'accounting:chart' %}" class="btn btn-outline-secondary">Cancel</a>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      {% else %}
+      {# ── step two: what it would do ──────────────────────────────────── #}
+      <div class="card mb-3">
+        <div class="card-header bg-white">
+          <span class="fw-semibold">{{ filename }}</span>
+          <span class="text-muted small ms-2">sheet {{ sheet_name }} · {{ plan.total }} account rows read</span>
+        </div>
+        <div class="card-body">
+          <div class="row g-3 text-center mb-3">
+            <div class="col-6 col-md-3">
+              <div class="border rounded py-3">
+                <div class="ci-stat text-success">{{ plan.created|length }}</div>
+                <div class="small text-muted">New</div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="border rounded py-3">
+                <div class="ci-stat text-primary">{{ plan.updated|length }}</div>
+                <div class="small text-muted">Changed</div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="border rounded py-3">
+                <div class="ci-stat text-muted">{{ plan.unchanged|length }}</div>
+                <div class="small text-muted">Unchanged</div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="border rounded py-3">
+                <div class="ci-stat text-warning">{{ plan.missing|length }}</div>
+                <div class="small text-muted">Not in this file</div>
+              </div>
+            </div>
+          </div>
+
+          {% if duplicates or bad_types %}
+          <div class="alert alert-warning small">
+            {% for row, code, first in duplicates %}
+            <div>Row {{ row }}: duplicate code {{ code }} (first seen row {{ first }}) — skipped.</div>
+            {% endfor %}
+            {% for row, code, value in bad_types %}
+            <div>Row {{ row }}: account {{ code }} has unrecognised internal type "{{ value }}" — will import as Regular.</div>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          {% if plan.created %}
+          <h6 class="mt-4">New accounts</h6>
+          <div class="table-responsive">
+            <table class="table table-sm ci-table">
+              <thead><tr><th style="width:9rem;">Code</th><th>Name</th><th style="width:8rem;">Type</th></tr></thead>
+              <tbody>
+                {% for item in plan.created %}
+                <tr>
+                  <td class="ci-code">{{ item.code }}</td>
+                  <td>{{ item.name }}</td>
+                  <td><span class="badge bg-light text-dark border">{{ item.internal_type }}</span></td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% endif %}
+
+          {% if plan.updated %}
+          <h6 class="mt-4">Changed accounts</h6>
+          {% comment %} A rename or a type change is the edit most worth reading
+          before it happens: View to Regular turns a heading into something
+          postable, which changes where money can land. {% endcomment %}
+          <div class="table-responsive">
+            <table class="table table-sm ci-table">
+              <thead><tr><th style="width:9rem;">Code</th><th>Name</th><th style="width:14rem;">Type</th></tr></thead>
+              <tbody>
+                {% for change in plan.updated %}
+                <tr>
+                  <td class="ci-code">{{ change.code }}</td>
+                  <td>
+                    {% if change.from_name != change.to_name %}
+                    <span class="ci-was">{{ change.from_name }}</span>
+                    <i class="bi bi-arrow-right mx-1 text-muted"></i>{{ change.to_name }}
+                    {% else %}{{ change.to_name }}{% endif %}
+                    {% if change.reactivated %}
+                    <span class="badge bg-success ms-1">reactivated</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if change.from_type != change.to_type %}
+                    <span class="ci-was">{{ change.from_type }}</span>
+                    <i class="bi bi-arrow-right mx-1 text-muted"></i>
+                    <span class="fw-semibold">{{ change.to_type }}</span>
+                    {% else %}<span class="text-muted">{{ change.to_type }}</span>{% endif %}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% endif %}
+
+          {% if plan.missing %}
+          <h6 class="mt-4">In the ERP but not in this file</h6>
+          <div class="table-responsive">
+            <table class="table table-sm ci-table">
+              <thead><tr><th style="width:9rem;">Code</th><th>Name</th><th style="width:8rem;">Type</th></tr></thead>
+              <tbody>
+                {% for account in plan.missing %}
+                <tr>
+                  <td class="ci-code">{{ account.code }}</td>
+                  <td>{{ account.name }}</td>
+                  <td><span class="badge bg-light text-dark border">{{ account.internal_type }}</span></td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-body">
+          <form method="post" action="{% url 'accounting:chart_import_apply' %}">
+            {% csrf_token %}
+            {% if plan.missing %}
+            {% comment %} Off by default. Leaving a retired account active is
+            untidy; deactivating one that is merely absent from a partial
+            workbook hides it from every screen that filters on active. The
+            first is recoverable at a glance, the second is confusing for
+            weeks. {% endcomment %}
+            <div class="form-check mb-3">
+              <input class="form-check-input" type="checkbox" name="deactivate_missing" id="deactivateMissing">
+              <label class="form-check-label" for="deactivateMissing">
+                Also deactivate the {{ plan.missing|length }} account{{ plan.missing|pluralize }}
+                not in this file
+              </label>
+              <div class="form-text">
+                They keep their postings and history and can be reactivated by a later
+                revision — they just stop appearing as current. Leave this unticked if
+                you are importing part of the chart rather than all of it.
+              </div>
+            </div>
+            {% endif %}
+            <div class="d-flex gap-2">
+              <button type="submit" class="btn btn-primary">
+                <i class="bi bi-check2 me-1"></i>Apply to the chart
+              </button>
+              <a href="{% url 'accounting:chart_import' %}" class="btn btn-outline-secondary">
+                Choose a different file
+              </a>
+            </div>
+          </form>
+        </div>
+      </div>
+      {% endif %}
+
+    </div>
+  </div>
+</div>
+{% endblock %}
