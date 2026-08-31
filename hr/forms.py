@@ -68,7 +68,7 @@ class EmployeeForm(forms.ModelForm):
             'medical_insurance_issued_on', 'medical_insurance_expires_on',
             'full_name', 'designation', 'qualification',
             'date_of_birth', 'joining_date', 'nationality', 'marital_status',
-            'blood_group', 'personal_email', 'documents_link', 'deployment',
+            'blood_group', 'personal_email', 'documents_link', 'deployment', 'grade', 'picture',
             'work_location', 'contract_type', 'work_email', 'mobile_number',
             'is_active', 'inactive_from', 'user',
         ]
@@ -91,6 +91,8 @@ class EmployeeForm(forms.ModelForm):
             'personal_email': forms.EmailInput(attrs={'class': 'form-control'}),
             'documents_link': forms.URLInput(attrs={'class': 'form-control'}),
             'deployment': forms.TextInput(attrs={'class': 'form-control'}),
+            'grade': forms.TextInput(attrs={'class': 'form-control'}),
+            'picture': forms.ClearableFileInput(attrs={'class': 'form-control', 'accept': 'image/*'}),
             'work_location': forms.Select(attrs={'class': 'form-select'}),
             'contract_type': forms.Select(attrs={'class': 'form-select'}),
             'work_email': forms.EmailInput(attrs={'class': 'form-control'}),

@@ -15,6 +15,7 @@ from django.core.exceptions import PermissionDenied
 from datetime import datetime, date, timedelta
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.drawing.image import Image as XLImage
 
 from .models import Employee, Asset, AssetAssignment, Vehicle, VehicleDocument, EmployeeDocument, LeaveType, Holiday, LeaveEntitlement, LeaveRecord, AttendanceRecord, AttendanceSettings, WorkingDay, WFHRecord, LeaveRequest, AttendanceException, LeaveRevokeRequest, AttendanceExceptionRevokeRequest
 from .forms import (
@@ -1335,7 +1336,7 @@ def employee_import(request):
 
                     defaults = {
                         'full_name': str(name).strip()[:255],
-                        'designation': str(get_value(['designation', 'position', 'title']) or '').strip()[:255],
+                        'designation': str(get_value(['designation', 'position', 'title', 'occupation (iqama)', 'occupation']) or '').strip()[:255],
                         'qualification': str(get_value(['qualification', 'qualifications']) or '').strip()[:255],
                         'date_of_birth': dob,
                         'joining_date': joining,
@@ -1344,7 +1345,8 @@ def employee_import(request):
                         'blood_group': blood_group,
                         'personal_email': personal_email,
                         'documents_link': str(get_value(['documents', 'documents link', 'document link', 'doc link']) or '').strip()[:500],
-                        'deployment': str(get_value(['deployment', 'location', 'site']) or '').strip()[:100],
+                        'deployment': str(get_value(['deployment', 'diployment', 'location', 'site']) or '').strip()[:100],
+                        'grade': str(get_value(['grade']) or '').strip()[:50],
                         'contract_type': contract_type,
                         'work_email': work_email,
                         'mobile_number': str(get_value(['mobile no', 'mobile number', 'mobile', 'phone', 'contact no']) or '').strip()[:20],
@@ -1433,8 +1435,8 @@ def employee_export(request):
     headers = [
         'S/No.', 'Iqama/Passport', 'Name', 'Designation', 'Qualification',
         'Date of Birth', 'Joining Date', 'Nationality', 'Marital Status',
-        'Blood Group', 'Personal Email', 'Documents', 'Deployment',
-        'Contract Type', 'Work Email', 'Mobile No', 'Status',
+        'Blood Group', 'Personal Email', 'Documents', 'Deployment', 'Grade',
+        'Contract Type', 'Work Email', 'Mobile No', 'Status', 'Picture',
     ]
 
     for col, header in enumerate(headers, 1):
@@ -1459,17 +1461,32 @@ def employee_export(request):
             emp.personal_email,
             emp.documents_link,
             emp.deployment,
+            emp.grade,
             emp.get_contract_type_display(),
             emp.work_email,
             emp.mobile_number,
             'Active' if emp.is_active else 'Inactive',
+            '',  # Picture column - image embedded separately below, not a text value
         ]
         for col, value in enumerate(data, 1):
             cell = ws.cell(row=row_num, column=col, value=value)
             cell.border = thin_border
 
+        if emp.picture:
+            try:
+                img = XLImage(emp.picture.path)
+                img.width = 60
+                img.height = 60
+                picture_col_letter = openpyxl.utils.get_column_letter(len(headers))
+                ws.add_image(img, f'{picture_col_letter}{row_num}')
+                ws.row_dimensions[row_num].height = 48
+            except (FileNotFoundError, OSError):
+                # Picture record exists but the file is missing from disk -
+                # skip embedding rather than fail the whole export.
+                pass
+
     # Column widths
-    column_widths = [8, 18, 25, 20, 20, 14, 14, 15, 14, 12, 28, 30, 15, 14, 28, 16, 10]
+    column_widths = [8, 18, 25, 20, 20, 14, 14, 15, 14, 12, 28, 30, 15, 12, 14, 28, 16, 10, 10]
     for col, width in enumerate(column_widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = width
 

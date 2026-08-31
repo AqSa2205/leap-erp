@@ -10483,3 +10483,325 @@ class PendingApprovalsPurchaseOrderTests(TestCase):
             self.assertEqual(self.po.current_stage['key'], 'ceo')
             self.assertEqual(len(self._po_items(self.super_admin)), 1)
             self.assertEqual(self._po_items(self.admin), [])
+
+
+class EmployeeGradeAndListDisplayTests(TestCase):
+    """Grade field: saves via the form, and shows correctly across the list
+    and detail pages. The list page shows Grade + Joining Date instead of
+    Deployment; the detail page keeps Deployment alongside the new Grade."""
+
+    def setUp(self):
+        self.admin = _make_role_user('grade-admin', Role.SUPER_ADMIN)
+        self.emp = make_employee(iqama='GRADE-1', name='Grade Test Employee')
+        self.emp.grade = 'EX-2'
+        self.emp.deployment = 'Riyadh Site'
+        self.emp.joining_date = _date(2022, 3, 15)
+        self.emp.save(update_fields=['grade', 'deployment', 'joining_date'])
+
+    def test_grade_field_persists(self):
+        self.emp.refresh_from_db()
+        self.assertEqual(self.emp.grade, 'EX-2')
+
+    def test_grade_and_joining_date_shown_on_list_not_deployment_column(self):
+        self.client.login(username='grade-admin', password='testpass123')
+        resp = self.client.get(reverse('hr:employee_list'))
+        content = resp.content.decode()
+        self.assertContains(resp, 'Grade')
+        self.assertContains(resp, 'Joining Date')
+        self.assertContains(resp, 'EX-2')
+        self.assertContains(resp, '15 Mar 2022')
+        # The column header itself must be gone, even though the word
+        # "Deployment" still legitimately appears elsewhere (e.g. the detail
+        # page link's title attribute is not present on this page, but to be
+        # safe check the specific header cell, not a bare substring).
+        self.assertNotIn('<th>Deployment</th>', content)
+
+    def test_deployment_and_grade_both_shown_on_detail_page(self):
+        self.client.login(username='grade-admin', password='testpass123')
+        resp = self.client.get(reverse('hr:employee_detail', args=[self.emp.pk]))
+        self.assertContains(resp, 'Riyadh Site')
+        self.assertContains(resp, 'EX-2')
+
+    def test_grade_field_present_on_edit_form(self):
+        self.client.login(username='grade-admin', password='testpass123')
+        resp = self.client.get(reverse('hr:employee_update', args=[self.emp.pk]))
+        self.assertContains(resp, 'name="grade"')
+
+    def test_missing_grade_shows_dash_on_list_and_detail(self):
+        blank_emp = make_employee(iqama='GRADE-2', name='No Grade Employee')
+        self.client.login(username='grade-admin', password='testpass123')
+        list_resp = self.client.get(reverse('hr:employee_list'))
+        self.assertContains(list_resp, 'No Grade Employee')
+        detail_resp = self.client.get(reverse('hr:employee_detail', args=[blank_emp.pk]))
+        self.assertEqual(detail_resp.status_code, 200)
+
+
+class EmployeeImportColumnMappingTests(TestCase):
+    """Import correctly maps the real-world Excel layout: a Grade column,
+    "OCCUPATION (Iqama)" for designation, and the "DIPLOYMENT" typo actually
+    present in the source sheet - alongside the existing, correctly-spelled
+    aliases already relied on elsewhere."""
+
+    def setUp(self):
+        self.admin = _make_role_user('import-admin', Role.SUPER_ADMIN)
+        self.client.login(username='import-admin', password='testpass123')
+
+    def _build_workbook(self, headers, rows):
+        import openpyxl
+        from io import BytesIO
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(headers)
+        for row in rows:
+            ws.append(row)
+        buf = BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return SimpleUploadedFile(
+            'employees.xlsx', buf.read(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+    def test_import_maps_grade_column(self):
+        f = self._build_workbook(
+            ['Name', 'Iqama/Passport', 'Grade'],
+            [['Test Employee', 'IMP-001', 'EX-3']])
+        self.client.post(reverse('hr:employee_import'), {'excel_file': f})
+        emp = Employee.objects.get(iqama_number='IMP-001')
+        self.assertEqual(emp.grade, 'EX-3')
+
+    def test_import_maps_occupation_iqama_header_to_designation(self):
+        f = self._build_workbook(
+            ['Name', 'Iqama/Passport', 'OCCUPATION (Iqama)'],
+            [['Test Employee', 'IMP-002', 'Electrical Machines Maint Tech']])
+        self.client.post(reverse('hr:employee_import'), {'excel_file': f})
+        emp = Employee.objects.get(iqama_number='IMP-002')
+        self.assertEqual(emp.designation, 'Electrical Machines Maint Tech')
+
+    def test_import_maps_diployment_typo_to_deployment(self):
+        f = self._build_workbook(
+            ['Name', 'Iqama/Passport', 'DIPLOYMENT'],
+            [['Test Employee', 'IMP-003', 'Leap Networks']])
+        self.client.post(reverse('hr:employee_import'), {'excel_file': f})
+        emp = Employee.objects.get(iqama_number='IMP-003')
+        self.assertEqual(emp.deployment, 'Leap Networks')
+
+    def test_import_still_maps_correct_deployment_spelling(self):
+        # The typo alias must not break the existing, correctly-spelled
+        # header that other imports already rely on.
+        f = self._build_workbook(
+            ['Name', 'Iqama/Passport', 'Deployment'],
+            [['Test Employee', 'IMP-004', 'Head Office']])
+        self.client.post(reverse('hr:employee_import'), {'excel_file': f})
+        emp = Employee.objects.get(iqama_number='IMP-004')
+        self.assertEqual(emp.deployment, 'Head Office')
+
+
+class EmployeeImportAuthBoundaryTests(TestCase):
+    """Only Super Admin / ERP Admin can import employees - matches the
+    check already in employee_import() (is_super_admin_user or
+    is_erp_admin_user)."""
+
+    def _build_minimal_workbook(self):
+        import openpyxl
+        from io import BytesIO
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(['Name', 'Iqama/Passport'])
+        ws.append(['Blocked Import Test', 'IMP-AUTH-1'])
+        buf = BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return SimpleUploadedFile(
+            'employees.xlsx', buf.read(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+    def test_regular_user_cannot_import(self):
+        _login_user('import-plain')
+        self.client.login(username='import-plain', password='testpass123')
+        resp = self.client.post(
+            reverse('hr:employee_import'), {'excel_file': self._build_minimal_workbook()})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, reverse('hr:employee_list'))
+        self.assertFalse(Employee.objects.filter(iqama_number='IMP-AUTH-1').exists())
+
+    def test_super_admin_can_import(self):
+        _make_role_user('import-super', Role.SUPER_ADMIN)
+        self.client.login(username='import-super', password='testpass123')
+        self.client.post(
+            reverse('hr:employee_import'), {'excel_file': self._build_minimal_workbook()})
+        self.assertTrue(Employee.objects.filter(iqama_number='IMP-AUTH-1').exists())
+
+
+class EmployeeImportEdgeCaseTests(TestCase):
+    """Grade import handles missing columns, whitespace, over-length
+    values, and header collisions without crashing or silently corrupting
+    other fields."""
+
+    def setUp(self):
+        _make_role_user('import-edge', Role.SUPER_ADMIN)
+        self.client.login(username='import-edge', password='testpass123')
+
+    def _build_workbook(self, headers, rows):
+        import openpyxl
+        from io import BytesIO
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(headers)
+        for row in rows:
+            ws.append(row)
+        buf = BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return SimpleUploadedFile(
+            'employees.xlsx', buf.read(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+    def test_sheet_with_no_grade_column_does_not_crash(self):
+        f = self._build_workbook(
+            ['Name', 'Iqama/Passport', 'Nationality'],
+            [['Test Employee', 'IMP-EDGE-1', 'Saudi']])
+        resp = self.client.post(reverse('hr:employee_import'), {'excel_file': f})
+        self.assertEqual(resp.status_code, 302)
+        emp = Employee.objects.get(iqama_number='IMP-EDGE-1')
+        self.assertEqual(emp.grade, '')
+
+    def test_grade_value_whitespace_is_stripped(self):
+        f = self._build_workbook(
+            ['Name', 'Iqama/Passport', 'Grade'],
+            [['Test Employee', 'IMP-EDGE-2', '  EX-1  ']])
+        self.client.post(reverse('hr:employee_import'), {'excel_file': f})
+        emp = Employee.objects.get(iqama_number='IMP-EDGE-2')
+        self.assertEqual(emp.grade, 'EX-1')
+
+    def test_overlength_grade_value_is_truncated_not_rejected(self):
+        long_grade = 'X' * 80
+        f = self._build_workbook(
+            ['Name', 'Iqama/Passport', 'Grade'],
+            [['Test Employee', 'IMP-EDGE-3', long_grade]])
+        resp = self.client.post(reverse('hr:employee_import'), {'excel_file': f})
+        self.assertEqual(resp.status_code, 302)
+        emp = Employee.objects.get(iqama_number='IMP-EDGE-3')
+        self.assertEqual(len(emp.grade), 50)
+
+    def test_correct_spelling_wins_when_both_deployment_headers_present(self):
+        # If a sheet somehow has both the correct spelling and the typo,
+        # the correctly-spelled header (checked first) should win rather
+        # than the result depending on column order.
+        f = self._build_workbook(
+            ['Name', 'Iqama/Passport', 'Deployment', 'DIPLOYMENT'],
+            [['Test Employee', 'IMP-EDGE-4', 'Correct Value', 'Typo Value']])
+        self.client.post(reverse('hr:employee_import'), {'excel_file': f})
+        emp = Employee.objects.get(iqama_number='IMP-EDGE-4')
+        self.assertEqual(emp.deployment, 'Correct Value')
+
+
+class EmployeePictureDisplayTests(TestCase):
+    """Picture upload via the form, and correct display (or placeholder)
+    on the detail page header."""
+
+    def setUp(self):
+        self.admin = _make_role_user('pic-admin', Role.SUPER_ADMIN)
+        self.client.login(username='pic-admin', password='testpass123')
+        self.emp = make_employee(iqama='PIC-1', name='Picture Test Employee')
+
+    def _tiny_png(self, name='photo.png'):
+        from io import BytesIO
+        from PIL import Image as PILImage
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        buf = BytesIO()
+        PILImage.new('RGB', (2, 2), color='red').save(buf, format='PNG')
+        buf.seek(0)
+        return SimpleUploadedFile(name, buf.read(), content_type='image/png')
+
+    def test_picture_uploads_and_saves(self):
+        resp = self.client.post(
+            reverse('hr:employee_update', args=[self.emp.pk]),
+            data={
+                'full_name': self.emp.full_name, 'iqama_number': self.emp.iqama_number,
+                'picture': self._tiny_png(),
+            })
+        self.emp.refresh_from_db()
+        self.assertTrue(bool(self.emp.picture))
+
+    def test_picture_shown_on_detail_page_when_set(self):
+        self.emp.picture.save('photo.png', self._tiny_png(), save=True)
+        resp = self.client.get(reverse('hr:employee_detail', args=[self.emp.pk]))
+        self.assertContains(resp, self.emp.picture.url)
+
+    def test_placeholder_icon_shown_when_no_picture(self):
+        resp = self.client.get(reverse('hr:employee_detail', args=[self.emp.pk]))
+        self.assertContains(resp, 'bi-person')
+
+
+class EmployeeExportTests(TestCase):
+    """Excel export: Picture column present, real images embedded for
+    employees who have one, and graceful handling when a picture is
+    missing or its file no longer exists on disk. Also covers the
+    admin-only access boundary, which had no prior test coverage."""
+
+    def setUp(self):
+        self.admin = _make_role_user('export-admin', Role.SUPER_ADMIN)
+        self.client.login(username='export-admin', password='testpass123')
+
+    def _tiny_png(self, name='photo.png'):
+        from io import BytesIO
+        from PIL import Image as PILImage
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        buf = BytesIO()
+        PILImage.new('RGB', (2, 2), color='blue').save(buf, format='PNG')
+        buf.seek(0)
+        return SimpleUploadedFile(name, buf.read(), content_type='image/png')
+
+    def _read_workbook(self, response):
+        import openpyxl
+        from io import BytesIO
+        return openpyxl.load_workbook(BytesIO(response.content))
+
+    def test_export_includes_picture_column_header(self):
+        make_employee(iqama='EXP-1', name='Export Test Employee')
+        resp = self.client.get(reverse('hr:employee_export'))
+        wb = self._read_workbook(resp)
+        ws = wb.active
+        headers = [cell.value for cell in ws[1]]
+        self.assertIn('Picture', headers)
+
+    def test_export_embeds_image_for_employee_with_picture(self):
+        emp = make_employee(iqama='EXP-2', name='Has Picture Employee')
+        emp.picture.save('photo.png', self._tiny_png(), save=True)
+        resp = self.client.get(reverse('hr:employee_export'))
+        wb = self._read_workbook(resp)
+        ws = wb.active
+        self.assertGreaterEqual(len(ws._images), 1)
+
+    def test_export_does_not_crash_for_employee_without_picture(self):
+        make_employee(iqama='EXP-3', name='No Picture Employee')
+        resp = self.client.get(reverse('hr:employee_export'))
+        self.assertEqual(resp.status_code, 200)
+        wb = self._read_workbook(resp)
+        self.assertEqual(len(wb.active._images), 0)
+
+    def test_export_does_not_crash_when_picture_file_missing_from_disk(self):
+        emp = make_employee(iqama='EXP-4', name='Missing File Employee')
+        # Point at a picture path that was never actually written to disk -
+        # simulates a DB row surviving after the underlying file was deleted.
+        emp.picture.name = 'employee_pictures/does_not_exist.png'
+        emp.save(update_fields=['picture'])
+        resp = self.client.get(reverse('hr:employee_export'))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_regular_user_cannot_export(self):
+        _login_user('export-plain')
+        self.client.login(username='export-plain', password='testpass123')
+        resp = self.client.get(reverse('hr:employee_export'))
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, reverse('hr:employee_list'))
+
+    def test_super_admin_can_export(self):
+        resp = self.client.get(reverse('hr:employee_export'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            resp['Content-Type'],
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
