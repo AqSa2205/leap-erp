@@ -1263,6 +1263,11 @@
                 </a>
             </li>
             <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'zoho_connection' %}active{% endif %}" href="{% url 'accounting:zoho_connection' %}" data-title="Accounting — Zoho Connection">
+                    <i class="bi bi-plug"></i> <span>Zoho Connection</span>
+                </a>
+            </li>
+            <li class="nav-item">
                 <a class="nav-link {% if 'chart_import' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'accounting:chart_import' %}" data-title="Accounting — Import Chart of Accounts">
                     <i class="bi bi-upload"></i> <span>Import Chart</span>
                 </a>
