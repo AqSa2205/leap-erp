@@ -5,6 +5,7 @@ from django.urls import reverse_lazy, reverse
 from django.contrib import messages
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.http import require_POST
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import Q
 from decimal import Decimal, InvalidOperation
@@ -30,6 +31,7 @@ import openpyxl
 from datetime import datetime, timedelta
 from accounts.permissions import require_capability, CapabilityRequiredMixin
 from .budget_status import approved_budgets_for, budget_status, exchange_rates
+from .system_breakdown import breakdown
 
 
 _NUM_UNITS = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine']
@@ -5022,3 +5024,37 @@ def ajax_po_toggle_term(request, pk):
             locked_po.selected_terms.add(term)
             selected = True
     return JsonResponse({'ok': True, 'selected': selected})
+
+
+@login_required
+def project_systems(request, project_id):
+    """What one project's purchase orders are made of, by system.
+
+    Reproduces the workbook procurement keeps by hand — every ordered line under
+    its system, with its share of the project, its share of its own system, and
+    how much of it has been delivered.
+
+    Visibility comes from _visible_pos_for() rather than a rule of its own, so
+    this page can never show a PO the flat list would not.
+    """
+    from projects.models import Project
+
+    project = get_object_or_404(Project, pk=project_id)
+    pos = (_visible_pos_for(request.user)
+           .filter(project=project)
+           .prefetch_related('items')
+           .order_by('po_date', 'id'))
+
+    # A project the viewer has no PO against must not be confirmed to exist by
+    # rendering an empty page for it — that is the same disclosure the board
+    # avoids by building itself from visible POs only.
+    if not pos.exists() and not _can_see_all_projects(request.user):
+        raise PermissionDenied
+
+    data = breakdown(pos)
+    budget = approved_budgets_for([project]).get(project.pk)
+    return render(request, 'procurement/project_systems.html', {
+        'project': project,
+        'data': data,
+        'budget_status': budget_status(budget, pos),
+    })
