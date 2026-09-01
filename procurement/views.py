@@ -29,6 +29,7 @@ from django.utils.text import slugify
 import openpyxl
 from datetime import datetime, timedelta
 from accounts.permissions import require_capability, CapabilityRequiredMixin
+from .budget_status import approved_budgets_for, budget_status, exchange_rates
 
 
 _NUM_UNITS = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine']
@@ -453,11 +454,18 @@ def _po_project_groups(user, include_empty=True):
             for project in list(approved) + list(selected):
                 groups.setdefault(project.pk, {'project': project, 'rows': []})
 
+    # Budgets fetched for the whole board in one pass — a per-project walk of
+    # sections and line items would issue queries in proportion to the entire
+    # body of work procurement is tracking.
+    budgets = approved_budgets_for([e['project'] for e in groups.values()])
+    rates = exchange_rates()
+
     out = []
     for pk, entry in groups.items():
         out.append(_build_group(
             entry['project'], entry['rows'],
-            approved=pk in approved_ids, selected=pk in selected_ids))
+            approved=pk in approved_ids, selected=pk in selected_ids,
+            budget=budgets.get(pk), rates=rates))
     # Projects with orders first, then the empty ones, each newest-first.
     out.sort(key=lambda g: (g['po_count'] == 0,
                             -(g['rows'][0].po_date.toordinal() if g['rows'] else 0),
@@ -474,7 +482,8 @@ def _can_see_all_projects(user):
                 or user.is_admin_user or user.is_manager_user)
 
 
-def _build_group(project, rows, *, approved=False, selected=False):
+def _build_group(project, rows, *, approved=False, selected=False,
+                 budget=None, rates=None):
     """One project's card: its POs, per-currency totals and what is waiting.
 
     `off_board` marks a project that is here only because orders exist against
@@ -506,6 +515,11 @@ def _build_group(project, rows, *, approved=False, selected=False):
         'rows': rows,
         'totals': sorted(totals.items()),
         'awaiting': awaiting,
+        # Committed spend against the approved budget. Measured on gross_value
+        # because total_value carries VAT and a budgeted price does not —
+        # comparing those would report every project ~15% further through its
+        # budget than it is.
+        'budget_status': budget_status(budget, rows, rates=rates),
     }
 
 
