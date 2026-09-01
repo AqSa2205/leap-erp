@@ -108,9 +108,16 @@
     all-open page cannot be read. That makes the header the whole design — it
     has to answer "is anything here, and is any of it stuck" without being
     opened. {% endcomment %}
-    <div class="card-header d-flex align-items-center gap-3 flex-wrap"
-         role="button" data-bs-toggle="collapse" data-bs-target="#proj{{ forloop.counter }}"
-         style="cursor:pointer;">
+    {% comment %} The toggle is an inner region, not the whole header. A link
+    inside the toggling element depends on stopping the click before Bootstrap's
+    delegated handler sees it, and when that fails the card merely expands and
+    the link never navigates — which is exactly what happened. Making the button
+    a sibling of the toggle removes the dependency instead of tuning it.
+    {% endcomment %}
+    <div class="card-header d-flex align-items-center gap-3 flex-wrap">
+      <div class="d-flex align-items-center gap-3 flex-grow-1"
+           role="button" data-bs-toggle="collapse" data-bs-target="#proj{{ forloop.counter }}"
+           style="cursor:pointer; min-width:0;">
       <i class="bi bi-chevron-right"></i>
       <div class="flex-grow-1">
         <span class="fw-semibold">{{ g.project_name }}</span>
@@ -139,6 +146,8 @@
         {% endif %}
       </div>
 
+      </div>{# /toggle region — everything past here is clickable on its own #}
+
       <span class="badge {% if g.po_count %}bg-dark{% else %}bg-light text-muted border{% endif %}">
         {{ g.po_count }} PO{{ g.po_count|pluralize }}
       </span>
@@ -159,7 +168,7 @@
       {% comment %} Stops the click bubbling into the card's collapse toggle,
       which would open the card on the way to leaving it. {% endcomment %}
       <a href="{% url 'procurement:project_systems' g.project.pk %}"
-         class="btn btn-sm btn-outline-secondary text-nowrap" onclick="event.stopPropagation();"
+         class="btn btn-sm btn-outline-secondary text-nowrap"
          title="Ordered value by system, and how much has been delivered">
         <i class="bi bi-pie-chart me-1"></i>Systems
       </a>
