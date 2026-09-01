@@ -7,6 +7,24 @@ from .models import (
 )
 
 
+class RegionForm(forms.ModelForm):
+    """Create a new sales region. Super Admin only - see
+    projects.views.RegionCreateView."""
+    class Meta:
+        model = Region
+        fields = ['name', 'code', 'currency', 'dashboard_group', 'description', 'is_active']
+        widgets = {
+            'name': forms.TextInput(attrs={'class': 'form-control'}),
+            'code': forms.TextInput(attrs={'class': 'form-control', 'style': 'text-transform:uppercase;'}),
+            'currency': forms.TextInput(attrs={'class': 'form-control', 'maxlength': 3, 'placeholder': 'e.g. SAR'}),
+            'dashboard_group': forms.TextInput(attrs={
+                'class': 'form-control',
+                'placeholder': "Optional - e.g. 'LNUK' to combine with another region's tab"}),
+            'description': forms.Textarea(attrs={'class': 'form-control', 'rows': 2}),
+            'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+        }
+
+
 class ProjectForm(forms.ModelForm):
     """Form for creating/editing projects"""
 

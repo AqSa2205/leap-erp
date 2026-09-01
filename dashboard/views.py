@@ -1,6 +1,8 @@
+from collections import OrderedDict
 from decimal import Decimal
 
 from django.shortcuts import render
+from django.utils.text import slugify
 from django.contrib.auth.decorators import login_required
 from django.db.models import Sum, Count, Q
 from django.http import JsonResponse
@@ -163,7 +165,10 @@ def index(request):
         from django.shortcuts import redirect
         return redirect(landing_url_for(user))
 
-    # Base queryset based on user role
+    # Base queryset based on user role. Sales reps (the else branch) see the
+    # UNION of what they personally own plus their own region's pipeline -
+    # not one or the other - so a rep assigned to one region who happens to
+    # own a deal filed under a different region still sees that deal too.
     if user.is_super_admin_user:
         projects = Project.objects.all()
     elif user.is_admin_user or user.is_manager_user:
@@ -171,6 +176,9 @@ def index(request):
     elif getattr(user, 'is_finance_team_user', False):
         # Finance sees their own region (capability gate already passed).
         projects = Project.objects.filter(region=user.region)
+    elif user.region_id:
+        projects = Project.objects.filter(
+            Q(owner=user) | Q(region=user.region)).distinct()
     else:
         projects = Project.objects.filter(owner=user)
 
@@ -179,41 +187,47 @@ def index(request):
     # tile and its chart so the costing tree is walked a single time per request.
     sales_values, rates = _resolve_sales_values(projects)
 
-    # Get stats for each region group
-    # LNUK = UK + Global (GBP)
-    lnuk_stats = get_region_stats(projects, ['UK', 'GLB'], sales_values, 'GBP', rates)
-    lnuk_stats['currency'] = 'GBP'
-    lnuk_stats['currency_symbol'] = '£'
-    lnuk_stats['name'] = 'LNUK'
-    lnuk_stats['full_name'] = 'Leap Networks UK & Global'
+    # Region tabs are built dynamically from the Regions table rather than a
+    # fixed list, so a newly created region appears automatically. Regions
+    # sharing a dashboard_group (e.g. UK and Global both tagged 'LNUK') are
+    # combined into one tab, exactly as LNUK was before this - a region with
+    # no group set gets a tab of its own, keyed by its own code.
+    CURRENCY_SYMBOLS = {'GBP': '£', 'USD': '$', 'SAR': 'SAR ', 'AED': 'AED '}
 
-    # LNA = Leap Networks Arabia (SAR)
-    lna_stats = get_region_stats(projects, ['LNA'], sales_values, 'SAR', rates)
-    lna_stats['currency'] = 'SAR'
-    lna_stats['currency_symbol'] = 'SAR'
-    lna_stats['name'] = 'LNA'
-    lna_stats['full_name'] = 'Leap Networks Arabia'
+    region_groups = OrderedDict()
+    for r in Region.objects.filter(is_active=True).order_by('name'):
+        key = r.dashboard_group.strip() if r.dashboard_group else r.code
+        region_groups.setdefault(key, []).append(r)
 
-    # PA = Pace Arabia (SAR)
-    pa_stats = get_region_stats(projects, ['PA'], sales_values, 'SAR', rates)
-    pa_stats['currency'] = 'SAR'
-    pa_stats['currency_symbol'] = 'SAR'
-    pa_stats['name'] = 'PA'
-    pa_stats['full_name'] = 'Pace Arabia'
+    # A Super Admin sees every tab with real figures. Everyone else only sees
+    # real figures for the tab their own region belongs to - every other tab
+    # still appears (so people know the region exists) but renders as a
+    # skeleton with no numbers, never a computed real one.
+    user_group_key = None
+    if not user.is_super_admin_user and user.region_id:
+        ur = user.region
+        user_group_key = ur.dashboard_group.strip() if ur.dashboard_group else ur.code
 
-    # NEO-Dubai (AED)
-    neo_dubai_stats = get_region_stats(projects, ['NEO-Dubai'], sales_values, 'AED', rates)
-    neo_dubai_stats['currency'] = 'AED'
-    neo_dubai_stats['currency_symbol'] = 'AED'
-    neo_dubai_stats['name'] = 'NEO-Dubai'
-    neo_dubai_stats['full_name'] = 'NEO Dubai'
-
-    # NEO-KSA (SAR)
-    neo_ksa_stats = get_region_stats(projects, ['NEO-KSA'], sales_values, 'SAR', rates)
-    neo_ksa_stats['currency'] = 'SAR'
-    neo_ksa_stats['currency_symbol'] = 'SAR'
-    neo_ksa_stats['name'] = 'NEO-KSA'
-    neo_ksa_stats['full_name'] = 'NEO KSA'
+    region_tabs = []
+    for key, group_regions in region_groups.items():
+        codes = [r.code for r in group_regions]
+        currency = group_regions[0].currency
+        can_view = user.is_super_admin_user or key == user_group_key
+        if can_view:
+            stats = get_region_stats(projects, codes, sales_values, currency, rates)
+        else:
+            stats = None
+        region_tabs.append({
+            'key': key,
+            'slug': slugify(key),
+            'name': key,
+            'full_name': ' & '.join(r.name for r in group_regions),
+            'currency': currency,
+            'currency_symbol': CURRENCY_SYMBOLS.get(currency, currency),
+            'codes': codes,
+            'can_view': can_view,
+            'stats': stats,
+        })
 
     # Overall stats
     overall_stats = {
@@ -242,7 +256,9 @@ def index(request):
         },
     }
 
-    # Chart data for each region (for JS)
+    # Chart data for each region (for JS). Only computed for tabs the viewer
+    # can actually see - a locked tab gets no chart entry at all, so nothing
+    # ever reaches the page source for a region someone shouldn't see.
     def get_chart_data(region_codes, currency):
         region_projects = projects.filter(region__code__in=region_codes)
         return {
@@ -261,21 +277,15 @@ def index(request):
         }
 
     chart_data = {
-        'lnuk': get_chart_data(['UK', 'GLB'], 'GBP'),
-        'lna': get_chart_data(['LNA'], 'SAR'),
-        'pa': get_chart_data(['PA'], 'SAR'),
-        'neo_dubai': get_chart_data(['NEO-Dubai'], 'AED'),
-        'neo_ksa': get_chart_data(['NEO-KSA'], 'SAR'),
+        tab['slug']: get_chart_data(tab['codes'], tab['currency'])
+        for tab in region_tabs if tab['can_view']
     }
 
     context = {
         'overall_stats': overall_stats,
-        'lnuk': lnuk_stats,
-        'lna': lna_stats,
-        'pa': pa_stats,
-        'neo_dubai': neo_dubai_stats,
-        'neo_ksa': neo_ksa_stats,
+        'region_tabs': region_tabs,
         'chart_data': chart_data,
+        'is_super_admin': user.is_super_admin_user,
     }
 
     return render(request, 'dashboard/index.html', context)
