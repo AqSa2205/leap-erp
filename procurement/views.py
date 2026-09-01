@@ -811,6 +811,11 @@ class POCreateView(ProcurementPermissionMixin, CreateView):
             self.object.save()
             item_formset.instance = self.object
             item_formset.save()
+            # Once the items exist. The status hook on the model fires before
+            # the formset saves, so on a request that both commits a PO and
+            # writes its lines that first call saw no items at all.
+            from finance.outflow_links import fill_po_numbers
+            fill_po_numbers(self.object)
             _apply_po_terms(self.object, self.request.POST)
             _save_po_term_overrides(self.object, self.request.POST, self.request.user)
             # A new PO is immediately waiting on its first stage, so the person
@@ -1089,6 +1094,11 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
                     to_status=new_status, changed_by=self.request.user)
             item_formset.instance = self.object
             item_formset.save()
+            # Once the items exist. The status hook on the model fires before
+            # the formset saves, so on a request that both commits a PO and
+            # writes its lines that first call saw no items at all.
+            from finance.outflow_links import fill_po_numbers
+            fill_po_numbers(self.object)
             _apply_po_terms(self.object, self.request.POST)
             _save_po_term_overrides(self.object, self.request.POST, self.request.user)
             messages.success(self.request, f'Purchase Order {self.object.po_number} updated successfully.')
@@ -1159,6 +1169,11 @@ def po_create_from_bom(request, sheet_pk):
             uom=item.unit or 'Nos',
             rate_per_unit=item.budget_unit_price(),
             order=serial,
+            # Without this the PO cannot be traced back to the costing line it
+            # came from, so its number can never reach the cash-outflow row for
+            # that line. bom_procurement_tracker has always set it; this path,
+            # creating items from the same CostingLineItem, did not.
+            source_bom_item=item,
         )
         serial += 1
 
