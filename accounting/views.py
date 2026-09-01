@@ -1,8 +1,8 @@
+import os
 from datetime import datetime
 from decimal import Decimal
 from io import BytesIO
 from urllib.parse import urlencode
-from uuid import uuid4
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -13,19 +13,19 @@ from django.db.models import Q, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.core import signing
 from django.views.decorators.http import require_POST
-
-from django.core.files.base import ContentFile
-from django.core.files.storage import default_storage
 
 from .chart_import import (
     ChartImportError, apply as apply_chart, parse_rows, plan, read_grid,
 )
 from .mapping import certain_matches, index_accounts, suggest
 from .models import (
-    Account, Voucher, VoucherLine, ZohoAccountMap, build_tree, descendant_ids,
-    subtree_counts,
+    Account, Voucher, VoucherLine, ZohoAccountMap, ZohoCredentials, build_tree,
+    descendant_ids, subtree_counts,
 )
+from .zoho import READ_SCOPES, ZohoClient, ZohoError
+from .zoho_sync import automap_by_code, mapping_counts, upsert_accounts
 
 
 def _can_view_accounting(user):
@@ -418,8 +418,10 @@ def _stamp(note, line):
 
 # ── Chart of accounts import ────────────────────────────────────────────────
 
-CHART_UPLOAD_SESSION_KEY = 'chart_import_pending'
-CHART_UPLOAD_DIR = 'chart_imports'
+# A preview is only worth confirming while it still describes the chart it was
+# computed against.
+CHART_PREVIEW_MAX_AGE = 60 * 60
+CHART_PREVIEW_SALT = 'accounting.chart_import'
 MAX_CHART_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
@@ -428,10 +430,20 @@ def chart_import(request):
     """Upload a chart-of-accounts revision, see what it would change, then apply.
 
     Finance owns this chart and revises it — this is already the second
-    revision — so publishing one should not need a developer or a shell. The
-    preview step is the whole safety story: every ledger entry is coded against
+    revision — so publishing one should not need a developer or a shell. That
+    matters more than it sounds: the web service runs on a plan with no shell
+    at all, so a management command is not reachable in production.
+
+    The preview is the whole safety story: every ledger entry is coded against
     this structure, and the difference between "4 new accounts" and "200
     renamed" is the difference between a routine revision and a wrong file.
+
+    The parsed rows travel to the confirm step in a signed hidden field rather
+    than via the session and object storage. The first version used both, which
+    meant the flow could fail in two ways that look identical to the user — a
+    session that did not carry, or a re-read that did not come back — and it
+    made the apply depend on re-parsing a file rather than on the rows actually
+    previewed. Signed, the confirm step applies exactly what was shown.
 
     Nothing is ever deleted. Accounts absent from a new revision can be
     deactivated, which keeps their postings and history intact.
@@ -440,7 +452,6 @@ def chart_import(request):
         raise PermissionDenied
 
     if request.method != 'POST':
-        request.session.pop(CHART_UPLOAD_SESSION_KEY, None)
         return render(request, 'accounting/chart_import.html',
                       {'current_count': Account.objects.count(),
                        'active_count': Account.objects.active().count()})
@@ -456,10 +467,10 @@ def chart_import(request):
                                 'the wrong file.')
         return redirect('accounting:chart_import')
 
-    payload = upload.read()
     try:
-        sheet_name, rows = read_grid(BytesIO(payload),
-                                     sheet_name=(request.POST.get('sheet') or '').strip() or None)
+        sheet_name, rows = read_grid(
+            BytesIO(upload.read()),
+            sheet_name=(request.POST.get('sheet') or '').strip() or None)
         parsed, duplicates, bad_types = parse_rows(rows)
     except ChartImportError as exc:
         messages.error(request, str(exc))
@@ -473,17 +484,6 @@ def chart_import(request):
             f'in F, data starting at row 3.')
         return redirect('accounting:chart_import')
 
-    # Held in storage rather than the session so the confirm step works on the
-    # bytes that were actually previewed — re-uploading between the two steps
-    # would let the preview describe one file and the apply run another.
-    stored = default_storage.save(
-        f'{CHART_UPLOAD_DIR}/{uuid4().hex}', ContentFile(payload))
-    request.session[CHART_UPLOAD_SESSION_KEY] = {
-        'path': stored,
-        'sheet': sheet_name,
-        'filename': upload.name,
-    }
-
     return render(request, 'accounting/chart_import.html', {
         'plan': plan(parsed),
         'sheet_name': sheet_name,
@@ -492,6 +492,7 @@ def chart_import(request):
         'bad_types': bad_types,
         'current_count': Account.objects.count(),
         'active_count': Account.objects.active().count(),
+        'payload': signing.dumps(parsed, salt=CHART_PREVIEW_SALT, compress=True),
     })
 
 
@@ -502,38 +503,32 @@ def chart_import_apply(request):
     if not _can_view_accounting(request.user):
         raise PermissionDenied
 
-    pending = request.session.get(CHART_UPLOAD_SESSION_KEY)
-    if not pending:
+    raw = request.POST.get('payload') or ''
+    if not raw:
         messages.error(request, 'Nothing to apply — upload a workbook first.')
         return redirect('accounting:chart_import')
 
     try:
-        with default_storage.open(pending['path'], 'rb') as handle:
-            sheet_name, rows = read_grid(handle, sheet_name=pending.get('sheet'))
-        parsed, _duplicates, _bad = parse_rows(rows)
-    except (ChartImportError, FileNotFoundError, OSError) as exc:
-        messages.error(request, f'Could not re-read the uploaded workbook: {exc}. '
-                                f'Please upload it again.')
-        request.session.pop(CHART_UPLOAD_SESSION_KEY, None)
+        parsed = signing.loads(raw, salt=CHART_PREVIEW_SALT,
+                               max_age=CHART_PREVIEW_MAX_AGE)
+    except signing.SignatureExpired:
+        messages.error(request, 'That preview is more than an hour old, and the '
+                                'chart may have moved on since. Please upload the '
+                                'workbook again.')
+        return redirect('accounting:chart_import')
+    except signing.BadSignature:
+        messages.error(request, 'That preview could not be verified. Please upload '
+                                'the workbook again.')
         return redirect('accounting:chart_import')
 
     deactivate = request.POST.get('deactivate_missing') == 'on'
     with transaction.atomic():
         result = apply_chart(parsed, deactivate_missing=deactivate)
 
-    # The upload has served its purpose; leaving copies of the chart lying in
-    # storage is a slow leak nobody would think to look for.
-    try:
-        default_storage.delete(pending['path'])
-    except (OSError, NotImplementedError):
-        pass
-    request.session.pop(CHART_UPLOAD_SESSION_KEY, None)
-
     parts = [f"{result['created']} added", f"{result['updated']} updated"]
     if result['deactivated']:
         parts.append(f"{result['deactivated']} deactivated")
-    messages.success(request, f"Chart of accounts updated from {pending['filename']}: "
-                              f"{', '.join(parts)}.")
+    messages.success(request, f"Chart of accounts updated: {', '.join(parts)}.")
     if result['orphans']:
         messages.warning(
             request,
@@ -541,3 +536,181 @@ def chart_import_apply(request):
             f"at the top level: {', '.join(result['orphans'][:8])}"
             + ('…' if len(result['orphans']) > 8 else ''))
     return redirect('accounting:chart')
+
+
+# ── Zoho connection ─────────────────────────────────────────────────────────
+
+@login_required
+def zoho_connection(request):
+    """Connect Zoho Books and pull its chart, from the browser.
+
+    This exists because the web service runs on a plan with no shell. The
+    connection and the account sync were built as management commands, which
+    means they could be run on a developer's laptop and nowhere else — so the
+    live system had no Zoho data at all and its mapping screen sat empty. A
+    management command is not a deployment mechanism.
+
+    The Self Client flow suits a server with no browser: a grant token is
+    generated by hand in Zoho's console, exchanged once here for a refresh
+    token, and the refresh token then lasts until somebody revokes it. The
+    grant token is single-use and expires in minutes, so it is exchanged
+    immediately and never stored.
+
+    Read-only throughout: the scopes are all `.READ` and nothing in
+    accounting.zoho issues a write to Zoho.
+    """
+    if not _can_view_accounting(request.user):
+        raise PermissionDenied
+
+    creds = ZohoCredentials.load()
+
+    if request.method == 'POST':
+        action = request.POST.get('action')
+        handler = {
+            'credentials': _zoho_save_credentials,
+            'connect': _zoho_connect,
+            'sync': _zoho_sync,
+        }.get(action)
+        if handler is None:
+            messages.error(request, 'Unknown action.')
+        else:
+            handler(request, creds)
+        return redirect('accounting:zoho_connection')
+
+    return render(request, 'accounting/zoho_connection.html', {
+        'creds': creds,
+        'read_scopes': READ_SCOPES,
+        'counts': mapping_counts(),
+        # Never the secret itself — only whether one is on file. Rendering it
+        # back into the page would put it in every browser cache, screenshot
+        # and shoulder-surf that ever touches this screen.
+        'has_secret': bool(creds.client_secret),
+        'from_environment': {
+            'client_id': bool(os.environ.get('ZOHO_CLIENT_ID')),
+            'client_secret': bool(os.environ.get('ZOHO_CLIENT_SECRET')),
+            'organization_id': bool(os.environ.get('ZOHO_ORGANIZATION_ID')),
+        },
+    })
+
+
+def _zoho_save_credentials(request, creds):
+    """Store the long-lived identifiers. The environment still wins on load."""
+    changed = []
+    for field in ('client_id', 'organization_id', 'accounts_url'):
+        value = (request.POST.get(field) or '').strip()
+        if value and getattr(creds, field) != value:
+            setattr(creds, field, value)
+            changed.append(field)
+
+    # Blank means "leave the stored one alone", so the form can be re-submitted
+    # to correct an organisation id without re-typing the secret.
+    secret = (request.POST.get('client_secret') or '').strip()
+    if secret:
+        creds.client_secret = secret
+        changed.append('client_secret')
+
+    if changed:
+        creds.save()
+        messages.success(request, 'Credentials saved.')
+    else:
+        messages.info(request, 'Nothing changed.')
+
+
+def _zoho_connect(request, creds):
+    """Exchange a Self Client grant token for a refresh token."""
+    code = (request.POST.get('code') or '').strip()
+    if not code:
+        messages.error(request, 'Paste the code from Zoho first.')
+        return
+
+    missing = [label for label, value in (
+        ('Client ID', creds.client_id),
+        ('Client Secret', creds.client_secret),
+        ('Organization ID', creds.organization_id)) if not value]
+    if missing:
+        messages.error(request, f"Set {', '.join(missing)} before connecting.")
+        return
+
+    try:
+        ZohoClient(creds).exchange_grant_token(code)
+    except ZohoError as exc:
+        messages.error(request, str(exc))
+        return
+
+    messages.success(request, 'Connected. The refresh token is stored — this is '
+                              'the last time a code is needed.')
+    _zoho_report_organisation(request, creds)
+
+
+def _zoho_report_organisation(request, creds):
+    """Prove the whole chain: credentials, organisation and data centre.
+
+    A stored refresh token only means the exchange worked. Whether the
+    organisation id matches one Zoho will actually serve is a separate
+    question, and the failure it causes otherwise looks nothing like a
+    configuration mistake.
+    """
+    try:
+        payload = ZohoClient(creds).organization()
+    except ZohoError as exc:
+        messages.warning(request, f'Connected, but reading the organisation failed: {exc}')
+        return
+
+    organisations = payload.get('organizations') or []
+    match = [o for o in organisations
+             if str(o.get('organization_id')) == str(creds.organization_id)]
+    if match:
+        messages.info(request, f"Zoho reports: {match[0].get('name')} "
+                               f"[{match[0].get('currency_code')}]")
+    else:
+        visible = ', '.join(f"{o.get('organization_id')} {o.get('name')}"
+                            for o in organisations) or 'none'
+        messages.warning(
+            request,
+            f'Organization ID {creds.organization_id} is not one Zoho serves for '
+            f'these credentials. Visible: {visible}. Requests will fail until it matches.')
+
+
+def _zoho_sync(request, creds):
+    """Pull Zoho's chart of accounts into the mapping table."""
+    if not creds.is_configured:
+        messages.error(request, f'Not connected: {creds.status}.')
+        return
+
+    try:
+        records = list(ZohoClient(creds).accounts())
+    except ZohoError as exc:
+        messages.error(request, f'Could not read Zoho: {exc}')
+        return
+
+    if not records:
+        messages.error(request, 'Zoho returned no accounts — check the organization ID.')
+        return
+
+    wants_automap = request.POST.get('automap') == 'on'
+    with transaction.atomic():
+        created, updated = upsert_accounts(records)
+        proposed = automap_by_code() if wants_automap else 0
+
+    creds.last_synced_at = timezone.now()
+    creds.save(update_fields=['last_synced_at', 'updated_at'])
+
+    messages.success(request,
+                     f'{len(records)} Zoho account(s): {created} new, {updated} updated.')
+    if wants_automap:
+        if proposed:
+            messages.info(request, f'{proposed} mapping(s) proposed by exact code match.')
+        else:
+            # Silence here would read as "automap is broken". It is not — this
+            # organisation has no account codes for it to match on.
+            messages.info(
+                request,
+                'No code matches — this organisation has no account codes in Zoho, '
+                'so mapping is done by name on the Zoho Mapping screen.')
+
+    counts = mapping_counts()
+    if counts['unmapped']:
+        messages.warning(
+            request,
+            f"{counts['unmapped']} account(s) still need mapping — transactions "
+            f"against them cannot be coded yet.")
