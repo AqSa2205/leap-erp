@@ -45,6 +45,21 @@ services:
         sync: false
       - key: R2_ENDPOINT_URL
         sync: false
+      # Zoho Books (read-only accounting bridge). All four are set in the
+      # Render dashboard, never committed. The refresh token is included
+      # because it is created by exchanging a one-time code, so it exists only
+      # in whichever database ran the exchange — without it here, a connection
+      # made anywhere else cannot be carried to production and the Zoho screens
+      # sit empty. Alternatively connect from the UI at
+      # /accounting/zoho/connection/, which is the route when no shell exists.
+      - key: ZOHO_CLIENT_ID
+        sync: false
+      - key: ZOHO_CLIENT_SECRET
+        sync: false
+      - key: ZOHO_ORGANIZATION_ID
+        sync: false
+      - key: ZOHO_REFRESH_TOKEN
+        sync: false
       # Anthropic API key — powers AI quotation extraction (and the dev-tracking
       # digest). Set the value in the Render dashboard → Environment; never
       # commit it. Without it, quotation import shows "AI extraction is not

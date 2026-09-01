@@ -94,6 +94,7 @@
             <dd class="col-sm-8">
               {% if creds.refresh_token %}<span class="text-success"><i class="bi bi-check2"></i> stored</span>
               {% else %}<span class="text-muted">none — connect below</span>{% endif %}
+              {% if from_environment.refresh_token %}<span class="badge bg-light text-dark border ms-1">from environment</span>{% endif %}
             </dd>
             <dt class="col-sm-4">Last account sync</dt>
             <dd class="col-sm-8">
@@ -169,6 +170,16 @@
           <p class="small mb-2">In the Self Client, open the <strong>Generate Code</strong> tab and paste this
             scope string:</p>
           <div class="zc-scope mb-2">{{ read_scopes }}</div>
+          {% comment %} The token is created by exchanging a one-time code, so it
+          exists only in whichever database ran the exchange. Connecting on one
+          machine therefore leaves every other install unconnected — which is
+          why carrying it across is worth saying out loud here. {% endcomment %}
+          <div class="alert alert-light border small py-2">
+            <i class="bi bi-info-circle me-1"></i>
+            Already connected somewhere else? Set <code>ZOHO_REFRESH_TOKEN</code> in this
+            environment's configuration instead and skip this step — a connection carries
+            across, it does not have to be made again per environment.
+          </div>
           <p class="small text-muted">
             Every scope ends in <code>.READ</code> — the token Zoho issues has no permission to
             change anything, enforced by Zoho rather than by us. Choose a duration of 10 minutes,
