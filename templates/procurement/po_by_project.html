@@ -155,6 +155,16 @@
       </span>
       {% endif %}
 
+      {% if g.project %}
+      {% comment %} Stops the click bubbling into the card's collapse toggle,
+      which would open the card on the way to leaving it. {% endcomment %}
+      <a href="{% url 'procurement:project_systems' g.project.pk %}"
+         class="btn btn-sm btn-outline-secondary text-nowrap" onclick="event.stopPropagation();"
+         title="Ordered value by system, and how much has been delivered">
+        <i class="bi bi-pie-chart me-1"></i>Systems
+      </a>
+      {% endif %}
+
       {% comment %} How much of the approved budget the issued POs have
       committed. Ex-VAT on both sides: total_value carries VAT and a budgeted
       price does not, so comparing those would report every project ~15%
