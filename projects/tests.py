@@ -2012,3 +2012,116 @@ class HiddenContainerNestingTests(TestCase):
         self.assertIn('id="lostReasonRow"', html)
         row = html.split('id="lostReasonRow"', 1)[1][:200]
         self.assertIn('display:none', row.replace(' ', ''))
+
+
+class ProcurementTimelineVisibilityTests(TestCase):
+    """Procurement does not get the project activity timeline.
+
+    The feed links straight to the priced Commercial Proposal PDF and carries
+    a "Costing finalized" event showing the grand total. Procurement works from
+    the finance budget rather than the costing sheet — the same constraint that
+    already keeps the proposal team away from those events.
+    """
+
+    def setUp(self):
+        from django.core.files.base import ContentFile
+        from costing.models import CostingSheet, CostingSheetRevision
+
+        self.region = Region.objects.create(name='KSA', code='TLA')
+        # Won, because that is the only category procurement can open a project
+        # in at all — and therefore the only place this leak was reachable.
+        self.status = ProjectStatus.objects.create(name='Won', category='won')
+        self.project = Project.objects.create(
+            project_name='Ghazlan', proposal_reference='TLA-1',
+            region=self.region, status=self.status)
+
+        def user(username, role_name):
+            role, _ = Role.objects.get_or_create(name=role_name)
+            return User.objects.create_user(username, password='x', role=role,
+                                            region=self.region)
+
+        self.procurement_mgr = user('tl-pmgr', Role.PROCUREMENT_MGR)
+        self.procurement_off = user('tl-poff', Role.PROCUREMENT_OFF)
+        self.super_admin = user('tl-super', Role.SUPER_ADMIN)
+
+        self.sheet = CostingSheet.objects.create(
+            title='Ghazlan Costing', project=self.project)
+        rev = CostingSheetRevision.objects.create(
+            sheet=self.sheet, revision_label='R01', export_format='pdf',
+            created_by=self.super_admin)
+        rev.file.save('proposal.pdf', ContentFile(b'priced'), save=True)
+        self.revision = rev
+
+    def _context(self, who):
+        self.client.force_login(who)
+        response = self.client.get(
+            reverse('projects:detail', kwargs={'pk': self.project.pk}))
+        self.assertEqual(response.status_code, 200)
+        return response.context
+
+    # ── denied ──────────────────────────────────────────────────────────────
+
+    def test_a_procurement_manager_gets_no_timeline(self):
+        self.assertFalse(self._context(self.procurement_mgr)['show_timeline'])
+
+    def test_a_procurement_officer_gets_no_timeline(self):
+        self.assertFalse(self._context(self.procurement_off)['show_timeline'])
+
+    def test_the_events_are_not_in_procurements_context_at_all(self):
+        """Withheld rather than hidden: a later template edit cannot leak what
+        was never handed over."""
+        self.assertEqual(self._context(self.procurement_mgr)['timeline'], [])
+
+    def test_the_priced_pdf_link_never_reaches_the_page(self):
+        """The specific thing being protected — a direct link to the priced
+        Commercial Proposal."""
+        self.client.force_login(self.procurement_mgr)
+        body = self.client.get(
+            reverse('projects:detail', kwargs={'pk': self.project.pk})).content.decode()
+        self.assertNotIn(self.revision.file.url, body)
+        self.assertNotIn('Activity Timeline', body)
+
+    def test_the_costing_document_rule_names_both_teams(self):
+        """Asserted directly, because procurement is denied the whole feed
+        upstream and so never reaches this branch through the view. A guard no
+        test can call is not a second line of defence."""
+        from projects.views import may_see_costing_documents
+        self.assertFalse(may_see_costing_documents(self.procurement_mgr))
+        self.assertFalse(may_see_costing_documents(self.procurement_off))
+        self.assertTrue(may_see_costing_documents(self.super_admin))
+
+    def test_the_costing_document_rule_still_excludes_the_proposal_team(self):
+        from projects.views import may_see_costing_documents
+        role, _ = Role.objects.get_or_create(name=Role.PROPOSAL_HEAD)
+        head = User.objects.create_user('tl-rule-phead', password='x', role=role,
+                                        region=self.region)
+        self.assertFalse(may_see_costing_documents(head))
+
+    def test_the_proposal_team_is_still_excluded_from_the_pdf_event(self):
+        """The condition guarding those events was edited to add procurement.
+        The exclusion it already carried has to survive that edit."""
+        role, _ = Role.objects.get_or_create(name=Role.PROPOSAL_HEAD)
+        head = User.objects.create_user('tl-phead', password='x', role=role,
+                                        region=self.region)
+        context = self._context(head)
+        self.assertTrue(context['show_timeline'])
+        titles = [e['title'] for e in context['timeline']]
+        self.assertNotIn('Commercial Proposal R01 exported', titles)
+
+    # ── still allowed ───────────────────────────────────────────────────────
+
+    def test_a_super_admin_still_gets_the_timeline(self):
+        """Removing a feed for one team must not remove it for everyone."""
+        context = self._context(self.super_admin)
+        self.assertTrue(context['show_timeline'])
+        self.assertTrue(context['timeline'])
+
+    def test_the_super_admin_still_sees_the_pdf_export_event(self):
+        titles = [e['title'] for e in self._context(self.super_admin)['timeline']]
+        self.assertIn('Commercial Proposal R01 exported', titles)
+
+    def test_the_page_still_renders_the_card_for_everyone_else(self):
+        self.client.force_login(self.super_admin)
+        body = self.client.get(
+            reverse('projects:detail', kwargs={'pk': self.project.pk})).content.decode()
+        self.assertIn('Activity Timeline', body)
