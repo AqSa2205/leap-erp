@@ -589,6 +589,7 @@ def zoho_connection(request):
             'client_id': bool(os.environ.get('ZOHO_CLIENT_ID')),
             'client_secret': bool(os.environ.get('ZOHO_CLIENT_SECRET')),
             'organization_id': bool(os.environ.get('ZOHO_ORGANIZATION_ID')),
+            'refresh_token': bool(os.environ.get('ZOHO_REFRESH_TOKEN')),
         },
     })
 
