@@ -537,14 +537,23 @@ class ZohoCredentials(models.Model):
     @classmethod
     def load(cls):
         obj, _ = cls.objects.get_or_create(pk=1)
-        # Environment wins for the two long-lived secrets, so production can
-        # set them via the Render dashboard exactly like the R2 and Anthropic
-        # keys, and they never pass through a form or a git diff.
+        # Environment wins for the long-lived secrets, so production can set
+        # them via the Render dashboard exactly like the R2 and Anthropic keys,
+        # and they never pass through a form or a git diff.
+        #
+        # The refresh token is included deliberately. It is obtained by
+        # exchanging a one-time code, which means it exists only in whichever
+        # database performed the exchange — connect on a laptop and production
+        # stays unconnected however carefully its other credentials are set.
+        # Seeding it from the environment makes a connection portable between
+        # installs instead of something that must be redone per environment,
+        # which is the whole promise of "connect once".
         import os
         changed = []
         for field, env in (('client_id', 'ZOHO_CLIENT_ID'),
                            ('client_secret', 'ZOHO_CLIENT_SECRET'),
-                           ('organization_id', 'ZOHO_ORGANIZATION_ID')):
+                           ('organization_id', 'ZOHO_ORGANIZATION_ID'),
+                           ('refresh_token', 'ZOHO_REFRESH_TOKEN')):
             value = os.environ.get(env)
             if value and getattr(obj, field) != value:
                 setattr(obj, field, value)

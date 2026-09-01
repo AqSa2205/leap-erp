@@ -10,6 +10,7 @@ rendered back, a grant code that is single-use, an organisation id that can be
 valid-looking and still wrong, and a sync that must never touch the ERP's own
 chart.
 """
+import os
 from unittest import mock
 
 from django.contrib.auth import get_user_model
@@ -313,3 +314,82 @@ class ZohoConnectionScreenTests(TestCase):
                                     follow=True)
         self.assertIn('Unknown action', ' '.join(
             str(m) for m in response.context['messages']))
+
+
+class PortableConnectionTests(TestCase):
+    """A connection made once should carry to another environment.
+
+    The refresh token is produced by exchanging a one-time code, so it exists
+    only in whichever database ran the exchange. Connect on a laptop and
+    production stays unconnected however carefully its other credentials are
+    set — which is exactly what happened here, and looked like the Zoho screens
+    being broken rather than unconfigured.
+    """
+
+    def test_the_refresh_token_can_come_from_the_environment(self):
+        with mock.patch.dict('os.environ', {'ZOHO_REFRESH_TOKEN': '1000.carried'}):
+            creds = ZohoCredentials.load()
+        self.assertEqual(creds.refresh_token, '1000.carried')
+
+    def test_all_four_credentials_together_are_enough_to_be_connected(self):
+        """The property that matters: no code exchange needed in this
+        environment at all."""
+        with mock.patch.dict('os.environ', {
+                'ZOHO_CLIENT_ID': '1000.ABC',
+                'ZOHO_CLIENT_SECRET': 'shhh',
+                'ZOHO_ORGANIZATION_ID': '768283719',
+                'ZOHO_REFRESH_TOKEN': '1000.carried'}):
+            creds = ZohoCredentials.load()
+        self.assertTrue(creds.is_configured)
+
+    def test_the_environment_value_is_persisted_not_just_read(self):
+        """Otherwise every request re-writes it and a later rotation in the
+        database would be silently undone on the next load."""
+        with mock.patch.dict('os.environ', {'ZOHO_REFRESH_TOKEN': '1000.carried'}):
+            ZohoCredentials.load()
+        self.assertEqual(
+            ZohoCredentials.objects.get(pk=1).refresh_token, '1000.carried')
+
+    def test_an_absent_variable_leaves_a_stored_token_alone(self):
+        """A local install that connected through the UI must not be wiped by
+        the absence of an env var."""
+        creds = ZohoCredentials.load()
+        creds.refresh_token = '1000.connected-here'
+        creds.save()
+        with mock.patch.dict('os.environ', {}, clear=False):
+            os.environ.pop('ZOHO_REFRESH_TOKEN', None)
+            reloaded = ZohoCredentials.load()
+        self.assertEqual(reloaded.refresh_token, '1000.connected-here')
+
+    def test_the_environment_overrides_a_stale_stored_token(self):
+        """Rotating the token is done by changing the environment, so the
+        environment has to win."""
+        creds = ZohoCredentials.load()
+        creds.refresh_token = '1000.old'
+        creds.save()
+        with mock.patch.dict('os.environ', {'ZOHO_REFRESH_TOKEN': '1000.new'}):
+            reloaded = ZohoCredentials.load()
+        self.assertEqual(reloaded.refresh_token, '1000.new')
+
+    def test_the_screen_says_when_the_token_came_from_the_environment(self):
+        """Otherwise 'stored' is ambiguous between connected here and carried
+        in, and only one of those can be fixed by pasting a new code."""
+        for name, _label in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        user = User.objects.create_user(
+            'zc-env', password='x', role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.client.force_login(user)
+        with mock.patch.dict('os.environ', {'ZOHO_REFRESH_TOKEN': '1000.carried'}):
+            response = self.client.get(reverse('accounting:zoho_connection'))
+        self.assertTrue(response.context['from_environment']['refresh_token'])
+
+    def test_the_token_is_still_never_rendered_into_the_page(self):
+        """Carrying it across must not turn into displaying it."""
+        for name, _label in Role.ROLE_CHOICES:
+            Role.objects.get_or_create(name=name)
+        user = User.objects.create_user(
+            'zc-env2', password='x', role=Role.objects.get(name=Role.SUPER_ADMIN))
+        self.client.force_login(user)
+        with mock.patch.dict('os.environ', {'ZOHO_REFRESH_TOKEN': '1000.super-secret'}):
+            body = self.client.get(reverse('accounting:zoho_connection')).content.decode()
+        self.assertNotIn('1000.super-secret', body)
