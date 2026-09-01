@@ -248,7 +248,15 @@
             </div>
         </div>
 
-        <!-- Activity Timeline -->
+        {# Activity Timeline — a Django comment, not an HTML one: an HTML #}
+        {# comment still renders, so it would name a section the reader is  #}
+        {# not being shown.                                                  #}
+        {% comment %} Withheld from procurement: the feed links to the priced
+        Commercial Proposal PDF and shows the costing grand total, and
+        procurement works from the finance budget rather than the costing
+        sheet. The view does not hand over the events at all — this only
+        stops an empty card being drawn. {% endcomment %}
+        {% if show_timeline %}
         <div class="card mb-4 tl-card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0"><i class="bi bi-clock-history me-2"></i>Activity Timeline</h5>
@@ -273,6 +281,7 @@
                 {% endfor %}
             </div>
         </div>
+        {% endif %}
 
         <div class="card mb-4">
             <div class="card-header d-flex justify-content-between align-items-center">

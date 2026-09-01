@@ -28,6 +28,23 @@ from notifications.services import notify_users
 from accounts.permissions import CapabilityRequiredMixin
 
 
+def may_see_costing_documents(user):
+    """Whether a user may be shown priced PDFs and supplier cost documents.
+
+    The proposal team works from the BOM and procurement from the finance
+    budget; neither is shown the costing sheet, so neither should be handed a
+    link straight to the priced Commercial Proposal or a vendor quote.
+
+    A module-level rule rather than an inline condition because procurement is
+    already denied the whole activity feed upstream, which makes this branch
+    unreachable for them through the view — and an unreachable guard no test
+    can call is not a second line of defence, it is code that rots. Stated
+    here, it can be asserted directly and will still be right if the feed is
+    ever restored.
+    """
+    return not (user.is_proposal_team_user or user.is_procurement_user)
+
+
 class ProjectPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     """Base mixin for project permissions"""
 
@@ -257,6 +274,21 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
 
         # ── Timeline: flat, chronologically sorted event stream ─────────
         # Each event: {when, icon, color, title, subtitle, actor, url}
+        #
+        # Withheld from procurement. The feed links straight to the priced
+        # Commercial Proposal PDF and carries a "Costing finalized" event
+        # showing the grand total, and procurement works from the finance
+        # budget rather than the costing sheet — the same reason the approved
+        # budget pages exist, and the same reason the proposal team is already
+        # excluded from the PDF and vendor-quote events below.
+        #
+        # Kept out of the context rather than hidden in the template: a later
+        # template edit cannot leak what was never handed over. The events are
+        # still assembled and then dropped, which wastes a few queries for
+        # these users — worth revisiting only if the page gets slow.
+        show_timeline = not self.request.user.is_procurement_user
+        context['show_timeline'] = show_timeline
+
         events = []
 
         def _actor_name(u):
@@ -333,8 +365,13 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
 
         # Commercial Proposal PDF exports + vendor quotes link straight to the
         # priced PDF / supplier cost documents, so they must never appear in the
-        # proposal team's activity feed (they work from the BOM only).
-        if not self.request.user.is_proposal_team_user:
+        # proposal team's activity feed (they work from the BOM only) nor in
+        # procurement's (they work from the finance budget).
+        #
+        # Procurement is already denied the whole timeline above. This is the
+        # second lock on the same door: if the feed is ever restored for them,
+        # the priced documents must not come back with it.
+        if may_see_costing_documents(self.request.user):
             from costing.models import CostingSheetRevision as _Rev
             for rev in _Rev.objects.filter(sheet__in=costing_sheets, export_format='pdf').select_related('created_by', 'sheet'):
                 events.append({
@@ -387,7 +424,7 @@ class ProjectDetailView(ProjectPermissionMixin, DetailView):
 
         # Sort newest first
         events.sort(key=lambda e: e['when'] or project.created_at, reverse=True)
-        context['timeline'] = events
+        context['timeline'] = events if show_timeline else []
 
         # ── Pipeline email linking ("Add Emails" / "Delink") ──────────────
         # Purely additive: doesn't touch any of the context keys above.
