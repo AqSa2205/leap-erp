@@ -1016,7 +1016,7 @@ class EmployeeListView(AdminRequiredMixin, ListView):
         search = self.request.GET.get('search', '')
         contract_type = self.request.GET.get('contract_type', '')
         nationality = self.request.GET.get('nationality', '')
-        deployment = self.request.GET.get('deployment', '')
+        grade = self.request.GET.get('grade', '')
         work_location = self.request.GET.get('work_location', '')
         status = self.request.GET.get('status', '')
 
@@ -1031,8 +1031,8 @@ class EmployeeListView(AdminRequiredMixin, ListView):
             queryset = queryset.filter(contract_type=contract_type)
         if nationality:
             queryset = queryset.filter(nationality__icontains=nationality)
-        if deployment:
-            queryset = queryset.filter(deployment__icontains=deployment)
+        if grade:
+            queryset = queryset.filter(grade__icontains=grade)
         if work_location:
             queryset = queryset.filter(work_location=work_location)
         if status == 'active':
@@ -1399,7 +1399,7 @@ def employee_export(request):
     search = request.GET.get('search', '')
     contract_type = request.GET.get('contract_type', '')
     nationality = request.GET.get('nationality', '')
-    deployment = request.GET.get('deployment', '')
+    grade = request.GET.get('grade', '')
 
     if search:
         queryset = queryset.filter(
@@ -1411,8 +1411,8 @@ def employee_export(request):
         queryset = queryset.filter(contract_type=contract_type)
     if nationality:
         queryset = queryset.filter(nationality__icontains=nationality)
-    if deployment:
-        queryset = queryset.filter(deployment__icontains=deployment)
+    if grade:
+        queryset = queryset.filter(grade__icontains=grade)
 
     queryset = queryset.order_by('full_name')
 
@@ -1474,15 +1474,24 @@ def employee_export(request):
 
         if emp.picture:
             try:
-                img = XLImage(emp.picture.path)
+                # Read bytes through the storage API rather than .path -
+                # .path only works on local filesystem storage. Production
+                # runs S3-compatible object storage (R2), whose backend does
+                # not implement path() and raises NotImplementedError there;
+                # .open()/.read() works identically across every backend.
+                from io import BytesIO
+                with emp.picture.open('rb') as fh:
+                    img = XLImage(BytesIO(fh.read()))
                 img.width = 60
                 img.height = 60
                 picture_col_letter = openpyxl.utils.get_column_letter(len(headers))
                 ws.add_image(img, f'{picture_col_letter}{row_num}')
                 ws.row_dimensions[row_num].height = 48
-            except (FileNotFoundError, OSError):
-                # Picture record exists but the file is missing from disk -
-                # skip embedding rather than fail the whole export.
+            except Exception:
+                # Any storage-backend failure (missing local file, missing
+                # R2 object, transient network error, unsupported backend
+                # method) skips embedding for this one row rather than
+                # failing the whole export.
                 pass
 
     # Column widths

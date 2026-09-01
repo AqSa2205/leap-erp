@@ -131,6 +131,18 @@ class EmployeeForm(forms.ModelForm):
     def clean_deployment(self):
         return validate_title_field(self.cleaned_data.get('deployment'), 'Deployment')
 
+    def clean_grade(self):
+        return validate_title_field(self.cleaned_data.get('grade'), 'Grade')
+
+    def clean_picture(self):
+        # A very large photo would upload fine but then get embedded into
+        # every subsequent Excel export, making that file huge too.
+        picture = self.cleaned_data.get('picture')
+        max_size = 5 * 1024 * 1024  # 5 MB
+        if picture and hasattr(picture, 'size') and picture.size > max_size:
+            raise ValidationError('Picture must be smaller than 5 MB.')
+        return picture
+
     def clean_iqama_number(self):
         return validate_code_field(self.cleaned_data.get('iqama_number'), 'Iqama number')
 
@@ -181,11 +193,11 @@ class EmployeeFilterForm(forms.Form):
             'placeholder': 'Nationality...',
         }),
     )
-    deployment = forms.CharField(
+    grade = forms.CharField(
         required=False,
         widget=forms.TextInput(attrs={
             'class': 'form-control',
-            'placeholder': 'Deployment...',
+            'placeholder': 'Grade...',
         }),
     )
     work_location = forms.ChoiceField(
