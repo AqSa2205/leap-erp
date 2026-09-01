@@ -285,6 +285,53 @@ class SystemBreakdownTests(TestCase):
         self.assertIn(reverse('procurement:project_systems', args=[self.project.pk]),
                       body)
 
+    def test_the_link_is_not_inside_the_collapse_toggle(self):
+        """A link nested inside the element carrying data-bs-toggle="collapse"
+        only navigates if the click is stopped before Bootstrap's delegated
+        handler sees it. When that fails the card simply expands and the link
+        never fires — which is what happened in production while every other
+        test here passed, because none of them could see the structure.
+
+        Asserted as ancestry rather than behaviour: the JS cannot run in a
+        Django test, but "the link must not be a descendant of the toggle" is
+        the property that makes it work, and it is checkable here.
+        """
+        from html.parser import HTMLParser
+
+        self._item(self._po('PO-25'), 'CCTV', 'Camera', '1', '100')
+        self.client.force_login(self.user)
+        body = self.client.get(reverse('procurement:po_by_project')).content.decode()
+        target = reverse('procurement:project_systems', args=[self.project.pk])
+
+        class Ancestry(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.stack = []          # True where an open tag is a collapse toggle
+                self.offenders = 0
+                self.found = 0
+
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                toggles = attrs.get('data-bs-toggle') == 'collapse'
+                if tag == 'a' and attrs.get('href') == target:
+                    self.found += 1
+                    if any(self.stack):
+                        self.offenders += 1
+                if tag not in ('br', 'img', 'input', 'hr', 'meta', 'link'):
+                    self.stack.append(toggles)
+
+            def handle_endtag(self, tag):
+                if self.stack:
+                    self.stack.pop()
+
+        parser = Ancestry()
+        parser.feed(body)
+        self.assertEqual(parser.found, 1, 'the Systems link should appear once')
+        self.assertEqual(
+            parser.offenders, 0,
+            'the Systems link sits inside a data-bs-toggle="collapse" element, '
+            'so clicking it expands the card instead of navigating')
+
     def test_the_query_count_does_not_grow_with_the_lines(self):
         """Delivered quantities are looked up for the whole page at once; a
         per-line lookup degrades quietly as a project fills up."""
