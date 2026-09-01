@@ -215,6 +215,12 @@
         <div class="card-body">
           <form method="post" action="{% url 'accounting:chart_import_apply' %}">
             {% csrf_token %}
+            {% comment %} The parsed rows travel with the confirmation, signed,
+            rather than through the session and object storage. Both of those
+            could fail in ways that look identical to the reader — and the apply
+            should run exactly the rows that were shown, not a re-parse of a file
+            that might have been swapped underneath it. {% endcomment %}
+            <input type="hidden" name="payload" value="{{ payload }}">
             {% if plan.missing %}
             {% comment %} Off by default. Leaving a retired account active is
             untidy; deactivating one that is merely absent from a partial

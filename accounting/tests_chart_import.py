@@ -6,6 +6,8 @@ things above all: that a revision never destroys what came before, and that
 what the preview promises is what the apply does.
 """
 import io
+import time
+from unittest import mock
 
 import openpyxl
 from django.contrib.auth import get_user_model
@@ -289,6 +291,11 @@ class ChartImportScreenTests(TestCase):
         return SimpleUploadedFile(name, payload,
                                   content_type='application/vnd.ms-excel')
 
+    def _preview(self, rows=None):
+        """Preview, and hand back the signed payload a browser would carry."""
+        response = self.client.post(self.url, {'workbook': self._upload(rows)})
+        return response.context['payload']
+
     # ── access ──────────────────────────────────────────────────────────────
 
     def test_someone_outside_finance_cannot_open_it(self):
@@ -332,43 +339,66 @@ class ChartImportScreenTests(TestCase):
 
     def test_applying_after_a_preview_writes_the_changes(self):
         self.client.force_login(self.finance)
-        self.client.post(self.url, {'workbook': self._upload()})
-        self.client.post(self.apply_url)
+        self.client.post(self.apply_url, {'payload': self._preview()})
         self.assertTrue(Account.objects.filter(code='1110003').exists())
 
-    def test_applying_with_nothing_previewed_does_nothing(self):
+    def test_applying_with_no_payload_does_nothing(self):
         """A stray POST — a refresh, a stale tab — must not import anything."""
         self.client.force_login(self.finance)
         response = self.client.post(self.apply_url, follow=True)
         self.assertContains(response, 'upload a workbook first')
 
-    def test_applying_uses_the_file_that_was_previewed(self):
-        """Not whatever happens to be posted at the confirm step — otherwise
-        the preview describes one file and the apply runs another."""
+    def test_applying_uses_what_was_previewed_not_what_is_posted_beside_it(self):
+        """The apply runs the signed rows, so a file attached to the confirm
+        step is ignored rather than quietly replacing the previewed one."""
         self.client.force_login(self.finance)
-        self.client.post(self.url, {'workbook': self._upload()})
-        self.client.post(self.apply_url, {'workbook': self._upload(
-            rows=[account_row('9999999', 'Sneaky account')])})
+        payload = self._preview()
+        self.client.post(self.apply_url, {
+            'payload': payload,
+            'workbook': self._upload(rows=[account_row('9999999', 'Sneaky account')]),
+        })
         self.assertTrue(Account.objects.filter(code='1110003').exists())
         self.assertFalse(Account.objects.filter(code='9999999').exists())
 
+    def test_a_tampered_payload_is_refused(self):
+        """The rows come back from the browser, so they are trustworthy only
+        because they are signed."""
+        self.client.force_login(self.finance)
+        payload = self._preview()
+        response = self.client.post(
+            self.apply_url, {'payload': payload[:-4] + 'AAAA'}, follow=True)
+        self.assertContains(response, 'could not be verified')
+        self.assertFalse(Account.objects.filter(code='1110003').exists())
+
+    def test_a_stale_preview_is_refused(self):
+        """An hour on, the chart may have moved and the diff no longer
+        describes it."""
+        self.client.force_login(self.finance)
+        payload = self._preview()
+        with mock.patch('django.core.signing.time.time',
+                        return_value=time.time() + 7200):
+            response = self.client.post(self.apply_url, {'payload': payload},
+                                        follow=True)
+        self.assertContains(response, 'more than an hour old')
+        self.assertFalse(Account.objects.filter(code='1110003').exists())
+
     def test_deactivation_happens_only_when_asked(self):
         self.client.force_login(self.finance)
-        self.client.post(self.url, {'workbook': self._upload()})
-        self.client.post(self.apply_url)
+        self.client.post(self.apply_url, {'payload': self._preview()})
         self.assertTrue(Account.objects.get(code='1110001').is_active)
 
     def test_deactivation_when_asked_never_deletes(self):
         self.client.force_login(self.finance)
-        self.client.post(self.url, {'workbook': self._upload()})
-        self.client.post(self.apply_url, {'deactivate_missing': 'on'})
+        self.client.post(self.apply_url, {'payload': self._preview(),
+                                          'deactivate_missing': 'on'})
         self.assertFalse(Account.objects.get(code='1110001').is_active)
         self.assertTrue(Account.objects.filter(code='1110001').exists())
 
-    def test_the_pending_upload_is_consumed(self):
-        """Applying twice must not import twice off one preview."""
+    def test_applying_the_same_preview_twice_is_harmless(self):
+        """Upserts by code, so a double submit converges rather than
+        duplicating — worth pinning, since a signed payload is replayable."""
         self.client.force_login(self.finance)
-        self.client.post(self.url, {'workbook': self._upload()})
-        self.client.post(self.apply_url)
-        response = self.client.post(self.apply_url, follow=True)
-        self.assertContains(response, 'upload a workbook first')
+        payload = self._preview()
+        self.client.post(self.apply_url, {'payload': payload})
+        self.client.post(self.apply_url, {'payload': payload})
+        self.assertEqual(Account.objects.filter(code='1110003').count(), 1)
