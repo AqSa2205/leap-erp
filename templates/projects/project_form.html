@@ -142,8 +142,13 @@
             <h6 class="text-muted mb-3 border-bottom pb-2">Dates</h6>
             <div class="row mb-4">
                 <div class="col-md-4 mb-3">
-                    <label class="form-label">Submission Deadline</label>
+                    {% comment %} Required on a new entry only — see
+                    ProjectForm.__init__. The asterisk follows the same rule, so the
+                    label never promises something the form is not enforcing.
+                    {% endcomment %}
+                    <label class="form-label">Submission Deadline{% if not form.instance.pk %} *{% endif %}</label>
                     {{ form.submission_deadline }}
+                    {% if form.submission_deadline.errors %}<div class="text-danger small">{{ form.submission_deadline.errors.0 }}</div>{% endif %}
                 </div>
                 <div class="col-md-4 mb-3">
                     <label class="form-label">Estimated PO Date</label>
@@ -159,20 +164,24 @@
             <h6 class="text-muted mb-3 border-bottom pb-2">Milestone Deadlines</h6>
             <div class="row mb-4">
                 <div class="col-md-3 mb-3">
-                    <label class="form-label">BOM Started Deadline</label>
+                    <label class="form-label">BOM Started Deadline{% if not form.instance.pk %} *{% endif %}</label>
                     {{ form.bom_started_deadline }}
+                    {% if form.bom_started_deadline.errors %}<div class="text-danger small">{{ form.bom_started_deadline.errors.0 }}</div>{% endif %}
                 </div>
                 <div class="col-md-3 mb-3">
-                    <label class="form-label">Handed to Sales Deadline</label>
+                    <label class="form-label">Handed to Sales Deadline{% if not form.instance.pk %} *{% endif %}</label>
                     {{ form.handed_over_deadline }}
+                    {% if form.handed_over_deadline.errors %}<div class="text-danger small">{{ form.handed_over_deadline.errors.0 }}</div>{% endif %}
                 </div>
                 <div class="col-md-3 mb-3">
-                    <label class="form-label">Costing Started Deadline</label>
+                    <label class="form-label">Costing Started Deadline{% if not form.instance.pk %} *{% endif %}</label>
                     {{ form.costing_started_deadline }}
+                    {% if form.costing_started_deadline.errors %}<div class="text-danger small">{{ form.costing_started_deadline.errors.0 }}</div>{% endif %}
                 </div>
                 <div class="col-md-3 mb-3">
-                    <label class="form-label">Finalised Deadline</label>
+                    <label class="form-label">Finalised Deadline{% if not form.instance.pk %} *{% endif %}</label>
                     {{ form.finalized_deadline }}
+                    {% if form.finalized_deadline.errors %}<div class="text-danger small">{{ form.finalized_deadline.errors.0 }}</div>{% endif %}
                 </div>
             </div>
 
