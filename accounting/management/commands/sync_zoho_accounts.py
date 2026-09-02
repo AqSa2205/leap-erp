@@ -19,7 +19,9 @@ never disturbed.
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
+from accounting.management.commands._console import use_utf8_console
 from accounting.models import Account, ZohoAccountMap
+from accounting.zoho_sync import automap_by_code, upsert_accounts
 from accounting.zoho import ZohoClient, ZohoError
 
 
@@ -35,6 +37,7 @@ class Command(BaseCommand):
                                  'blanks; never rewrites a mapping finance has set.')
 
     def handle(self, *args, **options):
+        use_utf8_console()   # Zoho names are Arabic; cp1252 cannot print them
         try:
             client = ZohoClient.from_settings()
         except ZohoError as exc:
@@ -64,39 +67,10 @@ class Command(BaseCommand):
         self._report_state()
 
     def _upsert(self, records):
-        created = updated = 0
-        for record in records:
-            _, was_created = ZohoAccountMap.objects.update_or_create(
-                zoho_account_id=str(record.get('account_id')),
-                defaults={
-                    'zoho_account_code': str(record.get('account_code') or '').strip(),
-                    'zoho_account_name': str(record.get('account_name') or '').strip(),
-                    'zoho_account_type': str(record.get('account_type') or '').strip(),
-                    'zoho_parent_name': str(record.get('parent_account_name') or '').strip(),
-                    'zoho_is_active': bool(record.get('is_active', True)),
-                },
-            )
-            created += was_created
-            updated += not was_created
-        return created, updated
+        return upsert_accounts(records)
 
     def _automap(self):
-        """Fill blank mappings where the codes match exactly.
-
-        Only a suggestion engine, and a conservative one: it never overwrites a
-        mapping finance has already made, and only acts on an exact code match.
-        Anything ambiguous is left for a person.
-        """
-        by_code = {a.code: a for a in Account.objects.postable()}
-        proposed = 0
-        for row in ZohoAccountMap.objects.unmapped():
-            target = by_code.get(row.zoho_account_code)
-            if target is not None:
-                row.account = target
-                row.note = (row.note + '\nAuto-mapped on exact code match.').strip()
-                row.save(update_fields=['account', 'note', 'last_seen_at'])
-                proposed += 1
-        return proposed
+        return automap_by_code()
 
     def _report_plan(self, records):
         known = set(ZohoAccountMap.objects.values_list('zoho_account_id', flat=True))

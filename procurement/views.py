@@ -5,6 +5,7 @@ from django.urls import reverse_lazy, reverse
 from django.contrib import messages
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.http import require_POST
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import Q
 from decimal import Decimal, InvalidOperation
@@ -29,6 +30,8 @@ from django.utils.text import slugify
 import openpyxl
 from datetime import datetime, timedelta
 from accounts.permissions import require_capability, CapabilityRequiredMixin
+from .budget_status import approved_budgets_for, budget_status, exchange_rates
+from .system_breakdown import breakdown
 
 
 _NUM_UNITS = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine']
@@ -453,11 +456,18 @@ def _po_project_groups(user, include_empty=True):
             for project in list(approved) + list(selected):
                 groups.setdefault(project.pk, {'project': project, 'rows': []})
 
+    # Budgets fetched for the whole board in one pass — a per-project walk of
+    # sections and line items would issue queries in proportion to the entire
+    # body of work procurement is tracking.
+    budgets = approved_budgets_for([e['project'] for e in groups.values()])
+    rates = exchange_rates()
+
     out = []
     for pk, entry in groups.items():
         out.append(_build_group(
             entry['project'], entry['rows'],
-            approved=pk in approved_ids, selected=pk in selected_ids))
+            approved=pk in approved_ids, selected=pk in selected_ids,
+            budget=budgets.get(pk), rates=rates))
     # Projects with orders first, then the empty ones, each newest-first.
     out.sort(key=lambda g: (g['po_count'] == 0,
                             -(g['rows'][0].po_date.toordinal() if g['rows'] else 0),
@@ -474,7 +484,8 @@ def _can_see_all_projects(user):
                 or user.is_admin_user or user.is_manager_user)
 
 
-def _build_group(project, rows, *, approved=False, selected=False):
+def _build_group(project, rows, *, approved=False, selected=False,
+                 budget=None, rates=None):
     """One project's card: its POs, per-currency totals and what is waiting.
 
     `off_board` marks a project that is here only because orders exist against
@@ -506,6 +517,11 @@ def _build_group(project, rows, *, approved=False, selected=False):
         'rows': rows,
         'totals': sorted(totals.items()),
         'awaiting': awaiting,
+        # Committed spend against the approved budget. Measured on gross_value
+        # because total_value carries VAT and a budgeted price does not —
+        # comparing those would report every project ~15% further through its
+        # budget than it is.
+        'budget_status': budget_status(budget, rows, rates=rates),
     }
 
 
@@ -795,6 +811,11 @@ class POCreateView(ProcurementPermissionMixin, CreateView):
             self.object.save()
             item_formset.instance = self.object
             item_formset.save()
+            # Once the items exist. The status hook on the model fires before
+            # the formset saves, so on a request that both commits a PO and
+            # writes its lines that first call saw no items at all.
+            from finance.outflow_links import fill_po_numbers
+            fill_po_numbers(self.object)
             _apply_po_terms(self.object, self.request.POST)
             _save_po_term_overrides(self.object, self.request.POST, self.request.user)
             # A new PO is immediately waiting on its first stage, so the person
@@ -1073,6 +1094,11 @@ class POUpdateView(ProcurementPermissionMixin, UpdateView):
                     to_status=new_status, changed_by=self.request.user)
             item_formset.instance = self.object
             item_formset.save()
+            # Once the items exist. The status hook on the model fires before
+            # the formset saves, so on a request that both commits a PO and
+            # writes its lines that first call saw no items at all.
+            from finance.outflow_links import fill_po_numbers
+            fill_po_numbers(self.object)
             _apply_po_terms(self.object, self.request.POST)
             _save_po_term_overrides(self.object, self.request.POST, self.request.user)
             messages.success(self.request, f'Purchase Order {self.object.po_number} updated successfully.')
@@ -1143,6 +1169,11 @@ def po_create_from_bom(request, sheet_pk):
             uom=item.unit or 'Nos',
             rate_per_unit=item.budget_unit_price(),
             order=serial,
+            # Without this the PO cannot be traced back to the costing line it
+            # came from, so its number can never reach the cash-outflow row for
+            # that line. bom_procurement_tracker has always set it; this path,
+            # creating items from the same CostingLineItem, did not.
+            source_bom_item=item,
         )
         serial += 1
 
@@ -5008,3 +5039,37 @@ def ajax_po_toggle_term(request, pk):
             locked_po.selected_terms.add(term)
             selected = True
     return JsonResponse({'ok': True, 'selected': selected})
+
+
+@login_required
+def project_systems(request, project_id):
+    """What one project's purchase orders are made of, by system.
+
+    Reproduces the workbook procurement keeps by hand — every ordered line under
+    its system, with its share of the project, its share of its own system, and
+    how much of it has been delivered.
+
+    Visibility comes from _visible_pos_for() rather than a rule of its own, so
+    this page can never show a PO the flat list would not.
+    """
+    from projects.models import Project
+
+    project = get_object_or_404(Project, pk=project_id)
+    pos = (_visible_pos_for(request.user)
+           .filter(project=project)
+           .prefetch_related('items')
+           .order_by('po_date', 'id'))
+
+    # A project the viewer has no PO against must not be confirmed to exist by
+    # rendering an empty page for it — that is the same disclosure the board
+    # avoids by building itself from visible POs only.
+    if not pos.exists() and not _can_see_all_projects(request.user):
+        raise PermissionDenied
+
+    data = breakdown(pos)
+    budget = approved_budgets_for([project]).get(project.pk)
+    return render(request, 'procurement/project_systems.html', {
+        'project': project,
+        'data': data,
+        'budget_status': budget_status(budget, pos),
+    })

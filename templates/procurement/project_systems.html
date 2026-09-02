@@ -1,0 +1,215 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Procurement — {{ project.project_name }} by System{% endblock %}
+{% block page_title %}System Breakdown{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <span>Procurement</span>
+    <span class="crumb-sep">›</span>
+    <a href="{% url 'procurement:po_by_project' %}">POs by Project</a>
+    <span class="crumb-sep">›</span>
+    <span class="crumb-current">{{ project.project_name|truncatechars:40 }}</span>
+</nav>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .ps-hero { background: linear-gradient(135deg, #5b3fa0 0%, #402c73 100%); color:#fff; border:none; border-radius:14px; }
+    .ps-stat { font-size:1.35rem; font-weight:600; line-height:1; }
+    .ps-table { font-size:0.86rem; }
+    .ps-table thead th { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.3px;
+                         color:#402c73; border-bottom:2px solid #5b3fa0; white-space:nowrap; }
+    .ps-table td, .ps-table th { vertical-align:middle; }
+    .ps-ref { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:0.76rem; white-space:nowrap; }
+    /* The system row carries the subtotal, so it reads heavier than its lines. */
+    .ps-system-row { background:#faf9fd; }
+    .ps-system-row td { font-weight:600; color:#402c73; }
+    .ps-num { text-align:right; white-space:nowrap; font-variant-numeric: tabular-nums; }
+    .ps-delivered { color:#198754; }
+    .ps-pending { color:#b8860b; }
+    .ps-mini { position:relative; width:64px; height:6px; border-radius:3px; background:#e9ecef; overflow:hidden; display:inline-block; vertical-align:middle; }
+    .ps-mini-fill { position:absolute; left:0; top:0; height:100%; background:#198754; }
+    [data-theme="dark"] .ps-system-row { background:#252525; }
+    [data-theme="dark"] .ps-system-row td { color:#c5b6ec; }
+    [data-theme="dark"] .ps-mini { background:#3a3a3a; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+
+  <div class="card ps-hero mb-4">
+    <div class="card-body p-4 d-flex justify-content-between align-items-center flex-wrap gap-3">
+      <div>
+        <h1 class="h4 mb-1 text-white">{{ project.project_name }}</h1>
+        <div class="opacity-75 small">
+          {% if project.proposal_reference %}<code class="text-white-50">{{ project.proposal_reference }}</code> · {% endif %}
+          {{ data.po_count }} purchase order{{ data.po_count|pluralize }} ·
+          {{ data.groups|length }} system{{ data.groups|length|pluralize }}
+        </div>
+      </div>
+      <div class="d-flex gap-4 text-center flex-wrap">
+        <div>
+          <div class="ps-stat">{{ data.total|floatformat:2|intcomma }}</div>
+          <div class="small opacity-75">Ordered (SAR)</div>
+        </div>
+        <div>
+          <div class="ps-stat">{{ data.delivered|floatformat:2|intcomma }}</div>
+          <div class="small opacity-75">Delivered</div>
+        </div>
+        <div>
+          <div class="ps-stat">{{ data.pending|floatformat:2|intcomma }}</div>
+          <div class="small opacity-75">Pending</div>
+        </div>
+        {% if budget_status.has_budget %}
+        <div>
+          <div class="ps-stat">{{ budget_status.percent|floatformat:1 }}%</div>
+          <div class="small opacity-75">of budget</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if data.converted %}
+  <div class="alert alert-light border small py-2">
+    <i class="bi bi-info-circle me-1"></i>
+    Some orders are not in SAR and have been converted at current rates, so the totals
+    are indicative rather than the amounts committed on the day.
+  </div>
+  {% endif %}
+
+  {% if data.over_delivered %}
+  {% comment %} More delivered than ordered is a data problem rather than extra
+  value. Capped in the figures so the percentages stay coherent, and surfaced
+  here so somebody fixes the delivery note. {% endcomment %}
+  <div class="alert alert-warning small py-2">
+    <i class="bi bi-exclamation-triangle me-1"></i>
+    {{ data.over_delivered|length }} line{{ data.over_delivered|pluralize }} show more
+    delivered than ordered. Counted as fully delivered here so the percentages stay
+    coherent — but the delivery note or the PO quantity needs correcting:
+    {% for row in data.over_delivered|slice:":4" %}<code>{{ row.reference }}</code>{% if not forloop.last %}, {% endif %}{% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="row g-3">
+    {# ── the lines ──────────────────────────────────────────────────────── #}
+    <div class="col-xl-8">
+      <div class="card">
+        <div class="card-header bg-white py-2 fw-semibold">Ordered lines by system</div>
+        <div class="table-responsive">
+          <table class="table table-sm ps-table mb-0">
+            <thead>
+              <tr>
+                <th>Reference</th>
+                <th>Description</th>
+                <th class="ps-num">Total Value</th>
+                <th class="ps-num" title="This line's share of everything ordered on the project">% of All</th>
+                <th class="ps-num" title="This line's share of its own system">% of system</th>
+                <th class="ps-num" title="Delivered, as a share of everything ordered on the project">% Delivery</th>
+                <th class="ps-num" title="Not yet delivered, as a share of everything ordered on the project">Pending %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for g in data.groups %}
+              <tr class="ps-system-row">
+                <td colspan="2">{{ g.system }}</td>
+                <td class="ps-num">{{ g.total|floatformat:2|intcomma }}</td>
+                <td class="ps-num">{% if g.pct_of_all is not None %}{{ g.pct_of_all|floatformat:2 }}%{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+                <td class="ps-num">100%</td>
+                <td class="ps-num ps-delivered">{{ g.delivered|floatformat:2|intcomma }}</td>
+                <td class="ps-num ps-pending">{{ g.pending|floatformat:2|intcomma }}</td>
+              </tr>
+              {% for row in g.rows %}
+              <tr>
+                <td class="ps-ref">
+                  <a href="{% url 'procurement:po_detail' row.po.pk %}" class="text-decoration-none">{{ row.reference }}</a>
+                </td>
+                <td>{{ row.description|truncatechars:64 }}</td>
+                <td class="ps-num">{{ row.value|floatformat:2|intcomma }}</td>
+                <td class="ps-num">{% if row.pct_of_all is not None %}{{ row.pct_of_all|floatformat:2 }}%{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+                <td class="ps-num">{% if row.pct_of_system is not None %}{{ row.pct_of_system|floatformat:0 }}%{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+                <td class="ps-num ps-delivered">{% if row.pct_delivered is not None %}{{ row.pct_delivered|floatformat:2 }}%{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+                <td class="ps-num ps-pending">{% if row.pct_pending is not None %}{{ row.pct_pending|floatformat:2 }}%{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+              </tr>
+              {% endfor %}
+              {% empty %}
+              <tr><td colspan="7" class="text-center text-muted py-5">
+                <i class="bi bi-inbox fs-3 d-block mb-2 opacity-50"></i>
+                {% comment %} Drafts are excluded deliberately, and saying so
+                stops this reading as a broken page. {% endcomment %}
+                No issued purchase orders against this project yet.
+                Draft orders are not counted here — nothing has been ordered until it is issued.
+              </td></tr>
+              {% endfor %}
+            </tbody>
+            {% if data.rows %}
+            <tfoot class="table-light">
+              <tr class="fw-semibold">
+                <td colspan="2">Total</td>
+                <td class="ps-num">{{ data.total|floatformat:2|intcomma }}</td>
+                <td class="ps-num">100.00%</td>
+                <td class="ps-num"></td>
+                <td class="ps-num ps-delivered">{% if data.pct_delivered is not None %}{{ data.pct_delivered|floatformat:2 }}%{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+                <td class="ps-num ps-pending">{{ data.pending|floatformat:2|intcomma }}</td>
+              </tr>
+            </tfoot>
+            {% endif %}
+          </table>
+        </div>
+      </div>
+    </div>
+
+    {# ── the summary ────────────────────────────────────────────────────── #}
+    <div class="col-xl-4">
+      <div class="card">
+        <div class="card-header bg-white py-2 fw-semibold">By system</div>
+        <div class="table-responsive">
+          <table class="table table-sm ps-table mb-0">
+            <thead>
+              <tr>
+                <th style="width:2rem;">#</th>
+                <th>System</th>
+                <th class="ps-num">Total value</th>
+                <th class="ps-num">Percentage %</th>
+                <th class="ps-num">Delivered</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for g in data.groups %}
+              <tr>
+                <td class="text-muted">{{ forloop.counter }}</td>
+                <td class="fw-semibold">{{ g.system }}</td>
+                <td class="ps-num">{{ g.total|floatformat:2|intcomma }}</td>
+                <td class="ps-num">{% if g.pct_of_all is not None %}{{ g.pct_of_all|floatformat:2 }}%{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+                <td class="ps-num">
+                  <span class="ps-mini" title="{{ g.pct_delivered_of_system|floatformat:1 }}% of this system delivered">
+                    <span class="ps-mini-fill" style="width:{% if g.pct_delivered_of_system %}{{ g.pct_delivered_of_system|floatformat:'0' }}{% else %}0{% endif %}%"></span>
+                  </span>
+                  <span class="small text-muted ms-1">{% if g.pct_delivered_of_system is not None %}{{ g.pct_delivered_of_system|floatformat:0 }}%{% else %}<span class="text-muted">&mdash;</span>{% endif %}</span>
+                </td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="5" class="text-center text-muted py-4">Nothing ordered yet.</td></tr>
+              {% endfor %}
+            </tbody>
+            {% if data.groups %}
+            <tfoot class="table-light">
+              <tr class="fw-semibold">
+                <td></td>
+                <td>Total</td>
+                <td class="ps-num">{{ data.total|floatformat:2|intcomma }}</td>
+                <td class="ps-num">100.00%</td>
+                <td class="ps-num">{% if data.pct_delivered is not None %}{{ data.pct_delivered|floatformat:0 }}%{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+              </tr>
+            </tfoot>
+            {% endif %}
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

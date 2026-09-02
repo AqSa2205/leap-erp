@@ -315,10 +315,18 @@ class PurchaseOrder(models.Model):
             fields += ['client_acknowledged_at', 'client_acknowledged_by']
         self.save(update_fields=fields)
 
-        return POStatusChange.objects.create(
+        change = POStatusChange.objects.create(
             purchase_order=self, from_status=from_status, to_status=to_status,
             reason=reason or '', changed_by=changed_by,
         )
+
+        # A committed PO is the answer to a question the cash-outflow schedule
+        # was asking a human. Imported here rather than at module level: finance
+        # reads procurement, so a top-level import would close the circle.
+        from finance.outflow_links import fill_po_numbers
+        fill_po_numbers(self)
+
+        return change
 
     @property
     def is_locked(self):

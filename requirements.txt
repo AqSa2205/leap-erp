@@ -65,3 +65,17 @@ python-bidi==0.6.11
 # is rendered back to pages — guards against stored XSS. [css] pulls tinycss2
 # so inline style attributes (color/size/highlight) are CSS-sanitised too.
 bleach[css]==6.4.0
+
+# Use the operating system's certificate store for outbound TLS instead of the
+# bundle pinned inside certifi. Needed on developer machines behind corporate
+# TLS inspection (Netskope, Zscaler and friends re-sign every HTTPS connection
+# with a private root CA that Windows trusts and certifi does not), which
+# otherwise fails every outbound call — Zoho, Anthropic, R2 — with
+# CERTIFICATE_VERIFY_FAILED. See USE_SYSTEM_CERT_STORE in settings.py.
+truststore==0.10.4
+
+# Legacy .xls (BIFF/OLE2) support for the chart-of-accounts import. Finance's
+# workbook arrives in both formats and openpyxl reads only .xlsx; the importer
+# sniffs the magic bytes and picks a reader, so an extension being wrong does
+# not matter. xlrd 2.x is .xls-only by design.
+xlrd==2.0.2

@@ -1,6 +1,19 @@
 {% extends 'base.html' %}
 {% load humanize %}
 {% block title %}POs by Project{% endblock %}
+{% block extra_css %}
+<style>
+    .pbp-bar { position:relative; width:78px; height:7px; border-radius:4px; background:#e9ecef; overflow:hidden; }
+    .pbp-bar-fill { position:absolute; left:0; top:0; height:100%; background:#198754; }
+    .pbp-bar-fill.pbp-over { background:#dc3545; }
+    /* Draft sits after the committed fill, hatched, so it reads as "not yet
+       committed" rather than as more spend. */
+    .pbp-bar-draft { position:absolute; top:0; height:100%;
+                     background:repeating-linear-gradient(45deg,#ffc107,#ffc107 2px,transparent 2px,transparent 4px); }
+    [data-theme="dark"] .pbp-bar { background:#3a3a3a; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container-fluid py-3">
 
@@ -95,9 +108,16 @@
     all-open page cannot be read. That makes the header the whole design — it
     has to answer "is anything here, and is any of it stuck" without being
     opened. {% endcomment %}
-    <div class="card-header d-flex align-items-center gap-3 flex-wrap"
-         role="button" data-bs-toggle="collapse" data-bs-target="#proj{{ forloop.counter }}"
-         style="cursor:pointer;">
+    {% comment %} The toggle is an inner region, not the whole header. A link
+    inside the toggling element depends on stopping the click before Bootstrap's
+    delegated handler sees it, and when that fails the card merely expands and
+    the link never navigates — which is exactly what happened. Making the button
+    a sibling of the toggle removes the dependency instead of tuning it.
+    {% endcomment %}
+    <div class="card-header d-flex align-items-center gap-3 flex-wrap">
+      <div class="d-flex align-items-center gap-3 flex-grow-1"
+           role="button" data-bs-toggle="collapse" data-bs-target="#proj{{ forloop.counter }}"
+           style="cursor:pointer; min-width:0;">
       <i class="bi bi-chevron-right"></i>
       <div class="flex-grow-1">
         <span class="fw-semibold">{{ g.project_name }}</span>
@@ -126,6 +146,8 @@
         {% endif %}
       </div>
 
+      </div>{# /toggle region — everything past here is clickable on its own #}
+
       <span class="badge {% if g.po_count %}bg-dark{% else %}bg-light text-muted border{% endif %}">
         {{ g.po_count }} PO{{ g.po_count|pluralize }}
       </span>
@@ -141,6 +163,54 @@
         <i class="bi bi-hourglass-split"></i> {{ g.awaiting }} awaiting approval
       </span>
       {% endif %}
+
+      {% if g.project %}
+      {% comment %} Stops the click bubbling into the card's collapse toggle,
+      which would open the card on the way to leaving it. {% endcomment %}
+      <a href="{% url 'procurement:project_systems' g.project.pk %}"
+         class="btn btn-sm btn-outline-secondary text-nowrap"
+         title="Ordered value by system, and how much has been delivered">
+        <i class="bi bi-pie-chart me-1"></i>Systems
+      </a>
+      {% endif %}
+
+      {% comment %} How much of the approved budget the issued POs have
+      committed. Ex-VAT on both sides: total_value carries VAT and a budgeted
+      price does not, so comparing those would report every project ~15%
+      further through its budget than it is. {% endcomment %}
+      {% with b=g.budget_status %}
+      {% if b.has_budget %}
+      <div class="pbp-budget text-nowrap"
+           title="{{ b.committed|floatformat:2|intcomma }} SAR committed of {{ b.budget|floatformat:2|intcomma }} SAR approved{% if b.draft %} · {{ b.draft|floatformat:2|intcomma }} SAR still in draft{% endif %}{% if b.converted %} · includes non-SAR orders converted at current rates{% endif %}">
+        <div class="d-flex align-items-center gap-2">
+          <span class="fw-semibold {% if b.over_budget %}text-danger{% elif b.draft_would_exceed %}text-warning{% endif %}">
+            {{ b.percent|floatformat:1 }}%
+          </span>
+          <div class="pbp-bar">
+            {% comment %} Never clamped at 100 — going past it is the single
+            most important thing this can say. {% endcomment %}
+            <div class="pbp-bar-fill {% if b.over_budget %}pbp-over{% endif %}"
+                 style="width:{% if b.percent > 100 %}100{% else %}{{ b.percent|floatformat:'0' }}{% endif %}%"></div>
+            {% if b.draft and not b.over_budget %}
+            <div class="pbp-bar-draft"
+                 style="left:{{ b.percent|floatformat:'0' }}%; width:{% widthratio b.draft b.budget 100 %}%"></div>
+            {% endif %}
+          </div>
+          {% if b.over_budget %}
+          <i class="bi bi-exclamation-octagon-fill text-danger" title="Committed spend is past the approved budget"></i>
+          {% elif b.draft_would_exceed %}
+          <i class="bi bi-exclamation-triangle text-warning" title="Issuing the draft POs would take this past budget"></i>
+          {% endif %}
+        </div>
+      </div>
+      {% elif g.project %}
+      {% comment %} Not 0% — there is nothing to be a percentage of, and a 0%
+      bar reads as "nothing spent" rather than "nothing to compare". {% endcomment %}
+      <span class="small text-muted text-nowrap" title="No finance-approved budget for this project">
+        no budget set
+      </span>
+      {% endif %}
+      {% endwith %}
     </div>
 
     <div class="collapse" id="proj{{ forloop.counter }}">

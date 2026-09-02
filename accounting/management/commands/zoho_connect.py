@@ -16,6 +16,7 @@ production should set them — the same way the R2 and Anthropic keys are handle
 """
 from django.core.management.base import BaseCommand, CommandError
 
+from accounting.management.commands._console import use_utf8_console
 from accounting.models import ZohoCredentials
 from accounting.zoho import READ_SCOPES, ZohoClient, ZohoError
 
@@ -37,6 +38,7 @@ class Command(BaseCommand):
                             help='Print the scopes to paste into the Zoho console, then exit.')
 
     def handle(self, *args, **options):
+        use_utf8_console()   # Zoho names are Arabic; cp1252 cannot print them
         if options['scopes']:
             self.stdout.write('Paste these scopes into the Self Client "Generate Code" tab:\n')
             self.stdout.write(self.style.SUCCESS(READ_SCOPES))
