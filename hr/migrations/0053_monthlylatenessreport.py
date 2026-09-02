@@ -7,7 +7,11 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('hr', '0050_assethandover_hr_assethandover_one_open_per_asset_and_more'),
+        # Renumbered from 0051 and repointed at 0052 so this branch and the
+        # employee grade/picture branch form one chain rather than two leaves.
+        # Both were cut from dev at 0050 and both claimed 0051; Django refuses
+        # a tree with two leaf nodes in one app.
+        ('hr', '0052_employee_picture'),
     ]
 
     operations = [
