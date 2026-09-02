@@ -1084,8 +1084,14 @@ class RFQActivityTests(ComputeFixtureMixin, TestCase):
         """Counted once per project on the EARLIEST handover -- the RFQ left
         the proposal desk the first time a BOM went across."""
         p = self._rfq('MULTI', deadline_offset=5)
-        self._hand_over(p, days_ago=3, title='rev A')
-        self._hand_over(p, days_ago=1, title='rev B')
+        # Both handovers have to land inside the month being asked about.
+        # Fixed offsets of 3 and 1 days put the EARLIER one in the previous
+        # month whenever this runs on the 1st to the 3rd, and since the metric
+        # counts on the earliest handover the project was then correctly
+        # counted zero times here — a calendar-flaky test, not a broken tile.
+        earliest = min(3, self.today.day - 1)
+        self._hand_over(p, days_ago=earliest, title='rev A')
+        self._hand_over(p, days_ago=0, title='rev B')
         period = f'{self.today.year}-{self.today.month:02d}'
         self.assertEqual(
             _val('proposal_rfqs_submitted', period, region=self.region), Decimal('1'))
