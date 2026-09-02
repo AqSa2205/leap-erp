@@ -192,7 +192,11 @@ def index(request):
     # sharing a dashboard_group (e.g. UK and Global both tagged 'LNUK') are
     # combined into one tab, exactly as LNUK was before this - a region with
     # no group set gets a tab of its own, keyed by its own code.
-    CURRENCY_SYMBOLS = {'GBP': '£', 'USD': '$', 'SAR': 'SAR ', 'AED': 'AED '}
+    # Only true symbols go here - a currency with a letter code (SAR, AED,
+    # EUR, or any future region's currency) falls through to the .get()
+    # default below, which adds the trailing space itself so this covers
+    # every currency automatically, not just the two seen so far.
+    CURRENCY_SYMBOLS = {'GBP': '£', 'USD': '$'}
 
     region_groups = OrderedDict()
     for r in Region.objects.filter(is_active=True).order_by('name'):
@@ -223,7 +227,7 @@ def index(request):
             'name': key,
             'full_name': ' & '.join(r.name for r in group_regions),
             'currency': currency,
-            'currency_symbol': CURRENCY_SYMBOLS.get(currency, currency),
+            'currency_symbol': CURRENCY_SYMBOLS.get(currency, currency + ' '),
             'codes': codes,
             'can_view': can_view,
             'stats': stats,

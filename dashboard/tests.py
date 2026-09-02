@@ -249,6 +249,11 @@ class DashboardRegionScopingTests(TestCase):
         # a project there - the tab lock is about that region's aggregate
         # figures, separate from which projects they personally own.
         self.assertFalse(tabs['ZBTEST']['can_view'])
+        # The actual union, not just tab visibility: overall stats must
+        # include BOTH the own-region project (lna_project) and the
+        # owned-elsewhere project (zoneb_project) - 2 total. A regression
+        # to owner-only or region-only scoping would show 1, not 2.
+        self.assertEqual(resp.context['overall_stats']['total']['count'], 2)
 
     def test_sales_rep_with_no_region_sees_only_owned_projects(self):
         self.lna_project.owner = self.rep_no_region
@@ -259,6 +264,10 @@ class DashboardRegionScopingTests(TestCase):
         tabs = {t['name']: t for t in resp.context['region_tabs']}
         self.assertFalse(tabs['LNATEST']['can_view'])
         self.assertFalse(tabs['ZBTEST']['can_view'])
+        # With no region assigned, overall stats must be owner-only: just
+        # the lna_project they own (1), not also zoneb_project, which they
+        # neither own nor have a region for.
+        self.assertEqual(resp.context['overall_stats']['total']['count'], 1)
 
     def test_grouped_regions_combine_into_one_tab(self):
         Region.objects.create(name='UK', code='UKTEST', currency='GBP', dashboard_group='LNUKTEST')
@@ -382,7 +391,7 @@ class CodebaseHealthChecksTests(TestCase):
         import os
         from django.conf import settings
         from django.template.loader import get_template
-        from django.template import TemplateSyntaxError
+        from django.template import TemplateSyntaxError, TemplateDoesNotExist
         offenders = []
         template_dirs = settings.TEMPLATES[0].get('DIRS', [])
         for template_dir in template_dirs:
@@ -397,8 +406,44 @@ class CodebaseHealthChecksTests(TestCase):
                         get_template(rel_path)
                     except TemplateSyntaxError as e:
                         offenders.append(f"{rel_path}: {e}")
-                    except Exception:
+                    except TemplateDoesNotExist:
+                        # A template that {% extends %} or {% include %}s
+                        # something not present in this DIRS listing (e.g.
+                        # resolved elsewhere at render time) - a separate
+                        # concern from syntax validity, so skipped here.
                         pass
+                    # Anything else (e.g. a custom templatetag module that
+                    # fails to import) is a real problem and should fail
+                    # this test loudly rather than being swallowed.
         self.assertEqual(
             offenders, [],
             "Found templates with syntax errors:\n" + "\n".join(offenders))
+
+
+class CurrencySymbolFallbackTests(TestCase):
+    """Any currency without a known symbol (not just SAR/AED specifically)
+    gets a trailing space in its display prefix - the bug this PR was
+    meant to fix generally, not just for the two currencies seen when it
+    first shipped."""
+
+    def test_new_currency_gets_a_trailing_space(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        user = User.objects.create_user('curtest', password='x')
+        user.role = role
+        user.save()
+        Region.objects.create(name='Euro Zone', code='EURTEST', currency='EUR')
+        self.client.force_login(user)
+        resp = self.client.get(reverse('dashboard:index'))
+        tabs = {t['name']: t for t in resp.context['region_tabs']}
+        self.assertEqual(tabs['EURTEST']['currency_symbol'], 'EUR ')
+
+    def test_known_symbol_currency_has_no_trailing_space(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        user = User.objects.create_user('curtest2', password='x')
+        user.role = role
+        user.save()
+        Region.objects.create(name='UK Zone', code='GBPTEST', currency='GBP')
+        self.client.force_login(user)
+        resp = self.client.get(reverse('dashboard:index'))
+        tabs = {t['name']: t for t in resp.context['region_tabs']}
+        self.assertEqual(tabs['GBPTEST']['currency_symbol'], '\u00a3')
