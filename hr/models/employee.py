@@ -39,6 +39,8 @@ class Employee(models.Model):
     personal_email = models.EmailField(blank=True, verbose_name='Personal Email')
     documents_link = models.URLField(max_length=500, blank=True, verbose_name='Documents Link')
     deployment = models.CharField(max_length=100, blank=True, verbose_name='Deployment')
+    grade = models.CharField(max_length=50, blank=True, verbose_name='Grade')
+    picture = models.ImageField(upload_to='employee_pictures/', blank=True, null=True, verbose_name='Picture')
     work_location = models.CharField(
         max_length=10, choices=WORK_LOCATION_CHOICES, blank=True,
         verbose_name='Office / Site')

@@ -20,7 +20,7 @@
             <!-- Form Card -->
             <div class="card">
                 <div class="card-body">
-                    <form method="post" novalidate>
+                    <form method="post" enctype="multipart/form-data" novalidate>
                         {% csrf_token %}
 
                         <!-- Personal Information -->
@@ -139,6 +139,25 @@
                                 {{ form.deployment }}
                                 {% if form.deployment.errors %}
                                 <div class="invalid-feedback d-block">{{ form.deployment.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Grade</label>
+                                {{ form.grade }}
+                                {% if form.grade.errors %}
+                                <div class="invalid-feedback d-block">{{ form.grade.errors.0 }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Picture</label>
+                                {% if employee.picture %}
+                                <div class="mb-2">
+                                    <img src="{{ employee.picture.url }}" alt="{{ employee.full_name }}" style="max-height:80px; border-radius:6px;">
+                                </div>
+                                {% endif %}
+                                {{ form.picture }}
+                                {% if form.picture.errors %}
+                                <div class="invalid-feedback d-block">{{ form.picture.errors.0 }}</div>
                                 {% endif %}
                             </div>
                             <div class="col-md-4 mb-3">
