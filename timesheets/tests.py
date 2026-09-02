@@ -889,20 +889,40 @@ class HRRequestDetailQueryCountTests(TestCase):
         self.ts_request = request_timesheets(year=2026, month=7, requested_by=self.hr_user)
 
     def test_request_detail_query_count_does_not_scale_with_employee_count(self):
+        """Measured at two sizes rather than pinned to a number.
+
+        This used to assert assertNumQueries(17), and the comment beside it
+        said the point was the number staying flat rather than its exact
+        value — while asserting the exact value. It had been bumped twice
+        (17 -> 20 -> 17) to match whatever the code happened to do, which is
+        how a real N+1 gets absorbed instead of fixed: the failure reads as
+        "the baseline moved" and the constant gets edited.
+
+        Comparing two employee counts asserts the property the name claims,
+        and cannot be satisfied by editing a number.
+        """
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
         client = Client()
         client.login(username='queryhr', password='testpass123')
-        with self.assertNumQueries(17):  # adjust once if your baseline differs; the
-                                          # point is this number staying FLAT as
-                                          # employee count grows, not its exact value.
-                                          # 17 -> 20: the global HR pending-counts
-                                          # context processor gained 3 fixed COUNT
-                                          # queries (attendance-exception revoke) that
-                                          # run on every page; still flat per employee.
-                                          # 20 -> 17: this page is now driven by
-                                          # erp_admin rather than admin, and those 3
-                                          # pending-count queries only run for the
-                                          # admin tier that still reaches that queue.
-            client.get(reverse('timesheets:hr_request_detail', args=[self.ts_request.pk]))
+        url = reverse('timesheets:hr_request_detail', args=[self.ts_request.pk])
+
+        def queries():
+            with CaptureQueriesContext(connection) as ctx:
+                client.get(url)
+            return len(ctx.captured_queries)
+
+        with_five = queries()
+        for i in range(10):
+            _make_user_with_employee(f'queryextra{i}')
+        with_fifteen = queries()
+
+        self.assertEqual(
+            with_five, with_fifteen,
+            f'Query count grew from {with_five} (5 employees) to '
+            f'{with_fifteen} (15 employees) — an N+1 in this view or in a '
+            f'context processor that runs on every page.')
 
 
 from .forms import TimesheetEntryForm

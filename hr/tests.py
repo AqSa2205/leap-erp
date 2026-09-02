@@ -10483,3 +10483,149 @@ class PendingApprovalsPurchaseOrderTests(TestCase):
             self.assertEqual(self.po.current_stage['key'], 'ceo')
             self.assertEqual(len(self._po_items(self.super_admin)), 1)
             self.assertEqual(self._po_items(self.admin), [])
+
+
+class PendingApprovalsBadgeCostTests(TestCase):
+    """The sidebar badge runs on every page in the app, so its cost is the
+    app's cost.
+
+    hr.context_processors.pending_counts calls pending_approvals_count() for
+    every authenticated request, and that walks all six sources and builds
+    their full item lists purely to call len() on them. Anything that scales
+    inside those sources therefore scales across every page in the system.
+
+    This went unnoticed once already: the purchase-order source read
+    current_stage (-> required_stages -> total_value, which walks items),
+    po.project, and each stage's *_approved_by FK, none of them prefetched.
+    Twenty-one purchase orders in a development database produced 362 queries
+    on every page load, to render a badge that read zero.
+    """
+
+    def setUp(self):
+        from accounts.models import Role
+        self.user = _make_role_user('badge_super', Role.SUPER_ADMIN)
+
+    def _po(self, number):
+        from procurement.models import PurchaseOrder, PurchaseOrderItem
+        po = PurchaseOrder.objects.create(
+            po_number=number, po_date=_date(2026, 6, 1), created_by=self.user)
+        PurchaseOrderItem.objects.create(
+            purchase_order=po, serial_number=1, description='Thing',
+            quantity=Decimal('1'), rate_per_unit=Decimal('100'))
+        return po
+
+    def _queries(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        from hr.approvals import pending_approvals_count
+        with CaptureQueriesContext(connection) as ctx:
+            pending_approvals_count(self.user)
+        return len(ctx.captured_queries)
+
+    def test_the_badge_cost_does_not_scale_with_purchase_orders(self):
+        """Measured at two sizes. A pinned number would be edited to match a
+        regression rather than reveal one — which is how the 362-query version
+        survived."""
+        for i in range(2):
+            self._po(f'PO-BADGE-A{i}')
+        # One warm-up call. Django caches a missing reverse one-to-one on the
+        # instance, so the employee_profile lookup is paid once and would
+        # otherwise make the first measurement a query dearer than the second
+        # for reasons that have nothing to do with purchase orders.
+        self._queries()
+        small = self._queries()
+
+        for i in range(12):
+            self._po(f'PO-BADGE-B{i}')
+        large = self._queries()
+
+        self.assertEqual(
+            small, large,
+            f'Badge cost grew from {small} queries (2 POs) to {large} (14 POs). '
+            f'This runs on every page in the app.')
+
+    def test_the_badge_still_counts_the_same_things_it_did(self):
+        """A prefetch must not change the answer, only the cost."""
+        from hr.approvals import pending_approvals, pending_approvals_count
+        self._po('PO-BADGE-COUNT')
+        expected = sum(g['count'] for g in pending_approvals(self.user))
+        self.assertEqual(pending_approvals_count(self.user), expected)
+
+
+class PendingApprovalsSourceHealthTests(TestCase):
+    """Every source must actually run.
+
+    pending_approvals drops a source that raises, so one module's problem
+    cannot cost somebody the view of their other five queues. The cost of that
+    choice is that a permanently broken source is indistinguishable from an
+    empty one: leave_revokes named its foreign key `leave_record` when the
+    field is `leave_request`, so every call raised FieldError, the queue was
+    never in anybody's inbox, and nothing anywhere said so.
+
+    Every other test in this file went through pending_approvals() or the
+    view, so all of them saw the swallowed exception as "no leave
+    cancellations pending" and passed. These call the sources directly.
+    """
+
+    def setUp(self):
+        from accounts.models import Role
+        self.super_admin = _make_role_user('src_super', Role.SUPER_ADMIN)
+
+    def test_no_source_raises(self):
+        from hr.approvals import SOURCES
+        broken = []
+        for source in SOURCES:
+            try:
+                source(self.super_admin)
+            except Exception as exc:                      # noqa: BLE001
+                broken.append(f'{source.__name__}: {type(exc).__name__}: {exc}')
+        self.assertEqual(
+            broken, [],
+            'These sources raise and are silently dropped from every inbox:\n'
+            + '\n'.join(broken))
+
+    def test_every_source_is_reachable_for_someone(self):
+        """A source that returns None for a super admin is either correctly
+        scoped away or quietly unreachable; a super admin should reach all of
+        them, so None here means the gate is wrong."""
+        from hr.approvals import SOURCES
+        unreachable = [s.__name__ for s in SOURCES
+                       if s(self.super_admin) is None]
+        self.assertEqual(unreachable, [])
+
+    def test_a_pending_leave_revoke_reaches_the_inbox(self):
+        """The specific queue that was missing. Asserted through the real
+        aggregator, so it also proves the source is not being dropped."""
+        from django.utils import timezone
+        from hr.approvals import pending_approvals
+        from hr.models import LeaveRequest, LeaveRevokeRequest, LeaveType
+
+        employee = make_employee(iqama='REVOKE-1', name='Revoke Test Employee')
+        leave_type = LeaveType.objects.create(name='Annual', code='ANN-REV')
+        leave = LeaveRequest.objects.create(
+            employee=employee, leave_type=leave_type,
+            start_date=_date(2026, 6, 1), end_date=_date(2026, 6, 3),
+            days=Decimal('3'), status='pending')
+        LeaveRevokeRequest.objects.create(
+            leave_request=leave, requested_by=self.super_admin,
+            reason='Client moved the visit', status='pending')
+
+        groups = {g['key']: g for g in pending_approvals(self.super_admin)}
+        self.assertIn('leave_revoke', groups)
+        self.assertEqual(groups['leave_revoke']['count'], 1)
+        self.assertEqual(groups['leave_revoke']['items'][0]['title'],
+                         'Revoke Test Employee')
+
+    def test_a_failing_source_is_logged_rather_than_vanishing(self):
+        """Dropping a source silently is what let the above go unnoticed. It
+        must be recoverable from the logs."""
+        from unittest import mock
+        from hr import approvals
+
+        def boom(user):
+            raise RuntimeError('deliberate')
+
+        with mock.patch.object(approvals, 'SOURCES', (boom,)):
+            with self.assertLogs('hr.approvals', level='ERROR') as captured:
+                self.assertEqual(approvals.pending_approvals(self.super_admin), [])
+        self.assertIn('boom', '\n'.join(captured.output))
