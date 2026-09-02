@@ -614,17 +614,23 @@
     <!-- Documents -->
     <div class="col-lg-6">
       <div class="card h-100">
-        <div class="card-header fw-semibold"><i class="bi bi-folder2-open me-1"></i> My Documents</div>
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center"><span><i class="bi bi-folder2-open me-1"></i> My Documents</span>{% if documents %}<a href="{% url 'hr:my_documents_export_pdf' %}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-file-earmark-pdf"></i> Export PDF</a>{% endif %}</div>
         <div class="card-body p-0">
           {% if documents %}
           <table class="table table-sm mb-0">
-            <thead class="table-light"><tr><th>Type</th><th>Title</th><th>File</th></tr></thead>
+            <thead class="table-light"><tr><th>Type</th><th>Title</th><th>File</th><th></th></tr></thead>
             <tbody>
               {% for d in documents %}
               <tr>
                 <td><span class="badge bg-secondary">{{ d.get_document_type_display }}</span></td>
                 <td class="small">{{ d.title }}</td>
                 <td><a href="{{ d.file.url }}" target="_blank" class="small">{% if d.is_pdf %}<i class="bi bi-file-earmark-pdf text-danger me-1"></i>{% elif d.is_image %}<i class="bi bi-file-earmark-image text-success me-1"></i>{% else %}<i class="bi bi-file-earmark me-1"></i>{% endif %}{{ d.filename|truncatechars:24 }}</a></td>
+                <td class="text-end">
+                  <form method="post" action="{% url 'hr:my_document_delete' d.pk %}" onsubmit="return confirm('Delete this document?');" class="d-inline">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-sm btn-link text-danger p-0" title="Delete"><i class="bi bi-trash"></i></button>
+                  </form>
+                </td>
               </tr>
               {% endfor %}
             </tbody>
@@ -632,6 +638,30 @@
           {% else %}
           <p class="text-muted small p-3 mb-0">No documents on file.</p>
           {% endif %}
+          <form method="post" action="{% url 'hr:my_document_upload' %}" enctype="multipart/form-data" class="border-top p-3">
+            {% csrf_token %}
+            <div class="row g-2 mb-2">
+              <div class="col-md-4">
+                <label class="form-label small mb-1">Document Type</label>
+                {{ my_document_form.document_type }}
+              </div>
+              <div class="col-md-8" id="myDocNotesWrap" style="display:none;">
+                <label class="form-label small mb-1">Please specify</label>
+                {{ my_document_form.notes }}
+              </div>
+            </div>
+            <div class="row g-2 align-items-end">
+              <div class="col-md-9">
+                <label class="form-label small mb-1">File</label>
+                {{ my_document_form.file }}
+              </div>
+              <div class="col-md-3">
+                <button type="submit" class="btn btn-primary btn-sm w-100">
+                  <i class="bi bi-upload"></i> Upload
+                </button>
+              </div>
+            </div>
+          </form>
         </div>
       </div>
     </div>
@@ -994,6 +1024,20 @@
     }
     reasonSelect.addEventListener('change', toggleCustomReason);
     toggleCustomReason();
+})();
+
+// Show the 'Please specify' box on the My Documents upload form only
+// when Other Documents is selected - same toggle pattern as the leave
+// request reason field above.
+(function () {
+    var docTypeSelect = document.getElementById('myDocTypeSelect');
+    var notesWrap = document.getElementById('myDocNotesWrap');
+    if (!docTypeSelect || !notesWrap) return;
+    function toggleDocNotes() {
+        notesWrap.style.display = (docTypeSelect.value === 'other') ? '' : 'none';
+    }
+    docTypeSelect.addEventListener('change', toggleDocNotes);
+    toggleDocNotes();
 })();
 
 // Document removal on an Edit form is deferred, not immediate: clicking

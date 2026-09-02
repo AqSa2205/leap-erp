@@ -382,6 +382,39 @@ class EmployeeDocumentForm(forms.ModelForm):
             'notes': forms.Textarea(attrs={'rows': 2}),
         }
 
+
+class MyDocumentUploadForm(forms.ModelForm):
+    class Meta:
+        model = EmployeeDocument
+        fields = ['document_type', 'notes', 'file']
+        widgets = {
+            'document_type': forms.Select(attrs={'class': 'form-select', 'id': 'myDocTypeSelect'}),
+            'notes': forms.TextInput(attrs={
+                'class': 'form-control',
+                'id': 'myDocNotesInput',
+                'placeholder': 'e.g. Salary Certificate',
+            }),
+            'file': forms.ClearableFileInput(attrs={'class': 'form-control', 'id': 'myDocFileInput'}),
+        }
+        labels = {
+            'notes': 'Please specify',
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['document_type'].choices = [
+            c for c in EmployeeDocument.DOC_TYPE_CHOICES
+            if c[0] in EmployeeDocument.SELF_SERVICE_DOC_TYPES
+        ]
+
+    def clean(self):
+        cleaned_data = super().clean()
+        document_type = cleaned_data.get('document_type')
+        notes = cleaned_data.get('notes')
+        if document_type == 'other' and not notes:
+            self.add_error('notes', 'Please specify what this document is.')
+        return cleaned_data
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         for field in self.fields.values():

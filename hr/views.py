@@ -21,7 +21,7 @@ from .models import Employee, Asset, AssetAssignment, Vehicle, VehicleDocument, 
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm,
-    VehicleForm, VehicleFilterForm, EmployeeDocumentForm, VehicleDocumentForm,
+    VehicleForm, VehicleFilterForm, EmployeeDocumentForm, MyDocumentUploadForm, VehicleDocumentForm,
     LeaveTypeForm, HolidayForm, WorkingDayForm, WFHRecordForm,
     AttendanceSettingsForm, LeaveRequestForm, AttendanceExceptionForm,
     EmployeeHierarchyForm, ExceptionGrantForm,
@@ -612,6 +612,7 @@ def my_profile(request):
             handovers__employee=emp, handovers__status='active').distinct().order_by('asset_name')
         # Documents (iqama/passport copies, contracts, etc.).
         context['documents'] = emp.documents.all()
+        context['my_document_form'] = MyDocumentUploadForm()
         # Leave balance for the current year. The summary total only counts
         # standard accrued allowances (Annual) — conditional/incidental
         # leave (Sick, Marriage, Umrah, etc.) still appears in the per-type rows but
@@ -951,6 +952,63 @@ def build_attendance_pdf(emp, month_start, month_end):
 
 @login_required
 @require_POST
+def my_document_upload(request):
+    """Self-service document upload from the employee's own My Profile
+    page - restricted document types compared to the admin upload (see
+    MyDocumentUploadForm), and the employee is always fixed to
+    themselves rather than an arbitrary pk in the URL."""
+    from .models import EmployeeDocument
+
+    emp = getattr(request.user, 'employee_profile', None)
+    if emp is None:
+        messages.error(request, 'Your account is not linked to an employee record.')
+        return redirect('hr:my_profile')
+
+    form = MyDocumentUploadForm(request.POST, request.FILES)
+    if form.is_valid():
+        doc = form.save(commit=False)
+        doc.employee = emp
+        doc.uploaded_by = request.user
+        # Title is derived rather than typed separately: the chosen
+        # type's label, or - for Other - what the employee wrote in the
+        # "Please specify" box.
+        if doc.document_type == 'other':
+            doc.title = doc.notes.strip()
+        else:
+            doc.title = dict(EmployeeDocument.DOC_TYPE_CHOICES)[doc.document_type]
+        doc.save()
+        messages.success(request, f'Document "{doc.title}" uploaded.')
+    else:
+        for field, errors in form.errors.items():
+            for error in errors:
+                messages.error(request, error)
+
+    return redirect('hr:my_profile')
+
+
+@login_required
+@require_POST
+def my_document_delete(request, pk):
+    """Self-service delete on the employee's own My Profile page - only
+    a document's owning employee can delete it, unlike the admin delete
+    view which any admin can use on any employee's documents."""
+    from .models import EmployeeDocument
+
+    emp = getattr(request.user, 'employee_profile', None)
+    if emp is None:
+        messages.error(request, 'Your account is not linked to an employee record.')
+        return redirect('hr:my_profile')
+
+    doc = get_object_or_404(EmployeeDocument, pk=pk, employee=emp)
+    if doc.file:
+        doc.file.delete(save=False)
+    doc.delete()
+    messages.success(request, 'Document deleted.')
+    return redirect('hr:my_profile')
+
+
+@login_required
+@require_POST
 def raise_late_query(request):
     from hr.models import AttendanceRecord, LateQuery
     emp = getattr(request.user, 'employee_profile', None)
@@ -1003,6 +1061,109 @@ def my_attendance_export_pdf(request):
     response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     return response
+
+def build_documents_pdf(emp):
+    """Builds a single merged PDF: a table-of-contents page followed by
+    every uploaded document's actual content, clubbed into one file. PDFs
+    merge in directly; images convert to a PDF page first; anything else
+    that can't be converted is left out of the merge and flagged on the
+    TOC as \"Not included - download separately\" rather than silently
+    vanishing. Reuses the same conversion/merge helpers the PQD export
+    already relies on, rather than duplicating that logic here."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import cm
+    from django.utils import timezone
+    from pypdf import PdfReader
+    from proposals.pqd_export import _convert_to_pdf, _merge_pdfs
+    import io
+
+    documents = list(emp.documents.all())
+
+    # First pass: convert every document to PDF bytes and count its pages,
+    # so the table of contents can show accurate page numbers before
+    # anything is merged.
+    converted = []  # (doc, pdf_bytes_or_None, page_count)
+    for d in documents:
+        ext = d.file.name.rsplit('.', 1)[-1] if '.' in d.file.name else ''
+        pdf_bytes = None
+        try:
+            with d.file.open('rb') as fh:
+                file_bytes = fh.read()
+            pdf_bytes = _convert_to_pdf(file_bytes, ext)
+        except Exception:
+            pdf_bytes = None
+        page_count = 0
+        if pdf_bytes:
+            try:
+                page_count = len(PdfReader(io.BytesIO(pdf_bytes)).pages)
+            except Exception:
+                pdf_bytes = None
+        converted.append((d, pdf_bytes, page_count))
+
+    # Table of contents page. Assumed to fit on one page - reasonable for
+    # the handful of documents an employee typically has on file - so
+    # included documents are numbered starting from page 2.
+    buffer = io.BytesIO()
+    toc_doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2 * cm, bottomMargin=2 * cm)
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=16, spaceAfter=6)
+    subtitle_style = ParagraphStyle('DocSubtitle', parent=styles['Normal'], fontSize=10,
+                                     textColor=colors.grey, spaceAfter=16)
+
+    elements = [
+        Paragraph(f'My Documents — {emp.full_name}', title_style),
+        Paragraph(f'Generated {timezone.now().strftime("%d %B %Y")}', subtitle_style),
+    ]
+
+    if converted:
+        data = [['Type', 'Title', 'Uploaded', 'Page']]
+        page_cursor = 2  # page 1 is this table of contents
+        for d, pdf_bytes, page_count in converted:
+            if pdf_bytes:
+                page_label = str(page_cursor)
+                page_cursor += page_count
+            else:
+                page_label = 'Not included - download separately'
+            data.append([d.get_document_type_display(), d.title,
+                         d.uploaded_at.strftime('%d %b %Y'), page_label])
+        table = Table(data, colWidths=[3 * cm, 5 * cm, 3 * cm, 5 * cm])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a1a1a')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f5f5f5')]),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        elements.append(table)
+    else:
+        elements.append(Paragraph('No documents on file.', styles['Normal']))
+
+    toc_doc.build(elements)
+    toc_pdf_bytes = buffer.getvalue()
+
+    parts = [toc_pdf_bytes] + [pdf_bytes for _, pdf_bytes, _ in converted if pdf_bytes]
+    return io.BytesIO(_merge_pdfs(parts))
+
+
+@login_required
+def my_documents_export_pdf(request):
+    emp = getattr(request.user, 'employee_profile', None)
+    if emp is None:
+        messages.error(request, 'Your account is not linked to an employee record.')
+        return redirect('hr:my_profile')
+
+    buffer = build_documents_pdf(emp)
+    filename = f'my_documents_{emp.full_name.replace(" ", "_").lower()}.pdf'
+    response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response
+
 
 class EmployeeListView(AdminRequiredMixin, ListView):
     model = Employee
