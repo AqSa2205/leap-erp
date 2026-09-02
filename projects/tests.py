@@ -328,6 +328,14 @@ class PipelineVisibilityTests(TestCase):
             'estimated_value': '0', 'estimated_value_usd': '0',
             'estimated_value_per_annum': '0', 'estimated_gp': '0',
             'actual_sales': '0', 'success_quotient': '0',
+            # Deadlines are mandatory on create (ProjectForm.__init__), so a
+            # payload without them would fail for a reason unrelated to what
+            # the test is checking.
+            'submission_deadline': '2026-10-01',
+            'bom_started_deadline': '2026-09-10',
+            'handed_over_deadline': '2026-09-15',
+            'costing_started_deadline': '2026-09-20',
+            'finalized_deadline': '2026-09-25',
             'client_rfq_reference': '', 'po_number': '', 'customer': '',
             'end_user': '', 'project_stage': '', 'year': '', 'po_award_quarter': '',
             'contact_with': '', 'remarks': '', 'notes': '', 'portal_url': '',
@@ -391,6 +399,14 @@ class LnaReferenceTests(TestCase):
             'estimated_value': '0', 'estimated_value_usd': '0',
             'estimated_value_per_annum': '0', 'estimated_gp': '0',
             'actual_sales': '0', 'success_quotient': '0',
+            # Deadlines are mandatory on create (ProjectForm.__init__), so a
+            # payload without them would fail for a reason unrelated to what
+            # the test is checking.
+            'submission_deadline': '2026-10-01',
+            'bom_started_deadline': '2026-09-10',
+            'handed_over_deadline': '2026-09-15',
+            'costing_started_deadline': '2026-09-20',
+            'finalized_deadline': '2026-09-25',
             'client_rfq_reference': '', 'po_number': '', 'customer': '',
             'end_user': '', 'project_stage': '', 'year': '', 'po_award_quarter': '',
             'contact_with': '', 'remarks': '', 'notes': '', 'portal_url': '',
@@ -783,6 +799,14 @@ class OpportunityLostTests(TestCase):
             'estimated_value': '0', 'estimated_value_usd': '0',
             'estimated_value_per_annum': '0', 'estimated_gp': '0',
             'actual_sales': '0', 'success_quotient': '0', 'minimum_achievement': '0',
+            # Deadlines are mandatory on create (ProjectForm.__init__), so a
+            # payload without them would fail for a reason unrelated to what
+            # the test is checking.
+            'submission_deadline': '2026-10-01',
+            'bom_started_deadline': '2026-09-10',
+            'handed_over_deadline': '2026-09-15',
+            'costing_started_deadline': '2026-09-20',
+            'finalized_deadline': '2026-09-25',
         }
         data.update(overrides)
         return ProjectForm(data=data, user=self.user)
@@ -1559,6 +1583,14 @@ class ProjectCreateViewPickedEmailTests(TestCase):
             'estimated_value': '0', 'estimated_value_usd': '0',
             'estimated_value_per_annum': '0', 'estimated_gp': '0',
             'actual_sales': '0', 'success_quotient': '0',
+            # Deadlines are mandatory on create (ProjectForm.__init__), so a
+            # payload without them would fail for a reason unrelated to what
+            # the test is checking.
+            'submission_deadline': '2026-10-01',
+            'bom_started_deadline': '2026-09-10',
+            'handed_over_deadline': '2026-09-15',
+            'costing_started_deadline': '2026-09-20',
+            'finalized_deadline': '2026-09-25',
             'client_rfq_reference': '', 'po_number': '', 'customer': '',
             'end_user': '', 'project_stage': '', 'year': '', 'po_award_quarter': '',
             'contact_with': '', 'remarks': '', 'notes': '', 'portal_url': '',
@@ -2125,3 +2157,139 @@ class ProcurementTimelineVisibilityTests(TestCase):
         body = self.client.get(
             reverse('projects:detail', kwargs={'pk': self.project.pk})).content.decode()
         self.assertIn('Activity Timeline', body)
+
+
+class PipelineDeadlinesRequiredTests(TestCase):
+    """Deadlines are mandatory on a new pipeline entry.
+
+    Every milestone KPI is measured against these dates, so an entry created
+    without them is invisible to the deadline tiles for its whole life. The
+    tiles currently report how many projects they cannot see rather than
+    quietly dropping them; this is what shrinks that number.
+
+    Create only. Existing entries predate the rule and many have blanks, so
+    requiring them on edit would mean nobody could correct a typo on an old
+    project without first inventing four dates for it.
+    """
+
+    def setUp(self):
+        from projects.forms import DEADLINE_FIELDS
+        self.deadline_fields = DEADLINE_FIELDS
+        self.region = Region.objects.create(name='KSA', code='DLT')
+        self.status = ProjectStatus.objects.create(name='Open', category='open')
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('deadline-user', password='x',
+                                             role=role, region=self.region)
+
+    def _payload(self, **overrides):
+        data = {
+            'project_name': 'Ghazlan Substation',
+            'proposal_reference': 'DLT-2026-0001',
+            'status': self.status.pk,
+            'region': self.region.pk,
+            'submission_deadline': '2026-10-01',
+            'bom_started_deadline': '2026-09-10',
+            'handed_over_deadline': '2026-09-15',
+            'costing_started_deadline': '2026-09-20',
+            'finalized_deadline': '2026-09-25',
+            # Unrelated to this change, but the form requires them, so a
+            # payload without them would fail for the wrong reason.
+            'estimated_value': '100000',
+            'estimated_value_usd': '26666',
+            'estimated_value_per_annum': '100000',
+            'estimated_gp': '15',
+            'actual_sales': '0',
+            'success_quotient': '50',
+        }
+        data.update(overrides)
+        return data
+
+    def _form(self, data, instance=None):
+        from projects.forms import ProjectForm
+        return ProjectForm(data=data, instance=instance, user=self.user)
+
+    # ── on create ───────────────────────────────────────────────────────────
+
+    def test_every_deadline_is_required_on_a_new_entry(self):
+        form = self._form(self._payload())
+        for name in self.deadline_fields:
+            self.assertTrue(form.fields[name].required, name)
+
+    def test_a_new_entry_with_all_deadlines_is_valid(self):
+        self.assertTrue(self._form(self._payload()).is_valid(),
+                        self._form(self._payload()).errors.as_json())
+
+    def test_each_missing_deadline_is_rejected_individually(self):
+        """Named one at a time so a change that only covers some of them
+        cannot pass by satisfying the others."""
+        for name in self.deadline_fields:
+            with self.subTest(field=name):
+                form = self._form(self._payload(**{name: ''}))
+                self.assertFalse(form.is_valid())
+                self.assertIn(name, form.errors)
+
+    def test_the_error_names_the_field_rather_than_failing_silently(self):
+        form = self._form(self._payload(submission_deadline=''))
+        form.is_valid()
+        self.assertTrue(form.errors['submission_deadline'])
+
+    def test_estimated_po_date_is_still_optional(self):
+        """A forecast, not a deadline — requiring it would be a different
+        decision from the one taken."""
+        form = self._form(self._payload(estimated_po_date=''))
+        self.assertTrue(form.is_valid(), form.errors.as_json())
+
+    # ── on edit ─────────────────────────────────────────────────────────────
+
+    def test_deadlines_are_not_required_when_editing(self):
+        project = Project.objects.create(
+            project_name='Old Job', proposal_reference='DLT-2026-0002',
+            status=self.status, region=self.region)
+        form = self._form(self._payload(), instance=project)
+        for name in self.deadline_fields:
+            self.assertFalse(form.fields[name].required, name)
+
+    def test_an_old_entry_with_blank_deadlines_can_still_be_edited(self):
+        """The reason the rule is create-only: these exist in quantity, and
+        correcting a typo on one must not require inventing four dates."""
+        project = Project.objects.create(
+            project_name='Old Job', proposal_reference='DLT-2026-0003',
+            status=self.status, region=self.region)
+        self.assertIsNone(project.submission_deadline)
+        data = self._payload(project_name='Old Job Renamed')
+        for name in self.deadline_fields:
+            data[name] = ''
+        form = self._form(data, instance=project)
+        self.assertTrue(form.is_valid(), form.errors.as_json())
+
+    # ── the page ────────────────────────────────────────────────────────────
+
+    def test_the_create_page_marks_them_required(self):
+        """Without the asterisk the form refuses to save with no warning of
+        which fields it is waiting for."""
+        self.client.force_login(self.user)
+        body = self.client.get(reverse('projects:create')).content.decode()
+        self.assertIn('Submission Deadline *', body)
+        self.assertIn('BOM Started Deadline *', body)
+        self.assertIn('Finalised Deadline *', body)
+
+    def test_the_edit_page_does_not_mark_them_required(self):
+        """The asterisk has to follow the rule, or the label promises
+        something the form is not enforcing."""
+        project = Project.objects.create(
+            project_name='Old Job', proposal_reference='DLT-2026-0004',
+            status=self.status, region=self.region)
+        self.client.force_login(self.user)
+        body = self.client.get(
+            reverse('projects:edit', args=[project.pk])).content.decode()
+        self.assertIn('Submission Deadline', body)
+        self.assertNotIn('Submission Deadline *', body)
+
+    def test_the_page_shows_the_error_next_to_the_field(self):
+        self.client.force_login(self.user)
+        response = self.client.post(reverse('projects:create'),
+                                    self._payload(submission_deadline=''))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'text-danger')
+        self.assertFalse(Project.objects.filter(
+            proposal_reference='DLT-2026-0001').exists())
