@@ -55,6 +55,16 @@ class EmployeeFormValidationTests(TestCase):
         self.assertFalse(form.is_valid())
         self.assertIn('designation', form.errors)
 
+    def test_symbol_only_grade_is_rejected(self):
+        form = EmployeeForm(data=self._base_valid_data(grade='!@#$%^&*()'))
+        self.assertFalse(form.is_valid())
+        self.assertIn('grade', form.errors)
+
+    def test_valid_grade_is_accepted(self):
+        form = EmployeeForm(data=self._base_valid_data(grade='EX-2'))
+        form.is_valid()
+        self.assertNotIn('grade', form.errors)
+
 
 class AssetFormValidationTests(TestCase):
     """Same validation pattern applied to AssetForm's free-text fields."""
@@ -10502,6 +10512,17 @@ class EmployeeGradeAndListDisplayTests(TestCase):
         self.emp.refresh_from_db()
         self.assertEqual(self.emp.grade, 'EX-2')
 
+    def test_grade_filter_narrows_list_results(self):
+        # Replaces the old Deployment filter, which filtered on a value
+        # that had no matching column in the results (see PR review).
+        other = make_employee(iqama='GRADE-2', name='Other Grade Employee')
+        other.grade = 'EX-5'
+        other.save(update_fields=['grade'])
+        self.client.login(username='grade-admin', password='testpass123')
+        resp = self.client.get(reverse('hr:employee_list'), {'grade': 'EX-2'})
+        self.assertContains(resp, 'Grade Test Employee')
+        self.assertNotContains(resp, 'Other Grade Employee')
+
     def test_grade_and_joining_date_shown_on_list_not_deployment_column(self):
         self.client.login(username='grade-admin', password='testpass123')
         resp = self.client.get(reverse('hr:employee_list'))
@@ -10528,12 +10549,21 @@ class EmployeeGradeAndListDisplayTests(TestCase):
         self.assertContains(resp, 'name="grade"')
 
     def test_missing_grade_shows_dash_on_list_and_detail(self):
-        blank_emp = make_employee(iqama='GRADE-2', name='No Grade Employee')
+        blank_emp = make_employee(iqama='GRADE-3', name='No Grade Employee')
         self.client.login(username='grade-admin', password='testpass123')
         list_resp = self.client.get(reverse('hr:employee_list'))
-        self.assertContains(list_resp, 'No Grade Employee')
+        list_html = list_resp.content.decode()
+        self.assertIn('No Grade Employee', list_html)
+        # Isolate this employee's own table row rather than checking for a
+        # bare '-' anywhere on the page, which would pass even if grade
+        # rendered as something else entirely.
+        row = list_html.split('No Grade Employee', 1)[1][:400]
+        self.assertIn('<td>-</td>', row)
         detail_resp = self.client.get(reverse('hr:employee_detail', args=[blank_emp.pk]))
         self.assertEqual(detail_resp.status_code, 200)
+        detail_html = detail_resp.content.decode()
+        grade_section = detail_html.split('Grade:</strong>', 1)[1][:100]
+        self.assertIn('-', grade_section)
 
 
 class EmployeeImportColumnMappingTests(TestCase):
@@ -10698,6 +10728,7 @@ class EmployeeImportEdgeCaseTests(TestCase):
         self.assertEqual(emp.deployment, 'Correct Value')
 
 
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
 class EmployeePictureDisplayTests(TestCase):
     """Picture upload via the form, and correct display (or placeholder)
     on the detail page header."""
@@ -10726,6 +10757,37 @@ class EmployeePictureDisplayTests(TestCase):
         self.emp.refresh_from_db()
         self.assertTrue(bool(self.emp.picture))
 
+    def test_oversized_picture_is_rejected(self):
+        # A large photo would upload fine but then get embedded into
+        # every subsequent Excel export, making that file huge too.
+        from io import BytesIO
+        from PIL import Image as PILImage
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        buf = BytesIO()
+        # Large, low-compression image reliably exceeds the 5 MB limit.
+        PILImage.new('RGB', (3000, 3000), color='red').save(buf, format='PNG', compress_level=0)
+        buf.seek(0)
+        big_file = SimpleUploadedFile('big.png', buf.read(), content_type='image/png')
+        resp = self.client.post(
+            reverse('hr:employee_update', args=[self.emp.pk]),
+            data={
+                'full_name': self.emp.full_name, 'iqama_number': self.emp.iqama_number,
+                'picture': big_file,
+            })
+        self.assertEqual(resp.status_code, 200)  # re-rendered form, not a redirect
+        self.assertContains(resp, 'smaller than 5 MB')
+        self.emp.refresh_from_db()
+        self.assertFalse(bool(self.emp.picture))
+
+    def test_edit_form_has_multipart_enctype(self):
+        # A form GET is real HTML - unlike test_picture_uploads_and_saves,
+        # which posts through Django's test client and would pass even
+        # with no enctype attribute at all, since the client builds a
+        # multipart request itself regardless of what the template says.
+        # This is the actual regression test for the missing-enctype bug.
+        resp = self.client.get(reverse('hr:employee_update', args=[self.emp.pk]))
+        self.assertContains(resp, 'enctype="multipart/form-data"')
+
     def test_picture_shown_on_detail_page_when_set(self):
         self.emp.picture.save('photo.png', self._tiny_png(), save=True)
         resp = self.client.get(reverse('hr:employee_detail', args=[self.emp.pk]))
@@ -10736,6 +10798,7 @@ class EmployeePictureDisplayTests(TestCase):
         self.assertContains(resp, 'bi-person')
 
 
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
 class EmployeeExportTests(TestCase):
     """Excel export: Picture column present, real images embedded for
     employees who have one, and graceful handling when a picture is
@@ -10849,3 +10912,85 @@ class EmployeeListAndExportQueryScalingTests(TestCase):
             small, large,
             f"Query count grew from {small} (3 employees) to {large} (15 employees) - "
             "likely an N+1 introduced in the export view.")
+
+
+from django.core.files.storage import FileSystemStorage
+
+
+class _PathlessStorage(FileSystemStorage):
+    """Mimics S3Storage's contract exactly: everything else (open, save,
+    exists, url) works independently of any filesystem path - the same
+    shape as production's R2 backend - while the public .path() method
+    is unimplemented, exactly like S3Storage. FileSystemStorage's own
+    exists()/_open()/_save() all normally call self.path() internally,
+    so those are overridden here too to route through a private path
+    helper instead - otherwise saving through this storage would itself
+    raise before the test ever reached the code being tested. Used to
+    prove the export survives a storage backend that can't do
+    filesystem paths, since this exact bug (export 500s the moment
+    anyone has a picture) shipped once already and nothing exercised
+    the production storage path."""
+    def path(self, name):
+        raise NotImplementedError("This backend doesn't support absolute paths.")
+
+    def _local_path(self, name):
+        import os
+        return os.path.join(self.location, name)
+
+    def exists(self, name):
+        import os
+        return os.path.lexists(self._local_path(name))
+
+    def _open(self, name, mode='rb'):
+        from django.core.files import File
+        return File(open(self._local_path(name), mode))
+
+    def _save(self, name, content):
+        import os
+        full_path = self._local_path(name)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, 'wb') as f:
+            for chunk in content.chunks():
+                f.write(chunk)
+        return name
+
+    def url(self, name):
+        return '/media/' + name
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class EmployeeExportPathlessStorageTests(TestCase):
+    """Production runs an S3-compatible backend (R2) whose .path() raises
+    NotImplementedError, not OSError/FileNotFoundError - the export must
+    read picture bytes via .open() rather than .path(), and must survive
+    whatever a real storage backend throws, not just filesystem errors."""
+
+    def setUp(self):
+        self.admin = _make_role_user('pathless-admin', Role.SUPER_ADMIN)
+        self.client.login(username='pathless-admin', password='testpass123')
+
+    def _tiny_png(self, name='photo.png'):
+        from io import BytesIO
+        from PIL import Image as PILImage
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        buf = BytesIO()
+        PILImage.new('RGB', (2, 2), color='green').save(buf, format='PNG')
+        buf.seek(0)
+        return SimpleUploadedFile(name, buf.read(), content_type='image/png')
+
+    @override_settings(STORAGES={
+        'default': {'BACKEND': 'hr.tests._PathlessStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    })
+    def test_export_does_not_500_on_a_pathless_storage_backend(self):
+        emp = make_employee(iqama='PATHLESS-1', name='Pathless Storage Employee')
+        emp.picture.save('photo.png', self._tiny_png(), save=True)
+        resp = self.client.get(reverse('hr:employee_export'))
+        self.assertEqual(resp.status_code, 200)
+        import openpyxl
+        from io import BytesIO as _BIO
+        wb = openpyxl.load_workbook(_BIO(resp.content))
+        # The picture was embedded successfully despite the backend
+        # having no .path() at all - this is the actual regression test
+        # for the production bug.
+        self.assertGreaterEqual(len(wb.active._images), 1)
