@@ -11,6 +11,10 @@ Adding a source: append to SOURCES. Each callable takes the user and returns
 a group dict, or None when that source does not apply to them.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def _group(key, label, icon, url, items, empty_reason=''):
     return {
@@ -71,12 +75,15 @@ def leave_revokes(user):
 
     if not can_view_leave_dashboard(user):
         return None
+    # The FK is leave_request, not leave_record. Naming it wrongly made every
+    # call raise FieldError, which pending_approvals swallowed by design — so
+    # this queue was simply never in anybody's inbox and nothing said so.
     rows = (LeaveRevokeRequest.objects.filter(status='pending')
-            .select_related('leave_record', 'leave_record__employee')
+            .select_related('leave_request', 'leave_request__employee')
             .order_by('created_at'))
     items = [
-        _item(title=r.leave_record.employee.full_name,
-              subtitle=f'Cancel leave {r.leave_record.start_date:%d %b} – {r.leave_record.end_date:%d %b %Y}',
+        _item(title=r.leave_request.employee.full_name,
+              subtitle=f'Cancel leave {r.leave_request.start_date:%d %b} – {r.leave_request.end_date:%d %b %Y}',
               when=r.created_at,
               url=reverse('hr:leave_request_list'))
         for r in rows
@@ -227,9 +234,23 @@ def purchase_orders(user):
     except ImportError:
         return None
 
+    # Everything the loop below touches, fetched up front. Without this the
+    # source costs two queries per open PO and runs on EVERY page in the app,
+    # because the sidebar badge is built by a context processor:
+    #
+    #   current_stage -> required_stages -> requires_ceo_approval
+    #                 -> total_value, which walks self.items   (1 query/PO)
+    #   approval_status reads each stage's *_approved_by FK     (1 query each)
+    #   the item's meta reads po.project                        (1 query/PO)
+    #
+    # Measured at 362 queries and 110ms for one user on dev data, to render a
+    # badge that said 0.
     open_pos = (_visible_pos_for(user)
                 .filter(Q(coo_approved_at__isnull=True)
                         | Q(ceo_approved_at__isnull=True))
+                .select_related('project', 'scm_approved_by', 'pm_approved_by',
+                                'coo_approved_by', 'ceo_approved_by')
+                .prefetch_related('items')
                 .order_by('-id'))
     items = []
     for po in open_pos:
@@ -262,12 +283,22 @@ def pending_approvals(user):
     A source that raises is dropped rather than taking the page down with it:
     this is an aggregator over half the system, and one module's problem
     should not cost someone the view of their other five queues.
+
+    But it is logged. Swallowing silently is how the leave-revoke source sat
+    permanently broken — a wrong field name made every call raise, the queue
+    was simply never in anybody's inbox, and nothing anywhere said so. A
+    dropped source has to be recoverable from the logs, or "resilient" just
+    means "quietly missing".
     """
     groups = []
     for source in SOURCES:
         try:
             group = source(user)
         except Exception:      # noqa: BLE001 - see docstring
+            logger.exception(
+                'Pending-approvals source %r failed for user %s; '
+                'its queue is missing from this inbox.',
+                getattr(source, '__name__', source), getattr(user, 'pk', None))
             continue
         if group is not None and group['count']:
             groups.append(group)
