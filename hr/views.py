@@ -749,6 +749,10 @@ def my_profile(request):
                                   and w.end_date >= today)
             w.is_current = bool(w.start_date <= today <= w.end_date)
         context['my_wfh_records'] = my_wfh
+
+        from hr.models import MonthlyLatenessReport
+        context['my_lateness_reports'] = MonthlyLatenessReport.objects.filter(
+            employee=emp).order_by('-month')[:12]
         next_month_first = (month_end + timedelta(days=1))
         context['attendance_next_month'] = next_month_first
         context['recent_leaves'] = emp.leave_records.select_related(
@@ -3746,6 +3750,9 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
                     'employee', 'attendance_record', 'decided_by').order_by('-decided_at')[:50]
             ctx['late_email_notifications'] = Notification.objects.filter(
                 verb='You were late 3 times this month').select_related('recipient').order_by('-created_at')[:50]
+            from hr.models import MonthlyLatenessReport
+            ctx['monthly_lateness_reports'] = MonthlyLatenessReport.objects.select_related(
+                'employee').order_by('-month', 'employee__full_name')[:100]
         ctx['late_queries_tab_count'] = LateQuery.objects.filter(status='pending').count() if is_hr else 0
         return ctx
 

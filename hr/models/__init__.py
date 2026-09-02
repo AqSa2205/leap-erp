@@ -5,7 +5,8 @@ from .leave import (LeaveType, LeaveEntitlement, LeaveRecord, LeaveExceptionGran
                     LeaveRevokeRequest,
                     OverrideAccessSettings, OverrideAccessRole, OverrideAccessEmployee)
 from .attendance import (Holiday, AttendanceSettings, AttendanceRecord,
-                         WorkingDay, WFHRecord, LATE_WARNING_THRESHOLD)
+                         WorkingDay, WFHRecord, LATE_WARNING_THRESHOLD,
+                         MonthlyLatenessReport)
 from .attendance_exception import AttendanceException, AttendanceExceptionRevokeRequest, LateQuery
 from .asset_handover import AssetHandover, AssetHandoverAuthorizerPreference
 
@@ -18,6 +19,7 @@ __all__ = [
     'OverrideAccessSettings', 'OverrideAccessRole', 'OverrideAccessEmployee',
     'Holiday', 'AttendanceSettings', 'AttendanceRecord', 'WorkingDay', 'WFHRecord',
     'LATE_WARNING_THRESHOLD',
+    'MonthlyLatenessReport',
     'AttendanceException', 'AttendanceExceptionRevokeRequest', 'LateQuery',
     'AssetHandover', 'AssetHandoverAuthorizerPreference',
 ]

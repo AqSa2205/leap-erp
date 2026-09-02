@@ -315,3 +315,42 @@ class WFHRecord(models.Model):
         from django.core.exceptions import ValidationError
         if self.start_date and self.end_date and self.end_date < self.start_date:
             raise ValidationError({'end_date': 'End date cannot be before start date.'})
+
+
+class MonthlyLatenessReport(models.Model):
+    """Month-end snapshot of an employee's lateness for a given month and
+    the resulting policy consequence (every 3 late arrivals = 1 day of
+    absence). A pure record/summary - never modifies AttendanceRecord
+    rows or any existing absence/leave totals; it exists purely so HR
+    and the employee can see the pattern and the calculated impact
+    together. late_dates is snapshotted at generation time (not derived
+    live), so the report reflects what was true when it ran even if
+    underlying records are corrected afterward.
+
+    Generated once per employee per month by the
+    generate_monthly_lateness_reports management command, on the last
+    day of the month - only for employees with at least one late
+    arrival that month."""
+    employee = models.ForeignKey('hr.Employee', on_delete=models.CASCADE, related_name='lateness_reports')
+    month = models.DateField(help_text='First day of the reported month.')
+    total_lates = models.PositiveIntegerField()
+    late_dates = models.JSONField(default=list, help_text='ISO date strings, snapshotted at generation time.')
+    converted_absences = models.PositiveIntegerField()
+    email_sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('employee', 'month')
+        ordering = ['-month']
+        indexes = [models.Index(fields=['month'])]
+
+    def __str__(self):
+        return f"{self.employee.full_name} - {self.month.strftime('%B %Y')} ({self.total_lates} lates)"
+
+    @property
+    def late_dates_display(self):
+        """['2026-08-03', '2026-08-05', ...] -> '3 Aug, 5 Aug' - shared with
+        the email body via hr.lateness_report_services._format_late_dates,
+        so the two never drift out of sync."""
+        from hr.lateness_report_services import _format_late_dates
+        return _format_late_dates(self.late_dates)

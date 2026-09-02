@@ -479,6 +479,33 @@
       {% endif %}
     </div>
   </div>
+
+  <div class="card mb-4">
+    <div class="card-header"><h5 class="mb-0"><i class="bi bi-calendar-month"></i> Monthly Lateness Reports</h5></div>
+    <div class="card-body p-0">
+      {% if monthly_lateness_reports %}
+      <div class="table-responsive">
+      <table class="table table-sm mb-0">
+        <thead class="table-light"><tr><th>Employee</th><th>Month</th><th>Total Lates</th><th>Late Dates</th><th>Converted Absences</th><th>Email Sent</th></tr></thead>
+        <tbody>
+          {% for r in monthly_lateness_reports %}
+          <tr>
+            <td>{{ r.employee.full_name }}</td>
+            <td>{{ r.month|date:"F Y" }}</td>
+            <td>{{ r.total_lates }}</td>
+            <td class="small">{{ r.late_dates_display }}</td>
+            <td>+{{ r.converted_absences }}</td>
+            <td>{% if r.email_sent_at %}{{ r.email_sent_at|date:"d M Y H:i" }}{% else %}<span class="text-muted">-</span>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% else %}
+      <p class="text-muted text-center py-4 mb-0">No monthly lateness reports generated yet.</p>
+      {% endif %}
+    </div>
+  </div>
   {% endif %}
 
     </div>
