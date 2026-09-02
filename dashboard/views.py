@@ -99,6 +99,37 @@ def _resolved_value_for(tile_projects, sales_values, currency, rates):
     return total.quantize(Decimal('0.01'))
 
 
+def projects_visible_to(user):
+    """The pipeline one person may see. One ladder, used by every view here.
+
+    index() and chart_data() each carried their own copy and they had already
+    drifted: chart_data never gained the finance-team branch, and would not
+    have gained the sales-rep union either. Which projects somebody can see
+    must not depend on which endpoint they happen to hit — and a rule written
+    twice is a rule that will be updated once.
+
+    The divergence was not a leak, since chart_data was the narrower of the
+    two, but a view that quietly shows a rep less than the page it serves is
+    just as wrong in the other direction.
+    """
+    if user.is_super_admin_user:
+        return Project.objects.all()
+    if user.is_admin_user or user.is_manager_user:
+        return Project.objects.filter(region=user.region)
+    if getattr(user, 'is_finance_team_user', False):
+        # Same set as a manager, kept as its own branch because it is a
+        # separate decision that happens to land in the same place — the
+        # capability gate upstream is what admits them at all.
+        return Project.objects.filter(region=user.region)
+    if user.region_id:
+        # Sales reps see the UNION of what they personally own and their own
+        # region's pipeline — not one or the other — so a rep assigned to one
+        # region who owns a deal filed under another still sees that deal.
+        return Project.objects.filter(
+            Q(owner=user) | Q(region=user.region)).distinct()
+    return Project.objects.filter(owner=user)
+
+
 def get_region_stats(projects, region_codes, sales_values=None, currency='SAR', rates=None):
     """Helper to get stats for a specific region or regions.
 
@@ -165,22 +196,7 @@ def index(request):
         from django.shortcuts import redirect
         return redirect(landing_url_for(user))
 
-    # Base queryset based on user role. Sales reps (the else branch) see the
-    # UNION of what they personally own plus their own region's pipeline -
-    # not one or the other - so a rep assigned to one region who happens to
-    # own a deal filed under a different region still sees that deal too.
-    if user.is_super_admin_user:
-        projects = Project.objects.all()
-    elif user.is_admin_user or user.is_manager_user:
-        projects = Project.objects.filter(region=user.region)
-    elif getattr(user, 'is_finance_team_user', False):
-        # Finance sees their own region (capability gate already passed).
-        projects = Project.objects.filter(region=user.region)
-    elif user.region_id:
-        projects = Project.objects.filter(
-            Q(owner=user) | Q(region=user.region)).distinct()
-    else:
-        projects = Project.objects.filter(owner=user)
+    projects = projects_visible_to(user)
 
     # Won / Hot Lead values come from the actual sales costing sheets. Resolved
     # once for every priced project the user can see, then reused by each region
@@ -301,12 +317,7 @@ def chart_data(request):
     """API endpoint for dashboard charts"""
     user = request.user
 
-    if user.is_super_admin_user:
-        projects = Project.objects.all()
-    elif user.is_admin_user or user.is_manager_user:
-        projects = Project.objects.filter(region=user.region)
-    else:
-        projects = Project.objects.filter(owner=user)
+    projects = projects_visible_to(user)
 
     # Region distribution
     regions = Region.objects.filter(is_active=True).annotate(

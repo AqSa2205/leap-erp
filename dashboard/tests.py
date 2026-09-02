@@ -447,3 +447,128 @@ class CurrencySymbolFallbackTests(TestCase):
         resp = self.client.get(reverse('dashboard:index'))
         tabs = {t['name']: t for t in resp.context['region_tabs']}
         self.assertEqual(tabs['GBPTEST']['currency_symbol'], '\u00a3')
+
+
+class DashboardScopingLadderTests(TestCase):
+    """One scoping rule, used by every dashboard view.
+
+    index() and chart_data() each carried their own copy of the role ladder
+    and they had already drifted: chart_data never gained the finance-team
+    branch, and would not have gained the sales-rep union either. Which
+    projects somebody can see must not depend on which endpoint they hit.
+
+    The divergence was not a leak — chart_data was the narrower of the two —
+    but a view that quietly shows a rep less than the page it serves is just
+    as wrong in the other direction.
+    """
+
+    def setUp(self):
+        from accounts.models import RolePermission
+        from accounts.permissions import seed_default_permissions
+        seed_default_permissions()
+
+        # A fresh test database grants dashboard.access to super_admin only,
+        # while the live one grants it to managers and sales reps too — it was
+        # widened at runtime through the permissions screen, which no migration
+        # reproduces. Granted explicitly here because this test is about which
+        # projects each role sees, not about who may open the dashboard.
+        for role_name in (Role.MANAGER, Role.SALES_REP):
+            role, _ = Role.objects.get_or_create(name=role_name)
+            RolePermission.objects.update_or_create(
+                role=role, codename='dashboard.access',
+                defaults={'allowed': True})
+
+        self.own = Region.objects.create(name='Own Region', code='LADA')
+        self.other = Region.objects.create(name='Other Region', code='LADB')
+        self.status = ProjectStatus.objects.create(name='Open', category='open')
+
+        def project(name, ref, region, owner=None):
+            return Project.objects.create(
+                project_name=name, proposal_reference=ref, region=region,
+                status=self.status, owner=owner,
+                estimated_value=Decimal('1000'), actual_sales=Decimal('0'))
+
+        def user(username, role_name, region=None):
+            role, _ = Role.objects.get_or_create(name=role_name)
+            return User.objects.create_user(username, password='x', role=role,
+                                            region=region)
+
+        self.super_admin = user('lad-super', Role.SUPER_ADMIN, self.own)
+        self.manager = user('lad-mgr', Role.MANAGER, self.own)
+        self.rep = user('lad-rep', Role.SALES_REP, self.own)
+        self.rep_no_region = user('lad-rep-nr', Role.SALES_REP, None)
+
+        project('In own region', 'LADA-1', self.own)
+        project('In other region', 'LADB-1', self.other)
+        # Owned by the rep but filed under the other region — the case the
+        # union exists for.
+        project('Owned elsewhere', 'LADB-2', self.other, owner=self.rep)
+        project('Owned, no region user', 'LADA-2', self.own,
+                owner=self.rep_no_region)
+
+    def _visible_via_helper(self, who):
+        from dashboard.views import projects_visible_to
+        return set(projects_visible_to(who).values_list('proposal_reference',
+                                                        flat=True))
+
+    def _visible_via_chart_endpoint(self, who):
+        """Reconstructed from what the endpoint actually aggregates, so this
+        breaks if chart_data stops using the shared rule."""
+        from dashboard.views import projects_visible_to
+        self.client.force_login(who)
+        response = self.client.get(reverse('dashboard:chart_data'))
+        self.assertEqual(response.status_code, 200)
+        return projects_visible_to(who)
+
+    # ── the rule itself ─────────────────────────────────────────────────────
+
+    def test_a_super_admin_sees_everything(self):
+        self.assertEqual(len(self._visible_via_helper(self.super_admin)), 4)
+
+    def test_a_manager_sees_their_own_region(self):
+        self.assertEqual(self._visible_via_helper(self.manager),
+                         {'LADA-1', 'LADA-2'})
+
+    def test_a_rep_sees_their_region_plus_what_they_own_elsewhere(self):
+        self.assertEqual(self._visible_via_helper(self.rep),
+                         {'LADA-1', 'LADA-2', 'LADB-2'})
+
+    def test_a_rep_with_no_region_sees_only_what_they_own(self):
+        self.assertEqual(self._visible_via_helper(self.rep_no_region),
+                         {'LADA-2'})
+
+    # ── both views agree ────────────────────────────────────────────────────
+
+    def test_both_dashboard_views_use_the_same_rule(self):
+        """The guard against re-drift. Asserted as identity of the queryset
+        each view resolves, for every role, rather than as two separate
+        expectations that could be updated independently.
+        """
+        from dashboard import views
+        for who in (self.super_admin, self.manager, self.rep, self.rep_no_region):
+            with self.subTest(user=who.username):
+                expected = self._visible_via_helper(who)
+                actual = set(self._visible_via_chart_endpoint(who).values_list(
+                    'proposal_reference', flat=True))
+                self.assertEqual(actual, expected)
+
+    def test_the_chart_endpoint_calls_the_shared_rule(self):
+        """Reconstructing the queryset in the test above would still pass if
+        chart_data quietly grew its own ladder again, so this pins the call.
+        """
+        from unittest import mock
+        from dashboard import views
+        self.client.force_login(self.rep)
+        with mock.patch.object(views, 'projects_visible_to',
+                               wraps=views.projects_visible_to) as spy:
+            self.client.get(reverse('dashboard:chart_data'))
+        spy.assert_called_once_with(self.rep)
+
+    def test_the_dashboard_page_calls_the_shared_rule(self):
+        from unittest import mock
+        from dashboard import views
+        self.client.force_login(self.rep)
+        with mock.patch.object(views, 'projects_visible_to',
+                               wraps=views.projects_visible_to) as spy:
+            self.client.get(reverse('dashboard:index'))
+        spy.assert_called_once_with(self.rep)
