@@ -1243,6 +1243,22 @@
         </ul>
         {% endif %}
 
+        {# ─── PROJECT MANAGEMENT (delivery) ─── #}
+        {# Its own section rather than a page under Projects: `projects` is the  #}
+        {# commercial pipeline up to the award, this is what happens after it.   #}
+        {# Gated to match pmo.views.can_see_delivery — the two must agree, or    #}
+        {# the sidebar offers a link that 403s.                                  #}
+        {% if user.is_super_admin_user or user.is_admin_user or user.is_manager_user or user.is_project_manager_user or user.is_site_manager_user %}
+        <div class="nav-section" data-section="delivery"><span>Project Management</span><i class="bi bi-chevron-down section-chevron"></i></div>
+        <ul class="nav flex-column nav-section-items" data-section-items="delivery">
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'pmo' %}active{% endif %}" href="{% url 'pmo:board' %}" data-title="Project Management — Delivery Board">
+                    <i class="bi bi-kanban"></i> <span>Delivery Board</span>
+                </a>
+            </li>
+        </ul>
+        {% endif %}
+
         {# ─── ACCOUNTING (finance team + super admin) ─── #}
         {# Its own top-level section, not nested under Finance: `finance` plans   #}
         {# project cash flow, `accounting` holds the GL structure everything is   #}
