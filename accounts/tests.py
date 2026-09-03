@@ -873,3 +873,76 @@ class UserRegionFilterExportTests(TestCase):
         self.client.force_login(rep)
         resp = self.client.get(reverse('accounts:user_export_pdf') + '?region=LNA')
         self.assertEqual(resp.status_code, 302)   # redirected away, no PDF
+
+
+class FreshDatabaseRoleTests(TestCase):
+    """A newly migrated database must be usable, not merely consistent.
+
+    `admin`, `manager` and `sales_rep` are declared in ROLE_CHOICES and used
+    throughout the codebase, but nothing in the migration history created them
+    — they were made by hand on the original database and every environment
+    since has been a copy of it. A genuinely fresh install came up with 17 of
+    the 20 roles and nobody could be assigned any of the three.
+
+    These assert against the state migrations alone produce. No fixture, no
+    setUp creating roles: the point is what a new environment gets, and any
+    setUp that made roles would hide exactly the thing being tested.
+    """
+
+    def test_every_declared_role_exists_after_migrations(self):
+        declared = {name for name, _label in Role.ROLE_CHOICES}
+        present = set(Role.objects.values_list('name', flat=True))
+        self.assertEqual(
+            declared - present, set(),
+            'Roles declared in ROLE_CHOICES that no migration creates — a new '
+            'environment cannot assign them to anybody.')
+
+    def test_no_role_exists_that_is_not_declared(self):
+        """The other direction: a row nothing references is dead weight and
+        will show up in the permissions grid as an unexplained line."""
+        declared = {name for name, _label in Role.ROLE_CHOICES}
+        present = set(Role.objects.values_list('name', flat=True))
+        self.assertEqual(present - declared, set())
+
+    def test_the_originally_missing_three_are_there(self):
+        """Named explicitly, so the reason this migration exists survives even
+        if ROLE_CHOICES is reorganised later."""
+        for name in ('admin', 'manager', 'sales_rep'):
+            with self.subTest(role=name):
+                self.assertTrue(Role.objects.filter(name=name).exists())
+
+    def test_every_role_has_its_permission_rows(self):
+        """seed_default_permissions() iterates the roles that exist, so a role
+        created after the last seed would carry no rows at all and be denied
+        everything with no way to see why."""
+        from accounts.models import RolePermission
+        from accounts.permissions import CAPABILITIES
+
+        expected = len(CAPABILITIES)
+        missing = []
+        for role in Role.objects.all():
+            count = RolePermission.objects.filter(role=role).count()
+            if count != expected:
+                missing.append(f'{role.name}: {count} of {expected}')
+        self.assertEqual(missing, [], 'Roles without a full set of permission '
+                                      'rows:\n' + '\n'.join(missing))
+
+    def test_the_restored_roles_get_their_documented_defaults(self):
+        """Created is not enough — they have to come back with the access
+        DEFAULT_MODULE_ACCESS says they should have."""
+        from accounts.models import RolePermission
+        for name in ('admin', 'manager', 'sales_rep'):
+            with self.subTest(role=name):
+                self.assertTrue(
+                    RolePermission.objects.filter(
+                        role__name=name, codename='dashboard.access',
+                        allowed=True).exists())
+
+    def test_a_siloed_role_is_still_siloed(self):
+        """The seed must not have been applied so broadly that it widened
+        somebody. The AI team is deliberately kept off the open baseline."""
+        from accounts.models import RolePermission
+        self.assertFalse(
+            RolePermission.objects.filter(
+                role__name='developer', codename='dashboard.access',
+                allowed=True).exists())
