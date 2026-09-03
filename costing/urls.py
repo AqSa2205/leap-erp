@@ -67,6 +67,13 @@ urlpatterns = [
     path('<int:pk>/add-sow-item/', views.ajax_add_sow_item, name='add_sow_item'),
     path('sow-item/<int:pk>/update/', views.ajax_update_sow_item, name='update_sow_item'),
     path('sow-item/<int:pk>/delete/', views.ajax_delete_sow_item, name='delete_sow_item'),
+    # A.4 resources — the build-up behind the A.2 services price.
+    path('<int:pk>/add-resource-line/', views.ajax_add_resource_line,
+         name='add_resource_line'),
+    path('resource-line/<int:pk>/update/', views.ajax_update_resource_line,
+         name='update_resource_line'),
+    path('resource-line/<int:pk>/delete/', views.ajax_delete_resource_line,
+         name='delete_resource_line'),
 
     # PDF revisions
     path('revision/<int:pk>/delete/', login_required(views.delete_costing_revision), name='delete_revision'),
