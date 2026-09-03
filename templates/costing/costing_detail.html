@@ -231,6 +231,25 @@
                 </button>
                 {% endif %}
 
+                {% comment %} Send back to proposal: sales only, once the BOM is
+                with them. Distinct from Reopen, which rewinds the whole sheet to
+                BOM — this keeps sales' costing work and asks for an addition.
+                {% endcomment %}
+                {% if stage == 'ready_for_costing' or stage == 'costing_in_progress' %}
+                {% if user.is_sales_team_user %}
+                <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#returnToProposalModal">
+                    <i class="bi bi-arrow-return-left me-1"></i>Send back to Proposal
+                </button>
+                {% endif %}
+                {% endif %}
+
+                {# Send it back: proposal only, once they have added what was missing. #}
+                {% if stage == 'returned_to_proposal' and user.is_proposal_team_user %}
+                <button type="button" class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#resumeCostingModal">
+                    <i class="bi bi-send-check me-1"></i>Send back to Sales
+                </button>
+                {% endif %}
+
                 {# Reopen: sales can rewind #}
                 {% if stage != 'bom_in_progress' and user.is_sales_team_user %}
                 <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}" class="d-inline">
@@ -271,6 +290,153 @@
     <div><strong>Read-only.</strong> {{ edit_lock_reason }}</div>
 </div>
 {% endif %}
+
+{% comment %} A returned BOM is the one state where work has stopped and
+somebody is waiting. It gets a banner rather than a badge — the stage pill
+alone is easy to walk past on a page this long, and the whole point of the
+feature is that it is noticed. {% endcomment %}
+{% if sheet.open_return %}
+<div class="alert alert-danger d-flex align-items-start gap-3 mt-3" role="alert">
+    <i class="bi bi-exclamation-octagon-fill fs-4"></i>
+    <div class="flex-grow-1">
+        <div class="fw-bold">Returned to Proposal — sales is waiting on this BOM</div>
+        <div class="mt-1">{{ sheet.open_return.comment|linebreaksbr }}</div>
+        <div class="small mt-2 text-muted">
+            Sent back by
+            {{ sheet.open_return.returned_by.get_full_name|default:sheet.open_return.returned_by.username|default:"—" }}
+            on {{ sheet.open_return.returned_at|date:"d M Y, H:i" }}
+            {% comment %} Counts up while it is open, so the number is the
+            answer to "how long has this been sitting" rather than a figure
+            that only appears once it stops mattering. {% endcomment %}
+            · waiting <strong>{{ sheet.open_return.response_working_days }}</strong>
+            working day{{ sheet.open_return.response_working_days|pluralize }}
+        </div>
+    </div>
+    {% if user.is_proposal_team_user %}
+    <button type="button" class="btn btn-sm btn-light text-danger fw-semibold text-nowrap"
+            data-bs-toggle="modal" data-bs-target="#resumeCostingModal">
+        Send back to Sales
+    </button>
+    {% endif %}
+</div>
+{% endif %}
+
+{% comment %} Past round trips. Kept visible because "this BOM has been back
+three times" is a different conversation from "it is back now". {% endcomment %}
+{% if sheet.returns.exists %}
+<div class="card mt-3">
+    <div class="card-header bg-white py-2 d-flex justify-content-between align-items-center">
+        <span class="fw-semibold"><i class="bi bi-arrow-repeat me-2"></i>Returns to Proposal</span>
+        <span class="badge bg-secondary">{{ sheet.returns.count }}</span>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>Sent back</th>
+                    <th>What was missing</th>
+                    <th>Resolved</th>
+                    <th class="text-end">Response</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in sheet.returns.all %}
+                <tr {% if entry.is_open %}class="table-danger"{% endif %}>
+                    <td class="small text-nowrap">
+                        {{ entry.returned_at|date:"d M Y" }}<br>
+                        <span class="text-muted">{{ entry.returned_by.get_full_name|default:entry.returned_by.username|default:"—" }}</span>
+                    </td>
+                    <td class="small">{{ entry.comment|truncatechars:120 }}</td>
+                    <td class="small text-nowrap">
+                        {% if entry.is_open %}
+                        <span class="badge bg-danger">still open</span>
+                        {% else %}
+                        {{ entry.resolved_at|date:"d M Y" }}<br>
+                        <span class="text-muted">{{ entry.resolved_by.get_full_name|default:entry.resolved_by.username|default:"—" }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end fw-semibold text-nowrap">
+                        {{ entry.response_working_days }} working day{{ entry.response_working_days|pluralize }}
+                        {% if entry.is_open %}<span class="text-muted small">so far</span>{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- Send back to Proposal -->
+<div class="modal fade" id="returnToProposalModal" tabindex="-1">
+    <div class="modal-dialog">
+        <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="return_to_proposal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-arrow-return-left me-2"></i>Send back to Proposal</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="returnComment" class="form-label fw-bold">What is missing? *</label>
+                        <textarea class="form-control" id="returnComment" name="note" rows="4" required
+                                  placeholder="e.g. Fibre termination boxes are not on the BOM — 24 needed for the north building."></textarea>
+                        {% comment %} Required, and said here as well as enforced
+                        server-side: a BOM sent back without saying why just
+                        moves the question to a phone call. {% endcomment %}
+                        <div class="form-text">
+                            The proposal team sees this. Be specific — this is the whole message.
+                        </div>
+                    </div>
+                    <div class="alert alert-light border small mb-0">
+                        Your costing work is kept. The sheet goes to
+                        <strong>Returned to Proposal</strong>, they are notified, and it comes
+                        back to <strong>Costing started</strong> when they have added it.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger">Send back</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Proposal sends it back to sales -->
+<div class="modal fade" id="resumeCostingModal" tabindex="-1">
+    <div class="modal-dialog">
+        <form method="post" action="{% url 'costing:workflow_transition' sheet.pk %}">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="resume_costing">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-send-check me-2"></i>Send back to Sales</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    {% if sheet.open_return %}
+                    <div class="alert alert-light border small">
+                        <strong>Sales asked for:</strong><br>{{ sheet.open_return.comment|linebreaksbr }}
+                    </div>
+                    {% endif %}
+                    <label for="resumeNote" class="form-label fw-bold">What you added <span class="text-muted fw-normal">(optional)</span></label>
+                    <textarea class="form-control" id="resumeNote" name="note" rows="3"
+                              placeholder="e.g. Added 24 fibre termination boxes under Section 3."></textarea>
+                    <div class="form-text">
+                        The sheet returns to <strong>Costing started</strong> and sales is notified.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success">Send back to Sales</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
 
 <!-- Handover modal -->
 {% if stage == 'bom_in_progress' %}
