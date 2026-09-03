@@ -31,13 +31,21 @@ def working_days_between(start, end):
 # Index in the sequence = how far along; `most_advanced_stage` uses it to pick a
 # single badge for a project that has several costing sheets.
 WORKFLOW_STAGE_SEQUENCE = [
-    'bom_not_started', 'bom_in_progress', 'ready_for_costing', 'costing_in_progress',
+    'bom_not_started', 'bom_in_progress', 'ready_for_costing',
+    # A returned sheet has been handed to sales at least once but is not being
+    # costed, so it sits between those two. Index in this list is how far along
+    # a sheet is, and a return is a step back rather than forward — ordering it
+    # after costing_in_progress would make a stalled sheet look like the most
+    # advanced one on a project.
+    'returned_to_proposal',
+    'costing_in_progress',
     'finalized', 'finance_review', 'finance_approved',
 ]
 PIPELINE_STAGE_LABELS = {
     'bom_not_started':     ('BOM not started',   'bg-light text-dark'),
     'bom_in_progress':     ('BOM in progress',   'bg-secondary'),
     'ready_for_costing':   ('Handed to Sales',   'bg-info text-dark'),
+    'returned_to_proposal': ('Returned to Proposal', 'bg-danger'),
     'costing_in_progress': ('Sales costing',     'bg-primary'),
     'finalized':           ('Sales finalised',   'bg-warning text-dark'),
     'finance_review':      ('Handed to Finance', 'bg-dark'),
@@ -51,6 +59,10 @@ STAGE_BADGES = {
     'bom_not_started':     ('BOM not started',   'bg-light text-dark border'),
     'bom_in_progress':     ('BOM in progress',   'bg-warning text-dark'),
     'ready_for_costing':   ('Ready for costing',  'bg-info text-dark'),
+    # Red on purpose: this is the only stage where somebody is waiting on
+    # somebody else with nothing else moving, and it has to be findable in a
+    # list of a hundred sheets.
+    'returned_to_proposal': ('Returned to Proposal', 'bg-danger'),
     'costing_in_progress': ('Costing started',    'bg-primary'),
     'finalized':           ('Sales finalised',    'bg-dark'),
     'finance_review':      ('Finance budgeting',  'bg-secondary'),
@@ -199,6 +211,7 @@ class CostingSheet(models.Model):
     # drives the filters/notifications.
     WORKFLOW_STAGE_CHOICES = [
         ('bom_not_started',     'BOM — not started'),
+        ('returned_to_proposal', 'Returned to Proposal'),
         ('bom_in_progress',     'BOM — in progress by Proposal'),
         ('ready_for_costing',   'Ready for costing (handed over to Sales)'),
         ('costing_in_progress', 'Costing — in progress by Sales'),
@@ -522,6 +535,16 @@ class CostingSheet(models.Model):
         if not sar_rate or not tgt_rate:
             return Decimal('1')
         return tgt_rate / sar_rate
+
+    @property
+    def open_return(self):
+        """The return sales is currently waiting on, or None.
+
+        There is at most one: a sheet can only be returned from a stage it
+        passes back through, so a second cannot be opened while the first is
+        outstanding.
+        """
+        return self.returns.filter(resolved_at__isnull=True).first()
 
     @property
     def resources_total(self):
@@ -1420,3 +1443,59 @@ class ResourceLine(models.Model):
     @property
     def total_price(self):
         return (self.quantity * self.rate).quantize(Decimal('0.01'))
+
+
+class BomReturn(models.Model):
+    """One round trip: sales sent a BOM back to proposal, and got it back.
+
+    A log rather than a pair of fields on the sheet, because a BOM can go back
+    more than once and the second trip must not overwrite the record of the
+    first. How long each one took is the number worth having — a sheet that
+    sat with proposal for nine working days is the thing to find, and an
+    average over one overwritten row would never show it.
+
+    Open (resolved_at is null) means somebody is waiting right now.
+    """
+
+    costing_sheet = models.ForeignKey(
+        'CostingSheet', on_delete=models.CASCADE, related_name='returns')
+
+    returned_at = models.DateTimeField(auto_now_add=True)
+    returned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        related_name='bom_returns_raised')
+    # Required at the point of return: "send it back" without saying what is
+    # missing just moves the question to a phone call.
+    comment = models.TextField(
+        verbose_name='What is missing',
+        help_text='What the proposal team needs to add or correct.')
+
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        blank=True, related_name='bom_returns_resolved')
+    resolution_note = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['-returned_at']
+        verbose_name = 'BOM return'
+
+    def __str__(self):
+        state = 'open' if self.is_open else 'closed'
+        return f'Return on {self.costing_sheet_id} ({state})'
+
+    @property
+    def is_open(self):
+        return self.resolved_at is None
+
+    @property
+    def response_working_days(self):
+        """Working days proposal took, or has taken so far if still open.
+
+        Working days rather than elapsed, matching every other cycle figure in
+        this file — a BOM returned on a Wednesday afternoon and fixed on Sunday
+        morning took two working days here, not four.
+        """
+        from django.utils import timezone
+        end = self.resolved_at or timezone.now()
+        return working_days_between(self.returned_at, end)

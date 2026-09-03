@@ -34,7 +34,7 @@ def _safe_filename(name, suffix='', extension=''):
         extension = f'.{extension}'
     return f'{safe}{extension}'
 
-from .models import (ExchangeRate, CostingSheet, CostingSection, CostingLineItem,
+from .models import (BomReturn, ExchangeRate, CostingSheet, CostingSection, CostingLineItem,
                      TermsTemplate, ScopeOfWorkItem, ClientRemarkTemplate,
                      ResourceCatalogueItem, ResourceLine)
 from .models import WORKFLOW_STAGE_SEQUENCE, STAGE_BADGES
@@ -293,6 +293,14 @@ def _strict_stage_edit(user, sheet, stage):
     if stage == 'ready_for_costing':
         # Handoff checkpoint — locked until Sales clicks "Start costing".
         return False
+    if stage == 'returned_to_proposal':
+        # The sheet is back with proposal precisely so they can add what sales
+        # said was missing. Without this branch the stage would fall through to
+        # the closing `return False` and the whole round trip would be a dead
+        # end — asked to add an item, locked out of adding it. Proposal only:
+        # sales handed it over, the same way ready_for_costing locks proposal
+        # out. No region gate, matching the BOM stage above.
+        return bool(getattr(user, 'is_proposal_team_user', False))
     if stage in ('costing_in_progress', 'finalized'):
         if is_rep:
             # Region still bounds an owned project here, mirroring the sales
@@ -379,6 +387,9 @@ def _edit_lock_reason(user, sheet):
                 'locked until then.')
     if stage in ('costing_in_progress', 'finalized'):
         return 'Sales owns this sheet at its current stage — read-only for other teams.'
+    if stage == 'returned_to_proposal':
+        return ('Sent back to the Proposal team to add what is missing — '
+                'read-only for everyone else until they send it back.')
     return ''
 
 
@@ -2878,6 +2889,38 @@ def costing_workflow_transition(request, pk):
             'verb': 'approved the sheet — released for procurement',
             'notify_team': 'procurement',
         },
+        # Sales found something missing. The comment is mandatory — sending a
+        # BOM back without saying what is wrong just moves the question to a
+        # phone call, and the clock starts here.
+        'return_to_proposal': {
+            'from': {'ready_for_costing', 'costing_in_progress'},
+            'to':   'returned_to_proposal',
+            'allowed_teams': {'sales'},
+            'requires_note': 'Say what is missing before sending the BOM back.',
+            'sets':  lambda: {'workflow_stage': 'returned_to_proposal'},
+            'verb': 'sent the BOM back to the proposal team',
+            'notify_team': 'proposal',
+            'after': lambda: BomReturn.objects.create(
+                costing_sheet=sheet, returned_by=user, comment=note),
+        },
+        # Proposal has added what was missing. Back to costing, where sales
+        # left off, and the clock stops.
+        'resume_costing': {
+            'from': {'returned_to_proposal'},
+            'to':   'costing_in_progress',
+            'allowed_teams': {'proposal'},
+            'sets':  lambda: {
+                'workflow_stage': 'costing_in_progress',
+                # Only stamped if it never was: this is a resumption, and
+                # overwriting it would erase when costing actually began and
+                # quietly shorten every cycle-time measured from it.
+                'costing_started_at': sheet.costing_started_at or now,
+                'costing_started_by': sheet.costing_started_by or user,
+            },
+            'verb': 'returned the BOM to sales with the missing items added',
+            'notify_team': 'sales',
+            'after': lambda: _close_open_returns(sheet, user, note),
+        },
         'reopen': {
             'from': {
                 'finalized', 'costing_in_progress', 'ready_for_costing',
@@ -2919,6 +2962,11 @@ def costing_workflow_transition(request, pk):
             )
             return redirect('costing:detail', pk=sheet.pk)
 
+    # A transition that exists to carry a message cannot run without one.
+    if tx.get('requires_note') and not note:
+        messages.error(request, tx['requires_note'])
+        return redirect('costing:detail', pk=sheet.pk)
+
     # Won-project gate (currently only used by send_to_finance — finance
     # budgeting only kicks in once the project is actually awarded).
     if tx.get('requires_won_project'):
@@ -2934,6 +2982,12 @@ def costing_workflow_transition(request, pk):
     updates = tx['sets']()
     CostingSheet.objects.filter(pk=sheet.pk).update(**updates)
     sheet.refresh_from_db()
+
+    # Side effect, after the stage has actually moved — opening a return
+    # against a sheet whose transition was refused would leave a clock running
+    # on something that never happened.
+    if tx.get('after'):
+        tx['after']()
 
     # Log to the change log
     _record_costing_change(
@@ -2980,6 +3034,21 @@ def costing_workflow_transition(request, pk):
 
     messages.success(request, f'Sheet is now: {sheet.get_workflow_stage_display()}')
     return redirect('costing:detail', pk=sheet.pk)
+
+
+def _close_open_returns(sheet, user, note):
+    """Stop the clock on whatever sales was waiting for.
+
+    Every open return is closed, not just the newest. Two open at once should
+    not happen — a sheet can only be returned from a stage it leaves on the
+    way back — but if it ever did, leaving one open would mean a clock running
+    forever on a sheet nobody is waiting for, and that quietly poisons the
+    average.
+    """
+    from django.utils import timezone
+    return (sheet.returns.filter(resolved_at__isnull=True)
+            .update(resolved_at=timezone.now(), resolved_by=user,
+                    resolution_note=note or ''))
 
 
 @require_POST
