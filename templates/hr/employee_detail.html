@@ -9,7 +9,15 @@
         <div class="col-lg-10">
             <!-- Header -->
             <div class="d-flex justify-content-between align-items-center mb-4">
-                <div>
+                <div class="d-flex align-items-center gap-3">
+                    {% if employee.picture %}
+                    <img src="{{ employee.picture.url }}" alt="{{ employee.full_name }}" class="rounded-circle" style="width:64px; height:64px; object-fit:cover;">
+                    {% else %}
+                    <div class="rounded-circle bg-secondary bg-opacity-25 d-flex align-items-center justify-content-center" style="width:64px; height:64px;">
+                        <i class="bi bi-person text-secondary" style="font-size:1.75rem;"></i>
+                    </div>
+                    {% endif %}
+                    <div>
                     <h1 class="h3 mb-1">{{ employee.full_name }}</h1>
                     <p class="text-muted mb-0">
                         {% if employee.designation %}{{ employee.designation }} &middot; {% endif %}
@@ -24,6 +32,7 @@
                         </span>
                         {% endif %}
                     </p>
+                    </div>
                 </div>
                 <div>
                     <a href="{% url 'hr:employee_list' %}" class="btn btn-outline-secondary me-2">
@@ -243,6 +252,10 @@
                             <p class="mb-2">
                                 <strong>Deployment:</strong><br>
                                 {{ employee.deployment|default:"-" }}
+                            </p>
+                            <p class="mb-2">
+                                <strong>Grade:</strong><br>
+                                {{ employee.grade|default:"-" }}
                             </p>
                             <p class="mb-2">
                                 <strong>Office / Site:</strong><br>

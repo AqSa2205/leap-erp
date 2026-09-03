@@ -68,7 +68,7 @@ class EmployeeForm(forms.ModelForm):
             'medical_insurance_issued_on', 'medical_insurance_expires_on',
             'full_name', 'designation', 'qualification',
             'date_of_birth', 'joining_date', 'nationality', 'marital_status',
-            'blood_group', 'personal_email', 'documents_link', 'deployment',
+            'blood_group', 'personal_email', 'documents_link', 'deployment', 'grade', 'picture',
             'work_location', 'contract_type', 'work_email', 'mobile_number',
             'is_active', 'inactive_from', 'user',
         ]
@@ -91,6 +91,8 @@ class EmployeeForm(forms.ModelForm):
             'personal_email': forms.EmailInput(attrs={'class': 'form-control'}),
             'documents_link': forms.URLInput(attrs={'class': 'form-control'}),
             'deployment': forms.TextInput(attrs={'class': 'form-control'}),
+            'grade': forms.TextInput(attrs={'class': 'form-control'}),
+            'picture': forms.ClearableFileInput(attrs={'class': 'form-control', 'accept': 'image/*'}),
             'work_location': forms.Select(attrs={'class': 'form-select'}),
             'contract_type': forms.Select(attrs={'class': 'form-select'}),
             'work_email': forms.EmailInput(attrs={'class': 'form-control'}),
@@ -128,6 +130,18 @@ class EmployeeForm(forms.ModelForm):
 
     def clean_deployment(self):
         return validate_title_field(self.cleaned_data.get('deployment'), 'Deployment')
+
+    def clean_grade(self):
+        return validate_title_field(self.cleaned_data.get('grade'), 'Grade')
+
+    def clean_picture(self):
+        # A very large photo would upload fine but then get embedded into
+        # every subsequent Excel export, making that file huge too.
+        picture = self.cleaned_data.get('picture')
+        max_size = 5 * 1024 * 1024  # 5 MB
+        if picture and hasattr(picture, 'size') and picture.size > max_size:
+            raise ValidationError('Picture must be smaller than 5 MB.')
+        return picture
 
     def clean_iqama_number(self):
         return validate_code_field(self.cleaned_data.get('iqama_number'), 'Iqama number')
@@ -179,11 +193,11 @@ class EmployeeFilterForm(forms.Form):
             'placeholder': 'Nationality...',
         }),
     )
-    deployment = forms.CharField(
+    grade = forms.CharField(
         required=False,
         widget=forms.TextInput(attrs={
             'class': 'form-control',
-            'placeholder': 'Deployment...',
+            'placeholder': 'Grade...',
         }),
     )
     work_location = forms.ChoiceField(

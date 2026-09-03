@@ -2157,6 +2157,161 @@ class ProcurementTimelineVisibilityTests(TestCase):
         body = self.client.get(
             reverse('projects:detail', kwargs={'pk': self.project.pk})).content.decode()
         self.assertIn('Activity Timeline', body)
+class RegionCodeFilterTests(TestCase):
+    """The ?region= query param on the Commercial Pipeline list resolves
+    dynamically against the Regions table (dashboard_group or code) - not
+    a hardcoded map, so a newly created region filters correctly without
+    any code change."""
+
+    def setUp(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('regionfilteruser', password='x')
+        self.user.role = role
+        self.user.save()
+        self.client.force_login(self.user)
+        self.status = ProjectStatus.objects.create(name='Open', category='open', is_active=True)
+
+        self.uk = Region.objects.create(code='UK2', name='UK', currency='GBP', dashboard_group='LNUK2')
+        self.glb = Region.objects.create(code='GLB2', name='Global', currency='GBP', dashboard_group='LNUK2')
+        self.lna = Region.objects.create(code='LNA2', name='Leap Arabia', currency='SAR')
+        self.new_region = Region.objects.create(code='ZONEC', name='Zone C', currency='USD')
+
+        self.uk_project = Project.objects.create(
+            project_name='UK P', proposal_reference='UK-1', region=self.uk, status=self.status)
+        self.glb_project = Project.objects.create(
+            project_name='GLB P', proposal_reference='GLB-1', region=self.glb, status=self.status)
+        self.lna_project = Project.objects.create(
+            project_name='LNA P', proposal_reference='LNA2-1', region=self.lna, status=self.status)
+        self.new_project = Project.objects.create(
+            project_name='Zone C P', proposal_reference='ZC-1', region=self.new_region, status=self.status)
+
+    def test_grouped_tab_key_returns_all_grouped_regions(self):
+        resp = self.client.get(reverse('projects:list'), {'region': 'LNUK2'})
+        projects = list(resp.context['projects'])
+        self.assertIn(self.uk_project, projects)
+        self.assertIn(self.glb_project, projects)
+        self.assertNotIn(self.lna_project, projects)
+
+    def test_ungrouped_region_own_code_returns_only_that_region(self):
+        resp = self.client.get(reverse('projects:list'), {'region': 'LNA2'})
+        projects = list(resp.context['projects'])
+        self.assertIn(self.lna_project, projects)
+        self.assertNotIn(self.uk_project, projects)
+
+    def test_newly_created_region_filters_correctly(self):
+        # This is the actual regression the hardcoded REGION_CODE_MAP
+        # caused: a region created after that map was last updated would
+        # silently return every project instead of just its own.
+        resp = self.client.get(reverse('projects:list'), {'region': 'ZONEC'})
+        projects = list(resp.context['projects'])
+        self.assertIn(self.new_project, projects)
+        self.assertNotIn(self.uk_project, projects)
+        self.assertNotIn(self.lna_project, projects)
+
+    def test_unknown_region_key_returns_unfiltered(self):
+        # Documented fallback: a bogus/unknown key matches no region, so
+        # region_codes is empty and the filter is skipped entirely.
+        resp = self.client.get(reverse('projects:list'), {'region': 'BOGUSKEY'})
+        projects = list(resp.context['projects'])
+        self.assertIn(self.uk_project, projects)
+        self.assertIn(self.lna_project, projects)
+
+
+class RegionManagementViewTests(TestCase):
+    """Create/List/Edit Region views - Super Admin only."""
+
+    def setUp(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.super = User.objects.create_user('regsuper', password='testpass123')
+        self.super.role = role
+        self.super.save()
+
+        plain_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        self.plain = User.objects.create_user('regplain', password='testpass123')
+        self.plain.role = plain_role
+        self.plain.save()
+
+    def test_super_admin_can_create_region(self):
+        self.client.force_login(self.super)
+        resp = self.client.post(reverse('projects:region_create'), {
+            'name': 'New Zone', 'code': 'NZTEST', 'currency': 'USD',
+            'dashboard_group': '', 'description': '', 'is_active': 'on',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(Region.objects.filter(code='NZTEST', name='New Zone').exists())
+
+    def test_non_super_admin_cannot_create_region(self):
+        self.client.force_login(self.plain)
+        resp = self.client.post(reverse('projects:region_create'), {
+            'name': 'Blocked Zone', 'code': 'BZTEST', 'currency': 'USD',
+        })
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(Region.objects.filter(code='BZTEST').exists())
+
+    def test_super_admin_can_view_region_list(self):
+        Region.objects.create(name='Existing Zone', code='EXTEST', currency='USD')
+        self.client.force_login(self.super)
+        resp = self.client.get(reverse('projects:region_list'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Existing Zone')
+
+    def test_non_super_admin_cannot_view_region_list(self):
+        self.client.force_login(self.plain)
+        resp = self.client.get(reverse('projects:region_list'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_super_admin_can_edit_region(self):
+        region = Region.objects.create(name='Old Name', code='ONTEST', currency='USD')
+        self.client.force_login(self.super)
+        resp = self.client.post(reverse('projects:region_edit', args=[region.pk]), {
+            'name': 'New Name', 'code': 'ONTEST', 'currency': 'EUR',
+            'dashboard_group': '', 'description': '', 'is_active': 'on',
+        })
+        self.assertEqual(resp.status_code, 302)
+        region.refresh_from_db()
+        self.assertEqual(region.name, 'New Name')
+        self.assertEqual(region.currency, 'EUR')
+
+    def test_non_super_admin_cannot_edit_region(self):
+        region = Region.objects.create(name='Protected Zone', code='PRTEST', currency='USD')
+        self.client.force_login(self.plain)
+        resp = self.client.post(reverse('projects:region_edit', args=[region.pk]), {
+            'name': 'Hacked', 'code': 'PRTEST', 'currency': 'USD',
+        })
+        self.assertEqual(resp.status_code, 403)
+        region.refresh_from_db()
+        self.assertEqual(region.name, 'Protected Zone')
+
+
+class RegionEdgeCaseTests(TestCase):
+    """Region create form edge cases: duplicate codes and missing required
+    fields should surface as ordinary form errors, not crashes."""
+
+    def setUp(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.super = User.objects.create_user('regedge', password='testpass123')
+        self.super.role = role
+        self.super.save()
+        self.client.force_login(self.super)
+
+    def test_duplicate_code_shows_form_error_not_crash(self):
+        Region.objects.create(name='Existing', code='DUPTEST', currency='USD')
+        resp = self.client.post(reverse('projects:region_create'), {
+            'name': 'Another', 'code': 'DUPTEST', 'currency': 'EUR',
+            'dashboard_group': '', 'description': '', 'is_active': 'on',
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.context['form'].errors.get('code'))
+        self.assertEqual(Region.objects.filter(code='DUPTEST').count(), 1)
+
+    def test_blank_required_fields_show_form_errors_not_crash(self):
+        resp = self.client.post(reverse('projects:region_create'), {
+            'name': '', 'code': '', 'currency': '',
+            'dashboard_group': '', 'description': '', 'is_active': 'on',
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.context['form'].errors)
+        self.assertFalse(Region.objects.filter(name='').exists())
 
 
 class PipelineDeadlinesRequiredTests(TestCase):

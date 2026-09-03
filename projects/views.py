@@ -21,7 +21,7 @@ from django.utils import timezone
 import openpyxl
 
 from .models import Project, Region, ProjectStatus, ProjectHistory, Document, ProjectRevision, PipelineEmail
-from .forms import ProjectForm, ProjectFilterForm, DocumentForm, DocumentFilterForm
+from .forms import ProjectForm, ProjectFilterForm, DocumentForm, DocumentFilterForm, RegionForm
 from .email_parsing import parse_eml_file, EmailParseError
 from . import graph_mail
 from notifications.services import notify_users
@@ -99,15 +99,6 @@ class ProjectListView(CapabilityRequiredMixin, ProjectPermissionMixin, ListView)
     def test_func(self):
         return True  # All authenticated users can view
 
-    # Mapping of consolidated regions to database region codes
-    REGION_CODE_MAP = {
-        'LNUK': ['UK', 'GLB', 'LNUK'],  # UK and Global together
-        'LNA': ['LNA'],
-        'PA': ['PA'],
-        'NEO-Dubai': ['NEO-Dubai'],
-        'NEO-KSA': ['NEO-KSA'],
-    }
-
     def get_queryset(self):
         queryset = super().get_queryset()
 
@@ -127,8 +118,15 @@ class ProjectListView(CapabilityRequiredMixin, ProjectPermissionMixin, ListView)
                 Q(client_rfq_reference__icontains=search)
             )
         if region:
-            # Use consolidated region mapping
-            region_codes = self.REGION_CODE_MAP.get(region, [])
+            # A dashboard tab's key is either a dashboard_group name (for a
+            # combined tab like LNUK = UK + Global) or a region's own code
+            # (for an ungrouped tab) - mirrors dashboard.views.index()'s
+            # grouping so a tab's View Full Pipeline link always filters
+            # to exactly what that tab showed, including for a region
+            # created after this page was last touched.
+            region_codes = list(Region.objects.filter(
+                Q(dashboard_group=region) | Q(code=region)
+            ).values_list('code', flat=True))
             if region_codes:
                 queryset = queryset.filter(region__code__in=region_codes)
         if year:
@@ -608,6 +606,56 @@ def _resolve_project_sales_value(project, costing_sheets=None):
         'sheet':    None,
         'currency': local_ccy,
     }
+
+
+class RegionCreateView(LoginRequiredMixin, UserPassesTestMixin, CreateView):
+    """Create a new sales region - Super Admin only. As the number of
+    regions the business operates in grows, this lets a Super Admin add one
+    without going through Django admin directly. The main dashboard and the
+    GM KPI dashboard both pick up a newly created region automatically
+    (they read Region.objects.filter(is_active=True) dynamically), so no
+    further code change is needed for it to appear as a new tab."""
+    model = Region
+    form_class = RegionForm
+    template_name = 'projects/region_form.html'
+    success_url = reverse_lazy('dashboard:index')
+
+    def test_func(self):
+        return self.request.user.is_super_admin_user
+
+    def form_valid(self, form):
+        messages.success(self.request, f'Region "{form.instance.name}" created.')
+        return super().form_valid(form)
+
+
+class RegionListView(LoginRequiredMixin, UserPassesTestMixin, ListView):
+    """All regions, one row each (not grouped by dashboard_group) - Super
+    Admin only. Editing targets one specific Region row, so this stays
+    ungrouped even though the dashboard combines some rows into one tab."""
+    model = Region
+    template_name = 'projects/region_list.html'
+    context_object_name = 'regions'
+
+    def test_func(self):
+        return self.request.user.is_super_admin_user
+
+    def get_queryset(self):
+        return Region.objects.all().order_by('name')
+
+
+class RegionUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
+    """Edit an existing region - Super Admin only."""
+    model = Region
+    form_class = RegionForm
+    template_name = 'projects/region_form.html'
+    success_url = reverse_lazy('projects:region_list')
+
+    def test_func(self):
+        return self.request.user.is_super_admin_user
+
+    def form_valid(self, form):
+        messages.success(self.request, f'Region "{form.instance.name}" updated.')
+        return super().form_valid(form)
 
 
 class ProjectCreateView(LoginRequiredMixin, CreateView):
