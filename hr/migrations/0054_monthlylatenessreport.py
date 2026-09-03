@@ -7,7 +7,17 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('hr', '0050_assethandover_hr_assethandover_one_open_per_asset_and_more'),
+        # Renumbered from 0051, and depends on the migration immediately
+        # before it rather than on a shared ancestor. That distinction is the
+        # whole point: Django ignores the filename number and reads only this
+        # list, so two migrations both hanging off 0052 are two leaf nodes
+        # however they are numbered, and it refuses to migrate at all.
+        #
+        # Three branches were cut from dev at 0050 and all three claimed 0051.
+        # The employee grade/picture pair landed first (0051, 0052); the
+        # document-upload branch takes 0053 because it is ready and this one
+        # is not; this is 0054 behind it.
+        ('hr', '0053_alter_employeedocument_document_type'),
     ]
 
     operations = [
