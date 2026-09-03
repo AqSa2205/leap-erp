@@ -34,7 +34,9 @@ def _safe_filename(name, suffix='', extension=''):
         extension = f'.{extension}'
     return f'{safe}{extension}'
 
-from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, TermsTemplate, ScopeOfWorkItem, ClientRemarkTemplate
+from .models import (ExchangeRate, CostingSheet, CostingSection, CostingLineItem,
+                     TermsTemplate, ScopeOfWorkItem, ClientRemarkTemplate,
+                     ResourceCatalogueItem, ResourceLine)
 from .models import WORKFLOW_STAGE_SEQUENCE, STAGE_BADGES
 from notifications.services import notify_users
 
@@ -1125,10 +1127,14 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
         # exist; fall back to the sheet's flat scope_of_work_total field.
         sow_items = list(sheet.scope_of_work_items.all())
         context['sow_items'] = sow_items
-        sow_total_oc = (
-            sum((i.total_price for i in sow_items), Decimal('0'))
-            if sow_items else sheet.scope_of_work_total
-        )
+        context['resource_lines'] = list(sheet.resource_lines.all())
+        context['resources_total'] = sheet.resources_total
+        context['resource_catalogue'] = list(
+            ResourceCatalogueItem.objects.filter(is_active=True))
+        # From the model, not recomputed here. A.4 resource lines outrank the
+        # A.2 rows when present, and this page and the PDF disagreeing about
+        # the contract price is not a failure anybody would catch quickly.
+        sow_total_oc = sheet.sow_total
         context['sow_total'] = sow_total_oc
 
         # Contract total = (line-item grand total in output currency) + SOW.
@@ -3957,7 +3963,10 @@ def costing_export_pdf(request, pk):
     # Scope of Work items & total — SOW values are user-entered in
     # output_currency already, so no conversion is applied to them.
     sow_items = list(sheet.scope_of_work_items.all())
-    sow_total = sum(i.total_price for i in sow_items) if sow_items else sheet.scope_of_work_total
+    # Same source as the detail page. A.4 is never rendered here — the client
+    # sees the services price, not the manpower rates behind it — but it is
+    # what that price is, so the total has to come through sow_total.
+    sow_total = sheet.sow_total
     # SAR aggregates → output_currency once, here, so the rest of the table
     # can mix them with the SOW values consistently.
     optional_total_oc = (sheet.optional_subtotal * conv).quantize(Decimal('0.01'))
@@ -4997,3 +5006,143 @@ def costing_import_new(request):
 
     # GET request - show import form
     return render(request, 'costing/import_new.html', {})
+
+
+# ── A.4 resource lines ──────────────────────────────────────────────────────
+# The build-up behind the A.2 services price: manpower, plant, accommodation.
+# Never rendered on the client PDF — they see what the service costs, not the
+# rates it was assembled from — but sheet.sow_total reads these when present,
+# so editing here moves the contract total.
+
+def _resource_payload(line):
+    return {
+        'pk': line.pk,
+        'serial_number': line.serial_number,
+        'description': line.description,
+        'quantity': str(line.quantity),
+        'uom': line.uom,
+        'rate': str(line.rate),
+        'total_price': str(line.total_price),
+        'remarks': line.remarks,
+    }
+
+
+def _resource_numbers(request):
+    """Quantity and rate off the POST, or an error string."""
+    try:
+        quantity = Decimal(request.POST.get('quantity', '1'))
+        rate = Decimal(request.POST.get('rate', '0'))
+    except (InvalidOperation, ValueError):
+        return None, None, 'Invalid number'
+    if quantity < 0 or rate < 0:
+        # A negative line silently reduces the contract total, which is a
+        # correction somebody should make on the line it belongs to rather
+        # than by burying a minus sign in the resources.
+        return None, None, 'Quantity and rate cannot be negative'
+    return quantity, rate, None
+
+
+@login_required
+@require_POST
+def ajax_add_resource_line(request, pk):
+    """Add an A.4 resource line to a costing sheet."""
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    quantity, rate, error = _resource_numbers(request)
+    if error:
+        return JsonResponse({'error': error}, status=400)
+
+    catalogue_item = None
+    catalogue_pk = (request.POST.get('catalogue_item') or '').strip()
+    if catalogue_pk:
+        catalogue_item = ResourceCatalogueItem.objects.filter(pk=catalogue_pk).first()
+        if catalogue_item is None:
+            return JsonResponse({'error': 'Unknown resource'}, status=400)
+
+    # Snapshotted from the catalogue rather than read through the FK later, so
+    # renaming an entry cannot rewrite what a quoted sheet says it was priced
+    # on. Free text is allowed for the one-off that is not worth cataloguing.
+    description = (request.POST.get('description', '').strip()
+                   or (catalogue_item.name if catalogue_item else ''))
+    if not description:
+        return JsonResponse({'error': 'Pick a resource or type one'}, status=400)
+
+    uom = (request.POST.get('uom', '').strip()
+           or (catalogue_item.default_uom if catalogue_item else 'Nos'))
+    last_order = sheet.resource_lines.order_by('-order').values_list(
+        'order', flat=True).first() or 0
+    last_sn = sheet.resource_lines.order_by('-serial_number').values_list(
+        'serial_number', flat=True).first() or 0
+
+    line = ResourceLine.objects.create(
+        costing_sheet=sheet,
+        catalogue_item=catalogue_item,
+        serial_number=last_sn + 1,
+        description=description[:255],
+        quantity=quantity,
+        uom=uom,
+        rate=rate,
+        remarks=request.POST.get('remarks', '').strip(),
+        order=last_order + 1,
+    )
+    return JsonResponse({
+        'ok': True,
+        'item': _resource_payload(line),
+        # The section total and the contract total both move with this, and
+        # the page shows both — returning them saves a reload that would lose
+        # whatever else the user was part-way through typing.
+        'resources_total': str(sheet.resources_total),
+        'sow_total': str(sheet.sow_total),
+    })
+
+
+@login_required
+@require_POST
+def ajax_update_resource_line(request, pk):
+    """Update an A.4 resource line."""
+    line = get_object_or_404(ResourceLine, pk=pk)
+    sheet = line.costing_sheet
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    quantity, rate, error = _resource_numbers(request)
+    if error:
+        return JsonResponse({'error': error}, status=400)
+
+    description = request.POST.get('description', '').strip()
+    if not description:
+        return JsonResponse({'error': 'Description required'}, status=400)
+
+    line.description = description[:255]
+    line.quantity = quantity
+    line.rate = rate
+    line.uom = request.POST.get('uom', '').strip() or line.uom
+    line.remarks = request.POST.get('remarks', '').strip()
+    line.save(update_fields=['description', 'quantity', 'rate', 'uom', 'remarks'])
+
+    return JsonResponse({
+        'ok': True,
+        'item': _resource_payload(line),
+        'resources_total': str(sheet.resources_total),
+        'sow_total': str(sheet.sow_total),
+    })
+
+
+@login_required
+@require_POST
+def ajax_delete_resource_line(request, pk):
+    """Delete an A.4 resource line."""
+    line = get_object_or_404(ResourceLine, pk=pk)
+    sheet = line.costing_sheet
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    line.delete()
+    return JsonResponse({
+        'ok': True,
+        'resources_total': str(sheet.resources_total),
+        # Deleting the last line hands A.2 back to its own rows, so this can
+        # change by more than the line that was removed.
+        'sow_total': str(sheet.sow_total),
+    })

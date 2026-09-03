@@ -844,6 +844,141 @@
 </div>
 {% endif %}
 
+
+{% comment %} A.4 — Resources. Internal only: this is how the A.2 services
+price is built up, and the client is shown the service, not the manpower
+rates behind it. Never rendered on the PDF. Gated on can_see_pricing like
+A.2, because it is cost data. {% endcomment %}
+{% if can_see_pricing %}
+<div class="card mt-3 bom-pricing-only">
+    <div class="card-header d-flex justify-content-between align-items-center" style="background:#E3E0F3;">
+        <span>
+            <i class="bi bi-people me-2"></i> <strong>A.4 — Resources</strong>
+            <span class="badge bg-secondary ms-2" title="This section is never printed on the client PDF">internal</span>
+        </span>
+        {% if can_edit %}
+        <button class="btn btn-sm btn-dark" data-bs-toggle="modal" data-bs-target="#addResourceModal">
+            <i class="bi bi-plus-lg me-1"></i> Add Resource
+        </button>
+        {% endif %}
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0" id="resourceTable">
+            <thead class="table-light">
+                <tr>
+                    <th width="50">#</th>
+                    <th>Resource</th>
+                    <th width="70">Qty</th>
+                    <th width="70">UOM</th>
+                    <th width="130" class="text-end">Rate ({{ sheet.output_currency }})</th>
+                    <th width="140" class="text-end">Total ({{ sheet.output_currency }})</th>
+                    <th width="60"></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for line in resource_lines %}
+                <tr data-resource-pk="{{ line.pk }}"
+                    data-description="{{ line.description }}"
+                    data-quantity="{{ line.quantity }}"
+                    data-uom="{{ line.uom }}"
+                    data-rate="{{ line.rate }}"
+                    data-remarks="{{ line.remarks }}">
+                    <td>{{ line.serial_number }}</td>
+                    <td class="res-cell-desc">{{ line.description }}</td>
+                    <td class="res-cell-qty">{{ line.quantity|floatformat:2 }}</td>
+                    <td class="res-cell-uom">{{ line.uom }}</td>
+                    <td class="res-cell-rate text-end">{{ line.rate|floatformat:2|intcomma }}</td>
+                    <td class="res-cell-total text-end fw-bold">{{ line.total_price|floatformat:2|intcomma }}</td>
+                    <td class="text-nowrap">
+                        {% if can_edit %}
+                        <button class="btn btn-sm btn-outline-secondary py-0 px-1 edit-resource me-1" data-pk="{{ line.pk }}" title="Edit">
+                            <i class="bi bi-pencil"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger py-0 px-1 delete-resource" data-pk="{{ line.pk }}" title="Delete">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr class="resource-empty-row">
+                    <td colspan="7" class="text-center text-muted py-3">
+                        No resources yet. While this is empty, A.2 uses its own line items.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot class="table-light">
+                <tr>
+                    <th colspan="5" class="text-end">Resources total</th>
+                    <th class="text-end" id="resourcesTotalCell">{{ resources_total|floatformat:2|intcomma }}</th>
+                    <th></th>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+    {% comment %} Said plainly, because a number that silently overrides
+    another one is how somebody quotes the wrong price. {% endcomment %}
+    <div class="card-footer small text-muted">
+        <i class="bi bi-info-circle me-1"></i>
+        Not printed on the client PDF. While this section has any lines its total
+        <strong>is</strong> the A.2 Services figure, replacing the sum of the A.2 rows.
+    </div>
+</div>
+{% endif %}
+
+<!-- Add / edit resource modal -->
+<div class="modal fade" id="addResourceModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-people me-2"></i><span id="resourceModalTitle">Add Resource</span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <input type="hidden" id="resourceEditingId" value="">
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label fw-bold" for="resourceCatalogue">Resource</label>
+                    <select class="form-select" id="resourceCatalogue">
+                        <option value="">— pick from the list —</option>
+                        {% for entry in resource_catalogue %}
+                        <option value="{{ entry.pk }}" data-uom="{{ entry.default_uom }}" data-name="{{ entry.name }}">{{ entry.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold" for="resourceDescription">Or type one</label>
+                    <input type="text" class="form-control" id="resourceDescription" maxlength="255"
+                           placeholder="For a one-off not in the list">
+                </div>
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label fw-bold" for="resourceQty">Quantity</label>
+                        <input type="number" class="form-control" id="resourceQty" value="1" min="0" step="0.01">
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label fw-bold" for="resourceUom">UOM</label>
+                        <input type="text" class="form-control" id="resourceUom" value="Nos">
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label fw-bold" for="resourceRate">Rate ({{ sheet.output_currency }})</label>
+                        <input type="number" class="form-control" id="resourceRate" value="0" min="0" step="0.01">
+                    </div>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label fw-bold" for="resourceRemarks">Remarks</label>
+                    <input type="text" class="form-control" id="resourceRemarks" placeholder="Optional">
+                </div>
+                <div class="alert alert-warning py-2 small mb-0" id="resourceError" style="display:none;"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-dark" id="saveResourceBtn">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Add SOW Item Modal -->
 <div class="modal fade" id="addSowModal" tabindex="-1">
     <div class="modal-dialog">
@@ -2214,4 +2349,146 @@ var CAN_EDIT = {% if can_edit %}true{% else %}false{% endif %};
     });
 })();
 </script>
+
+<script>
+// ── A.4 resources ───────────────────────────────────────────────────────────
+// Adding a line changes the A.2 figure and therefore the contract total, so
+// every response carries both back and the page updates them in place rather
+// than reloading — a reload would throw away whatever else is part-typed.
+(function () {
+  const table = document.getElementById('resourceTable');
+  if (!table) return;
+
+  const sheetPk = {{ sheet.pk }};
+  const modalEl = document.getElementById('addResourceModal');
+  const modal = modalEl ? new bootstrap.Modal(modalEl) : null;
+  const $ = (id) => document.getElementById(id);
+  const csrf = () => {
+    const el = document.querySelector('[name=csrfmiddlewaretoken]');
+    return el ? el.value : '';
+  };
+
+  function showError(message) {
+    const box = $('resourceError');
+    box.textContent = message;
+    box.style.display = message ? 'block' : 'none';
+  }
+
+  function refreshTotals(payload) {
+    const cell = $('resourcesTotalCell');
+    if (cell && payload.resources_total !== undefined) {
+      cell.textContent = Number(payload.resources_total).toLocaleString(
+        undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    // The A.2 tile and the contract total both move with this. Reloading is
+    // the honest way to keep every derived figure on the page consistent —
+    // there are several, and updating some but not others would be worse
+    // than the reload.
+    if (payload.sow_total !== undefined) window.location.reload();
+  }
+
+  // Picking from the list fills the description and its usual unit, both
+  // still editable — the list is a shortcut, not a constraint.
+  const picker = $('resourceCatalogue');
+  if (picker) {
+    picker.addEventListener('change', function () {
+      const opt = picker.options[picker.selectedIndex];
+      if (!opt || !opt.value) return;
+      $('resourceDescription').value = '';
+      if (opt.dataset.uom) $('resourceUom').value = opt.dataset.uom;
+    });
+  }
+
+  function openModal(line) {
+    showError('');
+    $('resourceEditingId').value = line ? line.pk : '';
+    $('resourceModalTitle').textContent = line ? 'Edit Resource' : 'Add Resource';
+    $('resourceCatalogue').value = '';
+    $('resourceDescription').value = line ? line.description : '';
+    $('resourceQty').value = line ? line.quantity : '1';
+    $('resourceUom').value = line ? line.uom : 'Nos';
+    $('resourceRate').value = line ? line.rate : '0';
+    $('resourceRemarks').value = line ? line.remarks : '';
+    // Editing works on the snapshotted description, not the catalogue link:
+    // the line records what it was priced on, and re-picking would let a
+    // later rename rewrite it.
+    $('resourceCatalogue').disabled = Boolean(line);
+    if (modal) modal.show();
+  }
+
+  document.querySelector('[data-bs-target="#addResourceModal"]')
+    ?.addEventListener('click', () => openModal(null));
+
+  table.addEventListener('click', function (event) {
+    const editBtn = event.target.closest('.edit-resource');
+    const delBtn = event.target.closest('.delete-resource');
+    if (editBtn) {
+      const row = editBtn.closest('tr');
+      openModal({
+        pk: editBtn.dataset.pk,
+        description: row.dataset.description,
+        quantity: row.dataset.quantity,
+        uom: row.dataset.uom,
+        rate: row.dataset.rate,
+        remarks: row.dataset.remarks,
+      });
+    } else if (delBtn) {
+      if (!confirm('Remove this resource line?')) return;
+      fetch(`/costing/resource-line/${delBtn.dataset.pk}/delete/`, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': csrf(), 'X-Requested-With': 'XMLHttpRequest' },
+      })
+        .then((r) => r.json())
+        .then((payload) => { if (payload.ok) refreshTotals(payload); })
+        .catch(() => alert('Could not remove that line.'));
+    }
+  });
+
+  $('saveResourceBtn')?.addEventListener('click', function () {
+    showError('');
+    const editingId = $('resourceEditingId').value;
+    const picked = $('resourceCatalogue');
+    const chosen = picked.options[picked.selectedIndex];
+
+    const body = new URLSearchParams();
+    body.append('quantity', $('resourceQty').value || '0');
+    body.append('rate', $('resourceRate').value || '0');
+    body.append('uom', $('resourceUom').value || 'Nos');
+    body.append('remarks', $('resourceRemarks').value || '');
+
+    let url;
+    if (editingId) {
+      url = `/costing/resource-line/${editingId}/update/`;
+      body.append('description', $('resourceDescription').value.trim());
+    } else {
+      url = `/costing/${sheetPk}/add-resource-line/`;
+      body.append('catalogue_item', picked.value || '');
+      body.append('description',
+        $('resourceDescription').value.trim() ||
+        (chosen && chosen.value ? chosen.dataset.name : ''));
+    }
+
+    fetch(url, {
+      method: 'POST',
+      headers: {
+        'X-CSRFToken': csrf(),
+        'X-Requested-With': 'XMLHttpRequest',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: body.toString(),
+    })
+      .then((r) => r.json().then((payload) => ({ ok: r.ok, payload })))
+      .then(({ ok, payload }) => {
+        if (!ok || payload.error) {
+          showError(payload.error || 'Could not save that line.');
+          return;
+        }
+        if (modal) modal.hide();
+        refreshTotals(payload);
+      })
+      .catch(() => showError('Could not save that line.'));
+  });
+})();
+</script>
+
 {% endblock %}
