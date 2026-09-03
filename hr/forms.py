@@ -382,6 +382,16 @@ class EmployeeDocumentForm(forms.ModelForm):
             'notes': forms.Textarea(attrs={'rows': 2}),
         }
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            if isinstance(field.widget, forms.Select):
+                field.widget.attrs['class'] = 'form-select'
+            elif isinstance(field.widget, forms.FileInput):
+                field.widget.attrs['class'] = 'form-control'
+            else:
+                field.widget.attrs['class'] = 'form-control'
+
 
 class MyDocumentUploadForm(forms.ModelForm):
     class Meta:
@@ -414,16 +424,6 @@ class MyDocumentUploadForm(forms.ModelForm):
         if document_type == 'other' and not notes:
             self.add_error('notes', 'Please specify what this document is.')
         return cleaned_data
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        for field in self.fields.values():
-            if isinstance(field.widget, forms.Select):
-                field.widget.attrs['class'] = 'form-select'
-            elif isinstance(field.widget, forms.FileInput):
-                field.widget.attrs['class'] = 'form-control'
-            else:
-                field.widget.attrs['class'] = 'form-control'
 
 
 class VehicleDocumentForm(forms.ModelForm):

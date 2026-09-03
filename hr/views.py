@@ -1071,15 +1071,18 @@ def build_documents_pdf(emp):
     vanishing. Reuses the same conversion/merge helpers the PQD export
     already relies on, rather than duplicating that logic here."""
     from reportlab.lib.pagesizes import A4
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+    from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer,
+                                     Image as RLImage)
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib import colors
-    from reportlab.lib.units import cm
+    from reportlab.lib.units import cm, mm
     from django.utils import timezone
+    from django.contrib.staticfiles.finders import find as find_static
     from pypdf import PdfReader
     from proposals.pqd_export import _convert_to_pdf, _merge_pdfs
     import io
 
+    BRAND_RED = colors.HexColor('#C41E3A')
     documents = list(emp.documents.all())
 
     # First pass: convert every document to PDF bytes and count its pages,
@@ -1109,14 +1112,24 @@ def build_documents_pdf(emp):
     buffer = io.BytesIO()
     toc_doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2 * cm, bottomMargin=2 * cm)
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=16, spaceAfter=6)
+    title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=16,
+                                  textColor=BRAND_RED, spaceAfter=6)
     subtitle_style = ParagraphStyle('DocSubtitle', parent=styles['Normal'], fontSize=10,
                                      textColor=colors.grey, spaceAfter=16)
+    note_style = ParagraphStyle('DocNote', parent=styles['Normal'], fontSize=9,
+                                 textColor=colors.HexColor('#555555'), spaceAfter=16)
 
-    elements = [
-        Paragraph(f'My Documents — {emp.full_name}', title_style),
-        Paragraph(f'Generated {timezone.now().strftime("%d %B %Y")}', subtitle_style),
-    ]
+    elements = []
+    logo_path = find_static('images/leap_logo.jpg')
+    if logo_path:
+        elements.append(RLImage(logo_path, width=45 * mm, height=13.6 * mm, hAlign='CENTER'))
+        elements.append(Spacer(1, 4 * mm))
+    elements.append(Paragraph(f'My Documents — {emp.full_name}', title_style))
+    elements.append(Paragraph(f'Generated {timezone.now().strftime("%d %B %Y")}', subtitle_style))
+    elements.append(Paragraph(
+        'This is your overall document PDF, combining everything on file. '
+        'If you need an individual document on its own, download it directly '
+        'from My Document Uploads on your profile page.', note_style))
 
     if converted:
         data = [['Type', 'Title', 'Uploaded', 'Page']]
@@ -1131,7 +1144,7 @@ def build_documents_pdf(emp):
                          d.uploaded_at.strftime('%d %b %Y'), page_label])
         table = Table(data, colWidths=[3 * cm, 5 * cm, 3 * cm, 5 * cm])
         table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a1a1a')),
+            ('BACKGROUND', (0, 0), (-1, 0), BRAND_RED),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('FONTSIZE', (0, 0), (-1, -1), 9),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),

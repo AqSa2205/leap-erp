@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('hr', '0050_assethandover_hr_assethandover_one_open_per_asset_and_more'),
+        ('hr', '0052_employee_picture'),
     ]
 
     operations = [
