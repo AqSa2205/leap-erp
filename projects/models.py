@@ -205,7 +205,8 @@ class Project(models.Model):
     po_number = models.CharField(max_length=100, blank=True, help_text="Purchase Order Number")
 
     # Dates
-    submission_deadline = models.DateField(null=True, blank=True)
+    # Blank on entries created before deadlines were made mandatory on the
+    # pipeline form; still nullable so those stay editable.
     submission_deadline = models.DateField(null=True, blank=True)
     bom_started_deadline = models.DateField(
         null=True, blank=True,

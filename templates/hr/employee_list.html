@@ -98,7 +98,7 @@
                     {{ filter_form.nationality }}
                 </div>
                 <div class="col-md-2">
-                    {{ filter_form.deployment }}
+                    {{ filter_form.grade }}
                 </div>
                 <div class="col-md-2">
                     {{ filter_form.work_location }}
@@ -126,7 +126,8 @@
                             <th>Iqama/Passport</th>
                             <th>Designation</th>
                             <th>Nationality</th>
-                            <th>Deployment</th>
+                            <th>Grade</th>
+                            <th>Joining Date</th>
                             <th>Office / Site</th>
                             <th>Contract</th>
                             <th>Mobile</th>
@@ -147,7 +148,8 @@
                             <td>{{ emp.iqama_number }}</td>
                             <td>{{ emp.designation|default:"-"|truncatechars:25 }}</td>
                             <td>{{ emp.nationality|default:"-" }}</td>
-                            <td>{{ emp.deployment|default:"-" }}</td>
+                            <td>{{ emp.grade|default:"-" }}</td>
+                            <td>{{ emp.joining_date|date:"d M Y"|default:"-" }}</td>
                             <td>
                                 {% if emp.work_location == 'office' %}<span class="badge bg-primary">Office</span>
                                 {% elif emp.work_location == 'site' %}<span class="badge bg-secondary">Site</span>

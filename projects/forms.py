@@ -7,6 +7,17 @@ from .models import (
 )
 
 
+# The dates every milestone KPI is measured against. Named once here so the
+# form and its template cannot disagree about which fields carry the asterisk.
+DEADLINE_FIELDS = (
+    'submission_deadline',
+    'bom_started_deadline',
+    'handed_over_deadline',
+    'costing_started_deadline',
+    'finalized_deadline',
+)
+
+
 class RegionForm(forms.ModelForm):
     """Create a new sales region. Super Admin only - see
     projects.views.RegionCreateView."""
@@ -88,6 +99,19 @@ class ProjectForm(forms.ModelForm):
 
         instance = getattr(self, 'instance', None)
         is_create = not (instance and instance.pk)
+
+        # Deadlines are mandatory on a NEW pipeline entry. Every milestone KPI
+        # is measured against these dates, so an entry created without them is
+        # invisible to the deadline tiles for its whole life — the tiles
+        # currently report how many projects they cannot see rather than
+        # quietly dropping them, and this is what shrinks that number.
+        #
+        # Create only. Existing entries predate the rule and many have blanks;
+        # requiring them on edit would mean nobody could correct a typo on an
+        # old project without first inventing four dates for it.
+        if is_create:
+            for name in DEADLINE_FIELDS:
+                self.fields[name].required = True
 
         # On create, default the project region to the logged-in user's region.
         # Their region is already known, so an LNA user immediately gets the LNA
