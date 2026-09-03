@@ -189,19 +189,38 @@ class ResourceEndpointTests(TestCase):
         self.catalogue = ResourceCatalogueItem.objects.get(name='Welder')
 
     def _add(self, **over):
-        data = {'catalogue_item': self.catalogue.pk, 'quantity': '2',
+        # One combo cell per row, so the resource arrives as text and the
+        # catalogue link is resolved from it — there is no separate picker to
+        # post an id from.
+        data = {'description': self.catalogue.name, 'quantity': '2',
                 'rate': '500'}
         data.update(over)
         return self.client.post(
             reverse('costing:add_resource_line', args=[self.sheet.pk]), data)
 
-    def test_a_line_can_be_added_from_the_catalogue(self):
+    def test_a_line_can_be_added_by_naming_a_catalogue_resource(self):
         self.client.force_login(self.user)
         response = self._add()
         self.assertEqual(response.status_code, 200)
         line = self.sheet.resource_lines.get()
         self.assertEqual(line.description, 'Welder')
         self.assertEqual(line.total_price, Decimal('1000'))
+
+    def test_naming_a_catalogue_resource_links_it(self):
+        """The link is what makes the catalogue reportable, and it has to
+        survive being typed rather than picked."""
+        self.client.force_login(self.user)
+        self._add()
+        self.assertEqual(self.sheet.resource_lines.get().catalogue_item,
+                         self.catalogue)
+
+    def test_the_match_ignores_case(self):
+        """Typing is the point of a combo box; 'welder' is the same resource
+        as 'Welder'."""
+        self.client.force_login(self.user)
+        self._add(description='welder')
+        self.assertEqual(self.sheet.resource_lines.get().catalogue_item,
+                         self.catalogue)
 
     def test_the_description_is_snapshotted_not_followed(self):
         """Renaming a catalogue entry must not rewrite what a quoted sheet
@@ -214,12 +233,26 @@ class ResourceEndpointTests(TestCase):
 
     def test_a_one_off_can_be_typed_without_the_catalogue(self):
         self.client.force_login(self.user)
-        self._add(catalogue_item='', description='Crane hire')
-        self.assertEqual(self.sheet.resource_lines.get().description, 'Crane hire')
+        self._add(description='Crane hire')
+        line = self.sheet.resource_lines.get()
+        self.assertEqual(line.description, 'Crane hire')
+        self.assertIsNone(line.catalogue_item)
+
+    def test_editing_a_row_into_a_catalogue_name_links_it(self):
+        """A row typed as free text and later corrected to a real resource
+        should stop being a one-off."""
+        self.client.force_login(self.user)
+        self._add(description='Weldr')
+        line = self.sheet.resource_lines.get()
+        self.assertIsNone(line.catalogue_item)
+        self.client.post(reverse('costing:update_resource_line', args=[line.pk]),
+                         {'description': 'Welder', 'quantity': '2', 'rate': '500'})
+        line.refresh_from_db()
+        self.assertEqual(line.catalogue_item, self.catalogue)
 
     def test_a_line_with_no_resource_at_all_is_refused(self):
         self.client.force_login(self.user)
-        response = self._add(catalogue_item='', description='')
+        response = self._add(description='')
         self.assertEqual(response.status_code, 400)
         self.assertFalse(self.sheet.resource_lines.exists())
 

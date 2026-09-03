@@ -848,7 +848,11 @@
 {% comment %} A.4 — Resources. Internal only: this is how the A.2 services
 price is built up, and the client is shown the service, not the manpower
 rates behind it. Never rendered on the PDF. Gated on can_see_pricing like
-A.2, because it is cost data. {% endcomment %}
+A.2, because it is cost data.
+
+Edited in place rather than through a dialog. This is a list somebody types
+twenty lines into in one sitting, and a modal per line means twenty
+open-fill-save-close cycles for what is four values. {% endcomment %}
 {% if can_see_pricing %}
 <div class="card mt-3 bom-pricing-only">
     <div class="card-header d-flex justify-content-between align-items-center" style="background:#E3E0F3;">
@@ -856,54 +860,49 @@ A.2, because it is cost data. {% endcomment %}
             <i class="bi bi-people me-2"></i> <strong>A.4 — Resources</strong>
             <span class="badge bg-secondary ms-2" title="This section is never printed on the client PDF">internal</span>
         </span>
-        {% if can_edit %}
-        <button class="btn btn-sm btn-dark" data-bs-toggle="modal" data-bs-target="#addResourceModal">
-            <i class="bi bi-plus-lg me-1"></i> Add Resource
-        </button>
-        {% endif %}
+        <span class="small text-muted">
+            <kbd>Enter</kbd> next line · <kbd>Tab</kbd> next column
+        </span>
     </div>
     <div class="card-body p-0">
-        <table class="table table-sm table-hover mb-0" id="resourceTable">
+        <table class="table table-sm mb-0 align-middle" id="resourceGrid"
+               data-sheet="{{ sheet.pk }}" data-can-edit="{{ can_edit|yesno:'1,0' }}">
             <thead class="table-light">
                 <tr>
-                    <th width="50">#</th>
+                    <th width="45">#</th>
                     <th>Resource</th>
-                    <th width="70">Qty</th>
-                    <th width="70">UOM</th>
-                    <th width="130" class="text-end">Rate ({{ sheet.output_currency }})</th>
-                    <th width="140" class="text-end">Total ({{ sheet.output_currency }})</th>
-                    <th width="60"></th>
+                    <th width="90">Qty</th>
+                    <th width="90">UOM</th>
+                    <th width="130">Rate ({{ sheet.output_currency }})</th>
+                    <th width="140" class="text-end">Total</th>
+                    <th>Remarks</th>
+                    <th width="40"></th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="resourceRows">
                 {% for line in resource_lines %}
-                <tr data-resource-pk="{{ line.pk }}"
-                    data-description="{{ line.description }}"
-                    data-quantity="{{ line.quantity }}"
-                    data-uom="{{ line.uom }}"
-                    data-rate="{{ line.rate }}"
-                    data-remarks="{{ line.remarks }}">
-                    <td>{{ line.serial_number }}</td>
-                    <td class="res-cell-desc">{{ line.description }}</td>
-                    <td class="res-cell-qty">{{ line.quantity|floatformat:2 }}</td>
-                    <td class="res-cell-uom">{{ line.uom }}</td>
-                    <td class="res-cell-rate text-end">{{ line.rate|floatformat:2|intcomma }}</td>
-                    <td class="res-cell-total text-end fw-bold">{{ line.total_price|floatformat:2|intcomma }}</td>
-                    <td class="text-nowrap">
+                <tr class="res-row" data-pk="{{ line.pk }}">
+                    <td class="text-muted res-sn">{{ forloop.counter }}</td>
+                    <td><input class="form-control form-control-sm res-f" data-f="description"
+                               list="resourceOptions" value="{{ line.description }}"
+                               {% if not can_edit %}readonly{% endif %}></td>
+                    <td><input type="number" step="0.01" min="0" class="form-control form-control-sm res-f text-end"
+                               data-f="quantity" value="{{ line.quantity|floatformat:2 }}"
+                               {% if not can_edit %}readonly{% endif %}></td>
+                    <td><input class="form-control form-control-sm res-f" data-f="uom"
+                               value="{{ line.uom }}" {% if not can_edit %}readonly{% endif %}></td>
+                    <td><input type="number" step="0.01" min="0" class="form-control form-control-sm res-f text-end"
+                               data-f="rate" value="{{ line.rate|floatformat:2 }}"
+                               {% if not can_edit %}readonly{% endif %}></td>
+                    <td class="text-end fw-bold res-total">{{ line.total_price|floatformat:2|intcomma }}</td>
+                    <td><input class="form-control form-control-sm res-f" data-f="remarks"
+                               value="{{ line.remarks }}" {% if not can_edit %}readonly{% endif %}></td>
+                    <td class="text-center">
                         {% if can_edit %}
-                        <button class="btn btn-sm btn-outline-secondary py-0 px-1 edit-resource me-1" data-pk="{{ line.pk }}" title="Edit">
-                            <i class="bi bi-pencil"></i>
-                        </button>
-                        <button class="btn btn-sm btn-outline-danger py-0 px-1 delete-resource" data-pk="{{ line.pk }}" title="Delete">
-                            <i class="bi bi-trash"></i>
+                        <button class="btn btn-sm btn-link text-danger p-0 res-del" title="Remove line" tabindex="-1">
+                            <i class="bi bi-x-lg"></i>
                         </button>
                         {% endif %}
-                    </td>
-                </tr>
-                {% empty %}
-                <tr class="resource-empty-row">
-                    <td colspan="7" class="text-center text-muted py-3">
-                        No resources yet. While this is empty, A.2 uses its own line items.
                     </td>
                 </tr>
                 {% endfor %}
@@ -912,72 +911,31 @@ A.2, because it is cost data. {% endcomment %}
                 <tr>
                     <th colspan="5" class="text-end">Resources total</th>
                     <th class="text-end" id="resourcesTotalCell">{{ resources_total|floatformat:2|intcomma }}</th>
-                    <th></th>
+                    <th colspan="2"></th>
                 </tr>
             </tfoot>
         </table>
+
+        {% comment %} The catalogue is offered as suggestions on a normal text
+        input rather than a select, so one cell both picks and accepts a
+        one-off. Two controls for one value is one more thing to tab past.
+        {% endcomment %}
+        <datalist id="resourceOptions">
+            {% for entry in resource_catalogue %}
+            <option value="{{ entry.name }}" data-uom="{{ entry.default_uom }}"></option>
+            {% endfor %}
+        </datalist>
     </div>
-    {% comment %} Said plainly, because a number that silently overrides
-    another one is how somebody quotes the wrong price. {% endcomment %}
-    <div class="card-footer small text-muted">
-        <i class="bi bi-info-circle me-1"></i>
-        Not printed on the client PDF. While this section has any lines its total
-        <strong>is</strong> the A.2 Services figure, replacing the sum of the A.2 rows.
+    <div class="card-footer small text-muted d-flex justify-content-between flex-wrap gap-2">
+        <span>
+            <i class="bi bi-info-circle me-1"></i>
+            Not printed on the client PDF. While this section has any lines its total
+            <strong>is</strong> the A.2 Services figure, replacing the sum of the A.2 rows.
+        </span>
+        <span id="resourceStatus" class="text-muted"></span>
     </div>
 </div>
 {% endif %}
-
-<!-- Add / edit resource modal -->
-<div class="modal fade" id="addResourceModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-people me-2"></i><span id="resourceModalTitle">Add Resource</span></h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <input type="hidden" id="resourceEditingId" value="">
-            <div class="modal-body">
-                <div class="mb-3">
-                    <label class="form-label fw-bold" for="resourceCatalogue">Resource</label>
-                    <select class="form-select" id="resourceCatalogue">
-                        <option value="">— pick from the list —</option>
-                        {% for entry in resource_catalogue %}
-                        <option value="{{ entry.pk }}" data-uom="{{ entry.default_uom }}" data-name="{{ entry.name }}">{{ entry.name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label fw-bold" for="resourceDescription">Or type one</label>
-                    <input type="text" class="form-control" id="resourceDescription" maxlength="255"
-                           placeholder="For a one-off not in the list">
-                </div>
-                <div class="row">
-                    <div class="col-md-4 mb-3">
-                        <label class="form-label fw-bold" for="resourceQty">Quantity</label>
-                        <input type="number" class="form-control" id="resourceQty" value="1" min="0" step="0.01">
-                    </div>
-                    <div class="col-md-4 mb-3">
-                        <label class="form-label fw-bold" for="resourceUom">UOM</label>
-                        <input type="text" class="form-control" id="resourceUom" value="Nos">
-                    </div>
-                    <div class="col-md-4 mb-3">
-                        <label class="form-label fw-bold" for="resourceRate">Rate ({{ sheet.output_currency }})</label>
-                        <input type="number" class="form-control" id="resourceRate" value="0" min="0" step="0.01">
-                    </div>
-                </div>
-                <div class="mb-2">
-                    <label class="form-label fw-bold" for="resourceRemarks">Remarks</label>
-                    <input type="text" class="form-control" id="resourceRemarks" placeholder="Optional">
-                </div>
-                <div class="alert alert-warning py-2 small mb-0" id="resourceError" style="display:none;"></div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-dark" id="saveResourceBtn">Save</button>
-            </div>
-        </div>
-    </div>
-</div>
 
 <!-- Add SOW Item Modal -->
 <div class="modal fade" id="addSowModal" tabindex="-1">
@@ -2351,124 +2309,93 @@ var CAN_EDIT = {% if can_edit %}true{% else %}false{% endif %};
 </script>
 
 <script>
-// ── A.4 resources ───────────────────────────────────────────────────────────
-// Adding a line changes the A.2 figure and therefore the contract total, so
-// every response carries both back and the page updates them in place rather
-// than reloading — a reload would throw away whatever else is part-typed.
+// ── A.4 resources grid ──────────────────────────────────────────────────────
+// Typed through like a spreadsheet: Tab moves along a row, Enter drops to the
+// same column on the next line, and the last line always has a blank one under
+// it so there is nothing to click to start another.
+//
+// Saving happens on blur, not on every keystroke — a rate is half-wrong while
+// somebody is typing it, and a request per character would race itself.
 (function () {
-  const table = document.getElementById('resourceTable');
-  if (!table) return;
+  const grid = document.getElementById('resourceGrid');
+  if (!grid || grid.dataset.canEdit !== '1') return;
 
-  const sheetPk = {{ sheet.pk }};
-  const modalEl = document.getElementById('addResourceModal');
-  const modal = modalEl ? new bootstrap.Modal(modalEl) : null;
-  const $ = (id) => document.getElementById(id);
-  const csrf = () => {
-    const el = document.querySelector('[name=csrfmiddlewaretoken]');
-    return el ? el.value : '';
-  };
+  const sheetPk = grid.dataset.sheet;
+  const rows = document.getElementById('resourceRows');
+  const status = document.getElementById('resourceStatus');
+  const totalCell = document.getElementById('resourcesTotalCell');
+  const COLUMNS = ['description', 'quantity', 'uom', 'rate', 'remarks'];
 
-  function showError(message) {
-    const box = $('resourceError');
-    box.textContent = message;
-    box.style.display = message ? 'block' : 'none';
+  const csrf = () => (document.querySelector('[name=csrfmiddlewaretoken]') || {}).value || '';
+  const money = (n) => Number(n).toLocaleString(undefined, {
+    minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  function say(message, isError) {
+    status.textContent = message;
+    status.className = isError ? 'text-danger' : 'text-muted';
+    if (message && !isError) setTimeout(() => { if (status.textContent === message) status.textContent = ''; }, 1500);
   }
 
-  function refreshTotals(payload) {
-    const cell = $('resourcesTotalCell');
-    if (cell && payload.resources_total !== undefined) {
-      cell.textContent = Number(payload.resources_total).toLocaleString(
-        undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    }
-    // The A.2 tile and the contract total both move with this. Reloading is
-    // the honest way to keep every derived figure on the page consistent —
-    // there are several, and updating some but not others would be worse
-    // than the reload.
-    if (payload.sow_total !== undefined) window.location.reload();
+  function cell(row, field) { return row.querySelector(`.res-f[data-f="${field}"]`); }
+  function value(row, field) { const c = cell(row, field); return c ? c.value.trim() : ''; }
+
+  function blankRow() {
+    const tr = document.createElement('tr');
+    tr.className = 'res-row';
+    tr.innerHTML = `
+      <td class="text-muted res-sn"></td>
+      <td><input class="form-control form-control-sm res-f" data-f="description" list="resourceOptions"></td>
+      <td><input type="number" step="0.01" min="0" class="form-control form-control-sm res-f text-end" data-f="quantity" value="1"></td>
+      <td><input class="form-control form-control-sm res-f" data-f="uom" value="Nos"></td>
+      <td><input type="number" step="0.01" min="0" class="form-control form-control-sm res-f text-end" data-f="rate" value="0"></td>
+      <td class="text-end fw-bold res-total">0.00</td>
+      <td><input class="form-control form-control-sm res-f" data-f="remarks"></td>
+      <td class="text-center"><button class="btn btn-sm btn-link text-danger p-0 res-del" title="Remove line" tabindex="-1"><i class="bi bi-x-lg"></i></button></td>`;
+    rows.appendChild(tr);
+    return tr;
   }
 
-  // Picking from the list fills the description and its usual unit, both
-  // still editable — the list is a shortcut, not a constraint.
-  const picker = $('resourceCatalogue');
-  if (picker) {
-    picker.addEventListener('change', function () {
-      const opt = picker.options[picker.selectedIndex];
-      if (!opt || !opt.value) return;
-      $('resourceDescription').value = '';
-      if (opt.dataset.uom) $('resourceUom').value = opt.dataset.uom;
+  // Exactly one blank row at the bottom, always. A row with no resource named
+  // has never been saved, so it is the blank one.
+  function ensureTrailingBlank() {
+    const all = [...rows.querySelectorAll('.res-row')];
+    const trailing = all[all.length - 1];
+    if (!trailing || value(trailing, 'description')) blankRow();
+    renumber();
+  }
+
+  function renumber() {
+    [...rows.querySelectorAll('.res-row')].forEach((row, i) => {
+      row.querySelector('.res-sn').textContent = row.dataset.pk ? i + 1 : '';
     });
   }
 
-  function openModal(line) {
-    showError('');
-    $('resourceEditingId').value = line ? line.pk : '';
-    $('resourceModalTitle').textContent = line ? 'Edit Resource' : 'Add Resource';
-    $('resourceCatalogue').value = '';
-    $('resourceDescription').value = line ? line.description : '';
-    $('resourceQty').value = line ? line.quantity : '1';
-    $('resourceUom').value = line ? line.uom : 'Nos';
-    $('resourceRate').value = line ? line.rate : '0';
-    $('resourceRemarks').value = line ? line.remarks : '';
-    // Editing works on the snapshotted description, not the catalogue link:
-    // the line records what it was priced on, and re-picking would let a
-    // later rename rewrite it.
-    $('resourceCatalogue').disabled = Boolean(line);
-    if (modal) modal.show();
+  function refreshTotals(payload) {
+    if (payload.resources_total !== undefined) totalCell.textContent = money(payload.resources_total);
+    // The A.2 tile and the contract total are derived from this and sit
+    // elsewhere on the page. Marking them stale is honest; silently leaving
+    // yesterday's number under a heading called Services is not.
+    document.querySelectorAll('[data-derived-from-sow]').forEach((el) => {
+      el.classList.add('text-muted');
+      el.title = 'Reload to update — the resources changed';
+    });
   }
 
-  document.querySelector('[data-bs-target="#addResourceModal"]')
-    ?.addEventListener('click', () => openModal(null));
-
-  table.addEventListener('click', function (event) {
-    const editBtn = event.target.closest('.edit-resource');
-    const delBtn = event.target.closest('.delete-resource');
-    if (editBtn) {
-      const row = editBtn.closest('tr');
-      openModal({
-        pk: editBtn.dataset.pk,
-        description: row.dataset.description,
-        quantity: row.dataset.quantity,
-        uom: row.dataset.uom,
-        rate: row.dataset.rate,
-        remarks: row.dataset.remarks,
-      });
-    } else if (delBtn) {
-      if (!confirm('Remove this resource line?')) return;
-      fetch(`/costing/resource-line/${delBtn.dataset.pk}/delete/`, {
-        method: 'POST',
-        headers: { 'X-CSRFToken': csrf(), 'X-Requested-With': 'XMLHttpRequest' },
-      })
-        .then((r) => r.json())
-        .then((payload) => { if (payload.ok) refreshTotals(payload); })
-        .catch(() => alert('Could not remove that line.'));
-    }
-  });
-
-  $('saveResourceBtn')?.addEventListener('click', function () {
-    showError('');
-    const editingId = $('resourceEditingId').value;
-    const picked = $('resourceCatalogue');
-    const chosen = picked.options[picked.selectedIndex];
-
+  function save(row) {
+    const description = value(row, 'description');
+    if (!description) return;                       // the blank row
     const body = new URLSearchParams();
-    body.append('quantity', $('resourceQty').value || '0');
-    body.append('rate', $('resourceRate').value || '0');
-    body.append('uom', $('resourceUom').value || 'Nos');
-    body.append('remarks', $('resourceRemarks').value || '');
+    body.append('description', description);
+    body.append('quantity', value(row, 'quantity') || '0');
+    body.append('uom', value(row, 'uom') || 'Nos');
+    body.append('rate', value(row, 'rate') || '0');
+    body.append('remarks', value(row, 'remarks'));
 
-    let url;
-    if (editingId) {
-      url = `/costing/resource-line/${editingId}/update/`;
-      body.append('description', $('resourceDescription').value.trim());
-    } else {
-      url = `/costing/${sheetPk}/add-resource-line/`;
-      body.append('catalogue_item', picked.value || '');
-      body.append('description',
-        $('resourceDescription').value.trim() ||
-        (chosen && chosen.value ? chosen.dataset.name : ''));
-    }
-
-    fetch(url, {
+    const pk = row.dataset.pk;
+    const url = pk ? `/costing/resource-line/${pk}/update/`
+                   : `/costing/${sheetPk}/add-resource-line/`;
+    say('Saving…');
+    return fetch(url, {
       method: 'POST',
       headers: {
         'X-CSRFToken': csrf(),
@@ -2480,14 +2407,101 @@ var CAN_EDIT = {% if can_edit %}true{% else %}false{% endif %};
       .then((r) => r.json().then((payload) => ({ ok: r.ok, payload })))
       .then(({ ok, payload }) => {
         if (!ok || payload.error) {
-          showError(payload.error || 'Could not save that line.');
+          say(payload.error || 'Could not save that line.', true);
           return;
         }
-        if (modal) modal.hide();
+        if (!pk) { row.dataset.pk = payload.item.pk; ensureTrailingBlank(); }
+        row.querySelector('.res-total').textContent = money(payload.item.total_price);
         refreshTotals(payload);
+        say('Saved');
       })
-      .catch(() => showError('Could not save that line.'));
+      .catch(() => say('Could not save that line.', true));
+  }
+
+  // Move to the same column one row down, adding a row if there is none.
+  function goDown(row, field) {
+    let next = row.nextElementSibling;
+    if (!next) { ensureTrailingBlank(); next = row.nextElementSibling; }
+    if (next) { const c = cell(next, field); if (c) { c.focus(); c.select && c.select(); } }
+  }
+
+  rows.addEventListener('keydown', function (event) {
+    const input = event.target.closest('.res-f');
+    if (!input) return;
+    const row = input.closest('.res-row');
+
+    if (event.key === 'Enter') {
+      // Not a form submit, and not a datalist pick either — while the
+      // suggestion list is open Enter belongs to it, so this only moves once
+      // the value has settled.
+      event.preventDefault();
+      Promise.resolve(save(row)).then(() => goDown(row, input.dataset.f));
+    } else if (event.key === 'ArrowDown' && input.type === 'number') {
+      // A number input would otherwise decrement, which is not what a
+      // spreadsheet does with the down arrow.
+      event.preventDefault();
+      goDown(row, input.dataset.f);
+    } else if (event.key === 'ArrowUp' && input.type === 'number') {
+      event.preventDefault();
+      const prev = row.previousElementSibling;
+      if (prev) { const c = cell(prev, input.dataset.f); if (c) { c.focus(); c.select(); } }
+    } else if (event.key === 'Escape') {
+      input.blur();
+    }
+    // Tab is left alone. The DOM is in row-major order, so the browser
+    // already walks the columns and wraps onto the next line — reimplementing
+    // that would only be a way to get it wrong.
   });
+
+  // Blur, not input: a rate is half-wrong while it is being typed.
+  rows.addEventListener('focusout', function (event) {
+    const input = event.target.closest('.res-f');
+    if (!input) return;
+    const row = input.closest('.res-row');
+    if (input.dataset.dirty !== '1') return;
+    input.dataset.dirty = '0';
+    save(row);
+  });
+
+  rows.addEventListener('input', function (event) {
+    const input = event.target.closest('.res-f');
+    if (!input) return;
+    input.dataset.dirty = '1';
+    // Picking a catalogue name fills its usual unit, still editable.
+    if (input.dataset.f === 'description') {
+      const opt = [...document.querySelectorAll('#resourceOptions option')]
+        .find((o) => o.value === input.value);
+      if (opt && opt.dataset.uom) {
+        const uom = cell(input.closest('.res-row'), 'uom');
+        if (uom && !uom.dataset.touched) uom.value = opt.dataset.uom;
+      }
+    }
+    if (input.dataset.f === 'uom') input.dataset.touched = '1';
+  });
+
+  rows.addEventListener('click', function (event) {
+    const del = event.target.closest('.res-del');
+    if (!del) return;
+    const row = del.closest('.res-row');
+    const pk = row.dataset.pk;
+    if (!pk) { row.remove(); ensureTrailingBlank(); return; }
+    if (!confirm('Remove this resource line?')) return;
+    fetch(`/costing/resource-line/${pk}/delete/`, {
+      method: 'POST',
+      headers: { 'X-CSRFToken': csrf(), 'X-Requested-With': 'XMLHttpRequest' },
+    })
+      .then((r) => r.json())
+      .then((payload) => {
+        if (!payload.ok) return say('Could not remove that line.', true);
+        row.remove();
+        ensureTrailingBlank();
+        refreshTotals(payload);
+        say('Removed');
+      })
+      .catch(() => say('Could not remove that line.', true));
+  });
+
+  ensureTrailingBlank();
 })();
 </script>
 

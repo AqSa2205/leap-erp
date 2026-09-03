@@ -5014,6 +5014,18 @@ def costing_import_new(request):
 # rates it was assembled from — but sheet.sow_total reads these when present,
 # so editing here moves the contract total.
 
+def _match_catalogue(description):
+    """The catalogue entry a typed resource names, or None for a one-off.
+
+    Matched case-insensitively on the whole name so the link survives someone
+    typing "welder" rather than picking it, which is the point of a combo box.
+    A miss is not an error — free text is a supported answer.
+    """
+    if not description:
+        return None
+    return ResourceCatalogueItem.objects.filter(name__iexact=description).first()
+
+
 def _resource_payload(line):
     return {
         'pk': line.pk,
@@ -5054,20 +5066,14 @@ def ajax_add_resource_line(request, pk):
     if error:
         return JsonResponse({'error': error}, status=400)
 
-    catalogue_item = None
-    catalogue_pk = (request.POST.get('catalogue_item') or '').strip()
-    if catalogue_pk:
-        catalogue_item = ResourceCatalogueItem.objects.filter(pk=catalogue_pk).first()
-        if catalogue_item is None:
-            return JsonResponse({'error': 'Unknown resource'}, status=400)
-
-    # Snapshotted from the catalogue rather than read through the FK later, so
-    # renaming an entry cannot rewrite what a quoted sheet says it was priced
-    # on. Free text is allowed for the one-off that is not worth cataloguing.
-    description = (request.POST.get('description', '').strip()
-                   or (catalogue_item.name if catalogue_item else ''))
+    # One combo cell per row rather than a picker plus a text box: the grid is
+    # meant to be typed through, and two controls for one value is one more
+    # thing to tab past. So the description arrives as text and the catalogue
+    # link is resolved from it.
+    description = (request.POST.get('description', '') or '').strip()
     if not description:
         return JsonResponse({'error': 'Pick a resource or type one'}, status=400)
+    catalogue_item = _match_catalogue(description)
 
     uom = (request.POST.get('uom', '').strip()
            or (catalogue_item.default_uom if catalogue_item else 'Nos'))
@@ -5116,11 +5122,15 @@ def ajax_update_resource_line(request, pk):
         return JsonResponse({'error': 'Description required'}, status=400)
 
     line.description = description[:255]
+    # Re-resolved on edit: typing a catalogue name into a row that was free
+    # text should link it, and vice versa.
+    line.catalogue_item = _match_catalogue(description)
     line.quantity = quantity
     line.rate = rate
     line.uom = request.POST.get('uom', '').strip() or line.uom
     line.remarks = request.POST.get('remarks', '').strip()
-    line.save(update_fields=['description', 'quantity', 'rate', 'uom', 'remarks'])
+    line.save(update_fields=['description', 'catalogue_item', 'quantity', 'rate',
+                             'uom', 'remarks'])
 
     return JsonResponse({
         'ok': True,
