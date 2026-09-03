@@ -124,6 +124,11 @@ class Region(models.Model):
     currency = models.CharField(max_length=3, default='GBP')  # GBP, SAR, USD
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
+    dashboard_group = models.CharField(
+        max_length=50, blank=True,
+        help_text="Regions sharing the same group name are combined into one "
+                  "tab on the main dashboard (e.g. UK and Global both set to "
+                  "'LNUK'). Leave blank for a region to get its own tab.")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

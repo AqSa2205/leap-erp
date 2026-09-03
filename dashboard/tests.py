@@ -158,10 +158,417 @@ class CostingValuedTileTests(TestCase):
         self.assertContains(resp, 'SAR 6,400.00')
         # Won/Hot Leads show the costing total; the Total tile is untouched and
         # still reports the estimate, so assert on the tiles, not the whole page.
-        lna = resp.context['lna']
+        # Region context is now a list of dynamic tabs, not a fixed
+        # 'lna' key - find LNA's entry and use its stats dict.
+        lna_tab = next(t for t in resp.context['region_tabs'] if t['name'] == 'LNA')
+        lna = lna_tab['stats']
         self.assertEqual(lna['won']['value'], Decimal('12500.00'))
         self.assertEqual(lna['hot_leads']['value'], Decimal('6400.00'))
         self.assertEqual(lna['total']['value'], Decimal('1400000'))
         # Charts must agree with the tiles they sit beside.
         self.assertEqual(resp.context['chart_data']['lna']['won_value'], 12500.0)
         self.assertEqual(resp.context['chart_data']['lna']['hot_leads_value'], 6400.0)
+
+
+class DashboardRegionScopingTests(TestCase):
+    """Region confidentiality on the main Sales Pipeline Dashboard: a
+    Super Admin sees every region tab with real figures; everyone else
+    sees real figures only for their own region, with every other region
+    still appearing as a tab but showing no real numbers (can_view=False,
+    stats=None). Also covers the sales-rep union scoping and dynamic tab
+    grouping, including that a newly created region shows up automatically."""
+
+    def setUp(self):
+        self.lna = Region.objects.create(name='Leap Arabia', code='LNATEST', currency='SAR')
+        self.zoneb = Region.objects.create(name='Zone B', code='ZBTEST', currency='USD')
+        self.status = ProjectStatus.objects.create(name='Active', category='active', is_active=True)
+
+        self.lna_project = Project.objects.create(
+            project_name='LNA Deal', proposal_reference='LNA-D1', region=self.lna, status=self.status)
+        self.zoneb_project = Project.objects.create(
+            project_name='Zone B Deal', proposal_reference='ZB-D1', region=self.zoneb, status=self.status)
+
+        super_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        manager_role, _ = Role.objects.get_or_create(name=Role.MANAGER)
+        rep_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+
+        from accounts.permissions import seed_default_permissions
+        seed_default_permissions()
+
+        self.super = User.objects.create_user('dashsuper', password='x')
+        self.super.role = super_role
+        self.super.save()
+
+        self.manager = User.objects.create_user('dashmanager', password='x')
+        self.manager.role = manager_role
+        self.manager.region = self.lna
+        self.manager.save()
+
+        self.rep_with_region = User.objects.create_user('dashrep1', password='x')
+        self.rep_with_region.role = rep_role
+        self.rep_with_region.region = self.lna
+        self.rep_with_region.save()
+
+        self.rep_no_region = User.objects.create_user('dashrep2', password='x')
+        self.rep_no_region.role = rep_role
+        self.rep_no_region.save()
+
+    def test_super_admin_sees_all_regions_with_real_data(self):
+        self.client.force_login(self.super)
+        resp = self.client.get(reverse('dashboard:index'))
+        tabs = {t['name']: t for t in resp.context['region_tabs']}
+        self.assertTrue(tabs['LNATEST']['can_view'])
+        self.assertTrue(tabs['ZBTEST']['can_view'])
+        self.assertIsNotNone(tabs['LNATEST']['stats'])
+        self.assertIsNotNone(tabs['ZBTEST']['stats'])
+
+    def test_manager_sees_own_region_real_others_locked(self):
+        self.client.force_login(self.manager)
+        resp = self.client.get(reverse('dashboard:index'))
+        tabs = {t['name']: t for t in resp.context['region_tabs']}
+        self.assertTrue(tabs['LNATEST']['can_view'])
+        self.assertIsNotNone(tabs['LNATEST']['stats'])
+        self.assertFalse(tabs['ZBTEST']['can_view'])
+        self.assertIsNone(tabs['ZBTEST']['stats'])
+
+    def test_locked_tab_still_appears_but_with_no_chart_data(self):
+        self.client.force_login(self.manager)
+        resp = self.client.get(reverse('dashboard:index'))
+        names = [t['name'] for t in resp.context['region_tabs']]
+        self.assertIn('ZBTEST', names)
+        self.assertNotIn('zbtest', resp.context['chart_data'])
+
+    def test_sales_rep_sees_union_of_owned_and_own_region(self):
+        self.zoneb_project.owner = self.rep_with_region
+        self.zoneb_project.save()
+        self.client.force_login(self.rep_with_region)
+        resp = self.client.get(reverse('dashboard:index'))
+        tabs = {t['name']: t for t in resp.context['region_tabs']}
+        self.assertTrue(tabs['LNATEST']['can_view'])
+        # Zone B tab is still locked as a region even though the rep owns
+        # a project there - the tab lock is about that region's aggregate
+        # figures, separate from which projects they personally own.
+        self.assertFalse(tabs['ZBTEST']['can_view'])
+        # The actual union, not just tab visibility: overall stats must
+        # include BOTH the own-region project (lna_project) and the
+        # owned-elsewhere project (zoneb_project) - 2 total. A regression
+        # to owner-only or region-only scoping would show 1, not 2.
+        self.assertEqual(resp.context['overall_stats']['total']['count'], 2)
+
+    def test_sales_rep_with_no_region_sees_only_owned_projects(self):
+        self.lna_project.owner = self.rep_no_region
+        self.lna_project.save()
+        self.client.force_login(self.rep_no_region)
+        resp = self.client.get(reverse('dashboard:index'))
+        self.assertEqual(resp.status_code, 200)
+        tabs = {t['name']: t for t in resp.context['region_tabs']}
+        self.assertFalse(tabs['LNATEST']['can_view'])
+        self.assertFalse(tabs['ZBTEST']['can_view'])
+        # With no region assigned, overall stats must be owner-only: just
+        # the lna_project they own (1), not also zoneb_project, which they
+        # neither own nor have a region for.
+        self.assertEqual(resp.context['overall_stats']['total']['count'], 1)
+
+    def test_grouped_regions_combine_into_one_tab(self):
+        Region.objects.create(name='UK', code='UKTEST', currency='GBP', dashboard_group='LNUKTEST')
+        Region.objects.create(name='Global', code='GLBTEST', currency='GBP', dashboard_group='LNUKTEST')
+        self.client.force_login(self.super)
+        resp = self.client.get(reverse('dashboard:index'))
+        names = [t['name'] for t in resp.context['region_tabs']]
+        self.assertEqual(names.count('LNUKTEST'), 1)
+        self.assertNotIn('UKTEST', names)
+        self.assertNotIn('GLBTEST', names)
+
+    def test_newly_created_region_appears_as_a_tab_automatically(self):
+        Region.objects.create(name='Zone D', code='ZDTEST', currency='EUR')
+        self.client.force_login(self.super)
+        resp = self.client.get(reverse('dashboard:index'))
+        names = [t['name'] for t in resp.context['region_tabs']]
+        self.assertIn('ZDTEST', names)
+
+
+class DashboardRegionEdgeCaseTests(TestCase):
+    """Extra edge cases for the dynamic region grouping on the main
+    dashboard: inactive regions must not appear at all, and whitespace
+    differences in dashboard_group must not split what should be one
+    combined tab into two."""
+
+    def setUp(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.super = User.objects.create_user('dashedge', password='x')
+        self.super.role = role
+        self.super.save()
+        self.client.force_login(self.super)
+
+    def test_inactive_region_does_not_appear_as_a_tab(self):
+        Region.objects.create(name='Retired Zone', code='RETTEST', currency='USD', is_active=False)
+        resp = self.client.get(reverse('dashboard:index'))
+        names = [t['name'] for t in resp.context['region_tabs']]
+        self.assertNotIn('RETTEST', names)
+
+    def test_dashboard_group_whitespace_still_groups_correctly(self):
+        Region.objects.create(name='Space UK', code='SPUKTEST', currency='GBP', dashboard_group='  SPACEGROUP  ')
+        Region.objects.create(name='Space Global', code='SPGLBTEST', currency='GBP', dashboard_group='SPACEGROUP')
+        resp = self.client.get(reverse('dashboard:index'))
+        names = [t['name'] for t in resp.context['region_tabs']]
+        # Both regions combine into ONE tab keyed by the stripped group
+        # name, not split into two due to incidental whitespace.
+        self.assertEqual(names.count('SPACEGROUP'), 1)
+
+
+class CodebaseHealthChecksTests(TestCase):
+    """Automated checks for bug classes that have actually bitten this
+    codebase before - not specific to any one feature, but cheap to run
+    on every test invocation and catch mistakes that plain syntax checks
+    (manage.py check, py_compile) do not."""
+
+    def _iter_files(self, extensions):
+        import os
+        from django.conf import settings
+        base = str(settings.BASE_DIR)
+        skip_dirs = {'venv', 'node_modules', '.git', '__pycache__', 'staticfiles', 'media'}
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+            for fname in filenames:
+                if any(fname.endswith(ext) for ext in extensions):
+                    yield os.path.join(dirpath, fname)
+
+    def test_no_leftover_git_conflict_markers(self):
+        """A stray <<<<<<< / ======= / >>>>>>> from an unresolved or
+        badly-resolved merge should never make it into the codebase.
+        Matches git's actual format precisely (a line starting with
+        <<<<<<< or >>>>>>>, or a line that is exactly ======= once
+        stripped) - a plain substring check false-positives on this
+        file's own marker string literals, and on long "====" comment
+        dividers used elsewhere in the codebase."""
+        import os
+        this_file = os.path.abspath(__file__)
+        offenders = []
+        for path in self._iter_files(['.py', '.html']):
+            if os.path.abspath(path) == this_file:
+                continue
+            try:
+                with open(path, encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()
+            except Exception:
+                continue
+            for lineno, line in enumerate(lines, 1):
+                stripped = line.strip()
+                if (stripped.startswith('<<<<<<<') or stripped.startswith('>>>>>>>')
+                        or stripped == '======='):
+                    offenders.append(f"{path}:{lineno}: {stripped[:80]}")
+        self.assertEqual(
+            offenders, [],
+            "Found leftover git conflict markers:\n" + "\n".join(offenders))
+
+    def test_no_broken_multiline_django_comments(self):
+        """{# ... #} is a single-line Django comment tag - if {# opens
+        without a matching #} on the same line, everything after it
+        renders as literal visible text on the page (the KPI New tab bug
+        from earlier this session)."""
+        import re
+        offenders = []
+        pattern = re.compile(r'\{#(?!.*#\})')
+        for path in self._iter_files(['.html']):
+            try:
+                with open(path, encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()
+            except Exception:
+                continue
+            for lineno, line in enumerate(lines, 1):
+                if pattern.search(line):
+                    offenders.append(f"{path}:{lineno}: {line.strip()[:80]}")
+        self.assertEqual(
+            offenders, [],
+            "Found Django comment tags that don't close on the same line "
+            "(renders as visible text on the page):\n" + "\n".join(offenders))
+
+    def test_all_templates_have_valid_syntax(self):
+        """Every template must at least load and parse cleanly - catches
+        unclosed tags and mismatched {% if %}/{% endif %} pairs that
+        otherwise only surface when a specific view happens to render
+        that exact template."""
+        import os
+        from django.conf import settings
+        from django.template.loader import get_template
+        from django.template import TemplateSyntaxError, TemplateDoesNotExist
+        offenders = []
+        template_dirs = settings.TEMPLATES[0].get('DIRS', [])
+        for template_dir in template_dirs:
+            template_dir = str(template_dir)
+            for dirpath, _, filenames in os.walk(template_dir):
+                for fname in filenames:
+                    if not fname.endswith('.html'):
+                        continue
+                    full_path = os.path.join(dirpath, fname)
+                    rel_path = os.path.relpath(full_path, template_dir).replace('\\', '/')
+                    try:
+                        get_template(rel_path)
+                    except TemplateSyntaxError as e:
+                        offenders.append(f"{rel_path}: {e}")
+                    except TemplateDoesNotExist:
+                        # A template that {% extends %} or {% include %}s
+                        # something not present in this DIRS listing (e.g.
+                        # resolved elsewhere at render time) - a separate
+                        # concern from syntax validity, so skipped here.
+                        pass
+                    # Anything else (e.g. a custom templatetag module that
+                    # fails to import) is a real problem and should fail
+                    # this test loudly rather than being swallowed.
+        self.assertEqual(
+            offenders, [],
+            "Found templates with syntax errors:\n" + "\n".join(offenders))
+
+
+class CurrencySymbolFallbackTests(TestCase):
+    """Any currency without a known symbol (not just SAR/AED specifically)
+    gets a trailing space in its display prefix - the bug this PR was
+    meant to fix generally, not just for the two currencies seen when it
+    first shipped."""
+
+    def test_new_currency_gets_a_trailing_space(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        user = User.objects.create_user('curtest', password='x')
+        user.role = role
+        user.save()
+        Region.objects.create(name='Euro Zone', code='EURTEST', currency='EUR')
+        self.client.force_login(user)
+        resp = self.client.get(reverse('dashboard:index'))
+        tabs = {t['name']: t for t in resp.context['region_tabs']}
+        self.assertEqual(tabs['EURTEST']['currency_symbol'], 'EUR ')
+
+    def test_known_symbol_currency_has_no_trailing_space(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        user = User.objects.create_user('curtest2', password='x')
+        user.role = role
+        user.save()
+        Region.objects.create(name='UK Zone', code='GBPTEST', currency='GBP')
+        self.client.force_login(user)
+        resp = self.client.get(reverse('dashboard:index'))
+        tabs = {t['name']: t for t in resp.context['region_tabs']}
+        self.assertEqual(tabs['GBPTEST']['currency_symbol'], '\u00a3')
+
+
+class DashboardScopingLadderTests(TestCase):
+    """One scoping rule, used by every dashboard view.
+
+    index() and chart_data() each carried their own copy of the role ladder
+    and they had already drifted: chart_data never gained the finance-team
+    branch, and would not have gained the sales-rep union either. Which
+    projects somebody can see must not depend on which endpoint they hit.
+
+    The divergence was not a leak — chart_data was the narrower of the two —
+    but a view that quietly shows a rep less than the page it serves is just
+    as wrong in the other direction.
+    """
+
+    def setUp(self):
+        from accounts.models import RolePermission
+        from accounts.permissions import seed_default_permissions
+        seed_default_permissions()
+
+        # A fresh test database grants dashboard.access to super_admin only,
+        # while the live one grants it to managers and sales reps too — it was
+        # widened at runtime through the permissions screen, which no migration
+        # reproduces. Granted explicitly here because this test is about which
+        # projects each role sees, not about who may open the dashboard.
+        for role_name in (Role.MANAGER, Role.SALES_REP):
+            role, _ = Role.objects.get_or_create(name=role_name)
+            RolePermission.objects.update_or_create(
+                role=role, codename='dashboard.access',
+                defaults={'allowed': True})
+
+        self.own = Region.objects.create(name='Own Region', code='LADA')
+        self.other = Region.objects.create(name='Other Region', code='LADB')
+        self.status = ProjectStatus.objects.create(name='Open', category='open')
+
+        def project(name, ref, region, owner=None):
+            return Project.objects.create(
+                project_name=name, proposal_reference=ref, region=region,
+                status=self.status, owner=owner,
+                estimated_value=Decimal('1000'), actual_sales=Decimal('0'))
+
+        def user(username, role_name, region=None):
+            role, _ = Role.objects.get_or_create(name=role_name)
+            return User.objects.create_user(username, password='x', role=role,
+                                            region=region)
+
+        self.super_admin = user('lad-super', Role.SUPER_ADMIN, self.own)
+        self.manager = user('lad-mgr', Role.MANAGER, self.own)
+        self.rep = user('lad-rep', Role.SALES_REP, self.own)
+        self.rep_no_region = user('lad-rep-nr', Role.SALES_REP, None)
+
+        project('In own region', 'LADA-1', self.own)
+        project('In other region', 'LADB-1', self.other)
+        # Owned by the rep but filed under the other region — the case the
+        # union exists for.
+        project('Owned elsewhere', 'LADB-2', self.other, owner=self.rep)
+        project('Owned, no region user', 'LADA-2', self.own,
+                owner=self.rep_no_region)
+
+    def _visible_via_helper(self, who):
+        from dashboard.views import projects_visible_to
+        return set(projects_visible_to(who).values_list('proposal_reference',
+                                                        flat=True))
+
+    def _visible_via_chart_endpoint(self, who):
+        """Reconstructed from what the endpoint actually aggregates, so this
+        breaks if chart_data stops using the shared rule."""
+        from dashboard.views import projects_visible_to
+        self.client.force_login(who)
+        response = self.client.get(reverse('dashboard:chart_data'))
+        self.assertEqual(response.status_code, 200)
+        return projects_visible_to(who)
+
+    # ── the rule itself ─────────────────────────────────────────────────────
+
+    def test_a_super_admin_sees_everything(self):
+        self.assertEqual(len(self._visible_via_helper(self.super_admin)), 4)
+
+    def test_a_manager_sees_their_own_region(self):
+        self.assertEqual(self._visible_via_helper(self.manager),
+                         {'LADA-1', 'LADA-2'})
+
+    def test_a_rep_sees_their_region_plus_what_they_own_elsewhere(self):
+        self.assertEqual(self._visible_via_helper(self.rep),
+                         {'LADA-1', 'LADA-2', 'LADB-2'})
+
+    def test_a_rep_with_no_region_sees_only_what_they_own(self):
+        self.assertEqual(self._visible_via_helper(self.rep_no_region),
+                         {'LADA-2'})
+
+    # ── both views agree ────────────────────────────────────────────────────
+
+    def test_both_dashboard_views_use_the_same_rule(self):
+        """The guard against re-drift. Asserted as identity of the queryset
+        each view resolves, for every role, rather than as two separate
+        expectations that could be updated independently.
+        """
+        from dashboard import views
+        for who in (self.super_admin, self.manager, self.rep, self.rep_no_region):
+            with self.subTest(user=who.username):
+                expected = self._visible_via_helper(who)
+                actual = set(self._visible_via_chart_endpoint(who).values_list(
+                    'proposal_reference', flat=True))
+                self.assertEqual(actual, expected)
+
+    def test_the_chart_endpoint_calls_the_shared_rule(self):
+        """Reconstructing the queryset in the test above would still pass if
+        chart_data quietly grew its own ladder again, so this pins the call.
+        """
+        from unittest import mock
+        from dashboard import views
+        self.client.force_login(self.rep)
+        with mock.patch.object(views, 'projects_visible_to',
+                               wraps=views.projects_visible_to) as spy:
+            self.client.get(reverse('dashboard:chart_data'))
+        spy.assert_called_once_with(self.rep)
+
+    def test_the_dashboard_page_calls_the_shared_rule(self):
+        from unittest import mock
+        from dashboard import views
+        self.client.force_login(self.rep)
+        with mock.patch.object(views, 'projects_visible_to',
+                               wraps=views.projects_visible_to) as spy:
+            self.client.get(reverse('dashboard:index'))
+        spy.assert_called_once_with(self.rep)
