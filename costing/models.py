@@ -31,13 +31,21 @@ def working_days_between(start, end):
 # Index in the sequence = how far along; `most_advanced_stage` uses it to pick a
 # single badge for a project that has several costing sheets.
 WORKFLOW_STAGE_SEQUENCE = [
-    'bom_not_started', 'bom_in_progress', 'ready_for_costing', 'costing_in_progress',
+    'bom_not_started', 'bom_in_progress', 'ready_for_costing',
+    # A returned sheet has been handed to sales at least once but is not being
+    # costed, so it sits between those two. Index in this list is how far along
+    # a sheet is, and a return is a step back rather than forward — ordering it
+    # after costing_in_progress would make a stalled sheet look like the most
+    # advanced one on a project.
+    'returned_to_proposal',
+    'costing_in_progress',
     'finalized', 'finance_review', 'finance_approved',
 ]
 PIPELINE_STAGE_LABELS = {
     'bom_not_started':     ('BOM not started',   'bg-light text-dark'),
     'bom_in_progress':     ('BOM in progress',   'bg-secondary'),
     'ready_for_costing':   ('Handed to Sales',   'bg-info text-dark'),
+    'returned_to_proposal': ('Returned to Proposal', 'bg-danger'),
     'costing_in_progress': ('Sales costing',     'bg-primary'),
     'finalized':           ('Sales finalised',   'bg-warning text-dark'),
     'finance_review':      ('Handed to Finance', 'bg-dark'),
@@ -51,6 +59,10 @@ STAGE_BADGES = {
     'bom_not_started':     ('BOM not started',   'bg-light text-dark border'),
     'bom_in_progress':     ('BOM in progress',   'bg-warning text-dark'),
     'ready_for_costing':   ('Ready for costing',  'bg-info text-dark'),
+    # Red on purpose: this is the only stage where somebody is waiting on
+    # somebody else with nothing else moving, and it has to be findable in a
+    # list of a hundred sheets.
+    'returned_to_proposal': ('Returned to Proposal', 'bg-danger'),
     'costing_in_progress': ('Costing started',    'bg-primary'),
     'finalized':           ('Sales finalised',    'bg-dark'),
     'finance_review':      ('Finance budgeting',  'bg-secondary'),
@@ -199,6 +211,7 @@ class CostingSheet(models.Model):
     # drives the filters/notifications.
     WORKFLOW_STAGE_CHOICES = [
         ('bom_not_started',     'BOM — not started'),
+        ('returned_to_proposal', 'Returned to Proposal'),
         ('bom_in_progress',     'BOM — in progress by Proposal'),
         ('ready_for_costing',   'Ready for costing (handed over to Sales)'),
         ('costing_in_progress', 'Costing — in progress by Sales'),
@@ -524,11 +537,50 @@ class CostingSheet(models.Model):
         return tgt_rate / sar_rate
 
     @property
-    def sow_total(self):
-        """Sum of Scope-of-Work / Services items, in this sheet's output
-        currency. Falls back to the legacy flat scope_of_work_total field
-        when no per-row items exist.
+    def open_return(self):
+        """The return sales is currently waiting on, or None.
+
+        There is at most one: a sheet can only be returned from a stage it
+        passes back through, so a second cannot be opened while the first is
+        outstanding.
         """
+        return self.returns.filter(resolved_at__isnull=True).first()
+
+    @property
+    def resources_total(self):
+        """A.4 on its own, in the sheet's output currency.
+
+        Separate from sow_total because the page shows both: what the
+        resources come to, and the A.2 figure that follows from it. They are
+        the same number whenever A.4 has any lines, and differ when it does
+        not — which is exactly the moment somebody needs to see both.
+        """
+        return sum((line.total_price for line in self.resource_lines.all()),
+                   Decimal('0'))
+
+    @property
+    def sow_total(self):
+        """The A.2 figure, in this sheet's output currency.
+
+        Three sources, in order of authority:
+
+        A.4 resource lines win when there are any. That section is the
+        build-up of the services price — manpower, plant, accommodation — so
+        when it has been filled in, it IS the number, and the A.2 rows above
+        it are the description of what the client is buying rather than the
+        arithmetic behind it. Those rows frequently carry price_text
+        ("Included", "TBD") instead of a figure precisely because of that.
+
+        Otherwise the A.2 rows themselves, and failing those the legacy flat
+        scope_of_work_total field.
+
+        Everything that needs this number reads it here. It used to be worked
+        out separately on the detail page and again in the PDF builder, which
+        is three chances to disagree about what a client is being charged.
+        """
+        resource_lines = list(self.resource_lines.all())
+        if resource_lines:
+            return sum((line.total_price for line in resource_lines), Decimal('0'))
         items = list(self.scope_of_work_items.all())
         if items:
             return sum((i.total_price for i in items), Decimal('0'))
@@ -1321,3 +1373,129 @@ class CostingSheetChangeLog(models.Model):
     def __str__(self):
         who = self.actor.username if self.actor else '?'
         return f'{who} · {self.scope_label or self.scope} · {self.field}'
+
+
+class ResourceCatalogueItem(models.Model):
+    """The picklist behind A.4 — the manpower, plant and site costs a services
+    price is built from.
+
+    A catalogue rather than free text because these repeat across every job and
+    the same thing typed three ways ("Site Engineer", "Site Engineer (Civil)",
+    "site eng") cannot be reported on. Free text is still allowed on the line
+    itself, for the one-off that is not worth adding here.
+    """
+
+    name = models.CharField(max_length=120, unique=True)
+    default_uom = models.CharField(max_length=50, default='Nos')
+    order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(
+        default=True,
+        help_text='Unticked keeps it on existing sheets but off the picker.')
+
+    class Meta:
+        ordering = ['order', 'name']
+        verbose_name = 'Resource catalogue item'
+
+    def __str__(self):
+        return self.name
+
+
+class ResourceLine(models.Model):
+    """One A.4 line: a resource, how many, and what each costs.
+
+    A.4 is never printed. It is how the services price is arrived at, and the
+    client sees the result of that under A.2, not the manpower rates behind it.
+
+    The description is snapshotted from the catalogue rather than read through
+    the foreign key, so renaming a catalogue entry later cannot silently
+    rewrite what a quoted sheet says it was priced on. The link is kept so the
+    catalogue can still be reported against.
+    """
+
+    costing_sheet = models.ForeignKey(
+        'CostingSheet', on_delete=models.CASCADE, related_name='resource_lines')
+    catalogue_item = models.ForeignKey(
+        ResourceCatalogueItem, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='lines',
+        help_text='Blank for a one-off not in the catalogue.')
+
+    serial_number = models.PositiveIntegerField(default=1, verbose_name='S.No.')
+    description = models.CharField(max_length=255, verbose_name='Resource')
+    quantity = models.DecimalField(max_digits=12, decimal_places=2,
+                                   default=Decimal('1'))
+    uom = models.CharField(max_length=50, default='Nos', verbose_name='UOM')
+    # In the sheet's output currency, matching how A.2 prices are entered —
+    # those are user-entered in output_currency and never converted, and a
+    # figure that rolls into A.2 has to be on the same footing.
+    rate = models.DecimalField(max_digits=15, decimal_places=2,
+                               default=Decimal('0'),
+                               verbose_name='Rate per unit')
+    remarks = models.TextField(blank=True)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order', 'serial_number']
+        verbose_name = 'A.4 resource line'
+
+    def __str__(self):
+        return f'{self.description} x{self.quantity}'
+
+    @property
+    def total_price(self):
+        return (self.quantity * self.rate).quantize(Decimal('0.01'))
+
+
+class BomReturn(models.Model):
+    """One round trip: sales sent a BOM back to proposal, and got it back.
+
+    A log rather than a pair of fields on the sheet, because a BOM can go back
+    more than once and the second trip must not overwrite the record of the
+    first. How long each one took is the number worth having — a sheet that
+    sat with proposal for nine working days is the thing to find, and an
+    average over one overwritten row would never show it.
+
+    Open (resolved_at is null) means somebody is waiting right now.
+    """
+
+    costing_sheet = models.ForeignKey(
+        'CostingSheet', on_delete=models.CASCADE, related_name='returns')
+
+    returned_at = models.DateTimeField(auto_now_add=True)
+    returned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        related_name='bom_returns_raised')
+    # Required at the point of return: "send it back" without saying what is
+    # missing just moves the question to a phone call.
+    comment = models.TextField(
+        verbose_name='What is missing',
+        help_text='What the proposal team needs to add or correct.')
+
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        blank=True, related_name='bom_returns_resolved')
+    resolution_note = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['-returned_at']
+        verbose_name = 'BOM return'
+
+    def __str__(self):
+        state = 'open' if self.is_open else 'closed'
+        return f'Return on {self.costing_sheet_id} ({state})'
+
+    @property
+    def is_open(self):
+        return self.resolved_at is None
+
+    @property
+    def response_working_days(self):
+        """Working days proposal took, or has taken so far if still open.
+
+        Working days rather than elapsed, matching every other cycle figure in
+        this file — a BOM returned on a Wednesday afternoon and fixed on Sunday
+        morning took two working days here, not four.
+        """
+        from django.utils import timezone
+        end = self.resolved_at or timezone.now()
+        return working_days_between(self.returned_at, end)
