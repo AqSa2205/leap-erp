@@ -34,7 +34,9 @@ def _safe_filename(name, suffix='', extension=''):
         extension = f'.{extension}'
     return f'{safe}{extension}'
 
-from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, TermsTemplate, ScopeOfWorkItem, ClientRemarkTemplate
+from .models import (BomReturn, ExchangeRate, CostingSheet, CostingSection, CostingLineItem,
+                     TermsTemplate, ScopeOfWorkItem, ClientRemarkTemplate,
+                     ResourceCatalogueItem, ResourceLine)
 from .models import WORKFLOW_STAGE_SEQUENCE, STAGE_BADGES
 from notifications.services import notify_users
 
@@ -291,6 +293,14 @@ def _strict_stage_edit(user, sheet, stage):
     if stage == 'ready_for_costing':
         # Handoff checkpoint — locked until Sales clicks "Start costing".
         return False
+    if stage == 'returned_to_proposal':
+        # The sheet is back with proposal precisely so they can add what sales
+        # said was missing. Without this branch the stage would fall through to
+        # the closing `return False` and the whole round trip would be a dead
+        # end — asked to add an item, locked out of adding it. Proposal only:
+        # sales handed it over, the same way ready_for_costing locks proposal
+        # out. No region gate, matching the BOM stage above.
+        return bool(getattr(user, 'is_proposal_team_user', False))
     if stage in ('costing_in_progress', 'finalized'):
         if is_rep:
             # Region still bounds an owned project here, mirroring the sales
@@ -377,6 +387,9 @@ def _edit_lock_reason(user, sheet):
                 'locked until then.')
     if stage in ('costing_in_progress', 'finalized'):
         return 'Sales owns this sheet at its current stage — read-only for other teams.'
+    if stage == 'returned_to_proposal':
+        return ('Sent back to the Proposal team to add what is missing — '
+                'read-only for everyone else until they send it back.')
     return ''
 
 
@@ -1125,10 +1138,14 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
         # exist; fall back to the sheet's flat scope_of_work_total field.
         sow_items = list(sheet.scope_of_work_items.all())
         context['sow_items'] = sow_items
-        sow_total_oc = (
-            sum((i.total_price for i in sow_items), Decimal('0'))
-            if sow_items else sheet.scope_of_work_total
-        )
+        context['resource_lines'] = list(sheet.resource_lines.all())
+        context['resources_total'] = sheet.resources_total
+        context['resource_catalogue'] = list(
+            ResourceCatalogueItem.objects.filter(is_active=True))
+        # From the model, not recomputed here. A.4 resource lines outrank the
+        # A.2 rows when present, and this page and the PDF disagreeing about
+        # the contract price is not a failure anybody would catch quickly.
+        sow_total_oc = sheet.sow_total
         context['sow_total'] = sow_total_oc
 
         # Contract total = (line-item grand total in output currency) + SOW.
@@ -2872,6 +2889,38 @@ def costing_workflow_transition(request, pk):
             'verb': 'approved the sheet — released for procurement',
             'notify_team': 'procurement',
         },
+        # Sales found something missing. The comment is mandatory — sending a
+        # BOM back without saying what is wrong just moves the question to a
+        # phone call, and the clock starts here.
+        'return_to_proposal': {
+            'from': {'ready_for_costing', 'costing_in_progress'},
+            'to':   'returned_to_proposal',
+            'allowed_teams': {'sales'},
+            'requires_note': 'Say what is missing before sending the BOM back.',
+            'sets':  lambda: {'workflow_stage': 'returned_to_proposal'},
+            'verb': 'sent the BOM back to the proposal team',
+            'notify_team': 'proposal',
+            'after': lambda: BomReturn.objects.create(
+                costing_sheet=sheet, returned_by=user, comment=note),
+        },
+        # Proposal has added what was missing. Back to costing, where sales
+        # left off, and the clock stops.
+        'resume_costing': {
+            'from': {'returned_to_proposal'},
+            'to':   'costing_in_progress',
+            'allowed_teams': {'proposal'},
+            'sets':  lambda: {
+                'workflow_stage': 'costing_in_progress',
+                # Only stamped if it never was: this is a resumption, and
+                # overwriting it would erase when costing actually began and
+                # quietly shorten every cycle-time measured from it.
+                'costing_started_at': sheet.costing_started_at or now,
+                'costing_started_by': sheet.costing_started_by or user,
+            },
+            'verb': 'returned the BOM to sales with the missing items added',
+            'notify_team': 'sales',
+            'after': lambda: _close_open_returns(sheet, user, note),
+        },
         'reopen': {
             'from': {
                 'finalized', 'costing_in_progress', 'ready_for_costing',
@@ -2913,6 +2962,11 @@ def costing_workflow_transition(request, pk):
             )
             return redirect('costing:detail', pk=sheet.pk)
 
+    # A transition that exists to carry a message cannot run without one.
+    if tx.get('requires_note') and not note:
+        messages.error(request, tx['requires_note'])
+        return redirect('costing:detail', pk=sheet.pk)
+
     # Won-project gate (currently only used by send_to_finance — finance
     # budgeting only kicks in once the project is actually awarded).
     if tx.get('requires_won_project'):
@@ -2928,6 +2982,12 @@ def costing_workflow_transition(request, pk):
     updates = tx['sets']()
     CostingSheet.objects.filter(pk=sheet.pk).update(**updates)
     sheet.refresh_from_db()
+
+    # Side effect, after the stage has actually moved — opening a return
+    # against a sheet whose transition was refused would leave a clock running
+    # on something that never happened.
+    if tx.get('after'):
+        tx['after']()
 
     # Log to the change log
     _record_costing_change(
@@ -2974,6 +3034,21 @@ def costing_workflow_transition(request, pk):
 
     messages.success(request, f'Sheet is now: {sheet.get_workflow_stage_display()}')
     return redirect('costing:detail', pk=sheet.pk)
+
+
+def _close_open_returns(sheet, user, note):
+    """Stop the clock on whatever sales was waiting for.
+
+    Every open return is closed, not just the newest. Two open at once should
+    not happen — a sheet can only be returned from a stage it leaves on the
+    way back — but if it ever did, leaving one open would mean a clock running
+    forever on a sheet nobody is waiting for, and that quietly poisons the
+    average.
+    """
+    from django.utils import timezone
+    return (sheet.returns.filter(resolved_at__isnull=True)
+            .update(resolved_at=timezone.now(), resolved_by=user,
+                    resolution_note=note or ''))
 
 
 @require_POST
@@ -3957,7 +4032,10 @@ def costing_export_pdf(request, pk):
     # Scope of Work items & total — SOW values are user-entered in
     # output_currency already, so no conversion is applied to them.
     sow_items = list(sheet.scope_of_work_items.all())
-    sow_total = sum(i.total_price for i in sow_items) if sow_items else sheet.scope_of_work_total
+    # Same source as the detail page. A.4 is never rendered here — the client
+    # sees the services price, not the manpower rates behind it — but it is
+    # what that price is, so the total has to come through sow_total.
+    sow_total = sheet.sow_total
     # SAR aggregates → output_currency once, here, so the rest of the table
     # can mix them with the SOW values consistently.
     optional_total_oc = (sheet.optional_subtotal * conv).quantize(Decimal('0.01'))
@@ -4997,3 +5075,153 @@ def costing_import_new(request):
 
     # GET request - show import form
     return render(request, 'costing/import_new.html', {})
+
+
+# ── A.4 resource lines ──────────────────────────────────────────────────────
+# The build-up behind the A.2 services price: manpower, plant, accommodation.
+# Never rendered on the client PDF — they see what the service costs, not the
+# rates it was assembled from — but sheet.sow_total reads these when present,
+# so editing here moves the contract total.
+
+def _match_catalogue(description):
+    """The catalogue entry a typed resource names, or None for a one-off.
+
+    Matched case-insensitively on the whole name so the link survives someone
+    typing "welder" rather than picking it, which is the point of a combo box.
+    A miss is not an error — free text is a supported answer.
+    """
+    if not description:
+        return None
+    return ResourceCatalogueItem.objects.filter(name__iexact=description).first()
+
+
+def _resource_payload(line):
+    return {
+        'pk': line.pk,
+        'serial_number': line.serial_number,
+        'description': line.description,
+        'quantity': str(line.quantity),
+        'uom': line.uom,
+        'rate': str(line.rate),
+        'total_price': str(line.total_price),
+        'remarks': line.remarks,
+    }
+
+
+def _resource_numbers(request):
+    """Quantity and rate off the POST, or an error string."""
+    try:
+        quantity = Decimal(request.POST.get('quantity', '1'))
+        rate = Decimal(request.POST.get('rate', '0'))
+    except (InvalidOperation, ValueError):
+        return None, None, 'Invalid number'
+    if quantity < 0 or rate < 0:
+        # A negative line silently reduces the contract total, which is a
+        # correction somebody should make on the line it belongs to rather
+        # than by burying a minus sign in the resources.
+        return None, None, 'Quantity and rate cannot be negative'
+    return quantity, rate, None
+
+
+@login_required
+@require_POST
+def ajax_add_resource_line(request, pk):
+    """Add an A.4 resource line to a costing sheet."""
+    sheet = get_object_or_404(CostingSheet, pk=pk)
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    quantity, rate, error = _resource_numbers(request)
+    if error:
+        return JsonResponse({'error': error}, status=400)
+
+    # One combo cell per row rather than a picker plus a text box: the grid is
+    # meant to be typed through, and two controls for one value is one more
+    # thing to tab past. So the description arrives as text and the catalogue
+    # link is resolved from it.
+    description = (request.POST.get('description', '') or '').strip()
+    if not description:
+        return JsonResponse({'error': 'Pick a resource or type one'}, status=400)
+    catalogue_item = _match_catalogue(description)
+
+    uom = (request.POST.get('uom', '').strip()
+           or (catalogue_item.default_uom if catalogue_item else 'Nos'))
+    last_order = sheet.resource_lines.order_by('-order').values_list(
+        'order', flat=True).first() or 0
+    last_sn = sheet.resource_lines.order_by('-serial_number').values_list(
+        'serial_number', flat=True).first() or 0
+
+    line = ResourceLine.objects.create(
+        costing_sheet=sheet,
+        catalogue_item=catalogue_item,
+        serial_number=last_sn + 1,
+        description=description[:255],
+        quantity=quantity,
+        uom=uom,
+        rate=rate,
+        remarks=request.POST.get('remarks', '').strip(),
+        order=last_order + 1,
+    )
+    return JsonResponse({
+        'ok': True,
+        'item': _resource_payload(line),
+        # The section total and the contract total both move with this, and
+        # the page shows both — returning them saves a reload that would lose
+        # whatever else the user was part-way through typing.
+        'resources_total': str(sheet.resources_total),
+        'sow_total': str(sheet.sow_total),
+    })
+
+
+@login_required
+@require_POST
+def ajax_update_resource_line(request, pk):
+    """Update an A.4 resource line."""
+    line = get_object_or_404(ResourceLine, pk=pk)
+    sheet = line.costing_sheet
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+
+    quantity, rate, error = _resource_numbers(request)
+    if error:
+        return JsonResponse({'error': error}, status=400)
+
+    description = request.POST.get('description', '').strip()
+    if not description:
+        return JsonResponse({'error': 'Description required'}, status=400)
+
+    line.description = description[:255]
+    # Re-resolved on edit: typing a catalogue name into a row that was free
+    # text should link it, and vice versa.
+    line.catalogue_item = _match_catalogue(description)
+    line.quantity = quantity
+    line.rate = rate
+    line.uom = request.POST.get('uom', '').strip() or line.uom
+    line.remarks = request.POST.get('remarks', '').strip()
+    line.save(update_fields=['description', 'catalogue_item', 'quantity', 'rate',
+                             'uom', 'remarks'])
+
+    return JsonResponse({
+        'ok': True,
+        'item': _resource_payload(line),
+        'resources_total': str(sheet.resources_total),
+        'sow_total': str(sheet.sow_total),
+    })
+
+
+@login_required
+@require_POST
+def ajax_delete_resource_line(request, pk):
+    """Delete an A.4 resource line."""
+    line = get_object_or_404(ResourceLine, pk=pk)
+    sheet = line.costing_sheet
+    if not _user_can_edit_sheet(request.user, sheet):
+        return JsonResponse({'error': 'Permission denied'}, status=403)
+    line.delete()
+    return JsonResponse({
+        'ok': True,
+        'resources_total': str(sheet.resources_total),
+        # Deleting the last line hands A.2 back to its own rows, so this can
+        # change by more than the line that was removed.
+        'sow_total': str(sheet.sow_total),
+    })
