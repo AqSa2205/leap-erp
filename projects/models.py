@@ -241,6 +241,14 @@ class Project(models.Model):
         blank=True,
         help_text="End User"
     )
+    # Where the work physically happens (Zuluf, Jazan). Distinct from region,
+    # which is the commercial entity the project belongs to. Delivery reporting
+    # groups by site; the pipeline never needed it.
+    location = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Site location where the work is delivered"
+    )
 
     PROJECT_STAGE_CHOICES = [
         ('', '-'),
