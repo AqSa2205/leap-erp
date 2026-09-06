@@ -53,7 +53,9 @@ class ProjectMilestone(models.Model):
     weightage = models.DecimalField(
         max_digits=6, decimal_places=4, default=ZERO,
         help_text='Fraction of the project this activity represents (0–1). '
-                  'Children of an activity must sum to 1.00.')
+                  'The activities that carry weight sum to 1.00 across the '
+                  'project — either the top-level rows, or their children '
+                  'where the parent is left blank.')
 
     # The one field that changes week to week. Everything else on this row is
     # set once when the WBS is agreed.

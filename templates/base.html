@@ -1252,10 +1252,19 @@
         <div class="nav-section" data-section="delivery"><span>Project Management</span><i class="bi bi-chevron-down section-chevron"></i></div>
         <ul class="nav flex-column nav-section-items" data-section-items="delivery">
             <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.app_name == 'pmo' %}active{% endif %}" href="{% url 'pmo:board' %}" data-title="Project Management — Delivery Board">
+                <a class="nav-link {% if request.resolver_match.app_name == 'pmo' and request.resolver_match.url_name != 'milestone_import' %}active{% endif %}" href="{% url 'pmo:board' %}" data-title="Project Management — Delivery Board">
                     <i class="bi bi-kanban"></i> <span>Delivery Board</span>
                 </a>
             </li>
+            {# Import rewrites a project's whole WBS, so it is admin-only —      #}
+            {# matching pmo.views.can_import_milestones.                         #}
+            {% if user.is_super_admin_user or user.is_admin_user %}
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name == 'milestone_import' %}active{% endif %}" href="{% url 'pmo:milestone_import' %}" data-title="Project Management — Import Milestones">
+                    <i class="bi bi-file-earmark-arrow-up"></i> <span>Import Milestones</span>
+                </a>
+            </li>
+            {% endif %}
         </ul>
         {% endif %}
 
