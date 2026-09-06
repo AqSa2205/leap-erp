@@ -279,3 +279,77 @@ def weight_problems(activities):
             problems.append(
                 f'the activities that carry weight sum to {total}, not 1.0000')
     return problems
+
+
+# ── writing ─────────────────────────────────────────────────────────────────
+
+def write_activities(project, activities):
+    """Create a project's milestone tree from parsed activities.
+
+    The tree is built from sheet order, not from the typed S.No column: the
+    MASCO sheet has two rows both labelled 1.1, so a child belongs to whichever
+    parent it follows rather than to the number it claims.
+
+    Shared by the management command and the import screen. Written once
+    because two copies of this would drift, and a tree built two different ways
+    is a completion figure that depends on how it was loaded.
+    """
+    from .models import ProjectMilestone
+
+    count = 0
+    parent = None
+    parent_order = 0
+    child_order = 0
+    for entry in activities:
+        if entry['level'] == 'parent':
+            parent_order += 1
+            child_order = 0
+            parent = ProjectMilestone.objects.create(
+                project=project, order=parent_order, activity=entry['activity'],
+                weightage=entry['weightage'],
+                completion_date=entry['completion_date'],
+                invoice_prerequisite=entry['invoice_prerequisite'])
+        else:
+            child_order += 1
+            ProjectMilestone.objects.create(
+                project=project, parent=parent, order=child_order,
+                activity=entry['activity'], weightage=entry['weightage'],
+                completed_fraction=entry['completed_fraction'],
+                completion_date=entry['completion_date'],
+                invoice_prerequisite=entry['invoice_prerequisite'])
+        count += 1
+    return count
+
+
+# ── carrying a preview to the confirm step ──────────────────────────────────
+#
+# Decimals and dates do not survive JSON, so they are written as strings and
+# read back. The alternative — re-parsing the uploaded file on confirm — is
+# what the chart importer did first, and it meant the apply step could act on
+# something other than what was previewed.
+
+def serialise_activities(activities):
+    return [{
+        'level': a['level'],
+        'activity': a['activity'],
+        'weightage': str(a['weightage']),
+        'completed_fraction': str(a['completed_fraction']),
+        'completion_date': a['completion_date'].isoformat() if a['completion_date'] else None,
+        'invoice_prerequisite': a['invoice_prerequisite'],
+    } for a in activities]
+
+
+def deserialise_activities(rows):
+    from datetime import date as _date_cls
+    out = []
+    for row in rows:
+        stamp = row.get('completion_date')
+        out.append({
+            'level': row['level'],
+            'activity': row['activity'],
+            'weightage': Decimal(row['weightage']),
+            'completed_fraction': Decimal(row['completed_fraction']),
+            'completion_date': _date_cls.fromisoformat(stamp) if stamp else None,
+            'invoice_prerequisite': row.get('invoice_prerequisite', ''),
+        })
+    return out

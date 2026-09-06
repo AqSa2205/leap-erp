@@ -1,9 +1,12 @@
 """Project delivery — the overview board and one project's milestone WBS."""
 from decimal import Decimal, InvalidOperation
+from io import BytesIO
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core import signing
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.db.models import Prefetch
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -14,6 +17,8 @@ from projects.models import Project
 
 from .models import ONE, ZERO, MilestoneProgressEntry, ProjectMilestone
 from .progress import board_rows, leaves, project_completion, validate_weightages
+from .workbook_import import (deserialise_activities, plan_workbook,
+                              serialise_activities, write_activities)
 
 
 def can_see_delivery(user):
@@ -196,3 +201,145 @@ def update_progress(request, pk):
         'completed_weightage': str(milestone.weightage * value),
         'project_completion_pct': str(project_completion(project) * Decimal('100')),
     })
+
+
+# ── importing the workbook from the browser ─────────────────────────────────
+#
+# The management command that does this cannot be run in production: the web
+# service runs on a plan with no shell at all. So the one-off that actually
+# matters — loading ten milestone sheets — has to be doable from a screen, the
+# same way finance publishes a chart revision at /accounting/chart/import/.
+
+MAX_WORKBOOK_BYTES = 15 * 1024 * 1024
+PREVIEW_SALT = 'pmo.milestone_import'
+PREVIEW_MAX_AGE = 60 * 60
+
+
+def can_import_milestones(user):
+    """Importing rewrites whole projects' WBS, so it sits above the weekly
+    update rather than beside it: a project manager moves a figure, an
+    administrator replaces the structure."""
+    if not getattr(user, 'is_authenticated', False):
+        return False
+    return bool(user.is_super_admin_user or user.is_admin_user)
+
+
+@login_required
+def milestone_import(request):
+    """Upload the projects overview workbook, see what it would do, then apply.
+
+    The preview is the whole safety story. Sheets are matched on the Leap
+    reference and an unmatched one is reported rather than guessed, so what a
+    person has to check before confirming is exactly what this page shows:
+    which sheet became which project, which projects already have milestones,
+    and which weights do not add up.
+
+    The parsed activities travel to the confirm step in a signed hidden field.
+    Re-reading the upload on confirm would mean applying something other than
+    what was previewed, which is the bug the chart importer had.
+    """
+    if not can_import_milestones(request.user):
+        raise PermissionDenied('Importing milestones is limited to administrators.')
+
+    if request.method != 'POST':
+        return render(request, 'pmo/milestone_import.html', {})
+
+    upload = request.FILES.get('workbook')
+    if not upload:
+        messages.error(request, 'Choose a workbook to upload.')
+        return redirect('pmo:milestone_import')
+    if upload.size > MAX_WORKBOOK_BYTES:
+        messages.error(request, 'That file is larger than 15 MB, which is almost '
+                                'certainly not the projects overview workbook.')
+        return redirect('pmo:milestone_import')
+
+    try:
+        import openpyxl
+        workbook = openpyxl.load_workbook(
+            BytesIO(upload.read()), data_only=True, read_only=True)
+    except Exception:
+        # Deliberately broad: openpyxl raises several unrelated exception types
+        # for a file that simply is not a workbook, and every one of them means
+        # the same thing to somebody who picked the wrong file.
+        messages.error(request, 'That file could not be read as an .xlsx workbook.')
+        return redirect('pmo:milestone_import')
+
+    results = plan_workbook(workbook, list(Project.objects.all()))
+    if not results:
+        messages.error(request, 'No milestone sheets found in that workbook. The '
+                                'importer looks for sheets named after a Leap '
+                                'reference, such as "LNA-2308-Milestones(MASCO)".')
+        return redirect('pmo:milestone_import')
+
+    for result in results:
+        project = result['project']
+        result['existing'] = project.milestones.count() if project else 0
+
+    # Only matched sheets can be applied, so only those are signed. A sheet
+    # with no project is a question for a person, not a thing to carry forward.
+    payload = [{
+        'project_id': r['project'].pk,
+        'sheet': r['sheet'],
+        'activities': serialise_activities(r['activities']),
+    } for r in results if r['project'] and r['activities']]
+
+    return render(request, 'pmo/milestone_import.html', {
+        'results': results,
+        'filename': upload.name,
+        'matched': [r for r in results if r['project']],
+        'unmatched': [r for r in results if not r['project']],
+        'with_problems': [r for r in results if r['problems']],
+        'already_have': [r for r in results if r['existing']],
+        'payload': signing.dumps(payload, salt=PREVIEW_SALT, compress=True),
+    })
+
+
+@require_POST
+@login_required
+def milestone_import_apply(request):
+    """Write the milestones that were previewed."""
+    if not can_import_milestones(request.user):
+        raise PermissionDenied('Importing milestones is limited to administrators.')
+
+    raw = request.POST.get('payload') or ''
+    if not raw:
+        messages.error(request, 'Nothing to apply — upload the workbook first.')
+        return redirect('pmo:milestone_import')
+
+    try:
+        payload = signing.loads(raw, salt=PREVIEW_SALT, max_age=PREVIEW_MAX_AGE)
+    except signing.SignatureExpired:
+        messages.error(request, 'That preview is more than an hour old and the '
+                                'projects may have moved on since. Please upload '
+                                'the workbook again.')
+        return redirect('pmo:milestone_import')
+    except signing.BadSignature:
+        messages.error(request, 'That preview could not be verified. Please upload '
+                                'the workbook again.')
+        return redirect('pmo:milestone_import')
+
+    replace = request.POST.get('replace') == 'on'
+    written = skipped = 0
+    # One transaction: a half-written import would leave projects with a
+    # partial WBS whose weights cannot add up, which reads as a data problem
+    # rather than as an import that failed.
+    with transaction.atomic():
+        for entry in payload:
+            project = Project.objects.filter(pk=entry['project_id']).first()
+            if project is None:
+                continue                      # deleted since the preview
+            if project.milestones.exists():
+                if not replace:
+                    skipped += 1
+                    continue
+                project.milestones.all().delete()
+            written += write_activities(
+                project, deserialise_activities(entry['activities']))
+
+    messages.success(request, f'Imported {written} milestone rows.')
+    if skipped:
+        messages.warning(
+            request,
+            f'{skipped} project(s) already had milestones and were left alone. '
+            f'Tick "replace existing milestones" to overwrite them.')
+    return redirect('pmo:board')
