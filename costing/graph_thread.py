@@ -162,14 +162,18 @@ def list_thread_messages(mailbox, conversation_id):
     Follows @odata.nextLink until Graph stops paginating — a real client
     conversation can run well past Graph's default page size (~10) once
     there's been enough back-and-forth, and without this a long thread
-    would silently lose its oldest messages."""
+    would silently lose its oldest messages.
+
+    No $orderby here deliberately: combining it with the conversationId
+    $filter is a documented Graph limitation ('InefficientFilter' / "The
+    restriction or sort order is too complex") that 400s on plenty of real
+    mailboxes. Sorted in Python instead, after fetching every page."""
     access_token = _get_access_token()
     headers = {'Authorization': f'Bearer {access_token}'}
     url = f'{GRAPH_BASE}/users/{quote(mailbox, safe="")}/messages'
     params = {
         '$filter': f"conversationId eq '{conversation_id}'",
         '$select': 'id,subject,from,toRecipients,ccRecipients,sentDateTime,body,hasAttachments',
-        '$orderby': 'sentDateTime asc',
         '$top': 50,
     }
 
@@ -209,6 +213,7 @@ def list_thread_messages(mailbox, conversation_id):
         # @odata.nextLink already carries the full query string — no params on the follow-up request.
         next_url = data.get('@odata.nextLink')
         next_params = None
+    messages.sort(key=lambda m: m['sent_at'] or '')
     return messages
 
 
@@ -281,7 +286,7 @@ def sync_thread(thread):
     return new_count
 
 
-def list_recent_messages(mailbox, top=25):
+def list_recent_messages(mailbox, top=50):
     """The most recent messages sitting in `mailbox`'s Inbox, regardless of
     conversation — used by the manual 'Attach a reply' fallback for when a
     client's reply didn't thread automatically (e.g. they composed a fresh
@@ -362,7 +367,7 @@ def get_message_detail(mailbox, message_id):
     }
 
 
-def list_recent_sent_messages(mailbox, top=25):
+def list_recent_sent_messages(mailbox, top=50):
     """The most recent messages in `mailbox`'s Sent Items — half of the
     unified 'link a sent/received email' picker (see
     browse_link_revision_email in costing/views.py, which merges this with

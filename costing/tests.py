@@ -1624,12 +1624,13 @@ class ListThreadMessagesPaginationTests(TestCase):
     once there's been enough back-and-forth — list_thread_messages must
     follow @odata.nextLink rather than silently dropping older messages."""
 
-    def _page(self, ids, next_link=None):
+    def _page(self, items, next_link=None):
+        """`items` is a list of (id, sentDateTime) tuples."""
         value = [
             {'id': i, 'subject': 's', 'from': {'emailAddress': {'name': 'A', 'address': 'a@x.com'}},
-             'toRecipients': [], 'ccRecipients': [], 'sentDateTime': '2026-01-01T00:00:00Z',
+             'toRecipients': [], 'ccRecipients': [], 'sentDateTime': sent_at,
              'body': {'content': '<p>hi</p>'}, 'hasAttachments': False}
-            for i in ids
+            for i, sent_at in items
         ]
         data = {'value': value}
         if next_link:
@@ -1640,8 +1641,9 @@ class ListThreadMessagesPaginationTests(TestCase):
         from unittest.mock import patch, MagicMock
         from costing import graph_thread
 
-        page1 = self._page(['m1', 'm2'], next_link='https://graph.microsoft.com/v1.0/next-page')
-        page2 = self._page(['m3'])
+        page1 = self._page([('m1', '2026-01-01T00:00:00Z'), ('m2', '2026-01-02T00:00:00Z')],
+                            next_link='https://graph.microsoft.com/v1.0/next-page')
+        page2 = self._page([('m3', '2026-01-03T00:00:00Z')])
         responses = [MagicMock(status_code=200, json=lambda: page1),
                      MagicMock(status_code=200, json=lambda: page2)]
 
@@ -1653,6 +1655,39 @@ class ListThreadMessagesPaginationTests(TestCase):
         self.assertEqual(mock_get.call_count, 2)
         self.assertEqual(mock_get.call_args_list[1].args[0], 'https://graph.microsoft.com/v1.0/next-page')
         self.assertIsNone(mock_get.call_args_list[1].kwargs['params'])
+
+    def test_no_orderby_sent_to_graph(self):
+        """Regression: combining $filter=conversationId with $orderby is a
+        documented Graph limitation that 400s ('InefficientFilter') on real
+        mailboxes — reported live from a real thread's Refresh button."""
+        from unittest.mock import patch, MagicMock
+        from costing import graph_thread
+
+        page = self._page([('m1', '2026-01-01T00:00:00Z')])
+        with patch.object(graph_thread, '_get_access_token', return_value='tok'), \
+             patch('costing.graph_thread.requests.get',
+                   return_value=MagicMock(status_code=200, json=lambda: page)) as mock_get:
+            graph_thread.list_thread_messages('mailbox@x.com', 'conv-1')
+
+        self.assertNotIn('$orderby', mock_get.call_args.kwargs['params'])
+
+    def test_sorts_out_of_order_pages_chronologically(self):
+        """Graph makes no ordering promise once $orderby is dropped —
+        sorting must happen on our side, across every page fetched."""
+        from unittest.mock import patch, MagicMock
+        from costing import graph_thread
+
+        page1 = self._page([('newer', '2026-01-05T00:00:00Z')],
+                            next_link='https://graph.microsoft.com/v1.0/next-page')
+        page2 = self._page([('oldest', '2026-01-01T00:00:00Z'), ('middle', '2026-01-03T00:00:00Z')])
+        responses = [MagicMock(status_code=200, json=lambda: page1),
+                     MagicMock(status_code=200, json=lambda: page2)]
+
+        with patch.object(graph_thread, '_get_access_token', return_value='tok'), \
+             patch('costing.graph_thread.requests.get', side_effect=responses):
+            messages = graph_thread.list_thread_messages('mailbox@x.com', 'conv-1')
+
+        self.assertEqual([m['id'] for m in messages], ['oldest', 'middle', 'newer'])
 
 
 class LinkRevisionEmailTests(TestCase):
