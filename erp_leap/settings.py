@@ -350,12 +350,6 @@ DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'Leap ERP <notificatio
 # but overridable independently via MS_GRAPH_SENDER if that's ever needed.
 from email.utils import parseaddr as _parseaddr
 MS_GRAPH_SENDER = os.environ.get('MS_GRAPH_SENDER') or _parseaddr(DEFAULT_FROM_EMAIL)[1]
-# The mailbox costing-revisions are both send and read from so
-# that client reply(the full back and forth convo) can be tracked
-#For testing purposes please swap the env variable so that it points at
-#a dedicated mailbox.
-
-REVISION_EMAIL_MAILBOX = os.environ.get('REVISION_EMAIL_MAILBOX','')
 
 # AI digest (devtracking) — Anthropic-powered developer-progress reports.
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')

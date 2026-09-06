@@ -1,6 +1,7 @@
 {% if error %}
 <div class="alert alert-danger small">{{ error }}</div>
 {% else %}
+<p class="small text-muted mb-1">Reading from: <strong>{{ mailbox }}</strong></p>
 <p class="small text-muted">
     Recent messages in your mailbox &mdash; pick the one for revision {{ rev.revision_label }},
     then say whether it was <strong>sent to</strong> the client or <strong>received from</strong> them.

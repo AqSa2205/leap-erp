@@ -1535,10 +1535,10 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <p class="small text-muted">Sending from: <strong>{{ revision_email_mailbox|default:"(no mailbox linked to your account — ask an admin)" }}</strong></p>
                 <p class="small text-muted mb-2">
-                    <i class="bi bi-info-circle me-1"></i>For this to work, Outlook (or your preferred mail app)
-                    needs to be set as your device's default mailing app.
+                    <i class="bi bi-info-circle me-1"></i>This opens your device's own default mail app to
+                    compose from — it does not send through any specific linked mailbox. For it to work,
+                    Outlook (or your preferred mail app) needs to be set as your device's default mailing app.
                 </p>
                 <div class="d-flex gap-2 flex-wrap mb-2">
                     <a href="#" id="downloadRevisionPdfLink" target="_blank" class="btn btn-outline-secondary">

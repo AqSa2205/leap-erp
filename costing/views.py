@@ -1169,7 +1169,6 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
                 rev.size_bytes = None
         context['pdf_revisions'] = revisions
         context['pdf_revisions_total_size'] = total_rev_size
-        context['revision_email_mailbox'] = _user_revision_mailbox(self.request.user)
 
         # Recent change log (for cross-team visibility).
         # The UI lets the user dial how many entries are shown via ?change_log_limit=N.
@@ -3124,30 +3123,19 @@ def _user_revision_mailbox(user):
     there is no value anywhere (URL, POST field, hidden JSON) that could
     be tampered with to reach someone else's mailbox. Returns '' if this
     user has no mailbox to use — callers must treat that as "nothing to
-    show", not fall back to guessing one. Mirrors
-    projects.views._user_mailbox() exactly (see RevisionMailbox's
-    docstring for why this is a separate copy rather than a shared
-    import).
+    show", not fall back to guessing one.
 
-    Resolution order:
-    1. This user's own RevisionMailbox, if an admin has linked one and
-       left it active.
-    2. The legacy single REVISION_EMAIL_MAILBOX setting, but ONLY while
-       the RevisionMailbox table has never had a single row created in
-       it — so the feature doesn't go dark for everyone the moment this
-       ships. The instant even one row has EVER existed (checked by
-       existence, not by is_active — deactivating someone's row must
-       revoke their access, not hand it to whoever the legacy setting
-       points at instead), this fallback stops applying for everyone
-       else too."""
+    No legacy/shared fallback of any kind: access exists only once an
+    admin has explicitly linked this exact user to a RevisionMailbox row.
+    (A prior version fell back to a single shared mailbox setting until
+    the first row was ever created, meaning every unlinked user could
+    browse and send through that shared mailbox before any admin action
+    was ever taken — a real exposure caught in live testing. Removed."""
     from .models import RevisionMailbox
     try:
         return RevisionMailbox.objects.get(owner=user, is_active=True).email_address
     except RevisionMailbox.DoesNotExist:
-        pass
-    if not RevisionMailbox.objects.exists():
-        return settings.REVISION_EMAIL_MAILBOX or ''
-    return ''
+        return ''
 
 
 @require_POST
@@ -3316,7 +3304,8 @@ def browse_link_revision_email(request, pk):
         for m in sent
     ]
     candidates.sort(key=lambda c: c['date'] or '', reverse=True)
-    return render(request, 'costing/_revision_link_browser.html', {'rev': rev, 'candidates': candidates})
+    return render(request, 'costing/_revision_link_browser.html',
+                  {'rev': rev, 'candidates': candidates, 'mailbox': mailbox})
 
 
 @require_POST

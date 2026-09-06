@@ -1446,7 +1446,6 @@ class SubHeadingRowTests(TestCase):
         self.assertTrue(bool(head.final_total_price))
 
 
-@override_settings(REVISION_EMAIL_MAILBOX='legacy@leap-arabia.com')
 class RevisionMailboxPrivacyTests(TestCase):
     """RevisionMailbox is the costing-app twin of projects.MonitoredMailbox:
     an admin links exactly one real mailbox to exactly one employee, and
@@ -1483,13 +1482,18 @@ class RevisionMailboxPrivacyTests(TestCase):
         self.assertEqual(self._resolve(self.alice), 'alice@leap-arabia.com')
         self.assertEqual(self._resolve(self.bob), 'bob@leap-arabia.com')
 
-    def test_legacy_fallback_only_before_any_row_ever_created(self):
-        # No RevisionMailbox row exists anywhere yet -> legacy setting applies to everyone.
-        self.assertEqual(self._resolve(self.alice), 'legacy@leap-arabia.com')
-        self.assertEqual(self._resolve(self.bob), 'legacy@leap-arabia.com')
-        # The moment ANY row is created, the legacy fallback stops applying,
-        # even for users who still have no row of their own.
-        self.RevisionMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+    @override_settings(REVISION_EMAIL_MAILBOX='legacy@leap-arabia.com')
+    def test_no_legacy_fallback_even_with_zero_rows_anywhere(self):
+        """Regression: an earlier version fell back to a single shared
+        mailbox setting until the first RevisionMailbox row was ever
+        created — meaning every unlinked user could browse and send
+        through that shared mailbox before any admin had linked anyone.
+        This was caught live (an unlinked user saw a real colleague's
+        mailbox) and must never come back, in any form: no user gets
+        access without an explicit, active row of their own — not even
+        if the old setting is still present in the environment."""
+        self.assertEqual(self.RevisionMailbox.objects.count(), 0)
+        self.assertEqual(self._resolve(self.alice), '')
         self.assertEqual(self._resolve(self.bob), '')
 
     def test_deactivation_revokes_access_not_falls_back_to_legacy(self):
@@ -1668,6 +1672,8 @@ class LinkRevisionEmailTests(TestCase):
         self.assertEqual(mocked_sent.call_args.args[0], 'alice@leap-arabia.com')
         self.assertContains(resp, 'Reply')
         self.assertContains(resp, 'Offer')
+        self.assertContains(resp, 'Reading from')
+        self.assertContains(resp, 'alice@leap-arabia.com')
 
     def test_link_as_sent_creates_thread(self):
         from unittest.mock import patch
