@@ -732,16 +732,30 @@ three times" is a different conversation from "it is back now". {% endcomment %}
                 <div class="total-value text-danger fw-bold">{{ sheet.grand_total|mul:conversion_rate|floatformat:2|intcomma }}</div>
                 <div class="total-label">Grand Total ({{ sheet.output_currency }})</div>
             </div>
-            {% if sow_total %}
-            <div class="text-center">
-                <div class="total-value text-secondary fw-bold">{{ sow_total|floatformat:2|intcomma }}</div>
+            {% comment %} Services is hidden rather than absent when there is
+            no services figure — a pure supply quote has none, and a tile
+            reading 0.00 is noise. Hidden, not omitted, so that adding the
+            first A.4 resource line can reveal it without a reload: an element
+            that is not in the page cannot be updated. {% endcomment %}
+            <div class="text-center" id="sowTotalTile" {% if not sow_total %}hidden{% endif %}>
+                <div class="total-value text-secondary fw-bold" id="sowTotalCell">{{ sow_total|floatformat:2|intcomma }}</div>
                 <div class="total-label">Services (A.2)</div>
             </div>
+            {% comment %} The contract total is shown unconditionally. It used
+            to sit inside the Services condition, so a sheet with neither an
+            A.2 row nor an A.4 line — an ordinary supply-only quote — showed no
+            contract total at all, while the PDF printed one. That is the
+            figure the client is given, and the page and the document must not
+            disagree about whether it exists.
+
+            When there are no services it equals the Grand Total above. The
+            repetition is deliberate: the PDF carries both rows too, and a
+            headline that appears only sometimes is worse than one that
+            occasionally restates. {% endcomment %}
             <div class="text-center">
-                <div class="total-value text-success fw-bold">{{ contract_total|floatformat:2|intcomma }}</div>
+                <div class="total-value text-success fw-bold" id="contractTotalCell">{{ contract_total|floatformat:2|intcomma }}</div>
                 <div class="total-label">Contract Total ({{ sheet.output_currency }})</div>
             </div>
-            {% endif %}
         </div>
         {% if sheet.optional_subtotal %}
         <div class="text-center mt-2 pt-2 border-top">
@@ -2538,13 +2552,26 @@ var CAN_EDIT = {% if can_edit %}true{% else %}false{% endif %};
 
   function refreshTotals(payload) {
     if (payload.resources_total !== undefined) totalCell.textContent = money(payload.resources_total);
-    // The A.2 tile and the contract total are derived from this and sit
-    // elsewhere on the page. Marking them stale is honest; silently leaving
-    // yesterday's number under a heading called Services is not.
-    document.querySelectorAll('[data-derived-from-sow]').forEach((el) => {
-      el.classList.add('text-muted');
-      el.title = 'Reload to update — the resources changed';
-    });
+    // The A.2 tile and the contract total are derived from the resources and
+    // sit at the top of the page, out of sight of the grid being typed into.
+    // They are updated from the response rather than marked stale: the server
+    // has already worked both out, and a number nobody can see change is how
+    // somebody quotes yesterday's price.
+    //
+    // This previously looked for [data-derived-from-sow], which no element
+    // carried — so it silently did nothing at all.
+    const sowCell = document.getElementById('sowTotalCell');
+    const sowTile = document.getElementById('sowTotalTile');
+    if (sowCell && payload.sow_total !== undefined) {
+      sowCell.textContent = money(payload.sow_total);
+      // Adding the first resource line to a supply-only sheet gives it a
+      // services figure for the first time, so the tile has to appear.
+      if (sowTile) sowTile.hidden = Number(payload.sow_total) === 0;
+    }
+    const contractCell = document.getElementById('contractTotalCell');
+    if (contractCell && payload.contract_total !== undefined) {
+      contractCell.textContent = money(payload.contract_total);
+    }
   }
 
   function save(row) {
