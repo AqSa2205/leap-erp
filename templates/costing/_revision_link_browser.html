@@ -21,16 +21,22 @@
             <span class="badge bg-secondary">Already linked</span>
             {% else %}
             <div class="btn-group btn-group-sm" role="group">
-                <button type="button" class="btn btn-outline-primary js-link-classified"
-                        data-url="{% url 'costing:link_revision_email' rev.pk %}"
-                        data-message-id="{{ c.id }}" data-direction="out">
-                    <i class="bi bi-arrow-up-right me-1"></i>Sent by us
-                </button>
-                <button type="button" class="btn btn-outline-success js-link-classified"
-                        data-url="{% url 'costing:link_revision_email' rev.pk %}"
-                        data-message-id="{{ c.id }}" data-direction="in">
-                    <i class="bi bi-arrow-down-left me-1"></i>Received from client
-                </button>
+                <form method="post" action="{% url 'costing:link_revision_email' rev.pk %}" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="message_id" value="{{ c.id }}">
+                    <input type="hidden" name="direction" value="out">
+                    <button type="submit" class="btn btn-outline-primary">
+                        <i class="bi bi-arrow-up-right me-1"></i>Sent by us
+                    </button>
+                </form>
+                <form method="post" action="{% url 'costing:link_revision_email' rev.pk %}" class="d-inline">
+                    {% csrf_token %}
+                    <input type="hidden" name="message_id" value="{{ c.id }}">
+                    <input type="hidden" name="direction" value="in">
+                    <button type="submit" class="btn btn-outline-success">
+                        <i class="bi bi-arrow-down-left me-1"></i>Received from client
+                    </button>
+                </form>
             </div>
             {% endif %}
         </div>

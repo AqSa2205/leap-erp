@@ -2355,29 +2355,6 @@ var CAN_EDIT = {% if can_edit %}true{% else %}false{% endif %};
             });
     };
 
-    if (linkRevisionEmailBody) {
-        linkRevisionEmailBody.addEventListener('click', function(e) {
-            var btn = e.target.closest('.js-link-classified');
-            if (!btn) return;
-            var group = btn.closest('.btn-group');
-            if (group) group.querySelectorAll('button').forEach(function(b) { b.disabled = true; });
-            btn.innerHTML = 'Linking…';
-            var body = new URLSearchParams();
-            body.set('message_id', btn.dataset.messageId);
-            body.set('direction', btn.dataset.direction);
-            fetch(btn.dataset.url, {
-                method: 'POST',
-                headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/x-www-form-urlencoded'},
-                body: body.toString(),
-            })
-            .then(function() { window.location.reload(); })
-            .catch(function(err) {
-                alert('Link failed: ' + err);
-                if (group) group.querySelectorAll('button').forEach(function(b) { b.disabled = false; });
-            });
-        });
-    }
-
     var revisionEmailThreadModalEl = document.getElementById('revisionEmailThreadModal');
     var revisionEmailThreadModal = revisionEmailThreadModalEl ? new bootstrap.Modal(revisionEmailThreadModalEl) : null;
     var revisionEmailThreadBody = document.getElementById('revisionEmailThreadBody');

@@ -1687,6 +1687,31 @@ class LinkRevisionEmailTests(TestCase):
         self.assertEqual(msg.direction, 'out')
         self.assertIsNotNone(msg.attached_at)  # recorded regardless of the email's own sent_at
 
+    def test_link_buttons_are_real_forms_so_the_result_message_survives_the_reload(self):
+        """Regression: the classify buttons used to be JS fetch() calls that
+        followed the redirect silently in the background before reloading the
+        real page — Django's one-shot messages framework got consumed by
+        that invisible fetch, so the actual page reload showed nothing at
+        all, success or failure. They're plain <form> submits now so the
+        browser's own navigation is what shows the result."""
+        from unittest.mock import patch
+        self.client.force_login(self.alice)
+        with patch('costing.graph_thread.list_recent_messages', return_value=[]), \
+             patch('costing.graph_thread.list_recent_sent_messages',
+                   return_value=[{'id': 'm1', 'subject': 'Offer', 'to': 'client@example.com',
+                                   'sent_at': '2026-08-20T10:00:00Z', 'body_preview': ''}]):
+            browse_html = self.client.get(
+                reverse('costing:browse_link_revision_email', kwargs={'pk': self.rev.pk})).content.decode()
+        self.assertIn('<form', browse_html)
+        self.assertIn('csrfmiddlewaretoken', browse_html)
+
+        with patch('costing.graph_thread.get_message_detail', return_value=self._detail()):
+            resp = self.client.post(
+                reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
+                {'message_id': 'm1', 'direction': 'out'}, follow=True)
+        self.assertContains(resp, 'email linked')  # the success message, visible on the followed page
+        self.assertContains(resp, 'Sent on Email')
+
     def test_link_as_received_creates_thread_already_marked_replied(self):
         """Classification, not sender-address inference, decides direction —
         this message's sender isn't the tracked mailbox, but the user says
