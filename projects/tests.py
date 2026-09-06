@@ -1050,6 +1050,8 @@ class LinkPipelineEmailExistingProjectViewTests(TestCase):
         self.status = ProjectStatus.objects.create(name='Open', category='active')
         sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
         self.user = User.objects.create_user('linker', password='pass12345', role=sales_role)
+        from projects.models import MonitoredMailbox
+        MonitoredMailbox.objects.create(owner=self.user, email_address='linker@leap-arabia.com')
         self.project = Project.objects.create(
             project_name='Linkable', proposal_reference='TST-LINK-1',
             region=self.region, status=self.status, owner=self.user)
@@ -1195,6 +1197,8 @@ class LinkPipelineEmailNewViewTests(TestCase):
         self.PipelineEmail = PipelineEmail
         sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
         self.user = User.objects.create_user('creator', password='pass12345', role=sales_role)
+        from projects.models import MonitoredMailbox
+        MonitoredMailbox.objects.create(owner=self.user, email_address='creator@leap-arabia.com')
         self.url = reverse('projects:link_pipeline_email_new')
 
     def _inbox_message(self):
@@ -1284,6 +1288,8 @@ class ViewPipelineInboxAttachmentTests(TestCase):
         self.status = ProjectStatus.objects.create(name='Open', category='active')
         sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
         self.user = User.objects.create_user('viewer', password='pass12345', role=sales_role)
+        from projects.models import MonitoredMailbox
+        MonitoredMailbox.objects.create(owner=self.user, email_address='viewer@leap-arabia.com')
         # owner=self.user: a Sales Rep only sees/acts on projects they own
         # (ProjectPermissionMixin.get_queryset, reused via
         # _scoped_project_or_404 for link_pipeline_email). An ownerless
@@ -1550,6 +1556,8 @@ class ProjectCreateViewPickedEmailTests(TestCase):
         self.user.role = role
         self.user.region = self.region
         self.user.save()
+        from projects.models import MonitoredMailbox
+        MonitoredMailbox.objects.create(owner=self.user, email_address='pmcreator@leap-arabia.com')
         self.client.force_login(self.user)
         self.url = reverse('projects:create')
 
@@ -1942,20 +1950,22 @@ class MonitoredMailboxPrivacyTests(TestCase):
         self.assertEqual(self._user_mailbox(self.carol), '')
 
     @override_settings(PIPELINE_EMAIL_MAILBOX='legacy@leap-arabia.com')
-    def test_legacy_fallback_applies_only_while_nobody_is_linked_yet(self):
-        # Nobody has been individually linked anywhere yet — the old
-        # single-mailbox setting still works, so the feature doesn't go
-        # dark for everyone the instant per-employee linking ships.
-        self.assertEqual(self._user_mailbox(self.carol), 'legacy@leap-arabia.com')
-
+    def test_no_legacy_fallback_even_with_zero_rows_anywhere(self):
+        """Regression: an earlier version fell back to a single shared
+        mailbox setting until the first MonitoredMailbox row was ever
+        created — meaning every unlinked user could browse a real shared
+        mailbox before any admin had linked anyone. The identical pattern
+        was caught live on the costing-revision feature (an unlinked user
+        saw a colleague's real mailbox) before this branch ever shipped.
+        No user gets access without an explicit, active row of their own —
+        not even if the old setting is still present in the environment."""
         from projects.models import MonitoredMailbox
-        MonitoredMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
-        # The moment even one employee is linked, the legacy fallback stops
-        # applying for everyone else too — carol now gets nothing rather
-        # than silently sharing a mailbox that may by now be someone else's
-        # personal, individually-linked one.
+        self.assertEqual(MonitoredMailbox.objects.count(), 0)
         self.assertEqual(self._user_mailbox(self.carol), '')
-        # alice, who IS linked, is of course unaffected either way.
+        self.assertEqual(self._user_mailbox(self.alice), '')
+
+        MonitoredMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        self.assertEqual(self._user_mailbox(self.carol), '')
         self.assertEqual(self._user_mailbox(self.alice), 'alice@leap-arabia.com')
 
     def test_deactivating_a_mailbox_revokes_access_immediately(self):

@@ -1366,30 +1366,19 @@ def _user_mailbox(user):
     mailbox. Returns '' if this user has no mailbox to browse — callers
     must treat that as "nothing to show", not fall back to guessing one.
 
-    Resolution order:
-    1. This user's own MonitoredMailbox, if an admin has linked one and
-       left it active.
-    2. The legacy single PIPELINE_EMAIL_MAILBOX setting, but ONLY while
-       the MonitoredMailbox table has never had a single row created in
-       it — so the feature doesn't go dark for everyone the moment this
-       ships, before an admin has had a chance to link anyone.
-       The instant even one row has EVER existed, this fallback stops
-       applying for everyone else too — checked by whether any row
-       exists at all, active or not. That distinction matters: a row
-       being deactivated (an admin revoking one employee's access) must
-       never cause OTHER unlinked users to start getting the legacy
-       mailbox — it would silently hand a deactivated or never-linked
-       user access to a mailbox nobody authorised them for. Only "the
-       per-employee system has literally never been touched" counts as
-       the pre-rollout state this fallback exists for."""
+    No legacy/shared fallback of any kind: access exists only once an
+    admin has explicitly linked this exact user to a MonitoredMailbox row.
+    (A prior version fell back to a single shared PIPELINE_EMAIL_MAILBOX
+    setting until the first row was ever created, meaning every unlinked
+    user could browse and pull documents from that shared mailbox before
+    any admin action was ever taken — the same exposure caught live on
+    the costing-revision feature's identical pattern. Removed before this
+    ever shipped.)"""
     from .models import MonitoredMailbox
     try:
         return MonitoredMailbox.objects.get(owner=user, is_active=True).email_address
     except MonitoredMailbox.DoesNotExist:
-        pass
-    if not MonitoredMailbox.objects.exists():
-        return settings.PIPELINE_EMAIL_MAILBOX or ''
-    return ''
+        return ''
 
 
 def _scoped_project_or_404(request, pk):
