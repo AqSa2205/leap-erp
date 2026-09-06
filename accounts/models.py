@@ -30,6 +30,10 @@ class Role(models.Model):
     SITE_MANAGER = 'site_manager'
     ERP_ADMIN = 'erp_admin'
     DOCUMENT_CONTROLLER = 'document_controller'
+    # Same team-scoped HR feature set and base permissions as Document
+    # Controller, plus read-only access to unpriced BOM data (never priced
+    # costing fields) and export-only (no import) on that BOM view.
+    PCC_ENGINEER = 'pcc_engineer'
 
     ROLE_CHOICES = [
         (SUPER_ADMIN, 'Super Administrator'),
@@ -52,6 +56,7 @@ class Role(models.Model):
         (SITE_MANAGER, 'Site Manager'),
         (ERP_ADMIN, 'ERP Admin'),
         (DOCUMENT_CONTROLLER, 'Document Controller'),
+        (PCC_ENGINEER, 'Planning and Cost Control Engineer'),
     ]
 
     name = models.CharField(max_length=20, choices=ROLE_CHOICES, unique=True)
@@ -131,6 +136,10 @@ class Role(models.Model):
     @property
     def is_document_controller(self):
         return self.name == self.DOCUMENT_CONTROLLER
+
+    @property
+    def is_pcc_engineer(self):
+        return self.name == self.PCC_ENGINEER
 
 
 # Roles whose users are tracked as "developers" in the devtracking module
@@ -264,16 +273,22 @@ class User(AbstractUser):
         return bool(self.role and self.role.is_document_controller)
 
     @property
+    def is_pcc_engineer_user(self):
+        return bool(self.role and self.role.is_pcc_engineer)
+
+    @property
     def is_team_scoped_hr_user(self):
-        """The team-scoped HR roles — Project Manager, Site Manager, and
-        Document Controller. These get the HR feature set (attendance, leave,
-        assets, team exceptions, org chart, KPIs) restricted to their own
-        org-chart reports (see hr/scoping.py). Distinct from ERP Admin, which
-        gets the same features but company-wide."""
+        """The team-scoped HR roles — Project Manager, Site Manager,
+        Document Controller, and PCC Engineer. These get the HR feature set
+        (attendance, leave, assets, team exceptions, org chart, KPIs)
+        restricted to their own org-chart reports (see hr/scoping.py).
+        Distinct from ERP Admin, which gets the same features but
+        company-wide."""
         return (
             self.is_project_manager_user
             or self.is_site_manager_user
             or self.is_document_controller_user
+            or self.is_pcc_engineer_user
         )
 
     @property
