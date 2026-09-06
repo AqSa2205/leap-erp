@@ -70,8 +70,26 @@ other.
 
 ## The importer
 
-`python manage.py import_milestone_workbook <path.xlsx>` — dry run by default, `--apply` to
-write, `--replace` to overwrite a project that already has milestones.
+Two front ends over one implementation. Both parse with `plan_workbook()` and write with
+`write_activities()`, so a tree cannot come out differently depending on how it was loaded.
+
+**From the browser — `/delivery/import/`**, Administration-only. This is the one that matters:
+the web service runs on a plan with no shell, so a management command is not reachable in
+production, and the whole point of the import is a one-off on production data. Upload, read the
+preview, confirm — the same two-step shape as `/accounting/chart/import/`.
+
+The preview shows which sheet matched which project, which projects already have milestones,
+which sheets could not be matched, and which weights do not add up. Nothing is written until
+the confirm. The parsed activities travel to the confirm step in a **signed** hidden field
+rather than being re-read from the upload — re-reading means applying something other than what
+was previewed, which is the bug the chart importer had first.
+
+Replacing is **off by default**. Re-uploading the file is a normal thing to do, and replacing
+deletes not only the activities but the progress history recorded against them, which is not
+recoverable.
+
+**From a shell — `python manage.py import_milestone_workbook <path.xlsx>`**, for local work.
+Dry run by default, `--apply` to write, `--replace` to overwrite.
 
 Projects are matched on `proposal_reference`, never on name; name matching is what produced
 five spellings of one project. An unmatched or ambiguous reference is **reported, never
@@ -95,7 +113,9 @@ somebody who knows the project needs to say which figure is right.
 
 ## Verification
 
-- `pmo` suite: 53 tests. Completion is checked against the MASCO sheet's hand-checked 0.522655.
+- `pmo` suite: 71 tests. Completion is checked against the MASCO sheet's hand-checked 0.522655.
+- The import screen was driven end to end over live HTTP with the real workbook: the preview
+  wrote nothing, the confirm wrote MASCO's 13 rows, and the board listed the project.
 - Every guard mutation-tested: the leaf-only rule, both weight conventions, the tolerance, the
   cash-in receipt rule, the last-updated fallback, the summary-row and range guards on the
   update endpoint, project scoping, and the column-map (hardcoding either layout fails).

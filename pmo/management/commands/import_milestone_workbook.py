@@ -8,7 +8,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from pmo.models import ProjectMilestone
-from pmo.workbook_import import plan_workbook
+from pmo.workbook_import import plan_workbook, write_activities
 from projects.models import Project
 
 
@@ -64,7 +64,7 @@ class Command(BaseCommand):
                     continue
                 if existing:
                     project.milestones.all().delete()
-                created += self._write(project, result['activities'])
+                created += write_activities(project, result['activities'])
 
         self.stdout.write(self.style.SUCCESS(
             f'Wrote {created} milestones. Skipped {skipped} project(s) that already had some '
@@ -80,33 +80,3 @@ class Command(BaseCommand):
                 f"  {result['sheet']}  ->  UNMATCHED: {result['reason']}"))
         for problem in result['problems']:
             self.stdout.write(self.style.WARNING(f'      weights: {problem}'))
-
-    def _write(self, project, activities):
-        """Build the tree from sheet order, not from the typed numbering.
-
-        The typed S.No column is unreliable — the MASCO sheet has two rows both
-        labelled 1.1 — so a child belongs to whichever parent it follows.
-        """
-        count = 0
-        parent = None
-        parent_order = 0
-        child_order = 0
-        for entry in activities:
-            if entry['level'] == 'parent':
-                parent_order += 1
-                child_order = 0
-                parent = ProjectMilestone.objects.create(
-                    project=project, order=parent_order, activity=entry['activity'],
-                    weightage=entry['weightage'],
-                    completion_date=entry['completion_date'],
-                    invoice_prerequisite=entry['invoice_prerequisite'])
-            else:
-                child_order += 1
-                ProjectMilestone.objects.create(
-                    project=project, parent=parent, order=child_order,
-                    activity=entry['activity'], weightage=entry['weightage'],
-                    completed_fraction=entry['completed_fraction'],
-                    completion_date=entry['completion_date'],
-                    invoice_prerequisite=entry['invoice_prerequisite'])
-            count += 1
-        return count
