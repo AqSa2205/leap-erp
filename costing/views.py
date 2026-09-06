@@ -3245,25 +3245,6 @@ def revision_email_thread(request, pk):
     return render(request, 'costing/_revision_email_thread.html', context)
 
 
-@require_POST
-def sync_costing_revision_email_thread(request, pk):
-    """AJAX: pull new messages for one revision's thread from Graph."""
-    from . import graph_thread
-    from .models import CostingSheetRevision
-
-    rev = get_object_or_404(CostingSheetRevision, pk=pk)
-    if not (_user_can_see_pricing(request.user) and _user_can_view_sheet(request.user, rev.sheet)):
-        return JsonResponse({'error': 'Permission denied.'}, status=403)
-    if not hasattr(rev, 'email_thread'):
-        return JsonResponse({'error': 'This revision has not been sent yet.'}, status=400)
-
-    try:
-        new_count = graph_thread.sync_thread(rev.email_thread)
-    except graph_thread.GraphThreadError as exc:
-        return JsonResponse({'error': str(exc)}, status=502)
-    return JsonResponse({'new_messages': new_count})
-
-
 def download_revision_email_attachment(request, message_pk, attachment_id):
     """Stream one reply's attachment straight from Graph — never stored
     locally, matching the plan's 'don't persist client attachments' choice."""
@@ -3407,11 +3388,6 @@ def link_revision_email(request, pk):
     if direction == 'in':
         thread.status = 'replied'
         thread.save(update_fields=['status'])
-
-    try:
-        graph_thread.sync_thread(thread)
-    except graph_thread.GraphThreadError:
-        pass  # the message we cared about is already linked; Refresh can backfill the rest later
 
     messages.success(request, f'Revision {rev.revision_label} — email linked.')
     return redirect('costing:detail', pk=sheet.pk)

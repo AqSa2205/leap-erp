@@ -1342,14 +1342,13 @@ class RevisionEmailThread(models.Model):
         related_name='revision_threads_sent',
     )
     sent_at = models.DateTimeField(auto_now_add=True)
-    last_synced_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f'{self.revision} - {self.subject}'
 
 
 class RevisionEmailMessage(models.Model):
-    """One email in a RevisionEmailThread - either one we sent, 
+    """One email in a RevisionEmailThread - either one we sent,
     or one that came back from the client (or anyone else on the thread)."""
 
     DIRECTION_CHOICES = [
@@ -1371,12 +1370,22 @@ class RevisionEmailMessage(models.Model):
     subject = models.CharField(max_length=500, blank=True)
     body_html = models.TextField(blank=True)
     body_text = models.TextField(blank=True)
-    sent_at = models.DateTimeField(null=True, blank= True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    attached_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text="When this was linked in the ERP - not the email's own timestamp.",
+    )
     has_attachments = models.BooleanField(default=False)
     attachment_meta = models.JSONField(null= True, blank=True)
 
     class Meta:
-        ordering = ['sent_at']
+        # Every message here is manually picked and classified one at a time
+        # (see link_revision_email) - display order must match the order a
+        # person actually attached them, not the email's own sent_at, since
+        # that's the only thing that reliably conveys "this was their second
+        # reply to our second message" when either side replies more than
+        # once. Insertion order (pk) is exactly that order.
+        ordering = ['pk']
 
     def __str__(self):
         return f'{self.get_direction_display()} - {self.subject}'

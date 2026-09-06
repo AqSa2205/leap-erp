@@ -1479,34 +1479,36 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
                             {% if rev.size_bytes %}{{ rev.size_bytes|filesizeformat }}{% else %}-{% endif %}
                         </td>
                         <td class="text-end">
-                            <a href="{{ rev.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary" title="Preview / download">
-                                <i class="bi bi-eye"></i>
-                            </a>
-                            {% if can_edit and not rev.email_thread %}
-                            <button type="button" class="btn btn-sm btn-outline-secondary" title="Send to client"
-                                    onclick="openSendRevisionEmail({{ rev.pk }}, '{{ rev.revision_label }}', '{{ rev.file.url|escapejs }}', '{{ sheet.title|escapejs }} — Costing {{ rev.revision_label|escapejs }}')">
-                                <i class="bi bi-envelope"></i>
-                            </button>
-                            {% endif %}
-                            {% if can_edit %}
-                            <button type="button" class="btn btn-sm btn-outline-secondary" title="Link a sent/received email"
-                                    onclick="openLinkRevisionEmail({{ rev.pk }})">
-                                <i class="bi bi-link-45deg"></i>
-                            </button>
-                            {% endif %}
+                            <div class="d-flex justify-content-end align-items-center gap-1">
+                                <a href="{{ rev.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary" title="Preview / download">
+                                    <i class="bi bi-eye"></i>
+                                </a>
+                                {% if can_edit and not rev.email_thread %}
+                                <button type="button" class="btn btn-sm btn-outline-secondary" title="Send to client"
+                                        onclick="openSendRevisionEmail({{ rev.pk }}, '{{ rev.revision_label }}', '{{ rev.file.url|escapejs }}', '{{ sheet.title|escapejs }} — Costing {{ rev.revision_label|escapejs }}')">
+                                    <i class="bi bi-envelope"></i>
+                                </button>
+                                {% endif %}
+                                {% if can_edit %}
+                                <button type="button" class="btn btn-sm btn-outline-secondary" title="Link a sent/received email"
+                                        onclick="openLinkRevisionEmail({{ rev.pk }})">
+                                    <i class="bi bi-link-45deg"></i>
+                                </button>
+                                {% endif %}
+                                {% if can_edit %}
+                                <form method="post" action="{% url 'costing:delete_revision' rev.pk %}" class="d-inline" onsubmit="return confirm('Delete revision {{ rev.revision_label }}? This cannot be undone.');">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </div>
                             {% if rev.email_thread %}
-                            <button type="button" class="btn btn-sm btn-outline-{% if rev.email_thread.status == 'replied' %}success{% else %}info{% endif %}"
-                                    title="View email thread" onclick="openRevisionEmailThread({{ rev.pk }})">
+                            <button type="button" class="btn btn-sm w-100 mt-1 btn-outline-{% if rev.email_thread.status == 'replied' %}success{% else %}info{% endif %}"
+                                    title="View conversation history" onclick="openRevisionEmailThread({{ rev.pk }})">
                                 <i class="bi bi-chevron-down me-1"></i>Convo History
                             </button>
-                            {% endif %}
-                            {% if can_edit %}
-                            <form method="post" action="{% url 'costing:delete_revision' rev.pk %}" class="d-inline" onsubmit="return confirm('Delete revision {{ rev.revision_label }}? This cannot be undone.');">
-                                {% csrf_token %}
-                                <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete">
-                                    <i class="bi bi-trash"></i>
-                                </button>
-                            </form>
                             {% endif %}
                         </td>
                     </tr>
@@ -2390,26 +2392,6 @@ var CAN_EDIT = {% if can_edit %}true{% else %}false{% endif %};
                 revisionEmailThreadBody.innerHTML = '<div class="text-danger">Failed to load: ' + err + '</div>';
             });
     };
-
-    if (revisionEmailThreadBody) {
-        revisionEmailThreadBody.addEventListener('click', function(e) {
-            var refreshBtn = e.target.closest('.js-refresh-thread');
-            if (refreshBtn) {
-                var syncUrl = refreshBtn.dataset.url;
-                var revPk = refreshBtn.dataset.revPk;
-                refreshBtn.disabled = true;
-                refreshBtn.textContent = 'Refreshing…';
-                fetch(syncUrl, {method: 'POST', headers: {'X-CSRFToken': csrfToken}})
-                    .then(function(r) { return r.json(); })
-                    .then(function(data) {
-                        if (data.error) { alert('Error: ' + data.error); return; }
-                        window.openRevisionEmailThread(revPk);
-                    })
-                    .catch(function(err) { alert('Refresh failed: ' + err); });
-                return;
-            }
-        });
-    }
 
     // ─── Terms template toggle ──────────────────────────────────
     var toggleTermUrl = '{% url "costing:toggle_term" sheet.pk %}';

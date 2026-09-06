@@ -82,7 +82,6 @@ urlpatterns = [
     # Revision -> client email thread
     path('revision/<int:pk>/send-email/', login_required(views.send_costing_revision_email), name='send_revision_email'),
     path('revision/<int:pk>/email-thread/', login_required(views.revision_email_thread), name='revision_email_thread'),
-    path('revision/<int:pk>/email-thread/sync/', login_required(views.sync_costing_revision_email_thread), name='sync_revision_email_thread'),
     path('revision-email/<int:message_pk>/attachment/<str:attachment_id>/', login_required(views.download_revision_email_attachment), name='download_revision_email_attachment'),
     path('revision/<int:pk>/browse-link/', login_required(views.browse_link_revision_email), name='browse_link_revision_email'),
     path('revision/<int:pk>/link/', login_required(views.link_revision_email), name='link_revision_email'),

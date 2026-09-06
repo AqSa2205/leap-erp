@@ -154,69 +154,6 @@ def _list_message_attachments(mailbox, message_id, headers):
     ]
 
 
-def list_thread_messages(mailbox, conversation_id):
-    """Every message in `conversation_id`, oldest first, as plain dicts:
-    id, subject, sender_name, sender_email, to, cc, sent_at, body_html,
-    has_attachments, attachments (list of {id, name, content_type, size}).
-
-    Follows @odata.nextLink until Graph stops paginating — a real client
-    conversation can run well past Graph's default page size (~10) once
-    there's been enough back-and-forth, and without this a long thread
-    would silently lose its oldest messages.
-
-    No $orderby here deliberately: combining it with the conversationId
-    $filter is a documented Graph limitation ('InefficientFilter' / "The
-    restriction or sort order is too complex") that 400s on plenty of real
-    mailboxes. Sorted in Python instead, after fetching every page."""
-    access_token = _get_access_token()
-    headers = {'Authorization': f'Bearer {access_token}'}
-    url = f'{GRAPH_BASE}/users/{quote(mailbox, safe="")}/messages'
-    params = {
-        '$filter': f"conversationId eq '{conversation_id}'",
-        '$select': 'id,subject,from,toRecipients,ccRecipients,sentDateTime,body,hasAttachments',
-        '$top': 50,
-    }
-
-    messages = []
-    next_url, next_params = url, params
-    while next_url:
-        try:
-            resp = requests.get(next_url, headers=headers, params=next_params, timeout=REQUEST_TIMEOUT)
-        except requests.RequestException as exc:
-            raise GraphThreadError(f'Could not reach the mailbox: {exc}')
-        if resp.status_code != 200:
-            raise GraphThreadError(f'Graph thread lookup failed ({resp.status_code}): {resp.text}')
-
-        data = resp.json()
-        for item in data.get('value', []):
-            sender = (item.get('from') or {}).get('emailAddress') or {}
-            sender_name, sender_email = sender.get('name', ''), sender.get('address', '')
-            if not sender_name:
-                sender_name, sender_email = parseaddr(sender_email)
-            body = item.get('body') or {}
-            attachments = (
-                _list_message_attachments(mailbox, item['id'], {'Authorization': f'Bearer {access_token}'})
-                if item.get('hasAttachments') else []
-            )
-            messages.append({
-                'id': item.get('id'),
-                'subject': item.get('subject') or '',
-                'sender_name': sender_name,
-                'sender_email': sender_email,
-                'to': _recipients_str(item.get('toRecipients')),
-                'cc': _recipients_str(item.get('ccRecipients')),
-                'sent_at': item.get('sentDateTime'),
-                'body_html': body.get('content') or '',
-                'has_attachments': bool(item.get('hasAttachments')),
-                'attachments': attachments,
-            })
-        # @odata.nextLink already carries the full query string — no params on the follow-up request.
-        next_url = data.get('@odata.nextLink')
-        next_params = None
-    messages.sort(key=lambda m: m['sent_at'] or '')
-    return messages
-
-
 def fetch_attachment_bytes(mailbox, message_id, attachment_id):
     """One specific attachment's bytes + metadata, for the download-proxy
     view — never persisted locally. Returns (filename, content_type, bytes)."""
@@ -240,50 +177,6 @@ def fetch_attachment_bytes(mailbox, message_id, attachment_id):
         data.get('contentType') or 'application/octet-stream',
         base64.b64decode(content_bytes),
     )
-
-
-def sync_thread(thread):
-    """Pull every message in `thread`'s conversation from Graph, save any
-    we haven't seen yet as RevisionEmailMessage rows, and update the
-    thread's status/last_synced_at. Safe to call repeatedly — messages are
-    matched (and skipped if already stored) by graph_message_id, which is
-    a unique column. Returns how many new messages were saved."""
-    from django.utils import timezone
-    from django.utils.dateparse import parse_datetime
-    from .models import RevisionEmailMessage
-
-    messages = list_thread_messages(thread.mailbox, thread.graph_conversation_id)
-    existing_ids = set(
-        RevisionEmailMessage.objects.filter(thread=thread).values_list('graph_message_id', flat=True)
-    )
-
-    new_count = 0
-    for msg in messages:
-        if msg['id'] in existing_ids:
-            continue
-        direction = 'out' if msg['sender_email'].lower() == thread.mailbox.lower() else 'in'
-        RevisionEmailMessage.objects.create(
-            thread=thread,
-            graph_message_id=msg['id'],
-            direction=direction,
-            sender_name=msg['sender_name'],
-            sender_email=msg['sender_email'],
-            to_recipients=msg['to'],
-            cc_recipients=msg['cc'],
-            subject=msg['subject'],
-            body_html=msg['body_html'],
-            body_text=html_to_text(msg['body_html']),
-            sent_at=parse_datetime(msg['sent_at']) if msg['sent_at'] else None,
-            has_attachments=msg['has_attachments'],
-            attachment_meta=msg['attachments'] or None,
-        )
-        new_count += 1
-
-    if new_count and RevisionEmailMessage.objects.filter(thread=thread, direction='in').exists():
-        thread.status = 'replied'
-    thread.last_synced_at = timezone.now()
-    thread.save(update_fields=['status', 'last_synced_at'])
-    return new_count
 
 
 def list_recent_messages(mailbox, top=50):

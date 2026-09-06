@@ -1619,77 +1619,6 @@ class HtmlToTextTests(TestCase):
         self.assertEqual(html_to_text(None), '')
 
 
-class ListThreadMessagesPaginationTests(TestCase):
-    """A real client conversation can run past Graph's default page size
-    once there's been enough back-and-forth — list_thread_messages must
-    follow @odata.nextLink rather than silently dropping older messages."""
-
-    def _page(self, items, next_link=None):
-        """`items` is a list of (id, sentDateTime) tuples."""
-        value = [
-            {'id': i, 'subject': 's', 'from': {'emailAddress': {'name': 'A', 'address': 'a@x.com'}},
-             'toRecipients': [], 'ccRecipients': [], 'sentDateTime': sent_at,
-             'body': {'content': '<p>hi</p>'}, 'hasAttachments': False}
-            for i, sent_at in items
-        ]
-        data = {'value': value}
-        if next_link:
-            data['@odata.nextLink'] = next_link
-        return data
-
-    def test_follows_pagination_across_pages(self):
-        from unittest.mock import patch, MagicMock
-        from costing import graph_thread
-
-        page1 = self._page([('m1', '2026-01-01T00:00:00Z'), ('m2', '2026-01-02T00:00:00Z')],
-                            next_link='https://graph.microsoft.com/v1.0/next-page')
-        page2 = self._page([('m3', '2026-01-03T00:00:00Z')])
-        responses = [MagicMock(status_code=200, json=lambda: page1),
-                     MagicMock(status_code=200, json=lambda: page2)]
-
-        with patch.object(graph_thread, '_get_access_token', return_value='tok'), \
-             patch('costing.graph_thread.requests.get', side_effect=responses) as mock_get:
-            messages = graph_thread.list_thread_messages('mailbox@x.com', 'conv-1')
-
-        self.assertEqual([m['id'] for m in messages], ['m1', 'm2', 'm3'])
-        self.assertEqual(mock_get.call_count, 2)
-        self.assertEqual(mock_get.call_args_list[1].args[0], 'https://graph.microsoft.com/v1.0/next-page')
-        self.assertIsNone(mock_get.call_args_list[1].kwargs['params'])
-
-    def test_no_orderby_sent_to_graph(self):
-        """Regression: combining $filter=conversationId with $orderby is a
-        documented Graph limitation that 400s ('InefficientFilter') on real
-        mailboxes — reported live from a real thread's Refresh button."""
-        from unittest.mock import patch, MagicMock
-        from costing import graph_thread
-
-        page = self._page([('m1', '2026-01-01T00:00:00Z')])
-        with patch.object(graph_thread, '_get_access_token', return_value='tok'), \
-             patch('costing.graph_thread.requests.get',
-                   return_value=MagicMock(status_code=200, json=lambda: page)) as mock_get:
-            graph_thread.list_thread_messages('mailbox@x.com', 'conv-1')
-
-        self.assertNotIn('$orderby', mock_get.call_args.kwargs['params'])
-
-    def test_sorts_out_of_order_pages_chronologically(self):
-        """Graph makes no ordering promise once $orderby is dropped —
-        sorting must happen on our side, across every page fetched."""
-        from unittest.mock import patch, MagicMock
-        from costing import graph_thread
-
-        page1 = self._page([('newer', '2026-01-05T00:00:00Z')],
-                            next_link='https://graph.microsoft.com/v1.0/next-page')
-        page2 = self._page([('oldest', '2026-01-01T00:00:00Z'), ('middle', '2026-01-03T00:00:00Z')])
-        responses = [MagicMock(status_code=200, json=lambda: page1),
-                     MagicMock(status_code=200, json=lambda: page2)]
-
-        with patch.object(graph_thread, '_get_access_token', return_value='tok'), \
-             patch('costing.graph_thread.requests.get', side_effect=responses):
-            messages = graph_thread.list_thread_messages('mailbox@x.com', 'conv-1')
-
-        self.assertEqual([m['id'] for m in messages], ['oldest', 'middle', 'newer'])
-
-
 class LinkRevisionEmailTests(TestCase):
     """The Mail.ReadWrite-free workaround: a user composes/replies via their
     own Outlook, then picks that message from the unified browse-and-link
@@ -1740,11 +1669,10 @@ class LinkRevisionEmailTests(TestCase):
         self.assertContains(resp, 'Reply')
         self.assertContains(resp, 'Offer')
 
-    def test_link_as_sent_creates_thread_and_backfills_via_sync(self):
+    def test_link_as_sent_creates_thread(self):
         from unittest.mock import patch
         self.client.force_login(self.alice)
-        with patch('costing.graph_thread.get_message_detail', return_value=self._detail()), \
-             patch('costing.graph_thread.sync_thread', return_value=0) as mocked_sync:
+        with patch('costing.graph_thread.get_message_detail', return_value=self._detail()):
             resp = self.client.post(
                 reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
                 {'message_id': 'm1', 'direction': 'out'})
@@ -1757,7 +1685,7 @@ class LinkRevisionEmailTests(TestCase):
         self.assertEqual(thread.status, 'sent')
         msg = RevisionEmailMessage.objects.get(thread=thread)
         self.assertEqual(msg.direction, 'out')
-        mocked_sync.assert_called_once_with(thread)
+        self.assertIsNotNone(msg.attached_at)  # recorded regardless of the email's own sent_at
 
     def test_link_as_received_creates_thread_already_marked_replied(self):
         """Classification, not sender-address inference, decides direction —
@@ -1766,8 +1694,7 @@ class LinkRevisionEmailTests(TestCase):
         from unittest.mock import patch
         self.client.force_login(self.alice)
         detail = self._detail(sender='client@example.com')
-        with patch('costing.graph_thread.get_message_detail', return_value=detail), \
-             patch('costing.graph_thread.sync_thread', return_value=0):
+        with patch('costing.graph_thread.get_message_detail', return_value=detail):
             resp = self.client.post(
                 reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
                 {'message_id': 'm1', 'direction': 'in'})
@@ -1780,13 +1707,11 @@ class LinkRevisionEmailTests(TestCase):
     def test_second_link_appends_to_the_same_thread_not_a_duplicate(self):
         from unittest.mock import patch
         self.client.force_login(self.alice)
-        with patch('costing.graph_thread.get_message_detail', return_value=self._detail('m1')), \
-             patch('costing.graph_thread.sync_thread', return_value=0):
+        with patch('costing.graph_thread.get_message_detail', return_value=self._detail('m1')):
             self.client.post(reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
                               {'message_id': 'm1', 'direction': 'out'})
         with patch('costing.graph_thread.get_message_detail',
-                   return_value=self._detail('m2', sender='client@example.com')), \
-             patch('costing.graph_thread.sync_thread', return_value=0):
+                   return_value=self._detail('m2', sender='client@example.com')):
             resp = self.client.post(reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
                                      {'message_id': 'm2', 'direction': 'in'})
         self.assertEqual(resp.status_code, 302)
@@ -1795,6 +1720,38 @@ class LinkRevisionEmailTests(TestCase):
         thread = RevisionEmailThread.objects.get(revision=self.rev)
         self.assertEqual(thread.status, 'replied')  # the 'in' message flipped it
         self.assertEqual(RevisionEmailMessage.objects.filter(thread=thread).count(), 2)
+
+    def test_messages_display_in_attachment_order_not_email_timestamp(self):
+        """The reported bug: attach two 'received' messages (real, LATER
+        timestamps) then one 'sent' message with an EARLIER timestamp — the
+        thread must still show them in the order they were attached, since
+        that's the only thing that reliably says 'this was their 2nd reply
+        to our 2nd message' once either side replies more than once."""
+        from unittest.mock import patch
+        self.client.force_login(self.alice)
+
+        def detail(msg_id, sender, sent_at):
+            d = self._detail(msg_id, sender=sender)
+            d['sent_at'] = sent_at
+            return d
+
+        with patch('costing.graph_thread.get_message_detail',
+                   return_value=detail('recv1', 'client@example.com', '2026-08-25T09:00:00Z')):
+            self.client.post(reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
+                              {'message_id': 'recv1', 'direction': 'in'})
+        with patch('costing.graph_thread.get_message_detail',
+                   return_value=detail('recv2', 'client@example.com', '2026-08-25T10:00:00Z')):
+            self.client.post(reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
+                              {'message_id': 'recv2', 'direction': 'in'})
+        with patch('costing.graph_thread.get_message_detail',
+                   return_value=detail('sent1', 'alice@leap-arabia.com', '2026-08-20T08:00:00Z')):
+            self.client.post(reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
+                              {'message_id': 'sent1', 'direction': 'out'})
+
+        from costing.models import RevisionEmailThread
+        thread = RevisionEmailThread.objects.get(revision=self.rev)
+        ordered_ids = list(thread.messages.values_list('graph_message_id', flat=True))
+        self.assertEqual(ordered_ids, ['recv1', 'recv2', 'sent1'])  # attachment order, not sent_at order
 
     def test_rejects_missing_direction(self):
         self.client.force_login(self.alice)

@@ -15,7 +15,6 @@
     </div>
     <div class="small text-muted">
         Sent {{ thread.sent_at|date:"d M Y H:i" }} by {% if thread.sent_by %}{{ thread.sent_by.get_full_name|default:thread.sent_by.username }}{% else %}&mdash;{% endif %}
-        {% if thread.last_synced_at %} &middot; Last synced {{ thread.last_synced_at|date:"d M Y H:i" }}{% endif %}
     </div>
 </div>
 
@@ -53,16 +52,14 @@
             {% endfor %}
         </div>
         {% endif %}
+        <div class="small text-muted mt-2" style="font-size:0.7rem;">
+            <i class="bi bi-link-45deg me-1"></i>Attached {{ msg.attached_at|date:"d M Y H:i" }}
+        </div>
     </div>
     {% empty %}
     <div class="text-center text-muted py-3 small">No messages yet.</div>
     {% endfor %}
 </div>
-
-<button type="button" class="btn btn-sm btn-outline-primary js-refresh-thread"
-        data-url="{% url 'costing:sync_revision_email_thread' rev.pk %}" data-rev-pk="{{ rev.pk }}">
-    <i class="bi bi-arrow-clockwise me-1"></i>Refresh
-</button>
 {% else %}
 <div class="text-center text-muted py-3">This revision hasn't been sent to a client yet. Use the link button to attach the email once it's sent.</div>
 {% endif %}
