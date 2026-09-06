@@ -2424,9 +2424,12 @@ class PipelineDeadlinesRequiredTests(TestCase):
         which fields it is waiting for."""
         self.client.force_login(self.user)
         body = self.client.get(reverse('projects:create')).content.decode()
-        self.assertIn('Submission Deadline *', body)
-        self.assertIn('BOM Started Deadline *', body)
-        self.assertIn('Finalised Deadline *', body)
+        # The asterisk is now wrapped in a tooltip span (hover shows "This
+        # field is mandatory"), so check for the field label plus that
+        # tooltip markup rather than a plain literal asterisk.
+        self.assertIn('Submission Deadline <span data-bs-toggle="tooltip"', body)
+        self.assertIn('BOM Started Deadline <span data-bs-toggle="tooltip"', body)
+        self.assertIn('Finalised Deadline <span data-bs-toggle="tooltip"', body)
 
     def test_the_edit_page_does_not_mark_them_required(self):
         """The asterisk has to follow the rule, or the label promises
@@ -2448,3 +2451,171 @@ class PipelineDeadlinesRequiredTests(TestCase):
         self.assertContains(response, 'text-danger')
         self.assertFalse(Project.objects.filter(
             proposal_reference='DLT-2026-0001').exists())
+
+
+
+
+class PipelineDeadlineOrderingTests(PipelineDeadlinesRequiredTests):
+    """Submission Deadline must be strictly after every milestone
+    deadline, and the milestones themselves must follow in sequence:
+    BOM Started <= Handed to Sales <= Costing Started <= Finalized."""
+
+    # -- submission vs milestones --
+
+    def test_submission_after_every_milestone_is_valid(self):
+        form = self._form(self._payload())
+        self.assertTrue(form.is_valid(), form.errors.as_json())
+
+    def test_milestone_equal_to_submission_is_rejected(self):
+        form = self._form(self._payload(finalized_deadline='2026-10-01'))
+        self.assertFalse(form.is_valid())
+        self.assertIn('finalized_deadline', form.errors)
+
+    def test_milestone_after_submission_is_rejected(self):
+        form = self._form(self._payload(finalized_deadline='2026-10-15'))
+        self.assertFalse(form.is_valid())
+        self.assertIn('finalized_deadline', form.errors)
+
+    # -- milestone sequence --
+
+    def test_milestones_in_correct_sequence_is_valid(self):
+        form = self._form(self._payload())
+        self.assertTrue(form.is_valid(), form.errors.as_json())
+
+    def test_equal_dates_between_consecutive_milestones_is_allowed(self):
+        form = self._form(self._payload(
+            bom_started_deadline='2026-09-10',
+            handed_over_deadline='2026-09-10',
+        ))
+        self.assertTrue(form.is_valid(), form.errors.as_json())
+
+    def test_finalized_before_bom_started_is_rejected(self):
+        form = self._form(self._payload(
+            bom_started_deadline='2026-09-20',
+            handed_over_deadline='2026-09-21',
+            costing_started_deadline='2026-09-22',
+            finalized_deadline='2026-09-05',
+        ))
+        self.assertFalse(form.is_valid())
+        self.assertIn('finalized_deadline', form.errors)
+
+    def test_costing_started_before_handed_over_is_rejected(self):
+        form = self._form(self._payload(
+            bom_started_deadline='2026-09-10',
+            handed_over_deadline='2026-09-20',
+            costing_started_deadline='2026-09-15',
+            finalized_deadline='2026-09-25',
+        ))
+        self.assertFalse(form.is_valid())
+        self.assertIn('costing_started_deadline', form.errors)
+
+    # -- edge cases --
+
+    def test_ordering_check_skips_blank_milestones_on_edit(self):
+        """On edit, deadlines are optional (see PipelineDeadlinesRequiredTests'
+        docstring) - a blank milestone must not crash the ordering check,
+        just be skipped."""
+        instance = Project.objects.create(
+            project_name='Existing', proposal_reference='DLT-EXIST',
+            status=self.status, region=self.region)
+        data = self._payload(bom_started_deadline='', handed_over_deadline='')
+        form = self._form(data, instance=instance)
+        self.assertTrue(form.is_valid(), form.errors.as_json())
+
+
+
+
+
+    def test_all_deadlines_blank_on_edit_is_valid(self):
+        """Nothing to compare against nothing - the ordering check must
+        not crash or falsely reject when every deadline is blank."""
+        instance = Project.objects.create(
+            project_name='Existing', proposal_reference='DLT-EXIST2',
+            status=self.status, region=self.region)
+        data = self._payload(
+            submission_deadline='', bom_started_deadline='',
+            handed_over_deadline='', costing_started_deadline='',
+            finalized_deadline='')
+        form = self._form(data, instance=instance)
+        self.assertTrue(form.is_valid(), form.errors.as_json())
+
+    def test_multiple_violations_are_all_reported(self):
+        """A submission-vs-milestone violation and a sequence violation
+        happening together must both surface, not just whichever the
+        code happens to check first."""
+        form = self._form(self._payload(
+            bom_started_deadline='2026-09-25',
+            handed_over_deadline='2026-09-20',
+            finalized_deadline='2026-10-15',
+        ))
+        self.assertFalse(form.is_valid())
+        self.assertIn('handed_over_deadline', form.errors)
+        self.assertIn('finalized_deadline', form.errors)
+
+    def test_out_of_order_deadlines_rejected_via_create_view(self):
+        """The ordering check must be enforced through the actual view
+        and POST flow, not just when the form is exercised directly."""
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse('projects:create'),
+            self._payload(finalized_deadline='2026-09-05'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'text-danger')
+        self.assertFalse(Project.objects.filter(
+            proposal_reference='DLT-2026-0001').exists())
+
+
+
+class ProjectFormOwnerFilterTests(TestCase):
+    """The owner dropdown on ProjectForm must actually be filtered by the
+    logged-in user's role - this logic previously sat after a return
+    inside clean() and never ran at all, so the dropdown showed every
+    active user to everyone regardless of role or region."""
+
+    def setUp(self):
+        self.region_a = Region.objects.create(name='Region A', code='OFA')
+        self.region_b = Region.objects.create(name='Region B', code='OFB')
+
+        super_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        manager_role, _ = Role.objects.get_or_create(name=Role.MANAGER)
+        rep_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+
+        self.super_user = User.objects.create_user('ownerfiltersuper', password='x')
+        self.super_user.role = super_role
+        self.super_user.save()
+
+        self.manager_a = User.objects.create_user('ownerfiltermgra', password='x')
+        self.manager_a.role = manager_role
+        self.manager_a.region = self.region_a
+        self.manager_a.save()
+
+        self.rep_a = User.objects.create_user('ownerfilterrepa', password='x')
+        self.rep_a.role = rep_role
+        self.rep_a.region = self.region_a
+        self.rep_a.save()
+
+        self.rep_b = User.objects.create_user('ownerfilterrepb', password='x')
+        self.rep_b.role = rep_role
+        self.rep_b.region = self.region_b
+        self.rep_b.save()
+
+    def test_super_admin_sees_every_active_user(self):
+        from projects.forms import ProjectForm
+        form = ProjectForm(user=self.super_user)
+        owner_ids = set(form.fields['owner'].queryset.values_list('pk', flat=True))
+        self.assertIn(self.manager_a.pk, owner_ids)
+        self.assertIn(self.rep_a.pk, owner_ids)
+        self.assertIn(self.rep_b.pk, owner_ids)
+
+    def test_manager_sees_only_their_own_region(self):
+        from projects.forms import ProjectForm
+        form = ProjectForm(user=self.manager_a)
+        owner_ids = set(form.fields['owner'].queryset.values_list('pk', flat=True))
+        self.assertIn(self.rep_a.pk, owner_ids)
+        self.assertNotIn(self.rep_b.pk, owner_ids)
+
+    def test_sales_rep_sees_only_themselves(self):
+        from projects.forms import ProjectForm
+        form = ProjectForm(user=self.rep_a)
+        owner_ids = set(form.fields['owner'].queryset.values_list('pk', flat=True))
+        self.assertEqual(owner_ids, {self.rep_a.pk})
