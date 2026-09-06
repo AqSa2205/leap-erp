@@ -1,0 +1,170 @@
+{% extends 'base.html' %}
+
+{% block title %}Import Milestones{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-3">
+    <div>
+        <a href="{% url 'pmo:board' %}" class="small text-decoration-none">
+            <i class="bi bi-arrow-left me-1"></i>Delivery Board
+        </a>
+        <h4 class="mb-0 mt-1"><i class="bi bi-file-earmark-arrow-up me-2"></i>Import Milestones</h4>
+        <div class="small text-muted">
+            Loads the per-project milestone sheets from the projects overview workbook.
+        </div>
+    </div>
+</div>
+
+{% if not results %}
+<div class="card">
+    <div class="card-body">
+        <form method="post" enctype="multipart/form-data">
+            {% csrf_token %}
+            <div class="mb-3">
+                <label for="workbook" class="form-label fw-bold">Projects overview workbook (.xlsx)</label>
+                <input type="file" name="workbook" id="workbook" accept=".xlsx"
+                       class="form-control" required>
+                <div class="form-text">
+                    Nothing is written yet — the next screen shows exactly what would happen.
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-search me-1"></i>Read the workbook
+            </button>
+        </form>
+    </div>
+    <div class="card-footer small text-muted">
+        {% comment %} Said before the upload rather than only in a failure
+        message: somebody whose sheet is named "Jazan milestones" needs to know
+        why it is skipped before they wonder where it went. {% endcomment %}
+        Sheets are matched to projects on the Leap reference in the sheet name —
+        <code>P02195-Milestones(JAZAN)</code>, <code>LNA-2308-Milestones(MASCO)</code>.
+        A sheet whose reference matches no project, or more than one, is reported
+        rather than guessed at. Dashboard, Budget and the chart-helper sheets are ignored.
+    </div>
+</div>
+
+{% else %}
+
+<div class="alert alert-info d-flex align-items-center gap-2">
+    <i class="bi bi-info-circle-fill"></i>
+    <div>
+        Read <strong>{{ filename }}</strong> — {{ results|length }} milestone sheet{{ results|length|pluralize }},
+        {{ matched|length }} matched to a project.
+        <strong>Nothing has been written yet.</strong>
+    </div>
+</div>
+
+{% if unmatched %}
+<div class="alert alert-warning">
+    <div class="fw-bold mb-1">
+        <i class="bi bi-question-circle-fill me-1"></i>{{ unmatched|length }} sheet{{ unmatched|length|pluralize }}
+        could not be matched to a project
+    </div>
+    <div class="small mb-2">
+        These are skipped. Creating a project from a sheet name is how the same job
+        ends up in the system under several spellings, so it is not done here — fix the
+        project's Leap reference, or create the project first.
+    </div>
+    <ul class="mb-0 small">
+        {% for result in unmatched %}
+        <li><code>{{ result.sheet }}</code> — {{ result.reason }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+{% if with_problems %}
+<div class="alert alert-danger">
+    <div class="fw-bold mb-1">
+        <i class="bi bi-exclamation-octagon-fill me-1"></i>Weights that do not add up
+    </div>
+    <div class="small mb-2">
+        These sheets import, but the projects cannot reach 100% until somebody who knows
+        them says which figure is right.
+    </div>
+    <ul class="mb-0 small">
+        {% for result in with_problems %}
+        <li>
+            <code>{{ result.sheet }}</code>
+            <ul>{% for problem in result.problems %}<li>{{ problem }}</li>{% endfor %}</ul>
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<div class="card mb-3">
+    <div class="card-header bg-white py-2 fw-semibold">What would be imported</div>
+    <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>Sheet</th>
+                    <th>Project</th>
+                    <th class="text-end">Activities</th>
+                    <th>Already has</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for result in results %}
+                <tr class="{% if not result.project %}table-secondary{% endif %}">
+                    <td class="small"><code>{{ result.sheet }}</code></td>
+                    <td class="small">
+                        {% if result.project %}
+                        {{ result.project.project_name|truncatechars:40 }}
+                        <span class="text-muted">({{ result.project.proposal_reference|truncatechars:24 }})</span>
+                        {% else %}
+                        <span class="text-muted">— skipped</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end">{{ result.activities|length }}</td>
+                    <td class="small">
+                        {% if result.existing %}
+                        <span class="badge bg-warning text-dark">{{ result.existing }} existing</span>
+                        {% elif result.project %}
+                        <span class="text-muted">none</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<form method="post" action="{% url 'pmo:milestone_import_apply' %}">
+    {% csrf_token %}
+    <input type="hidden" name="payload" value="{{ payload }}">
+    <div class="card">
+        <div class="card-body">
+            {% comment %} Default off. Re-running the import is a normal thing
+            to do, and silently discarding weeks of progress updates because
+            somebody uploaded the file twice is not recoverable. {% endcomment %}
+            <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" name="replace" id="replace">
+                <label class="form-check-label" for="replace">
+                    <strong>Replace existing milestones</strong>
+                    <div class="small text-muted">
+                        Projects that already have milestones are left alone unless this is
+                        ticked. Replacing deletes their current activities <em>and the
+                        progress history recorded against them</em>.
+                    </div>
+                </label>
+            </div>
+            {% if already_have %}
+            <div class="alert alert-warning small py-2">
+                {{ already_have|length }} of these project{{ already_have|length|pluralize }}
+                already {{ already_have|length|pluralize:"has,have" }} milestones.
+                Without the tick above {{ already_have|length|pluralize:"it is,they are" }} skipped.
+            </div>
+            {% endif %}
+            <button type="submit" class="btn btn-success">
+                <i class="bi bi-check2 me-1"></i>Import {{ matched|length }} project{{ matched|length|pluralize }}
+            </button>
+            <a href="{% url 'pmo:milestone_import' %}" class="btn btn-outline-secondary">Start again</a>
+        </div>
+    </div>
+</form>
+{% endif %}
+{% endblock %}
