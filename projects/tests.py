@@ -11,7 +11,7 @@ from django.utils.http import urlencode
 from accounts.models import Role, User
 from projects.models import Region, ProjectStatus, Project
 from costing.models import CostingSheet, most_advanced_stage, pipeline_stage_badge
-from django.test import TestCase, Client
+from django.test import TestCase, Client, override_settings
 from django.urls import reverse
 from accounts.models import User, Role
 from projects.models import Project, Region, ProjectStatus
@@ -957,7 +957,8 @@ class AttachEmailToProjectHelperTests(TestCase):
         raw = _make_eml_bytes(subject=subject, attachments=attachments or [])
         with patch('projects.graph_mail.fetch_raw_message_bytes', return_value=raw):
             return _attach_email_to_project(
-                self.project, self.user, message_id, attachment_types=attachment_types)
+                self.project, self.user, 'test@leap-arabia.com', message_id,
+                attachment_types=attachment_types)
 
     def test_creates_pipeline_email_and_document_with_default_type(self):
         pipeline_email, created_count = self._attach(
@@ -1049,7 +1050,7 @@ class AttachEmailToProjectHelperTests(TestCase):
         with patch('projects.graph_mail.fetch_raw_message_bytes',
                    side_effect=graph_mail.GraphMailError('mailbox unreachable')):
             with self.assertRaises(graph_mail.GraphMailError):
-                _attach_email_to_project(self.project, self.user, 'msg-x')
+                _attach_email_to_project(self.project, self.user, 'test@leap-arabia.com', 'msg-x')
         self.assertEqual(self.PipelineEmail.objects.filter(project=self.project).count(), 0)
         self.assertEqual(self.Document.objects.filter(project=self.project).count(), 0)
 
@@ -1058,7 +1059,7 @@ class AttachEmailToProjectHelperTests(TestCase):
         from projects.views import _attach_email_to_project
         with patch('projects.graph_mail.fetch_raw_message_bytes', return_value=b''):
             with self.assertRaises(EmailParseError):
-                _attach_email_to_project(self.project, self.user, 'msg-empty')
+                _attach_email_to_project(self.project, self.user, 'test@leap-arabia.com', 'msg-empty')
         self.assertEqual(self.PipelineEmail.objects.filter(project=self.project).count(), 0)
 
 
@@ -1073,6 +1074,8 @@ class LinkPipelineEmailExistingProjectViewTests(TestCase):
         self.status = ProjectStatus.objects.create(name='Open', category='active')
         sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
         self.user = User.objects.create_user('linker', password='pass12345', role=sales_role)
+        from projects.models import MonitoredMailbox
+        MonitoredMailbox.objects.create(owner=self.user, email_address='linker@leap-arabia.com')
         self.project = Project.objects.create(
             project_name='Linkable', proposal_reference='TST-LINK-1',
             region=self.region, status=self.status, owner=self.user)
@@ -1218,6 +1221,8 @@ class LinkPipelineEmailNewViewTests(TestCase):
         self.PipelineEmail = PipelineEmail
         sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
         self.user = User.objects.create_user('creator', password='pass12345', role=sales_role)
+        from projects.models import MonitoredMailbox
+        MonitoredMailbox.objects.create(owner=self.user, email_address='creator@leap-arabia.com')
         self.url = reverse('projects:link_pipeline_email_new')
 
     def _inbox_message(self):
@@ -1307,6 +1312,8 @@ class ViewPipelineInboxAttachmentTests(TestCase):
         self.status = ProjectStatus.objects.create(name='Open', category='active')
         sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
         self.user = User.objects.create_user('viewer', password='pass12345', role=sales_role)
+        from projects.models import MonitoredMailbox
+        MonitoredMailbox.objects.create(owner=self.user, email_address='viewer@leap-arabia.com')
         # owner=self.user: a Sales Rep only sees/acts on projects they own
         # (ProjectPermissionMixin.get_queryset, reused via
         # _scoped_project_or_404 for link_pipeline_email). An ownerless
@@ -1573,6 +1580,8 @@ class ProjectCreateViewPickedEmailTests(TestCase):
         self.user.role = role
         self.user.region = self.region
         self.user.save()
+        from projects.models import MonitoredMailbox
+        MonitoredMailbox.objects.create(owner=self.user, email_address='pmcreator@leap-arabia.com')
         self.client.force_login(self.user)
         self.url = reverse('projects:create')
 
@@ -1938,6 +1947,142 @@ class InlineAttachmentAlignmentTests(TestCase):
             for i, a in enumerate(attachments)
         }
         self.assertEqual(resolved, {'quotation.pdf': 'client_rfq'})
+
+
+class MonitoredMailboxPrivacyTests(TestCase):
+    """The core privacy guarantee for "Add Emails": each employee's linked
+    mailbox is visible only to them. _user_mailbox() (views.py) derives the
+    mailbox purely from request.user — never from any request parameter —
+    so there is no value a user could send (URL, POST field, hidden JSON)
+    that would let them reach someone else's mailbox."""
+
+    def setUp(self):
+        from projects.views import _user_mailbox
+        self._user_mailbox = _user_mailbox
+        sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        self.alice = User.objects.create_user('alice_priv', password='x', role=sales_role)
+        self.bob = User.objects.create_user('bob_priv', password='x', role=sales_role)
+        self.carol = User.objects.create_user('carol_priv', password='x', role=sales_role)  # never linked
+
+    def test_each_user_sees_only_their_own_mailbox(self):
+        from projects.models import MonitoredMailbox
+        MonitoredMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        MonitoredMailbox.objects.create(owner=self.bob, email_address='bob@leap-arabia.com')
+        self.assertEqual(self._user_mailbox(self.alice), 'alice@leap-arabia.com')
+        self.assertEqual(self._user_mailbox(self.bob), 'bob@leap-arabia.com')
+        self.assertNotEqual(self._user_mailbox(self.alice), self._user_mailbox(self.bob))
+
+    def test_unlinked_user_gets_nothing_once_someone_else_is_linked(self):
+        """The critical negative case: carol has no MonitoredMailbox of her
+        own, but alice does. Carol must get NOTHING — not alice's mailbox,
+        not an error that reveals alice's address, just an empty result the
+        view layer turns into "no mailbox linked"."""
+        from projects.models import MonitoredMailbox
+        MonitoredMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        self.assertEqual(self._user_mailbox(self.carol), '')
+
+    @override_settings(PIPELINE_EMAIL_MAILBOX='legacy@leap-arabia.com')
+    def test_no_legacy_fallback_even_with_zero_rows_anywhere(self):
+        """Regression: an earlier version fell back to a single shared
+        mailbox setting until the first MonitoredMailbox row was ever
+        created — meaning every unlinked user could browse a real shared
+        mailbox before any admin had linked anyone. The identical pattern
+        was caught live on the costing-revision feature (an unlinked user
+        saw a colleague's real mailbox) before this branch ever shipped.
+        No user gets access without an explicit, active row of their own —
+        not even if the old setting is still present in the environment."""
+        from projects.models import MonitoredMailbox
+        self.assertEqual(MonitoredMailbox.objects.count(), 0)
+        self.assertEqual(self._user_mailbox(self.carol), '')
+        self.assertEqual(self._user_mailbox(self.alice), '')
+
+        MonitoredMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        self.assertEqual(self._user_mailbox(self.carol), '')
+        self.assertEqual(self._user_mailbox(self.alice), 'alice@leap-arabia.com')
+
+    def test_deactivating_a_mailbox_revokes_access_immediately(self):
+        from projects.models import MonitoredMailbox
+        mb = MonitoredMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        self.assertEqual(self._user_mailbox(self.alice), 'alice@leap-arabia.com')
+        mb.is_active = False
+        mb.save()
+        self.assertEqual(self._user_mailbox(self.alice), '')
+
+    def test_deactivating_one_persons_mailbox_never_exposes_a_colleagues(self):
+        """Regression test for a real bug caught while writing these tests:
+        _user_mailbox() used to gate the legacy fallback on "is there any
+        ACTIVE mailbox anywhere", so deactivating the only mailbox in the
+        system made every unlinked/deactivated user fall back to
+        PIPELINE_EMAIL_MAILBOX — a real address in production. With bob
+        still active and alice deactivated, alice must get NOTHING, never
+        bob's mailbox and never the legacy one."""
+        from projects.models import MonitoredMailbox
+        alice_mb = MonitoredMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        MonitoredMailbox.objects.create(owner=self.bob, email_address='bob@leap-arabia.com')
+        alice_mb.is_active = False
+        alice_mb.save()
+        self.assertEqual(self._user_mailbox(self.alice), '')
+        self.assertEqual(self._user_mailbox(self.bob), 'bob@leap-arabia.com')
+
+    def test_owner_can_only_have_one_mailbox(self):
+        """OneToOneField at the database level — not just a convention a
+        view happens to follow."""
+        from projects.models import MonitoredMailbox
+        from django.db import IntegrityError, transaction
+        MonitoredMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                MonitoredMailbox.objects.create(owner=self.alice, email_address='alice-alt@leap-arabia.com')
+
+    def test_two_owners_cannot_share_the_same_mailbox_address(self):
+        """unique=True on email_address — two employees can never end up
+        both linked to the same inbox, which would defeat the whole point."""
+        from projects.models import MonitoredMailbox
+        from django.db import IntegrityError, transaction
+        MonitoredMailbox.objects.create(owner=self.alice, email_address='shared@leap-arabia.com')
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                MonitoredMailbox.objects.create(owner=self.bob, email_address='shared@leap-arabia.com')
+
+    def test_spoofed_mailbox_query_param_has_no_effect_on_inbox_list(self):
+        """bob tries to browse alice's mailbox by editing the URL — proves
+        the request value is never even read, not just validated away."""
+        from projects.models import MonitoredMailbox
+        MonitoredMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        MonitoredMailbox.objects.create(owner=self.bob, email_address='bob@leap-arabia.com')
+        client = Client()
+        client.force_login(self.bob)
+        with patch('projects.graph_mail.list_inbox_messages') as mock_list:
+            mock_list.return_value = []
+            client.get('/projects/link-email/new/?mailbox=alice@leap-arabia.com')
+        mock_list.assert_called_once_with('bob@leap-arabia.com')
+
+    def test_spoofed_mailbox_query_param_has_no_effect_on_attachment_view(self):
+        from projects.models import MonitoredMailbox
+        MonitoredMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        MonitoredMailbox.objects.create(owner=self.bob, email_address='bob@leap-arabia.com')
+        client = Client()
+        client.force_login(self.bob)
+        with patch('projects.graph_mail.fetch_attachment_bytes') as mock_fetch:
+            mock_fetch.return_value = ('a.pdf', 'application/pdf', b'%PDF')
+            client.get(
+                '/projects/link-email/new/attachment/'
+                '?mailbox=alice@leap-arabia.com&message_id=m1&attachment_id=a1')
+        mock_fetch.assert_called_once_with('bob@leap-arabia.com', 'm1', 'a1')
+
+    def test_attached_email_records_which_mailbox_it_came_from(self):
+        from projects.models import MonitoredMailbox, PipelineEmail
+        from projects.views import _attach_email_to_project
+        MonitoredMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        project = Project.objects.create(
+            project_name='Priv Target', proposal_reference='TST-PRIV-1',
+            region=Region.objects.create(name='PrivRegion', code='TSTPRV'),
+            status=ProjectStatus.objects.create(name='Open', category='active'))
+        mailbox = self._user_mailbox(self.alice)
+        raw = _make_eml_bytes(subject='Q', attachments=[])
+        with patch('projects.graph_mail.fetch_raw_message_bytes', return_value=raw):
+            pipeline_email, _ = _attach_email_to_project(project, self.alice, mailbox, 'm1')
+        self.assertEqual(pipeline_email.source_mailbox, 'alice@leap-arabia.com')
 
 
 class HiddenContainerNestingTests(TestCase):

@@ -683,9 +683,14 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
         if self.request.method == 'GET':
             message_id = self.request.GET.get('picked_email')
             if message_id and _can_use_pipeline_email_feature(self.request.user):
+                # Always this user's own mailbox — never taken from the
+                # request. See _user_mailbox()'s docstring.
+                mailbox = _user_mailbox(self.request.user)
                 try:
-                    summary = graph_mail.get_message_summary(
-                        settings.PIPELINE_EMAIL_MAILBOX, message_id)
+                    if not mailbox:
+                        raise graph_mail.GraphMailError(
+                            'No mailbox is linked to your account.')
+                    summary = graph_mail.get_message_summary(mailbox, message_id)
                     # Default type, same as the existing-project attach flow —
                     # editable in the "Email to be attached" section, and
                     # whatever's chosen there rides along in this same field.
@@ -792,8 +797,20 @@ class ProjectCreateView(LoginRequiredMixin, CreateView):
                     str(index): a.get('document_type')
                     for index, a in enumerate(picked.get('attachments', []))
                 }
+                # Always this user's own mailbox — never taken from
+                # picked_email_json (which rode back from the browser in a
+                # hidden field, so it can't be trusted for this) or any
+                # other request value. See _user_mailbox()'s docstring.
+                # Checked explicitly here (not left to fetch_raw_message_
+                # bytes() raising below and the broad except catching it) —
+                # every other _user_mailbox() call site in this file guards
+                # the empty case up front, and this one should too rather
+                # than relying on a downstream function happening to.
+                mailbox = _user_mailbox(self.request.user)
+                if not mailbox:
+                    raise graph_mail.GraphMailError('No mailbox is linked to your account.')
                 _attach_email_to_project(
-                    project, self.request.user, picked['id'],
+                    project, self.request.user, mailbox, picked['id'],
                     attachment_types=attachment_types)
             except Exception:
                 messages.warning(
@@ -1426,6 +1443,29 @@ def _can_use_pipeline_email_feature(user):
     )
 
 
+def _user_mailbox(user):
+    """The ONE mailbox `user` is allowed to browse through "Add Emails" —
+    never taken from a request parameter, always derived here from who's
+    actually logged in, so there is no value anywhere (URL, POST field,
+    hidden JSON) that could be tampered with to reach someone else's
+    mailbox. Returns '' if this user has no mailbox to browse — callers
+    must treat that as "nothing to show", not fall back to guessing one.
+
+    No legacy/shared fallback of any kind: access exists only once an
+    admin has explicitly linked this exact user to a MonitoredMailbox row.
+    (A prior version fell back to a single shared PIPELINE_EMAIL_MAILBOX
+    setting until the first row was ever created, meaning every unlinked
+    user could browse and pull documents from that shared mailbox before
+    any admin action was ever taken — the same exposure caught live on
+    the costing-revision feature's identical pattern. Removed before this
+    ever shipped.)"""
+    from .models import MonitoredMailbox
+    try:
+        return MonitoredMailbox.objects.get(owner=user, is_active=True).email_address
+    except MonitoredMailbox.DoesNotExist:
+        return ''
+
+
 def _scoped_project_or_404(request, pk):
     """Same region/ownership visibility rule as ProjectPermissionMixin
     (used by every class-based project view) — for the plain function-based
@@ -1472,8 +1512,8 @@ def _safe_attachment_filename(filename):
     return name[:200]
 
 
-def _attach_email_to_project(project, user, message_id, attachment_types=None):
-    """Fetch one message from the live monitored inbox (Microsoft Graph —
+def _attach_email_to_project(project, user, mailbox, message_id, attachment_types=None):
+    """Fetch one message from `mailbox` (Microsoft Graph —
     see projects/graph_mail.py) and turn it into a PipelineEmail + Document
     rows on `project`, tagged with source_pipeline_email (see
     projects/models.py) so they show up under Project Documents.
@@ -1504,7 +1544,7 @@ def _attach_email_to_project(project, user, message_id, attachment_types=None):
     attachment_types = attachment_types or {}
     valid_types = dict(Document.DOCUMENT_TYPE_CHOICES)
 
-    raw_bytes = graph_mail.fetch_raw_message_bytes(settings.PIPELINE_EMAIL_MAILBOX, message_id)
+    raw_bytes = graph_mail.fetch_raw_message_bytes(mailbox, message_id)
     parsed = parse_eml_file(io.BytesIO(raw_bytes))
 
     raw_filename = f"pipeline_email_{project.pk}_{timezone.now():%Y%m%d%H%M%S}.eml"
@@ -1520,6 +1560,7 @@ def _attach_email_to_project(project, user, message_id, attachment_types=None):
 
         pipeline_email = PipelineEmail.objects.create(
             project=project,
+            source_mailbox=mailbox,
             subject=parsed['subject'],
             sender_name=parsed['sender_name'],
             sender_email=parsed['sender_email'],
@@ -1571,10 +1612,15 @@ def link_pipeline_email(request, pk):
         messages.error(request, 'Add Emails is restricted to Sales, Admin, and Super Admin users.')
         return redirect('projects:detail', pk=pk)
 
+    mailbox = _user_mailbox(request.user)
+
     if request.method == 'POST':
         message_id = request.POST.get('message_id')
         if not message_id:
             messages.error(request, 'Please choose an email to attach.')
+            return redirect('projects:link_pipeline_email', pk=pk)
+        if not mailbox:
+            messages.error(request, 'No mailbox is linked to your account — ask an admin to link one.')
             return redirect('projects:link_pipeline_email', pk=pk)
 
         # Keyed by position within the email, not filename — see
@@ -1584,7 +1630,7 @@ def link_pipeline_email(request, pk):
 
         try:
             pipeline_email, created_count = _attach_email_to_project(
-                project, request.user, message_id, attachment_types=attachment_types)
+                project, request.user, mailbox, message_id, attachment_types=attachment_types)
         except (graph_mail.GraphMailError, EmailParseError) as exc:
             messages.error(request, f'Could not attach that email: {exc}')
             return redirect('projects:link_pipeline_email', pk=pk)
@@ -1605,13 +1651,17 @@ def link_pipeline_email(request, pk):
 
     inbox_messages = []
     inbox_error = None
-    try:
-        inbox_messages = graph_mail.list_inbox_messages(settings.PIPELINE_EMAIL_MAILBOX)
-    except graph_mail.GraphMailError as exc:
-        inbox_error = str(exc)
+    if not mailbox:
+        inbox_error = 'No mailbox is linked to your account yet — ask an admin to link one in Django admin (Projects → Monitored mailboxes).'
+    else:
+        try:
+            inbox_messages = graph_mail.list_inbox_messages(mailbox)
+        except graph_mail.GraphMailError as exc:
+            inbox_error = str(exc)
     _add_attachment_urls(inbox_messages, project.pk)
 
     return render(request, 'projects/pipeline_email_form.html', {
+        'mailbox': mailbox,
         'project': project,
         'active_email': project.linked_emails.filter(is_active=True).first(),
         'inbox_messages': inbox_messages,
@@ -1630,7 +1680,11 @@ def _add_attachment_urls(inbox_messages, project_pk):
     reverse() raised NoReverseMatch for any such message, which took this
     whole page down — one oddly-encoded id anywhere in the inbox, and
     nobody could use Add Emails at all. Query params have no such
-    restriction."""
+    restriction. `mailbox` is deliberately NOT one of these params — see
+    _user_mailbox()'s docstring: the mailbox is always derived from
+    request.user server-side, on both this list view and
+    view_pipeline_inbox_attachment, precisely so there's never a client-
+    supplied value that could point at someone else's mailbox."""
     if project_pk:
         url_name, kwargs = 'projects:view_pipeline_inbox_attachment', {'pk': project_pk}
     else:
@@ -1654,6 +1708,8 @@ def link_pipeline_email_new(request):
         messages.error(request, 'Add Emails is restricted to Sales, Admin, and Super Admin users.')
         return redirect('projects:create')
 
+    mailbox = _user_mailbox(request.user)
+
     if request.method == 'POST':
         message_id = request.POST.get('message_id')
         if not message_id:
@@ -1663,13 +1719,17 @@ def link_pipeline_email_new(request):
 
     inbox_messages = []
     inbox_error = None
-    try:
-        inbox_messages = graph_mail.list_inbox_messages(settings.PIPELINE_EMAIL_MAILBOX)
-    except graph_mail.GraphMailError as exc:
-        inbox_error = str(exc)
+    if not mailbox:
+        inbox_error = 'No mailbox is linked to your account yet — ask an admin to link one in Django admin (Projects → Monitored mailboxes).'
+    else:
+        try:
+            inbox_messages = graph_mail.list_inbox_messages(mailbox)
+        except graph_mail.GraphMailError as exc:
+            inbox_error = str(exc)
     _add_attachment_urls(inbox_messages, None)
 
     return render(request, 'projects/pipeline_email_form.html', {
+        'mailbox': mailbox,
         'project': None,
         'active_email': None,
         'inbox_messages': inbox_messages,
@@ -1700,7 +1760,8 @@ def view_pipeline_inbox_attachment(request, pk=None):
     is None — see link_pipeline_email_new).
 
     message_id/attachment_id come from query params, not path segments —
-    see _add_attachment_urls() for why."""
+    see _add_attachment_urls() for why. The mailbox itself is never a
+    request param at all — see _user_mailbox()'s docstring."""
     message_id = request.GET.get('message_id')
     attachment_id = request.GET.get('attachment_id')
     if not message_id or not attachment_id:
@@ -1717,9 +1778,12 @@ def view_pipeline_inbox_attachment(request, pk=None):
     # the other.
     if pk is not None:
         _scoped_project_or_404(request, pk)
+    mailbox = _user_mailbox(request.user)
+    if not mailbox:
+        raise Http404('No mailbox is linked to your account.')
     try:
         filename, content_type, content = graph_mail.fetch_attachment_bytes(
-            settings.PIPELINE_EMAIL_MAILBOX, message_id, attachment_id)
+            mailbox, message_id, attachment_id)
     except graph_mail.GraphMailError as exc:
         messages.error(request, f'Could not open that document: {exc}')
         if pk is not None:

@@ -120,6 +120,12 @@
                 </div>
                 {% endif %}
 
+                {% if mailbox %}
+                <p class="small text-muted mb-3">
+                    <i class="bi bi-envelope me-1"></i>Your mailbox: {{ mailbox }}
+                </p>
+                {% endif %}
+
                 {% if inbox_error %}
                 <div class="alert alert-danger">
                     <i class="bi bi-exclamation-triangle me-1"></i>

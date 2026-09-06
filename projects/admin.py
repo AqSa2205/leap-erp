@@ -1,5 +1,13 @@
 from django.contrib import admin
-from .models import Region, ProjectStatus, Project, ProjectHistory, Document
+from .models import Region, ProjectStatus, Project, ProjectHistory, Document, MonitoredMailbox
+
+
+@admin.register(MonitoredMailbox)
+class MonitoredMailboxAdmin(admin.ModelAdmin):
+    list_display = ['owner', 'email_address', 'is_active', 'created_at']
+    list_filter = ['is_active']
+    search_fields = ['owner__username', 'owner__first_name', 'owner__last_name', 'email_address']
+    autocomplete_fields = ['owner']
 
 
 @admin.register(Region)
