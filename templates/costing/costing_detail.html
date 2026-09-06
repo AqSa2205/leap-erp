@@ -1431,16 +1431,14 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
                     {% for rev in pdf_revisions %}
                     <tr class="{% if rev.email_thread.status == 'replied' %}table-success{% elif rev.email_thread %}table-info{% endif %}">
                         <td>
-                            <strong><code>{{ rev.revision_label }}</code></strong>
-                            {% if rev.email_thread.status == 'replied' %}
-                            <span class="badge bg-success ms-1" title="Sent to client, and they replied">
-                                <i class="bi bi-envelope-check me-1"></i>Client replied
-                            </span>
-                            {% elif rev.email_thread %}
-                            <span class="badge bg-info text-dark ms-1" title="Sent to client, no reply yet">
-                                <i class="bi bi-envelope-check me-1"></i>Sent to client
-                            </span>
+                            {% if rev.email_thread %}
+                            <div class="mb-1">
+                                <span class="badge bg-primary" style="font-size:0.65rem;" title="This revision was emailed to the client">
+                                    <i class="bi bi-envelope-check me-1"></i>Sent on Email
+                                </span>
+                            </div>
                             {% endif %}
+                            <strong><code>{{ rev.revision_label }}</code></strong>
                         </td>
                         <td>
                             {% if rev.export_format == 'pdf' %}
@@ -1499,8 +1497,7 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
                             {% if rev.email_thread %}
                             <button type="button" class="btn btn-sm btn-outline-{% if rev.email_thread.status == 'replied' %}success{% else %}info{% endif %}"
                                     title="View email thread" onclick="openRevisionEmailThread({{ rev.pk }})">
-                                <i class="bi bi-chevron-down"></i>
-                                {% if rev.email_thread.status == 'replied' %}Replied{% else %}Sent{% endif %}
+                                <i class="bi bi-chevron-down me-1"></i>Convo History
                             </button>
                             {% endif %}
                             {% if can_edit %}
@@ -1557,32 +1554,6 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
                     Download the PDF, attach it in the draft that opens, and send it from there.
                     Once it's sent, use the <i class="bi bi-link-45deg"></i> link button on this revision to attach it here.
                 </p>
-                <button type="button" class="btn btn-link btn-sm p-0 mt-2" data-bs-toggle="collapse" data-bs-target="#sendDirectlyPanel">
-                    Or send directly from the ERP (needs Mail.ReadWrite — not granted yet)
-                </button>
-                <div class="collapse mt-2" id="sendDirectlyPanel">
-                    <form id="sendRevisionEmailForm">
-                        {% csrf_token %}
-                        <div class="mb-2">
-                            <label class="form-label fw-bold">To *</label>
-                            <input type="text" name="to" class="form-control" placeholder="client@example.com, other@example.com" required>
-                        </div>
-                        <div class="mb-2">
-                            <label class="form-label fw-bold">Cc</label>
-                            <input type="text" name="cc" class="form-control" placeholder="optional, comma-separated">
-                        </div>
-                        <div class="mb-2">
-                            <label class="form-label fw-bold">Subject *</label>
-                            <input type="text" name="subject" class="form-control" required>
-                        </div>
-                        <div class="mb-2">
-                            <label class="form-label fw-bold">Message *</label>
-                            <textarea name="body" class="form-control" rows="5" required></textarea>
-                        </div>
-                        <div id="sendRevisionEmailStatus" class="small mb-2"></div>
-                        <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-send me-1"></i>Send</button>
-                    </form>
-                </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
@@ -2318,40 +2289,17 @@ var CAN_EDIT = {% if can_edit %}true{% else %}false{% endif %};
     // ─── Revision email thread ───────────────────────────────────
     var sendRevisionEmailModalEl = document.getElementById('sendRevisionEmailModal');
     var sendRevisionEmailModal = sendRevisionEmailModalEl ? new bootstrap.Modal(sendRevisionEmailModalEl) : null;
-    var sendRevisionEmailForm = document.getElementById('sendRevisionEmailForm');
-    var sendRevisionEmailStatus = document.getElementById('sendRevisionEmailStatus');
-    var currentSendRevisionPk = null;
     var currentSendRevisionSubject = null;
 
     window.openSendRevisionEmail = function(pk, label, fileUrl, subject) {
-        currentSendRevisionPk = pk;
         currentSendRevisionSubject = subject;
         document.getElementById('sendRevisionLabel').textContent = label;
-        sendRevisionEmailStatus.textContent = '';
-        sendRevisionEmailForm.reset();
         var dlLink = document.getElementById('downloadRevisionPdfLink');
         if (dlLink) dlLink.href = fileUrl;
         var outlookError = document.getElementById('composeInOutlookError');
         if (outlookError) outlookError.classList.add('d-none');
         sendRevisionEmailModal.show();
     };
-
-    if (sendRevisionEmailForm) {
-        sendRevisionEmailForm.addEventListener('submit', function(e) {
-            e.preventDefault();
-            var formData = new FormData(sendRevisionEmailForm);
-            sendRevisionEmailStatus.textContent = 'Sending…';
-            fetch('/costing/revision/' + currentSendRevisionPk + '/send-email/', {
-                method: 'POST',
-                headers: {'X-CSRFToken': csrfToken},
-                body: formData,
-            })
-            .then(function() { window.location.reload(); })
-            .catch(function(err) {
-                sendRevisionEmailStatus.textContent = 'Failed to send: ' + err;
-            });
-        });
-    }
 
     var composeInOutlookLink = document.getElementById('composeInOutlookLink');
     var composeInOutlookError = document.getElementById('composeInOutlookError');
