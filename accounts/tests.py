@@ -208,7 +208,7 @@ class SeedTests(TestCase):
     SILOED_ROLES = {Role.DEVELOPER, Role.AI_HEAD, Role.AI_INTERN,
                     Role.AI_ENGINEER, Role.AI_JUNIOR_ENGINEER,
                     Role.PROJECT_MANAGER, Role.SITE_MANAGER, Role.ERP_ADMIN,
-                    Role.DOCUMENT_CONTROLLER}
+                    Role.DOCUMENT_CONTROLLER, Role.PCC_ENGINEER}
 
     def test_match_today_all_open_modules_on_for_every_role(self):
         # Zero-regression baseline: every currently-open module is ON for every
@@ -946,3 +946,38 @@ class FreshDatabaseRoleTests(TestCase):
             RolePermission.objects.filter(
                 role__name='developer', codename='dashboard.access',
                 allowed=True).exists())
+
+
+class PCCEngineerRoleTests(TestCase):
+    """The pcc_engineer role must exist (created by migration
+    0034_create_pcc_engineer_role) with the same permissions as
+    document_controller, and the model properties must recognize it."""
+
+    def test_role_exists_with_document_controller_permissions(self):
+        doc_controller = Role.objects.get(name='document_controller')
+        pcc = Role.objects.get(name='pcc_engineer')
+        doc_perms = set(RolePermission.objects.filter(
+            role=doc_controller, allowed=True).values_list('codename', flat=True))
+        pcc_perms = set(RolePermission.objects.filter(
+            role=pcc, allowed=True).values_list('codename', flat=True))
+        self.assertEqual(doc_perms, pcc_perms)
+        self.assertTrue(doc_perms, "sanity check: document_controller should have some permissions")
+
+    def test_is_pcc_engineer_property(self):
+        role = Role.objects.get(name='pcc_engineer')
+        self.assertTrue(role.is_pcc_engineer)
+        other_role = Role.objects.get(name='document_controller')
+        self.assertFalse(other_role.is_pcc_engineer)
+
+    def test_user_is_pcc_engineer_user(self):
+        role = Role.objects.get(name='pcc_engineer')
+        user = User.objects.create_user('pcc_test', password='x', role=role)
+        self.assertTrue(user.is_pcc_engineer_user)
+
+    def test_pcc_engineer_gets_team_scoped_hr_access(self):
+        """Same team-scoped HR feature set as Document Controller - the
+        task's core requirement, so a regression here silently drops the
+        entire inherited feature set."""
+        role = Role.objects.get(name='pcc_engineer')
+        user = User.objects.create_user('pcc_test2', password='x', role=role)
+        self.assertTrue(user.is_team_scoped_hr_user)
