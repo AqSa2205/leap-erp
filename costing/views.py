@@ -5165,11 +5165,13 @@ def ajax_add_resource_line(request, pk):
     return JsonResponse({
         'ok': True,
         'item': _resource_payload(line),
-        # The section total and the contract total both move with this, and
-        # the page shows both — returning them saves a reload that would lose
-        # whatever else the user was part-way through typing.
+        # The section total, the A.2 figure and the contract total all move
+        # with this and the page shows all three — returning them saves a
+        # reload that would lose whatever else was part-way through being
+        # typed.
         'resources_total': str(sheet.resources_total),
         'sow_total': str(sheet.sow_total),
+        'contract_total': str(sheet.contract_total),
     })
 
 
@@ -5206,6 +5208,7 @@ def ajax_update_resource_line(request, pk):
         'item': _resource_payload(line),
         'resources_total': str(sheet.resources_total),
         'sow_total': str(sheet.sow_total),
+        'contract_total': str(sheet.contract_total),
     })
 
 
@@ -5221,7 +5224,8 @@ def ajax_delete_resource_line(request, pk):
     return JsonResponse({
         'ok': True,
         'resources_total': str(sheet.resources_total),
-        # Deleting the last line hands A.2 back to its own rows, so this can
+        # Deleting the last line hands A.2 back to its own rows, so these can
         # change by more than the line that was removed.
         'sow_total': str(sheet.sow_total),
+        'contract_total': str(sheet.contract_total),
     })
