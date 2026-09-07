@@ -657,3 +657,194 @@ def ajax_toggle_permission(request):
             actor=request.user, role=role, codename=codename, allowed=allowed,
         )
     return JsonResponse({'ok': True})
+
+
+# Roles are split across stacked tables rather than crowded into one: twenty
+# columns on a landscape page leaves each about 10mm, too narrow for a header
+# anybody can read. Twelve and eight give the names room to sit above their
+# columns, and the split follows how people already group the roles.
+PERMISSION_PDF_GROUPS = [
+    ('Commercial, finance and administration', [
+        Role.SUPER_ADMIN, Role.ADMIN, Role.ERP_ADMIN, Role.MANAGER,
+        Role.SALES_REP, Role.PROPOSAL_HEAD, Role.PROPOSAL_REP,
+        Role.FINANCE_HEAD, Role.FINANCE_MANAGER, Role.FINANCE_REP,
+        Role.PROCUREMENT_MGR, Role.PROCUREMENT_OFF,
+    ]),
+    ('Delivery, HR-scoped and technical', [
+        Role.PROJECT_MANAGER, Role.SITE_MANAGER, Role.DOCUMENT_CONTROLLER,
+        Role.DEVELOPER, Role.AI_HEAD, Role.AI_ENGINEER,
+        Role.AI_JUNIOR_ENGINEER, Role.AI_INTERN,
+    ]),
+]
+
+
+# Column headers for the export only. The twelve-role table gives each column
+# about 17mm, which holds roughly twelve characters at header size — long
+# enough for "Procurement" on its own line, not for "Representative", which
+# ReportLab breaks mid-word into something unreadable. These are the standard
+# short forms people already use, so nothing needs a legend to decode.
+PERMISSION_PDF_ROLE_HEADERS = {
+    Role.SUPER_ADMIN: 'Super Admin',
+    Role.ADMIN: 'Admin',
+    Role.SALES_REP: 'Sales Rep',
+    Role.PROPOSAL_REP: 'Proposal Rep',
+    Role.FINANCE_REP: 'Finance Rep',
+    Role.AI_JUNIOR_ENGINEER: 'Junior AI Eng',
+}
+
+
+@login_required
+def permission_matrix_pdf(request):
+    """Export the permission grid exactly as it stands right now.
+
+    Same hardcoded super_admin gate as the page it exports. A document setting
+    out who can do what is as sensitive as the screen it came from, so gating
+    the export any more loosely would hand out the whole access model.
+
+    The ticks come from the live grants, not from the seeded defaults, which is
+    the point of exporting: something datable to file, review, or hand to an
+    auditor.
+
+    A role listed in PERMISSION_PDF_GROUPS but missing from the database is
+    skipped rather than crashing the export, and any role in the database that
+    is not listed is appended to the last group — so a role added later still
+    appears, instead of silently dropping out of the document that is supposed
+    to be the complete picture.
+    """
+    if not request.user.is_super_admin_user:
+        raise PermissionDenied
+
+    from io import BytesIO
+
+    from django.utils import timezone
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (PageBreak, Paragraph, SimpleDocTemplate,
+                                    Spacer, Table, TableStyle)
+
+    roles_by_name = {r.name: r for r in Role.objects.all()}
+    grant_map = {
+        (g.role_id, g.codename): g.allowed
+        for g in RolePermission.objects.all()
+    }
+
+    groups = [(label, [roles_by_name[n] for n in names if n in roles_by_name])
+              for label, names in PERMISSION_PDF_GROUPS]
+    listed = {r.name for _label, roles in groups for r in roles}
+    unlisted = [r for name, r in roles_by_name.items() if name not in listed]
+    if unlisted and groups:
+        groups[-1][1].extend(unlisted)
+
+    base = getSampleStyleSheet()
+    st_title = ParagraphStyle('t', parent=base['Title'], fontName='Helvetica-Bold',
+                              fontSize=17, leading=21, alignment=0,
+                              textColor=colors.HexColor('#1A1A1A'))
+    st_meta = ParagraphStyle('m', parent=base['Normal'], fontName='Helvetica',
+                             fontSize=8.5, leading=12,
+                             textColor=colors.HexColor('#6C757D'))
+    st_group = ParagraphStyle('g', parent=base['Normal'], fontName='Helvetica-Bold',
+                              fontSize=10.5, leading=14, spaceBefore=8, spaceAfter=4,
+                              textColor=colors.HexColor('#C41E3A'))
+    st_mod = ParagraphStyle('mod', parent=base['Normal'], fontName='Helvetica-Bold',
+                            fontSize=7.5, leading=9.5,
+                            textColor=colors.HexColor('#1A1A1A'))
+    st_cap = ParagraphStyle('cap', parent=base['Normal'], fontName='Helvetica',
+                            fontSize=7, leading=9)
+    st_head = ParagraphStyle('h', parent=base['Normal'], fontName='Helvetica-Bold',
+                             fontSize=6.2, leading=7.6, alignment=1)
+    st_note = ParagraphStyle('n', parent=base['Normal'], fontName='Helvetica-Oblique',
+                             fontSize=7.5, leading=10,
+                             textColor=colors.HexColor('#6C757D'))
+
+    buf = BytesIO()
+    page = landscape(A4)
+    doc = SimpleDocTemplate(
+        buf, pagesize=page, topMargin=13 * mm, bottomMargin=13 * mm,
+        leftMargin=12 * mm, rightMargin=12 * mm,
+        title='Leap ERP - Role Permissions')
+    content_w = page[0] - 24 * mm
+
+    exported_by = request.user.get_full_name() or request.user.username
+    story = [
+        Paragraph('Role Permissions', st_title),
+        Spacer(1, 2 * mm),
+        Paragraph('Leap Networks ERP &middot; exported {0:%d %B %Y, %H:%M} by {1}'.format(
+            timezone.localtime(), exported_by), st_meta),
+        Spacer(1, 1.5 * mm),
+        Paragraph(
+            'A tick means the role holds that capability. Super Admin is always allowed and '
+            'cannot be switched off. Capabilities marked <b>(pending)</b> are stored in the '
+            'grid but not yet enforced in code &mdash; switching one off does not restrict '
+            'anything yet.', st_note),
+        Spacer(1, 4 * mm),
+    ]
+
+    modules = capabilities_by_module()
+
+    for index, (group_label, group_roles) in enumerate(groups):
+        if not group_roles:
+            continue
+        if index:
+            story.append(PageBreak())
+        story.append(Paragraph(group_label, st_group))
+
+        label_w = 62 * mm
+        col_w = (content_w - label_w) / len(group_roles)
+
+        rows = [[Paragraph('Capability', st_head)]
+                + [Paragraph(
+                    PERMISSION_PDF_ROLE_HEADERS.get(
+                        r.name, r.get_name_display()).replace(' ', '<br/>'), st_head)
+                   for r in group_roles]]
+        style = [
+            ('GRID', (0, 0), (-1, -1), 0.35, colors.HexColor('#D8D8DE')),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F0F0F3')),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+            ('TOPPADDING', (0, 0), (-1, -1), 2.5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+            ('LEFTPADDING', (0, 0), (-1, -1), 3),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+            ('FONTSIZE', (1, 1), (-1, -1), 8),
+        ]
+
+        for module_label, caps in modules.items():
+            # A module header spanning the row, so the export reads in the same
+            # blocks as the screen it came from.
+            header_at = len(rows)
+            rows.append([Paragraph(module_label, st_mod)] + [''] * len(group_roles))
+            style.append(('SPAN', (0, header_at), (-1, header_at)))
+            style.append(('BACKGROUND', (0, header_at), (-1, header_at),
+                          colors.HexColor('#E8E8EE')))
+
+            for cap in caps:
+                at = len(rows)
+                label = cap.label if cap.enforced else cap.label + ' (pending)'
+                row = [Paragraph(label, st_cap)]
+                for column, role in enumerate(group_roles, start=1):
+                    # Super admin bypasses the grid in code, so it is shown as
+                    # held regardless of what its stored row happens to say.
+                    locked = role.name == Role.SUPER_ADMIN
+                    allowed = locked or grant_map.get((role.id, cap.codename), False)
+                    row.append('Y' if allowed else '.')
+                    style.append((
+                        'TEXTCOLOR', (column, at), (column, at),
+                        colors.HexColor('#1B6B45' if allowed else '#B9B4B8')))
+                if not cap.enforced:
+                    style.append(('TEXTCOLOR', (0, at), (0, at),
+                                  colors.HexColor('#8A5A00')))
+                rows.append(row)
+
+        table = Table(rows, colWidths=[label_w] + [col_w] * len(group_roles),
+                      repeatRows=1)
+        table.setStyle(TableStyle(style))
+        story.append(table)
+
+    doc.build(story)
+    buf.seek(0)
+    filename = 'leap-erp-permissions-{0:%Y-%m-%d}.pdf'.format(timezone.localtime())
+    response = HttpResponse(buf.read(), content_type='application/pdf')
+    response['Content-Disposition'] = 'attachment; filename="{0}"'.format(filename)
+    return response
