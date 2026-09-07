@@ -42,6 +42,15 @@
 
                     <div class="row mb-3">
                         <div class="col-md-6">
+                            <label class="form-label fw-bold">Department <span class="text-danger">*</span></label>
+                            {{ form.department }}
+                            {% if form.department.field.disabled %}<small class="text-muted">{{ form.department.help_text }}</small>{% endif %}
+                            {% if form.department.errors %}<div class="text-danger small">{{ form.department.errors.0 }}</div>{% endif %}
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
                             <label class="form-label fw-bold">Client Name</label>
                             {{ form.client_name }}
                             {% if form.client_name.errors %}<div class="text-danger small">{{ form.client_name.errors.0 }}</div>{% endif %}

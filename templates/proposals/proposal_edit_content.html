@@ -28,17 +28,64 @@
         <a href="{% url 'proposals:detail' object.pk %}" class="btn btn-outline-secondary btn-sm">
             <i class="bi bi-arrow-left me-1"></i> Back to Detail
         </a>
-        <code class="ms-2">{{ object.proposal_reference }}</code>
+        <code class="ms-2">{{ object.proposal_reference }}{% if object.department %}-{{ object.get_department_display }}{% endif %}</code>
     </div>
     <div class="d-flex align-items-center gap-2">
+        {% if object.department != 'other' %}
         <div class="btn-group btn-group-sm" role="group" aria-label="Department template toggle" id="deptToggle">
-            <button type="button" class="btn btn-outline-primary dept-toggle-btn" data-dept="ai">AI</button>
-            <button type="button" class="btn btn-outline-primary dept-toggle-btn" data-dept="telecom">Telecom</button>
-            <button type="button" class="btn btn-outline-primary dept-toggle-btn" data-dept="procurement">Security</button>
+            <button type="button" class="btn btn-outline-primary dept-toggle-btn" data-dept="ai"
+                    {% if object.department and object.department != 'ai' %}disabled title="This proposal's department is locked to {{ object.get_department_display }}"{% endif %}>AI</button>
+            <button type="button" class="btn btn-outline-primary dept-toggle-btn" data-dept="telecom"
+                    {% if object.department and object.department != 'telecom' %}disabled title="This proposal's department is locked to {{ object.get_department_display }}"{% endif %}>Telecom</button>
+            <button type="button" class="btn btn-outline-primary dept-toggle-btn" data-dept="procurement"
+                    {% if object.department and object.department != 'procurement' %}disabled title="This proposal's department is locked to {{ object.get_department_display }}"{% endif %}>Security</button>
         </div>
+        {% endif %}
+        {% if object.is_export_locked %}
+        <span class="btn btn-secondary btn-sm disabled" title="Link a client email to unlock export">
+            <i class="bi bi-lock-fill me-1"></i> Export Locked
+        </span>
+        {% else %}
         <a href="{% url 'proposals:export_docx' object.pk %}" class="btn btn-success btn-sm">
             <i class="bi bi-file-earmark-word me-1"></i> Export DOCX
         </a>
+        {% endif %}
+        <button type="button" class="btn btn-outline-primary btn-sm" onclick="openLinkProposalEmail({{ object.pk }})">
+            <i class="bi bi-link-45deg me-1"></i> Link Email
+        </button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="openProposalLinkedEmails({{ object.pk }})">
+            <i class="bi bi-envelope-open me-1"></i> Linked Emails{% if object.linked_emails.count %} ({{ object.linked_emails.count }}){% endif %}
+        </button>
+    </div>
+</div>
+
+<!-- Link a Client Email -->
+<div class="modal fade" id="linkProposalEmailModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-link-45deg me-2"></i>Link a Client Email</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="linkProposalEmailBody">
+                <div class="text-center text-muted py-4">Loading…</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Linked Emails -->
+<div class="modal fade" id="proposalLinkedEmailsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-envelope-open me-2"></i>Linked Emails</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="proposalLinkedEmailsBody">
+                <div class="text-center text-muted py-4">Loading…</div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -353,6 +400,55 @@ document.addEventListener('DOMContentLoaded', function() {
             if (panel) panel.style.display = '';
         });
     });
+
+    // This proposal's department is locked to one specific value (the other
+    // two buttons above are already disabled) — there's no reason to make
+    // someone click the only option left, so open its panel automatically.
+    var lockedDept = '{{ object.department|default:"" }}';
+    if (lockedDept && lockedDept !== 'other') {
+        var lockedBtn = document.querySelector('.dept-toggle-btn[data-dept="' + lockedDept + '"]');
+        if (lockedBtn && !lockedBtn.disabled) lockedBtn.click();
+    }
+});
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Deferred to DOMContentLoaded: this block lives inside {% block content
+    // %}, which Django renders before base.html's bootstrap.bundle.min.js
+    // <script> tag loads further down the page — calling `new
+    // bootstrap.Modal(...)` immediately here would throw "bootstrap is not
+    // defined" and silently abort before window.openLinkProposalEmail ever
+    // gets assigned, leaving the button's onclick calling nothing.
+    var linkModalEl = document.getElementById('linkProposalEmailModal');
+    var linkModal = linkModalEl ? new bootstrap.Modal(linkModalEl) : null;
+    var linkBody = document.getElementById('linkProposalEmailBody');
+
+    window.openLinkProposalEmail = function(pk) {
+        linkBody.innerHTML = '<div class="text-center text-muted py-4">Loading…</div>';
+        linkModal.show();
+        fetch('/proposals/' + pk + '/browse-link-email/')
+            .then(function(r) { return r.text(); })
+            .then(function(html) { linkBody.innerHTML = html; })
+            .catch(function(err) {
+                linkBody.innerHTML = '<div class="text-danger">Failed to load: ' + err + '</div>';
+            });
+    };
+
+    var linkedModalEl = document.getElementById('proposalLinkedEmailsModal');
+    var linkedModal = linkedModalEl ? new bootstrap.Modal(linkedModalEl) : null;
+    var linkedBody = document.getElementById('proposalLinkedEmailsBody');
+
+    window.openProposalLinkedEmails = function(pk) {
+        linkedBody.innerHTML = '<div class="text-center text-muted py-4">Loading…</div>';
+        linkedModal.show();
+        fetch('/proposals/' + pk + '/linked-emails/')
+            .then(function(r) { return r.text(); })
+            .then(function(html) { linkedBody.innerHTML = html; })
+            .catch(function(err) {
+                linkedBody.innerHTML = '<div class="text-danger">Failed to load: ' + err + '</div>';
+            });
+    };
 });
 </script>
 {% endblock %}

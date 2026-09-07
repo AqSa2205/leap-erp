@@ -2,6 +2,21 @@ from django.db import models
 from django.conf import settings
 
 
+PROPOSAL_DEPARTMENT_CHOICES = [
+    ('ai', 'AI'),
+    ('telecom', 'Telecom'),
+    ('procurement', 'Security'),
+    ('other', 'Other'),
+]
+
+# Every department the export-lock toggle applies to — a Super Admin can
+# enable/disable the 'requires a linked client email to export' rule for
+# any of these independently, 'Other' included. 'Other' still opts a
+# proposal out of the department-headings restriction (see
+# ProposalEditContentView) — that's a separate concern from the export lock.
+PROPOSAL_LOCKABLE_DEPARTMENTS = PROPOSAL_DEPARTMENT_CHOICES
+
+
 class ProposalBoilerplate(models.Model):
     SECTION_CHOICES = [
         ('covering_letter', 'Covering Letter'),
@@ -52,6 +67,13 @@ class TechnicalProposal(models.Model):
         blank=True,
         related_name='proposals',
     )
+    department = models.CharField(
+        max_length=20,
+        choices=PROPOSAL_DEPARTMENT_CHOICES,
+        blank=True,
+        default='',
+        help_text='Which department this proposal is for — controls whether the export-lock feature applies to it.',
+    )
     title = models.CharField(max_length=255)
     proposal_reference = models.CharField(max_length=50, unique=True)
     document_type = models.CharField(max_length=100, default='Technical Proposal')
@@ -90,6 +112,22 @@ class TechnicalProposal(models.Model):
 
     def __str__(self):
         return self.title
+
+    @property
+    def is_export_locked(self):
+        """True when this proposal's department currently requires a linked
+        client email before its DOCX can be exported, and none has been
+        linked yet. A proposal with no department chosen is never locked —
+        that's every proposal that existed before this feature shipped, and
+        any new one where nobody bothers to pick a department. 'Other' is a
+        real, lockable department like the rest — it only opts out of the
+        department-headings restriction, not the export lock."""
+        if not self.department:
+            return False
+        return (
+            ProposalDepartmentFeature.requires_email(self.department)
+            and not self.linked_emails.exists()
+        )
 
     def get_region_display_name(self):
         return dict(self.REGION_CHOICES).get(self.region_entity, self.region_entity)
@@ -409,3 +447,133 @@ class SectionHeadingTemplate(models.Model):
 
     def __str__(self):
         return f'{self.heading.name} — {self.get_department_display()}'
+
+
+class ProposalMailbox(models.Model):
+    """One employee's own mailbox for linking client emails to a Technical
+    Proposal — never shared. Same exact design as costing.RevisionMailbox /
+    projects.MonitoredMailbox (one row per user, OneToOne both ways, an
+    admin links each employee to their own real mailbox address) — kept as
+    a separate, self-contained copy in this app rather than a cross-app
+    import, since those models live on different, not-yet-merged branches
+    and this app shouldn't depend on their migration state.
+
+    The privacy guarantee is identical: only the linked employee can ever
+    browse their own mailbox through this feature, and which mailbox to use
+    is always derived from request.user server-side (see
+    proposals/views.py:_user_proposal_mailbox) — never from anything the
+    client sends."""
+
+    owner = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='proposal_mailbox',
+        help_text='The employee this mailbox belongs to. Only they can browse it.',
+    )
+    email_address = models.EmailField(unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+',
+        help_text='The admin who assigned this mailbox.',
+    )
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+',
+        help_text='The admin who last revoked this mailbox. Cleared on reactivation.',
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['owner__username']
+
+    def __str__(self):
+        return f'{self.owner} — {self.email_address}'
+
+
+class ProposalDepartmentFeature(models.Model):
+    """Super-Admin-only per-department switch: does exporting a Technical
+    Proposal for this department require a client email to be linked first?
+    One row per department, created on demand — a department with no row
+    yet behaves as 'not required' (see requires_email()), so this feature
+    changes nothing until a Super Admin explicitly turns it on."""
+
+    department = models.CharField(
+        max_length=20, choices=PROPOSAL_LOCKABLE_DEPARTMENTS, unique=True)
+    requires_client_email_to_export = models.BooleanField(
+        default=False,
+        help_text='If checked, a Technical Proposal in this department cannot be '
+                   'exported as DOCX until a client email has been linked to it.',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+',
+    )
+
+    class Meta:
+        ordering = ['department']
+
+    def __str__(self):
+        return f'{self.get_department_display()} — {"locked" if self.requires_client_email_to_export else "unlocked"}'
+
+    @classmethod
+    def requires_email(cls, department):
+        """False for an empty/unknown department, and False the very first
+        time a department is checked (get_or_create with the field's own
+        default) — a brand new department is unlocked until a Super Admin
+        opts it in, never the other way around."""
+        if not department:
+            return False
+        obj, _ = cls.objects.get_or_create(department=department)
+        return obj.requires_client_email_to_export
+
+
+class ProposalLinkedEmail(models.Model):
+    """One client email linked to a Technical Proposal - read live from the
+    linking employee's own mailbox via Microsoft Graph (Mail.Read) and
+    recorded here as metadata only. Always an inbound client email; there is
+    no 'sent by us' concept for this feature (proposals aren't emailed out
+    from inside the ERP, only linked back once a client has replied)."""
+
+    proposal = models.ForeignKey(
+        TechnicalProposal,
+        on_delete=models.CASCADE,
+        related_name='linked_emails',
+    )
+    graph_message_id = models.CharField(max_length=255, unique=True)
+    mailbox = models.EmailField(
+        help_text='The mailbox this was read from - recorded at link time so a later '
+                   'attachment download always uses this, never the current viewer\'s own.',
+    )
+    sender_name = models.CharField(max_length=255, blank=True)
+    sender_email = models.EmailField(blank=True)
+    to_recipients = models.CharField(max_length=1000, blank=True)
+    cc_recipients = models.CharField(max_length=1000, blank=True)
+    subject = models.CharField(max_length=500, blank=True)
+    body_html = models.TextField(blank=True)
+    body_text = models.TextField(blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    has_attachments = models.BooleanField(default=False)
+    attachment_meta = models.JSONField(null=True, blank=True)
+    linked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='proposal_emails_linked',
+    )
+    linked_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        # Display order should match the order a person actually linked
+        # these, not the email's own sent_at - see the identical reasoning
+        # already applied to costing.RevisionEmailMessage.
+        ordering = ['pk']
+
+    def __str__(self):
+        return f'{self.proposal} — {self.subject}'

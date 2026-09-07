@@ -617,7 +617,7 @@ class AIProposalAccessTests(TestCase):
         self.client.force_login(self.ai)
         self.assertEqual(self.client.get(reverse('proposals:create')).status_code, 200)
         r = self.client.post(reverse('proposals:create'), {
-            'title': 'AI Proposal', 'project': str(self.project.pk),
+            'title': 'AI Proposal', 'project': str(self.project.pk), 'department': 'ai',
             'proposal_reference': 'AI-1', 'document_type': 'Technical Proposal',
             'client_name': 'ACME', 'region_entity': 'LNKSA', 'revision': 'R00',
             'revision_date': '2026-07-06', 'prepared_by_initials': 'AI', 'status': 'draft'})
@@ -1164,3 +1164,375 @@ class CompanyAcronymDoesNotEatCustomerTextTests(TestCase):
         """The reorder must not stop the substitution it exists to perform."""
         xml = self._document_xml(self._proposal())
         self.assertNotIn('Leap Networks Global Ltd', xml)
+
+
+class DepartmentLockedHeadingToggleTests(TestCase):
+    """The Edit Content page's AI/Telecom/Security toggle buttons: once a
+    proposal has a department, only that department's button stays usable —
+    the other two are disabled so the wrong department's headings can't be
+    added. 'Other' has no matching department at all, so the whole toggle
+    group disappears. A proposal from before this feature (blank
+    department) is left alone, exactly as it behaved before."""
+
+    def setUp(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('dept_toggle_user', password='x', role=role)
+        self.client.force_login(self.user)
+
+    def _content_page(self, department, ref):
+        proposal = TechnicalProposal.objects.create(
+            title='T', proposal_reference=ref, client_name='ACME',
+            revision_date=date(2026, 1, 1), prepared_by_initials='AJ',
+            created_by=self.user, department=department)
+        return self.client.get(reverse('proposals:content', kwargs={'pk': proposal.pk}))
+
+    def test_ai_department_disables_the_other_two_buttons(self):
+        resp = self._content_page('ai', 'TP-TOGGLE-1')
+        html = resp.content.decode()
+        ai_pos = html.index('data-dept="ai"')
+        telecom_pos = html.index('data-dept="telecom"')
+        procurement_pos = html.index('data-dept="procurement"')
+        # AI's own <button> tag (up to the next '>') must not carry disabled.
+        self.assertNotIn('disabled', html[ai_pos:html.index('>', ai_pos)])
+        self.assertIn('disabled', html[telecom_pos:html.index('>', telecom_pos)])
+        self.assertIn('disabled', html[procurement_pos:html.index('>', procurement_pos)])
+
+    def test_other_department_hides_the_toggle_entirely(self):
+        resp = self._content_page('other', 'TP-TOGGLE-2')
+        self.assertNotContains(resp, 'id="deptToggle"')
+
+    def test_legacy_blank_department_leaves_all_three_enabled(self):
+        resp = self._content_page('', 'TP-TOGGLE-3')
+        html = resp.content.decode()
+        for dept in ('ai', 'telecom', 'procurement'):
+            pos = html.index('data-dept="%s"' % dept)
+            self.assertNotIn('disabled', html[pos:html.index('>', pos)])
+
+
+class ProposalMailboxPrivacyTests(TestCase):
+    """The core privacy guarantee for 'Link Email' on a Technical Proposal:
+    each employee's linked mailbox is visible only to them.
+    _user_proposal_mailbox() derives the mailbox purely from request.user —
+    never from any request parameter, and with no legacy/shared fallback of
+    any kind — mirrors costing.RevisionMailbox / projects.MonitoredMailbox
+    exactly, including the exact bug class both of those were caught and
+    fixed for live."""
+
+    def setUp(self):
+        from proposals.models import ProposalMailbox
+        self.ProposalMailbox = ProposalMailbox
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.alice = User.objects.create_user('alice_pm', password='x', role=role)
+        self.bob = User.objects.create_user('bob_pm', password='x', role=role)
+
+    def _resolve(self, user):
+        from proposals.views import _user_proposal_mailbox
+        return _user_proposal_mailbox(user)
+
+    def test_unlinked_user_gets_nothing_even_with_other_rows(self):
+        self.ProposalMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        self.assertEqual(self._resolve(self.bob), '')
+
+    def test_each_user_only_ever_gets_their_own_mailbox(self):
+        self.ProposalMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        self.ProposalMailbox.objects.create(owner=self.bob, email_address='bob@leap-arabia.com')
+        self.assertEqual(self._resolve(self.alice), 'alice@leap-arabia.com')
+        self.assertEqual(self._resolve(self.bob), 'bob@leap-arabia.com')
+
+    def test_no_fallback_even_with_zero_rows_anywhere(self):
+        """Regression class already caught live on two sibling features
+        (costing.RevisionMailbox, projects.MonitoredMailbox): a legacy
+        fallback to a single shared mailbox until the first row was ever
+        created meant every unlinked user could browse a real shared
+        mailbox before any admin had linked anyone. Built correctly here
+        from day one — no such fallback exists at all."""
+        self.assertEqual(self.ProposalMailbox.objects.count(), 0)
+        self.assertEqual(self._resolve(self.alice), '')
+        self.assertEqual(self._resolve(self.bob), '')
+
+    def test_deactivation_revokes_access_immediately(self):
+        mb = self.ProposalMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        self.assertEqual(self._resolve(self.alice), 'alice@leap-arabia.com')
+        mb.is_active = False
+        mb.save(update_fields=['is_active'])
+        self.assertEqual(self._resolve(self.alice), '')
+
+    def test_owner_must_be_unique(self):
+        from django.db import IntegrityError, transaction
+        self.ProposalMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                self.ProposalMailbox.objects.create(owner=self.alice, email_address='alice2@leap-arabia.com')
+
+    def test_email_address_must_be_unique(self):
+        from django.db import IntegrityError, transaction
+        self.ProposalMailbox.objects.create(owner=self.alice, email_address='shared@leap-arabia.com')
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                self.ProposalMailbox.objects.create(owner=self.bob, email_address='shared@leap-arabia.com')
+
+
+class ProposalExportLockTests(TestCase):
+    """Whether a Technical Proposal's DOCX export is locked: no department
+    chosen -> never locked (every proposal that existed before this feature
+    shipped); department set + toggle off (the default) -> not locked;
+    department set + toggle on + no linked email -> locked; same + a linked
+    email exists -> unlocked again."""
+
+    def _proposal(self, **kw):
+        return TechnicalProposal.objects.create(
+            title='T', proposal_reference=kw.pop('proposal_reference', 'TP-LOCK-1'),
+            client_name='ACME', revision_date=date(2026, 1, 1),
+            prepared_by_initials='AJ', **kw)
+
+    def test_no_department_never_locked(self):
+        proposal = self._proposal(department='')
+        self.assertFalse(proposal.is_export_locked)
+
+    def test_other_department_is_unlocked_by_default(self):
+        """'Other' opts a proposal out of the department-headings
+        restriction, but not out of the export lock — same default-off
+        behavior as AI/Telecom/Security until a Super Admin turns it on."""
+        proposal = self._proposal(department='other', proposal_reference='TP-LOCK-OTHER')
+        self.assertFalse(proposal.is_export_locked)
+
+    def test_other_department_can_be_locked_like_any_other(self):
+        from proposals.models import ProposalDepartmentFeature
+        ProposalDepartmentFeature.objects.create(department='other', requires_client_email_to_export=True)
+        proposal = self._proposal(department='other', proposal_reference='TP-LOCK-OTHER-2')
+        self.assertTrue(proposal.is_export_locked)
+
+    def test_department_set_toggle_off_by_default_not_locked(self):
+        from proposals.models import ProposalDepartmentFeature
+        self.assertEqual(ProposalDepartmentFeature.objects.count(), 0)
+        proposal = self._proposal(department='ai', proposal_reference='TP-LOCK-2')
+        self.assertFalse(proposal.is_export_locked)
+        # Checking it creates the row (get_or_create) but leaves it off.
+        self.assertEqual(
+            ProposalDepartmentFeature.objects.get(department='ai').requires_client_email_to_export,
+            False)
+
+    def test_department_set_toggle_on_no_email_is_locked(self):
+        from proposals.models import ProposalDepartmentFeature
+        ProposalDepartmentFeature.objects.create(department='ai', requires_client_email_to_export=True)
+        proposal = self._proposal(department='ai', proposal_reference='TP-LOCK-3')
+        self.assertTrue(proposal.is_export_locked)
+
+    def test_linking_an_email_unlocks_it(self):
+        from proposals.models import ProposalDepartmentFeature, ProposalLinkedEmail
+        ProposalDepartmentFeature.objects.create(department='ai', requires_client_email_to_export=True)
+        proposal = self._proposal(department='ai', proposal_reference='TP-LOCK-4')
+        self.assertTrue(proposal.is_export_locked)
+        ProposalLinkedEmail.objects.create(
+            proposal=proposal, graph_message_id='m1', mailbox='alice@leap-arabia.com',
+            sender_email='client@example.com')
+        proposal.refresh_from_db()
+        self.assertFalse(proposal.is_export_locked)
+
+    def test_toggle_only_affects_its_own_department(self):
+        from proposals.models import ProposalDepartmentFeature
+        ProposalDepartmentFeature.objects.create(department='ai', requires_client_email_to_export=True)
+        telecom_proposal = self._proposal(department='telecom', proposal_reference='TP-LOCK-5')
+        self.assertFalse(telecom_proposal.is_export_locked)
+
+    def test_creating_a_proposal_without_a_department_is_rejected(self):
+        """Department is now a required field on the create/edit metadata
+        form — this is what lets the lock be an intentional per-proposal
+        identifier rather than something that only works if someone
+        remembers to set it."""
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        user = User.objects.create_user('nodept_creator', password='x', role=role)
+        self.client.force_login(user)
+        resp = self.client.post(reverse('proposals:create'), {
+            'title': 'No Dept Proposal', 'proposal_reference': 'TP-LOCK-8',
+            'document_type': 'Technical Proposal', 'client_name': 'ACME',
+            'region_entity': 'LNKSA', 'revision': 'R00', 'revision_date': '2026-07-06',
+            'prepared_by_initials': 'XX', 'status': 'draft'})
+        self.assertEqual(resp.status_code, 200)  # re-rendered with a validation error
+        self.assertFalse(TechnicalProposal.objects.filter(proposal_reference='TP-LOCK-8').exists())
+
+    def test_creating_a_proposal_with_a_department_succeeds(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        user = User.objects.create_user('withdept_creator', password='x', role=role)
+        self.client.force_login(user)
+        resp = self.client.post(reverse('proposals:create'), {
+            'title': 'With Dept Proposal', 'department': 'telecom',
+            'proposal_reference': 'TP-LOCK-9', 'document_type': 'Technical Proposal',
+            'client_name': 'ACME', 'region_entity': 'LNKSA', 'revision': 'R00',
+            'revision_date': '2026-07-06', 'prepared_by_initials': 'XX', 'status': 'draft'})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(
+            TechnicalProposal.objects.get(proposal_reference='TP-LOCK-9').department, 'telecom')
+
+    def test_department_cannot_be_changed_after_creation(self):
+        """The loophole this closes: pick AI, see the export is locked, edit
+        the metadata to switch to an unlocked department, export anyway.
+        The field must be ignored even if a crafted POST includes a
+        different department value — not just hidden/disabled in the UI."""
+        from proposals.models import ProposalDepartmentFeature
+        ProposalDepartmentFeature.objects.create(department='ai', requires_client_email_to_export=True)
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        user = User.objects.create_user('dept_lock_editor', password='x', role=role)
+        proposal = self._proposal(department='ai', proposal_reference='TP-LOCK-10', created_by=user)
+        self.client.force_login(user)
+        resp = self.client.post(
+            reverse('proposals:edit', kwargs={'pk': proposal.pk}),
+            {'title': proposal.title, 'department': 'procurement',
+             'proposal_reference': proposal.proposal_reference, 'document_type': 'Technical Proposal',
+             'client_name': proposal.client_name, 'region_entity': 'LNKSA', 'revision': 'R00',
+             'revision_date': '2026-07-06', 'prepared_by_initials': 'XX', 'status': 'draft'})
+        self.assertEqual(resp.status_code, 302)
+        proposal.refresh_from_db()
+        self.assertEqual(proposal.department, 'ai')  # unchanged, still locked
+        self.assertTrue(proposal.is_export_locked)
+
+    def test_legacy_proposal_with_no_department_can_still_set_one_on_edit(self):
+        """A proposal from before this feature shipped has a blank
+        department — it isn't locked yet, so it must still be settable
+        (once) when someone edits its metadata."""
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        user = User.objects.create_user('dept_backfill_editor', password='x', role=role)
+        proposal = self._proposal(department='', proposal_reference='TP-LOCK-11', created_by=user)
+        self.client.force_login(user)
+        resp = self.client.post(
+            reverse('proposals:edit', kwargs={'pk': proposal.pk}),
+            {'title': proposal.title, 'department': 'procurement',
+             'proposal_reference': proposal.proposal_reference, 'document_type': 'Technical Proposal',
+             'client_name': proposal.client_name, 'region_entity': 'LNKSA', 'revision': 'R00',
+             'revision_date': '2026-07-06', 'prepared_by_initials': 'XX', 'status': 'draft'})
+        self.assertEqual(resp.status_code, 302)
+        proposal.refresh_from_db()
+        self.assertEqual(proposal.department, 'procurement')
+
+    def test_export_view_blocks_a_locked_proposal(self):
+        from proposals.models import ProposalDepartmentFeature
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        user = User.objects.create_user('exporter1', password='x', role=role)
+        ProposalDepartmentFeature.objects.create(department='ai', requires_client_email_to_export=True)
+        proposal = self._proposal(department='ai', proposal_reference='TP-LOCK-6', created_by=user)
+        self.client.force_login(user)
+        resp = self.client.get(reverse('proposals:export_docx', kwargs={'pk': proposal.pk}))
+        self.assertEqual(resp.status_code, 302)  # redirected, not exported
+        self.assertNotEqual(resp.get('Content-Type'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+
+    def test_export_view_allows_an_unlocked_proposal_exactly_as_before(self):
+        """Every proposal that existed before this feature shipped has no
+        department, so this must keep working completely unchanged."""
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        user = User.objects.create_user('exporter2', password='x', role=role)
+        proposal = self._proposal(proposal_reference='TP-LOCK-7', created_by=user)  # no department
+        self.client.force_login(user)
+        resp = self.client.get(reverse('proposals:export_docx', kwargs={'pk': proposal.pk}))
+        self.assertEqual(resp.status_code, 200)
+
+
+class LinkProposalEmailTests(TestCase):
+    """The 'Link Email' flow: browse the user's own linked mailbox, pick a
+    message, link it — always an inbound client email, no classification
+    needed. Attachment downloads always use the mailbox recorded on the
+    ProposalLinkedEmail row, never the current viewer's own."""
+
+    def setUp(self):
+        from proposals.models import ProposalMailbox
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.alice = User.objects.create_user('alice_le', password='x', role=role)
+        self.bob = User.objects.create_user('bob_le', password='x', role=role)
+        ProposalMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        ProposalMailbox.objects.create(owner=self.bob, email_address='bob@leap-arabia.com')
+        self.proposal = TechnicalProposal.objects.create(
+            title='T', proposal_reference='TP-LINK-1', client_name='ACME',
+            revision_date=date(2026, 1, 1), prepared_by_initials='AJ', created_by=self.alice)
+
+    def _detail(self, msg_id='m1', sender='client@example.com'):
+        return {
+            'id': msg_id, 'subject': 'RE: Proposal', 'sender_name': 'Client Contact',
+            'sender_email': sender, 'to': 'alice@leap-arabia.com', 'cc': '',
+            'sent_at': '2026-08-20T10:00:00Z', 'body_html': '<p>Approved.</p>',
+            'has_attachments': False, 'attachments': [],
+        }
+
+    def test_browse_uses_only_the_logged_in_users_own_mailbox(self):
+        from unittest.mock import patch
+        self.client.force_login(self.bob)
+        with patch('proposals.graph_mail.list_recent_messages', return_value=[]) as mocked:
+            resp = self.client.get(
+                reverse('proposals:browse_link_proposal_email', kwargs={'pk': self.proposal.pk}))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(mocked.call_args.args[0], 'bob@leap-arabia.com')
+
+    def test_browse_shows_contact_admin_message_when_unlinked(self):
+        from proposals.models import ProposalMailbox
+        ProposalMailbox.objects.filter(owner=self.bob).delete()
+        self.client.force_login(self.bob)
+        resp = self.client.get(
+            reverse('proposals:browse_link_proposal_email', kwargs={'pk': self.proposal.pk}))
+        self.assertContains(resp, 'contact an admin')
+
+    def test_link_creates_a_proposal_linked_email(self):
+        from unittest.mock import patch
+        from proposals.models import ProposalLinkedEmail
+        self.client.force_login(self.alice)
+        with patch('proposals.graph_mail.get_message_detail', return_value=self._detail()):
+            resp = self.client.post(
+                reverse('proposals:link_proposal_email', kwargs={'pk': self.proposal.pk}),
+                {'message_id': 'm1'})
+        self.assertEqual(resp.status_code, 302)
+        linked = ProposalLinkedEmail.objects.get(proposal=self.proposal)
+        self.assertEqual(linked.mailbox, 'alice@leap-arabia.com')
+        self.assertEqual(linked.sender_email, 'client@example.com')
+
+    def test_link_dedupes_on_graph_message_id(self):
+        from unittest.mock import patch
+        from proposals.models import ProposalLinkedEmail
+        self.client.force_login(self.alice)
+        with patch('proposals.graph_mail.get_message_detail', return_value=self._detail()):
+            self.client.post(
+                reverse('proposals:link_proposal_email', kwargs={'pk': self.proposal.pk}),
+                {'message_id': 'm1'})
+            self.client.post(
+                reverse('proposals:link_proposal_email', kwargs={'pk': self.proposal.pk}),
+                {'message_id': 'm1'})
+        self.assertEqual(ProposalLinkedEmail.objects.filter(graph_message_id='m1').count(), 1)
+
+    def test_link_blocked_for_a_user_who_cannot_edit_the_proposal(self):
+        """bob has a mailbox, but doesn't own this proposal and isn't an
+        admin over it — _can_edit_proposal must still gate this."""
+        outsider_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        outsider = User.objects.create_user('outsider_le', password='x', role=outsider_role)
+        self.client.force_login(outsider)
+        resp = self.client.post(
+            reverse('proposals:link_proposal_email', kwargs={'pk': self.proposal.pk}),
+            {'message_id': 'm1'})
+        self.assertEqual(resp.status_code, 302)
+        from proposals.models import ProposalLinkedEmail
+        self.assertFalse(ProposalLinkedEmail.objects.filter(proposal=self.proposal).exists())
+
+    def test_attachment_download_uses_the_recorded_mailbox_not_the_viewers_own(self):
+        """The critical anti-IDOR check: bob (a different user, with his own
+        linked mailbox) viewing an email alice linked must fetch the
+        attachment from ALICE's recorded mailbox, never bob's own."""
+        from unittest.mock import patch
+        from proposals.models import ProposalLinkedEmail
+        linked = ProposalLinkedEmail.objects.create(
+            proposal=self.proposal, graph_message_id='m1', mailbox='alice@leap-arabia.com',
+            sender_email='client@example.com', has_attachments=True,
+            attachment_meta=[{'id': 'a1', 'name': 'quote.pdf', 'content_type': 'application/pdf', 'size': 10}])
+        self.client.force_login(self.bob)
+        with patch('proposals.graph_mail.fetch_attachment_bytes',
+                   return_value=('quote.pdf', 'application/pdf', b'%PDF-1.4')) as mocked:
+            resp = self.client.get(
+                reverse('proposals:download_proposal_email_attachment', kwargs={'message_pk': linked.pk}),
+                {'attachment_id': 'a1'})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(mocked.call_args.args[0], 'alice@leap-arabia.com')
+
+    def test_linked_emails_view_shows_what_is_already_linked(self):
+        from proposals.models import ProposalLinkedEmail
+        ProposalLinkedEmail.objects.create(
+            proposal=self.proposal, graph_message_id='m1', mailbox='alice@leap-arabia.com',
+            sender_email='client@example.com', subject='RE: Proposal', body_text='Approved.')
+        self.client.force_login(self.bob)  # doesn't need a mailbox to view
+        resp = self.client.get(
+            reverse('proposals:proposal_linked_emails', kwargs={'pk': self.proposal.pk}))
+        self.assertContains(resp, 'RE: Proposal')
+        self.assertContains(resp, 'Approved.')

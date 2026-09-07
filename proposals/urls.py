@@ -22,6 +22,12 @@ urlpatterns = [
     path('<int:pk>/save-section/', views.ajax_save_section, name='save_section'),
     path('<int:pk>/upload-image/', views.ajax_upload_image, name='upload_image'),
 
+    # Client email linking (export-lock feature)
+    path('<int:pk>/browse-link-email/', login_required(views.browse_link_proposal_email), name='browse_link_proposal_email'),
+    path('<int:pk>/link-email/', login_required(views.link_proposal_email), name='link_proposal_email'),
+    path('<int:pk>/linked-emails/', login_required(views.proposal_linked_emails), name='proposal_linked_emails'),
+    path('proposal-email/<int:message_pk>/attachment/', login_required(views.download_proposal_email_attachment), name='download_proposal_email_attachment'),
+
     # Prequalification Documents (PQD)
     path('pqd/', views.PQDListView.as_view(), name='pqd_list'),
     path('pqd/create/', views.PQDCreateView.as_view(), name='pqd_create'),
