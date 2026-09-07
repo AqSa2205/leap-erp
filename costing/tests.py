@@ -1444,3 +1444,175 @@ class SubHeadingRowTests(TestCase):
         self._item('1.2.2', price='10')
         self.assertIn('1.2', self._sub_headings())
         self.assertTrue(bool(head.final_total_price))
+
+
+class PCCEngineerBOMAccessTests(TestCase):
+    """PCC Engineer must see every BOM (full visibility, like Proposal
+    Team) but never any pricing figure - not just hidden by CSS, but
+    absent from the page source, the AJAX line-item fragment, and both
+    export formats. No edit access; no import; unpriced export only."""
+
+    FIGURE = '918273'  # a distinctive base unit cost, unlikely to collide
+
+    def setUp(self):
+        from decimal import Decimal
+        from accounts.models import Role, User
+        from projects.models import Region, ProjectStatus, Project
+        from costing.models import CostingSheet, CostingSection, CostingLineItem
+        self.region = Region.objects.create(name='Saudi', code='LNA2', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+
+        def mkuser(username, role_name):
+            role, _ = Role.objects.get_or_create(name=role_name)
+            u = User.objects.create_user(username, password='x')
+            u.role = role
+            u.region = self.region
+            u.save()
+            return u
+
+        self.pcc = mkuser('pcc_bom_test', Role.PCC_ENGINEER)
+        self.sales = mkuser('sales_bom_test', Role.SALES_REP)
+
+        # A sheet the PCC Engineer neither owns nor created, in the same
+        # region - confirms they see it via full BOM visibility, not
+        # region/ownership scoping.
+        self.project = Project.objects.create(
+            project_name='P', proposal_reference='REF-PCC',
+            status=self.status, region=self.region, owner=self.sales)
+        self.sheet = CostingSheet.objects.create(
+            title='Sheet', project=self.project, created_by=self.sales,
+            margin=Decimal('40'), output_currency='SAR', workflow_stage='finalized')
+        self.sec = CostingSection.objects.create(
+            costing_sheet=self.sheet, section_number='1', title='CCTV', order=0)
+        CostingLineItem.objects.create(
+            section=self.sec, item_number='1', description='Camera',
+            quantity=Decimal('1'), unit='EA', vendor_name='Acme',
+            base_unit_cost=Decimal(self.FIGURE), supplier_currency='SAR', margin=Decimal('40'))
+
+    def _detail(self, user):
+        self.client.force_login(user)
+        return self.client.get(reverse('costing:detail', kwargs={'pk': self.sheet.pk}))
+
+    def _rows(self, user):
+        self.client.force_login(user)
+        return self.client.get(reverse('costing:section_items', kwargs={'pk': self.sec.pk}))
+
+    def _export(self, user, view_name='export', **params):
+        self.client.force_login(user)
+        return self.client.get(reverse(f'costing:{view_name}', args=[self.sheet.pk]), params)
+
+    # -- visibility --
+
+    def test_pcc_engineer_sees_every_sheet_not_just_own_region_or_ownership(self):
+        """Full BOM visibility, same as Proposal Team - not gated by
+        ownership or region, since neither is true of the sheet here."""
+        resp = self._detail(self.pcc)
+        self.assertEqual(resp.status_code, 200)
+
+    def test_pcc_engineer_appears_in_costing_scoped_queryset(self):
+        from costing.views import costing_scoped_queryset
+        qs = costing_scoped_queryset(self.pcc)
+        self.assertIn(self.sheet, list(qs))
+
+    # -- pricing hidden --
+
+    def test_pcc_engineer_gets_no_figures_anywhere(self):
+        detail = self._detail(self.pcc)
+        self.assertFalse(detail.context['can_see_pricing'])
+        self.assertNotContains(detail, 'GRAND TOTAL')
+        rows = self._rows(self.pcc)
+        self.assertNotContains(rows, self.FIGURE)
+        self.assertContains(rows, 'Camera')  # BOM item still visible
+
+    def test_sales_sees_figures_for_comparison(self):
+        """Sanity check the fixture actually exercises the pricing path -
+        sales must see what PCC Engineer above must not."""
+        detail = self._detail(self.sales)
+        self.assertTrue(detail.context['can_see_pricing'])
+
+    # -- no edit, no import --
+
+    def test_pcc_engineer_cannot_edit_sheet(self):
+        from costing.views import _user_can_edit_sheet
+        self.assertFalse(_user_can_edit_sheet(self.pcc, self.sheet))
+
+    def test_pcc_engineer_cannot_reach_import_new(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('costing:import_new'))
+        self.assertEqual(resp.status_code, 302)
+
+    def test_pcc_engineer_cannot_import_into_existing_sheet(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('costing:import_excel', args=[self.sheet.pk]))
+        self.assertEqual(resp.status_code, 302)
+
+    # -- export: unpriced only --
+
+    def test_pcc_engineer_can_download_unpriced_excel_but_not_priced(self):
+        self.assertEqual(self._export(self.pcc, 'export', unpriced='1').status_code, 200)
+        self.assertEqual(self._export(self.pcc, 'export').status_code, 302)
+
+    def test_pcc_engineer_can_download_unpriced_pdf_but_not_priced(self):
+        self.assertEqual(self._export(self.pcc, 'export_pdf', unpriced='1').status_code, 200)
+        self.assertEqual(self._export(self.pcc, 'export_pdf').status_code, 302)
+
+    def test_no_pricing_value_in_pcc_engineers_unpriced_excel(self):
+        import io
+        import openpyxl
+        resp = self._export(self.pcc, 'export', unpriced='1')
+        wb = openpyxl.load_workbook(io.BytesIO(resp.content))
+        ws = wb.active
+        cells = [str(c.value) for r in ws.iter_rows() for c in r if c.value is not None]
+        blob = ' '.join(cells)
+        self.assertNotIn(self.FIGURE, blob)
+        self.assertIn('Camera', blob)
+
+
+    # -- additional edge cases / auth boundary --
+
+    def test_no_pricing_value_in_pcc_engineers_unpriced_pdf(self):
+        from pypdf import PdfReader
+        import io
+        resp = self._export(self.pcc, 'export_pdf', unpriced='1')
+        reader = PdfReader(io.BytesIO(resp.content))
+        text = ' '.join(page.extract_text() or '' for page in reader.pages)
+        self.assertNotIn(self.FIGURE, text)
+        self.assertIn('Camera', text)
+
+    def test_revoking_costing_access_capability_blocks_the_list_view(self):
+        """The capability grid and the role-specific BOM functions are two
+        separate layers - revoking costing.access must still lock PCC
+        Engineer out of the list view even though _user_can_view_sheet
+        and costing_scoped_queryset would otherwise let them see sheets."""
+        from accounts.models import RolePermission
+        RolePermission.objects.filter(
+            role=self.pcc.role, codename='costing.access').update(allowed=False)
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('costing:list'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_pcc_engineer_sees_sheet_from_a_different_region(self):
+        """Full BOM visibility means regardless of region, not just same
+        region as it happens to be in the main fixture above."""
+        from decimal import Decimal
+        from projects.models import Region, Project
+        from costing.models import CostingSheet
+        other_region = Region.objects.create(name='UK', code='UKX', currency='GBP')
+        other_project = Project.objects.create(
+            project_name='Q', proposal_reference='REF-OTHER-REGION',
+            status=self.status, region=other_region, owner=self.sales)
+        other_sheet = CostingSheet.objects.create(
+            title='OtherSheet', project=other_project, created_by=self.sales,
+            margin=Decimal('40'), output_currency='GBP', workflow_stage='finalized')
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('costing:detail', kwargs={'pk': other_sheet.pk}))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_pcc_engineer_cannot_post_to_import_new_either(self):
+        """The block runs before the method branch, so a direct POST
+        (bypassing the form) must be caught too, not just a GET."""
+        self.client.force_login(self.pcc)
+        resp = self.client.post(reverse('costing:import_new'), {'title': 'x'})
+        self.assertEqual(resp.status_code, 302)
+        from costing.models import CostingSheet
+        self.assertFalse(CostingSheet.objects.filter(title='x').exists())

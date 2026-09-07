@@ -15,12 +15,14 @@
             <a href="{% url 'hr:employee_export' %}?{{ request.GET.urlencode }}" class="btn btn-outline-secondary me-2">
                 <i class="bi bi-download"></i> Export
             </a>
+            {% if not user.is_pcc_engineer_user %}
             <a href="{% url 'hr:employee_import' %}" class="btn btn-outline-primary me-2">
                 <i class="bi bi-upload"></i> Import
             </a>
             <a href="{% url 'hr:employee_create' %}" class="btn btn-primary">
                 <i class="bi bi-plus-lg"></i> Add Employee
             </a>
+            {% endif %}
         </div>
     </div>
 
@@ -182,12 +184,14 @@
                                     <a href="{% url 'hr:employee_detail' emp.pk %}" class="btn btn-outline-primary" title="View">
                                         <i class="bi bi-eye"></i>
                                     </a>
+                                    {% if not user.is_pcc_engineer_user %}
                                     <a href="{% url 'hr:employee_update' emp.pk %}" class="btn btn-outline-secondary" title="Edit">
                                         <i class="bi bi-pencil"></i>
                                     </a>
                                     <a href="{% url 'hr:employee_delete' emp.pk %}" class="btn btn-outline-danger" title="Delete">
                                         <i class="bi bi-trash"></i>
                                     </a>
+                                    {% endif %}
                                 </div>
                             </td>
                         </tr>
@@ -196,12 +200,14 @@
                             <td colspan="12" class="text-center py-5">
                                 <i class="bi bi-people display-4 text-muted"></i>
                                 <p class="text-muted mt-3">No employees found.</p>
+                                {% if not user.is_pcc_engineer_user %}
                                 <a href="{% url 'hr:employee_create' %}" class="btn btn-primary me-2">
                                     <i class="bi bi-plus-lg"></i> Add Employee
                                 </a>
                                 <a href="{% url 'hr:employee_import' %}" class="btn btn-outline-primary">
                                     <i class="bi bi-upload"></i> Import from Excel
                                 </a>
+                                {% endif %}
                             </td>
                         </tr>
                         {% endfor %}

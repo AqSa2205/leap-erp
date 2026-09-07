@@ -953,15 +953,22 @@ class PCCEngineerRoleTests(TestCase):
     0034_create_pcc_engineer_role) with the same permissions as
     document_controller, and the model properties must recognize it."""
 
-    def test_role_exists_with_document_controller_permissions(self):
+    def test_role_has_document_controller_permissions_plus_bom_access(self):
+        """PCC Engineer = everything Document Controller has, plus BOM
+        access (costing.access/costing.nav) - not a strict copy, since the
+        task added Costing on top of the inherited base permission set."""
         doc_controller = Role.objects.get(name='document_controller')
         pcc = Role.objects.get(name='pcc_engineer')
         doc_perms = set(RolePermission.objects.filter(
             role=doc_controller, allowed=True).values_list('codename', flat=True))
         pcc_perms = set(RolePermission.objects.filter(
             role=pcc, allowed=True).values_list('codename', flat=True))
-        self.assertEqual(doc_perms, pcc_perms)
         self.assertTrue(doc_perms, "sanity check: document_controller should have some permissions")
+        self.assertTrue(doc_perms.issubset(pcc_perms),
+                         "PCC Engineer must have every permission Document Controller has")
+        self.assertEqual(pcc_perms - doc_perms, {'costing.access', 'costing.nav'},
+                          "The only extra grants PCC Engineer has beyond Document Controller "
+                          "should be BOM (Costing) access")
 
     def test_is_pcc_engineer_property(self):
         role = Role.objects.get(name='pcc_engineer')

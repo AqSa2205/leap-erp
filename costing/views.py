@@ -74,6 +74,10 @@ def _user_can_view_sheet(user, sheet):
     # Proposal team sees every sheet as a BOM (no pricing) regardless of region
     if getattr(user, 'is_proposal_team_user', False):
         return True
+    # PCC Engineer: same as Proposal Team - full BOM visibility, no pricing
+    # (enforced by _user_can_see_pricing, not by hiding sheets here).
+    if getattr(user, 'is_pcc_engineer_user', False):
+        return True
     # Sales reps see ONLY sheets for projects they own (plus any sheet they
     # personally created, granted above). Managers/admins were handled above
     # with region scope.
@@ -104,7 +108,8 @@ def _user_can_see_pricing(user):
     if not getattr(user, 'is_authenticated', False):
         return False
     return not (getattr(user, 'is_proposal_team_user', False)
-                or getattr(user, 'is_procurement_user', False))
+                or getattr(user, 'is_procurement_user', False)
+                or getattr(user, 'is_pcc_engineer_user', False))
 
 
 def _user_can_view_margin_analysis(user, sheet):
@@ -403,9 +408,11 @@ def costing_scoped_queryset(user):
     if (
         user.is_super_admin_user
         or getattr(user, 'is_proposal_team_user', False)
+        or getattr(user, 'is_pcc_engineer_user', False)
     ):
-        # Super admins and proposal team see every sheet (proposal team
-        # is the source of BOMs, so they need full visibility).
+        # Super admins, proposal team, and PCC Engineer see every sheet
+        # (all three work from the BOM without pricing, so they need full
+        # visibility - pricing itself stays gated by _user_can_see_pricing).
         return queryset
     elif user.is_admin_user or user.is_manager_user:
         return queryset.filter(
@@ -3414,7 +3421,8 @@ def costing_export_excel(request, pk):
     if not _user_can_view_sheet(request.user, sheet):
         messages.error(request, 'You do not have permission to export this costing sheet.')
         return redirect('costing:list')
-    if not unpriced and getattr(request.user, 'is_proposal_team_user', False):
+    if not unpriced and (getattr(request.user, 'is_proposal_team_user', False)
+                          or getattr(request.user, 'is_pcc_engineer_user', False)):
         messages.error(
             request,
             'The priced Excel export is sales-only. Use "Export BOM Excel (unpriced)" instead.')
@@ -3670,7 +3678,8 @@ def costing_export_pdf(request, pk):
     if not _user_can_view_sheet(request.user, sheet):
         messages.error(request, 'You do not have permission to export this costing sheet.')
         return redirect('costing:list')
-    if not unpriced and getattr(request.user, 'is_proposal_team_user', False):
+    if not unpriced and (getattr(request.user, 'is_proposal_team_user', False)
+                          or getattr(request.user, 'is_pcc_engineer_user', False)):
         messages.error(
             request,
             'The priced PDF is sales-only. Use "Export BOM PDF (unpriced)" instead.',
@@ -4895,6 +4904,12 @@ def costing_import_new(request):
     from openpyxl.utils.exceptions import InvalidFileException
     from decimal import Decimal, InvalidOperation
     import re
+
+    # PCC Engineer is export-only on BOM data - creating a new (necessarily
+    # priced) sheet from an import is a write action outside that scope.
+    if getattr(request.user, 'is_pcc_engineer_user', False):
+        messages.error(request, 'You do not have permission to create a costing sheet.')
+        return redirect('costing:list')
 
     if request.method == 'POST':
         excel_file = request.FILES.get('excel_file')

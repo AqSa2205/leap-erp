@@ -1051,11 +1051,13 @@
                             </div>
                             <div class="collapse {% if request.GET.view == 'bom' %}show{% endif %}" id="proposalsTechnical">
                                 <ul class="nav flex-column ms-3">
+                                    {% if not user.is_pcc_engineer_user %}
                                     <li class="nav-item">
                                         <a class="nav-link py-1" href="{% url 'projects:document_list' %}?document_type=rfq">
                                             <i class="bi bi-file-earmark-arrow-up"></i> <span>Client RFQ</span>
                                         </a>
                                     </li>
+                                    {% endif %}
                                     {% if user|can:'costing.nav' %}
                                     <li class="nav-item">
                                         <a class="nav-link py-1 {% if request.resolver_match.app_name == 'costing' and request.GET.view == 'bom' %}active{% endif %}" href="{% url 'costing:list' %}?view=bom">
@@ -1063,11 +1065,13 @@
                                         </a>
                                     </li>
                                     {% endif %}
+                                    {% if not user.is_pcc_engineer_user %}
                                     <li class="nav-item">
                                         <a class="nav-link py-1 {% if request.resolver_match.app_name == 'proposals' and 'pqd' not in request.resolver_match.url_name and request.resolver_match.url_name != 'dashboard' %}active{% endif %}" href="{% url 'proposals:list' %}">
                                             <i class="bi bi-file-earmark-richtext"></i> <span>Technical Proposal</span>
                                         </a>
                                     </li>
+                                    {% endif %}
                                 </ul>
                             </div>
                         </li>
@@ -1087,7 +1091,7 @@
                             <div class="collapse {% if request.resolver_match.app_name == 'costing' and request.GET.view != 'bom' %}show{% endif %}" id="proposalsCommercial">
                                 <ul class="nav flex-column ms-3">
                                     {# Vendor Quotes + Commercial Proposal expose pricing/cost documents — hidden from the proposal team (they keep Costing for the BOM). #}
-                                    {% if not user.is_proposal_team_user %}
+                                    {% if not user.is_proposal_team_user and not user.is_pcc_engineer_user %}
                                     <li class="nav-item">
                                         <a class="nav-link py-1 {% if request.resolver_match.url_name == 'vendor_quote_list' %}active{% endif %}" href="{% url 'costing:vendor_quote_list' %}">
                                             <i class="bi bi-receipt"></i> <span>Vendor Quotes</span>
@@ -1099,7 +1103,7 @@
                                             <i class="bi bi-calculator"></i> <span>Costing</span>
                                         </a>
                                     </li>
-                                    {% if not user.is_proposal_team_user %}
+                                    {% if not user.is_proposal_team_user and not user.is_pcc_engineer_user %}
                                     <li class="nav-item">
                                         <a class="nav-link py-1 {% if request.resolver_match.url_name == 'commercial_proposal_list' %}active{% endif %}" href="{% url 'costing:commercial_proposal_list' %}">
                                             <i class="bi bi-file-earmark-pdf"></i> <span>Commercial Proposal</span>
@@ -1376,6 +1380,18 @@
                     <i class="bi bi-diagram-3"></i> <span>Org Chart</span>
                 </a>
             </li>
+            {% if user.is_pcc_engineer_user %}
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name and 'employee' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:employee_list' %}" data-title="Employees">
+                    <i class="bi bi-people-fill"></i> <span>Employees</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if 'entitlement' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:entitlement_year' %}" data-title="Leave Entitlements">
+                    <i class="bi bi-bar-chart-steps"></i> <span>Leave Entitlements</span>
+                </a>
+            </li>
+            {% endif %}
         </ul>
         {% endif %}
 
