@@ -189,7 +189,7 @@ DEFAULT_MODULE_ACCESS = {
     'project_manager':     {'dashboard', 'kpis'},
     'site_manager':        {'dashboard', 'kpis'},
     'document_controller': {'dashboard', 'kpis'},
-    'pcc_engineer':        {'dashboard', 'kpis'},
+    'pcc_engineer':        {'dashboard', 'kpis', 'costing'},
     # ERP Admin: a Dashboard landing page; the Administration section it manages
     # is role-gated (is_erp_admin_user), not capability-gated.
     # erp_admin owns the whole Administration section; engineer_calendar and

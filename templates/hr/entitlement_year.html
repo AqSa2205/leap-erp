@@ -25,7 +25,7 @@
             </div>
         </div>
 
-        {% if not user.is_document_controller_user %}
+        {% if not user.is_document_controller_user and not user.is_pcc_engineer_user %}
         <!-- Generate action (POST) -->
         <div class="col-md-8">
             <div class="card border-primary">
