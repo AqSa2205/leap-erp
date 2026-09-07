@@ -1485,7 +1485,7 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
                                 </a>
                                 {% if can_edit and not rev.email_thread %}
                                 <button type="button" class="btn btn-sm btn-outline-secondary" title="Send to client"
-                                        onclick="openSendRevisionEmail({{ rev.pk }}, '{{ rev.revision_label }}', '{{ rev.file.url|escapejs }}', '{{ sheet.title|escapejs }} — Costing {{ rev.revision_label|escapejs }}')">
+                                        onclick="openSendRevisionEmail({{ rev.pk }}, '{{ rev.revision_label|escapejs }}', '{{ rev.file.url|escapejs }}', '{{ sheet.title|escapejs }} — Costing {{ rev.revision_label|escapejs }}')">
                                     <i class="bi bi-envelope"></i>
                                 </button>
                                 {% endif %}

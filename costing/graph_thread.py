@@ -23,7 +23,11 @@ class GraphThreadError(Exception):
     """Raised when Graph can't send or read back the revision email thread."""
 
 
+_msal_app = None  # module-level so MSAL's own token cache survives across calls
+
+
 def _get_access_token():
+    global _msal_app
     import msal
     tenant_id = settings.MS_TENANT_ID
     client_id = settings.MS_CLIENT_ID
@@ -33,12 +37,16 @@ def _get_access_token():
         raise GraphThreadError(
             'MS_TENANT_ID/MS_CLIENT_ID/MS_CLIENT_SECRET must all be set to use Microsoft Graph.')
 
-    app = msal.ConfidentialClientApplication(
-        client_id,
-        authority=f'https://login.microsoftonline.com/{tenant_id}',
-        client_credential=client_secret,
-    )
-    result = app.acquire_token_for_client(scopes=GRAPH_SCOPE)
+    if _msal_app is None:
+        _msal_app = msal.ConfidentialClientApplication(
+            client_id,
+            authority=f'https://login.microsoftonline.com/{tenant_id}',
+            client_credential=client_secret,
+        )
+    # Reusing the same app instance lets MSAL serve this from its own
+    # in-memory cache when the last token hasn't expired yet, instead of a
+    # fresh OAuth round trip to Azure AD on every single Graph call.
+    result = _msal_app.acquire_token_for_client(scopes=GRAPH_SCOPE)
     access_token = result.get('access_token')
 
     if not access_token:

@@ -3143,6 +3143,7 @@ def send_costing_revision_email(request, pk):
     """Email a CostingSheetRevision's file to a client and start tracking
     the reply thread. One thread per revision — the 'Send to Client'
     action disappears once revision.email_thread exists."""
+    from django.db import IntegrityError, transaction
     from . import graph_thread
     from .models import CostingSheetRevision, RevisionEmailThread, RevisionEmailMessage
 
@@ -3170,11 +3171,15 @@ def send_costing_revision_email(request, pk):
         messages.error(request, 'No mailbox is linked to your account — ask an admin to link one.')
         return redirect('costing:detail', pk=sheet.pk)
 
-    rev.file.open('rb')
     try:
-        attachment_bytes = rev.file.read()
-    finally:
-        rev.file.close()
+        rev.file.open('rb')
+        try:
+            attachment_bytes = rev.file.read()
+        finally:
+            rev.file.close()
+    except Exception:
+        messages.error(request, f"Revision {rev.revision_label}'s file could not be read from storage.")
+        return redirect('costing:detail', pk=sheet.pk)
     attachment_filename = rev.original_filename or rev.file.name.rsplit('/', 1)[-1]
 
     try:
@@ -3186,15 +3191,24 @@ def send_costing_revision_email(request, pk):
         messages.error(request, f'Could not send the email: {exc}')
         return redirect('costing:detail', pk=sheet.pk)
 
-    thread = RevisionEmailThread.objects.create(
-        revision=rev,
-        mailbox=mailbox,
-        graph_conversation_id=conversation_id,
-        client_to=', '.join(to),
-        client_cc=', '.join(cc),
-        subject=subject,
-        sent_by=request.user if request.user.is_authenticated else None,
-    )
+    try:
+        with transaction.atomic():
+            thread = RevisionEmailThread.objects.create(
+                revision=rev,
+                mailbox=mailbox,
+                graph_conversation_id=conversation_id,
+                client_to=', '.join(to),
+                client_cc=', '.join(cc),
+                subject=subject,
+                sent_by=request.user if request.user.is_authenticated else None,
+            )
+    except IntegrityError:
+        # The email was already sent via Graph above (so the client did receive
+        # it), but a concurrent request beat us to recording it — rev.email_thread
+        # is a OneToOneField, so this is the only case that can hit it. Nothing
+        # left to do here safely; the other request's row is the record of it.
+        messages.error(request, f'Revision {rev.revision_label} was just sent by another request.')
+        return redirect('costing:detail', pk=sheet.pk)
     RevisionEmailMessage.objects.create(
         thread=thread,
         graph_message_id=message_id,
@@ -3250,9 +3264,19 @@ def download_revision_email_attachment(request, message_pk, attachment_id):
     except graph_thread.GraphThreadError as exc:
         return HttpResponse(str(exc), status=502)
 
-    safe_name = filename.replace('"', "'").replace('\r', '').replace('\n', '')
+    # Same fallback Django's own FileResponse uses: a plain quoted filename
+    # when it's pure ASCII, otherwise RFC 5987 filename* — needed for a
+    # client's attachment named in Arabic (or any non-Latin-1 script), which
+    # a plain filename="..." header can't represent correctly.
+    from urllib.parse import quote as url_quote
+    safe_name = filename.replace('\r', '').replace('\n', '')
+    try:
+        safe_name.encode('ascii')
+        file_expr = 'filename="{}"'.format(safe_name.replace('\\', '\\\\').replace('"', r'\"'))
+    except UnicodeEncodeError:
+        file_expr = "filename*=utf-8''{}".format(url_quote(safe_name))
     response = HttpResponse(data, content_type=content_type)
-    response['Content-Disposition'] = f'attachment; filename="{safe_name}"'
+    response['Content-Disposition'] = f'attachment; {file_expr}'
     return response
 
 
@@ -3317,6 +3341,7 @@ def link_revision_email(request, pk):
     Explicit classification (not sender-address inference) matters here
     specifically because this is the manual path for messages composed
     outside the ERP, where inference is the least reliable."""
+    from django.db import IntegrityError, transaction
     from django.utils.dateparse import parse_datetime
     from . import graph_thread
     from .models import CostingSheetRevision, RevisionEmailThread, RevisionEmailMessage
@@ -3349,15 +3374,24 @@ def link_revision_email(request, pk):
 
     thread = getattr(rev, 'email_thread', None)
     if thread is None:
-        thread = RevisionEmailThread.objects.create(
-            revision=rev,
-            mailbox=mailbox,
-            graph_conversation_id=msg['conversation_id'],
-            client_to=msg['to'] if direction == 'out' else msg['sender_email'],
-            client_cc=msg['cc'] if direction == 'out' else '',
-            subject=msg['subject'],
-            sent_by=request.user if request.user.is_authenticated else None,
-        )
+        try:
+            with transaction.atomic():
+                thread = RevisionEmailThread.objects.create(
+                    revision=rev,
+                    mailbox=mailbox,
+                    graph_conversation_id=msg['conversation_id'],
+                    client_to=msg['to'] if direction == 'out' else msg['sender_email'],
+                    client_cc=msg['cc'] if direction == 'out' else '',
+                    subject=msg['subject'],
+                    sent_by=request.user if request.user.is_authenticated else None,
+                )
+        except IntegrityError:
+            # A concurrent request created the thread first - reuse it rather
+            # than dropping this person's already-fetched, already-classified
+            # message (revision.email_thread is a OneToOneField, so this is
+            # the only way this create() can fail).
+            rev.refresh_from_db()
+            thread = rev.email_thread
 
     RevisionEmailMessage.objects.create(
         thread=thread,

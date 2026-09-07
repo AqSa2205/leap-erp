@@ -1556,6 +1556,52 @@ class RevisionMailboxPrivacyTests(TestCase):
         self.assertEqual(thread.sent_by, self.bob)
 
     @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_send_view_shows_friendly_error_when_file_missing_from_storage(self):
+        """Regression: reading rev.file was unguarded, so a revision whose
+        file went missing from storage (DB row survived, file didn't) would
+        500 instead of showing a friendly message like every other failure
+        path in this view already does."""
+        from django.core.files.base import ContentFile
+        from django.core.files.storage import default_storage
+        from costing.models import CostingSheetRevision, RevisionEmailThread
+
+        self.RevisionMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        rev = CostingSheetRevision(sheet=self.sheet, revision_label='R00', export_format='pdf')
+        rev.file.save('offer.pdf', ContentFile(b'%PDF-1.4 fake'), save=True)
+        default_storage.delete(rev.file.name)  # file gone, DB row survives
+
+        self.client.force_login(self.alice)
+        resp = self.client.post(
+            reverse('costing:send_revision_email', kwargs={'pk': rev.pk}),
+            {'to': 'client@example.com', 'subject': 'Offer', 'body': 'Please see attached.'})
+        self.assertEqual(resp.status_code, 302)  # friendly redirect, not a 500
+        self.assertFalse(RevisionEmailThread.objects.filter(revision=rev).exists())
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_send_view_recovers_when_thread_creation_races(self):
+        """Regression: two near-simultaneous 'Send' clicks (or a retried
+        request) could both pass the hasattr(rev, 'email_thread') check
+        before either commits; the second RevisionEmailThread.objects.create()
+        then hit the OneToOneField's unique constraint as an unhandled
+        IntegrityError instead of a friendly message."""
+        from unittest.mock import patch
+        from django.core.files.base import ContentFile
+        from django.db import IntegrityError
+        from costing.models import CostingSheetRevision, RevisionEmailThread
+
+        self.RevisionMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        rev = CostingSheetRevision(sheet=self.sheet, revision_label='R00', export_format='pdf')
+        rev.file.save('offer.pdf', ContentFile(b'%PDF-1.4 fake'), save=True)
+
+        self.client.force_login(self.alice)
+        with patch('costing.graph_thread.send_revision_email', return_value=('msg-1', 'conv-1')), \
+             patch.object(RevisionEmailThread.objects, 'create', side_effect=IntegrityError):
+            resp = self.client.post(
+                reverse('costing:send_revision_email', kwargs={'pk': rev.pk}),
+                {'to': 'client@example.com', 'subject': 'Offer', 'body': 'Please see attached.'})
+        self.assertEqual(resp.status_code, 302)  # friendly redirect, not a 500
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
     def test_send_view_blocked_when_user_has_no_linked_mailbox(self):
         from django.core.files.base import ContentFile
         from costing.models import CostingSheetRevision, RevisionEmailThread
@@ -1621,6 +1667,60 @@ class HtmlToTextTests(TestCase):
         from costing.graph_thread import html_to_text
         self.assertEqual(html_to_text(''), '')
         self.assertEqual(html_to_text(None), '')
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class DownloadRevisionEmailAttachmentTests(TestCase):
+    """The Content-Disposition filename must survive a real attachment name
+    - including one in a script that isn't representable in Latin-1, which
+    a plain filename="..." header can't carry correctly."""
+
+    def setUp(self):
+        from django.core.files.base import ContentFile
+        from costing.models import (
+            RevisionMailbox, CostingSheetRevision, RevisionEmailThread, RevisionEmailMessage,
+        )
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('dl_user', password='x', role=role)
+        RevisionMailbox.objects.create(owner=self.user, email_address='dl_user@leap-arabia.com')
+        region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        status = ProjectStatus.objects.create(name='Open', category='active')
+        project = Project.objects.create(
+            project_name='P', proposal_reference='REF-DL', status=status, region=region)
+        sheet = CostingSheet.objects.create(title='S', project=project, created_by=self.user)
+        rev = CostingSheetRevision(sheet=sheet, revision_label='R00', export_format='pdf')
+        rev.file.save('offer.pdf', ContentFile(b'%PDF-1.4 fake'), save=True)
+        thread = RevisionEmailThread.objects.create(
+            revision=rev, mailbox='dl_user@leap-arabia.com', graph_conversation_id='conv-1',
+            client_to='client@example.com', subject='Offer', sent_by=self.user)
+        self.msg = RevisionEmailMessage.objects.create(
+            thread=thread, graph_message_id='m1', direction='in', sender_email='client@example.com')
+        self.client.force_login(self.user)
+
+    def _download(self, filename):
+        from unittest.mock import patch
+        with patch('costing.graph_thread.fetch_attachment_bytes',
+                   return_value=(filename, 'application/pdf', b'%PDF-1.4 fake')):
+            return self.client.get(reverse(
+                'costing:download_revision_email_attachment',
+                kwargs={'message_pk': self.msg.pk, 'attachment_id': 'a1'}))
+
+    def test_ascii_filename_uses_plain_quoted_form(self):
+        resp = self._download('quote.pdf')
+        self.assertEqual(resp['Content-Disposition'], 'attachment; filename="quote.pdf"')
+
+    def test_non_ascii_filename_uses_rfc5987_form(self):
+        """Regression: an Arabic attachment name (plausible for this
+        market) was put straight into filename="..." with no non-ASCII
+        handling, which most browsers can't parse correctly."""
+        resp = self._download('عرض السعر.pdf')
+        disposition = resp['Content-Disposition']
+        self.assertTrue(disposition.startswith("attachment; filename*=utf-8''"))
+        self.assertNotIn('عرض', disposition)  # must be percent-encoded, not raw
+
+    def test_quote_in_filename_is_escaped_not_stripped(self):
+        resp = self._download('quo"te.pdf')
+        self.assertEqual(resp['Content-Disposition'], 'attachment; filename="quo\\"te.pdf"')
 
 
 class LinkRevisionEmailTests(TestCase):
@@ -1751,6 +1851,37 @@ class LinkRevisionEmailTests(TestCase):
         thread = RevisionEmailThread.objects.get(revision=self.rev)
         self.assertEqual(thread.status, 'replied')  # the 'in' message flipped it
         self.assertEqual(RevisionEmailMessage.objects.filter(thread=thread).count(), 2)
+
+    def test_recovers_when_thread_creation_races(self):
+        """Regression: two near-simultaneous links for the same revision's
+        first message could both pass the `thread is None` check before
+        either commits; the second RevisionEmailThread.objects.create() then
+        hit the unique constraint as an unhandled IntegrityError, dropping
+        this person's already-classified message entirely instead of
+        attaching it to the thread the other request just created."""
+        from unittest.mock import patch
+        from django.db import IntegrityError
+        from costing.models import RevisionEmailThread, RevisionEmailMessage
+
+        # Simulate "someone else's request already created the thread" by
+        # creating it directly, then still making our own create() call
+        # raise IntegrityError (exactly what the real unique constraint
+        # would do), forcing the view down its recovery path.
+        winning_thread = RevisionEmailThread.objects.create(
+            revision=self.rev, mailbox='alice@leap-arabia.com', graph_conversation_id='conv-1',
+            client_to='client@example.com', subject='Offer', sent_by=self.alice)
+
+        self.client.force_login(self.alice)
+        with patch('costing.graph_thread.get_message_detail', return_value=self._detail('m1')), \
+             patch.object(RevisionEmailThread.objects, 'create', side_effect=IntegrityError):
+            resp = self.client.post(
+                reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
+                {'message_id': 'm1', 'direction': 'out'})
+        self.assertEqual(resp.status_code, 302)
+        # The message must still land on the thread that actually exists,
+        # not get silently dropped.
+        msg = RevisionEmailMessage.objects.get(graph_message_id='m1')
+        self.assertEqual(msg.thread_id, winning_thread.pk)
 
     def test_messages_display_in_attachment_order_not_email_timestamp(self):
         """The reported bug: attach two 'received' messages (real, LATER
