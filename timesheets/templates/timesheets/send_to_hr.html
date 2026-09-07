@@ -160,10 +160,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   });
 
-  function getCookie(name) {
-    const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
-    return match ? match.pop() : '';
-  }
+  // CSRF comes from ERP.csrf() in static/js/erp.js, loaded by base.html.
   
   document.addEventListener('click', function (e) {
     const textSpan = e.target.closest('.xlsx-editable');
@@ -216,7 +213,7 @@ document.addEventListener('DOMContentLoaded', function () {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
-          'X-CSRFToken': getCookie('csrftoken'),
+          'X-CSRFToken': ERP.csrf(),
         },
         body: body.toString(),
       })
