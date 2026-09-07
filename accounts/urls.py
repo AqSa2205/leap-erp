@@ -23,4 +23,5 @@ urlpatterns = [
     path('reset-requests/<int:pk>/reject/', views.reject_reset, name='reject_reset'),
     path('settings/permissions/', views.permission_matrix, name='permission_matrix'),
     path('settings/permissions/toggle/', views.ajax_toggle_permission, name='toggle_permission'),
+    path('settings/permissions/export/', views.permission_matrix_pdf, name='permission_matrix_pdf'),
 ]
