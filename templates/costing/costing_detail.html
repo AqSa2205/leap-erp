@@ -822,7 +822,9 @@ three times" is a different conversation from "it is back now". {% endcomment %}
                         <th class="cost-hdr">Install %</th>
                         <th class="cost-hdr">Unit Price</th>
                         <th class="cost-hdr">Total Price</th>
+                        {% if can_edit %}
                         <th class="table-dark" style="width:60px;">Act</th>
+                        {% endif %}
                     </tr>
                 </thead>
 
@@ -1161,6 +1163,7 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
     </div>
 </div>
 
+{% if can_edit %}
 <!-- Paste from Excel Modal -->
 <div class="modal fade" id="pasteExcelModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
@@ -1193,6 +1196,7 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
         </div>
     </div>
 </div>
+{% endif %}
 
 <!-- Recent Changes (cross-team visibility) -->
 <div class="card mt-3">
