@@ -1616,3 +1616,64 @@ class PCCEngineerBOMAccessTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         from costing.models import CostingSheet
         self.assertFalse(CostingSheet.objects.filter(title='x').exists())
+
+
+    def test_pcc_engineer_has_no_row_edit_actions_in_the_bom_fragment(self):
+        """Add row / Paste from Excel and the per-row insert/delete buttons
+        (the Act column) are write actions - a read-only role must not see
+        any of them, on the detail page or in the lazy-loaded AJAX rows.
+        Checks the actual rendered button tags rather than plain text or
+        bare class names, since phrases like "Add row" appear in JS
+        comments and the class names themselves appear in JS selector
+        strings (e.g. closest('.add-row-btn')) - both stay in the page
+        source regardless of can_edit, since the event-delegation
+        handlers are defined unconditionally and only gate at runtime.
+        Neither is visible UI, so neither is what this test guards
+        against - only an actual <button class="...add-row-btn...">
+        tag would be."""
+        detail = self._detail(self.pcc)
+        self.assertNotContains(detail, 'btn-outline-success add-row-btn')
+        self.assertNotContains(detail, 'btn-outline-primary paste-excel-btn')
+        self.assertNotContains(detail, 'id="pasteExcelModal"')
+        self.assertNotContains(detail, '>Act<')
+        rows = self._rows(self.pcc)
+        self.assertNotContains(rows, 'btn-outline-success add-row-btn')
+        self.assertNotContains(rows, 'btn-outline-primary paste-excel-btn')
+        self.assertNotContains(rows, 'insert-row-btn')
+        self.assertNotContains(rows, 'item_delete')
+
+    def test_sales_still_has_row_edit_actions_for_comparison(self):
+        """Sanity check the fixture actually exercises the can_edit path -
+        sales must see what PCC Engineer above must not."""
+        rows = self._rows(self.sales)
+        self.assertContains(rows, 'insert-row-btn')
+
+
+    def test_pcc_engineer_sees_plain_text_not_editable_inputs_for_structural_fields(self):
+        """item_number, description, vendor, make, model, quantity and unit
+        must render as plain text for a read-only role - not an <input>,
+        <textarea>, or <select> that looks editable but silently fails to
+        save (since the AJAX handlers already gate on can_edit)."""
+        rows = self._rows(self.pcc)
+        self.assertNotContains(rows, 'item-num-edit')
+        self.assertNotContains(rows, 'desc-edit')
+        self.assertNotContains(rows, 'num-edit')
+        self.assertNotContains(rows, 'unit-edit')
+        # Note: a <select class="currency-select"> also exists in the row
+        # (supplier currency, a pricing field) - it's a separate, pre-existing
+        # element already hidden via CSS (cost-col/bom-pricing-only), not
+        # something this fix touches, so we check for the specific unit
+        # dropdown rather than any <select> tag on the page.
+        self.assertNotContains(rows, '<select class="text-edit unit-edit"')
+        self.assertNotContains(rows, '<textarea')
+        # The values themselves must still be visible as plain text.
+        self.assertContains(rows, 'Camera')
+        self.assertContains(rows, 'Acme')
+        self.assertContains(rows, 'EA')
+
+    def test_sales_still_sees_editable_inputs_for_structural_fields(self):
+        """Sanity check the fixture exercises can_edit - sales must see
+        what PCC Engineer above must not."""
+        rows = self._rows(self.sales)
+        self.assertContains(rows, 'item-num-edit')
+        self.assertContains(rows, 'unit-edit')

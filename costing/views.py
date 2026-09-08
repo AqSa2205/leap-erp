@@ -1848,6 +1848,7 @@ def ajax_section_items(request, pk):
         'conversion_rate': conversion_rate,
         'output_currency': sheet.output_currency,
         'can_see_pricing': _user_can_see_pricing(request.user),
+        'can_edit': _user_can_edit_sheet(request.user, sheet),
     }, request=request)
     return HttpResponse(html)
 
