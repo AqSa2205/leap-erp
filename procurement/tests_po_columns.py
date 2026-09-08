@@ -190,3 +190,72 @@ class POPdfFallbackBuildTests(TestCase):
 
         self.assertIn('Cable tray section type 1', text(self.render(break_canvas=True)))
         self.assertIn('Amount in words', text(self.render(break_canvas=True)))
+
+
+class POPageGeometryTests(TestCase):
+    """Every table in the purchase order fits the page it is drawn on.
+
+    The audit found three different assumptions about the usable width living
+    side by side: the page header summed to 180mm, the info block to 169mm, and
+    the item table to 185mm — five millimetres wider than the frame. Nothing
+    caught it because nothing derived from anything.
+    """
+
+    def test_the_usable_width_is_derived_not_asserted(self):
+        from procurement.page_geometry import (CONTENT_WIDTH_MM, MARGIN_MM,
+                                               PAGE_WIDTH_MM)
+        self.assertEqual(CONTENT_WIDTH_MM, PAGE_WIDTH_MM - 2 * MARGIN_MM)
+
+    def test_the_item_tables_fill_the_frame_exactly(self):
+        """Exactly, not merely within it: a table narrower than the frame
+        leaves a ragged right edge on a document that goes to a supplier."""
+        from procurement.page_geometry import CONTENT_WIDTH_MM
+        for unpriced in (False, True):
+            with self.subTest(unpriced=unpriced):
+                total = sum(w for _l, w, _c in pdf_columns(unpriced=unpriced))
+                self.assertAlmostEqual(total, CONTENT_WIDTH_MM, places=3)
+
+    def test_the_column_proportions_are_unchanged(self):
+        """The fix rescaled the table; it did not redesign it. Each column
+        keeps the share of the width it had before."""
+        for unpriced, weights in (
+                (False, [12, 25, 55, 15, 14, 22, 22, 20]),
+                (True, [12, 30, 80, 16, 16, 31])):
+            with self.subTest(unpriced=unpriced):
+                widths = [w for _l, w, _c in pdf_columns(unpriced=unpriced)]
+                scale = sum(weights)
+                for width, weight in zip(widths, weights):
+                    self.assertAlmostEqual(width / sum(widths), weight / scale,
+                                           places=6)
+
+    def test_no_table_in_the_builder_is_wider_than_the_frame(self):
+        """Catches the header tables too, and anything added later.
+
+        Reads the literal colWidths lists out of the builder — the derived item
+        table is checked above, and this is what stops a new hand-written table
+        being drawn wider than the page, which is exactly how the item table
+        got to 185mm.
+        """
+        import os
+        import re
+
+        from django.conf import settings
+
+        from procurement.page_geometry import CONTENT_WIDTH_MM
+
+        path = os.path.join(str(settings.BASE_DIR), 'procurement', 'po_pdf.py')
+        with open(path, encoding='utf-8') as handle:
+            source = handle.read()
+
+        offenders = []
+        for literal in re.findall(r'colWidths=\[([^\]]*)\]', source):
+            values = re.findall(r'([0-9]+(?:\.[0-9]+)?)\s*\*\s*mm', literal)
+            if not values:
+                continue                      # derived at runtime, checked above
+            total = sum(float(v) for v in values)
+            if total > CONTENT_WIDTH_MM + 0.01:
+                offenders.append('%s = %.2fmm' % (literal.strip(), total))
+        self.assertEqual(
+            offenders, [],
+            'these tables are wider than the %.0fmm frame: %s'
+            % (CONTENT_WIDTH_MM, offenders))

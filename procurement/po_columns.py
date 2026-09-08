@@ -17,6 +17,8 @@ somebody can settle it, instead of being invisible.
 """
 from dataclasses import dataclass
 
+from .page_geometry import distribute
+
 
 @dataclass(frozen=True)
 class ItemColumn:
@@ -35,8 +37,11 @@ class ItemColumn:
     pdf: str | None
     excel: str | None
     priced_only: bool = False
-    pdf_width: float | None = None
-    pdf_width_unpriced: float | None = None
+    #: Relative width, not millimetres. The actual widths are derived from
+    #: page_geometry.CONTENT_WIDTH_MM so the table always fits its frame —
+    #: these numbers only decide how the space is shared out.
+    weight: float | None = None
+    weight_unpriced: float | None = None
     pdf_centered: bool = False
     #: True where the PDF and Excel wordings differ. Recorded rather than
     #: reconciled — see the module docstring.
@@ -45,41 +50,39 @@ class ItemColumn:
 
 PO_ITEM_COLUMNS = [
     ItemColumn('serial_number', 'S.No.', 'S No.',
-               pdf_width=12, pdf_width_unpriced=12, labels_differ=True),
+               weight=12, weight_unpriced=12, labels_differ=True),
     ItemColumn('system', None, 'System'),
     ItemColumn('make_model', 'Make/Model', 'Make/Model',
-               pdf_width=25, pdf_width_unpriced=30),
+               weight=25, weight_unpriced=30),
     ItemColumn('description', 'Item Description', 'Item Descriptions / Specification',
-               pdf_width=55, pdf_width_unpriced=80, labels_differ=True),
+               weight=55, weight_unpriced=80, labels_differ=True),
     ItemColumn('quantity', 'Qty', 'Quantity',
-               pdf_width=15, pdf_width_unpriced=16, pdf_centered=True,
+               weight=15, weight_unpriced=16, pdf_centered=True,
                labels_differ=True),
     ItemColumn('uom', 'UOM', 'UOM',
-               pdf_width=14, pdf_width_unpriced=16),
+               weight=14, weight_unpriced=16),
     ItemColumn('rate_per_unit', 'Rate/Unit', 'Rate/unit ({currency})',
-               priced_only=True, pdf_width=22, labels_differ=True),
+               priced_only=True, weight=22, labels_differ=True),
     ItemColumn('total_value', 'Total ({currency})', 'Total Value ({currency})',
-               priced_only=True, pdf_width=22, labels_differ=True),
+               priced_only=True, weight=22, labels_differ=True),
     ItemColumn('remarks', 'Remarks', 'Remarks',
-               pdf_width=20, pdf_width_unpriced=31),
+               weight=20, weight_unpriced=31),
 ]
 
 
 def pdf_columns(unpriced=False):
     """The PDF's columns in order, as (label, width_mm, centered) triples.
 
-    Width is taken from the unpriced set when the pricing columns are dropped,
-    which is what keeps the table filling the page in both variants.
+    Widths are derived from the page geometry rather than carried here, so the
+    table fills its frame exactly in both variants and cannot drift wider than
+    the page. The unpriced copy drops the two pricing columns and its weights
+    share the freed space out between Description and Remarks.
     """
-    out = []
-    for column in PO_ITEM_COLUMNS:
-        if column.pdf is None:
-            continue
-        if unpriced and column.priced_only:
-            continue
-        width = column.pdf_width_unpriced if unpriced else column.pdf_width
-        out.append((column.pdf, width, column.pdf_centered))
-    return out
+    chosen = [c for c in PO_ITEM_COLUMNS
+              if c.pdf is not None and not (unpriced and c.priced_only)]
+    weights = [(c.weight_unpriced if unpriced else c.weight) for c in chosen]
+    widths = distribute(weights)
+    return [(c.pdf, w, c.pdf_centered) for c, w in zip(chosen, widths)]
 
 
 def excel_headers(currency):
