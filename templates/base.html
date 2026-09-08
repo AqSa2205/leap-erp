@@ -1376,6 +1376,18 @@
                     <i class="bi bi-diagram-3"></i> <span>Org Chart</span>
                 </a>
             </li>
+            {% if user.is_document_controller_user %}
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.url_name and 'employee' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:employee_list' %}" data-title="Employees">
+                    <i class="bi bi-people-fill"></i> <span>Employees</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if 'entitlement' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'hr:entitlement_year' %}" data-title="Leave Entitlements">
+                    <i class="bi bi-bar-chart-steps"></i> <span>Leave Entitlements</span>
+                </a>
+            </li>
+            {% endif %}
         </ul>
         {% endif %}
 

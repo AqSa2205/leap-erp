@@ -25,6 +25,7 @@
             </div>
         </div>
 
+        {% if not user.is_document_controller_user %}
         <!-- Generate action (POST) -->
         <div class="col-md-8">
             <div class="card border-primary">
@@ -59,6 +60,7 @@
                 </div>
             </div>
         </div>
+        {% endif %}
     </div>
 
     <!-- Entitlements summary table (one row per employee, expandable) -->

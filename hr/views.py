@@ -46,6 +46,19 @@ class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
         return u.is_super_admin_user or u.is_erp_admin_user
 
 
+class HRReadOnlyOrAdminMixin(LoginRequiredMixin, UserPassesTestMixin):
+    """Gate for HR list/detail views Document Controller may view
+    read-only, alongside the admins who can also edit from here.
+    Deliberately separate from AdminRequiredMixin: views that mutate data
+    (create, update, delete, document upload) stay on AdminRequiredMixin
+    unchanged, so Document Controller granted this mixin's views never
+    gains write access.
+    """
+    def test_func(self):
+        u = self.request.user
+        return u.is_super_admin_user or u.is_erp_admin_user or u.is_document_controller_user
+
+
 class SuperAdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
     """Historically super-admin-only; erp_admin now has the whole
     Administration section, so it passes here too. Kept as a separate mixin
@@ -1178,7 +1191,7 @@ def my_documents_export_pdf(request):
     return response
 
 
-class EmployeeListView(AdminRequiredMixin, ListView):
+class EmployeeListView(HRReadOnlyOrAdminMixin, ListView):
     model = Employee
     template_name = 'hr/employee_list.html'
     context_object_name = 'employees'
@@ -1239,7 +1252,7 @@ class EmployeeListView(AdminRequiredMixin, ListView):
         return context
 
 
-class EmployeeDetailView(AdminRequiredMixin, DetailView):
+class EmployeeDetailView(HRReadOnlyOrAdminMixin, DetailView):
     model = Employee
     template_name = 'hr/employee_detail.html'
     context_object_name = 'employee'
@@ -3000,11 +3013,17 @@ class EmployeeLeaveSummaryView(HRScopedAccessMixin, DetailView):
 
 @login_required
 def entitlement_year(request):
-    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
+    # Document Controller gets read-only access (view the entitlements
+    # table); regenerating or reapplying defaults below stays admin-only.
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user
+            or request.user.is_document_controller_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:hr_dashboard')
     year = _int_or(request.GET.get('year'), timezone.now().year)
     if request.method == 'POST':
+        if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
+            messages.error(request, 'Admin access required.')
+            return redirect('hr:entitlement_year')
         post_year = _int_or(request.POST.get('year'), year)
         if request.POST.get('action') == 'reapply':
             from hr.leave_services import reapply_leave_type_defaults
