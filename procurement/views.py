@@ -11,6 +11,7 @@ from django.db.models import Q
 from decimal import Decimal, InvalidOperation
 
 from .pdf_common import (  # shared PDF helpers, moved out of this module
+    a4_portrait_document,
     _amount_in_words,
     _make_numbered_canvas,
     _arabic_font,
@@ -41,6 +42,7 @@ from accounts.permissions import require_capability, CapabilityRequiredMixin
 from .budget_status import approved_budgets_for, budget_status, exchange_rates
 from .system_breakdown import breakdown
 from .po_pdf import render_po_pdf
+from .po_columns import excel_headers
 
 
 
@@ -1570,11 +1572,9 @@ def po_export_excel(request, pk):
 
     # ── Line Items Table ──
     table_row = header_start + max(len(headers_left), len(headers_right)) + 1
-    col_headers = [
-        'S No.', 'System', 'Make/Model', 'Item Descriptions / Specification',
-        'Quantity', 'UOM', 'Rate/unit (%s)' % po.currency,
-        'Total Value (%s)' % po.currency, 'Remarks',
-    ]
+    # From po_columns.py, the same table the PDF builder reads. The two used to
+    # keep separate lists and had drifted on three of the headings.
+    col_headers = excel_headers(po.currency)
     for col, h in enumerate(col_headers, 1):
         cell = ws.cell(row=table_row, column=col, value=h)
         cell.font = header_font
@@ -3066,7 +3066,7 @@ def dn_export_pdf(request, pk):
     NumberedCanvas = _make_numbered_canvas()
 
     buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
+    doc = a4_portrait_document(buf)
     elements = []
     styles = getSampleStyleSheet()
 
@@ -3200,7 +3200,7 @@ def dn_export_pdf(request, pk):
         )
         buf.seek(0)
         buf.truncate()
-        doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
+        doc = a4_portrait_document(buf)
         doc.build(elements)
     buf.seek(0)
     response = HttpResponse(buf.read(), content_type='application/pdf')

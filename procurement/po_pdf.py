@@ -10,7 +10,9 @@ the price box separating from the signature, a blank page appearing before the
 Terms. procurement/tests_po_pdf_layout.py pins those, and reintroducing any of
 them fails that suite.
 """
-from .pdf_common import (_amount_in_words, _arabic_font, _make_numbered_canvas,
+from .po_columns import pdf_columns
+from .pdf_common import (a4_portrait_document, _amount_in_words, _arabic_font,
+                         _make_numbered_canvas,
                          _reportlab_style_for_line, _shape_arabic,
                          _tinymce_html_to_reportlab_lines)
 
@@ -43,7 +45,7 @@ def render_po_pdf(po, unpriced=False):
     )
 
     buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
+    doc = a4_portrait_document(buf)
     elements = []
     styles = getSampleStyleSheet()
 
@@ -167,28 +169,16 @@ def render_po_pdf(po, unpriced=False):
     # ── Line Items Table ──
     # Unpriced copies drop the Rate/Unit and Total columns; the freed width is
     # redistributed to Description and Remarks so the table still fills the page.
-    if unpriced:
-        col_widths = [12*mm, 30*mm, 80*mm, 16*mm, 16*mm, 31*mm]
-        item_header = [
-            Paragraph('<b>S.No.</b>', small_style),
-            Paragraph('<b>Make/Model</b>', small_style),
-            Paragraph('<b>Item Description</b>', small_style),
-            Paragraph('<b>Qty</b>', small_center),
-            Paragraph('<b>UOM</b>', small_style),
-            Paragraph('<b>Remarks</b>', small_style),
-        ]
-    else:
-        col_widths = [12*mm, 25*mm, 55*mm, 15*mm, 14*mm, 22*mm, 22*mm, 20*mm]
-        item_header = [
-            Paragraph('<b>S.No.</b>', small_style),
-            Paragraph('<b>Make/Model</b>', small_style),
-            Paragraph('<b>Item Description</b>', small_style),
-            Paragraph('<b>Qty</b>', small_center),
-            Paragraph('<b>UOM</b>', small_style),
-            Paragraph('<b>Rate/Unit</b>', small_style),
-            Paragraph(f'<b>Total ({po.currency})</b>', small_style),
-            Paragraph('<b>Remarks</b>', small_style),
-        ]
+    # Columns come from po_columns.py, which the Excel export reads too — the
+    # two used to keep their own lists and had already drifted apart on three
+    # of the headings.
+    columns = pdf_columns(unpriced=unpriced)
+    col_widths = [width * mm for _label, width, _centered in columns]
+    item_header = [
+        Paragraph('<b>%s</b>' % label.format(currency=po.currency),
+                  small_center if centered else small_style)
+        for label, _width, centered in columns
+    ]
     item_data = [item_header]
 
     dark_blue = colors.HexColor('#C41E3A')
@@ -405,7 +395,7 @@ def render_po_pdf(po, unpriced=False):
         )
         buf.seek(0)
         buf.truncate()
-        doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
+        doc = a4_portrait_document(buf)
         doc.build(elements)
     buf.seek(0)
     return buf.read()

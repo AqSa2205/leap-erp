@@ -334,3 +334,24 @@ def _reportlab_style_for_line(base_style, max_pt):
     return ParagraphStyle(
         base_style.name + '_big%d' % max_pt, parent=base_style,
         fontSize=max_pt, leading=int(max_pt * 1.25))
+
+
+def a4_portrait_document(buf):
+    """The standard portrait page frame for procurement documents.
+
+    One definition, because there are two builds behind every one of these
+    documents: the normal one, and a fallback that runs when decorating the
+    canvas with page numbers fails. Both the purchase order and the delivery
+    note previously wrote these margins out twice, so a margin changed in the
+    primary silently did not reach the fallback — and the fallback only runs
+    on an error path nobody exercises, which is where a difference like that
+    survives longest.
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate
+
+    return SimpleDocTemplate(
+        buf, pagesize=A4,
+        topMargin=15 * mm, bottomMargin=15 * mm,
+        leftMargin=15 * mm, rightMargin=15 * mm)
