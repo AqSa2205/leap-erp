@@ -37,6 +37,24 @@ def _convert(amount, from_ccy, to_ccy, rates):
 # Total) is still an estimate sum — those stages have no priced sheet to read.
 COSTING_VALUED_CATEGORIES = ('won', 'hot_lead')
 
+# "Closed" is seeded with category='won' (see ProjectStatus seed data) so
+# procurement access, KPIs and finance reporting keep treating a closed deal
+# as won - that is existing business logic and stays untouched. This
+# dashboard, and only this dashboard, additionally excludes it by name so the
+# Won tile/chart reflect still-open wins.
+_DASHBOARD_WON_EXCLUDED_STATUS_NAMES = ('Closed',)
+
+
+def _won_qs(queryset):
+    """Won-category projects, minus the ones already moved to Closed.
+
+    Dashboard-display-only distinction - see the comment on
+    _DASHBOARD_WON_EXCLUDED_STATUS_NAMES above.
+    """
+    return queryset.filter(status__category='won').exclude(
+        status__name__in=_DASHBOARD_WON_EXCLUDED_STATUS_NAMES
+    )
+
 
 def _resolve_sales_values(projects):
     """Map project_id -> (amount, currency, from_costing) for the priced tiles.
@@ -141,7 +159,7 @@ def get_region_stats(projects, region_codes, sales_values=None, currency='SAR', 
 
     active = region_projects.filter(status__category='active')
     hot_leads = region_projects.filter(status__category='hot_lead')
-    won = region_projects.filter(status__category='won')
+    won = _won_qs(region_projects)
     lost = region_projects.filter(status__category='lost')
     ongoing = region_projects.filter(status__category='ongoing')
 
@@ -264,11 +282,11 @@ def index(request):
             'value': projects.filter(status__category='hot_lead').aggregate(Sum('estimated_value'))['estimated_value__sum'] or 0
         },
         'won': {
-            'count': projects.filter(status__category='won').count(),
+            'count': _won_qs(projects).count(),
             # The summary strip renders counts only — it spans every region, so a
             # single mixed-currency total would be meaningless. These values stay
             # estimate sums; the per-region tiles carry the real costing money.
-            'value': projects.filter(status__category='won').aggregate(Sum('estimated_value'))['estimated_value__sum'] or 0
+            'value': _won_qs(projects).aggregate(Sum('estimated_value'))['estimated_value__sum'] or 0
         },
         'lost': {
             'count': projects.filter(status__category='lost').count(),
@@ -284,7 +302,7 @@ def index(request):
         return {
             'active': region_projects.filter(status__category='active').count(),
             'hot_leads': region_projects.filter(status__category='hot_lead').count(),
-            'won': region_projects.filter(status__category='won').count(),
+            'won': _won_qs(region_projects).count(),
             'lost': region_projects.filter(status__category='lost').count(),
             'ongoing': region_projects.filter(status__category='ongoing').count(),
             'active_value': float(region_projects.filter(status__category='active').aggregate(Sum('estimated_value'))['estimated_value__sum'] or 0),
@@ -292,7 +310,7 @@ def index(request):
             'hot_leads_value': float(_resolved_value_for(
                 region_projects.filter(status__category='hot_lead'), sales_values, currency, rates)),
             'won_value': float(_resolved_value_for(
-                region_projects.filter(status__category='won'), sales_values, currency, rates)),
+                _won_qs(region_projects), sales_values, currency, rates)),
             'lost_value': float(region_projects.filter(status__category='lost').aggregate(Sum('estimated_value'))['estimated_value__sum'] or 0),
         }
 
