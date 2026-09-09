@@ -50,6 +50,7 @@ class ProposalMetadataForm(forms.ModelForm):
             else:
                 field.widget.attrs['class'] = 'form-control'
         self.fields['project'].required = False
+        self.fields['project'].empty_label = 'No project selected'
         self.fields['project'].queryset = Project.objects.select_related('region').all()
         self.fields['department'].required = True
         self.fields['department'].widget.attrs['required'] = True
