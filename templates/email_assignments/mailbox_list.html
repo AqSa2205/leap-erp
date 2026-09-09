@@ -132,17 +132,15 @@
 <div class="card border-0 shadow-sm" style="border-radius:12px;">
     <div class="card-header fw-semibold"><i class="bi bi-person-plus me-2"></i>Assign a mailbox</div>
     <div class="card-body">
+        {% if form.non_field_errors %}
+        <div class="alert alert-danger py-2 small">{{ form.non_field_errors|join:" " }}</div>
+        {% endif %}
         <form method="post" action="{% url 'email_assignments:assign' %}" class="row g-2 align-items-end">
             {% csrf_token %}
-            <div class="col-md-5">
+            <div class="col-md-10">
                 <label class="form-label small mb-1" for="{{ form.owner.id_for_label }}">Employee</label>
                 {{ form.owner }}
                 {% if form.owner.errors %}<div class="small text-danger">{{ form.owner.errors|join:", " }}</div>{% endif %}
-            </div>
-            <div class="col-md-5">
-                <label class="form-label small mb-1" for="{{ form.email_address.id_for_label }}">Mailbox address</label>
-                {{ form.email_address }}
-                {% if form.email_address.errors %}<div class="small text-danger">{{ form.email_address.errors|join:", " }}</div>{% endif %}
             </div>
             <div class="col-md-2 d-grid">
                 <button type="submit" class="btn btn-primary">
@@ -152,7 +150,9 @@
         </form>
         <div class="form-text mt-2">
             Only employees who don't already have a mailbox assigned appear above — revoke or
-            delete their current one first if you need to change it.
+            delete their current one first if you need to change it. The mailbox address used is
+            always the email already on file for that employee (Administration → Users) — it
+            can't be typed in separately here.
         </div>
     </div>
 </div>

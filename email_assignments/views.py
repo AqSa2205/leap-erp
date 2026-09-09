@@ -76,6 +76,9 @@ def assign_mailbox(request):
     form = ProposalMailboxAssignForm(request.POST)
     if form.is_valid():
         mailbox = form.save(commit=False)
+        # Always the employee's own address on file, never whatever an
+        # admin might type — see ProposalMailboxAssignForm's docstring.
+        mailbox.email_address = mailbox.owner.email
         mailbox.assigned_by = request.user
         mailbox.save()
         messages.success(
@@ -83,6 +86,8 @@ def assign_mailbox(request):
             f'{mailbox.owner.get_full_name() or mailbox.owner.username} can now link '
             f'client emails from {mailbox.email_address} on Technical Proposals.')
     else:
+        for error in form.non_field_errors():
+            messages.error(request, error)
         for field in form:
             for error in field.errors:
                 messages.error(request, f'{field.label}: {error}')

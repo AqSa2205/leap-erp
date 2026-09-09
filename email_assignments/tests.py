@@ -47,8 +47,7 @@ class EmailAssigningAccessTests(TestCase):
         just the list page — a sales rep POSTing directly must not be able
         to assign a mailbox to themselves or anyone else."""
         self.client.force_login(self.sales_rep)
-        resp = self.client.post(reverse('email_assignments:assign'), {
-            'owner': self.sales_rep.pk, 'email_address': 'sneaky@leap-arabia.com'})
+        resp = self.client.post(reverse('email_assignments:assign'), {'owner': self.sales_rep.pk})
         self.assertEqual(resp.status_code, 302)
         self.assertFalse(ProposalMailbox.objects.filter(owner=self.sales_rep).exists())
 
@@ -58,30 +57,57 @@ class AssignMailboxTests(TestCase):
         self.admin = User.objects.create_user(
             'ea_admin2', password='x',
             role=Role.objects.get_or_create(name=Role.SUPER_ADMIN)[0])
-        self.employee = User.objects.create_user('ea_employee', password='x')
+        self.employee = User.objects.create_user(
+            'ea_employee', password='x', email='employee@leap-arabia.com')
         self.client.force_login(self.admin)
 
-    def test_assign_creates_a_mailbox(self):
-        resp = self.client.post(reverse('email_assignments:assign'), {
-            'owner': self.employee.pk, 'email_address': 'employee@leap-arabia.com'})
+    def test_assign_creates_a_mailbox_using_the_employees_own_email_on_file(self):
+        resp = self.client.post(reverse('email_assignments:assign'), {'owner': self.employee.pk})
         self.assertEqual(resp.status_code, 302)
         mailbox = ProposalMailbox.objects.get(owner=self.employee)
         self.assertEqual(mailbox.email_address, 'employee@leap-arabia.com')
         self.assertTrue(mailbox.is_active)
         self.assertEqual(mailbox.assigned_by, self.admin)
 
+    def test_the_form_has_no_free_text_email_field_at_all(self):
+        """The whole point of the fix: there is no field an admin could type
+        a mismatched address into, even if they wanted to — closing the
+        'grant employee A read access to employee B's real mailbox' hole
+        rather than just discouraging it."""
+        resp = self.client.get(reverse('email_assignments:list'))
+        self.assertNotContains(resp, 'name="email_address"')
+
+    def test_a_crafted_post_cannot_smuggle_a_different_email_address(self):
+        """Even if a POST includes an email_address field by hand, the form
+        doesn't declare it, so Django ignores it — the mailbox still ends up
+        using the employee's own address on file."""
+        resp = self.client.post(reverse('email_assignments:assign'), {
+            'owner': self.employee.pk, 'email_address': 'ceo@leap-arabia.com'})
+        self.assertEqual(resp.status_code, 302)
+        mailbox = ProposalMailbox.objects.get(owner=self.employee)
+        self.assertEqual(mailbox.email_address, 'employee@leap-arabia.com')
+
     def test_employee_who_already_has_a_mailbox_is_not_offered_again(self):
         ProposalMailbox.objects.create(owner=self.employee, email_address='a@leap-arabia.com')
         resp = self.client.get(reverse('email_assignments:list'))
         self.assertNotContains(resp, f'value="{self.employee.pk}"')
 
-    def test_duplicate_email_address_is_rejected(self):
-        other = User.objects.create_user('ea_other', password='x')
-        ProposalMailbox.objects.create(owner=other, email_address='dup@leap-arabia.com')
-        resp = self.client.post(reverse('email_assignments:assign'), {
-            'owner': self.employee.pk, 'email_address': 'dup@leap-arabia.com'})
+    def test_employee_with_no_email_on_file_cannot_be_assigned(self):
+        no_email_employee = User.objects.create_user('ea_noemail', password='x')
+        resp = self.client.post(reverse('email_assignments:assign'), {'owner': no_email_employee.pk})
         self.assertEqual(resp.status_code, 302)
-        self.assertFalse(ProposalMailbox.objects.filter(owner=self.employee).exists())
+        self.assertFalse(ProposalMailbox.objects.filter(owner=no_email_employee).exists())
+
+    def test_duplicate_email_address_on_file_is_rejected(self):
+        """Two User accounts sharing the same email on file (a pre-existing
+        HR data issue) must not be able to collide into one ProposalMailbox
+        row via a raw IntegrityError — the form should catch it cleanly."""
+        other = User.objects.create_user('ea_other', password='x', email='dup@leap-arabia.com')
+        ProposalMailbox.objects.create(owner=other, email_address='dup@leap-arabia.com')
+        dup_employee = User.objects.create_user('ea_dup', password='x', email='dup@leap-arabia.com')
+        resp = self.client.post(reverse('email_assignments:assign'), {'owner': dup_employee.pk})
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(ProposalMailbox.objects.filter(owner=dup_employee).exists())
 
     def test_toggle_revokes_then_reactivates(self):
         mailbox = ProposalMailbox.objects.create(owner=self.employee, email_address='a@leap-arabia.com')
