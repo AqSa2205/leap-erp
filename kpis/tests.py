@@ -186,7 +186,12 @@ class ComputeTests(ComputeFixtureMixin, TestCase):
 class PerUserComputeTests(ComputeFixtureMixin, TestCase):
     def setUp(self):
         super().setUp()
-        self.role = Role.objects.create(name=Role.SALES_REP)
+        # get_or_create, not create: accounts migration 0032 seeds the
+        # admin, manager and sales_rep roles, so creating one here hits
+        # the unique constraint on Role.name. These three setUps were
+        # erroring out, which meant every assertion in these classes
+        # silently never ran.
+        self.role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
         self.alice = User.objects.create_user('alice', password='pw', role=self.role)
         self.bob = User.objects.create_user('bob', password='pw', role=self.role)
 
@@ -353,7 +358,12 @@ class ManagePostTests(TestCase):
 
 class ActivityRegistryTests(TestCase):
     def setUp(self):
-        self.role = Role.objects.create(name=Role.SALES_REP)
+        # get_or_create, not create: accounts migration 0032 seeds the
+        # admin, manager and sales_rep roles, so creating one here hits
+        # the unique constraint on Role.name. These three setUps were
+        # erroring out, which meant every assertion in these classes
+        # silently never ran.
+        self.role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
         self.u1 = User.objects.create_user('act1', password='pw', role=self.role)
         self.u2 = User.objects.create_user('act2', password='pw', role=self.role)
         self.region = Region.objects.create(name='KSA', code='LNA', currency='SAR')
@@ -424,7 +434,12 @@ class ActivityPermissionSeedTests(TestCase):
 
 class ActivityServiceTests(TestCase):
     def setUp(self):
-        self.role = Role.objects.create(name=Role.SALES_REP)
+        # get_or_create, not create: accounts migration 0032 seeds the
+        # admin, manager and sales_rep roles, so creating one here hits
+        # the unique constraint on Role.name. These three setUps were
+        # erroring out, which meant every assertion in these classes
+        # silently never ran.
+        self.role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
         self.active1 = User.objects.create_user('a1', password='pw', role=self.role)
         self.active2 = User.objects.create_user('a2', password='pw', role=self.role)
         self.inactive = User.objects.create_user('z', password='pw', role=self.role, is_active=False)
