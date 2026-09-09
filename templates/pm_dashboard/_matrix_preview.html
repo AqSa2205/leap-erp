@@ -1,0 +1,19 @@
+{% load pm_dashboard_extras %}
+<div class="table-responsive">
+    <table class="pmd-grid-preview mb-0">
+        <thead>
+            <tr>
+                {% for col in columns %}<th>{{ col.name|default:"—" }}</th>{% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in rows %}
+            <tr>
+                {% for col in columns %}<td>{{ row|matrix_cell_text:col.key }}</td>{% endfor %}
+            </tr>
+            {% empty %}
+            <tr><td colspan="{{ columns|length }}" class="text-center text-muted py-4">{{ empty_message }}</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>

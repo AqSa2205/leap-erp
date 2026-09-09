@@ -1,0 +1,158 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ project.project_name }} - PM Dashboard{% endblock %}
+{% block page_title %}{{ project.project_name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .pmd-card { border-radius: 12px; border: none; box-shadow: 0 4px 15px rgba(0,0,0,0.06); }
+    .pmd-nav-tabs .nav-link { color: #495057; font-weight: 600; }
+    .pmd-nav-tabs .nav-link.active { color: #C41E3A; border-bottom: 3px solid #C41E3A; }
+    .pmd-grid-preview { width: 100%; border-collapse: collapse; }
+    .pmd-grid-preview th { background: #1a1a1a; color: #fff; font-size: 0.8rem; padding: 8px 10px; text-align: left; }
+    .pmd-grid-preview td { border: 1px solid #eee; padding: 8px 10px; font-size: 0.85rem; vertical-align: top; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div>
+        <a href="{% url 'pm_dashboard:index' %}" class="text-muted small"><i class="bi bi-arrow-left"></i> Back to PM Dashboard</a>
+        <div class="text-muted small">{{ project.serial_number }} &middot; {{ project.customer|default:"—" }}</div>
+    </div>
+    <a href="{% url 'projects:detail' project.pk %}" class="btn btn-outline-dark btn-sm">
+        <i class="bi bi-folder2-open me-1"></i> Open in Commercial Pipeline
+    </a>
+</div>
+
+<ul class="nav nav-tabs pmd-nav-tabs mb-3" id="pmdTabs" role="tablist">
+    <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-po" type="button">Client PO</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-boq" type="button">BOQ (Unpriced)</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-resp" type="button">Responsibility Matrix</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-comm" type="button">Communication Matrix</button></li>
+</ul>
+
+<div class="tab-content">
+
+    <!-- Client PO -->
+    <div class="tab-pane fade show active" id="tab-po">
+        <div class="card pmd-card mb-3">
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <div class="text-muted small">PO Number</div>
+                        <div class="fw-semibold">{{ project.po_number|default:"Not recorded yet" }}</div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="text-muted small">Estimated PO Date</div>
+                        <div class="fw-semibold">{{ project.estimated_po_date|date:"d M Y"|default:"—" }}</div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="text-muted small">PO Award Quarter</div>
+                        <div class="fw-semibold">{{ project.get_po_award_quarter_display|default:"—" }}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="card pmd-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-file-earmark-text me-2"></i>PO Documents</span>
+                <a href="{% url 'projects:add_document' project.pk %}" class="btn btn-sm btn-outline-dark">
+                    <i class="bi bi-upload me-1"></i> Upload PO document
+                </a>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light"><tr><th>Name</th><th>Reference</th><th>Document date</th><th>Uploaded</th><th></th></tr></thead>
+                    <tbody>
+                        {% for doc in po_documents %}
+                        <tr>
+                            <td>{{ doc.name }}</td>
+                            <td>{{ doc.reference_number|default:"—" }}</td>
+                            <td>{{ doc.document_date|date:"d M Y"|default:"—" }}</td>
+                            <td>{{ doc.uploaded_at|date:"d M Y" }} by {{ doc.uploaded_by|default:"—" }}</td>
+                            <td class="text-end"><a href="{{ doc.file.url }}" target="_blank" class="btn btn-sm btn-outline-secondary"><i class="bi bi-download"></i></a></td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="5" class="text-center text-muted py-4">No PO document uploaded yet for this project.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- BOQ (unpriced) -->
+    <div class="tab-pane fade" id="tab-boq">
+        <div class="card pmd-card">
+            <div class="card-header"><i class="bi bi-list-check me-2"></i>Costing Sheets (Bill of Quantities)</div>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light"><tr><th>Sheet</th><th>Stage</th><th>Updated</th><th class="text-end">Unpriced export</th></tr></thead>
+                    <tbody>
+                        {% for sheet in costing_sheets %}
+                        <tr>
+                            <td>{{ sheet.title }}</td>
+                            <td><span class="badge bg-secondary">{{ sheet.get_workflow_stage_display }}</span></td>
+                            <td>{{ sheet.updated_at|date:"d M Y" }}</td>
+                            <td class="text-end">
+                                <a href="{% url 'costing:export_pdf' sheet.pk %}?unpriced=1" class="btn btn-sm btn-outline-dark" target="_blank">
+                                    <i class="bi bi-file-earmark-pdf me-1"></i>PDF
+                                </a>
+                                <a href="{% url 'costing:export' sheet.pk %}?unpriced=1" class="btn btn-sm btn-outline-dark">
+                                    <i class="bi bi-file-earmark-excel me-1"></i>Excel
+                                </a>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="4" class="text-center text-muted py-4">No costing sheet linked to this project yet.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="card-footer text-muted small">
+                Unpriced exports omit all rates/totals — safe to share outside Leap.
+            </div>
+        </div>
+    </div>
+
+    <!-- Responsibility Matrix -->
+    <div class="tab-pane fade" id="tab-resp">
+        <div class="card pmd-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-diagram-3 me-2"></i>Responsibility Matrix</span>
+                <a href="{% url 'pm_dashboard:responsibility_matrix_edit' project.pk %}" class="btn btn-sm btn-outline-dark">
+                    <i class="bi bi-pencil me-1"></i> Edit
+                </a>
+            </div>
+            <div class="card-body p-0">
+                {% include 'pm_dashboard/_matrix_preview.html' with columns=responsibility_columns rows=responsibility_rows empty_message="No responsibility matrix defined yet." %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Communication Matrix -->
+    <div class="tab-pane fade" id="tab-comm">
+        <div class="card pmd-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-chat-left-text me-2"></i>Communication Matrix</span>
+                <div>
+                    <a href="{% url 'pm_dashboard:communication_matrix_export_pdf' project.pk %}" class="btn btn-sm btn-outline-dark" target="_blank">
+                        <i class="bi bi-file-earmark-pdf me-1"></i> Export PDF
+                    </a>
+                    <a href="{% url 'pm_dashboard:communication_matrix_edit' project.pk %}" class="btn btn-sm btn-outline-dark">
+                        <i class="bi bi-pencil me-1"></i> Edit
+                    </a>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                {% include 'pm_dashboard/_matrix_preview.html' with columns=communication_columns rows=communication_rows empty_message="No communication matrix defined yet." %}
+            </div>
+            <div class="card-footer text-muted small">
+                Export a PDF to share this plan with the client.
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}

@@ -39,6 +39,7 @@ urlpatterns = [
     path('attendance/', include('attendance.ui_urls')),
     path('drafts/', include('drafts.urls')),
     path('email-assignments/', include('email_assignments.urls')),
+    path('pm-dashboard/', include('pm_dashboard.urls')),
 ]
 
 # Whitenoise serves STATIC_URL in production but not MEDIA_URL, so route media

@@ -142,6 +142,7 @@ INSTALLED_APPS = [
     # Project delivery: the execution milestone WBS and the progress board.
     # Named `pmo` because `projects` is the commercial pipeline app.
     "pmo",
+    "pm_dashboard",
 ]
 
 # ── Wi-Fi automatic attendance ────────────────────────────────────────────────

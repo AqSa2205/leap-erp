@@ -1005,6 +1005,13 @@
     </a>
 </li>
 {% endif %}
+{% if user|can:'pm_dashboard.nav' %}
+<li class="nav-item">
+    <a class="nav-link {% if request.resolver_match.app_name == 'pm_dashboard' %}active{% endif %}" href="{% url 'pm_dashboard:index' %}" data-title="PM Dashboard">
+        <i class="bi bi-kanban"></i> <span>PM Dashboard</span>
+    </a>
+</li>
+{% endif %}
             {% if user|can:'pipeline.nav' %}
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'projects' and 'document' not in request.resolver_match.url_name and request.resolver_match.url_name != 'recycle_bin' %}active{% endif %}" href="{% url 'projects:list' %}" data-title="Commercial Pipeline">
