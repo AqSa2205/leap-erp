@@ -11325,3 +11325,88 @@ class MyDocumentUploadTests(TestCase):
         reader = PdfReader(_BIO(resp.content))
         # TOC page + the converted image page.
         self.assertGreaterEqual(len(reader.pages), 2)
+
+
+class DocumentControllerHRReadOnlyTests(TestCase):
+    """Document Controller gets read-only access to Employees and Leave
+    Entitlements - the list/detail pages open, but no create, edit,
+    delete, document upload, or entitlement-generation action is
+    available to them anywhere."""
+
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.DOCUMENT_CONTROLLER)
+        self.doc_controller = User.objects.create_user('dc_hr_test', password='x')
+        self.doc_controller.role = role
+        self.doc_controller.save()
+
+        admin_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.admin = User.objects.create_user('dc_admin_test', password='x')
+        self.admin.role = admin_role
+        self.admin.is_superuser = True
+        self.admin.save()
+
+        self.employee = make_employee(iqama='DCTEST1', name='Test Employee')
+
+    # -- list/detail access --
+
+    def test_document_controller_can_view_employee_list(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:employee_list'))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_document_controller_can_view_employee_detail(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:employee_detail', args=[self.employee.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_document_controller_can_view_leave_entitlements(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:entitlement_year'))
+        self.assertEqual(resp.status_code, 200)
+
+    # -- no write access --
+
+    def test_document_controller_cannot_reach_employee_create(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:employee_create'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_document_controller_cannot_reach_employee_update(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:employee_update', args=[self.employee.pk]))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_document_controller_cannot_reach_employee_delete(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:employee_delete', args=[self.employee.pk]))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_document_controller_cannot_post_to_entitlement_year(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.post(reverse('hr:entitlement_year'), {'year': '2026'})
+        self.assertEqual(resp.status_code, 302)
+
+    def test_employee_list_hides_edit_actions_for_document_controller(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:employee_list'))
+        self.assertNotContains(resp, 'Add Employee')
+        self.assertNotContains(resp, 'hr:employee_update')
+
+    def test_employee_detail_hides_edit_actions_for_document_controller(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:employee_detail', args=[self.employee.pk]))
+        self.assertNotContains(resp, 'id="uploadDocModal"')
+        self.assertNotContains(resp, '>Delete<')
+
+    def test_entitlement_year_hides_generate_card_for_document_controller(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:entitlement_year'))
+        self.assertNotContains(resp, 'Generate Entitlements')
+
+    # -- sanity check: admin still sees the full feature set --
+
+    def test_admin_still_sees_edit_actions_for_comparison(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse('hr:employee_list'))
+        self.assertContains(resp, 'Add Employee')
