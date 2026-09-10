@@ -11138,3 +11138,190 @@ class PendingApprovalsSourceHealthTests(TestCase):
             with self.assertLogs('hr.approvals', level='ERROR') as captured:
                 self.assertEqual(approvals.pending_approvals(self.super_admin), [])
         self.assertIn('boom', '\n'.join(captured.output))
+
+
+from hr.models import EmployeeDocument
+
+
+class MyDocumentUploadTests(TestCase):
+    """Self-service document upload/delete/export on My Profile - the
+    dropdown is restricted to 5 types (not the full 12 admin choices),
+    Other requires a note, and only the owning employee can touch their
+    own documents."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('doc_emp', password='x', email='doc_emp@leap.com')
+        self.emp = Employee.objects.create(
+            full_name='Document Tester', iqama_number='IQ-DOC', user=self.user)
+        self.other_user = User.objects.create_user('doc_other', password='x', email='doc_other@leap.com')
+        self.other_emp = Employee.objects.create(
+            full_name='Other Doc Person', iqama_number='IQ-DOC-OTHER', user=self.other_user)
+        self.no_emp_user = User.objects.create_user('doc_noemp', password='x', email='doc_noemp@leap.com')
+
+    def _tiny_pdf(self, name='doc.pdf'):
+        from io import BytesIO
+        from reportlab.pdfgen import canvas
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        buf = BytesIO()
+        c = canvas.Canvas(buf)
+        c.drawString(100, 700, 'Test Document')
+        c.save()
+        buf.seek(0)
+        return SimpleUploadedFile(name, buf.read(), content_type='application/pdf')
+
+    # -- upload --
+
+    def test_upload_with_known_type_sets_title_from_choice_label(self):
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse('hr:my_document_upload'), {
+            'document_type': 'iqama', 'notes': '', 'file': self._tiny_pdf(),
+        })
+        self.assertEqual(resp.status_code, 302)
+        doc = self.emp.documents.get()
+        self.assertEqual(doc.title, 'Iqama / ID Copy')
+        self.assertEqual(doc.uploaded_by, self.user)
+
+    def test_upload_other_type_uses_notes_as_title(self):
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse('hr:my_document_upload'), {
+            'document_type': 'other', 'notes': 'Salary Certificate', 'file': self._tiny_pdf(),
+        })
+        self.assertEqual(resp.status_code, 302)
+        doc = self.emp.documents.get()
+        self.assertEqual(doc.title, 'Salary Certificate')
+
+    def test_upload_other_type_without_notes_is_rejected(self):
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse('hr:my_document_upload'), {
+            'document_type': 'other', 'notes': '', 'file': self._tiny_pdf(),
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(self.emp.documents.count(), 0)
+
+    def test_dropdown_only_offers_self_service_choices(self):
+        from hr.forms import MyDocumentUploadForm
+        form = MyDocumentUploadForm()
+        choice_values = [c[0] for c in form.fields['document_type'].choices]
+        self.assertEqual(set(choice_values), set(EmployeeDocument.SELF_SERVICE_DOC_TYPES))
+        # Confirms admin-only types are excluded, not just that the
+        # allowed ones are present.
+        self.assertNotIn('warning_letter', choice_values)
+        self.assertNotIn('salary_slip', choice_values)
+
+    # -- auth boundary --
+
+    def test_user_without_employee_profile_cannot_upload(self):
+        self.client.force_login(self.no_emp_user)
+        resp = self.client.post(reverse('hr:my_document_upload'), {
+            'document_type': 'iqama', 'notes': '', 'file': self._tiny_pdf(),
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(EmployeeDocument.objects.count(), 0)
+
+    def test_get_request_to_upload_is_rejected(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('hr:my_document_upload'))
+        self.assertEqual(resp.status_code, 405)
+
+    def test_cannot_delete_another_employees_document(self):
+        doc = EmployeeDocument.objects.create(
+            employee=self.other_emp, document_type='iqama', title='Iqama / ID Copy',
+            file=self._tiny_pdf(), uploaded_by=self.other_user)
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse('hr:my_document_delete', args=[doc.pk]))
+        self.assertEqual(resp.status_code, 404)
+        self.assertTrue(EmployeeDocument.objects.filter(pk=doc.pk).exists())
+
+    def test_can_delete_own_document(self):
+        doc = EmployeeDocument.objects.create(
+            employee=self.emp, document_type='iqama', title='Iqama / ID Copy',
+            file=self._tiny_pdf(), uploaded_by=self.user)
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse('hr:my_document_delete', args=[doc.pk]))
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(EmployeeDocument.objects.filter(pk=doc.pk).exists())
+
+    def test_user_without_employee_profile_cannot_export(self):
+        self.client.force_login(self.no_emp_user)
+        resp = self.client.get(reverse('hr:my_documents_export_pdf'))
+        self.assertEqual(resp.status_code, 302)
+
+    # -- export / edge cases --
+
+    def test_export_with_no_documents_still_produces_a_pdf(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('hr:my_documents_export_pdf'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+
+    def test_export_includes_uploaded_document_in_toc(self):
+        EmployeeDocument.objects.create(
+            employee=self.emp, document_type='iqama', title='Iqama / ID Copy',
+            file=self._tiny_pdf(), uploaded_by=self.user)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('hr:my_documents_export_pdf'))
+        self.assertEqual(resp.status_code, 200)
+        from pypdf import PdfReader
+        from io import BytesIO
+        reader = PdfReader(BytesIO(resp.content))
+        # TOC page + at least 1 page from the merged document.
+        self.assertGreaterEqual(len(reader.pages), 2)
+
+    def test_export_handles_unconvertible_file_without_crashing(self):
+        # A .txt file has no PDF/image conversion path - must be skipped
+        # gracefully, not crash the whole export.
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        txt_file = SimpleUploadedFile('notes.txt', b'plain text', content_type='text/plain')
+        EmployeeDocument.objects.create(
+            employee=self.emp, document_type='other', title='Random Notes',
+            file=txt_file, uploaded_by=self.user)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('hr:my_documents_export_pdf'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+
+
+    def test_user_without_employee_profile_cannot_delete(self):
+        doc = EmployeeDocument.objects.create(
+            employee=self.emp, document_type='iqama', title='Iqama / ID Copy',
+            file=self._tiny_pdf(), uploaded_by=self.user)
+        self.client.force_login(self.no_emp_user)
+        resp = self.client.post(reverse('hr:my_document_delete', args=[doc.pk]))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(EmployeeDocument.objects.filter(pk=doc.pk).exists())
+
+    def test_deleting_nonexistent_document_404s(self):
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse('hr:my_document_delete', args=[99999]))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_upload_without_file_is_rejected(self):
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse('hr:my_document_upload'), {
+            'document_type': 'iqama', 'notes': '',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(self.emp.documents.count(), 0)
+
+    def test_export_includes_actual_image_content(self):
+        # Confirms the image -> PDF conversion path actually works in the
+        # merged export, not just that PDFs pass through and non-images
+        # get skipped gracefully.
+        from io import BytesIO
+        from PIL import Image as PILImage
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        buf = BytesIO()
+        PILImage.new('RGB', (100, 100), color='blue').save(buf, format='PNG')
+        buf.seek(0)
+        image_file = SimpleUploadedFile('photo.png', buf.read(), content_type='image/png')
+        EmployeeDocument.objects.create(
+            employee=self.emp, document_type='cv', title='CV',
+            file=image_file, uploaded_by=self.user)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('hr:my_documents_export_pdf'))
+        self.assertEqual(resp.status_code, 200)
+        from pypdf import PdfReader
+        from io import BytesIO as _BIO
+        reader = PdfReader(_BIO(resp.content))
+        # TOC page + the converted image page.
+        self.assertGreaterEqual(len(reader.pages), 2)
