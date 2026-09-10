@@ -401,6 +401,11 @@ def my_profile(request):
         return redirect('hr:my_approvals')
 
     context = {'employee': emp}
+    # Computed once and reused everywhere below (submission gate, edit gate,
+    # banner context) so the cooldown check can never disagree with itself
+    # within one request — a naive date.today() would drift from this by up
+    # to 3 hours around midnight Riyadh time on a UTC-clocked host.
+    today = timezone.localtime(timezone.now()).date()
 
     is_leave_request_post = (
         emp and request.method == 'POST' and request.POST.get('action') == 'request_leave')
@@ -408,22 +413,33 @@ def my_profile(request):
         form = LeaveRequestForm(request.POST, request.FILES, fixed_employee=emp)
         if form.is_valid():
             from hr.leave_approval_services import submit_leave_request
-            try:
-                submit_leave_request(
-                    employee=emp, leave_type=form.cleaned_data['leave_type'],
-                    start_date=form.cleaned_data['start_date'], end_date=form.cleaned_data['end_date'],
-                    employee_reason=form.cleaned_data['employee_reason'], document=form.cleaned_data['document'],
-                    created_by=request.user,
-                )
-                messages.success(request, 'Leave request submitted and sent for approval.')
-                return redirect('hr:my_profile')
-            except ValueError as exc:
-                # The form already passed its own (unlocked) balance/overlap
-                # check — reaching here means submit_leave_request's locked,
-                # authoritative re-check caught something that changed in the
-                # meantime (most likely a genuinely concurrent submission).
-                messages.error(request, str(exc))
+            from hr.leave_cooldown import annual_leave_cooldown
+            # Additive gate, kept separate from the form's own balance/overlap
+            # check (LeaveRequestForm.clean / check_leave_balance) so that
+            # logic stays untouched. annual_leave_cooldown returns None for
+            # every non-Annual leave type, so this can never block Sick,
+            # Unpaid, etc.
+            cooldown = annual_leave_cooldown(emp, form.cleaned_data['leave_type'], today=today)
+            if cooldown:
+                messages.error(request, cooldown['reason'])
                 context['leave_request_submit_failed'] = True
+            else:
+                try:
+                    submit_leave_request(
+                        employee=emp, leave_type=form.cleaned_data['leave_type'],
+                        start_date=form.cleaned_data['start_date'], end_date=form.cleaned_data['end_date'],
+                        employee_reason=form.cleaned_data['employee_reason'], document=form.cleaned_data['document'],
+                        created_by=request.user,
+                    )
+                    messages.success(request, 'Leave request submitted and sent for approval.')
+                    return redirect('hr:my_profile')
+                except ValueError as exc:
+                    # The form already passed its own (unlocked) balance/overlap
+                    # check — reaching here means submit_leave_request's locked,
+                    # authoritative re-check caught something that changed in the
+                    # meantime (most likely a genuinely concurrent submission).
+                    messages.error(request, str(exc))
+                    context['leave_request_submit_failed'] = True
     else:
         form = LeaveRequestForm(fixed_employee=emp) if emp else LeaveRequestForm()
     context['leave_request_form'] = form
@@ -439,6 +455,15 @@ def my_profile(request):
             request.POST, request.FILES, fixed_employee=target.employee, exclude_request_id=target.pk,
             allow_leave_type=target.leave_type, initial={'document': target.document})
         if edit_form.is_valid():
+            from hr.leave_cooldown import annual_leave_cooldown
+            # Same gate as a fresh submission — editing a pending request
+            # (including switching its leave_type to Annual, or a still-
+            # pending Annual request) must not be a way to route around the
+            # cooldown that a brand-new request would be blocked by.
+            cooldown = annual_leave_cooldown(target.employee, edit_form.cleaned_data['leave_type'], today=today)
+            if cooldown:
+                return _edit_leave_retry_redirect(
+                    request, 'hr:my_profile', target, edit_form, error_text=cooldown['reason'])
             try:
                 edit_leave_request(
                     target, request.user, leave_type=edit_form.cleaned_data['leave_type'],
@@ -605,7 +630,6 @@ def my_profile(request):
         return redirect('hr:my_profile')
 
     if emp:
-        today = timezone.localtime(timezone.now()).date()
         # Assets in custody - AssetHandover is the source of truth for
         # current custody (see also hr_dashboard and asset_detail.html).
         context['assets'] = Asset.objects.filter(
@@ -621,6 +645,13 @@ def my_profile(request):
             .select_related('leave_type'))
         context['entitlements'] = entitlements
         accumulative = [e for e in entitlements if e.leave_type.is_accumulative]
+        # Post-vacation cooldown disclaimer (see hr.leave_cooldown) — purely
+        # additive: resolves to None for any employee not currently in a
+        # cooldown window, so the template only shows a banner when relevant.
+        from hr.leave_cooldown import annual_leave_cooldown
+        context['leave_cooldown'] = next(
+            (cd for cd in (annual_leave_cooldown(emp, e.leave_type, today=today) for e in accumulative) if cd),
+            None)
         context['leave_total_entitled'] = sum((e.entitled_days for e in accumulative), Decimal('0'))
         context['leave_total_remaining'] = sum((e.remaining_days for e in accumulative), Decimal('0'))
         context['leave_total_exception'] = sum((e.exception_days for e in accumulative), Decimal('0'))
