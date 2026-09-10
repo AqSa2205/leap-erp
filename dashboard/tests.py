@@ -572,3 +572,76 @@ class DashboardScopingLadderTests(TestCase):
                                wraps=views.projects_visible_to) as spy:
             self.client.get(reverse('dashboard:index'))
         spy.assert_called_once_with(self.rep)
+
+
+class SharedBrowserHelperTests(TestCase):
+    """The front-end helpers live in one place and stay there.
+
+    Fourteen templates once solved CSRF and fetch on their own, in three
+    different ways, while base.html's own `csrfToken` and `getCookie` sat
+    inside a function where nothing else could reach them. That is how a
+    codebase ends up with the same bug fixed in one copy out of four.
+
+    These are structural checks in the spirit of the other health tests here:
+    cheap on every run, and they fail the moment the pattern starts to spread
+    again — which is when it is still easy to stop.
+    """
+
+    HELPER = 'static/js/erp.js'
+
+    def _read(self, relative):
+        import os
+        from django.conf import settings
+        with open(os.path.join(str(settings.BASE_DIR), relative),
+                  encoding='utf-8') as handle:
+            return handle.read()
+
+    def _iter_frontend_files(self):
+        import os
+        from django.conf import settings
+        base = str(settings.BASE_DIR)
+        skip = {'venv', 'node_modules', '.git', '__pycache__', 'staticfiles',
+                'media', 'bruno'}
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [d for d in dirnames if d not in skip]
+            for name in filenames:
+                if name.endswith('.html') or name.endswith('.js'):
+                    path = os.path.join(dirpath, name)
+                    if os.path.relpath(path, base).replace('\\', '/') == self.HELPER:
+                        continue
+                    yield path
+
+    def test_the_shared_helper_exists_and_exposes_what_pages_use(self):
+        source = self._read(self.HELPER)
+        for name in ('ERP.csrf', 'ERP.postForm'):
+            self.assertIn(name, source)
+
+    def test_base_loads_the_shared_helper(self):
+        """Every page extends base.html, so loading it there is what makes the
+        helper available without each template remembering to."""
+        base = self._read('templates/base.html')
+        self.assertIn("js/erp.js", base)
+
+    def test_nothing_else_defines_its_own_cookie_reader(self):
+        """There were two copies of getCookie, and they disagreed: one read
+        the cookie only, so it missed the hidden form input that pages
+        actually render."""
+        import os
+        offenders = []
+        for path in self._iter_frontend_files():
+            try:
+                with open(path, encoding='utf-8', errors='ignore') as handle:
+                    text = handle.read()
+            except OSError:
+                continue
+            if 'function getCookie' in text:
+                offenders.append(os.path.relpath(path, os.getcwd()))
+        self.assertEqual(
+            offenders, [],
+            'These define their own cookie reader instead of using ERP.csrf() '
+            'from static/js/erp.js: ' + ', '.join(offenders))
+
+    def test_base_does_not_reintroduce_a_local_token_variable(self):
+        """base.html held `var csrfToken = '{{ csrf_token }}'` inside a
+        function, which read as shared and was not."""
+        self.assertNotIn('var csrfToken', self._read('templates/base.html'))

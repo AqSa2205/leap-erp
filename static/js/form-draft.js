@@ -1,8 +1,7 @@
-function getCookie(name) {
-  const value = `; ${document.cookie}`;
-  const parts = value.split(`; ${name}=`);
-  if (parts.length === 2) return parts.pop().split(';').shift();
-}
+// CSRF comes from the shared helper in erp.js, loaded by base.html. This file
+// carried its own cookie reader, which was the second copy in the codebase and
+// read the cookie directly — so it missed the hidden form input that pages
+// actually render.
 
 function initFormDraft(formEl, formKey, objectId) {
   let timer;
@@ -29,7 +28,7 @@ function initFormDraft(formEl, formKey, objectId) {
   function saveDraft() {
     fetch('/drafts/save/', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken')},
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': ERP.csrf()},
       body: JSON.stringify({form_key: formKey, object_id: objectId, data: collect()})
     });
   }
@@ -52,7 +51,7 @@ function initFormDraft(formEl, formKey, objectId) {
     // from POST data natively. (Never put the token in the query string: it
     // would leak via Referer headers, browser history and server logs.)
     const fd = new FormData();
-    fd.append('csrfmiddlewaretoken', getCookie('csrftoken'));
+    fd.append('csrfmiddlewaretoken', ERP.csrf());
     fd.append('payload', JSON.stringify(payload));
     navigator.sendBeacon('/drafts/save/', fd);
   });

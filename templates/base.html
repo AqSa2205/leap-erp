@@ -1702,6 +1702,10 @@
     {% endif %}
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    {# Shared browser helpers (ERP.csrf, ERP.postForm). Loaded here, before   #}
+    {# this page's own scripts and before {% block extra_js %}, so any page   #}
+    {# can use them without re-solving CSRF and fetch for itself.             #}
+    <script src="{% static 'js/erp.js' %}"></script>
     <script>
         // Bootstrap tooltips (hover-to-reveal help text) — opt-in via data-bs-toggle="tooltip".
         // Bootstrap doesn't auto-initialize these like collapse/modal, so any page using one
@@ -1867,14 +1871,7 @@
         var badge = document.getElementById('notifBadge');
         var body = document.getElementById('notifDropdownBody');
         var markAllBtn = document.getElementById('notifMarkAllRead');
-        var csrfToken = '{{ csrf_token }}';
-
         if (!bell) return;
-
-        function getCookie(name) {
-            var v = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
-            return v ? v.pop() : '';
-        }
 
         // Poll unread count every 30 seconds
         function pollUnread() {
@@ -1939,7 +1936,7 @@
                             var nid = this.getAttribute('data-nid');
                             fetch('/notifications/mark-read/' + nid + '/', {
                                 method: 'POST',
-                                headers: {'X-CSRFToken': csrfToken}
+                                headers: {'X-CSRFToken': ERP.csrf()}
                             }).then(function() { pollUnread(); });
                         });
                     });
@@ -1955,7 +1952,7 @@
             e.stopPropagation();
             fetch('/notifications/mark-all-read/', {
                 method: 'POST',
-                headers: {'X-CSRFToken': csrfToken}
+                headers: {'X-CSRFToken': ERP.csrf()}
             }).then(function() {
                 pollUnread();
                 loadRecent();
