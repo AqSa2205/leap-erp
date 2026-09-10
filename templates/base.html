@@ -1406,6 +1406,11 @@
             {% endif %}
             {% if user.is_super_admin_user or user.is_erp_admin_user %}
             <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'email_assignments' %}active{% endif %}" href="{% url 'email_assignments:list' %}" data-title="Email Assigning">
+                    <i class="bi bi-envelope-at"></i> <span>Email Assigning</span>
+                </a>
+            </li>
+            <li class="nav-item">
                 <a class="nav-link {% if 'reset' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'accounts:reset_requests' %}" data-title="Reset Requests">
                     <i class="bi bi-shield-lock"></i> <span>Reset Requests</span>
                 </a>

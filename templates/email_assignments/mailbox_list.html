@@ -1,0 +1,159 @@
+{% extends 'base.html' %}
+
+{% block title %}Email Assigning - Leap Networks ERP{% endblock %}
+{% block page_title %}Email Assigning{% endblock %}
+{% block breadcrumbs %}
+<nav class="crumb-trail" aria-label="breadcrumb">
+    <span class="crumb-current">Email Assigning</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+{% if department_locks %}
+<div class="card border-0 shadow-sm mb-3" style="border-radius:12px;">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-shield-lock me-2"></i>Require Email Attachment</h5>
+        <span class="badge bg-dark">ERP Admin &amp; Super Admin only</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small mb-3">
+            When switched on for a department, a Technical Proposal in that department
+            can't export as DOCX until a client email has been linked to it. Off by
+            default — turning one on doesn't affect any proposal that's already exported.
+        </p>
+        <div class="row g-3">
+            {% for row in department_locks %}
+            <div class="col-md-4">
+                <div class="border rounded p-3 d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="fw-semibold">{{ row.get_department_display }}</div>
+                        <div class="text-muted small">
+                            {% if row.requires_client_email_to_export %}Export locked without an email{% else %}Exports freely{% endif %}
+                        </div>
+                    </div>
+                    <form method="post" action="{% url 'email_assignments:toggle_department_lock' row.department %}">
+                        {% csrf_token %}
+                        <div class="form-check form-switch mb-0">
+                            <input class="form-check-input" type="checkbox" role="switch"
+                                   id="deptLock-{{ row.department }}"
+                                   {% if row.requires_client_email_to_export %}checked{% endif %}
+                                   onchange="this.form.submit()">
+                            <label class="form-check-label visually-hidden" for="deptLock-{{ row.department }}">
+                                Require email attachment for {{ row.get_department_display }}
+                            </label>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="card border-0 shadow-sm mb-3" style="border-radius:12px;">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-envelope-at me-2"></i>Technical Proposal — Linked Mailboxes</h5>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small mb-3">
+            Each employee here can browse their own mailbox from a Technical Proposal's
+            <strong>Link Email</strong> button and attach a client email to it. Revoking or
+            deleting someone here does not remove any email they've already linked — it only
+            stops them (or anyone else, since a mailbox belongs to one employee) from linking
+            new ones under that address.
+        </p>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th>Employee</th>
+                        <th>Mailbox address</th>
+                        <th>Status</th>
+                        <th>Assigned on</th>
+                        <th width="180">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for mailbox in mailboxes %}
+                    <tr>
+                        <td>{{ mailbox.owner.get_full_name|default:mailbox.owner.username }}</td>
+                        <td>{{ mailbox.email_address }}</td>
+                        <td>
+                            {% if mailbox.is_active %}
+                            <span class="badge bg-success">Active</span>
+                            {% else %}
+                            <span class="badge bg-secondary">Revoked</span>
+                            {% if mailbox.revoked_by %}
+                            <div class="text-muted small mt-1">by {{ mailbox.revoked_by.get_full_name|default:mailbox.revoked_by.username }}{% if mailbox.revoked_at %}, {{ mailbox.revoked_at|date:"d M Y" }}{% endif %}</div>
+                            {% endif %}
+                            {% endif %}
+                        </td>
+                        <td class="text-muted small">
+                            {{ mailbox.created_at|date:"d M Y" }}
+                            {% if mailbox.assigned_by %}<div>by {{ mailbox.assigned_by.get_full_name|default:mailbox.assigned_by.username }}</div>{% endif %}
+                        </td>
+                        <td>
+                            <div class="btn-group btn-group-sm">
+                                <form method="post" action="{% url 'email_assignments:toggle' mailbox.pk %}" class="d-inline"
+                                      onsubmit="return confirm('{% if mailbox.is_active %}Revoke mailbox access for {{ mailbox.owner }}?{% else %}Restore mailbox access for {{ mailbox.owner }}?{% endif %}')">
+                                    {% csrf_token %}
+                                    {% if mailbox.is_active %}
+                                    <button type="submit" class="btn btn-outline-warning" title="Revoke">
+                                        <i class="bi bi-slash-circle"></i> Revoke
+                                    </button>
+                                    {% else %}
+                                    <button type="submit" class="btn btn-outline-success" title="Reactivate">
+                                        <i class="bi bi-arrow-counterclockwise"></i> Reactivate
+                                    </button>
+                                    {% endif %}
+                                </form>
+                                <form method="post" action="{% url 'email_assignments:delete' mailbox.pk %}" class="d-inline"
+                                      onsubmit="return confirm('Permanently remove the mailbox assignment for {{ mailbox.owner }}? This cannot be undone.')">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-outline-danger" title="Delete">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="5" class="text-center text-muted py-4">No mailboxes assigned yet.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm" style="border-radius:12px;">
+    <div class="card-header fw-semibold"><i class="bi bi-person-plus me-2"></i>Assign a mailbox</div>
+    <div class="card-body">
+        {% if form.non_field_errors %}
+        <div class="alert alert-danger py-2 small">{{ form.non_field_errors|join:" " }}</div>
+        {% endif %}
+        <form method="post" action="{% url 'email_assignments:assign' %}" class="row g-2 align-items-end">
+            {% csrf_token %}
+            <div class="col-md-10">
+                <label class="form-label small mb-1" for="{{ form.owner.id_for_label }}">Employee</label>
+                {{ form.owner }}
+                {% if form.owner.errors %}<div class="small text-danger">{{ form.owner.errors|join:", " }}</div>{% endif %}
+            </div>
+            <div class="col-md-2 d-grid">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check-lg me-1"></i>Assign
+                </button>
+            </div>
+        </form>
+        <div class="form-text mt-2">
+            Only employees who don't already have a mailbox assigned appear above — revoke or
+            delete their current one first if you need to change it. The mailbox address used is
+            always the email already on file for that employee (Administration → Users) — it
+            can't be typed in separately here.
+        </div>
+    </div>
+</div>
+{% endblock %}
