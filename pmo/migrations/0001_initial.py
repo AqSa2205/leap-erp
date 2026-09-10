@@ -12,7 +12,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('finance', '0005_backfill_outflow_po_numbers'),
-        ('projects', '0019_project_location'),
+        ('projects', '0020_project_location'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
