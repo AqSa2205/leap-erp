@@ -524,7 +524,15 @@ def ajax_load_boilerplate(request, pk):
 
 @login_required
 def proposal_export_docx(request, pk):
-    proposal = get_object_or_404(TechnicalProposal, pk=pk)
+    # Resolved through visible_proposals, the same rule the detail page and
+    # the email-linking endpoints use. Fetching by bare primary key here let
+    # anyone authenticated download any proposal as a DOCX by knowing its id —
+    # detail answered 404 while this answered 200 with the whole document.
+    #
+    # Visibility is checked BEFORE the export lock on purpose. The lock's
+    # message names the proposal's state, so running it first would tell
+    # somebody who cannot see the proposal that it exists and is locked.
+    proposal = get_object_or_404(visible_proposals(request.user), pk=pk)
     if proposal.is_export_locked:
         messages.error(request, 'This proposal is locked — link a client email before exporting.')
         return redirect('proposals:detail', pk=proposal.pk)

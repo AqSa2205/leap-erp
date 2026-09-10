@@ -1536,3 +1536,75 @@ class LinkProposalEmailTests(TestCase):
             reverse('proposals:proposal_linked_emails', kwargs={'pk': self.proposal.pk}))
         self.assertContains(resp, 'RE: Proposal')
         self.assertContains(resp, 'Approved.')
+
+
+class ProposalExportScopeTests(TestCase):
+    """The DOCX export answers to the same visibility rule as everything else.
+
+    It previously resolved the proposal by bare primary key, so any
+    authenticated user could download any proposal by knowing its id — the
+    detail page answered 404 while the export answered 200 with the whole
+    document. The export lock added alongside these tests sits on top of this
+    endpoint, so an unscoped export would have made the lock look like a
+    control while leaving the document reachable.
+    """
+
+    def setUp(self):
+        from projects.models import Project, ProjectStatus, Region
+        self.r1 = Region.objects.create(name='ScopeA', code='SCA')
+        self.r2 = Region.objects.create(name='ScopeB', code='SCB')
+        self.st = ProjectStatus.objects.create(name='Open', category='open')
+        rep_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        self.author = User.objects.create_user(
+            'scope-author', password='x', role=rep_role, region=self.r1)
+        self.outsider = User.objects.create_user(
+            'scope-outsider', password='x', role=rep_role, region=self.r2)
+        project = Project.objects.create(
+            project_name='Scoped', region=self.r1, status=self.st,
+            proposal_reference='SCA-1')
+        self.proposal = TechnicalProposal.objects.create(
+            title='Confidential', proposal_reference='TP-SCOPE', client_name='C',
+            revision_date=date(2026, 1, 1), prepared_by_initials='A',
+            project=project, created_by=self.author)
+
+    def _export(self, user):
+        self.client.force_login(user)
+        return self.client.get(
+            reverse('proposals:export_docx', kwargs={'pk': self.proposal.pk}))
+
+    def test_a_user_outside_the_scope_cannot_export(self):
+        from proposals.views import visible_proposals
+        self.assertFalse(
+            visible_proposals(self.outsider).filter(pk=self.proposal.pk).exists())
+        self.assertEqual(self._export(self.outsider).status_code, 404)
+
+    def test_the_author_can_still_export(self):
+        """The scoping must not lock out the people it is meant to serve."""
+        response = self._export(self.author)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('wordprocessingml', response['Content-Type'])
+
+    def test_the_export_and_the_detail_page_agree(self):
+        """Two entry points to the same document must give the same answer.
+        They disagreed before: 404 from detail, 200 from export."""
+        for user in (self.author, self.outsider):
+            with self.subTest(user=user.username):
+                self.client.force_login(user)
+                detail = self.client.get(
+                    reverse('proposals:detail', kwargs={'pk': self.proposal.pk}))
+                export = self._export(user)
+                self.assertEqual(detail.status_code == 200, export.status_code == 200)
+
+    def test_an_outsider_is_not_told_the_proposal_is_locked(self):
+        """Visibility is resolved before the lock check. The lock's message
+        names the proposal's state, so checking it first would confirm to
+        somebody who cannot see the proposal that it exists."""
+        from proposals.models import ProposalDepartmentFeature
+        self.proposal.department = 'ai'
+        self.proposal.save(update_fields=['department'])
+        ProposalDepartmentFeature.objects.update_or_create(
+            department='ai', defaults={'requires_client_email_to_export': True})
+        self.assertTrue(self.proposal.is_export_locked)
+
+        response = self._export(self.outsider)
+        self.assertEqual(response.status_code, 404)
