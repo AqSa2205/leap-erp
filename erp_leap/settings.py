@@ -351,7 +351,6 @@ DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'Leap ERP <notificatio
 from email.utils import parseaddr as _parseaddr
 MS_GRAPH_SENDER = os.environ.get('MS_GRAPH_SENDER') or _parseaddr(DEFAULT_FROM_EMAIL)[1]
 
-
 # AI digest (devtracking) — Anthropic-powered developer-progress reports.
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 DEVTRACKING_AI_MODEL = os.environ.get('DEVTRACKING_AI_MODEL', 'claude-sonnet-4-6')

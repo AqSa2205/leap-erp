@@ -1280,6 +1280,117 @@ class CostingSheetRevision(models.Model):
         return f'R{cls.objects.filter(sheet=sheet).count():02d}'
 
 
+class RevisionMailbox(models.Model):
+    """One employee's own mailbox for sending costing-revision emails to
+    clients and tracking replies — never shared. Same exact design as
+    projects.MonitoredMailbox (one row per user, OneToOne both ways, an
+    admin links each employee to their own real mailbox address) — kept
+    as a separate, self-contained copy in this app rather than a cross-app
+    import, since that model currently lives on a different, not-yet-merged
+    branch and this app shouldn't depend on that branch's migration state.
+
+    The privacy guarantee is identical: only the linked employee can ever
+    send or browse from their own mailbox through this feature, and which
+    mailbox to use is always derived from request.user server-side (see
+    costing/views.py:_user_revision_mailbox) — never from anything the
+    client sends."""
+
+    owner = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='revision_mailbox',
+        help_text='The employee this mailbox belongs to. Only they can send/browse from it.',
+    )
+    email_address = models.EmailField(unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['owner__username']
+
+    def __str__(self):
+        return f'{self.owner} — {self.email_address}'
+
+
+class RevisionEmailThread(models.Model):
+    """Tracks that a costing sheet was emailed to the client and also
+    carries the full reply thread (RevisionEmailMessage rows to it)."""
+
+    STATUS_CHOICES= [
+        ('sent','Sent'),
+        ('replied','Client Replied'),
+    ]
+
+    revision = models.OneToOneField(
+        CostingSheetRevision,
+        on_delete=models.CASCADE,
+        related_name='email_thread'
+    )
+    mailbox = models.EmailField(
+        help_text='The mailbox this was sent from and is read back from.',
+    )
+    graph_conversation_id = models.CharField(max_length=225, db_index=True)
+    client_to = models.CharField(max_length=1000)
+    client_cc= models.CharField(max_length=1000, blank=True)
+    subject = models.CharField(max_length=500)
+    status= models.CharField(max_length=20, choices=STATUS_CHOICES, default ='sent')
+    sent_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='revision_threads_sent',
+    )
+    sent_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'{self.revision} - {self.subject}'
+
+
+class RevisionEmailMessage(models.Model):
+    """One email in a RevisionEmailThread - either one we sent,
+    or one that came back from the client (or anyone else on the thread)."""
+
+    DIRECTION_CHOICES = [
+        ('out', 'Sent by Leap'),
+        ('in', 'Client / other'),
+    ]
+
+    thread = models.ForeignKey(
+        RevisionEmailThread,
+        on_delete=models.CASCADE,
+        related_name='messages',
+    )
+    graph_message_id = models.CharField(max_length=255, unique=True)
+    direction = models.CharField(max_length=3, choices=DIRECTION_CHOICES)
+    sender_name = models.CharField(max_length=255, blank=True)
+    sender_email = models.EmailField(blank=True)
+    to_recipients = models.CharField(max_length=1000, blank=True)
+    cc_recipients = models.CharField(max_length=1000, blank=True)
+    subject = models.CharField(max_length=500, blank=True)
+    body_html = models.TextField(blank=True)
+    body_text = models.TextField(blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    attached_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text="When this was linked in the ERP - not the email's own timestamp.",
+    )
+    has_attachments = models.BooleanField(default=False)
+    attachment_meta = models.JSONField(null= True, blank=True)
+
+    class Meta:
+        # Every message here is manually picked and classified one at a time
+        # (see link_revision_email) - display order must match the order a
+        # person actually attached them, not the email's own sent_at, since
+        # that's the only thing that reliably conveys "this was their second
+        # reply to our second message" when either side replies more than
+        # once. Insertion order (pk) is exactly that order.
+        ordering = ['pk']
+
+    def __str__(self):
+        return f'{self.get_direction_display()} - {self.subject}'
+
+
 class VendorQuote(models.Model):
     """A supplier/vendor quote file uploaded against a costing sheet.
 

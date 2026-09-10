@@ -1429,8 +1429,17 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
                 </thead>
                 <tbody>
                     {% for rev in pdf_revisions %}
-                    <tr>
-                        <td><strong><code>{{ rev.revision_label }}</code></strong></td>
+                    <tr class="{% if rev.email_thread.status == 'replied' %}table-success{% elif rev.email_thread %}table-info{% endif %}">
+                        <td>
+                            {% if rev.email_thread %}
+                            <div class="mb-1">
+                                <span class="badge bg-primary" style="font-size:0.65rem;" title="This revision was emailed to the client">
+                                    <i class="bi bi-envelope-check me-1"></i>Sent on Email
+                                </span>
+                            </div>
+                            {% endif %}
+                            <strong><code>{{ rev.revision_label }}</code></strong>
+                        </td>
                         <td>
                             {% if rev.export_format == 'pdf' %}
                             <span class="badge bg-danger"><i class="bi bi-file-earmark-pdf me-1"></i>PDF</span>
@@ -1470,16 +1479,36 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
                             {% if rev.size_bytes %}{{ rev.size_bytes|filesizeformat }}{% else %}-{% endif %}
                         </td>
                         <td class="text-end">
-                            <a href="{{ rev.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary" title="Preview / download">
-                                <i class="bi bi-eye"></i>
-                            </a>
-                            {% if can_edit %}
-                            <form method="post" action="{% url 'costing:delete_revision' rev.pk %}" class="d-inline" onsubmit="return confirm('Delete revision {{ rev.revision_label }}? This cannot be undone.');">
-                                {% csrf_token %}
-                                <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete">
-                                    <i class="bi bi-trash"></i>
+                            <div class="d-flex justify-content-end align-items-center gap-1">
+                                <a href="{{ rev.file.url }}" target="_blank" class="btn btn-sm btn-outline-primary" title="Preview / download">
+                                    <i class="bi bi-eye"></i>
+                                </a>
+                                {% if can_edit and not rev.email_thread %}
+                                <button type="button" class="btn btn-sm btn-outline-secondary" title="Send to client"
+                                        onclick="openSendRevisionEmail({{ rev.pk }}, '{{ rev.revision_label|escapejs }}', '{{ rev.file.url|escapejs }}', '{{ sheet.title|escapejs }} — Costing {{ rev.revision_label|escapejs }}')">
+                                    <i class="bi bi-envelope"></i>
                                 </button>
-                            </form>
+                                {% endif %}
+                                {% if can_edit %}
+                                <button type="button" class="btn btn-sm btn-outline-secondary" title="Link a sent/received email"
+                                        onclick="openLinkRevisionEmail({{ rev.pk }})">
+                                    <i class="bi bi-link-45deg"></i>
+                                </button>
+                                {% endif %}
+                                {% if can_edit %}
+                                <form method="post" action="{% url 'costing:delete_revision' rev.pk %}" class="d-inline" onsubmit="return confirm('Delete revision {{ rev.revision_label }}? This cannot be undone.');">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </div>
+                            {% if rev.email_thread %}
+                            <button type="button" class="btn btn-sm w-100 mt-1 btn-outline-{% if rev.email_thread.status == 'replied' %}success{% else %}info{% endif %}"
+                                    title="View conversation history" onclick="openRevisionEmailThread({{ rev.pk }})">
+                                <i class="bi bi-chevron-down me-1"></i>Convo History
+                            </button>
                             {% endif %}
                         </td>
                     </tr>
@@ -1496,6 +1525,74 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
     </div>
 </div>
 {% endif %}
+
+<!-- Send Revision to Client -->
+<div class="modal fade" id="sendRevisionEmailModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-envelope me-2"></i>Send <span id="sendRevisionLabel"></span> to Client</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="small text-muted mb-2">
+                    <i class="bi bi-info-circle me-1"></i>This opens your device's own default mail app to
+                    compose from — it does not send through any specific linked mailbox. For it to work,
+                    Outlook (or your preferred mail app) needs to be set as your device's default mailing app.
+                </p>
+                <div class="d-flex gap-2 flex-wrap mb-2">
+                    <a href="#" id="downloadRevisionPdfLink" target="_blank" class="btn btn-outline-secondary">
+                        <i class="bi bi-download me-1"></i>Download PDF
+                    </a>
+                    <a href="#" id="composeInOutlookLink" class="btn btn-primary">
+                        <i class="bi bi-envelope me-1"></i>Compose in Outlook
+                    </a>
+                </div>
+                <div id="composeInOutlookError" class="alert alert-warning small py-2 px-2 d-none mb-2">
+                    Couldn't open a mail app. Make sure Outlook (or another mail client) is set as your
+                    device's default mailing app, then try again.
+                </div>
+                <p class="small text-muted mb-0">
+                    Download the PDF, attach it in the draft that opens, and send it from there.
+                    Once it's sent, use the <i class="bi bi-link-45deg"></i> link button on this revision to attach it here.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Link a Sent/Received Email -->
+<div class="modal fade" id="linkRevisionEmailModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-link-45deg me-2"></i>Link an Email</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="linkRevisionEmailBody">
+                <div class="text-center text-muted py-4">Loading…</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Revision Email Thread -->
+<div class="modal fade" id="revisionEmailThreadModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-envelope-open me-2"></i>Email Thread</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="revisionEmailThreadBody">
+                <div class="text-center text-muted py-4">Loading…</div>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- PDF Terms & Conditions Selection -->
 <div class="card mt-3 bom-pricing-only">
@@ -2190,6 +2287,88 @@ var CAN_EDIT = {% if can_edit %}true{% else %}false{% endif %};
             });
         });
     });
+
+    // ─── Revision email thread ───────────────────────────────────
+    var sendRevisionEmailModalEl = document.getElementById('sendRevisionEmailModal');
+    var sendRevisionEmailModal = sendRevisionEmailModalEl ? new bootstrap.Modal(sendRevisionEmailModalEl) : null;
+    var currentSendRevisionSubject = null;
+
+    window.openSendRevisionEmail = function(pk, label, fileUrl, subject) {
+        currentSendRevisionSubject = subject;
+        document.getElementById('sendRevisionLabel').textContent = label;
+        var dlLink = document.getElementById('downloadRevisionPdfLink');
+        if (dlLink) dlLink.href = fileUrl;
+        var outlookError = document.getElementById('composeInOutlookError');
+        if (outlookError) outlookError.classList.add('d-none');
+        sendRevisionEmailModal.show();
+    };
+
+    var composeInOutlookLink = document.getElementById('composeInOutlookLink');
+    var composeInOutlookError = document.getElementById('composeInOutlookError');
+    if (composeInOutlookLink) {
+        composeInOutlookLink.addEventListener('click', function(e) {
+            e.preventDefault();
+            if (composeInOutlookError) composeInOutlookError.classList.add('d-none');
+            var body = 'Hi,\n\nPlease find attached the costing revision.\n\n'
+                + '(Attach the downloaded PDF before sending — Outlook can\'t be pre-filled with it.)';
+            var mailto = 'mailto:?subject=' + encodeURIComponent(currentSendRevisionSubject || '')
+                + '&body=' + encodeURIComponent(body);
+
+            // mailto: hands off to the OS with no success/failure signal back to JS.
+            // Heuristic: if the tab loses focus shortly after (the mail app took
+            // over), assume it worked; if not, assume there's no default mail app
+            // configured and say so instead of leaving the click looking like a no-op.
+            var opened = false;
+            var onBlur = function() { opened = true; };
+            window.addEventListener('blur', onBlur, {once: true});
+
+            try {
+                window.location.href = mailto;
+            } catch (err) {
+                window.removeEventListener('blur', onBlur);
+                if (composeInOutlookError) composeInOutlookError.classList.remove('d-none');
+                return;
+            }
+
+            setTimeout(function() {
+                window.removeEventListener('blur', onBlur);
+                if (!opened && !document.hidden && composeInOutlookError) {
+                    composeInOutlookError.classList.remove('d-none');
+                }
+            }, 1800);
+        });
+    }
+
+    // ─── Link a sent/received email ────────────────────────────────
+    var linkRevisionEmailModalEl = document.getElementById('linkRevisionEmailModal');
+    var linkRevisionEmailModal = linkRevisionEmailModalEl ? new bootstrap.Modal(linkRevisionEmailModalEl) : null;
+    var linkRevisionEmailBody = document.getElementById('linkRevisionEmailBody');
+
+    window.openLinkRevisionEmail = function(pk) {
+        linkRevisionEmailBody.innerHTML = '<div class="text-center text-muted py-4">Loading…</div>';
+        linkRevisionEmailModal.show();
+        fetch('/costing/revision/' + pk + '/browse-link/')
+            .then(function(r) { return r.text(); })
+            .then(function(html) { linkRevisionEmailBody.innerHTML = html; })
+            .catch(function(err) {
+                linkRevisionEmailBody.innerHTML = '<div class="text-danger">Failed to load: ' + err + '</div>';
+            });
+    };
+
+    var revisionEmailThreadModalEl = document.getElementById('revisionEmailThreadModal');
+    var revisionEmailThreadModal = revisionEmailThreadModalEl ? new bootstrap.Modal(revisionEmailThreadModalEl) : null;
+    var revisionEmailThreadBody = document.getElementById('revisionEmailThreadBody');
+
+    window.openRevisionEmailThread = function(pk) {
+        revisionEmailThreadBody.innerHTML = '<div class="text-center text-muted py-4">Loading…</div>';
+        revisionEmailThreadModal.show();
+        fetch('/costing/revision/' + pk + '/email-thread/')
+            .then(function(r) { return r.text(); })
+            .then(function(html) { revisionEmailThreadBody.innerHTML = html; })
+            .catch(function(err) {
+                revisionEmailThreadBody.innerHTML = '<div class="text-danger">Failed to load: ' + err + '</div>';
+            });
+    };
 
     // ─── Terms template toggle ──────────────────────────────────
     var toggleTermUrl = '{% url "costing:toggle_term" sheet.pk %}';
