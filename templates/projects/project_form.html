@@ -30,12 +30,12 @@
             <h6 class="text-muted mb-3 border-bottom pb-2">Basic Information</h6>
             <div class="row mb-4">
                 <div class="col-md-6 mb-3">
-                    <label class="form-label">Project Name *</label>
+                    <label class="form-label">Project Name <span data-bs-toggle="tooltip" title="This field is mandatory">*</span></label>
                     {{ form.project_name }}
                     {% if form.project_name.errors %}<div class="text-danger small">{{ form.project_name.errors.0 }}</div>{% endif %}
                 </div>
                 <div class="col-md-6 mb-3">
-                    <label class="form-label">Proposal Reference *</label>
+                    <label class="form-label">Proposal Reference <span data-bs-toggle="tooltip" title="This field is mandatory">*</span></label>
                     <div class="input-group">
                         {{ form.proposal_reference }}
                         <input type="text" name="lna_revision" id="id_lna_revision" data-lna-revision="1"
@@ -61,12 +61,12 @@
             <h6 class="text-muted mb-3 border-bottom pb-2">Status & Assignment</h6>
             <div class="row mb-4">
                 <div class="col-md-4 mb-3">
-                    <label class="form-label">Status *</label>
+                    <label class="form-label">Status <span data-bs-toggle="tooltip" title="This field is mandatory">*</span></label>
                     {{ form.status }}
                     {% if form.status.errors %}<div class="text-danger small">{{ form.status.errors.0 }}</div>{% endif %}
                 </div>
                 <div class="col-md-4 mb-3">
-                    <label class="form-label">Region *</label>
+                    <label class="form-label">Region <span data-bs-toggle="tooltip" title="This field is mandatory">*</span></label>
                     {{ form.region }}
                     {% if form.region.errors %}<div class="text-danger small">{{ form.region.errors.0 }}</div>{% endif %}
                 </div>
@@ -146,7 +146,7 @@
                     ProjectForm.__init__. The asterisk follows the same rule, so the
                     label never promises something the form is not enforcing.
                     {% endcomment %}
-                    <label class="form-label">Submission Deadline{% if not form.instance.pk %} *{% endif %}</label>
+                    <label class="form-label">Submission Deadline{% if not form.instance.pk %} <span data-bs-toggle="tooltip" title="This field is mandatory">*</span>{% endif %}</label>
                     {{ form.submission_deadline }}
                     {% if form.submission_deadline.errors %}<div class="text-danger small">{{ form.submission_deadline.errors.0 }}</div>{% endif %}
                 </div>
@@ -164,22 +164,22 @@
             <h6 class="text-muted mb-3 border-bottom pb-2">Milestone Deadlines</h6>
             <div class="row mb-4">
                 <div class="col-md-3 mb-3">
-                    <label class="form-label">BOM Started Deadline{% if not form.instance.pk %} *{% endif %}</label>
+                    <label class="form-label">BOM Started Deadline{% if not form.instance.pk %} <span data-bs-toggle="tooltip" title="This field is mandatory">*</span>{% endif %}</label>
                     {{ form.bom_started_deadline }}
                     {% if form.bom_started_deadline.errors %}<div class="text-danger small">{{ form.bom_started_deadline.errors.0 }}</div>{% endif %}
                 </div>
                 <div class="col-md-3 mb-3">
-                    <label class="form-label">Handed to Sales Deadline{% if not form.instance.pk %} *{% endif %}</label>
+                    <label class="form-label">Handed to Sales Deadline{% if not form.instance.pk %} <span data-bs-toggle="tooltip" title="This field is mandatory">*</span>{% endif %}</label>
                     {{ form.handed_over_deadline }}
                     {% if form.handed_over_deadline.errors %}<div class="text-danger small">{{ form.handed_over_deadline.errors.0 }}</div>{% endif %}
                 </div>
                 <div class="col-md-3 mb-3">
-                    <label class="form-label">Costing Started Deadline{% if not form.instance.pk %} *{% endif %}</label>
+                    <label class="form-label">Costing Started Deadline{% if not form.instance.pk %} <span data-bs-toggle="tooltip" title="This field is mandatory">*</span>{% endif %}</label>
                     {{ form.costing_started_deadline }}
                     {% if form.costing_started_deadline.errors %}<div class="text-danger small">{{ form.costing_started_deadline.errors.0 }}</div>{% endif %}
                 </div>
                 <div class="col-md-3 mb-3">
-                    <label class="form-label">Finalised Deadline{% if not form.instance.pk %} *{% endif %}</label>
+                    <label class="form-label">Finalised Deadline{% if not form.instance.pk %} <span data-bs-toggle="tooltip" title="This field is mandatory">*</span>{% endif %}</label>
                     {{ form.finalized_deadline }}
                     {% if form.finalized_deadline.errors %}<div class="text-danger small">{{ form.finalized_deadline.errors.0 }}</div>{% endif %}
                 </div>
@@ -671,6 +671,107 @@ if (discardBtn) {
     statusEl.addEventListener('change', syncRow);
     if (reasonEl) reasonEl.addEventListener('change', syncComment);
     syncRow();   // reveal immediately when editing an already-lost project
+})();
+
+// --- Milestone Deadlines gated behind Submission Deadline ---
+// The milestone dates only make sense once there is an overall deadline
+// to plan them against, so they stay disabled until Submission Deadline
+// has a value.
+(function () {
+    var submissionEl = document.getElementById('id_submission_deadline');
+    var milestoneIds = ['id_bom_started_deadline', 'id_handed_over_deadline',
+                         'id_costing_started_deadline', 'id_finalized_deadline'];
+    var milestoneEls = milestoneIds.map(function (id) { return document.getElementById(id); })
+                                    .filter(Boolean);
+    if (!submissionEl || !milestoneEls.length) return;
+
+    function syncMilestones() {
+        var enabled = !!submissionEl.value;
+        milestoneEls.forEach(function (el) { el.disabled = !enabled; });
+    }
+
+    submissionEl.addEventListener('change', syncMilestones);
+    syncMilestones();  // reflect the current value immediately (e.g. when editing)
+})();
+
+// --- Live deadline ordering validation ---
+// Catches an out-of-order date the moment it's picked, rather than
+// waiting for a server round-trip after Save. HTML5 date inputs give
+// YYYY-MM-DD strings, so plain string comparison already matches
+// chronological order - no date parsing needed.
+(function () {
+    var fieldIds = {
+        submission_deadline: 'id_submission_deadline',
+        bom_started_deadline: 'id_bom_started_deadline',
+        handed_over_deadline: 'id_handed_over_deadline',
+        costing_started_deadline: 'id_costing_started_deadline',
+        finalized_deadline: 'id_finalized_deadline',
+    };
+    var labels = {
+        bom_started_deadline: 'BOM Started Deadline',
+        handed_over_deadline: 'Handed to Sales Deadline',
+        costing_started_deadline: 'Costing Started Deadline',
+        finalized_deadline: 'Finalized Deadline',
+    };
+    var els = {};
+    var allPresent = true;
+    Object.keys(fieldIds).forEach(function (key) {
+        els[key] = document.getElementById(fieldIds[key]);
+        if (!els[key]) allPresent = false;
+    });
+    if (!allPresent) return;
+
+    function errorDiv(key) {
+        var id = 'liveError_' + key;
+        var div = document.getElementById(id);
+        if (!div) {
+            div = document.createElement('div');
+            div.id = id;
+            div.className = 'text-danger small';
+            els[key].insertAdjacentElement('afterend', div);
+        }
+        return div;
+    }
+
+    function clearAll() {
+        Object.keys(fieldIds).forEach(function (key) {
+            var div = document.getElementById('liveError_' + key);
+            if (div) div.textContent = '';
+        });
+    }
+
+    function validateDeadlines() {
+        clearAll();
+        var submission = els.submission_deadline.value;
+        var milestones = {
+            bom_started_deadline: els.bom_started_deadline.value,
+            handed_over_deadline: els.handed_over_deadline.value,
+            costing_started_deadline: els.costing_started_deadline.value,
+            finalized_deadline: els.finalized_deadline.value,
+        };
+
+        if (submission) {
+            Object.keys(milestones).forEach(function (key) {
+                if (milestones[key] && milestones[key] >= submission) {
+                    errorDiv(key).textContent = labels[key] + ' must be before the Submission Deadline.';
+                }
+            });
+        }
+
+        var sequence = ['bom_started_deadline', 'handed_over_deadline', 'costing_started_deadline', 'finalized_deadline'];
+        for (var i = 0; i < sequence.length - 1; i++) {
+            var prevKey = sequence[i], nextKey = sequence[i + 1];
+            var prevVal = milestones[prevKey], nextVal = milestones[nextKey];
+            if (prevVal && nextVal && prevVal > nextVal) {
+                errorDiv(nextKey).textContent = labels[nextKey] + ' cannot be before ' + labels[prevKey] + '.';
+            }
+        }
+    }
+
+    Object.keys(fieldIds).forEach(function (key) {
+        els[key].addEventListener('change', validateDeadlines);
+    });
+    validateDeadlines();  // reflect current state immediately (e.g. when editing)
 })();
 </script>
 {% endblock %}
