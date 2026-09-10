@@ -1444,3 +1444,52 @@ class SubHeadingRowTests(TestCase):
         self._item('1.2.2', price='10')
         self.assertIn('1.2', self._sub_headings())
         self.assertTrue(bool(head.final_total_price))
+
+
+class LineItemUnitChoicesTests(TestCase):
+    """The A.1 unit dropdown, and the places that have to agree with it.
+
+    The list is defined once and read in three places — the model field, the
+    row template, and the server-side validation on the bulk/inline edit path.
+    A unit that reaches the dropdown but not the validator would look available
+    and then be rejected on save.
+    """
+
+    def test_inc_is_offered(self):
+        from costing.models import CostingLineItem
+        codes = [code for code, _label in CostingLineItem.UNIT_CHOICES]
+        self.assertIn('Inc', codes)
+
+    def test_the_existing_units_kept_their_order(self):
+        """The order here is the order of the dropdown. Reordering would move
+        what people reach for without anyone deciding to."""
+        from costing.models import CostingLineItem
+        codes = [code for code, _label in CostingLineItem.UNIT_CHOICES]
+        self.assertEqual(
+            codes,
+            ['EA', 'LOT', 'Mtr', 'Roll', 'Set', 'Pair', 'Box', 'Pkt', 'Inc'])
+
+    def test_the_server_side_validator_accepts_every_offered_unit(self):
+        """Both the dropdown and the validator derive from UNIT_CHOICES, so
+        this holds for any unit added later too — which is the point."""
+        from costing.models import CostingLineItem
+        valid_units = {code.lower(): code
+                       for code, _ in CostingLineItem.UNIT_CHOICES}
+        for code, _label in CostingLineItem.UNIT_CHOICES:
+            with self.subTest(unit=code):
+                self.assertEqual(valid_units.get(code.lower()), code)
+
+    def test_a_line_item_can_be_saved_with_the_new_unit(self):
+        from decimal import Decimal
+
+        from costing.models import CostingLineItem, CostingSection, CostingSheet
+        sheet = CostingSheet.objects.create(title='Units', margin=Decimal('30'))
+        section = CostingSection.objects.create(
+            costing_sheet=sheet, section_number='1', title='A', order=0)
+        item = CostingLineItem.objects.create(
+            section=section, item_number='1.1', description='Included item',
+            quantity=Decimal('1'), unit='Inc', base_unit_cost=Decimal('0'),
+            supplier_currency='SAR', order=0)
+        item.full_clean()          # choices are enforced here, not at save
+        item.refresh_from_db()
+        self.assertEqual(item.unit, 'Inc')

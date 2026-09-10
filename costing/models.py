@@ -869,6 +869,10 @@ class CostingLineItem(models.Model):
         ('Pair', 'Pair'),
         ('Box', 'Box'),
         ('Pkt', 'Pkt'),
+        # Appended rather than slotted in alphabetically: the order here is the
+        # order of the dropdown, and moving the existing entries would shift
+        # what people reach for by muscle memory.
+        ('Inc', 'Inc'),
     ]
 
     section = models.ForeignKey(
