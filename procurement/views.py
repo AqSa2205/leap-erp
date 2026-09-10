@@ -10,6 +10,15 @@ from django.db import transaction
 from django.db.models import Q
 from decimal import Decimal, InvalidOperation
 
+from .pdf_common import (  # shared PDF helpers, moved out of this module
+    a4_portrait_document,
+    _amount_in_words,
+    _make_numbered_canvas,
+    _arabic_font,
+    _shape_arabic,
+    _tinymce_html_to_reportlab_lines,
+    _reportlab_style_for_line,
+)
 from .models import (
     PurchaseOrder, PurchaseOrderItem,
     POSummaryEntry, QuotationImport,
@@ -32,76 +41,12 @@ from datetime import datetime, timedelta
 from accounts.permissions import require_capability, CapabilityRequiredMixin
 from .budget_status import approved_budgets_for, budget_status, exchange_rates
 from .system_breakdown import breakdown
+from .po_pdf import render_po_pdf
+from .po_columns import excel_headers
 
 
-_NUM_UNITS = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine']
-_NUM_TEENS = ['Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen']
-_NUM_TENS = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety']
-_NUM_SCALES = ['', 'Thousand', 'Million', 'Billion', 'Trillion']
 
 
-def _amount_in_words(value, currency='SAR'):
-    """Spell out a numeric amount for invoice/PO use.
-
-    Example: Decimal('25420.50') with currency='SAR' →
-    'Twenty Five Thousand Four Hundred Twenty SAR and Fifty Halalas Only'.
-
-    Splits into integer SAR and 2-digit fractional Halalas, words each part
-    in English, and appends ' Only' as is conventional on a payment doc.
-    Returns an empty string for None / unparseable input.
-    """
-    if value is None:
-        return ''
-    try:
-        d = Decimal(str(value)).quantize(Decimal('0.01'))
-    except (InvalidOperation, ValueError, TypeError):
-        return ''
-
-    # Operate on the absolute value so the sub-helpers never see a negative.
-    sign = ''
-    if d < 0:
-        sign = 'Negative '
-        d = -d
-
-    integer_part = int(d)
-    halala_part = int(((d - integer_part) * 100).to_integral_value())
-
-    def _under_hundred(n):
-        if n < 10:
-            return _NUM_UNITS[n]
-        if n < 20:
-            return _NUM_TEENS[n - 10]
-        t, u = divmod(n, 10)
-        return _NUM_TENS[t] if u == 0 else f'{_NUM_TENS[t]} {_NUM_UNITS[u]}'
-
-    def _under_thousand(n):
-        if n < 100:
-            return _under_hundred(n)
-        h, r = divmod(n, 100)
-        return f'{_NUM_UNITS[h]} Hundred' if r == 0 else f'{_NUM_UNITS[h]} Hundred {_under_hundred(r)}'
-
-    def _spell(n):
-        if n == 0:
-            return 'Zero'
-        parts, i = [], 0
-        while n > 0:
-            chunk = n % 1000
-            if chunk:
-                scale = _NUM_SCALES[i] if i < len(_NUM_SCALES) else ''
-                parts.append(f'{_under_thousand(chunk)} {scale}'.strip())
-            n //= 1000
-            i += 1
-        return ' '.join(reversed(parts))
-
-    main_words = _spell(integer_part)
-    base = f'{sign}{main_words} {currency}'
-    if halala_part:
-        # Fractional unit name depends on the currency (Halalas / Cents / Fils).
-        singular, plural = PurchaseOrder.CURRENCY_FRACTIONS.get(
-            currency, ('Halala', 'Halalas'))
-        suffix = singular if halala_part == 1 else plural
-        return f'{base} and {_under_hundred(halala_part)} {suffix} Only'
-    return f'{base} Only'
 
 
 def _safe_filename(name, prefix='', suffix='', extension=''):
@@ -119,115 +64,10 @@ def _safe_filename(name, prefix='', suffix='', extension=''):
     return f'{base}{extension}'
 
 
-def _make_numbered_canvas(draft=False, footer_left=None, footer_left2=None, footer_center=None):
-    """Return a two-pass Canvas subclass that draws "Page X of Y" at the
-    bottom of every page. Used by procurement PDF exports for consistent
-    pagination across PO / DN / Inventory / Summary outputs.
-
-    By default the page label is centred. When ``footer_left`` and/or
-    ``footer_center`` are given (e.g. the PO export passes the company name
-    and PO number), a three-part footer is drawn instead — ``footer_left``
-    left-aligned, ``footer_center`` centred, and the page label right-aligned.
-    ``footer_left2`` adds a second line beneath ``footer_left`` (e.g. the
-    Material Requisition + revision), with the centre/right text vertically
-    centred against the two-line left block.
-
-    When ``draft=True`` a large diagonal "DRAFT" watermark is layered on
-    every page so an unapproved export cannot be mistaken for a final,
-    signed document.
-    """
-    from reportlab.lib import colors
-    from reportlab.lib.units import mm
-    from reportlab.pdfgen.canvas import Canvas
-
-    class NumberedCanvas(Canvas):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self._saved_pages = []
-
-        def showPage(self):
-            self._saved_pages.append(dict(self.__dict__))
-            self._startPage()
-
-        def save(self):
-            page_count = len(self._saved_pages)
-            for state in self._saved_pages:
-                self.__dict__.update(state)
-                try:
-                    page_w, page_h = self._pagesize
-                    if draft:
-                        self.saveState()
-                        self.setFillColor(colors.HexColor('#C41E3A'))
-                        try:
-                            self.setFillAlpha(0.10)
-                        except Exception:
-                            pass
-                        self.setFont('Helvetica-Bold', 120)
-                        self.translate(page_w / 2, page_h / 2)
-                        self.rotate(45)
-                        self.drawCentredString(0, 0, 'DRAFT')
-                        self.restoreState()
-                    self.setFont('Helvetica', 8)
-                    self.setFillColor(colors.HexColor('#6c757d'))
-                    page_label = f'Page {self._pageNumber} of {page_count}'
-                    if footer_left is not None or footer_left2 is not None or footer_center is not None:
-                        # 3-part footer: company (left) · reference (center) · page (right).
-                        # footer_left2 stacks a second line under the company name.
-                        left_x, right_x = 15 * mm, page_w - 15 * mm
-                        if footer_left2:
-                            if footer_left:
-                                self.drawString(left_x, 10 * mm, footer_left)
-                            self.drawString(left_x, 6 * mm, footer_left2)
-                        elif footer_left:
-                            self.drawString(left_x, 8 * mm, footer_left)
-                        mid_y = 8 * mm  # vertically centred against the (up to) two left lines
-                        if footer_center:
-                            self.drawCentredString(page_w / 2, mid_y, footer_center)
-                        self.drawRightString(right_x, mid_y, page_label)
-                    else:
-                        self.drawCentredString(page_w / 2, 8 * mm, page_label)
-                except Exception:
-                    pass
-                super().showPage()
-            super().save()
-
-    return NumberedCanvas
 
 
-def _arabic_font():
-    """Register (once) and return the Arabic-capable font name for PDF headers,
-    or None if the TTF isn't present. The font lives at
-    ``static/fonts/Amiri-Regular.ttf`` (OFL) — committed separately so it ships
-    to production. Returning None lets callers fall back to the English-only
-    header instead of crashing."""
-    try:
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
-        from django.contrib.staticfiles.finders import find as find_static
-        if 'ArabicHeader' in pdfmetrics.getRegisteredFontNames():
-            return 'ArabicHeader'
-        path = find_static('fonts/Amiri-Regular.ttf')
-        if not path:
-            return None
-        pdfmetrics.registerFont(TTFont('ArabicHeader', path))
-        return 'ArabicHeader'
-    except Exception:
-        return None
 
 
-def _shape_arabic(text):
-    """Reshape Arabic to its joined presentation forms and apply the bidi
-    algorithm, so it renders correctly (right-to-left, connected) in reportlab,
-    which does neither on its own. Falls back to the raw text on any error."""
-    try:
-        import arabic_reshaper
-        try:
-            from bidi import get_display
-        except ImportError:  # older python-bidi
-            from bidi.algorithm import get_display
-        return get_display(arabic_reshaper.reshape(text))
-    except Exception:
-        return text
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1732,11 +1572,9 @@ def po_export_excel(request, pk):
 
     # ── Line Items Table ──
     table_row = header_start + max(len(headers_left), len(headers_right)) + 1
-    col_headers = [
-        'S No.', 'System', 'Make/Model', 'Item Descriptions / Specification',
-        'Quantity', 'UOM', 'Rate/unit (%s)' % po.currency,
-        'Total Value (%s)' % po.currency, 'Remarks',
-    ]
+    # From po_columns.py, the same table the PDF builder reads. The two used to
+    # keep separate lists and had drifted on three of the headings.
+    col_headers = excel_headers(po.currency)
     for col, h in enumerate(col_headers, 1):
         cell = ws.cell(row=table_row, column=col, value=h)
         cell.font = header_font
@@ -1845,550 +1683,22 @@ def po_export_excel(request, pk):
 
 # ─── PDF Export ───────────────────────────────────────────────
 
-def _tinymce_html_to_reportlab_lines(html):
-    # Converts TinyMCE-produced HTML into a list of (markup, max_pt) tuples,
-    # one per block (paragraph/list item). markup is ReportLab Paragraph-
-    # markup text; max_pt is the largest inline font-size (in points) used
-    # within that line, or None if no explicit size was set - callers use
-    # this to give large lines enough leading/line-height so they don't
-    # collide with the paragraph that follows (a fixed base leading is too
-    # tight for a much larger inline font-size override).
-    #
-    # Only handles the specific inline styles our TinyMCE toolbar can
-    # actually produce - font-size, text color, background color
-    # (highlight), bold, italic, underline, plus <ul>/<ol> lists. Each
-    # flushed line is self-contained: any inline tags still open at a
-    # <br>/<p> boundary are closed before the line ends and reopened for
-    # whatever text follows, so every line is valid on its own.
-    import re
-    from html.parser import HTMLParser
-    from xml.sax.saxutils import escape as xml_escape
-
-    # Legacy terms are pre-TinyMCE plain text (newline-delimited). The HTML
-    # parser below only breaks on block tags, so a bare '\n' would collapse the
-    # whole thing into one run-on line — handle plain text explicitly instead.
-    if html and '<' not in html:
-        return [(xml_escape(line.strip()), None)
-                for line in html.splitlines() if line.strip()]
-
-    font_size_re = re.compile(r'font-size:\s*([\d.]+)pt')
-    font_color_re = re.compile(r'(?<!background-)color:\s*(#[0-9a-fA-F]{6})')
-    back_color_re = re.compile(r'background-color:\s*(#[0-9a-fA-F]{6})')
-
-    class Converter(HTMLParser):
-        def __init__(self):
-            super().__init__()
-            self.lines = []  # list of (markup, max_pt)
-            self.current = []
-            self.open_tags = []  # list of (open_markup, close_markup, size_pt) currently open
-            self.current_max_pt = None
-            self.list_stack = []
-            self.list_counters = []
-
-        def flush_current(self, prefix=''):
-            closers = ''.join(close for _, close, _ in reversed(self.open_tags))
-            text = (''.join(self.current) + closers).strip()
-            if text:
-                self.lines.append((prefix + text, self.current_max_pt))
-            openers = ''.join(open_ for open_, _, _ in self.open_tags)
-            self.current = [openers] if openers else []
-            self.current_max_pt = max(
-                (pt for _, _, pt in self.open_tags if pt), default=None)
-
-        def _note_size(self, pt):
-            if pt and (self.current_max_pt is None or pt > self.current_max_pt):
-                self.current_max_pt = pt
-
-        def handle_starttag(self, tag, attrs):
-            attrs = dict(attrs)
-            if tag in ('p', 'div', 'br'):
-                self.flush_current()
-            elif tag in ('ul', 'ol'):
-                self.list_stack.append(tag)
-                self.list_counters.append(0)
-            elif tag == 'li':
-                self.flush_current()
-            elif tag in ('strong', 'b'):
-                self.current.append('<b>')
-                self.open_tags.append(('<b>', '</b>', None))
-            elif tag in ('em', 'i'):
-                self.current.append('<i>')
-                self.open_tags.append(('<i>', '</i>', None))
-            elif tag == 'u':
-                self.current.append('<u>')
-                self.open_tags.append(('<u>', '</u>', None))
-            elif tag == 'span':
-                style = attrs.get('style', '')
-                open_markup = ''
-                close_markup = ''
-                size_pt = None
-                size_match = font_size_re.search(style)
-                color_match = font_color_re.search(style)
-                back_match = back_color_re.search(style)
-                if size_match or color_match or back_match:
-                    font_attrs = ''
-                    if size_match:
-                        size_pt = int(float(size_match.group(1)))
-                        font_attrs += ' size="%d"' % size_pt
-                        self._note_size(size_pt)
-                    if color_match:
-                        font_attrs += ' color="%s"' % color_match.group(1)
-                    if back_match:
-                        font_attrs += ' backColor="%s"' % back_match.group(1)
-                    open_markup += '<font%s>' % font_attrs
-                    close_markup = '</font>' + close_markup
-                if 'text-decoration: underline' in style or 'text-decoration:underline' in style:
-                    open_markup += '<u>'
-                    close_markup = '</u>' + close_markup
-                if open_markup:
-                    self.current.append(open_markup)
-                    self.open_tags.append((open_markup, close_markup, size_pt))
-                else:
-                    self.open_tags.append(('', '', None))
-            else:
-                self.open_tags.append(('', '', None))
-
-        def handle_endtag(self, tag):
-            if tag in ('p', 'div'):
-                self.flush_current()
-            elif tag in ('ul', 'ol'):
-                if self.list_stack:
-                    self.list_stack.pop()
-                    self.list_counters.pop()
-            elif tag == 'li':
-                if self.list_stack and self.list_stack[-1] == 'ol':
-                    self.list_counters[-1] += 1
-                    prefix = '%d. ' % self.list_counters[-1]
-                else:
-                    prefix = '- '
-                self.flush_current(prefix=prefix)
-            elif tag in ('strong', 'b', 'em', 'i', 'u', 'span'):
-                if self.open_tags:
-                    _, close, _ = self.open_tags.pop()
-                    if close:
-                        self.current.append(close)
-
-        def handle_data(self, data):
-            self.current.append(xml_escape(data))
-
-    parser = Converter()
-    parser.feed(html or '')
-    parser.open_tags = []  # don't auto-reopen on the final flush
-    parser.current_max_pt = None
-    parser.flush_current()
-    return parser.lines
 
 
-def _reportlab_style_for_line(base_style, max_pt):
-    # Returns base_style unchanged if the line has no inline font-size
-    # override larger than the base, otherwise a cloned style sized up so
-    # the line has enough leading to not collide with what follows.
-    if not max_pt or max_pt <= base_style.fontSize:
-        return base_style
-    from reportlab.lib.styles import ParagraphStyle
-    return ParagraphStyle(
-        base_style.name + '_big%d' % max_pt, parent=base_style,
-        fontSize=max_pt, leading=int(max_pt * 1.25))
 
 
 @login_required
 def po_export_pdf(request, pk, unpriced=False):
+    """Serve the purchase-order PDF.
 
-    """Export a Purchase Order to PDF matching the original format.
-    When ``unpriced`` is True, all commercial figures are omitted — the
-    Rate/Unit and Total columns, the totals block, and the amount-in-words
-    line — producing a scope-only copy safe to share without revealing pricing.
+    The document itself is built in procurement/po_pdf.py; what belongs here is
+    resolving the order this user may see and naming the download.
     """
-    from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.units import mm
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, KeepTogether
-    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
-    from reportlab.pdfgen.canvas import Canvas
-    from io import BytesIO
-    from django.contrib.staticfiles.finders import find as find_static
-
     po = get_object_or_404(_visible_pos_for(request.user), pk=pk)
-    items = po.items.all()
-    is_draft = not po.is_released
+    content = render_po_pdf(po, unpriced=unpriced)
 
-    NumberedCanvas = _make_numbered_canvas(
-        draft=is_draft,
-        footer_left='Leap Networks Arabia',
-        footer_left2=('Material Requisition ' + (po.mr_revision or '')).strip(),
-        footer_center=str(po.po_number or ''),
-    )
-
-    buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
-    elements = []
-    styles = getSampleStyleSheet()
-
-    # Custom styles
-    title_style = ParagraphStyle('POTitle', parent=styles['Heading1'], fontSize=14, textColor=colors.HexColor('#C41E3A'), spaceAfter=6)
-    label_style = ParagraphStyle('Label', parent=styles['Normal'], fontSize=8, textColor=colors.grey)
-    value_style = ParagraphStyle('Value', parent=styles['Normal'], fontSize=9, fontName='Helvetica-Bold')
-    normal_style = ParagraphStyle('Norm', parent=styles['Normal'], fontSize=8)
-    small_style = ParagraphStyle('Small', parent=styles['Normal'], fontSize=7)
-    # Match the Costing PDF's terms size (9pt) — procurement terms were 7pt,
-    # which rendered noticeably shrunk next to the sales-side documents.
-    tc_style = ParagraphStyle('TC', parent=styles['Normal'], fontSize=9, leading=12)
-    right_style = ParagraphStyle('Right', parent=styles['Normal'], fontSize=8, alignment=TA_RIGHT)
-    right_bold = ParagraphStyle('RightBold', parent=styles['Normal'], fontSize=8, alignment=TA_RIGHT, fontName='Helvetica-Bold')
-    # Qty is a count, not a money column — centred so it scans cleanly and
-    # matches the PO detail table and the Excel export.
-    center_style = ParagraphStyle('Center', parent=styles['Normal'], fontSize=8, alignment=TA_CENTER)
-    small_center = ParagraphStyle('SmallCenter', parent=styles['Normal'], fontSize=7, alignment=TA_CENTER)
-
-    # ── Header: company (left) · title (centre) · logo (right) ──
-    company_style = ParagraphStyle('Company', parent=styles['Normal'], fontSize=11,
-                                   fontName='Helvetica-Bold', leading=13, textColor=colors.black)
-    sub_style = ParagraphStyle('CompanySub', parent=styles['Normal'], fontSize=8,
-                               leading=11, textColor=colors.HexColor('#333333'))
-    header_title_style = ParagraphStyle('HdrTitle', parent=styles['Normal'], fontSize=14,
-                                        alignment=TA_CENTER, fontName='Helvetica-Bold', textColor=colors.black)
-
-    # Left: company name (EN + AR) + address + website, stacked.
-    left_cell = [Paragraph('Leap Networks Arabia', company_style)]
-    ar_font = _arabic_font()
-    if ar_font:
-        ar_style = ParagraphStyle('CompanyAr', parent=styles['Normal'], fontSize=12,
-                                  fontName=ar_font, leading=16, textColor=colors.black)
-        left_cell.append(Paragraph(_shape_arabic('شركة لييب نتوركس أرابيا'), ar_style))
-    left_cell.append(Paragraph('Al-Khobar, Saudi Arabia', sub_style))
-    left_cell.append(Paragraph('www.leap-arabia.com', sub_style))
-
-    # Centre: "Purchase Order" underlined in black, with any draft/unpriced note beneath.
-    center_cell = [Paragraph('<u>Purchase Order</u>', header_title_style)]
-    note = ''
-    if is_draft:
-        pending = po.current_stage['label'] if po.current_stage else 'approval'
-        note = f'DRAFT (awaiting {pending})'
-    if unpriced:
-        note = (note + ' · ' if note else '') + 'UNPRICED'
-    if note:
-        note_style = ParagraphStyle('HdrNote', parent=styles['Normal'], fontSize=8,
-                                    alignment=TA_CENTER, textColor=colors.HexColor('#C41E3A'))
-        center_cell.append(Spacer(1, 1.5*mm))
-        center_cell.append(Paragraph(note, note_style))
-
-    # Right: logo.
-    logo_path = find_static('images/leap_logo.jpg')
-    if logo_path:
-        from reportlab.platypus import Image
-        right_cell = Image(logo_path, width=38*mm, height=11.4*mm, hAlign='RIGHT')
-    else:
-        right_cell = Paragraph('', normal_style)
-
-    header_table = Table([[left_cell, center_cell, right_cell]], colWidths=[70*mm, 60*mm, 50*mm])
-    header_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('ALIGN', (2, 0), (2, 0), 'RIGHT'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-    ]))
-    elements.append(header_table)
-    elements.append(Spacer(1, 4*mm))
-
-    # ── Header Info ──
-    def lv(label, value):
-        return [Paragraph(label, label_style), Paragraph(str(value or '-'), value_style)]
-
-    header_data = [
-        lv('PO Date', po.po_date.strftime('%d %b %Y') if po.po_date else '-') +
-        [''] +
-        lv('PO Issued By', po.po_issued_by),
-
-        lv('PO Number', po.po_number) +
-        [''] +
-        lv('Contact Email', po.issuer_email),
-
-        lv('Cost Center', po.get_cost_center_display()) +
-        [''] +
-        lv('Project Name', po.project_name),
-
-        lv('Vendor', po.vendor_name) +
-        [''] +
-        lv('End User', po.end_user),
-
-        lv('Contact Person', po.vendor_contact_person) +
-        [''] +
-        lv('MR / Item No.', po.mr_item_number),
-
-        lv('Contact Email', po.vendor_contact_email) +
-        [''] +
-        lv('Delivery Incoterms', po.get_delivery_incoterms_display() if po.delivery_incoterms else '-'),
-
-        lv('Contact Tel', po.vendor_contact_tel) +
-        [''] +
-        lv('Delivery Location', po.delivery_location),
-    ]
-    header_table = Table(header_data, colWidths=[22*mm, 60*mm, 5*mm, 22*mm, 60*mm])
-    header_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-        ('LEFTPADDING', (0, 0), (-1, -1), 4),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-        ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#D0D0D0')),
-        # Vertical lines: only between label↔value pairs (left and right groups).
-        # Skip the center spacer column so there's no line through the middle.
-        ('LINEAFTER', (0, 0), (0, -1), 0.4, colors.HexColor('#E0E0E0')),
-        ('LINEAFTER', (3, 0), (3, -1), 0.4, colors.HexColor('#E0E0E0')),
-        # Horizontal lines between rows
-        ('LINEBELOW', (0, 0), (-1, -2), 0.4, colors.HexColor('#E0E0E0')),
-    ]))
-    elements.append(header_table)
-    elements.append(Spacer(1, 5*mm))
-
-    # ── Line Items Table ──
-    # Unpriced copies drop the Rate/Unit and Total columns; the freed width is
-    # redistributed to Description and Remarks so the table still fills the page.
-    if unpriced:
-        col_widths = [12*mm, 30*mm, 80*mm, 16*mm, 16*mm, 31*mm]
-        item_header = [
-            Paragraph('<b>S.No.</b>', small_style),
-            Paragraph('<b>Make/Model</b>', small_style),
-            Paragraph('<b>Item Description</b>', small_style),
-            Paragraph('<b>Qty</b>', small_center),
-            Paragraph('<b>UOM</b>', small_style),
-            Paragraph('<b>Remarks</b>', small_style),
-        ]
-    else:
-        col_widths = [12*mm, 25*mm, 55*mm, 15*mm, 14*mm, 22*mm, 22*mm, 20*mm]
-        item_header = [
-            Paragraph('<b>S.No.</b>', small_style),
-            Paragraph('<b>Make/Model</b>', small_style),
-            Paragraph('<b>Item Description</b>', small_style),
-            Paragraph('<b>Qty</b>', small_center),
-            Paragraph('<b>UOM</b>', small_style),
-            Paragraph('<b>Rate/Unit</b>', small_style),
-            Paragraph(f'<b>Total ({po.currency})</b>', small_style),
-            Paragraph('<b>Remarks</b>', small_style),
-        ]
-    item_data = [item_header]
-
-    dark_blue = colors.HexColor('#C41E3A')
-
-    for item in items:
-        if unpriced:
-            item_data.append([
-                Paragraph(str(item.serial_number), normal_style),
-                Paragraph(item.make_model or '', small_style),
-                Paragraph(item.description, small_style),
-                Paragraph(f'{item.quantity:,.0f}', center_style),
-                Paragraph(item.uom, small_style),
-                Paragraph(item.remarks or '', small_style),
-            ])
-        else:
-            item_data.append([
-                Paragraph(str(item.serial_number), normal_style),
-                Paragraph(item.make_model or '', small_style),
-                Paragraph(item.description, small_style),
-                Paragraph(f'{item.quantity:,.0f}', center_style),
-                Paragraph(item.uom, small_style),
-                Paragraph(f'{item.rate_per_unit:,.2f}', right_style),
-                Paragraph(f'{item.total_value:,.2f}', right_bold),
-                Paragraph(item.remarks or '', small_style),
-            ])
-
-    item_table = Table(item_data, colWidths=col_widths, repeatRows=1)
-    item_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F5D7DC')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#495057')),
-        ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#C41E3A')),
-        ('FONTSIZE', (0, 0), (-1, -1), 7),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('TOPPADDING', (0, 0), (-1, -1), 2),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F5F5F5')]),
-    ]))
-    elements.append(item_table)
-    elements.append(Spacer(1, 4*mm))
-
-    # Totals + signature are kept together (one KeepTogether below) so a page
-    # break never splits the price box away from the approval/signature block.
-    totals_sig_flow = []
-    # ── Totals ── (omitted entirely on unpriced copies)
-    if not unpriced:
-        totals_data = [
-            ['', '', 'Base Amount', '', '', '', f'{po.base_amount:,.2f}', ''],
-        ]
-        if po.discount_rate:
-            totals_data.append(['', '', f'Discount ({po.discount_rate:.0f}%)', '', '', '', f'-{po.discount_amount:,.2f}', ''])
-        totals_data.append(['', '', 'Gross Value', '', '', '', f'{po.gross_value:,.2f}', ''])
-        totals_data.append(['', '', f'VAT ({po.vat_rate:.0f}%)', '', '', '', f'{po.vat_amount:,.2f}', ''])
-        totals_data.append(['', '', f'Total Value in {po.currency}', '', '', '', f'{po.total_value:,.2f}', ''])
-        total_row_idx = len(totals_data) - 1  # for SPAN/style refs below
-
-        # Amount-in-words row sits inside the same totals table so it aligns
-        # to the totals column block (cols 2-6) instead of free-floating.
-        amt_words_style = ParagraphStyle(
-            'AmtWords', parent=styles['Normal'], fontSize=8, leading=11,
-        )
-        amt_words_para = Paragraph(
-            f'<b>Amount in words:</b> {_amount_in_words(po.total_value, currency=po.currency)}',
-            amt_words_style,
-        )
-        totals_data.append(['', '', amt_words_para, '', '', '', '', ''])
-        amt_row_idx = len(totals_data) - 1
-
-        totals_table = Table(totals_data, colWidths=col_widths)
-        totals_table.setStyle(TableStyle([
-            ('FONTNAME', (2, 0), (2, total_row_idx), 'Helvetica-Bold'),
-            ('FONTNAME', (6, 0), (6, total_row_idx), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 8),
-            ('ALIGN', (6, 0), (6, total_row_idx), 'RIGHT'),
-            ('LINEABOVE', (2, total_row_idx), (6, total_row_idx), 1, dark_blue),
-            ('LINEBELOW', (2, total_row_idx), (6, total_row_idx), 1.5, dark_blue),
-            ('BACKGROUND', (2, total_row_idx), (6, total_row_idx), colors.HexColor('#FBE8EC')),
-            # Amount-in-words row — span across the totals column block, left-aligned,
-            # vertically padded so it doesn't sit flush against the total row.
-            ('SPAN', (2, amt_row_idx), (6, amt_row_idx)),
-            ('VALIGN', (2, amt_row_idx), (6, amt_row_idx), 'TOP'),
-            ('TOPPADDING', (2, amt_row_idx), (6, amt_row_idx), 4),
-            ('BOTTOMPADDING', (2, amt_row_idx), (6, amt_row_idx), 0),
-            ('TOPPADDING', (0, 0), (-1, total_row_idx), 2),
-            ('BOTTOMPADDING', (0, 0), (-1, total_row_idx), 2),
-        ]))
-        totals_sig_flow.append(totals_table)
-
-    # ── Approvals — rendered progressively as each stage is signed.
-    # Order: SCM → PM → COO → CEO. CEO is omitted entirely for POs under
-    # 1M SAR. po.approved_stages excludes unsigned stages, so a draft
-    # export renders only the signatures collected so far (or no signature
-    # block at all when the PO has not been signed yet).
-    from xml.sax.saxutils import escape as _xml_escape
-
-    totals_sig_flow.append(Spacer(1, 8*mm))
-    approvals = po.approved_stages
-    if approvals:
-        from reportlab.platypus import Image as RLImage
-        col_w = max(40*mm, 180*mm / max(len(approvals), 1))
-        sig_h = 16*mm  # signature image height — width auto-scales
-
-        # Row 1: signature image (or empty cell if none uploaded yet).
-        # Read via FieldFile so this works with both local storage and R2.
-        from io import BytesIO as _BytesIO
-        sig_row = []
-        for s in approvals:
-            sig = s['signature']
-            placed = False
-            if sig:
-                try:
-                    sig.open('rb')
-                    data = sig.read()
-                    sig.close()
-                    img = RLImage(_BytesIO(data),
-                                  width=col_w - 6*mm, height=sig_h,
-                                  kind='proportional')
-                    sig_row.append(img)
-                    placed = True
-                except Exception:
-                    pass
-            if not placed:
-                sig_row.append('')
-
-        # Row 2: signature line + role label.
-        sig_line = '___________________'
-        label_row = [
-            Paragraph(
-                f'<para align="center">{sig_line}<br/><b>{_xml_escape(s["label"])}</b></para>',
-                ParagraphStyle('AppRole', parent=styles['Normal'], fontSize=8, leading=10),
-            )
-            for s in approvals
-        ]
-        # Row 3: signer name (hardcoded, e.g. Shaker Alkhalifah).
-        name_row = [
-            Paragraph(
-                f'<para align="center">Name: <u>{_xml_escape(s["signer"])}</u></para>',
-                ParagraphStyle('AppName', parent=styles['Normal'], fontSize=8, leading=10),
-            )
-            for s in approvals
-        ]
-        approval_table = Table(
-            [sig_row, label_row, name_row],
-            colWidths=[col_w] * len(approvals),
-            rowHeights=[sig_h + 2*mm, None, None],
-        )
-        approval_table.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, 0), 'BOTTOM'),
-            ('VALIGN', (0, 1), (-1, -1), 'TOP'),
-            ('TOPPADDING', (0, 0), (-1, -1), 2),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-            ('LEFTPADDING', (0, 0), (-1, -1), 2),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 2),
-            ('LINEBELOW', (0, -1), (-1, -1), 1, colors.HexColor('#C41E3A')),
-        ]))
-        totals_sig_flow.append(approval_table)
-
-    # Emit the price box + signature as one keep-together unit so a page break
-    # can never split them apart.
-    if totals_sig_flow:
-        elements.append(KeepTogether(totals_sig_flow))
-
-    # ── Terms & Conditions ──
-    from costing.models import TermsTemplate as _TermsTemplate
-
-    # resolved_terms() applies any per-PO edits over the shared template text.
-    resolved = po.resolved_terms()
-    selected_terms = [e['template'] for e in resolved]
-    term_text = {e['template'].pk: e['content'] for e in resolved}
-    legacy_tc = (po.terms_and_conditions or '').strip()
-    has_terms = bool(selected_terms or legacy_tc)
-
-    # No spacer after the totals block: nothing follows it in the no-terms case
-    # (a trailing spacer that lands at the page bottom spills over into a blank
-    # last page), and in the terms case the PageBreak below supplies the gap. A
-    # spacer between the totals block and that PageBreak is exactly what turns
-    # the following page blank, so it must not be emitted here.
-    if has_terms:
-        # Terms & Conditions always begin on their own fresh page.
-        elements.append(PageBreak())
-        elements.append(Paragraph(
-            '<b>TERMS AND CONDITIONS</b>',
-            ParagraphStyle('TCHead', parent=styles['Heading2'], fontSize=10, textColor=colors.HexColor('#C41E3A'))
-        ))
-        elements.append(Spacer(1, 2*mm))
-
-        _hdr_pt = po.terms_heading_font_pt or 8
-        sub_hdr_style = ParagraphStyle('TCSubHdr', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=_hdr_pt, leading=_hdr_pt + 2, spaceAfter=1)
-
-        # Content-based: each line is printed exactly as the user typed it — no
-        # auto numbering. Terms still appear in the order the user selected them
-        # (selected_terms is already in selection order via resolved_terms()),
-        # so whatever numbering/lettering the user includes in the text is what
-        # shows in the PDF.
-        for tmpl in selected_terms:
-            elements.append(Paragraph(f'<b>{_xml_escape(tmpl.name)}</b>', sub_hdr_style))
-            _content = term_text.get(tmpl.pk, tmpl.content)
-            for line, max_pt in _tinymce_html_to_reportlab_lines(_content):
-                elements.append(Paragraph(line, _reportlab_style_for_line(tc_style, max_pt)))
-            elements.append(Spacer(1, 1*mm))
-
-        if legacy_tc:
-            for line, max_pt in _tinymce_html_to_reportlab_lines(legacy_tc):
-                elements.append(Paragraph(line, _reportlab_style_for_line(tc_style, max_pt)))
-            elements.append(Spacer(1, 1*mm))
-
-    try:
-        doc.build(elements, canvasmaker=NumberedCanvas)
-    except Exception:
-        # Fallback build without page numbers if canvas decoration fails
-        import logging, traceback
-        logging.getLogger(__name__).warning(
-            'PO PDF NumberedCanvas build failed:\n%s', traceback.format_exc()
-        )
-        buf.seek(0)
-        buf.truncate()
-        doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
-        doc.build(elements)
-    buf.seek(0)
-
-    response = HttpResponse(buf.read(), content_type='application/pdf')
-    prefix = 'PO_DRAFT' if is_draft else 'PO'
+    response = HttpResponse(content, content_type='application/pdf')
+    prefix = 'PO_DRAFT' if not po.is_released else 'PO'
     if unpriced:
         prefix += '_UNPRICED'
     filename = _safe_filename(po.po_number, prefix=prefix, extension='pdf')
@@ -3756,7 +3066,7 @@ def dn_export_pdf(request, pk):
     NumberedCanvas = _make_numbered_canvas()
 
     buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
+    doc = a4_portrait_document(buf)
     elements = []
     styles = getSampleStyleSheet()
 
@@ -3890,7 +3200,7 @@ def dn_export_pdf(request, pk):
         )
         buf.seek(0)
         buf.truncate()
-        doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
+        doc = a4_portrait_document(buf)
         doc.build(elements)
     buf.seek(0)
     response = HttpResponse(buf.read(), content_type='application/pdf')
