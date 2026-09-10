@@ -338,8 +338,7 @@
             </div>
             {% endif %}
 
-            <div class="collapse mb-3{% if leave_request_form.errors or leave_request_submit_failed %} show{% endif %}" id="requestLeaveForm"
-                 {% if leave_cooldown %}data-cooldown-leave-type="{{ leave_cooldown.leave_type_id }}" data-cooldown-days="{{ leave_cooldown.days_remaining }}"{% endif %}>
+            <div class="collapse mb-3{% if leave_request_form.errors or leave_request_submit_failed %} show{% endif %}" id="requestLeaveForm"{% if leave_cooldown %} data-cooldown-leave-type="{{ leave_cooldown.leave_type_id }}" data-cooldown-days="{{ leave_cooldown.days_remaining }}"{% endif %}>
               <form method="post" enctype="multipart/form-data" class="border rounded p-3">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="request_leave">

@@ -98,6 +98,13 @@ class FullEntitlementSingleBookingTests(TestCase):
         result = annual_leave_cooldown(emp, annual, today=date(2026, 8, 25))
         # 15 Mar 2026 already passed relative to the 30 Jun end date -> next occurrence is 2027.
         self.assertEqual(result['eligible_date'], date(2027, 3, 15))
+        # PR review finding 2: LeaveEntitlement is a calendar-year row and
+        # has already renewed by 1 Jan, long before the work-anniversary
+        # date below — the message must not claim this date is when the
+        # entitlement "renews" (it doesn't), only that it's the policy's
+        # re-apply date.
+        self.assertIn('work anniversary', result['reason'])
+        self.assertNotIn('entitlement renews', result['reason'])
 
     def test_fallback_to_next_jan_1_when_no_joining_date(self):
         emp = make_employee('CD-004', 'Fallback Employee', joining=None)
@@ -265,13 +272,34 @@ class NoCooldownEdgeCaseTests(TestCase):
             employee=emp, leave_type=sick, start_date=date(2026, 3, 1), end_date=date(2026, 3, 12), days=Decimal('12'))
         self.assertIsNone(annual_leave_cooldown(emp, sick, today=date(2026, 3, 13)))
 
-    def test_future_leave_is_ignored_until_it_actually_ends(self):
+    def test_future_approved_leave_counts_immediately(self):
+        """An approved-but-not-yet-taken leave must count the moment it's
+        approved, not only once it has actually happened — otherwise an
+        employee could get a holiday approved for later this year and
+        immediately submit a second one the same afternoon, defeating the
+        whole point of spacing applications out (PR review finding 1: the
+        old end_date__lte=today filter made a future booking invisible)."""
         emp = make_employee('CD-009', 'Future Leave Employee')
         annual = make_leave_type()
         LeaveEntitlement.objects.create(employee=emp, leave_type=annual, year=2026, entitled_days=Decimal('30'))
         LeaveRecord.objects.create(
-            employee=emp, leave_type=annual, start_date=date(2026, 12, 1), end_date=date(2026, 12, 5))
-        self.assertIsNone(annual_leave_cooldown(emp, annual, today=date(2026, 8, 25)))
+            employee=emp, leave_type=annual, start_date=date(2026, 4, 1), end_date=date(2026, 4, 15), days=Decimal('15'))
+        # Checked the same day the leave was approved, well before it starts.
+        result = annual_leave_cooldown(emp, annual, today=date(2026, 3, 1))
+        self.assertIsNotNone(result)
+        self.assertEqual(result['eligible_date'], date(2026, 7, 15))
+        self.assertIn('You have a 15.0-day annual leave booked, ending 15 Apr 2026', result['reason'])
+
+    def test_same_leave_still_blocks_after_it_has_happened(self):
+        emp = make_employee('CD-017', 'Future Then Past Leave Employee')
+        annual = make_leave_type()
+        LeaveEntitlement.objects.create(employee=emp, leave_type=annual, year=2026, entitled_days=Decimal('30'))
+        LeaveRecord.objects.create(
+            employee=emp, leave_type=annual, start_date=date(2026, 4, 1), end_date=date(2026, 4, 15), days=Decimal('15'))
+        result = annual_leave_cooldown(emp, annual, today=date(2026, 4, 16))
+        self.assertIsNotNone(result)
+        self.assertEqual(result['eligible_date'], date(2026, 7, 15))
+        self.assertIn('You returned from a 15.0-day annual leave on 15 Apr 2026', result['reason'])
 
 
 class MyProfileSubmissionBlockedTests(TestCase):
