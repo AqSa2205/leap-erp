@@ -470,7 +470,7 @@
                     </a>
                 </div>
                 <div class="col summary-item">
-                    <a href="{% url 'projects:list' %}?region={{ region_tabs.0.name }}&category=won" id="summary-won-link" class="text-decoration-none">
+                    <a href="{% url 'projects:list' %}?region={{ region_tabs.0.name }}&category=won&exclude_status=Closed" id="summary-won-link" class="text-decoration-none">
                         <h2 class="text-success" id="summary-won">{{ overall_stats.won.count|intcomma }}</h2>
                         <small class="text-muted">Won</small>
                     </a>
@@ -543,7 +543,7 @@
                     </a>
                 </div>
                 <div class="col-lg-2 col-md-4 col-6 mb-3">
-                    <a href="{% url 'projects:list' %}?region={{ tab.name }}&category=won" class="text-decoration-none">
+                    <a href="{% url 'projects:list' %}?region={{ tab.name }}&category=won&exclude_status=Closed" class="text-decoration-none">
                     <div class="card stat-card stat-won h-100">
                         <div class="card-body text-center">
                             <div class="stat-number">{{ tab.stats.won.count|intcomma }}</div>
@@ -837,7 +837,7 @@
         document.getElementById('summary-total-link').href = projectListUrl + '?region=' + regionCode;
         document.getElementById('summary-active-link').href = projectListUrl + '?region=' + regionCode + '&category=active';
         document.getElementById('summary-hotleads-link').href = projectListUrl + '?region=' + regionCode + '&category=hot_lead';
-        document.getElementById('summary-won-link').href = projectListUrl + '?region=' + regionCode + '&category=won';
+        document.getElementById('summary-won-link').href = projectListUrl + '?region=' + regionCode + '&category=won&exclude_status=Closed';
         document.getElementById('summary-lost-link').href = projectListUrl + '?region=' + regionCode + '&category=lost';
     }
 

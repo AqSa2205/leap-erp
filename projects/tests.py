@@ -2217,6 +2217,130 @@ class RegionCodeFilterTests(TestCase):
         self.assertIn(self.lna_project, projects)
 
 
+class CategoryFilterTests(TestCase):
+    """The ?category= query param on the Commercial Pipeline list, used by
+    every stat card on the Sales Pipeline Dashboard (Active/Hot Leads/Won/
+    Lost/Ongoing). Before this, the param was silently ignored by
+    get_queryset() - a tile reporting "2 Hot Leads" would click through to
+    every project in the region regardless of status, because nothing ever
+    read `?category=` off the request. These pin that it is now applied,
+    and that every other category and the unfiltered case still behave
+    exactly as before."""
+
+    def setUp(self):
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('categoryfilteruser', password='x')
+        self.user.role = role
+        self.user.save()
+        self.client.force_login(self.user)
+
+        self.region = Region.objects.create(code='CATR', name='Category Region', is_active=True)
+
+        self.active_status = ProjectStatus.objects.create(name='Open', category='active')
+        self.hot_status = ProjectStatus.objects.create(name='Hot Lead', category='hot_lead')
+        self.won_status = ProjectStatus.objects.create(name='Won', category='won')
+        self.lost_status = ProjectStatus.objects.create(name='Lost', category='lost')
+        self.ongoing_status = ProjectStatus.objects.create(name='Ongoing', category='ongoing')
+
+        self.active_project = Project.objects.create(
+            project_name='Active P', proposal_reference='CAT-ACTIVE', region=self.region,
+            status=self.active_status)
+        self.hot_project = Project.objects.create(
+            project_name='Hot P', proposal_reference='CAT-HOT', region=self.region,
+            status=self.hot_status)
+        self.won_project = Project.objects.create(
+            project_name='Won P', proposal_reference='CAT-WON', region=self.region,
+            status=self.won_status)
+        self.lost_project = Project.objects.create(
+            project_name='Lost P', proposal_reference='CAT-LOST', region=self.region,
+            status=self.lost_status)
+        self.ongoing_project = Project.objects.create(
+            project_name='Ongoing P', proposal_reference='CAT-ONGOING', region=self.region,
+            status=self.ongoing_status)
+
+        self.all_projects = {
+            self.active_project, self.hot_project, self.won_project,
+            self.lost_project, self.ongoing_project,
+        }
+
+    def test_no_category_param_returns_every_status(self):
+        # The exact bug being fixed: with no filter applied at all, every
+        # status must still show up (this is the baseline the per-category
+        # assertions below are contrasted against).
+        resp = self.client.get(reverse('projects:list'))
+        self.assertEqual(set(resp.context['projects']), self.all_projects)
+
+    def test_category_active_returns_only_active(self):
+        resp = self.client.get(reverse('projects:list'), {'category': 'active'})
+        self.assertEqual(set(resp.context['projects']), {self.active_project})
+
+    def test_category_hot_lead_returns_only_hot_lead(self):
+        resp = self.client.get(reverse('projects:list'), {'category': 'hot_lead'})
+        self.assertEqual(set(resp.context['projects']), {self.hot_project})
+
+    def test_category_won_returns_only_won(self):
+        resp = self.client.get(reverse('projects:list'), {'category': 'won'})
+        self.assertEqual(set(resp.context['projects']), {self.won_project})
+
+    def test_category_lost_returns_only_lost(self):
+        resp = self.client.get(reverse('projects:list'), {'category': 'lost'})
+        self.assertEqual(set(resp.context['projects']), {self.lost_project})
+
+    def test_category_ongoing_returns_only_ongoing(self):
+        resp = self.client.get(reverse('projects:list'), {'category': 'ongoing'})
+        self.assertEqual(set(resp.context['projects']), {self.ongoing_project})
+
+    def test_category_combines_with_region_filter(self):
+        other_region = Region.objects.create(code='CATR2', name='Other Category Region')
+        other_won = Project.objects.create(
+            project_name='Other Won', proposal_reference='CAT-WON-2', region=other_region,
+            status=self.won_status)
+        resp = self.client.get(reverse('projects:list'),
+                               {'category': 'won', 'region': 'CATR'})
+        projects = set(resp.context['projects'])
+        self.assertEqual(projects, {self.won_project})
+        self.assertNotIn(other_won, projects)
+
+    def test_unknown_category_value_returns_nothing(self):
+        # A category that matches no ProjectStatus.category choice filters
+        # down to an empty set rather than falling back to unfiltered -
+        # consistent with how ?status=<bad-id> already behaves.
+        resp = self.client.get(reverse('projects:list'), {'category': 'not_a_real_category'})
+        self.assertEqual(set(resp.context['projects']), set())
+
+    def test_exclude_status_is_a_no_op_when_absent(self):
+        # Every existing link/bookmark into this page omits exclude_status,
+        # so its mere existence in get_queryset() must not change anything
+        # for them.
+        resp = self.client.get(reverse('projects:list'))
+        self.assertEqual(set(resp.context['projects']), self.all_projects)
+
+    def test_exclude_status_removes_matching_status_by_name(self):
+        resp = self.client.get(reverse('projects:list'), {'exclude_status': 'Won'})
+        projects = set(resp.context['projects'])
+        self.assertNotIn(self.won_project, projects)
+        self.assertEqual(projects, self.all_projects - {self.won_project})
+
+    def test_exclude_status_combines_with_category_won(self):
+        # The exact query the dashboard's Won tile link now sends: category
+        # narrows to won-category projects, exclude_status then drops the
+        # ones filed under a status named "Closed" - the case that motivated
+        # this parameter.
+        closed_status = ProjectStatus.objects.create(name='Closed', category='won')
+        closed_project = Project.objects.create(
+            project_name='Closed P', proposal_reference='CAT-CLOSED', region=self.region,
+            status=closed_status)
+        resp = self.client.get(reverse('projects:list'),
+                               {'category': 'won', 'exclude_status': 'Closed'})
+        projects = set(resp.context['projects'])
+        self.assertEqual(projects, {self.won_project})
+        self.assertNotIn(closed_project, projects)
+
+    def test_exclude_status_unmatched_name_changes_nothing(self):
+        resp = self.client.get(reverse('projects:list'), {'exclude_status': 'Nonexistent Status'})
+        self.assertEqual(set(resp.context['projects']), self.all_projects)
+
+
 class RegionManagementViewTests(TestCase):
     """Create/List/Edit Region views - Super Admin only."""
 
