@@ -1,0 +1,131 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Delivery Board{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h4 class="mb-0"><i class="bi bi-kanban me-2"></i>Delivery Board</h4>
+        <div class="small text-muted">
+            Completion, cash in and cash out are all derived from the milestones,
+            finance's payment records and the purchase orders. Nothing on this page is typed.
+        </div>
+    </div>
+</div>
+
+{% comment %} Shown at the top rather than beside the project, because a wrong
+weight makes that project's completion figure meaningless and somebody reading
+a board scans the numbers, not the warnings beside them. {% endcomment %}
+{% if problem_count %}
+<div class="alert alert-warning d-flex align-items-center gap-2">
+    <i class="bi bi-exclamation-triangle-fill"></i>
+    <div>
+        <strong>{{ problem_count }}</strong> project{{ problem_count|pluralize }}
+        {{ problem_count|pluralize:"has,have" }} activity weights that do not add up.
+        Their completion figures cannot be trusted until the weights are fixed.
+    </div>
+</div>
+{% endif %}
+
+<div class="row g-3 mb-3">
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="small text-muted">Total Cash In</div>
+                <div class="h4 mb-0">SAR {{ total_cash_in|floatformat:2|intcomma }}</div>
+                <div class="small text-muted">Received, not merely invoiced.</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="small text-muted">Total Cash Out</div>
+                <div class="h4 mb-0">SAR {{ total_cash_out|floatformat:2|intcomma }}</div>
+                <div class="small text-muted">Committed purchase orders, ex-VAT.</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="small text-muted">Net</div>
+                <div class="h4 mb-0 {% if total_net < 0 %}text-danger{% else %}text-success{% endif %}">
+                    SAR {{ total_net|floatformat:2|intcomma }}
+                </div>
+                <div class="small text-muted">Cash In − Cash Out across the board.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Project</th>
+                    <th>Ref</th>
+                    <th>Location</th>
+                    <th style="width:190px;">Completion</th>
+                    <th class="text-end">PO Value</th>
+                    <th class="text-end">Cash In</th>
+                    <th class="text-end">Cash Out</th>
+                    <th class="text-end">Net</th>
+                    <th>Last update</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td>
+                        <a href="{% url 'pmo:project_detail' row.project.pk %}" class="fw-semibold text-decoration-none">
+                            {{ row.project.project_name|truncatechars:48 }}
+                        </a>
+                        {% if row.weightage_problems %}
+                        <i class="bi bi-exclamation-triangle-fill text-warning ms-1"
+                           title="Activity weights do not add up — this completion figure is unreliable."></i>
+                        {% endif %}
+                    </td>
+                    <td class="small text-muted">{{ row.reference }}</td>
+                    <td class="small">{{ row.project.location|default:"—" }}</td>
+                    <td>
+                        <div class="progress" style="height:18px;">
+                            <div class="progress-bar {% if row.weightage_problems %}bg-warning{% endif %}"
+                                 role="progressbar"
+                                 style="width: {{ row.completion_pct|floatformat:0 }}%;">
+                                {{ row.completion_pct|floatformat:1 }}%
+                            </div>
+                        </div>
+                    </td>
+                    <td class="text-end">{% if row.po_value %}{{ row.po_value|floatformat:2|intcomma }}{% else %}—{% endif %}</td>
+                    <td class="text-end">{{ row.cash_in|floatformat:2|intcomma }}</td>
+                    <td class="text-end">{{ row.cash_out|floatformat:2|intcomma }}</td>
+                    <td class="text-end {% if row.net < 0 %}text-danger{% else %}text-success{% endif %}">
+                        {{ row.net|floatformat:2|intcomma }}
+                    </td>
+                    {% comment %} A real timestamp, or an honest blank. The
+                    workbook's equivalent was TODAY(), so a project untouched
+                    since March still reported as updated this morning.
+                    {% endcomment %}
+                    <td class="small">
+                        {% if row.last_update %}
+                        {{ row.last_update|date:"d M Y" }}
+                        {% else %}
+                        <span class="text-muted">never</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="9" class="text-center text-muted py-4">
+                        No projects to show.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
