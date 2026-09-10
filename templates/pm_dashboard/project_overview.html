@@ -1,0 +1,144 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ project.project_name }} - PM Dashboard{% endblock %}
+{% block page_title %}{{ project.project_name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .kpi-card { border: none; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+    .kpi-card .kpi-icon { width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.3rem; }
+    .kpi-card .kpi-value { font-size: 1.5rem; font-weight: 700; line-height: 1; }
+    .kpi-card .kpi-label { font-size: 0.72rem; color: #6c757d; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+    .chart-card { border: none; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+    .chart-card .card-header { background: transparent; border-bottom: 2px solid #f0f0f0; }
+    .chart-card .card-header h6 { font-weight: 700; font-size: 0.85rem; color: #333; margin: 0; }
+    .pmd-nav-card { border: none; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); text-decoration: none; color: inherit; transition: transform 0.15s, box-shadow 0.15s; display: block; }
+    .pmd-nav-card:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); color: inherit; }
+    .pmd-nav-card .nav-icon { width: 52px; height: 52px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div>
+        <a href="{% url 'pm_dashboard:index' %}" class="text-muted small"><i class="bi bi-arrow-left"></i> Back to PM Dashboard</a>
+        <div class="text-muted small">{{ project.serial_number }} &middot; {{ project.customer|default:"—" }}</div>
+    </div>
+    <a href="{% url 'projects:detail' project.pk %}" class="btn btn-outline-dark btn-sm">
+        <i class="bi bi-folder2-open me-1"></i> Open in Commercial Pipeline
+    </a>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-lg-3 col-md-6">
+        <div class="card kpi-card h-100"><div class="card-body">
+            <div class="d-flex align-items-center gap-3">
+                <div class="kpi-icon bg-{% if project.milestone_overall_status == 'success' %}success{% elif project.milestone_overall_status == 'danger' %}danger{% elif project.milestone_overall_status == 'warning' %}warning{% else %}secondary{% endif %} bg-opacity-10 text-{% if project.milestone_overall_status == 'success' %}success{% elif project.milestone_overall_status == 'danger' %}danger{% elif project.milestone_overall_status == 'warning' %}warning{% else %}secondary{% endif %}">
+                    <i class="bi bi-speedometer2"></i>
+                </div>
+                <div>
+                    <div class="kpi-value text-dark">
+                        {% if project.milestone_overall_status == 'success' %}On time
+                        {% elif project.milestone_overall_status == 'danger' %}Behind
+                        {% elif project.milestone_overall_status == 'warning' %}In progress
+                        {% else %}No data{% endif %}
+                    </div>
+                    <div class="kpi-label">Schedule status</div>
+                </div>
+            </div>
+        </div></div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+        <div class="card kpi-card h-100"><div class="card-body">
+            <div class="d-flex align-items-center gap-3">
+                <div class="kpi-icon bg-primary bg-opacity-10 text-primary"><i class="bi bi-file-earmark-text"></i></div>
+                <div><div class="kpi-value text-dark">{{ po_document_count }}</div><div class="kpi-label">PO document{{ po_document_count|pluralize }}</div></div>
+            </div>
+        </div></div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+        <div class="card kpi-card h-100"><div class="card-body">
+            <div class="d-flex align-items-center gap-3">
+                <div class="kpi-icon bg-info bg-opacity-10 text-info"><i class="bi bi-list-check"></i></div>
+                <div><div class="kpi-value text-dark">{{ costing_sheet_count }}</div><div class="kpi-label">Costing sheet{{ costing_sheet_count|pluralize }}</div></div>
+            </div>
+        </div></div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+        <div class="card kpi-card h-100"><div class="card-body">
+            <div class="d-flex align-items-center gap-3">
+                <div class="kpi-icon bg-secondary bg-opacity-10 text-secondary"><i class="bi bi-diagram-3"></i></div>
+                <div><div class="kpi-value text-dark">{{ responsibility_row_count }} / {{ communication_row_count }}</div><div class="kpi-label">Resp. / Comm. rows</div></div>
+            </div>
+        </div></div>
+    </div>
+</div>
+
+<div class="card chart-card mb-4">
+    <div class="card-header"><h6><i class="bi bi-bar-chart-steps me-2"></i>Milestone schedule variance</h6></div>
+    <div class="card-body" style="height: 240px;">
+        <canvas id="milestoneChart"></canvas>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-3 col-md-6">
+        <a href="{% url 'pm_dashboard:project_po' project.pk %}" class="card pmd-nav-card h-100"><div class="card-body">
+            <div class="nav-icon bg-danger bg-opacity-10 text-danger mb-3"><i class="bi bi-file-earmark-text"></i></div>
+            <h6 class="fw-bold mb-1">Client PO</h6>
+            <div class="text-muted small">PO number, dates, and uploaded PO documents</div>
+        </div></a>
+    </div>
+    <div class="col-lg-3 col-md-6">
+        <a href="{% url 'pm_dashboard:project_boq' project.pk %}" class="card pmd-nav-card h-100"><div class="card-body">
+            <div class="nav-icon bg-dark bg-opacity-10 text-dark mb-3"><i class="bi bi-list-check"></i></div>
+            <h6 class="fw-bold mb-1">BOQ (Unpriced)</h6>
+            <div class="text-muted small">Costing sheets, exportable with no pricing</div>
+        </div></a>
+    </div>
+    <div class="col-lg-3 col-md-6">
+        <a href="{% url 'pm_dashboard:responsibility_matrix_detail' project.pk %}" class="card pmd-nav-card h-100"><div class="card-body">
+            <div class="nav-icon bg-info bg-opacity-10 text-info mb-3"><i class="bi bi-diagram-3"></i></div>
+            <h6 class="fw-bold mb-1">Responsibility Matrix</h6>
+            <div class="text-muted small">Who is Responsible / Accountable / Consulted / Informed</div>
+        </div></a>
+    </div>
+    <div class="col-lg-3 col-md-6">
+        <a href="{% url 'pm_dashboard:communication_matrix_detail' project.pk %}" class="card pmd-nav-card h-100"><div class="card-body">
+            <div class="nav-icon bg-success bg-opacity-10 text-success mb-3"><i class="bi bi-chat-left-text"></i></div>
+            <h6 class="fw-bold mb-1">Communication Matrix</h6>
+            <div class="text-muted small">The project's client-facing communication plan</div>
+        </div></a>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const rows = JSON.parse('{{ milestone_rows_json|escapejs }}');
+    const labels = rows.map(r => r.label);
+    const data = rows.map(r => {
+        if (!r.variance_display) return 0;
+        return parseInt(r.variance_display.replace('d', ''), 10) || 0;
+    });
+    const colors = rows.map(r => {
+        if (!r.variance_display) return '#adb5bd';
+        return r.variance_display.startsWith('-') ? '#dc3545' : '#198754';
+    });
+    new Chart(document.getElementById('milestoneChart'), {
+        type: 'bar',
+        data: { labels: labels, datasets: [{ data: data, backgroundColor: colors, borderRadius: 6 }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: (ctx) => (ctx.raw >= 0 ? '+' : '') + ctx.raw + ' days vs deadline' } },
+            },
+            scales: { y: { title: { display: true, text: 'Days ahead (+) / behind (−)' } }, x: { grid: { display: false } } },
+        }
+    });
+});
+</script>
+{% endblock %}
