@@ -37,6 +37,19 @@ def _convert(amount, from_ccy, to_ccy, rates):
 # Total) is still an estimate sum — those stages have no priced sheet to read.
 COSTING_VALUED_CATEGORIES = ('won', 'hot_lead')
 
+def _won_qs(queryset):
+    """Won-category projects, minus the ones flagged excluded_from_won_tile
+    (e.g. 'Closed' - a won deal that's already been wrapped up).
+
+    Dashboard-display-only distinction, driven by a dedicated field rather
+    than matching a status by name - see ProjectStatus.excluded_from_won_tile
+    for why. Procurement access, KPIs, finance and reporting all still key
+    off category='won' directly and are untouched by this flag.
+    """
+    return queryset.filter(status__category='won').exclude(
+        status__excluded_from_won_tile=True
+    )
+
 
 def _resolve_sales_values(projects):
     """Map project_id -> (amount, currency, from_costing) for the priced tiles.
@@ -141,7 +154,7 @@ def get_region_stats(projects, region_codes, sales_values=None, currency='SAR', 
 
     active = region_projects.filter(status__category='active')
     hot_leads = region_projects.filter(status__category='hot_lead')
-    won = region_projects.filter(status__category='won')
+    won = _won_qs(region_projects)
     lost = region_projects.filter(status__category='lost')
     ongoing = region_projects.filter(status__category='ongoing')
 
@@ -264,11 +277,11 @@ def index(request):
             'value': projects.filter(status__category='hot_lead').aggregate(Sum('estimated_value'))['estimated_value__sum'] or 0
         },
         'won': {
-            'count': projects.filter(status__category='won').count(),
+            'count': _won_qs(projects).count(),
             # The summary strip renders counts only — it spans every region, so a
             # single mixed-currency total would be meaningless. These values stay
             # estimate sums; the per-region tiles carry the real costing money.
-            'value': projects.filter(status__category='won').aggregate(Sum('estimated_value'))['estimated_value__sum'] or 0
+            'value': _won_qs(projects).aggregate(Sum('estimated_value'))['estimated_value__sum'] or 0
         },
         'lost': {
             'count': projects.filter(status__category='lost').count(),
@@ -284,7 +297,7 @@ def index(request):
         return {
             'active': region_projects.filter(status__category='active').count(),
             'hot_leads': region_projects.filter(status__category='hot_lead').count(),
-            'won': region_projects.filter(status__category='won').count(),
+            'won': _won_qs(region_projects).count(),
             'lost': region_projects.filter(status__category='lost').count(),
             'ongoing': region_projects.filter(status__category='ongoing').count(),
             'active_value': float(region_projects.filter(status__category='active').aggregate(Sum('estimated_value'))['estimated_value__sum'] or 0),
@@ -292,7 +305,7 @@ def index(request):
             'hot_leads_value': float(_resolved_value_for(
                 region_projects.filter(status__category='hot_lead'), sales_values, currency, rates)),
             'won_value': float(_resolved_value_for(
-                region_projects.filter(status__category='won'), sales_values, currency, rates)),
+                _won_qs(region_projects), sales_values, currency, rates)),
             'lost_value': float(region_projects.filter(status__category='lost').aggregate(Sum('estimated_value'))['estimated_value__sum'] or 0),
         }
 
@@ -301,11 +314,19 @@ def index(request):
         for tab in region_tabs if tab['can_view']
     }
 
+    # IDs, not names, so a status can be renamed in the admin without
+    # silently breaking which projects the Won tile's own links exclude -
+    # see ProjectStatus.excluded_from_won_tile.
+    won_excluded_status_ids = ','.join(str(pk) for pk in ProjectStatus.objects.filter(
+        category='won', excluded_from_won_tile=True
+    ).values_list('pk', flat=True))
+
     context = {
         'overall_stats': overall_stats,
         'region_tabs': region_tabs,
         'chart_data': chart_data,
         'is_super_admin': user.is_super_admin_user,
+        'won_excluded_status_ids': won_excluded_status_ids,
     }
 
     return render(request, 'dashboard/index.html', context)
