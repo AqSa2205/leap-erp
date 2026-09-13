@@ -306,7 +306,7 @@
     </div>
 </div>
 
-{% if not user.is_document_controller_user %}
+{% if not user.is_document_controller_user and not user.is_pcc_engineer_user %}
 <!-- Upload Document Modal -->
 <div class="modal fade" id="uploadDocModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
