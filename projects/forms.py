@@ -140,6 +140,22 @@ class ProjectForm(forms.ModelForm):
             if parsed and parsed[1]:
                 self.initial['lna_revision'] = parsed[1]
 
+        # Filter owner choices based on user role. This previously sat
+        # after a `return` inside clean() and never actually ran - the
+        # owner dropdown was never filtered at all. Belongs here instead:
+        # a queryset restriction is __init__'s job, not clean()'s.
+        if self.user:
+            from accounts.models import User
+            if self.user.is_super_admin_user:
+                self.fields['owner'].queryset = User.objects.filter(is_active=True)
+            elif self.user.is_admin_user or self.user.is_manager_user:
+                self.fields['owner'].queryset = User.objects.filter(
+                    is_active=True,
+                    region=self.user.region
+                )
+            else:
+                self.fields['owner'].queryset = User.objects.filter(pk=self.user.pk)
+
     def _is_lna(self, region):
         return bool(region and getattr(region, 'code', None) == 'LNA')
 
@@ -204,20 +220,39 @@ class ProjectForm(forms.ModelForm):
                     next_lna_reference_number(), name, revision)
         elif not cleaned.get('proposal_reference'):
             self.add_error('proposal_reference', 'This field is required.')
-        return cleaned
 
-        # Filter owner choices based on user role
-        if self.user:
-            from accounts.models import User
-            if self.user.is_super_admin_user:
-                self.fields['owner'].queryset = User.objects.filter(is_active=True)
-            elif self.user.is_admin_user or self.user.is_manager_user:
-                self.fields['owner'].queryset = User.objects.filter(
-                    is_active=True,
-                    region=self.user.region
-                )
-            else:
-                self.fields['owner'].queryset = User.objects.filter(pk=self.user.pk)
+        # Submission Deadline is the overall deadline every milestone
+        # works toward - it must come strictly after every milestone
+        # deadline, not merely on the same day.
+        MILESTONE_LABELS = {
+            'bom_started_deadline': 'BOM Started Deadline',
+            'handed_over_deadline': 'Handed to Sales Deadline',
+            'costing_started_deadline': 'Costing Started Deadline',
+            'finalized_deadline': 'Finalized Deadline',
+        }
+        submission = cleaned.get('submission_deadline')
+        milestone_values = {name: cleaned.get(name) for name in MILESTONE_LABELS}
+
+        if submission:
+            for name, value in milestone_values.items():
+                if value and value >= submission:
+                    self.add_error(
+                        name, f'{MILESTONE_LABELS[name]} must be before the Submission Deadline.')
+
+        # Milestones themselves must follow in sequence: BOM Started <=
+        # Handed to Sales <= Costing Started <= Finalized. Equal dates are
+        # allowed here (same day is a valid plan), unlike the submission
+        # deadline check above.
+        sequence = list(MILESTONE_LABELS)
+        for prev_name, next_name in zip(sequence, sequence[1:]):
+            prev_value = milestone_values[prev_name]
+            next_value = milestone_values[next_name]
+            if prev_value and next_value and prev_value > next_value:
+                self.add_error(
+                    next_name,
+                    f'{MILESTONE_LABELS[next_name]} cannot be before {MILESTONE_LABELS[prev_name]}.')
+
+        return cleaned
 
 
 class ProjectFilterForm(forms.Form):

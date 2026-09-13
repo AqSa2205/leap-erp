@@ -231,18 +231,24 @@ class EmployeeDocument(models.Model):
 
     DOC_TYPE_CHOICES = [
         ('joining_letter', 'Joining Letter'),
+        ('cv', 'CV'),
         ('asset_handover', 'Asset Handover'),
         ('leave_form', 'Leave Form'),
         ('contract', 'Contract'),
         ('iqama', 'Iqama / ID Copy'),
         ('passport', 'Passport Copy'),
         ('visa', 'Visa'),
-        ('certificate', 'Certificate'),
+        ('certificate', 'Certifications'),
         ('warning_letter', 'Warning Letter'),
         ('termination', 'Termination Letter'),
         ('salary_slip', 'Salary Slip'),
         ('other', 'Other'),
     ]
+
+    # The self-service My Documents upload on the profile page only
+    # offers this subset - the rest (asset handover, warning letter, etc.)
+    # are administrative document types an employee wouldn't self-upload.
+    SELF_SERVICE_DOC_TYPES = ['iqama', 'cv', 'joining_letter', 'certificate', 'other']
 
     employee = models.ForeignKey(
         Employee, on_delete=models.CASCADE, related_name='documents'

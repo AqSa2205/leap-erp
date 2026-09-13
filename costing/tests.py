@@ -1446,6 +1446,496 @@ class SubHeadingRowTests(TestCase):
         self.assertTrue(bool(head.final_total_price))
 
 
+class RevisionMailboxPrivacyTests(TestCase):
+    """RevisionMailbox is the costing-app twin of projects.MonitoredMailbox:
+    an admin links exactly one real mailbox to exactly one employee, and
+    _user_revision_mailbox() is the only place that resolves 'which mailbox
+    does this user get' — always from request.user, never from anything the
+    client sends. These guard the same privacy guarantees end to end."""
+
+    def setUp(self):
+        from costing.models import RevisionMailbox
+        self.RevisionMailbox = RevisionMailbox
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.alice = User.objects.create_user('alice_rm', password='x', role=role)
+        self.bob = User.objects.create_user('bob_rm', password='x', role=role)
+        self.region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.project = Project.objects.create(
+            project_name='P', proposal_reference='REF-RM', status=self.status,
+            region=self.region)
+        self.sheet = CostingSheet.objects.create(
+            title='S', project=self.project, created_by=self.alice)
+
+    def _resolve(self, user):
+        from costing.views import _user_revision_mailbox
+        return _user_revision_mailbox(user)
+
+    # ── core resolution behaviour ─────────────────────────────────────
+    def test_unlinked_user_gets_nothing_once_any_mailbox_exists(self):
+        self.RevisionMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        self.assertEqual(self._resolve(self.bob), '')  # bob has no row of his own
+
+    def test_each_user_only_ever_gets_their_own_mailbox(self):
+        self.RevisionMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        self.RevisionMailbox.objects.create(owner=self.bob, email_address='bob@leap-arabia.com')
+        self.assertEqual(self._resolve(self.alice), 'alice@leap-arabia.com')
+        self.assertEqual(self._resolve(self.bob), 'bob@leap-arabia.com')
+
+    @override_settings(REVISION_EMAIL_MAILBOX='legacy@leap-arabia.com')
+    def test_no_legacy_fallback_even_with_zero_rows_anywhere(self):
+        """Regression: an earlier version fell back to a single shared
+        mailbox setting until the first RevisionMailbox row was ever
+        created — meaning every unlinked user could browse and send
+        through that shared mailbox before any admin had linked anyone.
+        This was caught live (an unlinked user saw a real colleague's
+        mailbox) and must never come back, in any form: no user gets
+        access without an explicit, active row of their own — not even
+        if the old setting is still present in the environment."""
+        self.assertEqual(self.RevisionMailbox.objects.count(), 0)
+        self.assertEqual(self._resolve(self.alice), '')
+        self.assertEqual(self._resolve(self.bob), '')
+
+    def test_deactivation_revokes_access_not_falls_back_to_legacy(self):
+        """The bug class this must never regress to: deactivating the sole
+        mailbox must NOT silently hand the user the legacy address back."""
+        mb = self.RevisionMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        mb.is_active = False
+        mb.save(update_fields=['is_active'])
+        self.assertEqual(self._resolve(self.alice), '')
+
+    def test_mixed_active_and_inactive_rows(self):
+        self.RevisionMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com', is_active=True)
+        inactive = self.RevisionMailbox.objects.create(owner=self.bob, email_address='bob@leap-arabia.com', is_active=False)
+        self.assertEqual(self._resolve(self.alice), 'alice@leap-arabia.com')
+        self.assertEqual(self._resolve(self.bob), '')  # bob's row exists but is inactive
+        inactive.is_active = True
+        inactive.save(update_fields=['is_active'])
+        self.assertEqual(self._resolve(self.bob), 'bob@leap-arabia.com')
+
+    # ── DB-level uniqueness (belt-and-suspenders on top of the resolver) ──
+    def test_owner_must_be_unique(self):
+        from django.db import IntegrityError, transaction
+        self.RevisionMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                self.RevisionMailbox.objects.create(owner=self.alice, email_address='alice2@leap-arabia.com')
+
+    def test_email_address_must_be_unique(self):
+        from django.db import IntegrityError, transaction
+        self.RevisionMailbox.objects.create(owner=self.alice, email_address='shared@leap-arabia.com')
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                self.RevisionMailbox.objects.create(owner=self.bob, email_address='shared@leap-arabia.com')
+
+    # ── real views: no request-supplied value can steer the mailbox ──────
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_send_view_uses_only_the_logged_in_users_own_mailbox(self):
+        from unittest.mock import patch
+        from django.core.files.base import ContentFile
+        from costing.models import CostingSheetRevision
+
+        self.RevisionMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        self.RevisionMailbox.objects.create(owner=self.bob, email_address='bob@leap-arabia.com')
+        rev = CostingSheetRevision(sheet=self.sheet, revision_label='R00', export_format='pdf')
+        rev.file.save('offer.pdf', ContentFile(b'%PDF-1.4 fake'), save=True)
+
+        self.client.force_login(self.bob)
+        with patch('costing.graph_thread.send_revision_email',
+                   return_value=('msg-1', 'conv-1')) as mocked:
+            resp = self.client.post(
+                reverse('costing:send_revision_email', kwargs={'pk': rev.pk}),
+                {'to': 'client@example.com', 'subject': 'Offer', 'body': 'Please see attached.'})
+        self.assertEqual(resp.status_code, 302)
+        # Bob sent it -> Graph must have been called with BOB's mailbox, never alice's,
+        # regardless of anything else in the request.
+        self.assertEqual(mocked.call_args.kwargs['mailbox'], 'bob@leap-arabia.com')
+        from costing.models import RevisionEmailThread
+        thread = RevisionEmailThread.objects.get(revision=rev)
+        self.assertEqual(thread.mailbox, 'bob@leap-arabia.com')
+        self.assertEqual(thread.sent_by, self.bob)
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_send_view_shows_friendly_error_when_file_missing_from_storage(self):
+        """Regression: reading rev.file was unguarded, so a revision whose
+        file went missing from storage (DB row survived, file didn't) would
+        500 instead of showing a friendly message like every other failure
+        path in this view already does."""
+        from django.core.files.base import ContentFile
+        from django.core.files.storage import default_storage
+        from costing.models import CostingSheetRevision, RevisionEmailThread
+
+        self.RevisionMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        rev = CostingSheetRevision(sheet=self.sheet, revision_label='R00', export_format='pdf')
+        rev.file.save('offer.pdf', ContentFile(b'%PDF-1.4 fake'), save=True)
+        default_storage.delete(rev.file.name)  # file gone, DB row survives
+
+        self.client.force_login(self.alice)
+        resp = self.client.post(
+            reverse('costing:send_revision_email', kwargs={'pk': rev.pk}),
+            {'to': 'client@example.com', 'subject': 'Offer', 'body': 'Please see attached.'})
+        self.assertEqual(resp.status_code, 302)  # friendly redirect, not a 500
+        self.assertFalse(RevisionEmailThread.objects.filter(revision=rev).exists())
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_send_view_recovers_when_thread_creation_races(self):
+        """Regression: two near-simultaneous 'Send' clicks (or a retried
+        request) could both pass the hasattr(rev, 'email_thread') check
+        before either commits; the second RevisionEmailThread.objects.create()
+        then hit the OneToOneField's unique constraint as an unhandled
+        IntegrityError instead of a friendly message."""
+        from unittest.mock import patch
+        from django.core.files.base import ContentFile
+        from django.db import IntegrityError
+        from costing.models import CostingSheetRevision, RevisionEmailThread
+
+        self.RevisionMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        rev = CostingSheetRevision(sheet=self.sheet, revision_label='R00', export_format='pdf')
+        rev.file.save('offer.pdf', ContentFile(b'%PDF-1.4 fake'), save=True)
+
+        self.client.force_login(self.alice)
+        with patch('costing.graph_thread.send_revision_email', return_value=('msg-1', 'conv-1')), \
+             patch.object(RevisionEmailThread.objects, 'create', side_effect=IntegrityError):
+            resp = self.client.post(
+                reverse('costing:send_revision_email', kwargs={'pk': rev.pk}),
+                {'to': 'client@example.com', 'subject': 'Offer', 'body': 'Please see attached.'})
+        self.assertEqual(resp.status_code, 302)  # friendly redirect, not a 500
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_send_view_blocked_when_user_has_no_linked_mailbox(self):
+        from django.core.files.base import ContentFile
+        from costing.models import CostingSheetRevision, RevisionEmailThread
+
+        # A mailbox row exists (for alice), so the legacy fallback no longer
+        # applies -> bob, who has no row, must be refused, not fall through.
+        self.RevisionMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        rev = CostingSheetRevision(sheet=self.sheet, revision_label='R00', export_format='pdf')
+        rev.file.save('offer.pdf', ContentFile(b'%PDF-1.4 fake'), save=True)
+
+        self.client.force_login(self.bob)
+        resp = self.client.post(
+            reverse('costing:send_revision_email', kwargs={'pk': rev.pk}),
+            {'to': 'client@example.com', 'subject': 'Offer', 'body': 'Please see attached.'})
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(RevisionEmailThread.objects.filter(revision=rev).exists())
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_thread_view_shows_each_user_their_own_mailbox_in_context(self):
+        from django.core.files.base import ContentFile
+        from costing.models import CostingSheetRevision
+
+        self.RevisionMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        self.RevisionMailbox.objects.create(owner=self.bob, email_address='bob@leap-arabia.com')
+        rev = CostingSheetRevision(sheet=self.sheet, revision_label='R00', export_format='pdf')
+        rev.file.save('offer.pdf', ContentFile(b'%PDF-1.4 fake'), save=True)
+
+        self.client.force_login(self.alice)
+        resp = self.client.get(reverse('costing:revision_email_thread', kwargs={'pk': rev.pk}))
+        self.assertEqual(resp.context['mailbox'], 'alice@leap-arabia.com')
+
+        self.client.force_login(self.bob)
+        resp = self.client.get(reverse('costing:revision_email_thread', kwargs={'pk': rev.pk}))
+        self.assertEqual(resp.context['mailbox'], 'bob@leap-arabia.com')
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class HtmlToTextTests(TestCase):
+    """graph_thread.html_to_text() — plain strip_tags() collapses a
+    paragraph-formatted email onto one unreadable run-on line (the actual
+    bug reported from a real linked thread); this must keep line breaks
+    and decode entities instead."""
+
+    def test_paragraphs_become_separate_lines(self):
+        from costing.graph_thread import html_to_text
+        html = '<p>Hi Aqsa,</p><p>Please find attached the document.</p><p>Kind regards,<br>Asadullah</p>'
+        text = html_to_text(html)
+        self.assertEqual(
+            text,
+            'Hi Aqsa,\nPlease find attached the document.\nKind regards,\nAsadullah')
+
+    def test_entities_are_decoded(self):
+        from costing.graph_thread import html_to_text
+        self.assertEqual(html_to_text('<p>Terms &amp; Conditions</p>'), 'Terms & Conditions')
+
+    def test_excess_blank_lines_collapsed(self):
+        from costing.graph_thread import html_to_text
+        html = '<div>Line one</div><div><br></div><div><br></div><div>Line two</div>'
+        text = html_to_text(html)
+        self.assertEqual(text, 'Line one\n\nLine two')
+
+    def test_empty_input_returns_empty_string(self):
+        from costing.graph_thread import html_to_text
+        self.assertEqual(html_to_text(''), '')
+        self.assertEqual(html_to_text(None), '')
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class DownloadRevisionEmailAttachmentTests(TestCase):
+    """The Content-Disposition filename must survive a real attachment name
+    - including one in a script that isn't representable in Latin-1, which
+    a plain filename="..." header can't carry correctly."""
+
+    def setUp(self):
+        from django.core.files.base import ContentFile
+        from costing.models import (
+            RevisionMailbox, CostingSheetRevision, RevisionEmailThread, RevisionEmailMessage,
+        )
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('dl_user', password='x', role=role)
+        RevisionMailbox.objects.create(owner=self.user, email_address='dl_user@leap-arabia.com')
+        region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        status = ProjectStatus.objects.create(name='Open', category='active')
+        project = Project.objects.create(
+            project_name='P', proposal_reference='REF-DL', status=status, region=region)
+        sheet = CostingSheet.objects.create(title='S', project=project, created_by=self.user)
+        rev = CostingSheetRevision(sheet=sheet, revision_label='R00', export_format='pdf')
+        rev.file.save('offer.pdf', ContentFile(b'%PDF-1.4 fake'), save=True)
+        thread = RevisionEmailThread.objects.create(
+            revision=rev, mailbox='dl_user@leap-arabia.com', graph_conversation_id='conv-1',
+            client_to='client@example.com', subject='Offer', sent_by=self.user)
+        self.msg = RevisionEmailMessage.objects.create(
+            thread=thread, graph_message_id='m1', direction='in', sender_email='client@example.com')
+        self.client.force_login(self.user)
+
+    def _download(self, filename):
+        from unittest.mock import patch
+        with patch('costing.graph_thread.fetch_attachment_bytes',
+                   return_value=(filename, 'application/pdf', b'%PDF-1.4 fake')):
+            return self.client.get(reverse(
+                'costing:download_revision_email_attachment',
+                kwargs={'message_pk': self.msg.pk, 'attachment_id': 'a1'}))
+
+    def test_ascii_filename_uses_plain_quoted_form(self):
+        resp = self._download('quote.pdf')
+        self.assertEqual(resp['Content-Disposition'], 'attachment; filename="quote.pdf"')
+
+    def test_non_ascii_filename_uses_rfc5987_form(self):
+        """Regression: an Arabic attachment name (plausible for this
+        market) was put straight into filename="..." with no non-ASCII
+        handling, which most browsers can't parse correctly."""
+        resp = self._download('عرض السعر.pdf')
+        disposition = resp['Content-Disposition']
+        self.assertTrue(disposition.startswith("attachment; filename*=utf-8''"))
+        self.assertNotIn('عرض', disposition)  # must be percent-encoded, not raw
+
+    def test_quote_in_filename_is_escaped_not_stripped(self):
+        resp = self._download('quo"te.pdf')
+        self.assertEqual(resp['Content-Disposition'], 'attachment; filename="quo\\"te.pdf"')
+
+
+class LinkRevisionEmailTests(TestCase):
+    """The Mail.ReadWrite-free workaround: a user composes/replies via their
+    own Outlook, then picks that message from the unified browse-and-link
+    picker (browse_link_revision_email / link_revision_email) and says
+    whether it was sent to the client or received from them — no Graph
+    draft creation involved, only reads (Mail.Read), and direction is
+    always the human's explicit classification, never inferred."""
+
+    def setUp(self):
+        from django.core.files.base import ContentFile
+        from costing.models import RevisionMailbox, CostingSheetRevision
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.alice = User.objects.create_user('alice_ls', password='x', role=role)
+        self.bob = User.objects.create_user('bob_ls', password='x', role=role)
+        RevisionMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        RevisionMailbox.objects.create(owner=self.bob, email_address='bob@leap-arabia.com')
+        self.region = Region.objects.create(name='Saudi', code='LNA', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.project = Project.objects.create(
+            project_name='P', proposal_reference='REF-LS', status=self.status,
+            region=self.region)
+        self.sheet = CostingSheet.objects.create(
+            title='S', project=self.project, created_by=self.alice)
+        self.rev = CostingSheetRevision(sheet=self.sheet, revision_label='R00', export_format='pdf')
+        self.rev.file.save('offer.pdf', ContentFile(b'%PDF-1.4 fake'), save=True)
+
+    def _detail(self, msg_id='m1', sender='alice@leap-arabia.com', subject='Offer'):
+        return {
+            'id': msg_id, 'conversation_id': 'conv-1', 'subject': subject,
+            'sender_name': 'Someone', 'sender_email': sender,
+            'to': 'client@example.com', 'cc': '', 'sent_at': '2026-08-20T10:00:00Z',
+            'body_html': '<p>hi</p>', 'has_attachments': False, 'attachments': [],
+        }
+
+    def test_browse_merges_inbox_and_sent_from_the_users_own_mailbox(self):
+        from unittest.mock import patch
+        self.client.force_login(self.alice)
+        with patch('costing.graph_thread.list_recent_messages',
+                   return_value=[{'id': 'i1', 'subject': 'Reply', 'sender_name': 'Client', 'sender_email': 'c@x.com',
+                                   'received_at': '2026-08-21T10:00:00Z', 'body_preview': ''}]) as mocked_inbox, \
+             patch('costing.graph_thread.list_recent_sent_messages',
+                   return_value=[{'id': 's1', 'subject': 'Offer', 'to': 'client@example.com',
+                                   'sent_at': '2026-08-20T10:00:00Z', 'body_preview': ''}]) as mocked_sent:
+            resp = self.client.get(reverse('costing:browse_link_revision_email', kwargs={'pk': self.rev.pk}))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(mocked_inbox.call_args.args[0], 'alice@leap-arabia.com')
+        self.assertEqual(mocked_sent.call_args.args[0], 'alice@leap-arabia.com')
+        self.assertContains(resp, 'Reply')
+        self.assertContains(resp, 'Offer')
+        self.assertContains(resp, 'Reading from')
+        self.assertContains(resp, 'alice@leap-arabia.com')
+
+    def test_link_as_sent_creates_thread(self):
+        from unittest.mock import patch
+        self.client.force_login(self.alice)
+        with patch('costing.graph_thread.get_message_detail', return_value=self._detail()):
+            resp = self.client.post(
+                reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
+                {'message_id': 'm1', 'direction': 'out'})
+        self.assertEqual(resp.status_code, 302)
+        from costing.models import RevisionEmailThread, RevisionEmailMessage
+        thread = RevisionEmailThread.objects.get(revision=self.rev)
+        self.assertEqual(thread.mailbox, 'alice@leap-arabia.com')
+        self.assertEqual(thread.graph_conversation_id, 'conv-1')
+        self.assertEqual(thread.sent_by, self.alice)
+        self.assertEqual(thread.status, 'sent')
+        msg = RevisionEmailMessage.objects.get(thread=thread)
+        self.assertEqual(msg.direction, 'out')
+        self.assertIsNotNone(msg.attached_at)  # recorded regardless of the email's own sent_at
+
+    def test_link_buttons_are_real_forms_so_the_result_message_survives_the_reload(self):
+        """Regression: the classify buttons used to be JS fetch() calls that
+        followed the redirect silently in the background before reloading the
+        real page — Django's one-shot messages framework got consumed by
+        that invisible fetch, so the actual page reload showed nothing at
+        all, success or failure. They're plain <form> submits now so the
+        browser's own navigation is what shows the result."""
+        from unittest.mock import patch
+        self.client.force_login(self.alice)
+        with patch('costing.graph_thread.list_recent_messages', return_value=[]), \
+             patch('costing.graph_thread.list_recent_sent_messages',
+                   return_value=[{'id': 'm1', 'subject': 'Offer', 'to': 'client@example.com',
+                                   'sent_at': '2026-08-20T10:00:00Z', 'body_preview': ''}]):
+            browse_html = self.client.get(
+                reverse('costing:browse_link_revision_email', kwargs={'pk': self.rev.pk})).content.decode()
+        self.assertIn('<form', browse_html)
+        self.assertIn('csrfmiddlewaretoken', browse_html)
+
+        with patch('costing.graph_thread.get_message_detail', return_value=self._detail()):
+            resp = self.client.post(
+                reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
+                {'message_id': 'm1', 'direction': 'out'}, follow=True)
+        self.assertContains(resp, 'email linked')  # the success message, visible on the followed page
+        self.assertContains(resp, 'Sent on Email')
+
+    def test_link_as_received_creates_thread_already_marked_replied(self):
+        """Classification, not sender-address inference, decides direction —
+        this message's sender isn't the tracked mailbox, but the user says
+        it's the one that started the conversation (e.g. an inbound RFQ)."""
+        from unittest.mock import patch
+        self.client.force_login(self.alice)
+        detail = self._detail(sender='client@example.com')
+        with patch('costing.graph_thread.get_message_detail', return_value=detail):
+            resp = self.client.post(
+                reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
+                {'message_id': 'm1', 'direction': 'in'})
+        self.assertEqual(resp.status_code, 302)
+        from costing.models import RevisionEmailThread, RevisionEmailMessage
+        thread = RevisionEmailThread.objects.get(revision=self.rev)
+        self.assertEqual(thread.status, 'replied')
+        self.assertEqual(RevisionEmailMessage.objects.get(thread=thread).direction, 'in')
+
+    def test_second_link_appends_to_the_same_thread_not_a_duplicate(self):
+        from unittest.mock import patch
+        self.client.force_login(self.alice)
+        with patch('costing.graph_thread.get_message_detail', return_value=self._detail('m1')):
+            self.client.post(reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
+                              {'message_id': 'm1', 'direction': 'out'})
+        with patch('costing.graph_thread.get_message_detail',
+                   return_value=self._detail('m2', sender='client@example.com')):
+            resp = self.client.post(reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
+                                     {'message_id': 'm2', 'direction': 'in'})
+        self.assertEqual(resp.status_code, 302)
+        from costing.models import RevisionEmailThread, RevisionEmailMessage
+        self.assertEqual(RevisionEmailThread.objects.filter(revision=self.rev).count(), 1)
+        thread = RevisionEmailThread.objects.get(revision=self.rev)
+        self.assertEqual(thread.status, 'replied')  # the 'in' message flipped it
+        self.assertEqual(RevisionEmailMessage.objects.filter(thread=thread).count(), 2)
+
+    def test_recovers_when_thread_creation_races(self):
+        """Regression: two near-simultaneous links for the same revision's
+        first message could both pass the `thread is None` check before
+        either commits; the second RevisionEmailThread.objects.create() then
+        hit the unique constraint as an unhandled IntegrityError, dropping
+        this person's already-classified message entirely instead of
+        attaching it to the thread the other request just created."""
+        from unittest.mock import patch
+        from django.db import IntegrityError
+        from costing.models import RevisionEmailThread, RevisionEmailMessage
+
+        # Simulate "someone else's request already created the thread" by
+        # creating it directly, then still making our own create() call
+        # raise IntegrityError (exactly what the real unique constraint
+        # would do), forcing the view down its recovery path.
+        winning_thread = RevisionEmailThread.objects.create(
+            revision=self.rev, mailbox='alice@leap-arabia.com', graph_conversation_id='conv-1',
+            client_to='client@example.com', subject='Offer', sent_by=self.alice)
+
+        self.client.force_login(self.alice)
+        with patch('costing.graph_thread.get_message_detail', return_value=self._detail('m1')), \
+             patch.object(RevisionEmailThread.objects, 'create', side_effect=IntegrityError):
+            resp = self.client.post(
+                reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
+                {'message_id': 'm1', 'direction': 'out'})
+        self.assertEqual(resp.status_code, 302)
+        # The message must still land on the thread that actually exists,
+        # not get silently dropped.
+        msg = RevisionEmailMessage.objects.get(graph_message_id='m1')
+        self.assertEqual(msg.thread_id, winning_thread.pk)
+
+    def test_messages_display_in_attachment_order_not_email_timestamp(self):
+        """The reported bug: attach two 'received' messages (real, LATER
+        timestamps) then one 'sent' message with an EARLIER timestamp — the
+        thread must still show them in the order they were attached, since
+        that's the only thing that reliably says 'this was their 2nd reply
+        to our 2nd message' once either side replies more than once."""
+        from unittest.mock import patch
+        self.client.force_login(self.alice)
+
+        def detail(msg_id, sender, sent_at):
+            d = self._detail(msg_id, sender=sender)
+            d['sent_at'] = sent_at
+            return d
+
+        with patch('costing.graph_thread.get_message_detail',
+                   return_value=detail('recv1', 'client@example.com', '2026-08-25T09:00:00Z')):
+            self.client.post(reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
+                              {'message_id': 'recv1', 'direction': 'in'})
+        with patch('costing.graph_thread.get_message_detail',
+                   return_value=detail('recv2', 'client@example.com', '2026-08-25T10:00:00Z')):
+            self.client.post(reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
+                              {'message_id': 'recv2', 'direction': 'in'})
+        with patch('costing.graph_thread.get_message_detail',
+                   return_value=detail('sent1', 'alice@leap-arabia.com', '2026-08-20T08:00:00Z')):
+            self.client.post(reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
+                              {'message_id': 'sent1', 'direction': 'out'})
+
+        from costing.models import RevisionEmailThread
+        thread = RevisionEmailThread.objects.get(revision=self.rev)
+        ordered_ids = list(thread.messages.values_list('graph_message_id', flat=True))
+        self.assertEqual(ordered_ids, ['recv1', 'recv2', 'sent1'])  # attachment order, not sent_at order
+
+    def test_rejects_missing_direction(self):
+        self.client.force_login(self.alice)
+        resp = self.client.post(
+            reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
+            {'message_id': 'm1'})
+        self.assertEqual(resp.status_code, 302)
+        from costing.models import RevisionEmailThread
+        self.assertFalse(RevisionEmailThread.objects.filter(revision=self.rev).exists())
+
+    def test_bob_cannot_browse_or_link_using_alices_mailbox(self):
+        """Even though bob can edit the sheet, browsing/linking must resolve
+        HIS OWN mailbox, never alice's — same privacy guarantee as sending."""
+        from unittest.mock import patch
+        self.client.force_login(self.bob)
+        with patch('costing.graph_thread.list_recent_messages', return_value=[]) as mocked_inbox, \
+             patch('costing.graph_thread.list_recent_sent_messages', return_value=[]) as mocked_sent:
+            self.client.get(reverse('costing:browse_link_revision_email', kwargs={'pk': self.rev.pk}))
+        self.assertEqual(mocked_inbox.call_args.args[0], 'bob@leap-arabia.com')
+        self.assertEqual(mocked_sent.call_args.args[0], 'bob@leap-arabia.com')
+
+
 class LineItemUnitChoicesTests(TestCase):
     """The A.1 unit dropdown, and the places that have to agree with it.
 
@@ -1493,3 +1983,235 @@ class LineItemUnitChoicesTests(TestCase):
         item.full_clean()          # choices are enforced here, not at save
         item.refresh_from_db()
         self.assertEqual(item.unit, 'Inc')
+
+class PCCEngineerBOMAccessTests(TestCase):
+    """PCC Engineer must see every BOM (full visibility, like Proposal
+    Team) but never any pricing figure - not just hidden by CSS, but
+    absent from the page source, the AJAX line-item fragment, and both
+    export formats. No edit access; no import; unpriced export only."""
+
+    FIGURE = '918273'  # a distinctive base unit cost, unlikely to collide
+
+    def setUp(self):
+        from decimal import Decimal
+        from accounts.models import Role, User
+        from projects.models import Region, ProjectStatus, Project
+        from costing.models import CostingSheet, CostingSection, CostingLineItem
+        self.region = Region.objects.create(name='Saudi', code='LNA2', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+
+        def mkuser(username, role_name):
+            role, _ = Role.objects.get_or_create(name=role_name)
+            u = User.objects.create_user(username, password='x')
+            u.role = role
+            u.region = self.region
+            u.save()
+            return u
+
+        self.pcc = mkuser('pcc_bom_test', Role.PCC_ENGINEER)
+        self.sales = mkuser('sales_bom_test', Role.SALES_REP)
+
+        # A sheet the PCC Engineer neither owns nor created, in the same
+        # region - confirms they see it via full BOM visibility, not
+        # region/ownership scoping.
+        self.project = Project.objects.create(
+            project_name='P', proposal_reference='REF-PCC',
+            status=self.status, region=self.region, owner=self.sales)
+        self.sheet = CostingSheet.objects.create(
+            title='Sheet', project=self.project, created_by=self.sales,
+            margin=Decimal('40'), output_currency='SAR', workflow_stage='finalized')
+        self.sec = CostingSection.objects.create(
+            costing_sheet=self.sheet, section_number='1', title='CCTV', order=0)
+        CostingLineItem.objects.create(
+            section=self.sec, item_number='1', description='Camera',
+            quantity=Decimal('1'), unit='EA', vendor_name='Acme',
+            base_unit_cost=Decimal(self.FIGURE), supplier_currency='SAR', margin=Decimal('40'))
+
+    def _detail(self, user):
+        self.client.force_login(user)
+        return self.client.get(reverse('costing:detail', kwargs={'pk': self.sheet.pk}))
+
+    def _rows(self, user):
+        self.client.force_login(user)
+        return self.client.get(reverse('costing:section_items', kwargs={'pk': self.sec.pk}))
+
+    def _export(self, user, view_name='export', **params):
+        self.client.force_login(user)
+        return self.client.get(reverse(f'costing:{view_name}', args=[self.sheet.pk]), params)
+
+    # -- visibility --
+
+    def test_pcc_engineer_sees_every_sheet_not_just_own_region_or_ownership(self):
+        """Full BOM visibility, same as Proposal Team - not gated by
+        ownership or region, since neither is true of the sheet here."""
+        resp = self._detail(self.pcc)
+        self.assertEqual(resp.status_code, 200)
+
+    def test_pcc_engineer_appears_in_costing_scoped_queryset(self):
+        from costing.views import costing_scoped_queryset
+        qs = costing_scoped_queryset(self.pcc)
+        self.assertIn(self.sheet, list(qs))
+
+    # -- pricing hidden --
+
+    def test_pcc_engineer_gets_no_figures_anywhere(self):
+        detail = self._detail(self.pcc)
+        self.assertFalse(detail.context['can_see_pricing'])
+        self.assertNotContains(detail, 'GRAND TOTAL')
+        rows = self._rows(self.pcc)
+        self.assertNotContains(rows, self.FIGURE)
+        self.assertContains(rows, 'Camera')  # BOM item still visible
+
+    def test_sales_sees_figures_for_comparison(self):
+        """Sanity check the fixture actually exercises the pricing path -
+        sales must see what PCC Engineer above must not."""
+        detail = self._detail(self.sales)
+        self.assertTrue(detail.context['can_see_pricing'])
+
+    # -- no edit, no import --
+
+    def test_pcc_engineer_cannot_edit_sheet(self):
+        from costing.views import _user_can_edit_sheet
+        self.assertFalse(_user_can_edit_sheet(self.pcc, self.sheet))
+
+    def test_pcc_engineer_cannot_reach_import_new(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('costing:import_new'))
+        self.assertEqual(resp.status_code, 302)
+
+    def test_pcc_engineer_cannot_import_into_existing_sheet(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('costing:import_excel', args=[self.sheet.pk]))
+        self.assertEqual(resp.status_code, 302)
+
+    # -- export: unpriced only --
+
+    def test_pcc_engineer_can_download_unpriced_excel_but_not_priced(self):
+        self.assertEqual(self._export(self.pcc, 'export', unpriced='1').status_code, 200)
+        self.assertEqual(self._export(self.pcc, 'export').status_code, 302)
+
+    def test_pcc_engineer_can_download_unpriced_pdf_but_not_priced(self):
+        self.assertEqual(self._export(self.pcc, 'export_pdf', unpriced='1').status_code, 200)
+        self.assertEqual(self._export(self.pcc, 'export_pdf').status_code, 302)
+
+    def test_no_pricing_value_in_pcc_engineers_unpriced_excel(self):
+        import io
+        import openpyxl
+        resp = self._export(self.pcc, 'export', unpriced='1')
+        wb = openpyxl.load_workbook(io.BytesIO(resp.content))
+        ws = wb.active
+        cells = [str(c.value) for r in ws.iter_rows() for c in r if c.value is not None]
+        blob = ' '.join(cells)
+        self.assertNotIn(self.FIGURE, blob)
+        self.assertIn('Camera', blob)
+
+
+    # -- additional edge cases / auth boundary --
+
+    def test_no_pricing_value_in_pcc_engineers_unpriced_pdf(self):
+        from pypdf import PdfReader
+        import io
+        resp = self._export(self.pcc, 'export_pdf', unpriced='1')
+        reader = PdfReader(io.BytesIO(resp.content))
+        text = ' '.join(page.extract_text() or '' for page in reader.pages)
+        self.assertNotIn(self.FIGURE, text)
+        self.assertIn('Camera', text)
+
+    def test_revoking_costing_access_capability_blocks_the_list_view(self):
+        """The capability grid and the role-specific BOM functions are two
+        separate layers - revoking costing.access must still lock PCC
+        Engineer out of the list view even though _user_can_view_sheet
+        and costing_scoped_queryset would otherwise let them see sheets."""
+        from accounts.models import RolePermission
+        RolePermission.objects.filter(
+            role=self.pcc.role, codename='costing.access').update(allowed=False)
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('costing:list'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_pcc_engineer_sees_sheet_from_a_different_region(self):
+        """Full BOM visibility means regardless of region, not just same
+        region as it happens to be in the main fixture above."""
+        from decimal import Decimal
+        from projects.models import Region, Project
+        from costing.models import CostingSheet
+        other_region = Region.objects.create(name='UK', code='UKX', currency='GBP')
+        other_project = Project.objects.create(
+            project_name='Q', proposal_reference='REF-OTHER-REGION',
+            status=self.status, region=other_region, owner=self.sales)
+        other_sheet = CostingSheet.objects.create(
+            title='OtherSheet', project=other_project, created_by=self.sales,
+            margin=Decimal('40'), output_currency='GBP', workflow_stage='finalized')
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('costing:detail', kwargs={'pk': other_sheet.pk}))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_pcc_engineer_cannot_post_to_import_new_either(self):
+        """The block runs before the method branch, so a direct POST
+        (bypassing the form) must be caught too, not just a GET."""
+        self.client.force_login(self.pcc)
+        resp = self.client.post(reverse('costing:import_new'), {'title': 'x'})
+        self.assertEqual(resp.status_code, 302)
+        from costing.models import CostingSheet
+        self.assertFalse(CostingSheet.objects.filter(title='x').exists())
+
+
+    def test_pcc_engineer_has_no_row_edit_actions_in_the_bom_fragment(self):
+        """Add row / Paste from Excel and the per-row insert/delete buttons
+        (the Act column) are write actions - a read-only role must not see
+        any of them, on the detail page or in the lazy-loaded AJAX rows.
+        Checks the actual rendered button tags rather than plain text or
+        bare class names, since phrases like "Add row" appear in JS
+        comments and the class names themselves appear in JS selector
+        strings (e.g. closest('.add-row-btn')) - both stay in the page
+        source regardless of can_edit, since the event-delegation
+        handlers are defined unconditionally and only gate at runtime.
+        Neither is visible UI, so neither is what this test guards
+        against - only an actual <button class="...add-row-btn...">
+        tag would be."""
+        detail = self._detail(self.pcc)
+        self.assertNotContains(detail, 'btn-outline-success add-row-btn')
+        self.assertNotContains(detail, 'btn-outline-primary paste-excel-btn')
+        self.assertNotContains(detail, 'id="pasteExcelModal"')
+        self.assertNotContains(detail, '>Act<')
+        rows = self._rows(self.pcc)
+        self.assertNotContains(rows, 'btn-outline-success add-row-btn')
+        self.assertNotContains(rows, 'btn-outline-primary paste-excel-btn')
+        self.assertNotContains(rows, 'insert-row-btn')
+        self.assertNotContains(rows, 'item_delete')
+
+    def test_sales_still_has_row_edit_actions_for_comparison(self):
+        """Sanity check the fixture actually exercises the can_edit path -
+        sales must see what PCC Engineer above must not."""
+        rows = self._rows(self.sales)
+        self.assertContains(rows, 'insert-row-btn')
+
+
+    def test_pcc_engineer_sees_plain_text_not_editable_inputs_for_structural_fields(self):
+        """item_number, description, vendor, make, model, quantity and unit
+        must render as plain text for a read-only role - not an <input>,
+        <textarea>, or <select> that looks editable but silently fails to
+        save (since the AJAX handlers already gate on can_edit)."""
+        rows = self._rows(self.pcc)
+        self.assertNotContains(rows, 'item-num-edit')
+        self.assertNotContains(rows, 'desc-edit')
+        self.assertNotContains(rows, 'num-edit')
+        self.assertNotContains(rows, 'unit-edit')
+        # Note: a <select class="currency-select"> also exists in the row
+        # (supplier currency, a pricing field) - it's a separate, pre-existing
+        # element already hidden via CSS (cost-col/bom-pricing-only), not
+        # something this fix touches, so we check for the specific unit
+        # dropdown rather than any <select> tag on the page.
+        self.assertNotContains(rows, '<select class="text-edit unit-edit"')
+        self.assertNotContains(rows, '<textarea')
+        # The values themselves must still be visible as plain text.
+        self.assertContains(rows, 'Camera')
+        self.assertContains(rows, 'Acme')
+        self.assertContains(rows, 'EA')
+
+    def test_sales_still_sees_editable_inputs_for_structural_fields(self):
+        """Sanity check the fixture exercises can_edit - sales must see
+        what PCC Engineer above must not."""
+        rows = self._rows(self.sales)
+        self.assertContains(rows, 'item-num-edit')
+        self.assertContains(rows, 'unit-edit')

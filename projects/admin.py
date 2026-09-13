@@ -11,8 +11,8 @@ class RegionAdmin(admin.ModelAdmin):
 
 @admin.register(ProjectStatus)
 class ProjectStatusAdmin(admin.ModelAdmin):
-    list_display = ['name', 'category', 'color', 'order', 'is_active']
-    list_filter = ['category', 'is_active']
+    list_display = ['name', 'category', 'color', 'order', 'is_active', 'excluded_from_won_tile']
+    list_filter = ['category', 'is_active', 'excluded_from_won_tile']
     search_fields = ['name']
     ordering = ['order', 'name']
 

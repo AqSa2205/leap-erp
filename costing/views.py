@@ -1,4 +1,5 @@
 import json
+from django.conf import settings
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.shortcuts import get_object_or_404, redirect, render
@@ -74,6 +75,10 @@ def _user_can_view_sheet(user, sheet):
     # Proposal team sees every sheet as a BOM (no pricing) regardless of region
     if getattr(user, 'is_proposal_team_user', False):
         return True
+    # PCC Engineer: same as Proposal Team - full BOM visibility, no pricing
+    # (enforced by _user_can_see_pricing, not by hiding sheets here).
+    if getattr(user, 'is_pcc_engineer_user', False):
+        return True
     # Sales reps see ONLY sheets for projects they own (plus any sheet they
     # personally created, granted above). Managers/admins were handled above
     # with region scope.
@@ -104,7 +109,8 @@ def _user_can_see_pricing(user):
     if not getattr(user, 'is_authenticated', False):
         return False
     return not (getattr(user, 'is_proposal_team_user', False)
-                or getattr(user, 'is_procurement_user', False))
+                or getattr(user, 'is_procurement_user', False)
+                or getattr(user, 'is_pcc_engineer_user', False))
 
 
 def _user_can_view_margin_analysis(user, sheet):
@@ -403,9 +409,11 @@ def costing_scoped_queryset(user):
     if (
         user.is_super_admin_user
         or getattr(user, 'is_proposal_team_user', False)
+        or getattr(user, 'is_pcc_engineer_user', False)
     ):
-        # Super admins and proposal team see every sheet (proposal team
-        # is the source of BOMs, so they need full visibility).
+        # Super admins, proposal team, and PCC Engineer see every sheet
+        # (all three work from the BOM without pricing, so they need full
+        # visibility - pricing itself stays gated by _user_can_see_pricing).
         return queryset
     elif user.is_admin_user or user.is_manager_user:
         return queryset.filter(
@@ -1158,7 +1166,7 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
         # PDF revisions (saved snapshots from previous Export PDF clicks).
         # Attach each file's size + a total so the UI can show storage cost and
         # offer cleanup. .size hits the backend; a sheet has only a handful.
-        revisions = list(sheet.pdf_revisions.select_related('created_by').all())
+        revisions = list(sheet.pdf_revisions.select_related('created_by', 'email_thread').all())
         total_rev_size = 0
         for rev in revisions:
             try:
@@ -1841,6 +1849,7 @@ def ajax_section_items(request, pk):
         'conversion_rate': conversion_rate,
         'output_currency': sheet.output_currency,
         'can_see_pricing': _user_can_see_pricing(request.user),
+        'can_edit': _user_can_edit_sheet(request.user, sheet),
     }, request=request)
     return HttpResponse(html)
 
@@ -3113,6 +3122,308 @@ def cleanup_costing_revisions(request, pk):
     return redirect('costing:detail', pk=sheet.pk)
 
 
+# ─── Revision → Client Email Thread ──────────────────────────
+
+def _user_revision_mailbox(user):
+    """The ONE mailbox `user` is allowed to send costing-revision emails
+    from / browse the reply thread through — never taken from a request
+    parameter, always derived here from who's actually logged in, so
+    there is no value anywhere (URL, POST field, hidden JSON) that could
+    be tampered with to reach someone else's mailbox. Returns '' if this
+    user has no mailbox to use — callers must treat that as "nothing to
+    show", not fall back to guessing one.
+
+    No legacy/shared fallback of any kind: access exists only once an
+    admin has explicitly linked this exact user to a RevisionMailbox row.
+    (A prior version fell back to a single shared mailbox setting until
+    the first row was ever created, meaning every unlinked user could
+    browse and send through that shared mailbox before any admin action
+    was ever taken — a real exposure caught in live testing. Removed."""
+    from .models import RevisionMailbox
+    try:
+        return RevisionMailbox.objects.get(owner=user, is_active=True).email_address
+    except RevisionMailbox.DoesNotExist:
+        return ''
+
+
+@require_POST
+def send_costing_revision_email(request, pk):
+    """Email a CostingSheetRevision's file to a client and start tracking
+    the reply thread. One thread per revision — the 'Send to Client'
+    action disappears once revision.email_thread exists."""
+    from django.db import IntegrityError, transaction
+    from . import graph_thread
+    from .models import CostingSheetRevision, RevisionEmailThread, RevisionEmailMessage
+
+    rev = get_object_or_404(CostingSheetRevision, pk=pk)
+    sheet = rev.sheet
+    if not (_user_can_see_pricing(request.user) and _user_can_edit_sheet(request.user, sheet)):
+        messages.error(request, 'Permission denied.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    if hasattr(rev, 'email_thread'):
+        messages.error(request, f'Revision {rev.revision_label} has already been sent to a client.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    to = [addr.strip() for addr in (request.POST.get('to') or '').split(',') if addr.strip()]
+    cc = [addr.strip() for addr in (request.POST.get('cc') or '').split(',') if addr.strip()]
+    subject = (request.POST.get('subject') or '').strip()
+    body_text = (request.POST.get('body') or '').strip()
+
+    if not to or not subject or not body_text:
+        messages.error(request, 'To, subject, and message are all required.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    mailbox = _user_revision_mailbox(request.user)
+    if not mailbox:
+        messages.error(request, 'No mailbox is linked to your account — ask an admin to link one.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    try:
+        rev.file.open('rb')
+        try:
+            attachment_bytes = rev.file.read()
+        finally:
+            rev.file.close()
+    except Exception:
+        messages.error(request, f"Revision {rev.revision_label}'s file could not be read from storage.")
+        return redirect('costing:detail', pk=sheet.pk)
+    attachment_filename = rev.original_filename or rev.file.name.rsplit('/', 1)[-1]
+
+    try:
+        message_id, conversation_id = graph_thread.send_revision_email(
+            mailbox=mailbox, to=to, cc=cc, subject=subject, body_text=body_text,
+            attachment_bytes=attachment_bytes, attachment_filename=attachment_filename,
+        )
+    except graph_thread.GraphThreadError as exc:
+        messages.error(request, f'Could not send the email: {exc}')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    try:
+        with transaction.atomic():
+            thread = RevisionEmailThread.objects.create(
+                revision=rev,
+                mailbox=mailbox,
+                graph_conversation_id=conversation_id,
+                client_to=', '.join(to),
+                client_cc=', '.join(cc),
+                subject=subject,
+                sent_by=request.user if request.user.is_authenticated else None,
+            )
+    except IntegrityError:
+        # The email was already sent via Graph above (so the client did receive
+        # it), but a concurrent request beat us to recording it — rev.email_thread
+        # is a OneToOneField, so this is the only case that can hit it. Nothing
+        # left to do here safely; the other request's row is the record of it.
+        messages.error(request, f'Revision {rev.revision_label} was just sent by another request.')
+        return redirect('costing:detail', pk=sheet.pk)
+    RevisionEmailMessage.objects.create(
+        thread=thread,
+        graph_message_id=message_id,
+        direction='out',
+        sender_email=mailbox,
+        to_recipients=', '.join(to),
+        cc_recipients=', '.join(cc),
+        subject=subject,
+        body_html=body_text,
+        body_text=body_text,
+        sent_at=timezone.now(),
+    )
+    messages.success(request, f'Revision {rev.revision_label} emailed to {", ".join(to)}.')
+    return redirect('costing:detail', pk=sheet.pk)
+
+
+def revision_email_thread(request, pk):
+    """Render the email-thread modal content for one CostingSheetRevision —
+    either the compose form (not sent yet) or the message list (sent)."""
+    from .models import CostingSheetRevision
+
+    rev = get_object_or_404(CostingSheetRevision, pk=pk)
+    sheet = rev.sheet
+    if not (_user_can_see_pricing(request.user) and _user_can_view_sheet(request.user, sheet)):
+        return HttpResponse('Permission denied.', status=403)
+
+    context = {
+        'rev': rev,
+        'sheet': sheet,
+        'can_edit': _user_can_edit_sheet(request.user, sheet),
+        'mailbox': _user_revision_mailbox(request.user),
+    }
+    if hasattr(rev, 'email_thread'):
+        context['thread'] = rev.email_thread
+        context['thread_messages'] = rev.email_thread.messages.all()
+    return render(request, 'costing/_revision_email_thread.html', context)
+
+
+def download_revision_email_attachment(request, message_pk, attachment_id):
+    """Stream one reply's attachment straight from Graph — never stored
+    locally, matching the plan's 'don't persist client attachments' choice."""
+    from . import graph_thread
+    from .models import RevisionEmailMessage
+
+    msg = get_object_or_404(RevisionEmailMessage, pk=message_pk)
+    sheet = msg.thread.revision.sheet
+    if not (_user_can_see_pricing(request.user) and _user_can_view_sheet(request.user, sheet)):
+        return HttpResponse('Permission denied.', status=403)
+
+    try:
+        filename, content_type, data = graph_thread.fetch_attachment_bytes(
+            msg.thread.mailbox, msg.graph_message_id, attachment_id)
+    except graph_thread.GraphThreadError as exc:
+        return HttpResponse(str(exc), status=502)
+
+    # Same fallback Django's own FileResponse uses: a plain quoted filename
+    # when it's pure ASCII, otherwise RFC 5987 filename* — needed for a
+    # client's attachment named in Arabic (or any non-Latin-1 script), which
+    # a plain filename="..." header can't represent correctly.
+    from urllib.parse import quote as url_quote
+    safe_name = filename.replace('\r', '').replace('\n', '')
+    try:
+        safe_name.encode('ascii')
+        file_expr = 'filename="{}"'.format(safe_name.replace('\\', '\\\\').replace('"', r'\"'))
+    except UnicodeEncodeError:
+        file_expr = "filename*=utf-8''{}".format(url_quote(safe_name))
+    response = HttpResponse(data, content_type=content_type)
+    response['Content-Disposition'] = f'attachment; {file_expr}'
+    return response
+
+
+def browse_link_revision_email(request, pk):
+    """One combined, Outlook-style recent-messages list (Inbox + Sent
+    Items) for the current user's tracked mailbox, for the 'link an email'
+    picker: pick a message, then say whether it was sent to the client or
+    received from them (see link_revision_email) — used both to establish
+    a revision's thread for the first time and to attach further messages
+    (either direction) to one that already exists."""
+    from . import graph_thread
+    from .models import CostingSheetRevision
+
+    rev = get_object_or_404(CostingSheetRevision, pk=pk)
+    sheet = rev.sheet
+    if not (_user_can_see_pricing(request.user) and _user_can_edit_sheet(request.user, sheet)):
+        return HttpResponse('Permission denied.', status=403)
+
+    mailbox = _user_revision_mailbox(request.user)
+    if not mailbox:
+        return render(request, 'costing/_revision_link_browser.html',
+                       {'rev': rev, 'error': 'No mailbox is linked to your account — ask an admin to link one.'})
+
+    already_linked = set()
+    if hasattr(rev, 'email_thread'):
+        already_linked = set(rev.email_thread.messages.values_list('graph_message_id', flat=True))
+
+    try:
+        inbox = graph_thread.list_recent_messages(mailbox)
+        sent = graph_thread.list_recent_sent_messages(mailbox)
+    except graph_thread.GraphThreadError as exc:
+        return render(request, 'costing/_revision_link_browser.html', {'rev': rev, 'error': str(exc)})
+
+    candidates = [
+        {
+            'id': m['id'], 'subject': m['subject'],
+            'counterpart': m['sender_name'] or m['sender_email'],
+            'date': m['received_at'], 'preview': m['body_preview'],
+            'already_linked': m['id'] in already_linked,
+        }
+        for m in inbox
+    ] + [
+        {
+            'id': m['id'], 'subject': m['subject'],
+            'counterpart': m['to'],
+            'date': m['sent_at'], 'preview': m['body_preview'],
+            'already_linked': m['id'] in already_linked,
+        }
+        for m in sent
+    ]
+    candidates.sort(key=lambda c: c['date'] or '', reverse=True)
+    return render(request, 'costing/_revision_link_browser.html',
+                  {'rev': rev, 'candidates': candidates, 'mailbox': mailbox})
+
+
+@require_POST
+def link_revision_email(request, pk):
+    """Attach one Graph message to a revision's client thread, with the
+    sent/received classification the person picked in the UI rather than
+    an inferred one — creates the thread if this is the first message
+    linked for this revision, or appends to an existing one either way.
+    Explicit classification (not sender-address inference) matters here
+    specifically because this is the manual path for messages composed
+    outside the ERP, where inference is the least reliable."""
+    from django.db import IntegrityError, transaction
+    from django.utils.dateparse import parse_datetime
+    from . import graph_thread
+    from .models import CostingSheetRevision, RevisionEmailThread, RevisionEmailMessage
+
+    rev = get_object_or_404(CostingSheetRevision, pk=pk)
+    sheet = rev.sheet
+    if not (_user_can_see_pricing(request.user) and _user_can_edit_sheet(request.user, sheet)):
+        messages.error(request, 'Permission denied.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    mailbox = _user_revision_mailbox(request.user)
+    if not mailbox:
+        messages.error(request, 'No mailbox is linked to your account — ask an admin to link one.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    message_id = request.POST.get('message_id')
+    direction = request.POST.get('direction')
+    if not message_id or direction not in ('out', 'in'):
+        messages.error(request, 'Pick a message and whether it was sent or received first.')
+        return redirect('costing:detail', pk=sheet.pk)
+    if RevisionEmailMessage.objects.filter(graph_message_id=message_id).exists():
+        messages.info(request, 'That email is already linked to a thread.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    try:
+        msg = graph_thread.get_message_detail(mailbox, message_id)
+    except graph_thread.GraphThreadError as exc:
+        messages.error(request, f'Could not fetch that email: {exc}')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    thread = getattr(rev, 'email_thread', None)
+    if thread is None:
+        try:
+            with transaction.atomic():
+                thread = RevisionEmailThread.objects.create(
+                    revision=rev,
+                    mailbox=mailbox,
+                    graph_conversation_id=msg['conversation_id'],
+                    client_to=msg['to'] if direction == 'out' else msg['sender_email'],
+                    client_cc=msg['cc'] if direction == 'out' else '',
+                    subject=msg['subject'],
+                    sent_by=request.user if request.user.is_authenticated else None,
+                )
+        except IntegrityError:
+            # A concurrent request created the thread first - reuse it rather
+            # than dropping this person's already-fetched, already-classified
+            # message (revision.email_thread is a OneToOneField, so this is
+            # the only way this create() can fail).
+            rev.refresh_from_db()
+            thread = rev.email_thread
+
+    RevisionEmailMessage.objects.create(
+        thread=thread,
+        graph_message_id=msg['id'],
+        direction=direction,
+        sender_name=msg['sender_name'],
+        sender_email=msg['sender_email'],
+        to_recipients=msg['to'],
+        cc_recipients=msg['cc'],
+        subject=msg['subject'],
+        body_html=msg['body_html'],
+        body_text=graph_thread.html_to_text(msg['body_html']),
+        sent_at=parse_datetime(msg['sent_at']) if msg['sent_at'] else None,
+        has_attachments=msg['has_attachments'],
+        attachment_meta=msg['attachments'] or None,
+    )
+    if direction == 'in':
+        thread.status = 'replied'
+        thread.save(update_fields=['status'])
+
+    messages.success(request, f'Revision {rev.revision_label} — email linked.')
+    return redirect('costing:detail', pk=sheet.pk)
+
+
 # ── Revision helpers: snapshot + diff ─────────────────────────
 
 def _build_costing_snapshot(sheet):
@@ -3414,7 +3725,8 @@ def costing_export_excel(request, pk):
     if not _user_can_view_sheet(request.user, sheet):
         messages.error(request, 'You do not have permission to export this costing sheet.')
         return redirect('costing:list')
-    if not unpriced and getattr(request.user, 'is_proposal_team_user', False):
+    if not unpriced and (getattr(request.user, 'is_proposal_team_user', False)
+                          or getattr(request.user, 'is_pcc_engineer_user', False)):
         messages.error(
             request,
             'The priced Excel export is sales-only. Use "Export BOM Excel (unpriced)" instead.')
@@ -3670,7 +3982,8 @@ def costing_export_pdf(request, pk):
     if not _user_can_view_sheet(request.user, sheet):
         messages.error(request, 'You do not have permission to export this costing sheet.')
         return redirect('costing:list')
-    if not unpriced and getattr(request.user, 'is_proposal_team_user', False):
+    if not unpriced and (getattr(request.user, 'is_proposal_team_user', False)
+                          or getattr(request.user, 'is_pcc_engineer_user', False)):
         messages.error(
             request,
             'The priced PDF is sales-only. Use "Export BOM PDF (unpriced)" instead.',
@@ -4895,6 +5208,12 @@ def costing_import_new(request):
     from openpyxl.utils.exceptions import InvalidFileException
     from decimal import Decimal, InvalidOperation
     import re
+
+    # PCC Engineer is export-only on BOM data - creating a new (necessarily
+    # priced) sheet from an import is a write action outside that scope.
+    if getattr(request.user, 'is_pcc_engineer_user', False):
+        messages.error(request, 'You do not have permission to create a costing sheet.')
+        return redirect('costing:list')
 
     if request.method == 'POST':
         excel_file = request.FILES.get('excel_file')

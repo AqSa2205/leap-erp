@@ -257,7 +257,7 @@
           </ul>
           {% endif %}
 
-          {% if my_late_emails or my_late_queries %}
+          {% if my_late_emails or my_late_queries or my_lateness_reports %}
           <div class="fw-semibold small mb-2 mt-3"><i class="bi bi-envelope-exclamation me-1"></i> My Late Records</div>
           {% if my_late_emails %}
           <p class="text-muted small mb-1">Late-notice emails received:</p>
@@ -282,6 +282,14 @@
               {% if q.decided_at %}<span class="text-muted">· {{ q.decided_at|date:"d M Y" }}</span>{% endif %}
               {% include 'hr/_late_query_detail.html' %}
             </li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          {% if my_lateness_reports %}
+          <p class="text-muted small mb-1">Monthly lateness summaries:</p>
+          <ul class="small mb-2 ps-3">
+            {% for r in my_lateness_reports %}
+            <li>{{ r.month|date:"F Y" }}: {{ r.total_lates }} late(s) - {{ r.late_dates_display }} (+{{ r.converted_absences }} absence day(s))</li>
             {% endfor %}
           </ul>
           {% endif %}
@@ -328,7 +336,17 @@
               </button>
             </div>
 
-            <div class="collapse mb-3{% if leave_request_form.errors or leave_request_submit_failed %} show{% endif %}" id="requestLeaveForm">
+            {% if leave_cooldown %}
+            <div class="alert alert-warning py-2 small mb-3">
+              <i class="bi bi-exclamation-triangle me-1"></i>
+              {{ leave_cooldown.reason }}
+              <span class="badge bg-warning text-dark ms-1">
+                {{ leave_cooldown.days_remaining }} day{{ leave_cooldown.days_remaining|pluralize }} left
+              </span>
+            </div>
+            {% endif %}
+
+            <div class="collapse mb-3{% if leave_request_form.errors or leave_request_submit_failed %} show{% endif %}" id="requestLeaveForm"{% if leave_cooldown %} data-cooldown-leave-type="{{ leave_cooldown.leave_type_id }}" data-cooldown-days="{{ leave_cooldown.days_remaining }}"{% endif %}>
               <form method="post" enctype="multipart/form-data" class="border rounded p-3">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="request_leave">
@@ -361,6 +379,31 @@
                 <button type="submit" class="btn btn-sm btn-primary">Submit Request</button>
               </form>
             </div>
+            <script>
+            (function () {
+              // Client-side convenience only — the server is the real gate
+              // (see hr.leave_cooldown.annual_leave_cooldown, enforced in
+              // hr.views.my_profile before submit_leave_request runs). This
+              // just greys out the Annual option and shows a day countdown
+              // so employees don't pick it only to be told no afterwards.
+              var wrap = document.getElementById('requestLeaveForm');
+              if (!wrap) return;
+              var lockedId = wrap.dataset.cooldownLeaveType;
+              if (!lockedId) return;
+              var select = wrap.querySelector('select[name="leave_type"]');
+              if (!select) return;
+              var opt = select.querySelector('option[value="' + lockedId + '"]');
+              if (!opt) return;
+              var days = wrap.dataset.cooldownDays;
+              opt.disabled = true;
+              opt.textContent += ' (locked — ' + days + ' day' + (days == 1 ? '' : 's') + ' left)';
+              if (opt.selected) {
+                for (var i = 0; i < select.options.length; i++) {
+                  if (!select.options[i].disabled) { select.selectedIndex = i; break; }
+                }
+              }
+            })();
+            </script>
 
             {% if leave_requests %}
             <div class="d-flex justify-content-between align-items-center mb-1" style="cursor:pointer;"
@@ -614,17 +657,23 @@
     <!-- Documents -->
     <div class="col-lg-6">
       <div class="card h-100">
-        <div class="card-header fw-semibold"><i class="bi bi-folder2-open me-1"></i> My Documents</div>
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center"><span><i class="bi bi-folder2-open me-1"></i> My Documents</span>{% if documents %}<a href="{% url 'hr:my_documents_export_pdf' %}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-file-earmark-pdf"></i> Export PDF</a>{% endif %}</div>
         <div class="card-body p-0">
           {% if documents %}
           <table class="table table-sm mb-0">
-            <thead class="table-light"><tr><th>Type</th><th>Title</th><th>File</th></tr></thead>
+            <thead class="table-light"><tr><th>Type</th><th>Title</th><th>File</th><th></th></tr></thead>
             <tbody>
               {% for d in documents %}
               <tr>
                 <td><span class="badge bg-secondary">{{ d.get_document_type_display }}</span></td>
                 <td class="small">{{ d.title }}</td>
                 <td><a href="{{ d.file.url }}" target="_blank" class="small">{% if d.is_pdf %}<i class="bi bi-file-earmark-pdf text-danger me-1"></i>{% elif d.is_image %}<i class="bi bi-file-earmark-image text-success me-1"></i>{% else %}<i class="bi bi-file-earmark me-1"></i>{% endif %}{{ d.filename|truncatechars:24 }}</a></td>
+                <td class="text-end">
+                  <form method="post" action="{% url 'hr:my_document_delete' d.pk %}" onsubmit="return confirm('Delete this document?');" class="d-inline">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-sm btn-link text-danger p-0" title="Delete"><i class="bi bi-trash"></i></button>
+                  </form>
+                </td>
               </tr>
               {% endfor %}
             </tbody>
@@ -632,6 +681,30 @@
           {% else %}
           <p class="text-muted small p-3 mb-0">No documents on file.</p>
           {% endif %}
+          <form method="post" action="{% url 'hr:my_document_upload' %}" enctype="multipart/form-data" class="border-top p-3">
+            {% csrf_token %}
+            <div class="row g-2 mb-2">
+              <div class="col-md-4">
+                <label class="form-label small mb-1">Document Type</label>
+                {{ my_document_form.document_type }}
+              </div>
+              <div class="col-md-8" id="myDocNotesWrap" style="display:none;">
+                <label class="form-label small mb-1">Please specify</label>
+                {{ my_document_form.notes }}
+              </div>
+            </div>
+            <div class="row g-2 align-items-end">
+              <div class="col-md-9">
+                <label class="form-label small mb-1">File</label>
+                {{ my_document_form.file }}
+              </div>
+              <div class="col-md-3">
+                <button type="submit" class="btn btn-primary btn-sm w-100">
+                  <i class="bi bi-upload"></i> Upload
+                </button>
+              </div>
+            </div>
+          </form>
         </div>
       </div>
     </div>
@@ -994,6 +1067,20 @@
     }
     reasonSelect.addEventListener('change', toggleCustomReason);
     toggleCustomReason();
+})();
+
+// Show the 'Please specify' box on the My Documents upload form only
+// when Other Documents is selected - same toggle pattern as the leave
+// request reason field above.
+(function () {
+    var docTypeSelect = document.getElementById('myDocTypeSelect');
+    var notesWrap = document.getElementById('myDocNotesWrap');
+    if (!docTypeSelect || !notesWrap) return;
+    function toggleDocNotes() {
+        notesWrap.style.display = (docTypeSelect.value === 'other') ? '' : 'none';
+    }
+    docTypeSelect.addEventListener('change', toggleDocNotes);
+    toggleDocNotes();
 })();
 
 // Document removal on an Edit form is deferred, not immediate: clicking

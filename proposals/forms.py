@@ -31,7 +31,7 @@ class ProposalMetadataForm(forms.ModelForm):
     class Meta:
         model = TechnicalProposal
         fields = [
-            'title', 'project', 'proposal_reference', 'document_type',
+            'title', 'project', 'department', 'proposal_reference', 'document_type',
             'client_name', 'project_description', 'region_entity',
             'revision', 'revision_date',
             'prepared_by_initials', 'checked_by_initials', 'approved_by_initials',
@@ -50,7 +50,27 @@ class ProposalMetadataForm(forms.ModelForm):
             else:
                 field.widget.attrs['class'] = 'form-control'
         self.fields['project'].required = False
+        self.fields['project'].empty_label = 'No project selected'
         self.fields['project'].queryset = Project.objects.select_related('region').all()
+        self.fields['department'].required = True
+        self.fields['department'].widget.attrs['required'] = True
+        self.fields['department'].choices = [
+            ('', 'Select department…') if not value else (value, label)
+            for value, label in self.fields['department'].choices
+        ]
+
+        # Once a department has been chosen, it's locked for the life of the
+        # proposal — otherwise someone could pick AI, notice the export is
+        # locked, then edit the metadata to switch to an unlocked department
+        # and export anyway. disabled=True (not just a template-level
+        # readonly) means Django ignores whatever the client submits for
+        # this field and always keeps the instance's existing value, so this
+        # can't be bypassed with a hand-crafted POST either. A proposal that
+        # predates this feature (blank department) can still have one set
+        # once, same as any other required field being backfilled.
+        if self.instance.pk and self.instance.department:
+            self.fields['department'].disabled = True
+            self.fields['department'].help_text = 'Locked — the department cannot be changed once chosen.'
 
         # Super admins and the AI team can link a proposal to any existing
         # project (AI works cross-region and usually has no region set);
