@@ -6,7 +6,12 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('projects', '0019_alter_project_project_stage'),
+        # Renumbered from 0020: #223 took that number for
+        # projectstatus_excluded_from_won_tile. Django reads only this
+        # list and ignores the filename, so both hanging off 0019 would
+        # be two leaf nodes however they were named - this chains behind
+        # it instead.
+        ('projects', '0020_projectstatus_excluded_from_won_tile'),
     ]
 
     operations = [
