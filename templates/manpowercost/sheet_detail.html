@@ -1,0 +1,118 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}{{ sheet.title }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-3">
+    <div>
+        <h4 class="mb-0">{{ sheet.title }}</h4>
+        <div class="small text-muted">
+            {% if sheet.project_reference %}{{ sheet.project_reference }} · {% endif %}
+            {{ sheet.date|date:"d M Y" }}
+        </div>
+    </div>
+    <a href="{% url 'manpowercost:sheet_list' %}" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-arrow-left"></i> All sheets
+    </a>
+</div>
+
+{% comment %} The basis is stated on the page, not buried in a settings screen.
+The workbook this replaced divided by 176 hours in one tab and 240 in another
+with nothing on either page saying so, which moved the hourly rate by a third.
+{% endcomment %}
+{% if basis %}
+<div class="alert alert-secondary py-2 small d-flex flex-wrap gap-3 align-items-center">
+    <span><strong>Basis:</strong> {{ basis.name }}</span>
+    <span>Overhead {{ basis.overhead_pct|floatformat:"-2" }}%</span>
+    <span>Profit {{ basis.profit_pct|floatformat:"-2" }}%</span>
+    <span>{{ basis.billable_months|floatformat:"-2" }} billable months</span>
+    <span>{{ basis.hours_per_month|floatformat:"-2" }} h/month</span>
+    <span>{{ basis.working_days_per_month|floatformat:"-2" }} working days/month</span>
+</div>
+{% else %}
+<div class="alert alert-danger py-2 small">
+    This sheet has no cost basis and no default is set, so daily and hourly figures cannot be derived.
+</div>
+{% endif %}
+
+{% if summary.incomplete_count %}
+<div class="alert alert-warning d-flex align-items-center gap-2">
+    <i class="bi bi-exclamation-triangle-fill"></i>
+    <div>
+        <strong>{{ summary.incomplete_count }}</strong> line{{ summary.incomplete_count|pluralize }}
+        {{ summary.incomplete_count|pluralize:"has,have" }} no gross salary, so
+        {{ summary.incomplete_count|pluralize:"it is,they are" }} <strong>not</strong> in the totals below.
+    </div>
+</div>
+{% endif %}
+
+<div class="row g-3 mb-3">
+    <div class="col-6 col-lg-3">
+        <div class="card h-100"><div class="card-body py-2">
+            <div class="small text-muted">Monthly</div>
+            <div class="fs-5">{{ summary.monthly_total|floatformat:2|intcomma }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card h-100"><div class="card-body py-2">
+            <div class="small text-muted">Yearly</div>
+            <div class="fs-5">{{ summary.yearly_total|floatformat:2|intcomma }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card h-100"><div class="card-body py-2">
+            <div class="small text-muted">Blended hourly cost</div>
+            <div class="fs-5">{{ summary.hourly_total|floatformat:2|intcomma }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card h-100"><div class="card-body py-2">
+            <div class="small text-muted">People</div>
+            <div class="fs-5">{{ summary.line_count }}</div>
+        </div></div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>#</th>
+                    <th>Name</th>
+                    <th>Designation</th>
+                    <th>Department</th>
+                    <th>Class</th>
+                    <th class="text-end">Monthly</th>
+                    <th class="text-end">Yearly</th>
+                    <th class="text-end">Daily</th>
+                    <th class="text-end">Hourly</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for row in rows %}
+                <tr {% if row.incomplete %}class="table-warning"{% endif %}>
+                    <td class="text-muted">{{ forloop.counter }}</td>
+                    <td>
+                        {{ row.line.display_name }}
+                        {% if row.line.employee_id %}
+                        <i class="bi bi-person-check text-success ms-1" title="Linked to an HR employee record"></i>
+                        {% endif %}
+                    </td>
+                    <td>{{ row.line.designation|default:"—" }}</td>
+                    <td class="text-muted">{{ row.line.department|default:"—" }}</td>
+                    <td class="text-muted">{{ row.line.get_classification_display|default:"—" }}</td>
+                    <td class="text-end">{{ row.monthly|floatformat:2|intcomma }}</td>
+                    <td class="text-end">{{ row.yearly|floatformat:2|intcomma }}</td>
+                    <td class="text-end">{{ row.daily|floatformat:2|intcomma }}</td>
+                    <td class="text-end">{{ row.hourly|floatformat:2|intcomma }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="9" class="text-center text-muted py-4">No lines on this sheet.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

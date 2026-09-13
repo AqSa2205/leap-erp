@@ -1,0 +1,89 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Charge Rates{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h4 class="mb-0"><i class="bi bi-tags me-2"></i>Charge Rates</h4>
+        <div class="small text-muted">
+            Each rate is built from cost. Every step is shown so a price can be checked
+            rather than taken on trust.
+        </div>
+    </div>
+    <a href="{% url 'manpowercost:sheet_list' %}" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-arrow-left"></i> Cost sheets
+    </a>
+</div>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Position</th>
+                    <th>Class</th>
+                    <th>Basis</th>
+                    <th class="text-end">Monthly cost</th>
+                    <th class="text-end">+ Overhead</th>
+                    <th class="text-end">+ Profit</th>
+                    <th class="text-end">Per invoice</th>
+                    <th class="text-end">Hourly rate</th>
+                    {% if show_margin %}<th class="text-end">Margin</th>{% endif %}
+                    {% if can_edit %}<th></th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+            {% for row in rows %}
+                <tr>
+                    <td>{{ row.rate.position.name }}</td>
+                    <td class="text-muted">{{ row.rate.get_classification_display|default:"—" }}</td>
+                    <td class="text-muted small">{{ row.rate.basis.name }}</td>
+                    <td class="text-end">{{ row.build_up.monthly_cost|floatformat:2|intcomma }}</td>
+                    <td class="text-end text-muted">{{ row.build_up.overhead|floatformat:2|intcomma }}</td>
+                    <td class="text-end text-muted">{{ row.build_up.profit|floatformat:2|intcomma }}</td>
+                    <td class="text-end text-muted">{{ row.build_up.monthly_invoice|floatformat:2|intcomma }}</td>
+                    <td class="text-end">
+                        <strong>{{ row.effective|floatformat:4 }}</strong>
+                        {% comment %} A negotiated rate is marked, because an overridden
+                        number that looks derived is how a sheet comes to disagree with
+                        the cost it claims to be based on. {% endcomment %}
+                        {% if row.rate.is_overridden %}
+                        <span class="badge bg-info text-dark ms-1" title="Manual rate — does not follow cost">fixed</span>
+                        {% endif %}
+                    </td>
+                    {% if show_margin %}
+                    <td class="text-end {% if row.margin < 0 %}text-danger fw-bold{% endif %}">
+                        {{ row.margin|floatformat:1 }}%
+                    </td>
+                    {% endif %}
+                    {% if can_edit %}
+                    <td class="text-end">
+                        <form method="post" action="{% url 'manpowercost:rate_override' row.rate.pk %}"
+                              class="d-flex gap-1 justify-content-end">
+                            {% csrf_token %}
+                            <input type="text" name="manual_rate" class="form-control form-control-sm"
+                                   style="width:7rem" placeholder="follow cost"
+                                   value="{% if row.rate.manual_rate %}{{ row.rate.manual_rate }}{% endif %}">
+                            <button class="btn btn-sm btn-outline-primary" type="submit">Set</button>
+                        </form>
+                    </td>
+                    {% endif %}
+                </tr>
+            {% empty %}
+                <tr><td colspan="10" class="text-center text-muted py-4">
+                    No charge rates defined yet.
+                </td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if not show_margin %}
+<p class="small text-muted mt-2">
+    Margin is hidden — it needs the <em>See margin</em> permission.
+</p>
+{% endif %}
+{% endblock %}

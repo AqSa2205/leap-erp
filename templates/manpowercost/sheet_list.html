@@ -1,0 +1,76 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Manpower Costing{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h4 class="mb-0"><i class="bi bi-person-lines-fill me-2"></i>Manpower Cost Sheets</h4>
+        <div class="small text-muted">
+            Cost figures are entered <strong>per month</strong>. Yearly, daily and hourly
+            are derived from them and from the sheet's cost basis — none of them are typed.
+        </div>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{% url 'manpowercost:rate_card' %}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-tags"></i> Charge Rates
+        </a>
+        {% if can_edit %}
+        <a href="{% url 'manpowercost:sheet_import' %}" class="btn btn-primary btn-sm">
+            <i class="bi bi-upload"></i> Import
+        </a>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Sheet</th>
+                    <th>Reference</th>
+                    <th>Basis</th>
+                    <th class="text-end">People</th>
+                    <th class="text-end">Monthly (SAR)</th>
+                    <th class="text-end">Yearly (SAR)</th>
+                    <th>Date</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for row in rows %}
+                <tr>
+                    <td>
+                        <a href="{% url 'manpowercost:sheet_detail' row.sheet.pk %}">{{ row.sheet.title }}</a>
+                        {% comment %} A sheet whose total silently excludes people is the
+                        exact failure this module exists to prevent, so it is flagged in the
+                        list rather than only on the sheet itself. {% endcomment %}
+                        {% if row.summary.incomplete_count %}
+                        <span class="badge bg-warning text-dark ms-1"
+                              title="{{ row.summary.incomplete_count }} line(s) have no gross salary and are not in this total">
+                            {{ row.summary.incomplete_count }} incomplete
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td class="text-muted">{{ row.sheet.project_reference|default:"—" }}</td>
+                    <td>
+                        {% if row.summary.basis %}{{ row.summary.basis.name }}
+                        {% else %}<span class="text-danger">none set</span>{% endif %}
+                    </td>
+                    <td class="text-end">{{ row.summary.line_count }}</td>
+                    <td class="text-end">{{ row.summary.monthly_total|floatformat:2|intcomma }}</td>
+                    <td class="text-end">{{ row.summary.yearly_total|floatformat:2|intcomma }}</td>
+                    <td class="text-muted">{{ row.sheet.date|date:"d M Y" }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="7" class="text-center text-muted py-4">
+                    No cost sheets yet.
+                    {% if can_edit %}<a href="{% url 'manpowercost:sheet_import' %}">Import one</a>.{% endif %}
+                </td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

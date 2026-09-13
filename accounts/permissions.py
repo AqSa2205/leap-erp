@@ -67,7 +67,16 @@ CAPABILITIES = [
     Capability('timesheets.review', 'Timesheets', 'review',
                'Review & reopen employee timesheets (HR)', enforced=True, order=2),       
 
-    *_module('engineer_calendar', 'Engineer Calendar'),    
+    *_module('engineer_calendar', 'Engineer Calendar'),
+
+    # Manpower Costing: what staff cost and what we charge for them. The
+    # margin cap is separate because the cost sheet is useful to planners
+    # who should not see what the markup is.
+    *_module('manpowercost', 'Manpower Costing'),
+    Capability('manpowercost.edit', 'Manpower Costing', 'edit',
+               'Create & edit cost sheets and rates', enforced=True, order=2),
+    Capability('manpowercost.margin', 'Manpower Costing', 'margin',
+               'See margin between charge rate and cost', enforced=True, order=3),    
 ]
 
 
@@ -157,10 +166,11 @@ DEFAULT_MODULE_ACCESS = {
     # Department KPIs: restricted to super_admin only (the whole KPI section —
     # dashboard, by-person, and data entry). Super admin can widen later from
     # the permission grid if management wants dept heads to see it.
-    'super_admin':     _OPEN_TO_ALL | {'settings', 'devtracking', 'kpis','engineer_calendar'},
+    'super_admin':     _OPEN_TO_ALL | {'settings', 'devtracking', 'kpis','engineer_calendar',
+                                       'manpowercost'},
     # `admin` loses engineer_calendar with the rest of Administration; its
     # access to costing/procurement/pipeline is untouched.
-    'admin':           _OPEN_TO_ALL | {'devtracking'},
+    'admin':           _OPEN_TO_ALL | {'devtracking', 'manpowercost'},
     'manager':         set(_OPEN_TO_ALL),
     'sales_rep':       set(_OPEN_TO_ALL),
     'procurement_mgr': set(_OPEN_TO_ALL),
@@ -204,10 +214,14 @@ DEFAULT_MODULE_ACCESS = {
 # granular (User.has_capability checks the exact codename), so these are real,
 # independently-toggleable capabilities.
 DEFAULT_CODENAME_GRANTS = {
-    'super_admin':  {'devtracking.admin', 'devtracking.mywork', 'kpis.manage', 'kpis.activity','timesheets.review'},
+    'super_admin':  {'devtracking.admin', 'devtracking.mywork', 'kpis.manage', 'kpis.activity','timesheets.review',
+                     'manpowercost.edit', 'manpowercost.margin'},
     # timesheets.review drives the Request Timesheets page in Administration,
     # so it follows that section: erp_admin gains it, admin loses it.
-    'admin':        {'devtracking.admin', 'devtracking.mywork'},
+    # Matches the old manpower AdminRequiredMixin: admin could already read,
+    # edit and export every sheet, so both caps come with the module.
+    'admin':        {'devtracking.admin', 'devtracking.mywork',
+                     'manpowercost.edit', 'manpowercost.margin'},
     'erp_admin':    {'timesheets.review'},
     'developer':    {'devtracking.mywork'},
     'ai_head':            {'devtracking.admin', 'devtracking.mywork'},
