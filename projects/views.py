@@ -14,7 +14,7 @@ from django.views.generic import ListView, DetailView, CreateView, UpdateView, D
 from django.urls import reverse, reverse_lazy
 from django.utils.http import urlencode
 from django.db import transaction
-from django.db.models import Q, Sum, Count
+from django.db.models import Q, Sum, Count, ProtectedError
 from django.core.paginator import Paginator
 from django.core.files.base import ContentFile
 from django.utils import timezone
@@ -668,6 +668,33 @@ class RegionUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
     def form_valid(self, form):
         messages.success(self.request, f'Region "{form.instance.name}" updated.')
         return super().form_valid(form)
+
+
+class RegionDeleteView(LoginRequiredMixin, UserPassesTestMixin, DeleteView):
+    """Delete a region - Super Admin only. Project.region uses
+    on_delete=PROTECT, so a region with any project assigned to it can't
+    be deleted - catch that instead of letting it 500. User.region uses
+    SET_NULL, so a region with only users (no projects) can still be
+    deleted; those users are simply unassigned."""
+    model = Region
+    template_name = 'projects/region_confirm_delete.html'
+    success_url = reverse_lazy('projects:region_list')
+
+    def test_func(self):
+        return self.request.user.is_super_admin_user
+
+    def form_valid(self, form):
+        region_name = self.object.name
+        try:
+            response = super().form_valid(form)
+        except ProtectedError:
+            messages.error(
+                self.request,
+                f'"{region_name}" can\'t be deleted - it still has one or more '
+                'projects assigned to it.')
+            return redirect('projects:region_list')
+        messages.success(self.request, f'Region "{region_name}" deleted.')
+        return response
 
 
 class ProjectCreateView(LoginRequiredMixin, CreateView):

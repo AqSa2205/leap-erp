@@ -2458,6 +2458,49 @@ class RegionManagementViewTests(TestCase):
         region.refresh_from_db()
         self.assertEqual(region.name, 'Protected Zone')
 
+    def test_super_admin_can_delete_unused_region(self):
+        region = Region.objects.create(name='Deletable', code='DELTEST', currency='USD')
+        self.client.force_login(self.super)
+        resp = self.client.post(reverse('projects:region_delete', kwargs={'pk': region.pk}))
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(Region.objects.filter(pk=region.pk).exists())
+
+    def test_non_super_admin_cannot_delete_region(self):
+        region = Region.objects.create(name='Guarded', code='GUARDTEST', currency='USD')
+        self.client.force_login(self.plain)
+        resp = self.client.post(reverse('projects:region_delete', kwargs={'pk': region.pk}))
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(Region.objects.filter(pk=region.pk).exists())
+
+    def test_delete_blocked_when_region_has_a_project(self):
+        """Project.region is on_delete=PROTECT - a region with any project
+        assigned must not be deletable, and the ProtectedError must be
+        caught rather than surfacing as a 500."""
+        region = Region.objects.create(name='In Use', code='INUSETEST', currency='USD')
+        status = ProjectStatus.objects.create(name='Open', category='active')
+        Project.objects.create(
+            project_name='Blocking Project', proposal_reference='INUSE-1',
+            status=status, region=region,
+        )
+        self.client.force_login(self.super)
+        resp = self.client.post(reverse('projects:region_delete', kwargs={'pk': region.pk}))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(Region.objects.filter(pk=region.pk).exists())
+
+    def test_delete_still_works_when_region_has_only_users(self):
+        """User.region is on_delete=SET_NULL - a region with only users
+        (no projects) assigned must still be deletable; those users are
+        simply unassigned rather than blocking the delete."""
+        region = Region.objects.create(name='Users Only', code='USERSONLY', currency='USD')
+        role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        user = User.objects.create_user('regionuser', password='testpass123', role=role, region=region)
+        self.client.force_login(self.super)
+        resp = self.client.post(reverse('projects:region_delete', kwargs={'pk': region.pk}))
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(Region.objects.filter(pk=region.pk).exists())
+        user.refresh_from_db()
+        self.assertIsNone(user.region)
+
 
 class RegionEdgeCaseTests(TestCase):
     """Region create form edge cases: duplicate codes and missing required
