@@ -24,9 +24,9 @@
             {{ proposal.get_status_display }}
         </span>
         {% if proposal.project %}
-        <a href="{% url 'projects:detail' proposal.project.pk %}" class="text-decoration-none" title="Open workflow hub"><code>{{ proposal.proposal_reference }}</code></a>
+        <a href="{% url 'projects:detail' proposal.project.pk %}" class="text-decoration-none" title="Open workflow hub"><code>{{ proposal.proposal_reference }}{% if proposal.department %}-{{ proposal.get_department_display }}{% endif %}</code></a>
         {% else %}
-        <code>{{ proposal.proposal_reference }}</code>
+        <code>{{ proposal.proposal_reference }}{% if proposal.department %}-{{ proposal.get_department_display }}{% endif %}</code>
         {% endif %}
     </div>
     <div>
@@ -36,9 +36,23 @@
         <a href="{% url 'proposals:edit' proposal.pk %}" class="btn btn-outline-secondary">
             <i class="bi bi-gear me-1"></i> Edit Metadata
         </a>
+        {% if proposal.is_export_locked %}
+        <span class="btn btn-secondary disabled" title="Link a client email to unlock export">
+            <i class="bi bi-lock-fill me-1"></i> Export Locked
+        </span>
+        {% else %}
         <a href="{% url 'proposals:export_docx' proposal.pk %}" class="btn btn-success">
             <i class="bi bi-file-earmark-word me-1"></i> Export DOCX
         </a>
+        {% endif %}
+        {% if can_edit %}
+        <button type="button" class="btn btn-outline-primary" onclick="openLinkProposalEmail({{ proposal.pk }})">
+            <i class="bi bi-link-45deg me-1"></i> Link Email
+        </button>
+        {% endif %}
+        <button type="button" class="btn btn-outline-secondary" onclick="openProposalLinkedEmails({{ proposal.pk }})">
+            <i class="bi bi-envelope-open me-1"></i> Linked Emails{% if proposal.linked_emails.count %} ({{ proposal.linked_emails.count }}){% endif %}
+        </button>
         <form method="post" action="{% url 'proposals:duplicate' proposal.pk %}" class="d-inline">
             {% csrf_token %}
             <button type="submit" class="btn btn-outline-secondary"
@@ -122,4 +136,70 @@
     Created by {{ proposal.created_by.get_full_name|default:proposal.created_by.username }} on {{ proposal.created_at|date:"d M Y H:i" }}
     | Last updated {{ proposal.updated_at|date:"d M Y H:i" }}
 </div>
+
+<!-- Link a Client Email -->
+<div class="modal fade" id="linkProposalEmailModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-link-45deg me-2"></i>Link a Client Email</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="linkProposalEmailBody">
+                <div class="text-center text-muted py-4">Loading…</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Linked Emails -->
+<div class="modal fade" id="proposalLinkedEmailsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-envelope-open me-2"></i>Linked Emails</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="proposalLinkedEmailsBody">
+                <div class="text-center text-muted py-4">Loading…</div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    var linkModalEl = document.getElementById('linkProposalEmailModal');
+    var linkModal = linkModalEl ? new bootstrap.Modal(linkModalEl) : null;
+    var linkBody = document.getElementById('linkProposalEmailBody');
+
+    window.openLinkProposalEmail = function(pk) {
+        linkBody.innerHTML = '<div class="text-center text-muted py-4">Loading…</div>';
+        linkModal.show();
+        fetch('/proposals/' + pk + '/browse-link-email/')
+            .then(function(r) { return r.text(); })
+            .then(function(html) { linkBody.innerHTML = html; })
+            .catch(function(err) {
+                linkBody.innerHTML = '<div class="text-danger">Failed to load: ' + err + '</div>';
+            });
+    };
+
+    var linkedModalEl = document.getElementById('proposalLinkedEmailsModal');
+    var linkedModal = linkedModalEl ? new bootstrap.Modal(linkedModalEl) : null;
+    var linkedBody = document.getElementById('proposalLinkedEmailsBody');
+
+    window.openProposalLinkedEmails = function(pk) {
+        linkedBody.innerHTML = '<div class="text-center text-muted py-4">Loading…</div>';
+        linkedModal.show();
+        fetch('/proposals/' + pk + '/linked-emails/')
+            .then(function(r) { return r.text(); })
+            .then(function(html) { linkedBody.innerHTML = html; })
+            .catch(function(err) {
+                linkedBody.innerHTML = '<div class="text-danger">Failed to load: ' + err + '</div>';
+            });
+    };
+})();
+</script>
 {% endblock %}

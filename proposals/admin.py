@@ -8,6 +8,13 @@ from .models import (
     SectionHeadingTemplate,
 )
 
+# ProposalMailbox and ProposalDepartmentFeature are deliberately not
+# registered here — assigning/revoking an employee's mailbox, and toggling
+# the per-department export lock, are both managed from the in-ERP "Email
+# Assigning" screen (email_assignments app) instead of Django admin, so ERP
+# Admins (who can't reach Django admin at all) can do the former, and so a
+# mistaken bulk-delete in Django admin's list view can't wipe either one out.
+
 
 @admin.register(PrequalLibraryItem)
 class PrequalLibraryItemAdmin(admin.ModelAdmin):

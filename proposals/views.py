@@ -3,7 +3,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.shortcuts import get_object_or_404, render, redirect
 from django.urls import reverse_lazy, reverse
 from django.contrib import messages
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
@@ -204,6 +204,7 @@ class ProposalDetailView(ProposalPermissionMixin, DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['engineering_docs'] = self.object.engineering_documents.all()
+        context['can_edit'] = _can_edit_proposal(self.request.user, self.object)
         return context
 
 
@@ -523,9 +524,168 @@ def ajax_load_boilerplate(request, pk):
 
 @login_required
 def proposal_export_docx(request, pk):
-    proposal = get_object_or_404(TechnicalProposal, pk=pk)
+    # Resolved through visible_proposals, the same rule the detail page and
+    # the email-linking endpoints use. Fetching by bare primary key here let
+    # anyone authenticated download any proposal as a DOCX by knowing its id —
+    # detail answered 404 while this answered 200 with the whole document.
+    #
+    # Visibility is checked BEFORE the export lock on purpose. The lock's
+    # message names the proposal's state, so running it first would tell
+    # somebody who cannot see the proposal that it exists and is locked.
+    proposal = get_object_or_404(visible_proposals(request.user), pk=pk)
+    if proposal.is_export_locked:
+        messages.error(request, 'This proposal is locked — link a client email before exporting.')
+        return redirect('proposals:detail', pk=proposal.pk)
     from .docx_export import generate_proposal_docx
     return generate_proposal_docx(proposal)
+
+
+# ─── Client Email Linking (export-lock feature) ────────────────
+
+def _user_proposal_mailbox(user):
+    """The ONE mailbox `user` is allowed to browse through "Link Email" on a
+    Technical Proposal — never taken from a request parameter, always
+    derived here from who's actually logged in, so there is no value
+    anywhere (URL, POST field, hidden JSON) that could be tampered with to
+    reach someone else's mailbox. Returns '' if this user has no mailbox to
+    use — callers must treat that as "nothing to show", not fall back to
+    guessing one. No legacy/shared fallback of any kind."""
+    from .models import ProposalMailbox
+    try:
+        return ProposalMailbox.objects.get(owner=user, is_active=True).email_address
+    except ProposalMailbox.DoesNotExist:
+        return ''
+
+
+def browse_link_proposal_email(request, pk):
+    """List recent Inbox messages from the current user's own linked
+    mailbox, so they can pick one to link to this Technical Proposal."""
+    from . import graph_mail
+
+    proposal = get_object_or_404(TechnicalProposal, pk=pk)
+    if not _can_edit_proposal(request.user, proposal):
+        return HttpResponse('Permission denied.', status=403)
+
+    mailbox = _user_proposal_mailbox(request.user)
+    if not mailbox:
+        return render(request, 'proposals/_proposal_link_browser.html',
+                      {'proposal': proposal,
+                       'error': 'You have not been assigned an email — contact an admin.'})
+
+    already_linked = set(proposal.linked_emails.values_list('graph_message_id', flat=True))
+    try:
+        candidates = graph_mail.list_recent_messages(mailbox)
+    except graph_mail.GraphMailError as exc:
+        return render(request, 'proposals/_proposal_link_browser.html',
+                      {'proposal': proposal, 'error': str(exc)})
+    for c in candidates:
+        c['already_linked'] = c['id'] in already_linked
+    return render(request, 'proposals/_proposal_link_browser.html',
+                  {'proposal': proposal, 'candidates': candidates, 'mailbox': mailbox})
+
+
+@require_POST
+def link_proposal_email(request, pk):
+    """Attach one Graph message to this Technical Proposal as a
+    ProposalLinkedEmail — always an inbound client email, no classification
+    needed (proposals aren't sent from inside the ERP, only linked back
+    once a client has replied)."""
+    from django.utils.dateparse import parse_datetime
+    from . import graph_mail
+    from .models import ProposalLinkedEmail
+
+    proposal = get_object_or_404(TechnicalProposal, pk=pk)
+    if not _can_edit_proposal(request.user, proposal):
+        messages.error(request, 'Permission denied.')
+        return redirect('proposals:detail', pk=proposal.pk)
+
+    mailbox = _user_proposal_mailbox(request.user)
+    if not mailbox:
+        messages.error(request, 'You have not been assigned an email — contact an admin.')
+        return redirect('proposals:detail', pk=proposal.pk)
+
+    message_id = request.POST.get('message_id')
+    if not message_id:
+        messages.error(request, 'Pick a message to link first.')
+        return redirect('proposals:detail', pk=proposal.pk)
+    if ProposalLinkedEmail.objects.filter(graph_message_id=message_id).exists():
+        messages.info(request, 'That email is already linked.')
+        return redirect('proposals:detail', pk=proposal.pk)
+
+    try:
+        msg = graph_mail.get_message_detail(mailbox, message_id)
+    except graph_mail.GraphMailError as exc:
+        messages.error(request, f'Could not fetch that email: {exc}')
+        return redirect('proposals:detail', pk=proposal.pk)
+
+    with transaction.atomic():
+        ProposalLinkedEmail.objects.create(
+            proposal=proposal,
+            graph_message_id=msg['id'],
+            mailbox=mailbox,
+            sender_name=msg['sender_name'],
+            sender_email=msg['sender_email'],
+            to_recipients=msg['to'],
+            cc_recipients=msg['cc'],
+            subject=msg['subject'],
+            body_html=msg['body_html'],
+            body_text=graph_mail.html_to_text(msg['body_html']),
+            sent_at=parse_datetime(msg['sent_at']) if msg['sent_at'] else None,
+            has_attachments=msg['has_attachments'],
+            attachment_meta=msg['attachments'] or None,
+            linked_by=request.user if request.user.is_authenticated else None,
+        )
+
+    messages.success(request, f'Email linked to {proposal.title}.')
+    return redirect('proposals:detail', pk=proposal.pk)
+
+
+def proposal_linked_emails(request, pk):
+    """Render the 'Linked Emails' modal content for one Technical Proposal —
+    read-only, no mailbox required to view what's already linked. Scoped by
+    the same visibility rule as the proposal detail page itself
+    (visible_proposals) — nothing new, nothing weaker."""
+    proposal = get_object_or_404(visible_proposals(request.user), pk=pk)
+    return render(request, 'proposals/_proposal_linked_emails.html', {
+        'proposal': proposal,
+        'linked_emails': proposal.linked_emails.all(),
+    })
+
+
+def download_proposal_email_attachment(request, message_pk):
+    """Stream one linked email's attachment straight from Graph — never
+    stored locally. message_id/attachment_id ride as query params (not path
+    segments) since Graph ids can contain '/', which a <str:> path
+    converter rejects."""
+    from . import graph_mail
+    from .models import ProposalLinkedEmail
+
+    msg = get_object_or_404(ProposalLinkedEmail, pk=message_pk)
+    if not visible_proposals(request.user).filter(pk=msg.proposal_id).exists():
+        return HttpResponse('Permission denied.', status=403)
+    attachment_id = request.GET.get('attachment_id')
+    if not attachment_id:
+        return HttpResponse('Missing attachment_id.', status=400)
+
+    try:
+        filename, content_type, data = graph_mail.fetch_attachment_bytes(
+            msg.mailbox, msg.graph_message_id, attachment_id)
+    except graph_mail.GraphMailError as exc:
+        return HttpResponse(str(exc), status=502)
+
+    # Same fallback Django's own FileResponse uses: a plain quoted filename
+    # when it's pure ASCII, otherwise RFC 5987 filename* — needed for a
+    # client attachment named in a non-Latin script.
+    from urllib.parse import quote as url_quote
+    safe_name = filename.replace('\r', '').replace('\n', '')
+    try:
+        safe_name.encode('ascii')
+        file_expr = 'filename="{}"'.format(safe_name.replace('\\', '\\\\').replace('"', r'\"'))
+    except UnicodeEncodeError:
+        file_expr = "filename*=utf-8''{}".format(url_quote(safe_name))
+    response = HttpResponse(data, content_type=content_type)
+    response['Content-Disposition'] = f'attachment; {file_expr}'
+    return response
 
 
 # ─── Boilerplate CRUD ─────────────────────────────────────────

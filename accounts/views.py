@@ -672,6 +672,7 @@ PERMISSION_PDF_GROUPS = [
     ]),
     ('Delivery, HR-scoped and technical', [
         Role.PROJECT_MANAGER, Role.SITE_MANAGER, Role.DOCUMENT_CONTROLLER,
+        Role.PCC_ENGINEER,
         Role.DEVELOPER, Role.AI_HEAD, Role.AI_ENGINEER,
         Role.AI_JUNIOR_ENGINEER, Role.AI_INTERN,
     ]),

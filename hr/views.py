@@ -21,7 +21,7 @@ from .models import Employee, Asset, AssetAssignment, Vehicle, VehicleDocument, 
 from .forms import (
     EmployeeForm, EmployeeFilterForm, EmployeeImportForm,
     AssetForm, AssetFilterForm, AssetImportForm,
-    VehicleForm, VehicleFilterForm, EmployeeDocumentForm, VehicleDocumentForm,
+    VehicleForm, VehicleFilterForm, EmployeeDocumentForm, MyDocumentUploadForm, VehicleDocumentForm,
     LeaveTypeForm, HolidayForm, WorkingDayForm, WFHRecordForm,
     AttendanceSettingsForm, LeaveRequestForm, AttendanceExceptionForm,
     EmployeeHierarchyForm, ExceptionGrantForm,
@@ -44,6 +44,20 @@ class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
     def test_func(self):
         u = self.request.user
         return u.is_super_admin_user or u.is_erp_admin_user
+
+
+class HRReadOnlyOrAdminMixin(LoginRequiredMixin, UserPassesTestMixin):
+    """Gate for HR list/detail views the read-only HR roles may view,
+    alongside the admins who can also edit from here. Document Controller
+    and PCC Engineer both arrive through this gate. Deliberately separate
+    from AdminRequiredMixin: views that mutate data (create, update,
+    delete, document upload) stay on AdminRequiredMixin unchanged, so a
+    role granted this mixin's views never gains write access.
+    """
+    def test_func(self):
+        u = self.request.user
+        return (u.is_super_admin_user or u.is_erp_admin_user
+                or u.is_document_controller_user or u.is_pcc_engineer_user)
 
 
 class SuperAdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
@@ -401,6 +415,11 @@ def my_profile(request):
         return redirect('hr:my_approvals')
 
     context = {'employee': emp}
+    # Computed once and reused everywhere below (submission gate, edit gate,
+    # banner context) so the cooldown check can never disagree with itself
+    # within one request — a naive date.today() would drift from this by up
+    # to 3 hours around midnight Riyadh time on a UTC-clocked host.
+    today = timezone.localtime(timezone.now()).date()
 
     is_leave_request_post = (
         emp and request.method == 'POST' and request.POST.get('action') == 'request_leave')
@@ -408,22 +427,33 @@ def my_profile(request):
         form = LeaveRequestForm(request.POST, request.FILES, fixed_employee=emp)
         if form.is_valid():
             from hr.leave_approval_services import submit_leave_request
-            try:
-                submit_leave_request(
-                    employee=emp, leave_type=form.cleaned_data['leave_type'],
-                    start_date=form.cleaned_data['start_date'], end_date=form.cleaned_data['end_date'],
-                    employee_reason=form.cleaned_data['employee_reason'], document=form.cleaned_data['document'],
-                    created_by=request.user,
-                )
-                messages.success(request, 'Leave request submitted and sent for approval.')
-                return redirect('hr:my_profile')
-            except ValueError as exc:
-                # The form already passed its own (unlocked) balance/overlap
-                # check — reaching here means submit_leave_request's locked,
-                # authoritative re-check caught something that changed in the
-                # meantime (most likely a genuinely concurrent submission).
-                messages.error(request, str(exc))
+            from hr.leave_cooldown import annual_leave_cooldown
+            # Additive gate, kept separate from the form's own balance/overlap
+            # check (LeaveRequestForm.clean / check_leave_balance) so that
+            # logic stays untouched. annual_leave_cooldown returns None for
+            # every non-Annual leave type, so this can never block Sick,
+            # Unpaid, etc.
+            cooldown = annual_leave_cooldown(emp, form.cleaned_data['leave_type'], today=today)
+            if cooldown:
+                messages.error(request, cooldown['reason'])
                 context['leave_request_submit_failed'] = True
+            else:
+                try:
+                    submit_leave_request(
+                        employee=emp, leave_type=form.cleaned_data['leave_type'],
+                        start_date=form.cleaned_data['start_date'], end_date=form.cleaned_data['end_date'],
+                        employee_reason=form.cleaned_data['employee_reason'], document=form.cleaned_data['document'],
+                        created_by=request.user,
+                    )
+                    messages.success(request, 'Leave request submitted and sent for approval.')
+                    return redirect('hr:my_profile')
+                except ValueError as exc:
+                    # The form already passed its own (unlocked) balance/overlap
+                    # check — reaching here means submit_leave_request's locked,
+                    # authoritative re-check caught something that changed in the
+                    # meantime (most likely a genuinely concurrent submission).
+                    messages.error(request, str(exc))
+                    context['leave_request_submit_failed'] = True
     else:
         form = LeaveRequestForm(fixed_employee=emp) if emp else LeaveRequestForm()
     context['leave_request_form'] = form
@@ -439,6 +469,15 @@ def my_profile(request):
             request.POST, request.FILES, fixed_employee=target.employee, exclude_request_id=target.pk,
             allow_leave_type=target.leave_type, initial={'document': target.document})
         if edit_form.is_valid():
+            from hr.leave_cooldown import annual_leave_cooldown
+            # Same gate as a fresh submission — editing a pending request
+            # (including switching its leave_type to Annual, or a still-
+            # pending Annual request) must not be a way to route around the
+            # cooldown that a brand-new request would be blocked by.
+            cooldown = annual_leave_cooldown(target.employee, edit_form.cleaned_data['leave_type'], today=today)
+            if cooldown:
+                return _edit_leave_retry_redirect(
+                    request, 'hr:my_profile', target, edit_form, error_text=cooldown['reason'])
             try:
                 edit_leave_request(
                     target, request.user, leave_type=edit_form.cleaned_data['leave_type'],
@@ -605,13 +644,13 @@ def my_profile(request):
         return redirect('hr:my_profile')
 
     if emp:
-        today = timezone.localtime(timezone.now()).date()
         # Assets in custody - AssetHandover is the source of truth for
         # current custody (see also hr_dashboard and asset_detail.html).
         context['assets'] = Asset.objects.filter(
             handovers__employee=emp, handovers__status='active').distinct().order_by('asset_name')
         # Documents (iqama/passport copies, contracts, etc.).
         context['documents'] = emp.documents.all()
+        context['my_document_form'] = MyDocumentUploadForm()
         # Leave balance for the current year. The summary total only counts
         # standard accrued allowances (Annual) — conditional/incidental
         # leave (Sick, Marriage, Umrah, etc.) still appears in the per-type rows but
@@ -621,6 +660,13 @@ def my_profile(request):
             .select_related('leave_type'))
         context['entitlements'] = entitlements
         accumulative = [e for e in entitlements if e.leave_type.is_accumulative]
+        # Post-vacation cooldown disclaimer (see hr.leave_cooldown) — purely
+        # additive: resolves to None for any employee not currently in a
+        # cooldown window, so the template only shows a banner when relevant.
+        from hr.leave_cooldown import annual_leave_cooldown
+        context['leave_cooldown'] = next(
+            (cd for cd in (annual_leave_cooldown(emp, e.leave_type, today=today) for e in accumulative) if cd),
+            None)
         context['leave_total_entitled'] = sum((e.entitled_days for e in accumulative), Decimal('0'))
         context['leave_total_remaining'] = sum((e.remaining_days for e in accumulative), Decimal('0'))
         context['leave_total_exception'] = sum((e.exception_days for e in accumulative), Decimal('0'))
@@ -750,6 +796,10 @@ def my_profile(request):
                                   and w.end_date >= today)
             w.is_current = bool(w.start_date <= today <= w.end_date)
         context['my_wfh_records'] = my_wfh
+
+        from hr.models import MonthlyLatenessReport
+        context['my_lateness_reports'] = MonthlyLatenessReport.objects.filter(
+            employee=emp).order_by('-month')[:12]
         next_month_first = (month_end + timedelta(days=1))
         context['attendance_next_month'] = next_month_first
         context['recent_leaves'] = emp.leave_records.select_related(
@@ -951,6 +1001,63 @@ def build_attendance_pdf(emp, month_start, month_end):
 
 @login_required
 @require_POST
+def my_document_upload(request):
+    """Self-service document upload from the employee's own My Profile
+    page - restricted document types compared to the admin upload (see
+    MyDocumentUploadForm), and the employee is always fixed to
+    themselves rather than an arbitrary pk in the URL."""
+    from .models import EmployeeDocument
+
+    emp = getattr(request.user, 'employee_profile', None)
+    if emp is None:
+        messages.error(request, 'Your account is not linked to an employee record.')
+        return redirect('hr:my_profile')
+
+    form = MyDocumentUploadForm(request.POST, request.FILES)
+    if form.is_valid():
+        doc = form.save(commit=False)
+        doc.employee = emp
+        doc.uploaded_by = request.user
+        # Title is derived rather than typed separately: the chosen
+        # type's label, or - for Other - what the employee wrote in the
+        # "Please specify" box.
+        if doc.document_type == 'other':
+            doc.title = doc.notes.strip()
+        else:
+            doc.title = dict(EmployeeDocument.DOC_TYPE_CHOICES)[doc.document_type]
+        doc.save()
+        messages.success(request, f'Document "{doc.title}" uploaded.')
+    else:
+        for field, errors in form.errors.items():
+            for error in errors:
+                messages.error(request, error)
+
+    return redirect('hr:my_profile')
+
+
+@login_required
+@require_POST
+def my_document_delete(request, pk):
+    """Self-service delete on the employee's own My Profile page - only
+    a document's owning employee can delete it, unlike the admin delete
+    view which any admin can use on any employee's documents."""
+    from .models import EmployeeDocument
+
+    emp = getattr(request.user, 'employee_profile', None)
+    if emp is None:
+        messages.error(request, 'Your account is not linked to an employee record.')
+        return redirect('hr:my_profile')
+
+    doc = get_object_or_404(EmployeeDocument, pk=pk, employee=emp)
+    if doc.file:
+        doc.file.delete(save=False)
+    doc.delete()
+    messages.success(request, 'Document deleted.')
+    return redirect('hr:my_profile')
+
+
+@login_required
+@require_POST
 def raise_late_query(request):
     from hr.models import AttendanceRecord, LateQuery
     emp = getattr(request.user, 'employee_profile', None)
@@ -1004,7 +1111,123 @@ def my_attendance_export_pdf(request):
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     return response
 
-class EmployeeListView(AdminRequiredMixin, ListView):
+def build_documents_pdf(emp):
+    """Builds a single merged PDF: a table-of-contents page followed by
+    every uploaded document's actual content, clubbed into one file. PDFs
+    merge in directly; images convert to a PDF page first; anything else
+    that can't be converted is left out of the merge and flagged on the
+    TOC as \"Not included - download separately\" rather than silently
+    vanishing. Reuses the same conversion/merge helpers the PQD export
+    already relies on, rather than duplicating that logic here."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer,
+                                     Image as RLImage)
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import cm, mm
+    from django.utils import timezone
+    from django.contrib.staticfiles.finders import find as find_static
+    from pypdf import PdfReader
+    from proposals.pqd_export import _convert_to_pdf, _merge_pdfs
+    import io
+
+    BRAND_RED = colors.HexColor('#C41E3A')
+    documents = list(emp.documents.all())
+
+    # First pass: convert every document to PDF bytes and count its pages,
+    # so the table of contents can show accurate page numbers before
+    # anything is merged.
+    converted = []  # (doc, pdf_bytes_or_None, page_count)
+    for d in documents:
+        ext = d.file.name.rsplit('.', 1)[-1] if '.' in d.file.name else ''
+        pdf_bytes = None
+        try:
+            with d.file.open('rb') as fh:
+                file_bytes = fh.read()
+            pdf_bytes = _convert_to_pdf(file_bytes, ext)
+        except Exception:
+            pdf_bytes = None
+        page_count = 0
+        if pdf_bytes:
+            try:
+                page_count = len(PdfReader(io.BytesIO(pdf_bytes)).pages)
+            except Exception:
+                pdf_bytes = None
+        converted.append((d, pdf_bytes, page_count))
+
+    # Table of contents page. Assumed to fit on one page - reasonable for
+    # the handful of documents an employee typically has on file - so
+    # included documents are numbered starting from page 2.
+    buffer = io.BytesIO()
+    toc_doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2 * cm, bottomMargin=2 * cm)
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=16,
+                                  textColor=BRAND_RED, spaceAfter=6)
+    subtitle_style = ParagraphStyle('DocSubtitle', parent=styles['Normal'], fontSize=10,
+                                     textColor=colors.grey, spaceAfter=16)
+    note_style = ParagraphStyle('DocNote', parent=styles['Normal'], fontSize=9,
+                                 textColor=colors.HexColor('#555555'), spaceAfter=16)
+
+    elements = []
+    logo_path = find_static('images/leap_logo.jpg')
+    if logo_path:
+        elements.append(RLImage(logo_path, width=45 * mm, height=13.6 * mm, hAlign='CENTER'))
+        elements.append(Spacer(1, 4 * mm))
+    elements.append(Paragraph(f'My Documents — {emp.full_name}', title_style))
+    elements.append(Paragraph(f'Generated {timezone.now().strftime("%d %B %Y")}', subtitle_style))
+    elements.append(Paragraph(
+        'This is your overall document PDF, combining everything on file. '
+        'If you need an individual document on its own, download it directly '
+        'from My Document Uploads on your profile page.', note_style))
+
+    if converted:
+        data = [['Type', 'Title', 'Uploaded', 'Page']]
+        page_cursor = 2  # page 1 is this table of contents
+        for d, pdf_bytes, page_count in converted:
+            if pdf_bytes:
+                page_label = str(page_cursor)
+                page_cursor += page_count
+            else:
+                page_label = 'Not included - download separately'
+            data.append([d.get_document_type_display(), d.title,
+                         d.uploaded_at.strftime('%d %b %Y'), page_label])
+        table = Table(data, colWidths=[3 * cm, 5 * cm, 3 * cm, 5 * cm])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), BRAND_RED),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f5f5f5')]),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        elements.append(table)
+    else:
+        elements.append(Paragraph('No documents on file.', styles['Normal']))
+
+    toc_doc.build(elements)
+    toc_pdf_bytes = buffer.getvalue()
+
+    parts = [toc_pdf_bytes] + [pdf_bytes for _, pdf_bytes, _ in converted if pdf_bytes]
+    return io.BytesIO(_merge_pdfs(parts))
+
+
+@login_required
+def my_documents_export_pdf(request):
+    emp = getattr(request.user, 'employee_profile', None)
+    if emp is None:
+        messages.error(request, 'Your account is not linked to an employee record.')
+        return redirect('hr:my_profile')
+
+    buffer = build_documents_pdf(emp)
+    filename = f'my_documents_{emp.full_name.replace(" ", "_").lower()}.pdf'
+    response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response
+
+
+class EmployeeListView(HRReadOnlyOrAdminMixin, ListView):
     model = Employee
     template_name = 'hr/employee_list.html'
     context_object_name = 'employees'
@@ -1065,7 +1288,7 @@ class EmployeeListView(AdminRequiredMixin, ListView):
         return context
 
 
-class EmployeeDetailView(AdminRequiredMixin, DetailView):
+class EmployeeDetailView(HRReadOnlyOrAdminMixin, DetailView):
     model = Employee
     template_name = 'hr/employee_detail.html'
     context_object_name = 'employee'
@@ -2826,11 +3049,19 @@ class EmployeeLeaveSummaryView(HRScopedAccessMixin, DetailView):
 
 @login_required
 def entitlement_year(request):
-    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
+    # Document Controller and PCC Engineer get read-only access (view the
+    # entitlements table); regenerating or reapplying defaults below stays
+    # admin-only.
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user
+            or request.user.is_document_controller_user
+            or request.user.is_pcc_engineer_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:hr_dashboard')
     year = _int_or(request.GET.get('year'), timezone.now().year)
     if request.method == 'POST':
+        if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
+            messages.error(request, 'Admin access required.')
+            return redirect('hr:entitlement_year')
         post_year = _int_or(request.POST.get('year'), year)
         if request.POST.get('action') == 'reapply':
             from hr.leave_services import reapply_leave_type_defaults
@@ -3772,6 +4003,9 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
                     'employee', 'attendance_record', 'decided_by').order_by('-decided_at')[:50]
             ctx['late_email_notifications'] = Notification.objects.filter(
                 verb='You were late 3 times this month').select_related('recipient').order_by('-created_at')[:50]
+            from hr.models import MonthlyLatenessReport
+            ctx['monthly_lateness_reports'] = MonthlyLatenessReport.objects.select_related(
+                'employee').order_by('-month', 'employee__full_name')[:100]
         ctx['late_queries_tab_count'] = LateQuery.objects.filter(status='pending').count() if is_hr else 0
         return ctx
 

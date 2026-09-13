@@ -11138,3 +11138,710 @@ class PendingApprovalsSourceHealthTests(TestCase):
             with self.assertLogs('hr.approvals', level='ERROR') as captured:
                 self.assertEqual(approvals.pending_approvals(self.super_admin), [])
         self.assertIn('boom', '\n'.join(captured.output))
+
+
+from hr.models import EmployeeDocument
+
+
+class MyDocumentUploadTests(TestCase):
+    """Self-service document upload/delete/export on My Profile - the
+    dropdown is restricted to 5 types (not the full 12 admin choices),
+    Other requires a note, and only the owning employee can touch their
+    own documents."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('doc_emp', password='x', email='doc_emp@leap.com')
+        self.emp = Employee.objects.create(
+            full_name='Document Tester', iqama_number='IQ-DOC', user=self.user)
+        self.other_user = User.objects.create_user('doc_other', password='x', email='doc_other@leap.com')
+        self.other_emp = Employee.objects.create(
+            full_name='Other Doc Person', iqama_number='IQ-DOC-OTHER', user=self.other_user)
+        self.no_emp_user = User.objects.create_user('doc_noemp', password='x', email='doc_noemp@leap.com')
+
+    def _tiny_pdf(self, name='doc.pdf'):
+        from io import BytesIO
+        from reportlab.pdfgen import canvas
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        buf = BytesIO()
+        c = canvas.Canvas(buf)
+        c.drawString(100, 700, 'Test Document')
+        c.save()
+        buf.seek(0)
+        return SimpleUploadedFile(name, buf.read(), content_type='application/pdf')
+
+    # -- upload --
+
+    def test_upload_with_known_type_sets_title_from_choice_label(self):
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse('hr:my_document_upload'), {
+            'document_type': 'iqama', 'notes': '', 'file': self._tiny_pdf(),
+        })
+        self.assertEqual(resp.status_code, 302)
+        doc = self.emp.documents.get()
+        self.assertEqual(doc.title, 'Iqama / ID Copy')
+        self.assertEqual(doc.uploaded_by, self.user)
+
+    def test_upload_other_type_uses_notes_as_title(self):
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse('hr:my_document_upload'), {
+            'document_type': 'other', 'notes': 'Salary Certificate', 'file': self._tiny_pdf(),
+        })
+        self.assertEqual(resp.status_code, 302)
+        doc = self.emp.documents.get()
+        self.assertEqual(doc.title, 'Salary Certificate')
+
+    def test_upload_other_type_without_notes_is_rejected(self):
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse('hr:my_document_upload'), {
+            'document_type': 'other', 'notes': '', 'file': self._tiny_pdf(),
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(self.emp.documents.count(), 0)
+
+    def test_dropdown_only_offers_self_service_choices(self):
+        from hr.forms import MyDocumentUploadForm
+        form = MyDocumentUploadForm()
+        choice_values = [c[0] for c in form.fields['document_type'].choices]
+        self.assertEqual(set(choice_values), set(EmployeeDocument.SELF_SERVICE_DOC_TYPES))
+        # Confirms admin-only types are excluded, not just that the
+        # allowed ones are present.
+        self.assertNotIn('warning_letter', choice_values)
+        self.assertNotIn('salary_slip', choice_values)
+
+    # -- auth boundary --
+
+    def test_user_without_employee_profile_cannot_upload(self):
+        self.client.force_login(self.no_emp_user)
+        resp = self.client.post(reverse('hr:my_document_upload'), {
+            'document_type': 'iqama', 'notes': '', 'file': self._tiny_pdf(),
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(EmployeeDocument.objects.count(), 0)
+
+    def test_get_request_to_upload_is_rejected(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('hr:my_document_upload'))
+        self.assertEqual(resp.status_code, 405)
+
+    def test_cannot_delete_another_employees_document(self):
+        doc = EmployeeDocument.objects.create(
+            employee=self.other_emp, document_type='iqama', title='Iqama / ID Copy',
+            file=self._tiny_pdf(), uploaded_by=self.other_user)
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse('hr:my_document_delete', args=[doc.pk]))
+        self.assertEqual(resp.status_code, 404)
+        self.assertTrue(EmployeeDocument.objects.filter(pk=doc.pk).exists())
+
+    def test_can_delete_own_document(self):
+        doc = EmployeeDocument.objects.create(
+            employee=self.emp, document_type='iqama', title='Iqama / ID Copy',
+            file=self._tiny_pdf(), uploaded_by=self.user)
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse('hr:my_document_delete', args=[doc.pk]))
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(EmployeeDocument.objects.filter(pk=doc.pk).exists())
+
+    def test_user_without_employee_profile_cannot_export(self):
+        self.client.force_login(self.no_emp_user)
+        resp = self.client.get(reverse('hr:my_documents_export_pdf'))
+        self.assertEqual(resp.status_code, 302)
+
+    # -- export / edge cases --
+
+    def test_export_with_no_documents_still_produces_a_pdf(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('hr:my_documents_export_pdf'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+
+    def test_export_includes_uploaded_document_in_toc(self):
+        EmployeeDocument.objects.create(
+            employee=self.emp, document_type='iqama', title='Iqama / ID Copy',
+            file=self._tiny_pdf(), uploaded_by=self.user)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('hr:my_documents_export_pdf'))
+        self.assertEqual(resp.status_code, 200)
+        from pypdf import PdfReader
+        from io import BytesIO
+        reader = PdfReader(BytesIO(resp.content))
+        # TOC page + at least 1 page from the merged document.
+        self.assertGreaterEqual(len(reader.pages), 2)
+
+    def test_export_handles_unconvertible_file_without_crashing(self):
+        # A .txt file has no PDF/image conversion path - must be skipped
+        # gracefully, not crash the whole export.
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        txt_file = SimpleUploadedFile('notes.txt', b'plain text', content_type='text/plain')
+        EmployeeDocument.objects.create(
+            employee=self.emp, document_type='other', title='Random Notes',
+            file=txt_file, uploaded_by=self.user)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('hr:my_documents_export_pdf'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+
+
+    def test_user_without_employee_profile_cannot_delete(self):
+        doc = EmployeeDocument.objects.create(
+            employee=self.emp, document_type='iqama', title='Iqama / ID Copy',
+            file=self._tiny_pdf(), uploaded_by=self.user)
+        self.client.force_login(self.no_emp_user)
+        resp = self.client.post(reverse('hr:my_document_delete', args=[doc.pk]))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(EmployeeDocument.objects.filter(pk=doc.pk).exists())
+
+    def test_deleting_nonexistent_document_404s(self):
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse('hr:my_document_delete', args=[99999]))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_upload_without_file_is_rejected(self):
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse('hr:my_document_upload'), {
+            'document_type': 'iqama', 'notes': '',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(self.emp.documents.count(), 0)
+
+    def test_export_includes_actual_image_content(self):
+        # Confirms the image -> PDF conversion path actually works in the
+        # merged export, not just that PDFs pass through and non-images
+        # get skipped gracefully.
+        from io import BytesIO
+        from PIL import Image as PILImage
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        buf = BytesIO()
+        PILImage.new('RGB', (100, 100), color='blue').save(buf, format='PNG')
+        buf.seek(0)
+        image_file = SimpleUploadedFile('photo.png', buf.read(), content_type='image/png')
+        EmployeeDocument.objects.create(
+            employee=self.emp, document_type='cv', title='CV',
+            file=image_file, uploaded_by=self.user)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('hr:my_documents_export_pdf'))
+        self.assertEqual(resp.status_code, 200)
+        from pypdf import PdfReader
+        from io import BytesIO as _BIO
+        reader = PdfReader(_BIO(resp.content))
+        # TOC page + the converted image page.
+        self.assertGreaterEqual(len(reader.pages), 2)
+
+
+class DocumentControllerHRReadOnlyTests(TestCase):
+    """Document Controller gets read-only access to Employees and Leave
+    Entitlements - the list/detail pages open, but no create, edit,
+    delete, document upload, or entitlement-generation action is
+    available to them anywhere."""
+
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.DOCUMENT_CONTROLLER)
+        self.doc_controller = User.objects.create_user('dc_hr_test', password='x')
+        self.doc_controller.role = role
+        self.doc_controller.save()
+
+        admin_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.admin = User.objects.create_user('dc_admin_test', password='x')
+        self.admin.role = admin_role
+        self.admin.is_superuser = True
+        self.admin.save()
+
+        self.employee = make_employee(iqama='DCTEST1', name='Test Employee')
+
+    # -- list/detail access --
+
+    def test_document_controller_can_view_employee_list(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:employee_list'))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_document_controller_can_view_employee_detail(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:employee_detail', args=[self.employee.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_document_controller_can_view_leave_entitlements(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:entitlement_year'))
+        self.assertEqual(resp.status_code, 200)
+
+    # -- no write access --
+
+    def test_document_controller_cannot_reach_employee_create(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:employee_create'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_document_controller_cannot_reach_employee_update(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:employee_update', args=[self.employee.pk]))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_document_controller_cannot_reach_employee_delete(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:employee_delete', args=[self.employee.pk]))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_document_controller_cannot_post_to_entitlement_year(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.post(reverse('hr:entitlement_year'), {'year': '2026'})
+        self.assertEqual(resp.status_code, 302)
+
+    def test_employee_list_hides_edit_actions_for_document_controller(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:employee_list'))
+        self.assertNotContains(resp, 'Add Employee')
+        self.assertNotContains(resp, 'hr:employee_update')
+
+    def test_employee_detail_hides_edit_actions_for_document_controller(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:employee_detail', args=[self.employee.pk]))
+        self.assertNotContains(resp, 'id="uploadDocModal"')
+        self.assertNotContains(resp, '>Delete<')
+
+    def test_entitlement_year_hides_generate_card_for_document_controller(self):
+        self.client.force_login(self.doc_controller)
+        resp = self.client.get(reverse('hr:entitlement_year'))
+        self.assertNotContains(resp, 'Generate Entitlements')
+
+    # -- sanity check: admin still sees the full feature set --
+
+    def test_admin_still_sees_edit_actions_for_comparison(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse('hr:employee_list'))
+        self.assertContains(resp, 'Add Employee')
+
+
+class PCCEngineerHRReadOnlyTests(TestCase):
+    """PCC Engineer gets the same read-only HR access Document Controller
+    has - the list/detail pages open, but no create, edit, delete,
+    document upload, or entitlement-generation action is available.
+
+    These mirror DocumentControllerHRReadOnlyTests deliberately. Both
+    roles arrive through the one HRReadOnlyOrAdminMixin, so each needs
+    its own coverage: with only one role asserted, dropping the other
+    from the gate would break access silently."""
+
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.PCC_ENGINEER)
+        self.pcc = User.objects.create_user('pcc_hr_test', password='x')
+        self.pcc.role = role
+        self.pcc.save()
+
+        self.employee = make_employee(iqama='PCCTEST1', name='Test Employee')
+
+    # -- list/detail access --
+
+    def test_pcc_engineer_can_view_employee_list(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:employee_list'))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_pcc_engineer_can_view_employee_detail(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:employee_detail', args=[self.employee.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_pcc_engineer_can_view_leave_entitlements(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:entitlement_year'))
+        self.assertEqual(resp.status_code, 200)
+
+    # -- no write access --
+
+    def test_pcc_engineer_cannot_reach_employee_create(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:employee_create'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_pcc_engineer_cannot_reach_employee_update(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:employee_update', args=[self.employee.pk]))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_pcc_engineer_cannot_reach_employee_delete(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:employee_delete', args=[self.employee.pk]))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_pcc_engineer_cannot_post_to_entitlement_year(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.post(reverse('hr:entitlement_year'), {'year': '2026'})
+        self.assertEqual(resp.status_code, 302)
+
+    def test_employee_list_hides_edit_actions_for_pcc_engineer(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:employee_list'))
+        self.assertNotContains(resp, 'Add Employee')
+        self.assertNotContains(resp, 'hr:employee_update')
+
+    def test_employee_detail_hides_edit_actions_for_pcc_engineer(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:employee_detail', args=[self.employee.pk]))
+        self.assertNotContains(resp, 'id="uploadDocModal"')
+        self.assertNotContains(resp, '>Delete<')
+
+    def test_entitlement_year_hides_generate_card_for_pcc_engineer(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:entitlement_year'))
+        self.assertNotContains(resp, 'Generate Entitlements')
+
+from hr.models import MonthlyLatenessReport
+
+
+class MonthlyLatenessReportTests(TransactionTestCase):
+    """Month-end lateness-to-absence report: correct totals/dates/absence
+    conversion, idempotency, email-only-when-a-user-is-linked, and the
+    last-day-of-month gate. Purely a record/notification - never touches
+    AttendanceRecord rows or any absence/leave totals."""
+
+    def setUp(self):
+        self.emp = make_employee(iqama='LATE-RPT-1', name='Sara Khan')
+        self.user = _login_user('late_rpt_emp')
+        self.user.email = 'late_rpt_emp@leap.com'
+        self.user.save(update_fields=['email'])
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+
+    def _mark_late(self, day):
+        # bulk_create bypasses AttendanceRecord.save()'s side effect (the
+        # separate, pre-existing real-time "3 lates this month" email at
+        # exactly the 3rd late) - this test class is about the monthly
+        # report, not that other feature, and its own background thread
+        # would otherwise race our synchronous-in-tests send for the same
+        # SQLite table.
+        AttendanceRecord.objects.bulk_create([
+            AttendanceRecord(employee=self.emp, date=_date(2026, 8, day), status='late')
+        ])
+
+    def test_is_last_day_of_month(self):
+        from hr.lateness_report_services import is_last_day_of_month
+        self.assertTrue(is_last_day_of_month(_date(2026, 8, 31)))
+        self.assertFalse(is_last_day_of_month(_date(2026, 8, 20)))
+        self.assertTrue(is_last_day_of_month(_date(2026, 2, 28)))  # 2026 is not a leap year
+
+    def test_report_totals_and_conversion(self):
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        for day in [3, 5, 7, 12, 18, 22]:
+            self._mark_late(day)
+        count = generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+        self.assertEqual(count, 1)
+        report = MonthlyLatenessReport.objects.get(employee=self.emp, month=_date(2026, 8, 1))
+        self.assertEqual(report.total_lates, 6)
+        self.assertEqual(report.converted_absences, 2)
+        self.assertEqual(report.late_dates, ['2026-08-03', '2026-08-05', '2026-08-07',
+                                              '2026-08-12', '2026-08-18', '2026-08-22'])
+
+    def test_partial_lates_round_down(self):
+        # 2 lates -> 0 converted absences, but still a report/email (>=1 late).
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        self._mark_late(3)
+        self._mark_late(5)
+        generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+        report = MonthlyLatenessReport.objects.get(employee=self.emp, month=_date(2026, 8, 1))
+        self.assertEqual(report.total_lates, 2)
+        self.assertEqual(report.converted_absences, 0)
+
+    def test_no_lates_no_report(self):
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        count = generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+        self.assertEqual(count, 0)
+        self.assertFalse(MonthlyLatenessReport.objects.filter(employee=self.emp).exists())
+
+    def test_idempotent_on_rerun(self):
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        self._mark_late(3)
+        self._mark_late(5)
+        self._mark_late(7)
+        count1 = generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+        count2 = generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+        self.assertEqual(count1, 1)
+        self.assertEqual(count2, 0)
+        self.assertEqual(MonthlyLatenessReport.objects.filter(employee=self.emp).count(), 1)
+
+    def test_email_sent_with_html_alternative(self):
+        from django.core import mail
+        from django.test import override_settings
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        import time as _time
+        with override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend'):
+            for day in [3, 5, 7, 12, 18, 22]:
+                self._mark_late(day)
+            # Creating 6 'late' AttendanceRecords also trips the separate,
+            # pre-existing real-time "3 lates this month" notification
+            # (AttendanceRecord._notify_late_threshold) - both emails are
+            # legitimate, so filter to the one this test is actually about.
+            generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+            _time.sleep(1)
+            summary_emails = [m for m in mail.outbox if 'Lateness Summary' in m.subject]
+            self.assertEqual(len(summary_emails), 1)
+            sent = summary_emails[0]
+            self.assertIn('Sara Khan', sent.body)
+            self.assertIn('Total Lates: 6', sent.body)
+            self.assertIn('3 Aug, 5 Aug, 7 Aug, 12 Aug, 18 Aug, 22 Aug', sent.body)
+            self.assertIn('6 lates \u00f7 3 = 2', sent.body)
+            self.assertIn('2 absence day(s) calculated under this policy', sent.body)
+            self.assertEqual(len(sent.alternatives), 1)
+            html_content, mimetype = sent.alternatives[0]
+            self.assertEqual(mimetype, 'text/html')
+            self.assertIn('Admin Team', html_content)
+            # Outlook renders mail through Word and ignores CSS gradients, so
+            # without a flat bgcolor the header loses its background and the
+            # white heading on it becomes invisible.
+            self.assertIn('bgcolor="#C41E3A"', html_content)
+
+    def test_report_still_created_without_linked_user_but_no_email(self):
+        from django.core import mail
+        from django.test import override_settings
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        no_user_emp = make_employee(iqama='LATE-RPT-2', name='No User Employee')
+        AttendanceRecord.objects.create(employee=no_user_emp, date=_date(2026, 8, 3), status='late')
+        with override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend'):
+            generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+            self.assertEqual(len(mail.outbox), 0)
+        self.assertTrue(MonthlyLatenessReport.objects.filter(employee=no_user_emp).exists())
+
+    def test_retries_email_if_previously_unsent(self):
+        from django.core import mail
+        from django.test import override_settings
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        import time as _time
+        self._mark_late(3)
+        self._mark_late(5)
+        self._mark_late(7)
+        # Simulate a report that was created but whose email send failed
+        # (email_sent_at still None) - created directly, bypassing the
+        # normal generate flow.
+        MonthlyLatenessReport.objects.create(
+            employee=self.emp, month=_date(2026, 8, 1),
+            total_lates=3, late_dates=['2026-08-03', '2026-08-05', '2026-08-07'],
+            converted_absences=1,
+        )
+        with override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend'):
+            count = generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+            _time.sleep(1)
+            self.assertEqual(count, 0)
+            summary_emails = [m for m in mail.outbox if 'Lateness Summary' in m.subject]
+            self.assertEqual(len(summary_emails), 1)
+            report = MonthlyLatenessReport.objects.get(employee=self.emp, month=_date(2026, 8, 1))
+            self.assertIsNotNone(report.email_sent_at)
+
+    def test_does_not_resend_once_already_sent(self):
+        from django.core import mail
+        from django.test import override_settings
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        import time as _time
+        self._mark_late(3)
+        self._mark_late(5)
+        self._mark_late(7)
+        with override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend'):
+            generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+            _time.sleep(1)
+            mail.outbox.clear()
+            generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+            _time.sleep(1)
+            summary_emails = [m for m in mail.outbox if 'Lateness Summary' in m.subject]
+            self.assertEqual(len(summary_emails), 0)
+
+
+class MonthlyLatenessReportAuthBoundaryTests(TestCase):
+    """The 'Monthly Lateness Reports' card lives inside Team Exceptions'
+    late_queries tab, which is already HR-only gated (non-HR requesting it
+    is silently downgraded to the 'direct' tab - see
+    TeamExceptionsView._resolve_tab). These tests confirm that inherited
+    protection actually holds for our card specifically, and that My
+    Profile never leaks one employee's reports to another."""
+
+    def setUp(self):
+        self.hr_user = _make_role_user('mlr-hr', Role.SUPER_ADMIN)
+        self.emp = make_employee(iqama='MLR-AUTH-1', name='Report Owner')
+        self.other_emp = make_employee(iqama='MLR-AUTH-2', name='Other Employee')
+        self.plain_user = _login_user('mlr-plain')
+        self.plain_emp = make_employee(iqama='MLR-AUTH-3', name='Plain Employee')
+        self.plain_emp.user = self.plain_user
+        self.plain_emp.save(update_fields=['user'])
+        # plain_user needs baseline Team Exceptions access (an active
+        # manager of someone) to reach the page at all - can_view_team_exceptions
+        # would otherwise 403 before the late_queries-tab gating is even
+        # reached, which isn't what this test is about.
+        self.other_emp.main_manager = self.plain_emp
+        self.other_emp.save(update_fields=['main_manager'])
+
+        self.report = MonthlyLatenessReport.objects.create(
+            employee=self.emp, month=_date(2026, 8, 1),
+            total_lates=6, late_dates=['2026-08-03', '2026-08-05', '2026-08-07',
+                                        '2026-08-12', '2026-08-18', '2026-08-22'],
+            converted_absences=2,
+        )
+
+    def test_non_hr_user_cannot_see_monthly_lateness_reports_card(self):
+        self.client.login(username='mlr-plain', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions') + '?tab=late_queries')
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn('Monthly Lateness Reports', resp.content.decode())
+        self.assertNotContains(resp, 'Report Owner')
+
+    def test_hr_user_can_see_monthly_lateness_reports_card(self):
+        self.client.login(username='mlr-hr', password='testpass123')
+        resp = self.client.get(reverse('hr:team_exceptions') + '?tab=late_queries')
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Monthly Lateness Reports')
+        self.assertContains(resp, 'Report Owner')
+
+    def test_employee_sees_only_own_report_on_my_profile(self):
+        # Confirm no cross-employee leak by using a DIFFERENT employee/user
+        # than the one the report actually belongs to.
+        other_user = _login_user('mlr-owner')
+        self.emp.user = other_user
+        self.emp.save(update_fields=['user'])
+        self.client.login(username='mlr-plain', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertNotContains(resp, 'August 2026: 6 late')
+
+    def test_employee_sees_their_own_report_on_my_profile(self):
+        owner_user = _login_user('mlr-owner2')
+        self.emp.user = owner_user
+        self.emp.save(update_fields=['user'])
+        self.client.login(username='mlr-owner2', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'August 2026')
+        self.assertContains(resp, '6 late')
+
+
+class MonthlyLatenessReportEdgeCaseTests(TestCase):
+    """Month-boundary correctness and multi-month independence for the
+    report generator - late records outside the target month must never
+    be counted, and separate months must never merge into one report."""
+
+    def setUp(self):
+        self.emp = make_employee(iqama='MLR-EDGE-1', name='Edge Case Employee')
+        self.user = _login_user('mlr_edge_emp')
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+
+    def _mark_late(self, year, month, day):
+        return AttendanceRecord.objects.bulk_create([
+            AttendanceRecord(employee=self.emp, date=_date(year, month, day), status='late')
+        ])[0]
+
+    def test_previous_month_lates_not_counted(self):
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        # Late in July should not appear in the August report.
+        self._mark_late(2026, 7, 30)
+        self._mark_late(2026, 7, 31)
+        self._mark_late(2026, 8, 3)
+        generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+        report = MonthlyLatenessReport.objects.get(employee=self.emp, month=_date(2026, 8, 1))
+        self.assertEqual(report.total_lates, 1)
+        self.assertEqual(report.late_dates, ['2026-08-03'])
+
+    def test_future_dated_lates_not_counted(self):
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        # A late dated after "today" (e.g. a data-entry error, or the
+        # command running mid-cycle) must not be counted for this report.
+        self._mark_late(2026, 8, 3)
+        self._mark_late(2026, 9, 1)
+        generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+        report = MonthlyLatenessReport.objects.get(employee=self.emp, month=_date(2026, 8, 1))
+        self.assertEqual(report.total_lates, 1)
+
+    def test_separate_months_produce_separate_reports(self):
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        self._mark_late(2026, 7, 5)
+        self._mark_late(2026, 7, 10)
+        self._mark_late(2026, 7, 15)
+        generate_monthly_lateness_reports(today=_date(2026, 7, 31))
+        self._mark_late(2026, 8, 3)
+        self._mark_late(2026, 8, 5)
+        generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+        july_report = MonthlyLatenessReport.objects.get(employee=self.emp, month=_date(2026, 7, 1))
+        august_report = MonthlyLatenessReport.objects.get(employee=self.emp, month=_date(2026, 8, 1))
+        self.assertEqual(july_report.total_lates, 3)
+        self.assertEqual(july_report.converted_absences, 1)
+        self.assertEqual(august_report.total_lates, 2)
+        self.assertEqual(august_report.converted_absences, 0)
+        self.assertEqual(MonthlyLatenessReport.objects.filter(employee=self.emp).count(), 2)
+
+    def test_nonexistent_month_has_no_report(self):
+        # No lates recorded anywhere - generating for a month with no data
+        # must not create a report for anyone.
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        count = generate_monthly_lateness_reports(today=_date(2026, 10, 31))
+        self.assertEqual(count, 0)
+        self.assertFalse(MonthlyLatenessReport.objects.filter(month=_date(2026, 10, 1)).exists())
+
+    def test_refuses_to_run_on_non_last_day(self):
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        self._mark_late(2026, 8, 3)
+        self._mark_late(2026, 8, 5)
+        self._mark_late(2026, 8, 7)
+        count = generate_monthly_lateness_reports(today=_date(2026, 8, 20))
+        self.assertEqual(count, 0)
+        self.assertFalse(MonthlyLatenessReport.objects.filter(employee=self.emp).exists())
+
+    def test_skip_last_day_check_bypasses_guard(self):
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        self._mark_late(2026, 8, 3)
+        self._mark_late(2026, 8, 5)
+        self._mark_late(2026, 8, 7)
+        count = generate_monthly_lateness_reports(today=_date(2026, 8, 20), _skip_last_day_check=True)
+        self.assertEqual(count, 1)
+
+    def test_inactive_employee_excluded(self):
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        self.emp.is_active = False
+        self.emp.save(update_fields=['is_active'])
+        self._mark_late(2026, 8, 3)
+        self._mark_late(2026, 8, 5)
+        self._mark_late(2026, 8, 7)
+        count = generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+        self.assertEqual(count, 0)
+        self.assertFalse(MonthlyLatenessReport.objects.filter(employee=self.emp).exists())
+
+    def test_target_month_recovers_correct_month(self):
+        # Simulate a missed 31 Aug run being recovered on 5 Sep - without
+        # target_month, this would incorrectly generate a one-day September
+        # report instead of the intended August one.
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        self._mark_late(2026, 8, 3)
+        self._mark_late(2026, 8, 5)
+        self._mark_late(2026, 8, 7)
+        self._mark_late(2026, 9, 2)  # should NOT leak into the August recovery
+        count = generate_monthly_lateness_reports(
+            today=_date(2026, 9, 5), _skip_last_day_check=True,
+            target_month=_date(2026, 8, 1))
+        self.assertEqual(count, 1)
+        report = MonthlyLatenessReport.objects.get(employee=self.emp, month=_date(2026, 8, 1))
+        self.assertEqual(report.total_lates, 3)
+        self.assertEqual(report.late_dates, ['2026-08-03', '2026-08-05', '2026-08-07'])
+        self.assertFalse(MonthlyLatenessReport.objects.filter(
+            employee=self.emp, month=_date(2026, 9, 1)).exists())
+
+    def test_pending_disputed_late_excluded(self):
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        from hr.models import LateQuery
+        self._mark_late(2026, 8, 3)
+        self._mark_late(2026, 8, 5)
+        disputed_record = self._mark_late(2026, 8, 7)
+        LateQuery.objects.create(
+            employee=self.emp, attendance_record=disputed_record,
+            status='pending', message='I was not late.')
+        generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+        report = MonthlyLatenessReport.objects.get(employee=self.emp, month=_date(2026, 8, 1))
+        self.assertEqual(report.total_lates, 2)
+        self.assertEqual(report.late_dates, ['2026-08-03', '2026-08-05'])
+
+    def test_resolved_disputed_late_still_counted(self):
+        # Only PENDING disputes are excluded - an approved or rejected
+        # query no longer blocks the day from being counted.
+        from hr.lateness_report_services import generate_monthly_lateness_reports
+        from hr.models import LateQuery
+        self._mark_late(2026, 8, 3)
+        resolved_record = self._mark_late(2026, 8, 5)
+        LateQuery.objects.create(
+            employee=self.emp, attendance_record=resolved_record,
+            status='rejected', message='Disputed but rejected.')
+        generate_monthly_lateness_reports(today=_date(2026, 8, 31))
+        report = MonthlyLatenessReport.objects.get(employee=self.emp, month=_date(2026, 8, 1))
+        self.assertEqual(report.total_lates, 2)

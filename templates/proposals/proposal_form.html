@@ -3,6 +3,34 @@
 {% block title %}{% if form.instance.pk %}Edit{% else %}New{% endif %} Technical Proposal - Leap Networks ERP{% endblock %}
 {% block page_title %}{% if form.instance.pk %}Edit Technical Proposal{% else %}New Technical Proposal{% endif %}{% endblock %}
 
+{% block extra_css %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css">
+<style>
+    /* Tom Select's bootstrap5 theme already matches .form-select closely —
+       this just adds the small dropdown-toggle arrow on the right (it ships
+       with none by default) so the field still reads as "a dropdown" even
+       though, unlike a plain <select>, its box is a real, directly-typable
+       text input. */
+    #project-field .ts-control {
+        position: relative;
+        padding-right: 2rem;
+    }
+    #project-field .ts-control::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        right: 0.9rem;
+        width: 0;
+        height: 0;
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-top: 5px solid #6c757d;
+        transform: translateY(-50%);
+        pointer-events: none;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="row justify-content-center">
     <div class="col-md-8">
@@ -30,13 +58,24 @@
                     <div class="row mb-3">
                         <div class="col-md-6">
                             <label class="form-label fw-bold">Project (Optional)</label>
-                            {{ form.project }}
-                            <small class="text-muted">Picking a project fills in the reference and client name below (you can still edit them).</small>
+                            <div id="project-field">
+                                {{ form.project }}
+                            </div>
+                            <small class="text-muted">Type directly to filter, or click the arrow to browse the full list. Picking a project fills in the reference and client name below (you can still edit them).</small>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label fw-bold">Proposal Reference</label>
                             {{ form.proposal_reference }}
                             {% if form.proposal_reference.errors %}<div class="text-danger small">{{ form.proposal_reference.errors.0 }}</div>{% endif %}
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">Department <span class="text-danger">*</span></label>
+                            {{ form.department }}
+                            {% if form.department.field.disabled %}<small class="text-muted">{{ form.department.help_text }}</small>{% endif %}
+                            {% if form.department.errors %}<div class="text-danger small">{{ form.department.errors.0 }}</div>{% endif %}
                         </div>
                     </div>
 
@@ -149,6 +188,42 @@ document.addEventListener('DOMContentLoaded', function() {
         apply(refField, 'reference', data.reference);
         apply(clientField, 'client', data.client);
     });
+});
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Turns the plain <select> into a directly-typable combobox — the
+    // native dropdown was unusable with this many projects (it opens as a
+    // giant listbox that swallows most of the page). Unlike a "click to
+    // reveal a separate search box" widget, Tom Select's control IS a real
+    // <input> you can start typing into immediately. It keeps the original
+    // <select> in the DOM and mirrors picks onto it, still firing a normal
+    // 'change' event on it, so the autofill listener above needs no
+    // changes to keep working.
+    var projectSelect = document.getElementById('{{ form.project.id_for_label }}');
+    if (projectSelect && window.TomSelect) {
+        new TomSelect(projectSelect, {
+            sortField: '$order',
+            create: false,
+            maxOptions: null,
+            placeholder: 'No project selected',
+            // A <select> always has SOME option "selected" — Django renders
+            // the empty choice as that default, and Tom Select would
+            // otherwise render it as a permanent "No project selected" chip
+            // sitting in the box with nowhere for typed text to go but
+            // beside it. Rendering the empty item as blank lets the real
+            // placeholder (above) show through instead, so the box reads as
+            // genuinely empty and ready to type into until something's
+            // actually picked.
+            render: {
+                item: function(data, escape) {
+                    return data.value ? '<div class="item">' + escape(data.text) + '</div>' : '<div class="item"></div>';
+                },
+            },
+        });
+    }
 });
 </script>
 {% endblock %}

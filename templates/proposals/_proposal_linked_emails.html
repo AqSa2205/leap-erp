@@ -1,0 +1,37 @@
+{% if linked_emails %}
+<div style="max-height: 480px; overflow-y: auto;">
+    {% for msg in linked_emails %}
+    <div class="rounded mb-3 p-2 border-start border-4 border-success">
+        <div class="d-flex align-items-center gap-2">
+            <div class="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0 fw-bold text-white bg-success"
+                 style="width:30px;height:30px;font-size:0.75rem;">
+                <i class="bi bi-arrow-down-left"></i>
+            </div>
+            <div class="flex-grow-1">
+                <div class="d-flex justify-content-between">
+                    <span class="fw-bold">{{ msg.sender_name|default:msg.sender_email }}</span>
+                    <span class="small text-muted">{{ msg.sent_at|date:"d M Y H:i"|default:"—" }}</span>
+                </div>
+                <div class="small text-muted">From: {{ msg.sender_email }}</div>
+            </div>
+        </div>
+        <div class="small text-muted mt-1">{{ msg.subject }}</div>
+        <div class="mt-2" style="white-space: pre-wrap; line-height: 1.5;">{{ msg.body_text }}</div>
+        {% if msg.attachment_meta %}
+        <div class="mt-2">
+            {% for att in msg.attachment_meta %}
+            <a href="{% url 'proposals:download_proposal_email_attachment' msg.pk %}?attachment_id={{ att.id }}" class="badge bg-secondary text-decoration-none me-1">
+                <i class="bi bi-paperclip"></i> {{ att.name }}
+            </a>
+            {% endfor %}
+        </div>
+        {% endif %}
+        <div class="small text-muted mt-2" style="font-size:0.7rem;">
+            <i class="bi bi-link-45deg me-1"></i>Linked {{ msg.linked_at|date:"d M Y H:i" }}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="text-center text-muted py-3">No emails linked yet.</div>
+{% endif %}

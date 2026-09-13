@@ -28,10 +28,14 @@ urlpatterns = [
     path('kpis/', include('kpis.urls')),
     path('company/', include('company.urls')),
     path('finance/', include('finance.urls')),
+    # Project delivery (milestone WBS and the progress board). Mounted at
+    # /delivery/ rather than /pmo/ so the URL reads as what it is.
+    path('delivery/', include('pmo.urls')),
     path('accounting/', include('accounting.urls')),
     path('api/attendance/', include('attendance.urls')),
     path('attendance/', include('attendance.ui_urls')),
     path('drafts/', include('drafts.urls')),
+    path('email-assignments/', include('email_assignments.urls')),
 ]
 
 # Whitenoise serves STATIC_URL in production but not MEDIA_URL, so route media

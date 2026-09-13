@@ -213,7 +213,7 @@ document.addEventListener('DOMContentLoaded', function () {
   function saveCell(td, employeeId, dateStr, text, fallbackText) {
     fetch("{% url 'engineer_calendar:save_cell' %}", {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': ERP.csrf() },
       body: JSON.stringify({ employee_id: employeeId, date: dateStr, text: text }),
     })
       .then(function (resp) { if (!resp.ok) throw new Error(); return resp.json(); })
@@ -239,10 +239,7 @@ document.addEventListener('DOMContentLoaded', function () {
     td.appendChild(span);
   }
 
-  function getCookie(name) {
-    const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
-    return match ? match.pop() : '';
-  }
+  // CSRF comes from ERP.csrf() in static/js/erp.js, loaded by base.html.
 
   const fillRangeModalEl = document.getElementById('fillRangeModal');
   const fillRangeErrorEl = document.getElementById('fillRangeError');
@@ -264,7 +261,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     fetch("{% url 'engineer_calendar:fill_range' %}", {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': ERP.csrf() },
       body: JSON.stringify({ employee_id: employeeId, start_date: startDate, end_date: endDate, text: text }),
     })
       .then(function (resp) { return resp.json().then(function (data) { return { ok: resp.ok, data: data }; }); })
