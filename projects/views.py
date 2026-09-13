@@ -111,7 +111,7 @@ class ProjectListView(CapabilityRequiredMixin, ProjectPermissionMixin, ListView)
         quarter = self.request.GET.get('quarter')
         owner = self.request.GET.get('owner')
         category = self.request.GET.get('category')
-        exclude_status = self.request.GET.get('exclude_status')
+        exclude_status_id = self.request.GET.get('exclude_status_id')
 
         if search:
             queryset = queryset.filter(
@@ -137,11 +137,14 @@ class ProjectListView(CapabilityRequiredMixin, ProjectPermissionMixin, ListView)
             queryset = queryset.filter(status_id=status)
         if category:
             queryset = queryset.filter(status__category=category)
-        if exclude_status:
+        if exclude_status_id:
             # Inert unless a caller explicitly opts in (used by the dashboard's
             # Won tile link to keep its click-through count in sync without
             # changing this page's own default filtering for anyone else).
-            queryset = queryset.exclude(status__name=exclude_status)
+            # By id, not name, so renaming a status in the admin can't
+            # silently change what this excludes.
+            ids = [v for v in exclude_status_id.split(',') if v]
+            queryset = queryset.exclude(status_id__in=ids)
         if workflow_stage == 'none':
             # Projects that have no costing sheet yet (workflow not started).
             queryset = queryset.filter(costing_sheets__isnull=True)

@@ -49,7 +49,8 @@ class Command(BaseCommand):
             {'name': 'Hold', 'category': 'active', 'color': '#ffc107', 'order': 4},
             {'name': 'Hot Lead', 'category': 'hot_lead', 'color': '#fd7e14', 'order': 5},
             {'name': 'Won', 'category': 'won', 'color': '#198754', 'order': 6},
-            {'name': 'Closed', 'category': 'won', 'color': '#20c997', 'order': 7},
+            {'name': 'Closed', 'category': 'won', 'color': '#20c997', 'order': 7,
+             'excluded_from_won_tile': True},
             {'name': 'Lost', 'category': 'lost', 'color': '#dc3545', 'order': 8},
             {'name': 'Awarded', 'category': 'ongoing', 'color': '#198754', 'order': 9},
             {'name': 'Ongoing', 'category': 'ongoing', 'color': '#0d6efd', 'order': 10},
@@ -60,7 +61,8 @@ class Command(BaseCommand):
                 defaults={
                     'category': status_data['category'],
                     'color': status_data['color'],
-                    'order': status_data['order']
+                    'order': status_data['order'],
+                    'excluded_from_won_tile': status_data.get('excluded_from_won_tile', False)
                 }
             )
             result = 'Created' if created else 'Already exists'

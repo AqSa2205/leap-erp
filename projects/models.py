@@ -154,6 +154,19 @@ class ProjectStatus(models.Model):
     color = models.CharField(max_length=7, default='#6c757d')  # Bootstrap color
     order = models.IntegerField(default=0)
     is_active = models.BooleanField(default=True)
+    excluded_from_won_tile = models.BooleanField(
+        default=False,
+        help_text="Projects in this status are left out of the Sales Pipeline "
+                  "Dashboard's Won tile/chart/list (e.g. 'Closed' - a won deal "
+                  "that has already been wrapped up). Meaningful only on a "
+                  "status whose category is Won. Every other Won-category "
+                  "query - procurement access, KPIs, finance, reports, and the "
+                  "Commercial Pipeline list itself - still counts this status "
+                  "as won regardless of this flag; it affects that one "
+                  "dashboard display only. A dedicated field rather than "
+                  "matching this status by name, so renaming it here can't "
+                  "silently break the dashboard's exclusion."
+    )
 
     class Meta:
         ordering = ['order', 'name']

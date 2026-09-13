@@ -37,22 +37,17 @@ def _convert(amount, from_ccy, to_ccy, rates):
 # Total) is still an estimate sum — those stages have no priced sheet to read.
 COSTING_VALUED_CATEGORIES = ('won', 'hot_lead')
 
-# "Closed" is seeded with category='won' (see ProjectStatus seed data) so
-# procurement access, KPIs and finance reporting keep treating a closed deal
-# as won - that is existing business logic and stays untouched. This
-# dashboard, and only this dashboard, additionally excludes it by name so the
-# Won tile/chart reflect still-open wins.
-_DASHBOARD_WON_EXCLUDED_STATUS_NAMES = ('Closed',)
-
-
 def _won_qs(queryset):
-    """Won-category projects, minus the ones already moved to Closed.
+    """Won-category projects, minus the ones flagged excluded_from_won_tile
+    (e.g. 'Closed' - a won deal that's already been wrapped up).
 
-    Dashboard-display-only distinction - see the comment on
-    _DASHBOARD_WON_EXCLUDED_STATUS_NAMES above.
+    Dashboard-display-only distinction, driven by a dedicated field rather
+    than matching a status by name - see ProjectStatus.excluded_from_won_tile
+    for why. Procurement access, KPIs, finance and reporting all still key
+    off category='won' directly and are untouched by this flag.
     """
     return queryset.filter(status__category='won').exclude(
-        status__name__in=_DASHBOARD_WON_EXCLUDED_STATUS_NAMES
+        status__excluded_from_won_tile=True
     )
 
 
@@ -319,11 +314,19 @@ def index(request):
         for tab in region_tabs if tab['can_view']
     }
 
+    # IDs, not names, so a status can be renamed in the admin without
+    # silently breaking which projects the Won tile's own links exclude -
+    # see ProjectStatus.excluded_from_won_tile.
+    won_excluded_status_ids = ','.join(str(pk) for pk in ProjectStatus.objects.filter(
+        category='won', excluded_from_won_tile=True
+    ).values_list('pk', flat=True))
+
     context = {
         'overall_stats': overall_stats,
         'region_tabs': region_tabs,
         'chart_data': chart_data,
         'is_super_admin': user.is_super_admin_user,
+        'won_excluded_status_ids': won_excluded_status_ids,
     }
 
     return render(request, 'dashboard/index.html', context)

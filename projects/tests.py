@@ -2308,37 +2308,89 @@ class CategoryFilterTests(TestCase):
         resp = self.client.get(reverse('projects:list'), {'category': 'not_a_real_category'})
         self.assertEqual(set(resp.context['projects']), set())
 
-    def test_exclude_status_is_a_no_op_when_absent(self):
-        # Every existing link/bookmark into this page omits exclude_status,
+    def test_exclude_status_id_is_a_no_op_when_absent(self):
+        # Every existing link/bookmark into this page omits exclude_status_id,
         # so its mere existence in get_queryset() must not change anything
         # for them.
         resp = self.client.get(reverse('projects:list'))
         self.assertEqual(set(resp.context['projects']), self.all_projects)
 
-    def test_exclude_status_removes_matching_status_by_name(self):
-        resp = self.client.get(reverse('projects:list'), {'exclude_status': 'Won'})
+    def test_exclude_status_id_removes_matching_status(self):
+        resp = self.client.get(reverse('projects:list'),
+                               {'exclude_status_id': str(self.won_status.pk)})
         projects = set(resp.context['projects'])
         self.assertNotIn(self.won_project, projects)
         self.assertEqual(projects, self.all_projects - {self.won_project})
 
-    def test_exclude_status_combines_with_category_won(self):
+    def test_exclude_status_id_combines_with_category_won(self):
         # The exact query the dashboard's Won tile link now sends: category
-        # narrows to won-category projects, exclude_status then drops the
-        # ones filed under a status named "Closed" - the case that motivated
-        # this parameter.
-        closed_status = ProjectStatus.objects.create(name='Closed', category='won')
+        # narrows to won-category projects, exclude_status_id then drops the
+        # ones flagged excluded_from_won_tile - by id, not by matching a
+        # status name (see ProjectStatus.excluded_from_won_tile for why).
+        closed_status = ProjectStatus.objects.create(
+            name='Closed', category='won', excluded_from_won_tile=True)
         closed_project = Project.objects.create(
             project_name='Closed P', proposal_reference='CAT-CLOSED', region=self.region,
             status=closed_status)
         resp = self.client.get(reverse('projects:list'),
-                               {'category': 'won', 'exclude_status': 'Closed'})
+                               {'category': 'won', 'exclude_status_id': str(closed_status.pk)})
         projects = set(resp.context['projects'])
         self.assertEqual(projects, {self.won_project})
         self.assertNotIn(closed_project, projects)
 
-    def test_exclude_status_unmatched_name_changes_nothing(self):
-        resp = self.client.get(reverse('projects:list'), {'exclude_status': 'Nonexistent Status'})
+    def test_exclude_status_id_accepts_a_comma_separated_list(self):
+        resp = self.client.get(reverse('projects:list'), {
+            'exclude_status_id': f'{self.won_status.pk},{self.lost_status.pk}'
+        })
+        projects = set(resp.context['projects'])
+        self.assertEqual(projects, self.all_projects - {self.won_project, self.lost_project})
+
+    def test_exclude_status_id_unmatched_id_changes_nothing(self):
+        resp = self.client.get(reverse('projects:list'), {'exclude_status_id': '999999'})
         self.assertEqual(set(resp.context['projects']), self.all_projects)
+
+
+class ExcludedFromWonTileBackfillMigrationTests(TestCase):
+    """Data-migration backfill (0020_projectstatus_excluded_from_won_tile):
+    before ProjectStatus.excluded_from_won_tile existed, the dashboard's
+    Won tile excluded a status by matching its name against literal string
+    "Closed". The migration must flip the new flag on exactly the status(es)
+    that old rule would have matched, so upgrading an existing database
+    doesn't silently change today's Won tile behavior."""
+
+    def _run_backfill(self):
+        import importlib
+        from django.apps import apps as real_apps
+        mod = importlib.import_module(
+            'projects.migrations.0020_projectstatus_excluded_from_won_tile')
+        mod.set_flag_on_existing_closed_status(real_apps, None)
+
+    def test_flags_a_won_category_status_named_closed(self):
+        closed = ProjectStatus.objects.create(name='Closed', category='won')
+        self._run_backfill()
+        closed.refresh_from_db()
+        self.assertTrue(closed.excluded_from_won_tile)
+
+    def test_does_not_flag_a_closed_status_in_a_different_category(self):
+        # Name match alone was never enough for the old rule either - it
+        # only ever ran inside _won_qs(), scoped to category='won' first.
+        closed_lost = ProjectStatus.objects.create(name='Closed', category='lost')
+        self._run_backfill()
+        closed_lost.refresh_from_db()
+        self.assertFalse(closed_lost.excluded_from_won_tile)
+
+    def test_does_not_flag_a_differently_named_won_status(self):
+        won = ProjectStatus.objects.create(name='Won', category='won')
+        self._run_backfill()
+        won.refresh_from_db()
+        self.assertFalse(won.excluded_from_won_tile)
+
+    def test_backfill_is_idempotent(self):
+        closed = ProjectStatus.objects.create(name='Closed', category='won')
+        self._run_backfill()
+        self._run_backfill()
+        closed.refresh_from_db()
+        self.assertTrue(closed.excluded_from_won_tile)
 
 
 class RegionManagementViewTests(TestCase):

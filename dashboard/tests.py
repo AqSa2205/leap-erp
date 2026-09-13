@@ -175,17 +175,24 @@ class ClosedExcludedFromWonTests(TestCase):
     and finance reporting keep treating a closed deal as won - that is
     existing business logic and must stay untouched (see _won_qs's own
     docstring). Only the Sales Pipeline Dashboard's Won tile/chart/summary
-    strip, and the exclude_status param its Won links now send, should ever
-    drop a Closed project from the "Won" figure. Everything else - Total,
-    the other category tiles, the recent-entries table, and the shared
-    Commercial Pipeline list's own default filtering - must keep counting
-    Closed exactly as it always has."""
+    strip, and the exclude_status_id param its Won links now send, should
+    ever drop a project flagged excluded_from_won_tile from the "Won"
+    figure. Everything else - Total, the other category tiles, the
+    recent-entries table, and the shared Commercial Pipeline list's own
+    default filtering - must keep counting it exactly as it always has.
+
+    The exclusion is driven by ProjectStatus.excluded_from_won_tile, a
+    dedicated field, not by matching "Closed" as a literal status name -
+    see test_status_named_closed_without_flag_is_not_excluded and
+    test_status_with_different_name_but_flag_set_is_excluded below for why
+    that distinction is load-bearing."""
 
     def setUp(self):
         self.region = Region.objects.create(name='Won Region', code='WONR', currency='SAR')
 
         self.won_status = ProjectStatus.objects.create(name='Won', category='won')
-        self.closed_status = ProjectStatus.objects.create(name='Closed', category='won')
+        self.closed_status = ProjectStatus.objects.create(
+            name='Closed', category='won', excluded_from_won_tile=True)
         self.hot_status = ProjectStatus.objects.create(name='Hot Lead', category='hot_lead')
         self.active_status = ProjectStatus.objects.create(name='Open', category='active')
         self.lost_status = ProjectStatus.objects.create(name='Lost', category='lost')
@@ -235,9 +242,9 @@ class ClosedExcludedFromWonTests(TestCase):
         stats = self._region_stats()
         self.assertIn(self.closed_project, list(stats['projects']))
 
-    def test_won_status_with_a_different_name_is_not_excluded(self):
-        # Only the specific status NAME "Closed" is excluded - any other
-        # status that also happens to carry category='won' still counts.
+    def test_won_status_without_the_flag_is_not_excluded(self):
+        # A won-category status without excluded_from_won_tile set still
+        # counts, regardless of what it's named.
         other_won = ProjectStatus.objects.create(name='Contract Signed', category='won')
         Project.objects.create(
             project_name='Signed', proposal_reference='WON-3', region=self.region,
@@ -245,6 +252,37 @@ class ClosedExcludedFromWonTests(TestCase):
         stats = self._region_stats()
         self.assertEqual(stats['won']['count'], 2)
         self.assertEqual(stats['won']['value'], Decimal('17000.00'))
+
+    def test_status_named_closed_without_flag_is_not_excluded(self):
+        # The exact regression the review flagged: renaming/re-creating a
+        # status called "Closed" must NOT exclude it by itself - only the
+        # flag does. Two statuses can share the name "Closed" (nothing
+        # enforces uniqueness on ProjectStatus.name); only the flagged one
+        # should be dropped from Won.
+        unflagged_closed = ProjectStatus.objects.create(name='Closed', category='won')
+        Project.objects.create(
+            project_name='Also called Closed', proposal_reference='WON-7',
+            region=self.region, status=unflagged_closed, estimated_value=Decimal('3000'))
+        stats = self._region_stats()
+        # Still-Won (1) + this unflagged "Closed" (1) = 2. The original
+        # flagged Closed project remains excluded.
+        self.assertEqual(stats['won']['count'], 2)
+        self.assertEqual(stats['won']['value'], Decimal('13000.00'))
+
+    def test_status_with_different_name_but_flag_set_is_excluded(self):
+        # The other half of the same regression: a status that does NOT
+        # carry the literal name "Closed" is still excluded once the flag
+        # is set on it - proving the exclusion survives a rename.
+        renamed_closed = ProjectStatus.objects.create(
+            name='Wrapped Up', category='won', excluded_from_won_tile=True)
+        Project.objects.create(
+            project_name='Renamed status', proposal_reference='WON-8',
+            region=self.region, status=renamed_closed, estimated_value=Decimal('9000'))
+        stats = self._region_stats()
+        # Still just the one Still-Won project - both "Closed" and
+        # "Wrapped Up" are excluded via the flag.
+        self.assertEqual(stats['won']['count'], 1)
+        self.assertEqual(stats['won']['value'], Decimal('10000.00'))
 
     def test_other_category_tiles_unaffected(self):
         Project.objects.create(project_name='Hot', proposal_reference='WON-4',
@@ -287,33 +325,36 @@ class ClosedExcludedFromWonTests(TestCase):
 
     # ── the click-through links this page renders ───────────────────────
 
-    def test_rendered_page_won_links_carry_exclude_status_closed(self):
+    def test_rendered_page_won_links_carry_exclude_status_id(self):
         self.client.force_login(self.user)
         body = self.client.get(reverse('dashboard:index')).content.decode()
-        self.assertIn('category=won&exclude_status=Closed', body)
+        self.assertIn(f'category=won&exclude_status_id={self.closed_status.pk}', body)
 
-    def test_rendered_page_other_category_links_omit_exclude_status(self):
+    def test_rendered_page_other_category_links_omit_exclude_status_id(self):
         self.client.force_login(self.user)
         body = self.client.get(reverse('dashboard:index')).content.decode()
         self.assertIn('category=active" class="text-decoration-none"', body)
         self.assertIn('category=hot_lead" class="text-decoration-none"', body)
         self.assertIn('category=lost" class="text-decoration-none"', body)
-        self.assertNotIn('category=active&exclude_status', body)
-        self.assertNotIn('category=hot_lead&exclude_status', body)
-        self.assertNotIn('category=lost&exclude_status', body)
+        self.assertNotIn('category=active&exclude_status_id', body)
+        self.assertNotIn('category=hot_lead&exclude_status_id', body)
+        self.assertNotIn('category=lost&exclude_status_id', body)
 
 
 class ClosedNotExcludedOutsideDashboardTests(TestCase):
     """The flip side of ClosedExcludedFromWonTests: the shared Commercial
     Pipeline list (projects app) must keep its own default, unmodified
     behavior for every caller that is not the dashboard's Won link -
-    Closed still counts as Won there unless a request explicitly opts in
-    with ?exclude_status=Closed, exactly as before this change."""
+    a project flagged excluded_from_won_tile still counts as Won there
+    unless a request explicitly opts in with ?exclude_status_id=<pk>,
+    exactly as before this change. The flag alone changes nothing outside
+    dashboard/views.py's own _won_qs()."""
 
     def setUp(self):
         self.region = Region.objects.create(name='Shared Region', code='SHRD', currency='SAR')
         self.won_status = ProjectStatus.objects.create(name='Won', category='won')
-        self.closed_status = ProjectStatus.objects.create(name='Closed', category='won')
+        self.closed_status = ProjectStatus.objects.create(
+            name='Closed', category='won', excluded_from_won_tile=True)
 
         role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
         self.user = User.objects.create_user('sharedtest', password='x')
