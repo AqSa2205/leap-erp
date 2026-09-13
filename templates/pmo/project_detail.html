@@ -1,0 +1,215 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}{{ project.project_name }} — Milestones{% endblock %}
+
+{% block content %}
+{% comment %} The progress grid posts with fetch and reads the token from
+the DOM. There is no form on this page, so it carries its own.
+{% endcomment %}
+<form style="display:none">{% csrf_token %}</form>
+
+<div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
+    <div>
+        <a href="{% url 'pmo:board' %}" class="small text-decoration-none">
+            <i class="bi bi-arrow-left me-1"></i>Delivery Board
+        </a>
+        <h4 class="mb-0 mt-1">{{ project.project_name }}</h4>
+        <div class="small text-muted">
+            {{ project.proposal_reference }}
+            {% if project.location %}· {{ project.location }}{% endif %}
+            {% if project.po_number %}· PO {{ project.po_number }}{% endif %}
+        </div>
+    </div>
+    <div class="text-end">
+        <div class="small text-muted">Completion</div>
+        <div class="h3 mb-0">{{ completion_pct|floatformat:2 }}%</div>
+        <div class="small text-muted">across {{ leaf_count }} activit{{ leaf_count|pluralize:"y,ies" }}</div>
+    </div>
+</div>
+
+{% comment %} A completion figure built on weights that do not add up is
+worse than no figure, because it looks like an answer. Said here rather than
+only on the board, since this is the page where it gets fixed. {% endcomment %}
+{% if problems %}
+<div class="alert alert-warning">
+    <div class="fw-bold mb-1"><i class="bi bi-exclamation-triangle-fill me-1"></i>The weights do not add up</div>
+    <ul class="mb-0 small">
+        {% for problem in problems %}
+        <li>
+            {% if problem.kind == 'project' %}
+            The top-level activities sum to <strong>{{ problem.total }}</strong>, not 1.0000 —
+            this project can never reach 100%.
+            {% else %}
+            Activities under <strong>{{ problem.parent.activity }}</strong> sum to
+            <strong>{{ problem.total }}</strong>, but that activity carries
+            <strong>{{ problem.expected }}</strong>.
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-header bg-white d-flex justify-content-between align-items-center py-2">
+        <span class="fw-semibold"><i class="bi bi-list-check me-2"></i>Project Milestones</span>
+        {% if can_update %}
+        <span class="small text-muted"><kbd>Enter</kbd> next activity · saved as you leave each cell</span>
+        {% endif %}
+    </div>
+    <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0" id="milestoneGrid"
+               data-can-update="{{ can_update|yesno:'1,0' }}">
+            <thead class="table-light">
+                <tr>
+                    <th width="60">#</th>
+                    <th>Activity</th>
+                    <th width="100" class="text-end">Weight</th>
+                    <th width="120" class="text-end">Completed</th>
+                    <th width="120" class="text-end">Earned</th>
+                    <th width="130">Completion date</th>
+                    <th>Invoice prerequisite</th>
+                </tr>
+            </thead>
+            <tbody id="milestoneRows">
+                {% for entry in display %}
+                <tr class="ms-row {% if entry.is_parent %}table-light fw-semibold{% endif %}"
+                    data-pk="{{ entry.row.pk }}">
+                    <td class="text-muted">{{ entry.number }}</td>
+                    <td {% if not entry.is_parent %}class="ps-4"{% endif %}>{{ entry.row.activity }}</td>
+                    <td class="text-end">{{ entry.weightage|floatformat:4 }}</td>
+                    <td class="text-end">
+                        {% comment %} Only the activities that carry weight are
+                        editable. A parent's figure is its children's sum, so an
+                        input here would let the same weight be claimed twice.
+                        {% endcomment %}
+                        {% if entry.is_parent %}
+                        <span class="text-muted">—</span>
+                        {% elif can_update %}
+                        <input type="number" step="0.0001" min="0" max="1"
+                               class="form-control form-control-sm text-end ms-progress"
+                               value="{{ entry.row.completed_fraction|floatformat:4 }}">
+                        {% else %}
+                        {{ entry.row.completed_fraction|floatformat:4 }}
+                        {% endif %}
+                    </td>
+                    <td class="text-end ms-earned">{{ entry.completed_weightage|floatformat:4 }}</td>
+                    <td class="small">{{ entry.row.completion_date|date:"d M Y"|default:"—" }}</td>
+                    <td class="small text-muted">{{ entry.row.invoice_prerequisite|truncatechars:70 }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="7" class="text-center text-muted py-4">
+                        No milestones yet for this project.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="card-footer small text-muted d-flex justify-content-between flex-wrap gap-2">
+        <span>
+            Progress is a fraction between 0 and 1 — <code>0.4933</code> is 49.33% of that activity.
+            Every change is recorded with who made it and when.
+        </span>
+        <span id="milestoneStatus"></span>
+    </div>
+</div>
+
+{% if can_update %}
+<script>
+// Weekly progress update. The same shape as the A.4 resources grid on the
+// costing sheet: type down a column, Enter moves to the next activity, and the
+// save happens on blur rather than per keystroke — a fraction is half-wrong
+// while somebody is typing "0.49".
+(function () {
+  const grid = document.getElementById('milestoneGrid');
+  if (!grid || grid.dataset.canUpdate !== '1') return;
+
+  const rows = document.getElementById('milestoneRows');
+  const status = document.getElementById('milestoneStatus');
+  const csrf = () => (document.querySelector('[name=csrfmiddlewaretoken]') || {}).value || '';
+
+  function say(message, isError) {
+    status.textContent = message;
+    status.className = isError ? 'text-danger' : 'text-muted';
+    if (message && !isError) {
+      setTimeout(() => { if (status.textContent === message) status.textContent = ''; }, 1500);
+    }
+  }
+
+  const inputs = () => [...rows.querySelectorAll('.ms-progress')];
+
+  function save(input) {
+    const row = input.closest('.ms-row');
+    const body = new URLSearchParams();
+    body.append('completed_fraction', input.value.trim() || '0');
+    say('Saving…');
+    return fetch(`/delivery/milestone/${row.dataset.pk}/progress/`, {
+      method: 'POST',
+      headers: {
+        'X-CSRFToken': csrf(),
+        'X-Requested-With': 'XMLHttpRequest',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: body.toString(),
+    })
+      .then((r) => r.json().then((payload) => ({ ok: r.ok, payload })))
+      .then(({ ok, payload }) => {
+        if (!ok || payload.error) {
+          // Put the saved value back rather than leaving the rejected one on
+          // screen looking accepted.
+          say(payload.error || 'Could not save that.', true);
+          input.classList.add('is-invalid');
+          return;
+        }
+        input.classList.remove('is-invalid');
+        row.querySelector('.ms-earned').textContent =
+          Number(payload.completed_weightage).toFixed(4);
+        // The parent's earned figure and the project total are both derived
+        // from this and sit elsewhere on the page. Marking them stale is
+        // honest; leaving yesterday's number under a heading is not.
+        document.querySelectorAll('.table-light .ms-earned').forEach((el) => {
+          el.classList.add('text-muted');
+          el.title = 'Reload to update — an activity below this changed';
+        });
+        say('Saved');
+      })
+      .catch(() => say('Could not save that.', true));
+  }
+
+  rows.addEventListener('keydown', function (event) {
+    const input = event.target.closest('.ms-progress');
+    if (!input) return;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      const all = inputs();
+      const next = all[all.indexOf(input) + 1];
+      Promise.resolve(save(input)).then(() => {
+        input.dataset.dirty = '0';
+        if (next) { next.focus(); next.select(); }
+      });
+    } else if (event.key === 'Escape') {
+      input.blur();
+    }
+    // Tab is the browser's. The DOM is in reading order, so it already walks
+    // the grid correctly and reimplementing it would only be a way to get it
+    // wrong.
+  });
+
+  rows.addEventListener('input', function (event) {
+    const input = event.target.closest('.ms-progress');
+    if (input) input.dataset.dirty = '1';
+  });
+
+  rows.addEventListener('focusout', function (event) {
+    const input = event.target.closest('.ms-progress');
+    if (!input || input.dataset.dirty !== '1') return;
+    input.dataset.dirty = '0';
+    save(input);
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}
