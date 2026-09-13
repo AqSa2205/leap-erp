@@ -11410,3 +11410,79 @@ class DocumentControllerHRReadOnlyTests(TestCase):
         self.client.force_login(self.admin)
         resp = self.client.get(reverse('hr:employee_list'))
         self.assertContains(resp, 'Add Employee')
+
+
+class PCCEngineerHRReadOnlyTests(TestCase):
+    """PCC Engineer gets the same read-only HR access Document Controller
+    has - the list/detail pages open, but no create, edit, delete,
+    document upload, or entitlement-generation action is available.
+
+    These mirror DocumentControllerHRReadOnlyTests deliberately. Both
+    roles arrive through the one HRReadOnlyOrAdminMixin, so each needs
+    its own coverage: with only one role asserted, dropping the other
+    from the gate would break access silently."""
+
+    def setUp(self):
+        from accounts.models import Role, User
+        role, _ = Role.objects.get_or_create(name=Role.PCC_ENGINEER)
+        self.pcc = User.objects.create_user('pcc_hr_test', password='x')
+        self.pcc.role = role
+        self.pcc.save()
+
+        self.employee = make_employee(iqama='PCCTEST1', name='Test Employee')
+
+    # -- list/detail access --
+
+    def test_pcc_engineer_can_view_employee_list(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:employee_list'))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_pcc_engineer_can_view_employee_detail(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:employee_detail', args=[self.employee.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_pcc_engineer_can_view_leave_entitlements(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:entitlement_year'))
+        self.assertEqual(resp.status_code, 200)
+
+    # -- no write access --
+
+    def test_pcc_engineer_cannot_reach_employee_create(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:employee_create'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_pcc_engineer_cannot_reach_employee_update(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:employee_update', args=[self.employee.pk]))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_pcc_engineer_cannot_reach_employee_delete(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:employee_delete', args=[self.employee.pk]))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_pcc_engineer_cannot_post_to_entitlement_year(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.post(reverse('hr:entitlement_year'), {'year': '2026'})
+        self.assertEqual(resp.status_code, 302)
+
+    def test_employee_list_hides_edit_actions_for_pcc_engineer(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:employee_list'))
+        self.assertNotContains(resp, 'Add Employee')
+        self.assertNotContains(resp, 'hr:employee_update')
+
+    def test_employee_detail_hides_edit_actions_for_pcc_engineer(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:employee_detail', args=[self.employee.pk]))
+        self.assertNotContains(resp, 'id="uploadDocModal"')
+        self.assertNotContains(resp, '>Delete<')
+
+    def test_entitlement_year_hides_generate_card_for_pcc_engineer(self):
+        self.client.force_login(self.pcc)
+        resp = self.client.get(reverse('hr:entitlement_year'))
+        self.assertNotContains(resp, 'Generate Entitlements')

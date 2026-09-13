@@ -47,16 +47,17 @@ class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
 
 
 class HRReadOnlyOrAdminMixin(LoginRequiredMixin, UserPassesTestMixin):
-    """Gate for HR list/detail views Document Controller may view
-    read-only, alongside the admins who can also edit from here.
-    Deliberately separate from AdminRequiredMixin: views that mutate data
-    (create, update, delete, document upload) stay on AdminRequiredMixin
-    unchanged, so Document Controller granted this mixin's views never
-    gains write access.
+    """Gate for HR list/detail views the read-only HR roles may view,
+    alongside the admins who can also edit from here. Document Controller
+    and PCC Engineer both arrive through this gate. Deliberately separate
+    from AdminRequiredMixin: views that mutate data (create, update,
+    delete, document upload) stay on AdminRequiredMixin unchanged, so a
+    role granted this mixin's views never gains write access.
     """
     def test_func(self):
         u = self.request.user
-        return u.is_super_admin_user or u.is_erp_admin_user or u.is_document_controller_user
+        return (u.is_super_admin_user or u.is_erp_admin_user
+                or u.is_document_controller_user or u.is_pcc_engineer_user)
 
 
 class SuperAdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
@@ -3044,10 +3045,12 @@ class EmployeeLeaveSummaryView(HRScopedAccessMixin, DetailView):
 
 @login_required
 def entitlement_year(request):
-    # Document Controller gets read-only access (view the entitlements
-    # table); regenerating or reapplying defaults below stays admin-only.
+    # Document Controller and PCC Engineer get read-only access (view the
+    # entitlements table); regenerating or reapplying defaults below stays
+    # admin-only.
     if not (request.user.is_super_admin_user or request.user.is_erp_admin_user
-            or request.user.is_document_controller_user):
+            or request.user.is_document_controller_user
+            or request.user.is_pcc_engineer_user):
         messages.error(request, 'Admin access required.')
         return redirect('hr:hr_dashboard')
     year = _int_or(request.GET.get('year'), timezone.now().year)

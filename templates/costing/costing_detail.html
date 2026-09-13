@@ -657,7 +657,7 @@ three times" is a different conversation from "it is back now". {% endcomment %}
                 {% else %}
                 <span class="badge bg-success mb-1">Final</span>
                 {% endif %}
-                <div class="btn-group-vertical btn-group-sm">
+                <div class="{% if user.is_pcc_engineer_user %}btn-group{% else %}btn-group-vertical{% endif %} btn-group-sm">
                     {% if can_edit %}
                     <a href="{% url 'costing:edit' sheet.pk %}" class="btn btn-outline-secondary"><i class="bi bi-pencil"></i> Edit</a>
                     <a href="{% url 'costing:import_excel' sheet.pk %}" class="btn btn-outline-success"><i class="bi bi-upload"></i> Import Excel</a>
@@ -822,7 +822,9 @@ three times" is a different conversation from "it is back now". {% endcomment %}
                         <th class="cost-hdr">Install %</th>
                         <th class="cost-hdr">Unit Price</th>
                         <th class="cost-hdr">Total Price</th>
+                        {% if can_edit %}
                         <th class="table-dark" style="width:60px;">Act</th>
+                        {% endif %}
                     </tr>
                 </thead>
 
@@ -1161,6 +1163,7 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
     </div>
 </div>
 
+{% if can_edit %}
 <!-- Paste from Excel Modal -->
 <div class="modal fade" id="pasteExcelModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
@@ -1193,6 +1196,7 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
         </div>
     </div>
 </div>
+{% endif %}
 
 <!-- Recent Changes (cross-team visibility) -->
 <div class="card mt-3">

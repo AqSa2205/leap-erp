@@ -38,7 +38,7 @@
                     <a href="{% url 'hr:employee_list' %}" class="btn btn-outline-secondary me-2">
                         <i class="bi bi-arrow-left"></i> Back
                     </a>
-                    {% if not user.is_document_controller_user %}
+                    {% if not user.is_document_controller_user and not user.is_pcc_engineer_user %}
                     <a href="{% url 'hr:employee_update' employee.pk %}" class="btn btn-primary me-2">
                         <i class="bi bi-pencil"></i> Edit
                     </a>
@@ -178,7 +178,7 @@
                     <div class="card mb-4">
                         <div class="card-header d-flex justify-content-between align-items-center">
                             <h5 class="mb-0"><i class="bi bi-folder2-open"></i> Documents</h5>
-                            {% if not user.is_document_controller_user %}
+                            {% if not user.is_document_controller_user and not user.is_pcc_engineer_user %}
                             <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#uploadDocModal">
                                 <i class="bi bi-upload me-1"></i> Upload
                             </button>
@@ -216,7 +216,7 @@
                                             <td><small>{{ doc.uploaded_at|date:"d M Y" }}</small></td>
                                             <td>
                                                 <a href="{{ doc.file.url }}" class="btn btn-sm btn-outline-primary" title="Download" download><i class="bi bi-download"></i></a>
-                                                {% if not user.is_document_controller_user %}
+                                                {% if not user.is_document_controller_user and not user.is_pcc_engineer_user %}
                                                 <a href="{% url 'hr:employee_doc_delete' doc.pk %}" class="btn btn-sm btn-outline-danger" title="Delete" onclick="return confirm('Delete this document?')"><i class="bi bi-trash"></i></a>
                                                 {% endif %}
                                             </td>
@@ -306,7 +306,7 @@
     </div>
 </div>
 
-{% if not user.is_document_controller_user %}
+{% if not user.is_document_controller_user and not user.is_pcc_engineer_user %}
 <!-- Upload Document Modal -->
 <div class="modal fade" id="uploadDocModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
