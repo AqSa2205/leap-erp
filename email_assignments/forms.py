@@ -48,6 +48,24 @@ class _MailboxAssignFormBase(forms.ModelForm):
                 'Another employee already has this exact email address on '
                 'file — fix the duplicate under Administration → Users '
                 'first.')
+        # Taking the address from owner.email closes the free-text hole, but
+        # only as far as the User record is trusted. An admin can edit anyone's
+        # email under Administration → Users, so pointing a low-privilege
+        # account at a colleague's address and then assigning it here would
+        # hand that account their inbox — app-only Mail.Read reads whatever
+        # address it is given. Refuse when the address belongs to somebody
+        # else's account.
+        if owner and owner.email:
+            clash = (User.objects
+                     .filter(email__iexact=owner.email, is_active=True)
+                     .exclude(pk=owner.pk)
+                     .first())
+            if clash:
+                raise forms.ValidationError(
+                    f'That address is also on {clash.get_full_name() or clash.username}’s '
+                    f'account. A mailbox must belong to exactly one person — '
+                    f'correct the duplicate under Administration → Users before '
+                    f'assigning it.')
         return cleaned_data
 
 
