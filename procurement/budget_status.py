@@ -38,6 +38,16 @@ from decimal import Decimal
 COMMITTED_STATUSES = ('issued', 'client_acknowledged', 'completed')
 PENDING_STATUSES = ('draft',)
 
+# The same rule for QUANTITY rather than money: which POs still hold a claim
+# on a budget line's quantity. A cancelled PO was never bought, so its units
+# go back to the line and can be ordered again.
+#
+# Written as what is RELEASED rather than what claims, so it fails closed: a
+# status added later counts as a live claim until somebody decides otherwise.
+# Getting that backwards releases quantity that is really on order, and the
+# result is buying the same thing twice.
+RELEASED_STATUSES = ('cancelled',)
+
 APPROVED_STAGE = 'finance_approved'
 BASE_CURRENCY = 'SAR'
 
