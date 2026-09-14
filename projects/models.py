@@ -789,21 +789,20 @@ class MonitoredMailbox(models.Model):
     projects/views.py:_user_mailbox() only ever returns the CURRENT
     request's own user's row — there is no way, by request parameter or
     otherwise, for one person to browse another's linked mailbox through
-    this feature. An admin creates one row per employee who needs "Add
-    Emails" (Django admin: Projects → Monitored mailboxes), linking their
-    ERP account to their real mailbox address.
+    this feature. An admin assigns one row per employee who needs "Add
+    Emails" from the Email Assigning app (Administration → Email Assigning
+    → Commercial Pipeline tab) — not Django admin, which no longer manages
+    this model at all — linking their ERP account to their real mailbox
+    address.
 
-    Historically there was exactly one mailbox for everyone, set via the
-    PIPELINE_EMAIL_MAILBOX environment variable — that still works
-    untouched as a fallback ONLY while this table has never had a row in
-    it at all, so the feature doesn't go dark the moment this ships. The
-    instant even one row has EVER existed (checked by existence, not by
-    is_active — deactivating someone's row must revoke their access, not
-    hand it to whoever the legacy setting points at instead), that
-    fallback stops applying entirely for everyone else too — an unlinked
-    or deactivated user simply has no mailbox until an admin links or
-    reactivates them, rather than silently falling back to a mailbox that
-    may by then be someone else's personal, individually-linked one.
+    No legacy/shared fallback of any kind: access exists only once an admin
+    has explicitly linked this exact user to a row here. (A prior version
+    fell back to a single shared PIPELINE_EMAIL_MAILBOX setting until the
+    first row was ever created, meaning every unlinked user could browse
+    and pull documents from that shared mailbox before any admin action was
+    ever taken — the same exposure caught live on the costing-revision
+    feature's identical pattern. Removed before this ever shipped; see
+    _user_mailbox()'s docstring in views.py.)
 
     Every mailbox here is reachable via the same Graph app registration
     and its existing Mail.Read application permission — no new Azure AD
@@ -821,6 +820,17 @@ class MonitoredMailbox(models.Model):
     email_address = models.EmailField(unique=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+',
+        help_text='The admin who assigned this mailbox.',
+    )
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+',
+        help_text='The admin who last revoked this mailbox. Cleared on reactivation.',
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['owner__username']

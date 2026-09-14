@@ -644,12 +644,49 @@ def proposal_linked_emails(request, pk):
     """Render the 'Linked Emails' modal content for one Technical Proposal —
     read-only, no mailbox required to view what's already linked. Scoped by
     the same visibility rule as the proposal detail page itself
-    (visible_proposals) — nothing new, nothing weaker."""
+    (visible_proposals) — nothing new, nothing weaker.
+
+    The delete button (see delete_proposal_linked_email below) only ever
+    renders for Super Admin / ERP Admin — deliberately not the employee who
+    linked it, even though they can link one in the first place. Letting an
+    ordinary employee delete a linked email would turn the export lock into
+    something they could open on their own: link any email to unlock
+    export, download the DOCX, then delete the email again, leaving no
+    trace. Restricting delete to admins means the employee has to actually
+    ask one, which is the whole point of the lock."""
     proposal = get_object_or_404(visible_proposals(request.user), pk=pk)
     return render(request, 'proposals/_proposal_linked_emails.html', {
         'proposal': proposal,
         'linked_emails': proposal.linked_emails.all(),
+        'is_email_admin': bool(request.user.is_super_admin_user or request.user.is_erp_admin_user),
     })
+
+
+@require_POST
+def delete_proposal_linked_email(request, message_pk):
+    """Remove one linked email from a Technical Proposal — Super Admin / ERP
+    Admin only (see proposal_linked_emails' docstring for why). If this was
+    the department's only linked email and the export-lock rule is on for
+    it, the proposal is locked again automatically the moment this saves —
+    is_export_locked is computed live from linked_emails.exists(), so there
+    is nothing extra to do here to re-lock it."""
+    from .models import ProposalLinkedEmail
+
+    if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
+        messages.error(request, 'Only a Super Admin or ERP Admin can remove a linked email.')
+        return redirect('proposals:list')
+
+    msg = get_object_or_404(ProposalLinkedEmail, pk=message_pk)
+    proposal = msg.proposal
+    msg.delete()
+
+    if proposal.is_export_locked:
+        messages.success(
+            request, 'Email removed. This proposal is locked again until another client '
+                     'email is linked.')
+    else:
+        messages.success(request, 'Email removed from this proposal.')
+    return redirect('proposals:detail', pk=proposal.pk)
 
 
 def download_proposal_email_attachment(request, message_pk):

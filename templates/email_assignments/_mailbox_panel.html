@@ -1,0 +1,109 @@
+{% comment %}
+Shared mailbox-assignment table + form — identical shape across all three
+tabs (Technical Proposals / Commercial Pipeline / Costing), so it's one
+partial rather than three near-identical copies of the same ~100 lines.
+
+Expected context: mailboxes, form, feature_label (e.g. "Technical Proposal"),
+assign_url_name / toggle_url_name / delete_url_name (each an
+'email_assignments:...' url-name string — Django's {% url %} tag accepts a
+variable holding the name).
+{% endcomment %}
+<div class="card border-0 shadow-sm mb-3" style="border-radius:12px;">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-envelope-at me-2"></i>{{ feature_label }} — Linked Mailboxes</h5>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small mb-3">{{ panel_description }}</p>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th>Employee</th>
+                        <th>Mailbox address</th>
+                        <th>Status</th>
+                        <th>Assigned on</th>
+                        <th width="180">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for mailbox in mailboxes %}
+                    <tr>
+                        <td>{{ mailbox.owner.get_full_name|default:mailbox.owner.username }}</td>
+                        <td>{{ mailbox.email_address }}</td>
+                        <td>
+                            {% if mailbox.is_active %}
+                            <span class="badge bg-success">Active</span>
+                            {% else %}
+                            <span class="badge bg-secondary">Revoked</span>
+                            {% if mailbox.revoked_by %}
+                            <div class="text-muted small mt-1">by {{ mailbox.revoked_by.get_full_name|default:mailbox.revoked_by.username }}{% if mailbox.revoked_at %}, {{ mailbox.revoked_at|date:"d M Y" }}{% endif %}</div>
+                            {% endif %}
+                            {% endif %}
+                        </td>
+                        <td class="text-muted small">
+                            {{ mailbox.created_at|date:"d M Y" }}
+                            {% if mailbox.assigned_by %}<div>by {{ mailbox.assigned_by.get_full_name|default:mailbox.assigned_by.username }}</div>{% endif %}
+                        </td>
+                        <td>
+                            <div class="btn-group btn-group-sm">
+                                <form method="post" action="{% url toggle_url_name mailbox.pk %}" class="d-inline"
+                                      onsubmit="return confirm('{% if mailbox.is_active %}Revoke mailbox access for {{ mailbox.owner }}?{% else %}Restore mailbox access for {{ mailbox.owner }}?{% endif %}')">
+                                    {% csrf_token %}
+                                    {% if mailbox.is_active %}
+                                    <button type="submit" class="btn btn-outline-warning" title="Revoke">
+                                        <i class="bi bi-slash-circle"></i> Revoke
+                                    </button>
+                                    {% else %}
+                                    <button type="submit" class="btn btn-outline-success" title="Reactivate">
+                                        <i class="bi bi-arrow-counterclockwise"></i> Reactivate
+                                    </button>
+                                    {% endif %}
+                                </form>
+                                <form method="post" action="{% url delete_url_name mailbox.pk %}" class="d-inline"
+                                      onsubmit="return confirm('Permanently remove the mailbox assignment for {{ mailbox.owner }}? This cannot be undone.')">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-outline-danger" title="Delete">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="5" class="text-center text-muted py-4">No mailboxes assigned yet.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm" style="border-radius:12px;">
+    <div class="card-header fw-semibold"><i class="bi bi-person-plus me-2"></i>Assign a mailbox</div>
+    <div class="card-body">
+        {% if form.non_field_errors %}
+        <div class="alert alert-danger py-2 small">{{ form.non_field_errors|join:" " }}</div>
+        {% endif %}
+        <form method="post" action="{% url assign_url_name %}" class="row g-2 align-items-end">
+            {% csrf_token %}
+            <div class="col-md-10">
+                <label class="form-label small mb-1" for="{{ form.owner.id_for_label }}">Employee</label>
+                {{ form.owner }}
+                {% if form.owner.errors %}<div class="small text-danger">{{ form.owner.errors|join:", " }}</div>{% endif %}
+            </div>
+            <div class="col-md-2 d-grid">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check-lg me-1"></i>Assign
+                </button>
+            </div>
+        </form>
+        <div class="form-text mt-2">
+            Only employees who don't already have a mailbox assigned appear above — revoke or
+            delete their current one first if you need to change it. The mailbox address used is
+            always the email already on file for that employee (Administration → Users) — it
+            can't be typed in separately here.
+        </div>
+    </div>
+</div>

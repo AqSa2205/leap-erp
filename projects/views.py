@@ -1664,7 +1664,9 @@ def link_pipeline_email(request, pk):
     inbox_messages = []
     inbox_error = None
     if not mailbox:
-        inbox_error = 'No mailbox is linked to your account yet — ask an admin to link one in Django admin (Projects → Monitored mailboxes).'
+        inbox_error = ('No mailbox is linked to your account yet — ask an admin to assign '
+                        'one from Email Assigning (Administration → Email Assigning → '
+                        'Commercial Pipeline tab).')
     else:
         try:
             inbox_messages = graph_mail.list_inbox_messages(mailbox)
@@ -1732,7 +1734,9 @@ def link_pipeline_email_new(request):
     inbox_messages = []
     inbox_error = None
     if not mailbox:
-        inbox_error = 'No mailbox is linked to your account yet — ask an admin to link one in Django admin (Projects → Monitored mailboxes).'
+        inbox_error = ('No mailbox is linked to your account yet — ask an admin to assign '
+                        'one from Email Assigning (Administration → Email Assigning → '
+                        'Commercial Pipeline tab).')
     else:
         try:
             inbox_messages = graph_mail.list_inbox_messages(mailbox)
