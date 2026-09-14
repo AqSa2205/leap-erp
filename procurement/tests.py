@@ -1155,12 +1155,23 @@ class POClientAcknowledgedLockTests(TestCase):
     # ── the status itself ───────────────────────────────────────────────────
 
     def test_only_the_new_status_locks(self):
-        for status in ('draft', 'issued', 'completed', 'cancelled'):
+        for status in ('draft', 'issued', 'supplier_acknowledged', 'completed', 'cancelled'):
             self.po.status = status
             with self.subTest(status=status):
                 self.assertFalse(self.po.is_locked)
         self.po.status = 'client_acknowledged'
         self.assertTrue(self.po.is_locked)
+
+    def test_supplier_acknowledged_does_not_stamp_the_client_ack_fields(self):
+        """Supplier Acknowledged is a plain status note, deliberately
+        distinct from Client Acknowledged - it must not touch the
+        client_acknowledged_at/by stamps, which describe a different
+        acknowledgement and are what the lock guarantee is built on."""
+        self.po.record_status_change(
+            to_status='supplier_acknowledged', changed_by=self.procurement)
+        self.po.refresh_from_db()
+        self.assertIsNone(self.po.client_acknowledged_at)
+        self.assertIsNone(self.po.client_acknowledged_by)
 
     def test_acknowledging_stamps_who_and_when(self):
         self._lock()
