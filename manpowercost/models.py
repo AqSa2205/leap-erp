@@ -29,12 +29,14 @@ COST_COMPONENTS = (
     ('gross_salary', 'Gross Salary'),
     ('iqama_cost', 'Iqama Cost'),
     ('service_transfer_visa_fee', 'Services Transfer & Visa Fee'),
+    ('re_entry_visa', 'Re-entry Visa'),
     ('gosi_cost', 'GOSI Cost'),
     ('vacation_pay', 'Vacation Pay'),
     ('exe_cost', 'EXE Cost'),
     ('eosb', 'EOSB'),
     ('air_ticket', 'Air Ticket'),
     ('insurance_cost', 'Insurance Cost'),
+    ('saudization_cost', 'Saudization'),
     ('project_allowance', 'Project Allowance'),
     ('ppe', 'PPE'),
     ('engineering_council_cost', 'Engineering Council Cost'),
@@ -42,6 +44,23 @@ COST_COMPONENTS = (
 )
 
 COST_COMPONENT_FIELDS = tuple(name for name, _label in COST_COMPONENTS)
+
+# How the components are grouped on screen. Fifteen inputs in one row is a
+# horizontal scroll nobody reads; grouped, they are four short lists that
+# match how the cost is actually made up. A test asserts every component
+# appears exactly once here, so a new one cannot be added to the model and
+# quietly left off the form.
+COST_GROUPS = (
+    ('Pay', ('gross_salary',)),
+    ('Statutory & permits', (
+        'iqama_cost', 'service_transfer_visa_fee', 're_entry_visa',
+        'gosi_cost', 'saudization_cost', 'engineering_council_cost')),
+    ('Benefits', ('vacation_pay', 'eosb', 'air_ticket', 'insurance_cost')),
+    ('Project & other', (
+        'project_allowance', 'ppe', 'exe_cost', 'other_expenditures')),
+)
+
+COMPONENT_LABELS = dict(COST_COMPONENTS)
 
 
 class Classification(models.TextChoices):
@@ -214,6 +233,24 @@ class ManpowerCostLine(models.Model):
     location_project = models.CharField(max_length=255, blank=True)
     doj = models.DateField(null=True, blank=True, verbose_name='Date of Joining')
     demobilization_date = models.DateField(null=True, blank=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+
+    # Optional decomposition of gross salary, from the REAL COST layout
+    # (Basic + Housing + Transport). NOT added into monthly_cost - gross_salary
+    # already carries the pay, and adding both would double it. Held because
+    # GOSI and end-of-service are calculated from basic (and housing) in KSA,
+    # so a module that ever derives those instead of taking them as input
+    # needs the split. `salary_breakdown_mismatch` reports the two disagreeing
+    # rather than silently preferring one.
+    basic_salary = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        verbose_name='Basic Salary (monthly)')
+    housing_allowance = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        verbose_name='Housing Allowance (monthly)')
+    transport_allowance = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        verbose_name='Transport Allowance (monthly)')
 
     gross_salary = models.DecimalField(
         max_digits=12, decimal_places=2, default=0,
@@ -239,9 +276,18 @@ class ManpowerCostLine(models.Model):
     air_ticket = models.DecimalField(
         max_digits=12, decimal_places=2, default=0,
         verbose_name='Air Ticket (monthly)')
+    re_entry_visa = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        verbose_name='Re-entry Visa (monthly)')
     insurance_cost = models.DecimalField(
         max_digits=12, decimal_places=2, default=0,
         verbose_name='Insurance Cost (monthly)')
+    saudization_cost = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        verbose_name='Saudization (monthly)',
+        help_text='Saudization / Nitaqat levy. 12,000 a year per expatriate '
+                  'head in the source workbook — around 16% of its benefits '
+                  'bill, so leaving it out understates cost materially.')
     project_allowance = models.DecimalField(
         max_digits=12, decimal_places=2, default=0,
         verbose_name='Project Allowance (monthly)')
@@ -268,6 +314,37 @@ class ManpowerCostLine(models.Model):
         if self.employee_id and self.employee:
             return self.employee.full_name
         return self.employee_name or self.designation or f'Line {self.pk}'
+
+    @property
+    def employee_age(self):
+        from datetime import date
+        dob = self.date_of_birth
+        if not dob and self.employee_id and self.employee:
+            dob = self.employee.date_of_birth
+        if not dob:
+            return None
+        today = date.today()
+        return (today.year - dob.year
+                - ((today.month, today.day) < (dob.month, dob.day)))
+
+    @property
+    def salary_breakdown_total(self):
+        return ((self.basic_salary or Decimal('0'))
+                + (self.housing_allowance or Decimal('0'))
+                + (self.transport_allowance or Decimal('0')))
+
+    @property
+    def salary_breakdown_mismatch(self):
+        """The gap between the split and the gross, when both are filled.
+
+        Returns None when no breakdown was entered. Surfaced rather than
+        resolved: silently preferring one over the other is how a cost sheet
+        comes to disagree with payroll without anybody noticing.
+        """
+        if not self.salary_breakdown_total:
+            return None
+        diff = self.salary_breakdown_total - (self.gross_salary or Decimal('0'))
+        return diff if diff else None
 
     @property
     def monthly_cost(self):

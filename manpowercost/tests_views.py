@@ -203,11 +203,11 @@ class EditControlVisibilityTests(TestCase):
             codename='manpowercost.access', defaults={'allowed': True})
         return user
 
-    def test_reader_is_not_offered_the_import_button(self):
+    def test_reader_is_not_offered_the_new_sheet_button(self):
         self.client.force_login(self._reader())
         resp = self.client.get(reverse('manpowercost:sheet_list'))
         self.assertFalse(resp.context['can_edit'])
-        self.assertNotContains(resp, reverse('manpowercost:sheet_import'))
+        self.assertNotContains(resp, 'newSheetModal')
 
     def test_reader_is_not_offered_the_rate_override_form(self):
         self.client.force_login(self._reader())
@@ -219,7 +219,7 @@ class EditControlVisibilityTests(TestCase):
         self.client.force_login(make_user('rw', Role.SUPER_ADMIN))
         self.assertContains(
             self.client.get(reverse('manpowercost:sheet_list')),
-            reverse('manpowercost:sheet_import'))
+            'newSheetModal')
         self.assertContains(
             self.client.get(reverse('manpowercost:rate_card')),
             'name="manual_rate"')

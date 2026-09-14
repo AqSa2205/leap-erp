@@ -13,25 +13,28 @@ from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.core import signing
 from django.core.exceptions import PermissionDenied
-from django.db import transaction
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from accounts.permissions import require_capability
-from costing.models import ResourceCatalogueItem
 from costing.views import _user_can_see_pricing
 
 from . import rates
 from .models import (
-    COST_COMPONENTS, COST_COMPONENT_FIELDS, ChargeRate, CostBasis,
-    ManpowerCostLine, ManpowerCostSheet,
+    COMPONENT_LABELS, COST_COMPONENTS, COST_COMPONENT_FIELDS, COST_GROUPS,
+    ChargeRate, CostBasis, Classification, ManpowerCostLine,
+    ManpowerCostSheet,
 )
 
-PREVIEW_SALT = 'manpowercost.import'
-PREVIEW_MAX_AGE = 60 * 30  # 30 minutes, same as the PMO milestone import
+# Text cells a grid row may set, alongside the numeric cost components.
+TEXT_FIELDS = ('employee_name', 'designation', 'department',
+               'location_project', 'classification')
+
+SALARY_SPLIT_FIELDS = ('basic_salary', 'housing_allowance',
+                       'transport_allowance')
 
 
 def _require_pricing(user):
@@ -53,6 +56,30 @@ def _can_see_margin(user):
     return user.has_capability('manpowercost.margin')
 
 
+def _require_edit(user):
+    if not _can_edit(user):
+        raise PermissionDenied
+
+
+def _decimal_or_error(raw):
+    """Parse a grid cell. Blank means zero; nonsense is refused.
+
+    Deliberately not a silent fallback to 0. The importer this module
+    replaced turned anything it could not parse into a zero, which is how a
+    salary quietly left a total.
+    """
+    raw = (raw or '').strip().replace(',', '')
+    if raw == '':
+        return Decimal('0'), None
+    try:
+        value = Decimal(raw)
+    except (InvalidOperation, ValueError):
+        return None, f'"{raw}" is not a number'
+    if value < 0:
+        return None, 'Cost cannot be negative'
+    return value, None
+
+
 @login_required
 @require_capability('manpowercost.access')
 def sheet_list(request):
@@ -65,6 +92,25 @@ def sheet_list(request):
         'rows': rows,
         'can_edit': _can_edit(request.user),
     })
+
+
+@login_required
+@require_capability('manpowercost.edit')
+@require_POST
+def sheet_create(request):
+    _require_pricing(request.user)
+    title = (request.POST.get('title') or '').strip()
+    if not title:
+        messages.error(request, 'Give the sheet a title.')
+        return redirect('manpowercost:sheet_list')
+    sheet = ManpowerCostSheet.objects.create(
+        title=title[:255],
+        project_reference=(request.POST.get('project_reference') or '')[:255],
+        date=timezone.localdate(),
+        basis=CostBasis.get_default(),
+        created_by=request.user,
+    )
+    return redirect('manpowercost:sheet_detail', pk=sheet.pk)
 
 
 @login_required
@@ -82,11 +128,30 @@ def sheet_detail(request, pk):
         monthly = line.monthly_cost
         rows.append({
             'line': line,
+            # Built here rather than reached for in the template: a template
+            # cannot look a field up by name, and the groups have to stay in
+            # the order COST_GROUPS declares.
+            'groups': [
+                {
+                    'name': group_name,
+                    'fields': [(f, COMPONENT_LABELS[f], getattr(line, f))
+                               for f in fields],
+                    'subtotal': sum((getattr(line, f) or Decimal('0')
+                                     for f in fields), Decimal('0')),
+                }
+                for group_name, fields in COST_GROUPS
+            ],
+            'split': [
+                ('basic_salary', 'Basic', line.basic_salary),
+                ('housing_allowance', 'Housing', line.housing_allowance),
+                ('transport_allowance', 'Transport', line.transport_allowance),
+            ],
             'monthly': monthly,
             'yearly': monthly * 12,
             'daily': line.daily_cost(basis),
             'hourly': line.hourly_cost(basis),
             'incomplete': not line.gross_salary,
+            'mismatch': line.salary_breakdown_mismatch,
         })
 
     return render(request, 'manpowercost/sheet_detail.html', {
@@ -95,9 +160,108 @@ def sheet_detail(request, pk):
         'rows': rows,
         'summary': rates.sheet_summary(sheet),
         'components': COST_COMPONENTS,
+        'classifications': Classification.choices,
         'can_edit': _can_edit(request.user),
     })
 
+
+# ── The editable grid ─────────────────────────────────────────────────────
+# Same shape as costing's A.4 resource grid: one row per person, saved on
+# blur, so twenty people can be typed in one sitting without a page reload.
+
+def _line_payload(line, basis):
+    monthly = line.monthly_cost
+    return {
+        'id': line.pk,
+        'monthly': f'{monthly:.2f}',
+        'yearly': f'{monthly * 12:.2f}',
+        'daily': f'{line.daily_cost(basis):.2f}',
+        'hourly': f'{line.hourly_cost(basis):.2f}',
+        'incomplete': not line.gross_salary,
+    }
+
+
+def _sheet_payload(sheet):
+    summary = rates.sheet_summary(sheet)
+    return {
+        'monthly_total': f'{summary["monthly_total"]:.2f}',
+        'yearly_total': f'{summary["yearly_total"]:.2f}',
+        'hourly_total': f'{summary["hourly_total"]:.2f}',
+        'line_count': summary['line_count'],
+        'incomplete_count': summary['incomplete_count'],
+    }
+
+
+@login_required
+@require_POST
+def line_add(request, pk):
+    _require_pricing(request.user)
+    _require_edit(request.user)
+    sheet = get_object_or_404(ManpowerCostSheet, pk=pk)
+    last = (sheet.lines.order_by('-order')
+            .values_list('order', flat=True).first() or 0)
+    line = ManpowerCostLine.objects.create(sheet=sheet, order=last + 1)
+    return JsonResponse({
+        'line': _line_payload(line, sheet.effective_basis),
+        'sheet': _sheet_payload(sheet),
+    })
+
+
+@login_required
+@require_POST
+def line_update(request, pk):
+    """Update one field on one line.
+
+    One field per request rather than the whole row: the grid saves on blur,
+    and sending the untouched cells back would let a stale tab overwrite what
+    somebody else just typed into a different column.
+    """
+    _require_pricing(request.user)
+    _require_edit(request.user)
+    line = get_object_or_404(
+        ManpowerCostLine.objects.select_related('sheet__basis'), pk=pk)
+
+    field = request.POST.get('field', '')
+    raw = request.POST.get('value', '')
+
+    if field in COST_COMPONENT_FIELDS or field in SALARY_SPLIT_FIELDS:
+        value, error = _decimal_or_error(raw)
+        if error:
+            return JsonResponse({'error': error}, status=400)
+        setattr(line, field, value)
+    elif field in TEXT_FIELDS:
+        if field == 'classification':
+            valid = {c for c, _ in Classification.choices}
+            if raw and raw not in valid:
+                return JsonResponse({'error': 'Unknown classification'},
+                                    status=400)
+        setattr(line, field, (raw or '').strip()[:255])
+    else:
+        # An unknown field name is refused rather than ignored: silently
+        # accepting a POST that changed nothing is indistinguishable from a
+        # save that worked.
+        return JsonResponse({'error': f'Cannot edit "{field}"'}, status=400)
+
+    line.save(update_fields=[field])
+    return JsonResponse({
+        'line': _line_payload(line, line.sheet.effective_basis),
+        'sheet': _sheet_payload(line.sheet),
+    })
+
+
+@login_required
+@require_POST
+def line_delete(request, pk):
+    _require_pricing(request.user)
+    _require_edit(request.user)
+    line = get_object_or_404(ManpowerCostLine.objects.select_related('sheet'),
+                             pk=pk)
+    sheet = line.sheet
+    line.delete()
+    return JsonResponse({'sheet': _sheet_payload(sheet)})
+
+
+# ── Charge rates ──────────────────────────────────────────────────────────
 
 @login_required
 @require_capability('manpowercost.access')
@@ -157,203 +321,3 @@ def rate_override(request, pk):
         messages.success(request, f'{cr} fixed at {cr.manual_rate}/hr.')
     cr.save(update_fields=['manual_rate', 'updated_at'])
     return redirect('manpowercost:rate_card')
-
-
-# ── Import ───────────────────────────────────────────────────────────────
-# Column aliases carried over from the app this replaces, so a workbook that
-# imported before still imports. The behaviour that changes is what happens
-# to a column that matches nothing: it is reported, not silently zeroed.
-
-COLUMN_ALIASES = {
-    'employee_name': ('employees name', 'employee name', 'name', 'full name'),
-    'department': ('department', 'dept'),
-    'classification': ('classification of staff', 'classification', 'class'),
-    'location_project': ('location/project', 'location', 'project', 'site'),
-    'designation': ('designation', 'position', 'title'),
-    'gross_salary': ('gross salary', 'salary', 'basic salary'),
-    'iqama_cost': ('iqama cost', 'iqama'),
-    'service_transfer_visa_fee': ('services transfer & visa fee',
-                                  'service transfer & visa fee',
-                                  'services transfer', 'visa fee'),
-    'gosi_cost': ('gosi cost', 'gosi'),
-    'vacation_pay': ('vacation pay', 'vacation'),
-    'exe_cost': ('exe cost', 'exe'),
-    'eosb': ('eosb', 'end of service', 'end of service benefit'),
-    'air_ticket': ('air ticket', 'airticket', 'ticket'),
-    'insurance_cost': ('insurance cost', 'insurance'),
-    'project_allowance': ('project allowance', 'allowance'),
-    'ppe': ('ppe',),
-    'engineering_council_cost': ('engineering council cost',
-                                 'engineering council'),
-    'other_expenditures': ('other expenditures', 'other expenses', 'others'),
-}
-
-HEADER_HINTS = {
-    'employees name', 'employee name', 'name', 'sr. no.', 'sr.no.', 'sr. no',
-    's.no', 's.no.', 'gross salary', 'designation', 'department',
-}
-
-
-def _parse_decimal(value):
-    if value in (None, ''):
-        return Decimal('0')
-    try:
-        return Decimal(str(value).replace(',', '').strip())
-    except (InvalidOperation, ValueError):
-        return Decimal('0')
-
-
-def _read_workbook(upload):
-    """Parse an uploaded workbook into rows, and report what did not map.
-
-    Returns (rows, unmapped_headers, header_row_index).
-    """
-    import openpyxl
-
-    wb = openpyxl.load_workbook(upload, data_only=True)
-    ws = wb.active
-
-    header_row_idx = 1
-    for idx, row in enumerate(ws.iter_rows(min_row=1, max_row=5,
-                                           values_only=True), start=1):
-        cells = {str(c).strip().lower() for c in row if c is not None}
-        if cells & HEADER_HINTS:
-            header_row_idx = idx
-            break
-
-    header_row = next(ws.iter_rows(min_row=header_row_idx,
-                                   max_row=header_row_idx, values_only=True))
-    header_map = {}
-    for col_idx, cell in enumerate(header_row):
-        if cell is None:
-            continue
-        header_map[str(cell).strip().lower()] = col_idx
-
-    known = {alias for aliases in COLUMN_ALIASES.values() for alias in aliases}
-    ignorable = {'sr. no.', 'sr.no.', 'sr. no', 's.no', 's.no.', 'costing',
-                 'total yearly cost', 'monthly cost', 'daily cost',
-                 'hourly cost', 'doj', 'date of joining', 'date of birth',
-                 'dob', 'emloyee age', 'employee age',
-                 'employees demobilization date', 'demobilization date'}
-    unmapped = sorted(h for h in header_map
-                      if h and h not in known and h not in ignorable)
-
-    def pick(row, field):
-        for alias in COLUMN_ALIASES[field]:
-            if alias in header_map:
-                idx = header_map[alias]
-                if idx < len(row):
-                    return row[idx]
-        return None
-
-    rows = []
-    for row in ws.iter_rows(min_row=header_row_idx + 1, values_only=True):
-        name = pick(row, 'employee_name')
-        designation = pick(row, 'designation')
-        if not name and not designation:
-            continue
-        entry = {
-            'employee_name': str(name).strip() if name else '',
-            'department': str(pick(row, 'department') or '').strip(),
-            'classification': str(pick(row, 'classification') or '').strip(),
-            'location_project': str(pick(row, 'location_project') or '').strip(),
-            'designation': str(designation or '').strip(),
-        }
-        for field in COST_COMPONENT_FIELDS:
-            entry[field] = str(_parse_decimal(pick(row, field)))
-        rows.append(entry)
-
-    return rows, unmapped, ws.title
-
-
-@login_required
-@require_capability('manpowercost.edit')
-def sheet_import(request):
-    """Step 1: parse and show what would be created. Nothing is written."""
-    _require_pricing(request.user)
-    if request.method != 'POST':
-        return render(request, 'manpowercost/import.html', {
-            'bases': CostBasis.objects.all(),
-        })
-
-    upload = request.FILES.get('workbook')
-    if not upload:
-        messages.error(request, 'Choose a workbook to import.')
-        return redirect('manpowercost:sheet_import')
-
-    try:
-        rows, unmapped, sheet_name = _read_workbook(upload)
-    except Exception as exc:  # openpyxl raises a wide range on bad files
-        messages.error(request, f'Could not read that workbook: {exc}')
-        return redirect('manpowercost:sheet_import')
-
-    if not rows:
-        messages.warning(request, 'No rows with a name or designation were found.')
-        return redirect('manpowercost:sheet_import')
-
-    # The whole point of the preview: a row whose salary did not map is
-    # called out before anything is saved, instead of being stored as zero
-    # and quietly shrinking every total built on it.
-    zero_salary = [r for r in rows if Decimal(r['gross_salary']) == 0]
-
-    basis_id = request.POST.get('basis') or None
-    payload = {
-        'title': request.POST.get('title') or sheet_name or 'Imported sheet',
-        'project_reference': request.POST.get('project_reference', ''),
-        'basis_id': int(basis_id) if basis_id else None,
-        'rows': rows,
-    }
-    return render(request, 'manpowercost/import_preview.html', {
-        'rows': rows,
-        'unmapped': unmapped,
-        'zero_salary': zero_salary,
-        'title': payload['title'],
-        'basis_id': payload['basis_id'],
-        'payload': signing.dumps(payload, salt=PREVIEW_SALT, compress=True),
-    })
-
-
-@login_required
-@require_capability('manpowercost.edit')
-@require_POST
-def sheet_import_apply(request):
-    """Step 2: write the previewed rows, all or nothing."""
-    _require_pricing(request.user)
-    raw = request.POST.get('payload', '')
-    try:
-        payload = signing.loads(raw, salt=PREVIEW_SALT, max_age=PREVIEW_MAX_AGE)
-    except signing.SignatureExpired:
-        messages.error(request, 'That preview expired. Upload the file again.')
-        return redirect('manpowercost:sheet_import')
-    except signing.BadSignature:
-        messages.error(request, 'That preview could not be verified. Upload the file again.')
-        return redirect('manpowercost:sheet_import')
-
-    basis = None
-    if payload.get('basis_id'):
-        basis = CostBasis.objects.filter(pk=payload['basis_id']).first()
-
-    # Atomic because the app this replaces created the sheet before parsing
-    # and had no transaction: a row that blew up mid-loop left a half-imported
-    # sheet behind that looked complete.
-    with transaction.atomic():
-        sheet = ManpowerCostSheet.objects.create(
-            title=payload['title'],
-            project_reference=payload.get('project_reference', ''),
-            date=timezone.localdate(),
-            basis=basis,
-            created_by=request.user,
-            notes='Imported from a workbook. Cost figures are monthly.',
-        )
-        for order, row in enumerate(payload['rows']):
-            ManpowerCostLine.objects.create(
-                sheet=sheet, order=order,
-                employee_name=row.get('employee_name', ''),
-                department=row.get('department', ''),
-                location_project=row.get('location_project', ''),
-                designation=row.get('designation', ''),
-                **{f: Decimal(row.get(f, '0')) for f in COST_COMPONENT_FIELDS},
-            )
-
-    messages.success(request, f'Imported {len(payload["rows"])} lines into "{sheet.title}".')
-    return redirect('manpowercost:sheet_detail', pk=sheet.pk)

@@ -21,7 +21,7 @@ from manpowercost.models import CostBasis, ManpowerCostSheet
 from importlib import import_module
 
 forwards = import_module(
-    'manpowercost.migrations.0002_seed_basis_and_migrate_manpower').forwards
+    'manpowercost.migrations.0003_seed_basis_and_migrate_manpower').forwards
 
 
 class CarryOverTests(TestCase):

@@ -18,6 +18,9 @@ from decimal import Decimal
 
 from django.db import migrations
 
+# Deliberately the OLD model's field list, not the new one: re_entry_visa
+# and saudization_cost did not exist there, so they carry over as zero
+# rather than being invented.
 COST_FIELDS = (
     'gross_salary', 'iqama_cost', 'service_transfer_visa_fee', 'gosi_cost',
     'vacation_pay', 'exe_cost', 'eosb', 'air_ticket', 'insurance_cost',
@@ -97,6 +100,7 @@ def forwards(apps, schema_editor):
                 location_project=old_line.location_project or '',
                 designation=old_line.designation or '',
                 doj=old_line.doj,
+                date_of_birth=old_line.date_of_birth,
                 demobilization_date=old_line.demobilization_date,
                 **values,
             )
@@ -118,7 +122,7 @@ def backwards(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('manpowercost', '0001_initial'),
+        ('manpowercost', '0002_manpowercostline_salary_split_and_more'),
         ('manpower', '0001_initial'),
     ]
 

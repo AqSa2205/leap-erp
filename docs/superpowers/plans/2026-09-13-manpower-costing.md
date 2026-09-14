@@ -43,7 +43,7 @@ labels, and every step of the build-up is shown.
 - **`CostBasis`** — `overhead_pct`, `profit_pct`, `billable_months`,
   `hours_per_month`, `working_days_per_month`. Marking one default demotes the
   others, so `get_default()` can never depend on insertion order.
-- **`ManpowerCostSheet` / `ManpowerCostLine`** — 13 cost components, all
+- **`ManpowerCostSheet` / `ManpowerCostLine`** — 15 cost components, all
   explicitly monthly in their field labels. Optional FK to `hr.Employee`
   alongside a snapshotted `employee_name`, and an optional FK to
   `costing.ResourceCatalogueItem` for the role.
@@ -57,6 +57,26 @@ Pure functions, no ORM writes — same shape as `pmo/progress.py`.
 because a single opaque number is what made the source sheets uncheckable.
 Overhead and profit are both taken on the base cost and never compounded, which
 is what `REAL COST` actually did.
+
+### Entry and use
+
+Cost lines are typed on screen, one row per person, saved on blur - the same
+grid pattern as costing's A.4 resources, because this is the "type twenty
+lines in one sitting" job that pattern exists for. A cell that cannot be
+parsed is **refused**, and the previous value stands; the Excel importer this
+replaced turned anything it could not read into a silent zero, which is how
+both source workbooks came to under-report.
+
+### In the costing sheet
+
+A.4 Resources now shows a **Std rate** column: the charge-out rate this module
+derives for that role, offered beside the rate actually typed. Clicking it
+applies it through the grid's own save path. Where the viewer holds
+`manpowercost.margin`, a **Margin** column shows what the sheet earns against
+that role's cost - computed from the rate on the line, not the standard one,
+because what this sheet charges is the question.
+
+Nothing is applied automatically: a negotiated rate stays as typed.
 
 ### Access
 
@@ -85,7 +105,7 @@ has been eyeballed.
 
 ## Verification
 
-- **66 tests** in the app. Single migration leaf per app, checked through the
+- **81 tests** in the app. Single migration leaf per app, checked through the
   loader graph.
 - The anchor test reproduces **REAL COST row 12** (Hydraulic Engineer →
   **219.7443 SAR/hr**) from 5% / 20% / 11 months / 176 h, proving the module
@@ -100,7 +120,6 @@ has been eyeballed.
 
 **Project pricing sheets** — the MANHOUR side: positions × quantity ×
 time-phased monthly hour allocation, priced off `ChargeRate`, totalled per
-project with margin against the cost register. Also deferred: feeding
-`ChargeRate` into `costing.ResourceLine.rate` as a default (every A.4 rate is
-still typed by hand), and the `ajeer` contract type, which is a materially
-different cost model.
+project with margin against the cost register. Also deferred: the `ajeer`
+contract type, which is a materially different cost model, and creating charge
+rates from a cost sheet in bulk (they are entered in the admin today).

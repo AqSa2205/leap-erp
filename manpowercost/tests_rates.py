@@ -164,10 +164,26 @@ class LineAndSheetCostTests(TestCase):
         self.assertEqual(line.yearly_cost, line.monthly_cost * 12)
         self.assertEqual(line.monthly_cost, Decimal('10854.17'))
 
-    def test_all_thirteen_components_are_counted(self):
+    def test_every_declared_component_is_counted(self):
+        """Asserted against the declared list, not a hardcoded count, so
+        adding a component cannot leave it out of the total."""
         from manpowercost.models import COST_COMPONENT_FIELDS
         line = self._line(**{f: Decimal('1') for f in COST_COMPONENT_FIELDS})
-        self.assertEqual(line.monthly_cost, Decimal('13'))
+        self.assertEqual(line.monthly_cost,
+                         Decimal(len(COST_COMPONENT_FIELDS)))
+
+    def test_saudization_is_part_of_cost(self):
+        """12,000 a year per expat head in the source workbook — about 16%
+        of its benefits bill. Omitting it understates cost materially."""
+        line = self._line(gross_salary=Decimal('0'),
+                          saudization_cost=Decimal('1000'))
+        self.assertEqual(line.monthly_cost, Decimal('1000'))
+
+    def test_re_entry_visa_is_part_of_cost(self):
+        line = self._line(gross_salary=Decimal('0'),
+                          re_entry_visa=Decimal('66.67'))
+        self.assertEqual(line.monthly_cost, Decimal('66.67'))
+
 
     def test_sheet_total_is_the_sum_of_its_lines(self):
         self._line(gross_salary=Decimal('1000'))
@@ -272,3 +288,90 @@ class CostBasisTests(TestCase):
         self.assertFalse(first.is_default)
         self.assertEqual(CostBasis.get_default(), second)
         self.assertEqual(CostBasis.objects.filter(is_default=True).count(), 1)
+
+
+class SalaryBreakdownTests(TestCase):
+    """Basic / Housing / Transport are held for GOSI and end-of-service,
+    which are calculated from basic (and housing) in KSA. They are detail on
+    gross_salary, never added to it — doing both would double the pay."""
+
+    def setUp(self):
+        self.basis = CostBasis.objects.create(name='B', is_default=True)
+        self.sheet = ManpowerCostSheet.objects.create(
+            title='T', date='2026-09-13', basis=self.basis)
+
+    def _line(self, **kw):
+        return ManpowerCostLine.objects.create(sheet=self.sheet, **kw)
+
+    def test_breakdown_is_not_added_on_top_of_gross(self):
+        line = self._line(gross_salary=Decimal('22000'),
+                          basic_salary=Decimal('16800'),
+                          housing_allowance=Decimal('4200'),
+                          transport_allowance=Decimal('1000'))
+        self.assertEqual(line.monthly_cost, Decimal('22000'))
+
+    def test_a_breakdown_that_agrees_reports_no_mismatch(self):
+        line = self._line(gross_salary=Decimal('22000'),
+                          basic_salary=Decimal('16800'),
+                          housing_allowance=Decimal('4200'),
+                          transport_allowance=Decimal('1000'))
+        self.assertIsNone(line.salary_breakdown_mismatch)
+
+    def test_a_breakdown_that_disagrees_is_surfaced(self):
+        line = self._line(gross_salary=Decimal('22000'),
+                          basic_salary=Decimal('16800'))
+        self.assertEqual(line.salary_breakdown_mismatch, Decimal('-5200'))
+
+    def test_no_breakdown_is_not_a_mismatch(self):
+        line = self._line(gross_salary=Decimal('22000'))
+        self.assertIsNone(line.salary_breakdown_mismatch)
+
+
+class EmployeeAgeTests(TestCase):
+
+    def setUp(self):
+        self.basis = CostBasis.objects.create(name='B', is_default=True)
+        self.sheet = ManpowerCostSheet.objects.create(
+            title='T', date='2026-09-13', basis=self.basis)
+
+    def test_age_is_derived_from_date_of_birth(self):
+        from datetime import date
+        line = ManpowerCostLine.objects.create(
+            sheet=self.sheet, date_of_birth=date(1990, 1, 1))
+        self.assertGreaterEqual(line.employee_age, 30)
+
+    def test_no_date_of_birth_gives_no_age(self):
+        line = ManpowerCostLine.objects.create(sheet=self.sheet)
+        self.assertIsNone(line.employee_age)
+
+
+class CostGroupingTests(TestCase):
+    """The on-screen grouping must cover the model exactly.
+
+    The form is built from COST_GROUPS, so a component missing from it has
+    no input anywhere - it would still count towards the total while being
+    impossible to enter or correct, which is the quiet-wrong-number failure
+    this whole module exists to prevent.
+    """
+
+    def test_every_component_appears_exactly_once(self):
+        from manpowercost.models import COST_COMPONENT_FIELDS, COST_GROUPS
+        grouped = [f for _name, fields in COST_GROUPS for f in fields]
+        self.assertEqual(sorted(grouped), sorted(COST_COMPONENT_FIELDS))
+        self.assertEqual(len(grouped), len(set(grouped)),
+                         "a component is listed in two groups")
+
+    def test_every_grouped_field_has_a_label(self):
+        from manpowercost.models import COMPONENT_LABELS, COST_GROUPS
+        for _name, fields in COST_GROUPS:
+            for field in fields:
+                self.assertIn(field, COMPONENT_LABELS)
+
+    def test_the_salary_split_is_not_in_any_cost_group(self):
+        """It is detail on gross pay, not an addition to it. Grouping it
+        with the components is how the pay would come to be counted twice."""
+        from manpowercost.models import COST_GROUPS
+        grouped = {f for _name, fields in COST_GROUPS for f in fields}
+        for field in ("basic_salary", "housing_allowance",
+                      "transport_allowance"):
+            self.assertNotIn(field, grouped)

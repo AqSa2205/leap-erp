@@ -17,9 +17,9 @@
             <i class="bi bi-tags"></i> Charge Rates
         </a>
         {% if can_edit %}
-        <a href="{% url 'manpowercost:sheet_import' %}" class="btn btn-primary btn-sm">
-            <i class="bi bi-upload"></i> Import
-        </a>
+        <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#newSheetModal">
+            <i class="bi bi-plus-lg"></i> New sheet
+        </button>
         {% endif %}
     </div>
 </div>
@@ -66,11 +66,43 @@
             {% empty %}
                 <tr><td colspan="7" class="text-center text-muted py-4">
                     No cost sheets yet.
-                    {% if can_edit %}<a href="{% url 'manpowercost:sheet_import' %}">Import one</a>.{% endif %}
+                    {% if can_edit %}Use <strong>New sheet</strong> to start one.{% endif %}
                 </td></tr>
             {% endfor %}
             </tbody>
         </table>
     </div>
 </div>
+
+{% if can_edit %}
+<div class="modal fade" id="newSheetModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <form class="modal-content" method="post" action="{% url 'manpowercost:sheet_create' %}">
+            {% csrf_token %}
+            <div class="modal-header">
+                <h5 class="modal-title">New cost sheet</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label" for="sheetTitle">Title</label>
+                    <input class="form-control" id="sheetTitle" name="title" required>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label" for="sheetRef">Project reference</label>
+                    <input class="form-control" id="sheetRef" name="project_reference">
+                </div>
+                <div class="small text-muted">
+                    Cost figures are entered <strong>per month</strong>. The default cost basis is used;
+                    it is shown on the sheet and can be changed from the admin.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
 {% endblock %}
