@@ -39,7 +39,8 @@ from django.utils.text import slugify
 import openpyxl
 from datetime import datetime, timedelta
 from accounts.permissions import require_capability, CapabilityRequiredMixin
-from .budget_status import approved_budgets_for, budget_status, exchange_rates
+from .budget_status import (approved_budgets_for, budget_status, exchange_rates,
+                            RELEASED_STATUSES)
 from .system_breakdown import breakdown
 from .po_pdf import render_po_pdf
 from .po_columns import excel_headers
@@ -1103,8 +1104,14 @@ def bom_procurement_tracker(request, sheet_pk):
             to_order = []
             skipped_full = 0
             for li in picked_items:
-                already_ordered = li.procured_po_items.aggregate(
-                    total=Sum('quantity'))['total'] or Decimal('0')
+                # Cancelled POs are excluded: those units were never bought,
+                # so they return to the line. Counting them would lock the
+                # quantity out of the budget permanently - the line would
+                # read 'fully ordered' for something nobody received.
+                already_ordered = (li.procured_po_items
+                                   .exclude(purchase_order__status__in=RELEASED_STATUSES)
+                                   .aggregate(total=Sum('quantity'))['total']
+                                   or Decimal('0'))
                 remaining = li.quantity - already_ordered
                 if remaining <= 0:
                     skipped_full += 1
@@ -1175,7 +1182,14 @@ def bom_procurement_tracker(request, sheet_pk):
             li.set_exchange_rates_cache(rates)
             li.set_sheet_cache(sheet)
             procured = list(li.procured_po_items.select_related('purchase_order').all())
-            already_ordered = sum((pi.quantity for pi in procured), Decimal('0'))
+            # Same rule as the POST path above, or the page would show a
+            # different remaining quantity from the one it will actually
+            # let you order. The cancelled PO stays in `procured` so the
+            # history is still visible - it just stops counting.
+            already_ordered = sum(
+                (pi.quantity for pi in procured
+                 if pi.purchase_order.status not in RELEASED_STATUSES),
+                Decimal('0'))
             remaining = li.quantity - already_ordered
             line_price = li.budget_line_price()
             budget_total += line_price
@@ -1186,7 +1200,10 @@ def bom_procurement_tracker(request, sheet_pk):
                 fully_procured_count += 1
             section_items.append({
                 'item': li, 'procured_in': procured, 'is_available': is_available,
-                'is_partial': bool(procured) and is_available,
+                # Driven by what is actually still on order, not by whether
+                # any PO row exists: a cancelled one would otherwise leave
+                # the line reading 'Partial - 0 of 2 ordered'.
+                'is_partial': already_ordered > 0 and is_available,
                 'already_ordered': already_ordered, 'remaining': remaining,
                 'unit_price': li.budget_unit_price(), 'line_price': line_price,
             })
