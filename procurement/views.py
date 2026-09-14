@@ -1526,18 +1526,27 @@ class PODeleteView(ProcurementPermissionMixin, DeleteView):
 # ─── Excel Export ─────────────────────────────────────────────
 
 @login_required
-def po_export_excel(request, pk):
-    """Export a Purchase Order to Excel matching the original format."""
+def po_export_excel(request, pk, unpriced=False):
+    """Export a Purchase Order to Excel matching the original format.
+
+    When ``unpriced`` is True, the Rate/Unit and Total columns are dropped
+    entirely (not just blanked) and the remaining columns are recomputed
+    from po_columns.py - the same source the PDF's unpriced layout reads,
+    so the two stay in lockstep rather than drifting the way the header
+    wording once did. The totals block and amount-in-words line are
+    omitted too, mirroring the PDF's unpriced copy.
+    """
     import openpyxl
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from .po_columns import excel_columns
 
-    # Region/role scoped — guessing a PK from outside the user's scope
+    # Region/role scoped \u2014 guessing a PK from outside the user's scope
     # returns 404, so this also enforces the same region rules the list
     # and detail views use.
     po = get_object_or_404(_visible_pos_for(request.user), pk=pk)
     if not po.is_released:
         cur = po.current_stage['label'] if po.current_stage else 'approval'
-        messages.error(request, f'PO not released yet — pending {cur}. Excel export is locked until all required approvals are signed.')
+        messages.error(request, f'PO not released yet \u2014 pending {cur}. Excel export is locked until all required approvals are signed.')
         return redirect('procurement:po_detail', pk=pk)
     items = po.items.all()
 
@@ -1545,12 +1554,24 @@ def po_export_excel(request, pk):
     ws = wb.active
     ws.title = 'PURCHASE ORDER'
 
-    # One field per column — no merged item cells. The previous version merged
-    # the description across C:E but only bordered the top-left cell, so Excel
-    # rendered half-open boxes; a flat grid keeps every cell bordered.
-    COL_SNO, COL_SYSTEM, COL_MAKE, COL_DESC = 1, 2, 3, 4
-    COL_QTY, COL_UOM, COL_RATE, COL_TOTAL, COL_REMARKS = 5, 6, 7, 8, 9
-    LAST_COL = COL_REMARKS
+    # Column positions come from po_columns.py rather than fixed constants,
+    # so the unpriced layout can drop Rate/Unit and Total entirely and
+    # compact the rest - the same approach the PDF's unpriced layout uses.
+    chosen_cols = excel_columns(unpriced=unpriced)
+    col_index = {c.key: i + 1 for i, c in enumerate(chosen_cols)}
+    LAST_COL = len(chosen_cols)
+    COL_UOM = col_index['uom']
+    # Where the right-hand header block's values start: right after the
+    # label column (UOM's position), merged out to whatever the last real
+    # column is - generalises correctly whether that's Remarks (priced) or
+    # the same Remarks shifted left (unpriced, two fewer columns).
+    HDR_VALUE_START = COL_UOM + 1
+
+    col_widths_by_key = {
+        'serial_number': 8, 'system': 14, 'make_model': 22, 'description': 55,
+        'quantity': 11, 'uom': 9, 'rate_per_unit': 15, 'total_value': 17,
+        'remarks': 26,
+    }
 
     # Styles
     bold = Font(bold=True)
@@ -1569,14 +1590,15 @@ def po_export_excel(request, pk):
     money_fmt = '#,##0.00'
     qty_fmt = '#,##0.##'
 
-    # ── Title ──
+    # \u2500\u2500 Title \u2500\u2500
     ws.merge_cells(start_row=1, start_column=1, end_row=2, end_column=LAST_COL)
-    title_cell = ws.cell(row=1, column=1, value='PURCHASE ORDER')
+    title_value = 'PURCHASE ORDER' + (' (UNPRICED)' if unpriced else '')
+    title_cell = ws.cell(row=1, column=1, value=title_value)
     title_cell.font = title_font
     title_cell.alignment = center
     ws.row_dimensions[1].height = 24
 
-    # ── Header Section ──
+    # \u2500\u2500 Header Section \u2500\u2500
     # Two label/value pairs per row: labels in A and F, values spanning the
     # columns beside them so long vendor/project names stay readable.
     headers_left = [
@@ -1615,17 +1637,17 @@ def po_export_excel(request, pk):
         lc = ws.cell(row=r, column=COL_UOM, value=label)
         lc.font = label_font
         lc.border = thin_border
-        vc = ws.cell(row=r, column=COL_RATE, value=str(value or ''))
+        vc = ws.cell(row=r, column=HDR_VALUE_START, value=str(value or ''))
         vc.alignment = Alignment(vertical='center')
-        ws.merge_cells(start_row=r, start_column=COL_RATE, end_row=r, end_column=LAST_COL)
-        for c in (COL_RATE, COL_TOTAL, COL_REMARKS):
+        ws.merge_cells(start_row=r, start_column=HDR_VALUE_START, end_row=r, end_column=LAST_COL)
+        for c in range(HDR_VALUE_START, LAST_COL + 1):
             ws.cell(row=r, column=c).border = thin_border
 
-    # ── Line Items Table ──
+    # \u2500\u2500 Line Items Table \u2500\u2500
     table_row = header_start + max(len(headers_left), len(headers_right)) + 1
     # From po_columns.py, the same table the PDF builder reads. The two used to
     # keep separate lists and had drifted on three of the headings.
-    col_headers = excel_headers(po.currency)
+    col_headers = excel_headers(po.currency, unpriced=unpriced)
     for col, h in enumerate(col_headers, 1):
         cell = ws.cell(row=table_row, column=col, value=h)
         cell.font = header_font
@@ -1636,59 +1658,63 @@ def po_export_excel(request, pk):
 
     row = table_row + 1
     for item in items:
-        ws.cell(row=row, column=COL_SNO, value=item.serial_number).alignment = center
-        ws.cell(row=row, column=COL_SYSTEM, value=item.system or '')
-        ws.cell(row=row, column=COL_MAKE, value=item.make_model or '')
-        ws.cell(row=row, column=COL_DESC, value=item.description or '').alignment = wrap
-        qty_cell = ws.cell(row=row, column=COL_QTY, value=float(item.quantity))
+        ws.cell(row=row, column=col_index['serial_number'], value=item.serial_number).alignment = center
+        if 'system' in col_index:
+            ws.cell(row=row, column=col_index['system'], value=item.system or '')
+        ws.cell(row=row, column=col_index['make_model'], value=item.make_model or '')
+        ws.cell(row=row, column=col_index['description'], value=item.description or '').alignment = wrap
+        qty_cell = ws.cell(row=row, column=col_index['quantity'], value=float(item.quantity))
         qty_cell.alignment = center
         qty_cell.number_format = qty_fmt
-        ws.cell(row=row, column=COL_UOM, value=item.uom or '').alignment = center
-        rate_cell = ws.cell(row=row, column=COL_RATE, value=float(item.rate_per_unit))
-        rate_cell.number_format = money_fmt
-        tot_cell = ws.cell(row=row, column=COL_TOTAL, value=float(item.total_value))
-        tot_cell.number_format = money_fmt
-        tot_cell.font = bold
-        ws.cell(row=row, column=COL_REMARKS, value=item.remarks or '').alignment = wrap
+        ws.cell(row=row, column=col_index['uom'], value=item.uom or '').alignment = center
+        if not unpriced:
+            rate_cell = ws.cell(row=row, column=col_index['rate_per_unit'], value=float(item.rate_per_unit))
+            rate_cell.number_format = money_fmt
+            tot_cell = ws.cell(row=row, column=col_index['total_value'], value=float(item.total_value))
+            tot_cell.number_format = money_fmt
+            tot_cell.font = bold
+        ws.cell(row=row, column=col_index['remarks'], value=item.remarks or '').alignment = wrap
         for c in range(1, LAST_COL + 1):
             ws.cell(row=row, column=c).border = thin_border
         row += 1
 
-    # ── Totals ──
+    # \u2500\u2500 Totals \u2500\u2500 (omitted entirely on unpriced copies, mirroring the PDF)
     # Label sits in the Rate column and the figure in the Total column, so the
     # numbers line up under the item totals instead of floating mid-table.
-    row += 1
-    totals = [('Base Amount', float(po.base_amount), None)]
-    if po.discount_rate:
-        totals.append(('Discount (%.0f%%)' % po.discount_rate, -float(po.discount_amount), None))
-    totals.append(('Gross Value', float(po.gross_value), None))
-    totals.append(('VAT (%.0f%%)' % po.vat_rate, float(po.vat_amount), None))
-    totals.append(('Total Value in %s' % po.currency, float(po.total_value), 'grand'))
-
-    for label, val, kind in totals:
-        label_cell = ws.cell(row=row, column=COL_RATE, value=label)
-        label_cell.font = bold
-        label_cell.alignment = Alignment(horizontal='right')
-        label_cell.border = thin_border
-        val_cell = ws.cell(row=row, column=COL_TOTAL, value=val)
-        val_cell.font = bold
-        val_cell.number_format = money_fmt
-        val_cell.border = thin_border
-        if kind == 'grand':
-            label_cell.fill = total_fill
-            val_cell.fill = total_fill
+    if not unpriced:
         row += 1
+        totals = [('Base Amount', float(po.base_amount), None)]
+        if po.discount_rate:
+            totals.append(('Discount (%.0f%%)' % po.discount_rate, -float(po.discount_amount), None))
+        totals.append(('Gross Value', float(po.gross_value), None))
+        totals.append(('VAT (%.0f%%)' % po.vat_rate, float(po.vat_amount), None))
+        totals.append(('Total Value in %s' % po.currency, float(po.total_value), 'grand'))
 
-    # Amount in words — mirrors the PDF so both documents read identically.
-    row += 1
-    words_cell = ws.cell(
-        row=row, column=1,
-        value='Amount in words: %s' % _amount_in_words(po.total_value, currency=po.currency))
-    words_cell.font = bold
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=LAST_COL)
-    words_cell.alignment = Alignment(wrap_text=True, vertical='center')
+        for label, val, kind in totals:
+            label_cell = ws.cell(row=row, column=col_index['rate_per_unit'], value=label)
+            label_cell.font = bold
+            label_cell.alignment = Alignment(horizontal='right')
+            label_cell.border = thin_border
+            val_cell = ws.cell(row=row, column=col_index['total_value'], value=val)
+            val_cell.font = bold
+            val_cell.number_format = money_fmt
+            val_cell.border = thin_border
+            if kind == 'grand':
+                label_cell.fill = total_fill
+                val_cell.fill = total_fill
+            row += 1
 
-    # ── T&C ──
+        # Amount in words \u2014 mirrors the PDF so both documents read identically.
+        # Omitted on unpriced copies since it restates the total value.
+        row += 1
+        words_cell = ws.cell(
+            row=row, column=1,
+            value='Amount in words: %s' % _amount_in_words(po.total_value, currency=po.currency))
+        words_cell.font = bold
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=LAST_COL)
+        words_cell.alignment = Alignment(wrap_text=True, vertical='center')
+
+    # \u2500\u2500 T&C \u2500\u2500
     # Read through resolved_terms() so a PO-specific edit of a term appears
     # here exactly as it does in the PDF, without touching the shared template.
     selected_terms_xl = po.resolved_terms()
@@ -1709,10 +1735,10 @@ def po_export_excel(request, pk):
                     ws.cell(row=row, column=2, value=line.strip()).alignment = wrap
                     row += 1
 
-    # Column widths — one entry per column, in the order defined above.
-    widths = [8, 14, 22, 55, 11, 9, 15, 17, 26]
-    for i, w in enumerate(widths, 1):
-        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    # Column widths \u2014 derived from the same chosen_cols list, so the unpriced
+    # layout does not carry stale widths for columns it no longer has.
+    for i, c in enumerate(chosen_cols, 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = col_widths_by_key[c.key]
 
     # Keep the item header visible while scrolling, and make the sheet print as
     # a tidy landscape page rather than spilling columns onto a second sheet.
@@ -1726,10 +1752,17 @@ def po_export_excel(request, pk):
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
-    filename = _safe_filename(po.po_number, prefix='PO', extension='xlsx')
+    prefix = 'PO_UNPRICED' if unpriced else 'PO'
+    filename = _safe_filename(po.po_number, prefix=prefix, extension='xlsx')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)
     return response
+
+
+@login_required
+def po_export_excel_unpriced(request, pk):
+    """Unpriced PO Excel \u2014 same layout with all commercial figures removed."""
+    return po_export_excel(request, pk, unpriced=True)
 
 
 # ─── PDF Export ───────────────────────────────────────────────
