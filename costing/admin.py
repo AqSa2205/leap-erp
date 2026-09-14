@@ -1,13 +1,12 @@
 from django.contrib import admin
-from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem, RevisionMailbox
+from .models import ExchangeRate, CostingSheet, CostingSection, CostingLineItem
 
-
-@admin.register(RevisionMailbox)
-class RevisionMailboxAdmin(admin.ModelAdmin):
-    list_display = ['owner', 'email_address', 'is_active', 'created_at']
-    list_filter = ['is_active']
-    search_fields = ['owner__username', 'owner__first_name', 'owner__last_name', 'email_address']
-    autocomplete_fields = ['owner']
+# RevisionMailbox is deliberately not registered here — assigning/revoking an
+# employee's mailbox is managed from the in-ERP "Email Assigning" app
+# (Administration → Email Assigning → Costing tab) instead of Django admin,
+# matching the same move made for proposals.ProposalMailbox: an ERP Admin
+# can't reach Django admin at all, and a mistaken bulk-delete in Django
+# admin's list view can't wipe every assignment at once.
 
 
 @admin.register(ExchangeRate)

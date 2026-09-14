@@ -3424,6 +3424,45 @@ def link_revision_email(request, pk):
     return redirect('costing:detail', pk=sheet.pk)
 
 
+@require_POST
+def delete_revision_email_message(request, message_pk):
+    """Remove one message from a revision's linked conversation — the undo
+    for linking the wrong email by mistake. Same permission as linking one
+    in the first place, since removing a wrong pick is the natural other
+    half of that same action.
+
+    Deleting a message never renumbers or reorders the ones that remain —
+    RevisionEmailMessage.Meta.ordering is ['pk'] (insertion order), and a
+    delete just leaves a gap in that sequence, not a reshuffle.
+
+    If this was the thread's last message, the thread record itself is
+    removed too, so the revision reverts to "not yet sent to a client"
+    rather than showing an empty, message-less conversation."""
+    from .models import RevisionEmailMessage
+
+    msg = get_object_or_404(RevisionEmailMessage, pk=message_pk)
+    thread = msg.thread
+    rev = thread.revision
+    sheet = rev.sheet
+    if not (_user_can_see_pricing(request.user) and _user_can_edit_sheet(request.user, sheet)):
+        messages.error(request, 'Permission denied.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    direction = msg.direction
+    msg.delete()
+
+    if not thread.messages.exists():
+        thread.delete()
+    elif direction == 'in' and not thread.messages.filter(direction='in').exists():
+        # The only client reply just got removed — this thread no longer
+        # has one, so it shouldn't still claim "Client Replied".
+        thread.status = 'sent'
+        thread.save(update_fields=['status'])
+
+    messages.success(request, 'Email removed from the conversation.')
+    return redirect('costing:detail', pk=sheet.pk)
+
+
 # ── Revision helpers: snapshot + diff ─────────────────────────
 
 def _build_costing_snapshot(sheet):
