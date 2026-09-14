@@ -160,6 +160,20 @@ class POColumnSourceTests(TestCase):
         self.assertNotIn('Base Amount', flat_text)
         self.assertNotIn('Total Value in', flat_text)
 
+    def test_the_unpriced_excel_works_on_a_draft_po(self):
+        """The unpriced Excel carries no commercial figures, so - like the
+        unpriced PDF - it must be available before release, not just after.
+        The priced Excel must still be locked on the same draft PO."""
+        self.assertFalse(self.po.is_released)
+        r = self.client.get(
+            reverse('procurement:po_export_unpriced', kwargs={'pk': self.po.pk}))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('PO_DRAFT_UNPRICED', r['Content-Disposition'])
+
+        r2 = self.client.get(
+            reverse('procurement:po_export', kwargs={'pk': self.po.pk}))
+        self.assertEqual(r2.status_code, 302)
+
 
 class POPdfFallbackBuildTests(TestCase):
     """The build that runs when decorating the canvas fails.

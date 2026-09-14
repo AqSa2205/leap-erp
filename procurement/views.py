@@ -1540,13 +1540,16 @@ def po_export_excel(request, pk, unpriced=False):
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
     from .po_columns import excel_columns
 
-    # Region/role scoped \u2014 guessing a PK from outside the user's scope
+    # Region/role scoped — guessing a PK from outside the user's scope
     # returns 404, so this also enforces the same region rules the list
     # and detail views use.
     po = get_object_or_404(_visible_pos_for(request.user), pk=pk)
-    if not po.is_released:
+    # The priced export stays locked until release - it carries commercial
+    # figures. The unpriced export carries none, so it's available anytime,
+    # the same way the unpriced PDF already is.
+    if not po.is_released and not unpriced:
         cur = po.current_stage['label'] if po.current_stage else 'approval'
-        messages.error(request, f'PO not released yet \u2014 pending {cur}. Excel export is locked until all required approvals are signed.')
+        messages.error(request, f'PO not released yet — pending {cur}. Excel export is locked until all required approvals are signed.')
         return redirect('procurement:po_detail', pk=pk)
     items = po.items.all()
 
@@ -1590,7 +1593,7 @@ def po_export_excel(request, pk, unpriced=False):
     money_fmt = '#,##0.00'
     qty_fmt = '#,##0.##'
 
-    # \u2500\u2500 Title \u2500\u2500
+    # ── Title ──
     ws.merge_cells(start_row=1, start_column=1, end_row=2, end_column=LAST_COL)
     title_value = 'PURCHASE ORDER' + (' (UNPRICED)' if unpriced else '')
     title_cell = ws.cell(row=1, column=1, value=title_value)
@@ -1598,7 +1601,7 @@ def po_export_excel(request, pk, unpriced=False):
     title_cell.alignment = center
     ws.row_dimensions[1].height = 24
 
-    # \u2500\u2500 Header Section \u2500\u2500
+    # ── Header Section ──
     # Two label/value pairs per row: labels in A and F, values spanning the
     # columns beside them so long vendor/project names stay readable.
     headers_left = [
@@ -1643,7 +1646,7 @@ def po_export_excel(request, pk, unpriced=False):
         for c in range(HDR_VALUE_START, LAST_COL + 1):
             ws.cell(row=r, column=c).border = thin_border
 
-    # \u2500\u2500 Line Items Table \u2500\u2500
+    # ── Line Items Table ──
     table_row = header_start + max(len(headers_left), len(headers_right)) + 1
     # From po_columns.py, the same table the PDF builder reads. The two used to
     # keep separate lists and had drifted on three of the headings.
@@ -1678,7 +1681,7 @@ def po_export_excel(request, pk, unpriced=False):
             ws.cell(row=row, column=c).border = thin_border
         row += 1
 
-    # \u2500\u2500 Totals \u2500\u2500 (omitted entirely on unpriced copies, mirroring the PDF)
+    # ── Totals ── (omitted entirely on unpriced copies, mirroring the PDF)
     # Label sits in the Rate column and the figure in the Total column, so the
     # numbers line up under the item totals instead of floating mid-table.
     if not unpriced:
@@ -1704,7 +1707,7 @@ def po_export_excel(request, pk, unpriced=False):
                 val_cell.fill = total_fill
             row += 1
 
-        # Amount in words \u2014 mirrors the PDF so both documents read identically.
+        # Amount in words — mirrors the PDF so both documents read identically.
         # Omitted on unpriced copies since it restates the total value.
         row += 1
         words_cell = ws.cell(
@@ -1714,7 +1717,7 @@ def po_export_excel(request, pk, unpriced=False):
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=LAST_COL)
         words_cell.alignment = Alignment(wrap_text=True, vertical='center')
 
-    # \u2500\u2500 T&C \u2500\u2500
+    # ── T&C ──
     # Read through resolved_terms() so a PO-specific edit of a term appears
     # here exactly as it does in the PDF, without touching the shared template.
     selected_terms_xl = po.resolved_terms()
@@ -1735,7 +1738,7 @@ def po_export_excel(request, pk, unpriced=False):
                     ws.cell(row=row, column=2, value=line.strip()).alignment = wrap
                     row += 1
 
-    # Column widths \u2014 derived from the same chosen_cols list, so the unpriced
+    # Column widths — derived from the same chosen_cols list, so the unpriced
     # layout does not carry stale widths for columns it no longer has.
     for i, c in enumerate(chosen_cols, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = col_widths_by_key[c.key]
@@ -1752,7 +1755,9 @@ def po_export_excel(request, pk, unpriced=False):
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
-    prefix = 'PO_UNPRICED' if unpriced else 'PO'
+    prefix = 'PO_DRAFT' if not po.is_released else 'PO'
+    if unpriced:
+        prefix += '_UNPRICED'
     filename = _safe_filename(po.po_number, prefix=prefix, extension='xlsx')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)
@@ -1761,7 +1766,7 @@ def po_export_excel(request, pk, unpriced=False):
 
 @login_required
 def po_export_excel_unpriced(request, pk):
-    """Unpriced PO Excel \u2014 same layout with all commercial figures removed."""
+    """Unpriced PO Excel — same layout with all commercial figures removed."""
     return po_export_excel(request, pk, unpriced=True)
 
 
