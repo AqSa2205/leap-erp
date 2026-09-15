@@ -513,6 +513,12 @@ def sheet_budget(request, sheet_pk):
             return None
         for section in sheet.sections.filter(is_optional=False):
             for item in section.line_items.all():
+                # Sub items procurement adds after approval are theirs to
+                # price, not finance's - and this form was never rendered
+                # with fields for one, so touching it here would silently
+                # wipe out whatever procurement set. Skip it entirely.
+                if item.added_by_procurement:
+                    continue
                 item.budgeted_cost = _parse_decimal(request.POST.get(f'line-{item.pk}-budget'))
                 item.budget_discount = _parse_decimal(request.POST.get(f'line-{item.pk}-disc'))
                 item.budget_margin = _parse_decimal(request.POST.get(f'line-{item.pk}-margin'))
@@ -588,6 +594,7 @@ def sheet_budget(request, sheet_pk):
         }
 
     sections = []
+    sub_item_count = 0
     for section in sheet.sections.filter(is_optional=False).order_by('order', 'section_number'):
         lines, sec_cost, sec_price, sec_sales = [], Decimal('0'), Decimal('0'), Decimal('0')
         for item in section.line_items.all().order_by('order', 'item_number'):
@@ -602,9 +609,15 @@ def sheet_budget(request, sheet_pk):
                        item.effective_discount_pct * Decimal('100'),
                        item.effective_margin * Decimal('100'))
             lines.append(row)
-            sec_cost += budgeted_cost
-            sec_price += row['price']
-            sec_sales += row['sales_price']
+            # Sub items procurement adds after approval are shown here (so
+            # finance can see what was added) but never counted toward the
+            # totals - adding one must never move the approved figure.
+            if not item.added_by_procurement:
+                sec_cost += budgeted_cost
+                sec_price += row['price']
+                sec_sales += row['sales_price']
+            else:
+                sub_item_count += 1
         if lines:
             sections.append({'section': section, 'lines': lines,
                              'cost': sec_cost, 'price': sec_price, 'sales': sec_sales})
@@ -640,6 +653,7 @@ def sheet_budget(request, sheet_pk):
         'cost_total': cost_total, 'price_total': price_total, 'sales_total': sales_total,
         'variance_total': price_total - sales_total,
         'editable': editable, 'can_approve': can_approve,
+        'sub_item_count': sub_item_count,
     })
 
 

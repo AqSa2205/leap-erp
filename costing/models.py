@@ -913,6 +913,41 @@ class CostingLineItem(models.Model):
     budget_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     budget_remarks = models.TextField(blank=True)
 
+    # Procurement-added sub items (e.g. printer cartridges under a printer),
+    # added after finance approval. A sub item is a normal CostingLineItem
+    # nested under its parent via this FK - not a separate model - so it
+    # reuses the same pricing, unit and quantity machinery rather than
+    # duplicating it.
+    parent_item = models.ForeignKey(
+        'self', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='sub_items',
+        help_text='Set only on a procurement-added sub item; points back to '
+                   'the budget line item it was added under.',
+    )
+    # Drives the electric-purple highlight in the approved-budget view and
+    # excludes this item from the approved budget total - adding a sub item
+    # must never move the finance-approved figure. Kept as an explicit flag
+    # rather than inferred from parent_item is not None, so a future need to
+    # mark something "procurement-added" without nesting still has a place.
+    added_by_procurement = models.BooleanField(default=False)
+    added_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='+',
+        help_text='Who added this sub item, set only when added_by_procurement.',
+    )
+    added_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text='When this sub item was added, set only when added_by_procurement.',
+    )
+
+    # No cap on a sub item's quantity for now - deliberately centralised
+    # here (rather than left as an unenforced field) so a future limit is
+    # one change in one place, not a hunt through every call site that
+    # accepts a quantity. Returns None (no limit) until that day comes.
+    @staticmethod
+    def max_sub_item_quantity():
+        return None
+
     class Meta:
         ordering = ['order', 'item_number']
 
