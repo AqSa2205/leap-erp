@@ -56,7 +56,7 @@ class CompanyDocumentTests(TestCase):
         doc = CompanyDocument.objects.first()
         name = doc.file.name
         self.assertTrue(default_storage.exists(name))
-        self.client.get(reverse('company:document_delete', kwargs={'pk': doc.pk}))
+        self.client.post(reverse('company:document_delete', kwargs={'pk': doc.pk}))
         self.assertEqual(CompanyDocument.objects.count(), 0)
         self.assertFalse(default_storage.exists(name))  # cleanup signal fired
 
@@ -125,5 +125,5 @@ class CompanyDocumentTests(TestCase):
         doc.refresh_from_db()
         self.assertEqual(doc.title, 'ERP Renamed')
         # delete
-        self.client.get(reverse('company:document_delete', kwargs={'pk': doc.pk}))
+        self.client.post(reverse('company:document_delete', kwargs={'pk': doc.pk}))
         self.assertEqual(CompanyDocument.objects.count(), 0)
