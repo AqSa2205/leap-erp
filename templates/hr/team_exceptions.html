@@ -481,7 +481,36 @@
   </div>
 
   <div class="card mb-4">
-    <div class="card-header"><h5 class="mb-0"><i class="bi bi-calendar-month"></i> Monthly Lateness Reports</h5></div>
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <h5 class="mb-0"><i class="bi bi-calendar-month"></i> Monthly Lateness Reports</h5>
+      {% comment %} Generating is a button, not a schedule: production has no
+      shell and no cron, so without this no report is ever produced. Only
+      finished months are offered - a report generated mid-month is frozen with
+      part of the month missing, and the server refuses it too. {% endcomment %}
+      <form method="post" class="d-flex gap-2 align-items-center"
+            onsubmit="this.querySelector('button').disabled=true;">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="generate_lateness_report">
+        <input type="hidden" name="tab" value="{{ tab }}">
+        <select name="month" class="form-select form-select-sm" style="width:auto" aria-label="Month to generate">
+          {% for m in lateness_month_options %}
+          <option value="{{ m|date:'Y-m' }}">{{ m|date:"F Y" }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-sm btn-primary"
+                title="Creates each late employee's report for that month and emails them">
+          <i class="bi bi-envelope-paper"></i> Generate &amp; email
+        </button>
+      </form>
+    </div>
+    {% if lateness_months_missing %}
+    <div class="alert alert-warning rounded-0 border-start-0 border-end-0 mb-0 py-2 small">
+      <i class="bi bi-exclamation-triangle-fill"></i>
+      Late arrivals were recorded but no reports exist for
+      {% for m in lateness_months_missing %}<strong>{{ m|date:"F Y" }}</strong>{% if not forloop.last %}, {% endif %}{% endfor %}.
+      Those employees have not been told. Generate each month above.
+    </div>
+    {% endif %}
     <div class="card-body p-0">
       {% if monthly_lateness_reports %}
       <div class="table-responsive">
@@ -502,7 +531,7 @@
       </table>
       </div>
       {% else %}
-      <p class="text-muted text-center py-4 mb-0">No monthly lateness reports generated yet.</p>
+      <p class="text-muted text-center py-4 mb-0">No monthly lateness reports generated yet. Pick a finished month above to generate one.</p>
       {% endif %}
     </div>
   </div>

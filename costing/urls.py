@@ -85,6 +85,7 @@ urlpatterns = [
     path('revision-email/<int:message_pk>/attachment/<str:attachment_id>/', login_required(views.download_revision_email_attachment), name='download_revision_email_attachment'),
     path('revision/<int:pk>/browse-link/', login_required(views.browse_link_revision_email), name='browse_link_revision_email'),
     path('revision/<int:pk>/link/', login_required(views.link_revision_email), name='link_revision_email'),
+    path('revision-email/<int:message_pk>/delete/', login_required(views.delete_revision_email_message), name='delete_revision_email_message'),
 
     # Workflow stage transitions (handover BOM → costing → finalize)
     path('<int:pk>/workflow/', views.costing_workflow_transition, name='workflow_transition'),

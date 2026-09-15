@@ -1538,6 +1538,104 @@ class LinkProposalEmailTests(TestCase):
         self.assertContains(resp, 'Approved.')
 
 
+class DeleteProposalLinkedEmailTests(TestCase):
+    """Removing a linked email is Super Admin / ERP Admin only — not the
+    employee who linked it, even though they can link one in the first
+    place. Letting an employee delete their own linked email would turn the
+    export lock into something they could open themselves: link any email
+    to unlock export, download the DOCX, delete the email again, leaving no
+    trace. Deleting the department's only linked email must re-lock the
+    proposal, since is_export_locked is computed live."""
+
+    def setUp(self):
+        from proposals.models import ProposalDepartmentFeature
+        self.super_admin = User.objects.create_user(
+            'super_del', password='x',
+            role=Role.objects.get_or_create(name=Role.SUPER_ADMIN)[0])
+        self.erp_admin = User.objects.create_user(
+            'erpadmin_del', password='x',
+            role=Role.objects.get_or_create(name=Role.ERP_ADMIN)[0])
+        self.employee = User.objects.create_user(
+            'employee_del', password='x',
+            role=Role.objects.get_or_create(name=Role.SALES_REP)[0])
+        ProposalDepartmentFeature.objects.create(department='ai', requires_client_email_to_export=True)
+        self.proposal = TechnicalProposal.objects.create(
+            title='T', proposal_reference='TP-DEL-1', client_name='ACME',
+            revision_date=date(2026, 1, 1), prepared_by_initials='AJ',
+            department='ai', created_by=self.employee)
+
+    def _linked_email(self, msg_id='m1'):
+        from proposals.models import ProposalLinkedEmail
+        return ProposalLinkedEmail.objects.create(
+            proposal=self.proposal, graph_message_id=msg_id, mailbox='employee@leap-arabia.com',
+            sender_email='client@example.com', subject='RE: Proposal')
+
+    def test_super_admin_can_delete_and_the_proposal_relocks(self):
+        from proposals.models import ProposalLinkedEmail
+        linked = self._linked_email()
+        self.proposal.refresh_from_db()
+        self.assertFalse(self.proposal.is_export_locked)  # unlocked while the email exists
+        self.client.force_login(self.super_admin)
+        resp = self.client.post(
+            reverse('proposals:delete_proposal_linked_email', kwargs={'message_pk': linked.pk}))
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(ProposalLinkedEmail.objects.filter(pk=linked.pk).exists())
+        self.proposal.refresh_from_db()
+        self.assertTrue(self.proposal.is_export_locked)  # relocked automatically
+
+    def test_erp_admin_can_also_delete(self):
+        from proposals.models import ProposalLinkedEmail
+        linked = self._linked_email()
+        self.client.force_login(self.erp_admin)
+        self.client.post(
+            reverse('proposals:delete_proposal_linked_email', kwargs={'message_pk': linked.pk}))
+        self.assertFalse(ProposalLinkedEmail.objects.filter(pk=linked.pk).exists())
+
+    def test_employee_cannot_delete_even_their_own_proposals_linked_email(self):
+        """The exploit this closes: link a dummy email to unlock export,
+        download the DOCX, then delete the email to cover it up. Blocking
+        delete for the proposal's own creator specifically proves this
+        isn't gated by proposal ownership at all — only by admin role."""
+        from proposals.models import ProposalLinkedEmail
+        linked = self._linked_email()
+        self.client.force_login(self.employee)  # created this exact proposal
+        resp = self.client.post(
+            reverse('proposals:delete_proposal_linked_email', kwargs={'message_pk': linked.pk}))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(ProposalLinkedEmail.objects.filter(pk=linked.pk).exists())
+        self.proposal.refresh_from_db()
+        self.assertFalse(self.proposal.is_export_locked)  # still unlocked — nothing changed
+
+    def test_deleting_one_of_several_linked_emails_keeps_it_unlocked(self):
+        first = self._linked_email('m1')
+        self._linked_email('m2')
+        self.client.force_login(self.super_admin)
+        self.client.post(
+            reverse('proposals:delete_proposal_linked_email', kwargs={'message_pk': first.pk}))
+        self.proposal.refresh_from_db()
+        self.assertFalse(self.proposal.is_export_locked)  # m2 still linked
+
+    def test_delete_button_only_renders_for_admins(self):
+        self._linked_email()
+        linked_pk = self.proposal.linked_emails.get().pk
+        delete_url = reverse('proposals:delete_proposal_linked_email', kwargs={'message_pk': linked_pk})
+        self.client.force_login(self.employee)
+        resp = self.client.get(
+            reverse('proposals:proposal_linked_emails', kwargs={'pk': self.proposal.pk}))
+        self.assertNotContains(resp, delete_url)
+        self.client.force_login(self.super_admin)
+        resp = self.client.get(
+            reverse('proposals:proposal_linked_emails', kwargs={'pk': self.proposal.pk}))
+        self.assertContains(resp, delete_url)
+
+    def test_get_is_not_allowed(self):
+        linked = self._linked_email()
+        self.client.force_login(self.super_admin)
+        resp = self.client.get(
+            reverse('proposals:delete_proposal_linked_email', kwargs={'message_pk': linked.pk}))
+        self.assertEqual(resp.status_code, 405)
+
+
 class ProposalExportScopeTests(TestCase):
     """The DOCX export answers to the same visibility rule as everything else.
 

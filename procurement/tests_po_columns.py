@@ -20,7 +20,7 @@ from pypdf import PdfReader
 from accounts.models import Role
 from procurement.models import PurchaseOrder, PurchaseOrderItem
 from procurement.po_columns import (PO_ITEM_COLUMNS, divergent_labels,
-                                    excel_headers, pdf_columns)
+                                    excel_columns, excel_headers, pdf_columns)
 
 User = get_user_model()
 
@@ -61,11 +61,12 @@ class POColumnSourceTests(TestCase):
         self.po.save()
         self.assertTrue(self.po.is_released)
 
-    def excel_rows(self):
+    def excel_rows(self, unpriced=False):
         import openpyxl
         self.release()
+        url_name = 'procurement:po_export_unpriced' if unpriced else 'procurement:po_export'
         response = self.client.get(
-            reverse('procurement:po_export', kwargs={'pk': self.po.pk}))
+            reverse(url_name, kwargs={'pk': self.po.pk}))
         self.assertEqual(response.status_code, 200)
         book = openpyxl.load_workbook(io.BytesIO(response.content))
         return [['' if c is None else str(c) for c in row]
@@ -128,6 +129,50 @@ class POColumnSourceTests(TestCase):
                 continue
             with self.subTest(column=column.key):
                 self.assertEqual(column.pdf, column.excel)
+
+    def test_the_unpriced_excel_header_row_is_the_table(self):
+        expected = excel_headers(self.po.currency, unpriced=True)
+        rows = self.excel_rows(unpriced=True)
+        self.assertTrue(
+            any(row[:len(expected)] == expected for row in rows),
+            'the unpriced Excel header row does not match excel_headers(unpriced=True)')
+
+    def test_the_unpriced_excel_drops_exactly_the_priced_columns(self):
+        """Mirrors the PDF's equivalent test: rate_per_unit and total_value
+        must be genuinely absent, not just blank, in the unpriced Excel."""
+        chosen_keys = {c.key for c in excel_columns(unpriced=True)}
+        for column in PO_ITEM_COLUMNS:
+            if column.excel is None:
+                continue
+            with self.subTest(column=column.key):
+                if column.priced_only:
+                    self.assertNotIn(column.key, chosen_keys)
+                else:
+                    self.assertIn(column.key, chosen_keys)
+
+    def test_the_unpriced_excel_omits_totals_and_amount_in_words(self):
+        """The totals block and amount-in-words line reveal the PO's value
+        even without the per-item Rate/Total columns, so both must be
+        omitted entirely on the unpriced copy - mirroring the PDF."""
+        rows = self.excel_rows(unpriced=True)
+        flat_text = ' '.join(' '.join(row) for row in rows)
+        self.assertNotIn('Amount in words', flat_text)
+        self.assertNotIn('Base Amount', flat_text)
+        self.assertNotIn('Total Value in', flat_text)
+
+    def test_the_unpriced_excel_works_on_a_draft_po(self):
+        """The unpriced Excel carries no commercial figures, so - like the
+        unpriced PDF - it must be available before release, not just after.
+        The priced Excel must still be locked on the same draft PO."""
+        self.assertFalse(self.po.is_released)
+        r = self.client.get(
+            reverse('procurement:po_export_unpriced', kwargs={'pk': self.po.pk}))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('PO_DRAFT_UNPRICED', r['Content-Disposition'])
+
+        r2 = self.client.get(
+            reverse('procurement:po_export', kwargs={'pk': self.po.pk}))
+        self.assertEqual(r2.status_code, 302)
 
 
 class POPdfFallbackBuildTests(TestCase):

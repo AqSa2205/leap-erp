@@ -1,0 +1,416 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}{{ sheet.title }}{% endblock %}
+
+{% block content %}
+<style>
+  /* The grid is the page, so it gets to own its scroll region: a sticky head
+     and a sticky name column keep the two things you navigate by on screen
+     while the money scrolls under them. */
+  #mpScroll { max-height: calc(100vh - 22rem); overflow: auto; }
+  #mpGrid thead th { position: sticky; top: 0; z-index: 3; background: var(--bs-tertiary-bg, #f8f9fa); }
+  #mpGrid .col-name { position: sticky; left: 0; z-index: 2; background: var(--bs-body-bg, #fff); }
+  #mpGrid thead .col-name { z-index: 4; }
+  #mpGrid tr.mp-row.is-open > td { border-bottom-color: transparent; }
+  #mpGrid tr.mp-row.is-open .col-name { box-shadow: inset 3px 0 0 var(--bs-primary, #0d6efd); }
+  #mpGrid .mp-detail > td { background: var(--bs-tertiary-bg, #f8f9fa); }
+  #mpGrid .num { font-variant-numeric: tabular-nums; }
+  .mp-group-title { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; }
+  .mp-chevron { transition: transform .15s ease; }
+  .mp-row.is-open .mp-chevron { transform: rotate(90deg); }
+</style>
+
+<div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
+    <div>
+        <h4 class="mb-1">{{ sheet.title }}</h4>
+        <div class="small text-muted">
+            {% if sheet.project_reference %}<span class="me-2">{{ sheet.project_reference }}</span>{% endif %}
+            {{ sheet.date|date:"d M Y" }}
+        </div>
+    </div>
+    <div class="d-flex gap-2">
+        <button class="btn btn-outline-secondary btn-sm" id="mpToggleAll" data-open="1">
+            <i class="bi bi-chevron-contract"></i> Collapse all
+        </button>
+        <a href="{% url 'manpowercost:rate_card' %}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-tags"></i> Charge Rates
+        </a>
+        <a href="{% url 'manpowercost:sheet_list' %}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-arrow-left"></i> All sheets
+        </a>
+    </div>
+</div>
+
+{% comment %} The basis is on the page, not buried in a settings screen. The
+workbook this replaced divided by 176 hours in one tab and 240 in another with
+nothing on either saying so, which moved the hourly rate by a third.
+{% endcomment %}
+{% if basis %}
+<div class="d-flex flex-wrap align-items-center gap-2 mb-3 small">
+    <span class="text-muted">Basis</span>
+    <span class="badge bg-secondary-subtle text-secondary-emphasis border">{{ basis.name }}</span>
+    <span class="badge bg-light text-body border">Overhead {{ basis.overhead_pct|floatformat:"-2" }}%</span>
+    <span class="badge bg-light text-body border">Profit {{ basis.profit_pct|floatformat:"-2" }}%</span>
+    <span class="badge bg-light text-body border">{{ basis.billable_months|floatformat:"-2" }} billable months</span>
+    <span class="badge bg-light text-body border">{{ basis.hours_per_month|floatformat:"-2" }} h/month</span>
+    <span class="badge bg-light text-body border">{{ basis.working_days_per_month|floatformat:"-2" }} working days</span>
+</div>
+{% else %}
+<div class="alert alert-danger py-2 small">
+    This sheet has no cost basis and no default is set, so daily and hourly figures cannot be derived.
+</div>
+{% endif %}
+
+<div class="alert alert-warning d-flex align-items-center gap-2 py-2 {% if not summary.incomplete_count %}d-none{% endif %}"
+     id="incompleteBanner">
+    <i class="bi bi-exclamation-triangle-fill"></i>
+    <div class="small">
+        <strong id="incompleteCount">{{ summary.incomplete_count }}</strong> line(s) have no gross salary,
+        so they are <strong>not</strong> in the totals below.
+    </div>
+</div>
+
+<div class="row g-2 mb-3">
+    <div class="col-6 col-lg-3">
+        <div class="card h-100"><div class="card-body py-2 px-3">
+            <div class="small text-muted">Monthly</div>
+            <div class="fs-5 num" id="monthlyTotal">{{ summary.monthly_total|floatformat:2|intcomma }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card h-100"><div class="card-body py-2 px-3">
+            <div class="small text-muted">Yearly</div>
+            <div class="fs-5 num" id="yearlyTotal">{{ summary.yearly_total|floatformat:2|intcomma }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card h-100"><div class="card-body py-2 px-3">
+            <div class="small text-muted">Blended hourly cost</div>
+            <div class="fs-5 num" id="hourlyTotal">{{ summary.hourly_total|floatformat:2|intcomma }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card h-100"><div class="card-body py-2 px-3">
+            <div class="small text-muted">People</div>
+            <div class="fs-5 num" id="lineCount">{{ summary.line_count }}</div>
+        </div></div>
+    </div>
+</div>
+
+{% comment %} Two levels on purpose. Fifteen cost components in one row is a
+horizontal scroll nobody reads, and the columns people actually scan are the
+name and the totals. So the row carries those, and the build-up opens
+underneath the person it belongs to, grouped the way the cost is made up.
+{% endcomment %}
+<div class="card">
+    <div id="mpScroll">
+        <table class="table table-sm align-middle mb-0" id="mpGrid"
+               data-sheet="{{ sheet.pk }}" data-can-edit="{{ can_edit|yesno:'1,0' }}">
+            <thead>
+                <tr>
+                    <th class="col-name" style="min-width:16rem">Name</th>
+                    <th style="min-width:11rem">Designation</th>
+                    <th style="min-width:9rem">Department</th>
+                    <th style="min-width:8rem">Class</th>
+                    <th class="text-end" style="min-width:7rem">Monthly</th>
+                    <th class="text-end" style="min-width:8rem">Yearly</th>
+                    <th class="text-end" style="min-width:6rem">Daily</th>
+                    <th class="text-end" style="min-width:6rem">Hourly</th>
+                    <th style="width:2.5rem"></th>
+                </tr>
+            </thead>
+            <tbody id="mpRows">
+                {% for row in rows %}
+                <tr class="mp-row is-open" data-pk="{{ row.line.pk }}">
+                    <td class="col-name">
+                        <div class="d-flex align-items-center gap-1">
+                            <button class="btn btn-sm btn-link p-0 text-muted mp-toggle" tabindex="-1"
+                                    aria-label="Hide cost build-up">
+                                <i class="bi bi-chevron-right mp-chevron"></i>
+                            </button>
+                            <span class="text-muted small mp-sn" style="width:1.5rem">{{ forloop.counter }}</span>
+                            <input class="form-control form-control-sm mp-f" data-f="employee_name"
+                                   placeholder="Name or position"
+                                   value="{{ row.line.employee_name }}" {% if not can_edit %}readonly{% endif %}>
+                            {% if row.incomplete %}
+                            <i class="bi bi-exclamation-triangle-fill text-warning mp-warn"
+                               title="No gross salary — excluded from the totals"></i>
+                            {% else %}
+                            <i class="bi bi-exclamation-triangle-fill text-warning mp-warn d-none"
+                               title="No gross salary — excluded from the totals"></i>
+                            {% endif %}
+                        </div>
+                    </td>
+                    <td><input class="form-control form-control-sm mp-f" data-f="designation"
+                               value="{{ row.line.designation }}" {% if not can_edit %}readonly{% endif %}></td>
+                    <td><input class="form-control form-control-sm mp-f" data-f="department"
+                               value="{{ row.line.department }}" {% if not can_edit %}readonly{% endif %}></td>
+                    <td>
+                        <select class="form-select form-select-sm mp-f" data-f="classification"
+                                {% if not can_edit %}disabled{% endif %}>
+                            <option value="">—</option>
+                            {% for value, label in classifications %}
+                            <option value="{{ value }}" {% if row.line.classification == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </td>
+                    <td class="text-end fw-semibold num mp-monthly">{{ row.monthly|floatformat:2|intcomma }}</td>
+                    <td class="text-end num text-muted mp-yearly">{{ row.yearly|floatformat:2|intcomma }}</td>
+                    <td class="text-end num text-muted mp-daily">{{ row.daily|floatformat:2|intcomma }}</td>
+                    <td class="text-end num text-muted mp-hourly">{{ row.hourly|floatformat:2|intcomma }}</td>
+                    <td class="text-center">
+                        {% if can_edit %}
+                        <button class="btn btn-sm btn-link text-danger p-0 mp-del" title="Remove" tabindex="-1">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                        {% endif %}
+                    </td>
+                </tr>
+
+                <tr class="mp-detail" data-detail-for="{{ row.line.pk }}">
+                    <td colspan="9" class="px-3 py-3">
+                        <div class="row g-3">
+                            {% for group in row.groups %}
+                            <div class="col-12 col-md-6 col-xl-3">
+                                <div class="d-flex justify-content-between align-items-baseline mb-1">
+                                    <span class="mp-group-title text-muted">{{ group.name }}</span>
+                                    <span class="small text-muted num">{{ group.subtotal|floatformat:2|intcomma }}</span>
+                                </div>
+                                {% for field, label, value in group.fields %}
+                                <div class="input-group input-group-sm mb-1">
+                                    <span class="input-group-text bg-body-tertiary flex-grow-1 justify-content-between"
+                                          style="font-size:.78rem">{{ label }}</span>
+                                    <input type="number" step="0.01" min="0" style="max-width:7.5rem"
+                                           class="form-control form-control-sm mp-f text-end num"
+                                           data-f="{{ field }}" value="{{ value|floatformat:2 }}"
+                                           {% if not can_edit %}readonly{% endif %}>
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% endfor %}
+                        </div>
+
+                        {% comment %} The split is optional detail on gross pay, held because
+                        GOSI and end-of-service are calculated from basic in KSA. It is never
+                        added to the total — showing it beside the components it does not join
+                        would invite exactly that mistake, so it sits apart. {% endcomment %}
+                        <div class="border-top mt-3 pt-3">
+                            <div class="d-flex flex-wrap align-items-end gap-2">
+                                <span class="mp-group-title text-muted me-1">Salary split
+                                    <span class="text-body-tertiary text-lowercase fw-normal">(detail only — not added to the total)</span>
+                                </span>
+                                {% for field, label, value in row.split %}
+                                <div class="input-group input-group-sm" style="width:12rem">
+                                    <span class="input-group-text bg-body-tertiary" style="font-size:.78rem">{{ label }}</span>
+                                    <input type="number" step="0.01" min="0"
+                                           class="form-control form-control-sm mp-f text-end num"
+                                           data-f="{{ field }}" value="{{ value|floatformat:2 }}"
+                                           {% if not can_edit %}readonly{% endif %}>
+                                </div>
+                                {% endfor %}
+                                {% if row.mismatch %}
+                                <span class="badge bg-warning-subtle text-warning-emphasis border">
+                                    <i class="bi bi-exclamation-triangle"></i>
+                                    Split is {{ row.mismatch|floatformat:2 }} off gross
+                                </span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr id="mpEmpty">
+                    <td colspan="9" class="text-center text-muted py-5">
+                        <i class="bi bi-people fs-3 d-block mb-2 opacity-50"></i>
+                        Nobody on this sheet yet.
+                        {% if can_edit %}Use <strong>Add person</strong> below to start.{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="card-footer d-flex justify-content-between align-items-center flex-wrap gap-2">
+        {% if can_edit %}
+        <button class="btn btn-sm btn-primary" id="mpAddRow">
+            <i class="bi bi-plus-lg"></i> Add person
+        </button>
+        {% else %}<span></span>{% endif %}
+        <span class="small text-muted">
+            Figures are <strong>monthly</strong>.
+            {% if can_edit %}Enter moves down, Tab across; each cell saves when you leave it.{% endif %}
+        </span>
+        <span id="mpStatus" class="small text-muted"></span>
+    </div>
+</div>
+
+<script>
+(function () {
+  const grid = document.getElementById('mpGrid');
+  if (!grid) return;
+  const rows = document.getElementById('mpRows');
+
+  // Expanding is useful to a reader too, so it is wired before the edit gate.
+  rows.addEventListener('click', function (event) {
+    const toggle = event.target.closest('.mp-toggle');
+    if (!toggle) return;
+    const row = toggle.closest('.mp-row');
+    const detail = rows.querySelector(`.mp-detail[data-detail-for="${row.dataset.pk}"]`);
+    if (!detail) return;
+    const opening = detail.classList.contains('d-none');
+    detail.classList.toggle('d-none', !opening);
+    row.classList.toggle('is-open', opening);
+    toggle.setAttribute('aria-label', opening ? 'Hide cost build-up' : 'Show cost build-up');
+    if (opening) {
+      const first = detail.querySelector('.mp-f:not([readonly])');
+      if (first) first.focus();
+    }
+  });
+
+  const toggleAll = document.getElementById('mpToggleAll');
+  if (toggleAll) {
+    toggleAll.addEventListener('click', function () {
+      const open = toggleAll.dataset.open !== '1';
+      rows.querySelectorAll('.mp-detail').forEach((d) => d.classList.toggle('d-none', !open));
+      rows.querySelectorAll('.mp-row').forEach((r) => r.classList.toggle('is-open', open));
+      toggleAll.dataset.open = open ? '1' : '0';
+      toggleAll.innerHTML = open
+        ? '<i class="bi bi-chevron-contract"></i> Collapse all'
+        : '<i class="bi bi-chevron-expand"></i> Expand all';
+    });
+  }
+})();
+</script>
+
+{% if can_edit %}
+<script>
+(function () {
+  const grid = document.getElementById('mpGrid');
+  if (!grid || grid.dataset.canEdit !== '1') return;
+
+  const sheetPk = grid.dataset.sheet;
+  const rows = document.getElementById('mpRows');
+  const status = document.getElementById('mpStatus');
+
+  const money = (n) => Number(n).toLocaleString(undefined, {
+    minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  function say(message, isError) {
+    status.textContent = message;
+    status.className = isError ? 'small text-danger' : 'small text-muted';
+    if (message && !isError) {
+      setTimeout(() => { if (status.textContent === message) status.textContent = ''; }, 1500);
+    }
+  }
+
+  function rowFor(pk) { return rows.querySelector(`.mp-row[data-pk="${pk}"]`); }
+
+  function applyLine(pk, line) {
+    const row = rowFor(pk);
+    if (!row) return;
+    row.querySelector('.mp-monthly').textContent = money(line.monthly);
+    row.querySelector('.mp-yearly').textContent = money(line.yearly);
+    row.querySelector('.mp-daily').textContent = money(line.daily);
+    row.querySelector('.mp-hourly').textContent = money(line.hourly);
+    // Marked on the row itself, not only counted in the banner: the person
+    // typing needs to see which line is short.
+    const warn = row.querySelector('.mp-warn');
+    if (warn) warn.classList.toggle('d-none', !line.incomplete);
+  }
+
+  function applySheet(s) {
+    document.getElementById('monthlyTotal').textContent = money(s.monthly_total);
+    document.getElementById('yearlyTotal').textContent = money(s.yearly_total);
+    document.getElementById('hourlyTotal').textContent = money(s.hourly_total);
+    document.getElementById('lineCount').textContent = s.line_count;
+    document.getElementById('incompleteCount').textContent = s.incomplete_count;
+    document.getElementById('incompleteBanner')
+      .classList.toggle('d-none', !s.incomplete_count);
+  }
+
+  function save(input) {
+    const holder = input.closest('.mp-row') || input.closest('.mp-detail');
+    const pk = holder.dataset.pk || holder.dataset.detailFor;
+    if (!pk) return Promise.resolve();
+    return window.ERP.postForm(`/manpower-costing/line/${pk}/update/`, {
+      field: input.dataset.f, value: input.value,
+    }).then((payload) => {
+      if (payload.error) { say(payload.error, true); input.classList.add('is-invalid'); return; }
+      input.classList.remove('is-invalid');
+      applyLine(pk, payload.line);
+      applySheet(payload.sheet);
+      say('Saved');
+    }).catch(() => say('Could not save that cell.', true));
+  }
+
+  // Blur, not input: a salary is half-wrong while it is being typed.
+  rows.addEventListener('focusout', function (event) {
+    const input = event.target.closest('.mp-f');
+    if (!input || input.dataset.dirty !== '1') return;
+    input.dataset.dirty = '0';
+    save(input);
+  });
+
+  rows.addEventListener('input', function (event) {
+    const input = event.target.closest('.mp-f');
+    if (input) input.dataset.dirty = '1';
+  });
+
+  rows.addEventListener('change', function (event) {
+    const select = event.target.closest('select.mp-f');
+    if (select) { select.dataset.dirty = '0'; save(select); }
+  });
+
+  rows.addEventListener('keydown', function (event) {
+    const input = event.target.closest('.mp-f');
+    if (!input) return;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      const row = input.closest('.mp-row');
+      Promise.resolve(save(input)).then(() => {
+        if (!row) return;
+        // Skip the detail row when walking down a column.
+        let next = row.nextElementSibling;
+        while (next && !next.classList.contains('mp-row')) next = next.nextElementSibling;
+        if (!next) return;
+        const c = next.querySelector(`.mp-f[data-f="${input.dataset.f}"]`);
+        if (c) { c.focus(); if (c.select) c.select(); }
+      });
+    } else if (event.key === 'Escape') {
+      input.blur();
+    }
+    // Tab is left alone: the DOM is row-major, so the browser already walks
+    // across and wraps, and reimplementing that is only a way to get it wrong.
+  });
+
+  document.getElementById('mpAddRow').addEventListener('click', function () {
+    window.ERP.postForm(`/manpower-costing/${sheetPk}/line/add/`, {})
+      .then(() => window.location.reload())
+      .catch(() => say('Could not add a line.', true));
+  });
+
+  rows.addEventListener('click', function (event) {
+    const del = event.target.closest('.mp-del');
+    if (!del) return;
+    const row = del.closest('.mp-row');
+    const pk = row.dataset.pk;
+    if (!confirm('Remove this person from the sheet?')) return;
+    window.ERP.postForm(`/manpower-costing/line/${pk}/delete/`, {})
+      .then((payload) => {
+        if (payload.error) { say(payload.error, true); return; }
+        const detail = rows.querySelector(`.mp-detail[data-detail-for="${pk}"]`);
+        if (detail) detail.remove();
+        row.remove();
+        [...rows.querySelectorAll('.mp-row')].forEach((r, i) => {
+          r.querySelector('.mp-sn').textContent = i + 1;
+        });
+        applySheet(payload.sheet);
+        say('Removed');
+      })
+      .catch(() => say('Could not remove that line.', true));
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

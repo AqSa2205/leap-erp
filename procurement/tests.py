@@ -643,6 +643,142 @@ class BudgetProcurementFlowTests(TestCase):
         r = self.client.get(reverse('costing:detail', kwargs={'pk': self.sheet.pk}))
         self.assertNotEqual(r.status_code, 200)  # locked out (404/403/redirect)
 
+    def test_can_order_a_partial_quantity(self):
+        """Requesting less than the full budgeted quantity leaves the
+        remainder unclaimed and pickable for a later, separate PO."""
+        from procurement.models import PurchaseOrder
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        r = self.client.post(turl, {'item_ids': [str(self.item.pk)], f'qty_{self.item.pk}': '1'})
+        self.assertEqual(r.status_code, 302)
+        po = PurchaseOrder.objects.filter(project=self.project).latest('id')
+        pi = po.items.get(source_bom_item=self.item)
+        self.assertEqual(pi.quantity, Decimal('1'))
+
+    def test_second_po_can_claim_the_remaining_quantity_after_a_partial_order(self):
+        """The item (2 units budgeted) has 1 unit ordered on PO #1; it must
+        still be pickable for the remaining 1 unit on a second, separate PO."""
+        from procurement.models import PurchaseOrder
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        self.client.post(turl, {'item_ids': [str(self.item.pk)], f'qty_{self.item.pk}': '1'})
+
+        resp = self.client.get(turl)
+        self.assertContains(resp, 'Partial')
+
+        r2 = self.client.post(turl, {'item_ids': [str(self.item.pk)], f'qty_{self.item.pk}': '1'})
+        self.assertEqual(r2.status_code, 302)
+        pos = PurchaseOrder.objects.filter(project=self.project).order_by('id')
+        self.assertEqual(pos.count(), 2)
+        second_pi = pos.last().items.get(source_bom_item=self.item)
+        self.assertEqual(second_pi.quantity, Decimal('1'))
+
+    def test_requested_quantity_beyond_remaining_is_clamped(self):
+        """A tampered or stale request asking for more than what's left
+        must never create a PO item exceeding the true remaining amount."""
+        from procurement.models import PurchaseOrder
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        r = self.client.post(turl, {'item_ids': [str(self.item.pk)], f'qty_{self.item.pk}': '999'})
+        self.assertEqual(r.status_code, 302)
+        po = PurchaseOrder.objects.filter(project=self.project).latest('id')
+        pi = po.items.get(source_bom_item=self.item)
+        self.assertEqual(pi.quantity, Decimal('2'))
+
+    def test_a_cancelled_po_releases_its_quantity_back_to_the_line(self):
+        """A cancelled PO was never bought, so its units must return to the
+        budget line. Counting them would lock that quantity out permanently -
+        the tracker would read 'fully ordered' for something nobody received.
+
+        budget_status.py already excludes 'cancelled' from COMMITTED_STATUSES
+        for the money; this is the same rule for the quantity.
+        """
+        from procurement.models import PurchaseOrder
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        self.client.post(turl, {'item_ids': [str(self.item.pk)], f'qty_{self.item.pk}': '2'})
+        po = PurchaseOrder.objects.filter(project=self.project).latest('id')
+        po.status = 'cancelled'
+        po.save(update_fields=['status'])
+
+        resp = self.client.get(turl)
+        self.assertEqual(resp.context['available_count'], 1)
+        item_row = resp.context['rows'][0]['items'][0]
+        self.assertEqual(item_row['already_ordered'], Decimal('0'))
+        self.assertEqual(item_row['remaining'], self.item.quantity)
+
+    def test_a_cancelled_po_does_not_leave_the_line_looking_partial(self):
+        """The badge is driven by `is_partial`, so without the same filter
+        the row would read 'Partial - 1 of 2 ordered' for an order that was
+        cancelled."""
+        from procurement.models import PurchaseOrder
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        self.client.post(turl, {'item_ids': [str(self.item.pk)], f'qty_{self.item.pk}': '1'})
+        po = PurchaseOrder.objects.filter(project=self.project).latest('id')
+        po.status = 'cancelled'
+        po.save(update_fields=['status'])
+
+        resp = self.client.get(turl)
+        item_row = resp.context['rows'][0]['items'][0]
+        self.assertFalse(item_row['is_partial'])
+        self.assertEqual(item_row['remaining'], Decimal('2'))
+
+    def test_the_cancelled_po_is_still_listed_as_history(self):
+        """It stops counting, but it does not disappear - somebody needs to
+        be able to see that an order was placed and cancelled."""
+        from procurement.models import PurchaseOrder
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        self.client.post(turl, {'item_ids': [str(self.item.pk)], f'qty_{self.item.pk}': '2'})
+        po = PurchaseOrder.objects.filter(project=self.project).latest('id')
+        po.status = 'cancelled'
+        po.save(update_fields=['status'])
+
+        resp = self.client.get(turl)
+        item_row = resp.context['rows'][0]['items'][0]
+        self.assertEqual(len(item_row['procured_in']), 1)
+
+    def test_a_cancelled_po_lets_the_quantity_be_ordered_again(self):
+        """The end to end point of the fix: re-order what was cancelled."""
+        from procurement.models import PurchaseOrder
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        self.client.post(turl, {'item_ids': [str(self.item.pk)], f'qty_{self.item.pk}': '2'})
+        po = PurchaseOrder.objects.filter(project=self.project).latest('id')
+        po.status = 'cancelled'
+        po.save(update_fields=['status'])
+
+        r = self.client.post(turl, {'item_ids': [str(self.item.pk)], f'qty_{self.item.pk}': '2'})
+        self.assertEqual(r.status_code, 302)
+        live = PurchaseOrder.objects.filter(project=self.project).exclude(status='cancelled')
+        self.assertEqual(live.count(), 1)
+        self.assertEqual(live.first().items.get(source_bom_item=self.item).quantity,
+                         Decimal('2'))
+
+    def test_a_draft_po_still_holds_its_claim(self):
+        """Only cancelled releases. A draft is somebody mid-order, and
+        releasing it would let two POs claim the same units."""
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        self.client.post(turl, {'item_ids': [str(self.item.pk)], f'qty_{self.item.pk}': '2'})
+        resp = self.client.get(turl)
+        self.assertEqual(resp.context['available_count'], 0)
+
+    def test_fully_ordered_item_cannot_be_picked_again(self):
+        """Once the full budgeted quantity is ordered, posting the same
+        item again is a no-op - it warns and creates nothing further."""
+        from procurement.models import PurchaseOrder
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        self.client.post(turl, {'item_ids': [str(self.item.pk)]})
+        pos_before = PurchaseOrder.objects.filter(project=self.project).count()
+
+        r2 = self.client.post(turl, {'item_ids': [str(self.item.pk)]})
+        self.assertEqual(r2.status_code, 302)
+        pos_after = PurchaseOrder.objects.filter(project=self.project).count()
+        self.assertEqual(pos_before, pos_after)
+
 
 class POTermOverrideTests(TestCase):
     """Terms are picked from the shared TermsTemplate library, but a PO can

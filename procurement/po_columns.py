@@ -85,10 +85,21 @@ def pdf_columns(unpriced=False):
     return [(c.pdf, w, c.pdf_centered) for c, w in zip(chosen, widths)]
 
 
-def excel_headers(currency):
+def excel_columns(unpriced=False):
+    """The Excel item columns in order, as ItemColumn objects.
+
+    Lets a caller look up which 1-based column number each field sits at
+    dynamically, the same way pdf_columns() drives the PDF table - so the
+    unpriced Excel export can drop the Rate/Unit and Total columns and
+    compact the rest, instead of leaving blank columns in their place.
+    """
+    return [c for c in PO_ITEM_COLUMNS
+            if c.excel is not None and not (unpriced and c.priced_only)]
+
+
+def excel_headers(currency, unpriced=False):
     """The Excel header row in order."""
-    return [c.excel.format(currency=currency)
-            for c in PO_ITEM_COLUMNS if c.excel is not None]
+    return [c.excel.format(currency=currency) for c in excel_columns(unpriced=unpriced)]
 
 
 def divergent_labels():
