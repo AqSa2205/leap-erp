@@ -1048,7 +1048,8 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
     </div>
     <div class="card-body p-0">
         <table class="table table-sm mb-0 align-middle" id="resourceGrid"
-               data-sheet="{{ sheet.pk }}" data-can-edit="{{ can_edit|yesno:'1,0' }}">
+               data-sheet="{{ sheet.pk }}" data-can-edit="{{ can_edit|yesno:'1,0' }}"
+               data-show-margin="{{ show_manpower_margin|yesno:'1,0' }}">
             <thead class="table-light">
                 <tr>
                     <th width="45">#</th>
@@ -1056,6 +1057,8 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
                     <th width="90">Qty</th>
                     <th width="90">UOM</th>
                     <th width="130">Rate ({{ sheet.output_currency }})</th>
+                    <th width="110" class="text-end">Std rate</th>
+                    {% if show_manpower_margin %}<th width="90" class="text-end">Margin</th>{% endif %}
                     <th width="140" class="text-end">Total</th>
                     <th>Remarks</th>
                     <th width="40"></th>
@@ -1076,6 +1079,8 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
                     <td><input type="number" step="0.01" min="0" class="form-control form-control-sm res-f text-end"
                                data-f="rate" value="{{ line.rate|floatformat:2 }}"
                                {% if not can_edit %}readonly{% endif %}></td>
+                    <td class="text-end mp-std small text-muted">—</td>
+                    {% if show_manpower_margin %}<td class="text-end mp-margin small text-muted">—</td>{% endif %}
                     <td class="text-end fw-bold res-total">{{ line.total_price|floatformat:2|intcomma }}</td>
                     <td><input class="form-control form-control-sm res-f" data-f="remarks"
                                value="{{ line.remarks }}" {% if not can_edit %}readonly{% endif %}></td>
@@ -1091,7 +1096,7 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
             </tbody>
             <tfoot class="table-light">
                 <tr>
-                    <th colspan="5" class="text-end">Resources total</th>
+                    <th colspan="{% if show_manpower_margin %}7{% else %}6{% endif %}" class="text-end">Resources total</th>
                     <th class="text-end" id="resourcesTotalCell">{{ resources_total|floatformat:2|intcomma }}</th>
                     <th colspan="2"></th>
                 </tr>
@@ -1107,6 +1112,7 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
             <option value="{{ entry.name }}" data-uom="{{ entry.default_uom }}"></option>
             {% endfor %}
         </datalist>
+        {{ manpower_rates|json_script:"manpowerRates" }}
     </div>
     <div class="card-footer small text-muted d-flex justify-content-between flex-wrap gap-2">
         <span>
@@ -1115,6 +1121,12 @@ open-fill-save-close cycles for what is four values. {% endcomment %}
             <strong>is</strong> the A.2 Services figure, replacing the sum of the A.2 rows.
         </span>
         <span id="resourceStatus" class="text-muted"></span>
+        <span class="w-100">
+            <i class="bi bi-tags me-1"></i>
+            <strong>Std rate</strong> is the charge-out rate the Manpower Costing module
+            derives for that role. Click it to use it — nothing changes on its own,
+            so a negotiated rate stays as typed.
+        </span>
     </div>
 </div>
 {% endif %}
@@ -2711,6 +2723,8 @@ var CAN_EDIT = {% if can_edit %}true{% else %}false{% endif %};
       <td><input type="number" step="0.01" min="0" class="form-control form-control-sm res-f text-end" data-f="quantity" value="1"></td>
       <td><input class="form-control form-control-sm res-f" data-f="uom" value="Nos"></td>
       <td><input type="number" step="0.01" min="0" class="form-control form-control-sm res-f text-end" data-f="rate" value="0"></td>
+      <td class="text-end mp-std small text-muted">—</td>
+      ${grid.dataset.showMargin === '1' ? '<td class="text-end mp-margin small text-muted">—</td>' : ''}
       <td class="text-end fw-bold res-total">0.00</td>
       <td><input class="form-control form-control-sm res-f" data-f="remarks"></td>
       <td class="text-center"><button class="btn btn-sm btn-link text-danger p-0 res-del" title="Remove line" tabindex="-1"><i class="bi bi-x-lg"></i></button></td>`;
@@ -2878,6 +2892,107 @@ var CAN_EDIT = {% if can_edit %}true{% else %}false{% endif %};
   });
 
   ensureTrailingBlank();
+})();
+
+{% comment %} Standard manpower rates on the A.4 grid.
+
+Deliberately a separate block from the editing grid above, which returns
+early for anyone who cannot edit. Seeing what a role ought to cost is useful
+to a reader too, and tying it to the edit gate would have hidden it from them
+for no reason. {% endcomment %}
+<script>
+(function () {
+  const grid = document.getElementById("resourceGrid");
+  const holder = document.getElementById("manpowerRates");
+  if (!grid || !holder) return;
+
+  let RATES = {};
+  try { RATES = JSON.parse(holder.textContent) || {}; } catch (e) { RATES = {}; }
+
+  const rows = document.getElementById("resourceRows");
+  const canEdit = grid.dataset.canEdit === "1";
+  const showMargin = grid.dataset.showMargin === "1";
+
+  function lookup(row) {
+    const input = row.querySelector('.res-f[data-f="description"]');
+    if (!input) return null;
+    return RATES[input.value.trim().toLowerCase()] || null;
+  }
+
+  function paint(row) {
+    const std = row.querySelector(".mp-std");
+    const marginCell = row.querySelector(".mp-margin");
+    const entry = lookup(row);
+
+    if (std) {
+      if (!entry) {
+        std.textContent = "—";
+        std.className = "text-end mp-std small text-muted";
+        std.removeAttribute("title");
+      } else {
+        std.textContent = Number(entry.rate).toLocaleString(undefined, {
+          minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        std.className = canEdit
+          ? "text-end mp-std small text-primary"
+          : "text-end mp-std small text-muted";
+        std.title = canEdit
+          ? "Derived from what this role costs. Click to use it."
+          : "Derived from what this role costs.";
+        if (canEdit) std.style.cursor = "pointer";
+      }
+    }
+
+    // Margin is against the rate actually typed, not the standard one - what
+    // this sheet earns is the question, and showing the standard margin here
+    // would report a number the sheet is not charging.
+    if (showMargin && marginCell) {
+      const rateInput = row.querySelector('.res-f[data-f="rate"]');
+      const charged = rateInput ? Number(rateInput.value) : 0;
+      if (!entry || !charged) {
+        marginCell.textContent = "—";
+        marginCell.className = "text-end mp-margin small text-muted";
+      } else {
+        const cost = Number(entry.cost);
+        const pct = ((charged - cost) / charged) * 100;
+        marginCell.textContent = pct.toFixed(1) + "%";
+        marginCell.className = "text-end mp-margin small "
+          + (pct < 0 ? "text-danger fw-bold" : "text-muted");
+        marginCell.title = "Cost " + entry.cost + " per unit";
+      }
+    }
+  }
+
+  function paintAll() {
+    rows.querySelectorAll(".res-row").forEach(paint);
+  }
+
+  rows.addEventListener("input", function (event) {
+    const input = event.target.closest(".res-f");
+    if (!input) return;
+    if (input.dataset.f === "description" || input.dataset.f === "rate") {
+      paint(input.closest(".res-row"));
+    }
+  });
+
+  // Applying a standard rate goes through the grid's own save path rather
+  // than posting separately: one writer means the cell and the server cannot
+  // end up disagreeing about what was saved.
+  rows.addEventListener("click", function (event) {
+    const std = event.target.closest(".mp-std");
+    if (!std || !canEdit) return;
+    const row = std.closest(".res-row");
+    const entry = lookup(row);
+    const rateInput = row.querySelector('.res-f[data-f="rate"]');
+    if (!entry || !rateInput) return;
+    rateInput.value = Number(entry.rate).toFixed(2);
+    rateInput.dataset.dirty = "1";
+    rateInput.dispatchEvent(new Event("focusout", { bubbles: true }));
+    paint(row);
+  });
+
+  // New rows are appended by the grid above, so repaint when the table changes.
+  new MutationObserver(paintAll).observe(rows, { childList: true });
+  paintAll();
 })();
 </script>
 

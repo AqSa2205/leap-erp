@@ -20,6 +20,9 @@ urlpatterns = [
     path('notifications/', include('notifications.urls')),
     path('hr/', include('hr.urls')),
     path('manpower/', include('manpower.urls')),
+    # /manpower-costing/ rather than /manpowercost/ so the URL reads as
+    # what it is. `manpower/` above is the app this replaces.
+    path('manpower-costing/', include('manpowercost.urls')),
     path('proposals/', include('proposals.urls')),
     path('procurement/', include('procurement.urls')),
     path('devtracking/', include('devtracking.urls')),
