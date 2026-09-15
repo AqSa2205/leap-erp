@@ -30,6 +30,15 @@ class Command(BaseCommand):
             {'name': 'Pace Arabia', 'code': 'PA', 'currency': 'USD'},
             {'name': 'Global', 'code': 'GLB', 'currency': 'USD'},
         ]
+        # Regions and statuses are seeded only into an EMPTY table. This runs on
+        # every deploy, and both are editable in the UI - a region can be
+        # renamed, re-coded or (since #237) deleted, a status renamed. Matching
+        # on code/name would resurrect a deleted region, or recreate a renamed
+        # status beside its new name, on the next deploy. Once a table has any
+        # rows, what is in it belongs to the people running the system.
+        if Region.objects.exists():
+            self.stdout.write('  Regions: table already populated - left as it is')
+            regions_data = []
         for region_data in regions_data:
             region, created = Region.objects.get_or_create(
                 code=region_data['code'],
@@ -55,6 +64,9 @@ class Command(BaseCommand):
             {'name': 'Awarded', 'category': 'ongoing', 'color': '#198754', 'order': 9},
             {'name': 'Ongoing', 'category': 'ongoing', 'color': '#0d6efd', 'order': 10},
         ]
+        if ProjectStatus.objects.exists():
+            self.stdout.write('  Statuses: table already populated - left as it is')
+            statuses_data = []
         for status_data in statuses_data:
             status, created = ProjectStatus.objects.get_or_create(
                 name=status_data['name'],
