@@ -1936,6 +1936,104 @@ class LinkRevisionEmailTests(TestCase):
         self.assertEqual(mocked_sent.call_args.args[0], 'bob@leap-arabia.com')
 
 
+class DeleteRevisionEmailMessageTests(TestCase):
+    """The undo for linking the wrong email by mistake — same permission as
+    linking one (_user_can_see_pricing + _user_can_edit_sheet), and never
+    disturbs the order of whatever's left (RevisionEmailMessage.Meta.
+    ordering = ['pk'], so a delete just leaves a gap, not a reshuffle)."""
+
+    def setUp(self):
+        from django.core.files.base import ContentFile
+        from costing.models import RevisionMailbox, CostingSheetRevision
+        role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.alice = User.objects.create_user('alice_del', password='x', role=role)
+        self.region = Region.objects.create(name='DelRegion', code='DELR', currency='SAR')
+        self.status = ProjectStatus.objects.create(name='Open', category='active')
+        self.project = Project.objects.create(
+            project_name='P', proposal_reference='REF-DEL', status=self.status,
+            region=self.region)
+        self.sheet = CostingSheet.objects.create(
+            title='S', project=self.project, created_by=self.alice)
+        self.rev = CostingSheetRevision(sheet=self.sheet, revision_label='R00', export_format='pdf')
+        self.rev.file.save('offer.pdf', ContentFile(b'%PDF-1.4 fake'), save=True)
+        RevisionMailbox.objects.create(owner=self.alice, email_address='alice@leap-arabia.com')
+        self.client.force_login(self.alice)
+
+    def _link(self, msg_id, direction, sender='client@example.com'):
+        from unittest.mock import patch
+        detail = {
+            'id': msg_id, 'conversation_id': 'conv-1', 'subject': 'Offer',
+            'sender_name': 'Someone', 'sender_email': sender,
+            'to': 'client@example.com', 'cc': '', 'sent_at': '2026-08-20T10:00:00Z',
+            'body_html': '<p>hi</p>', 'has_attachments': False, 'attachments': [],
+        }
+        with patch('costing.graph_thread.get_message_detail', return_value=detail):
+            self.client.post(reverse('costing:link_revision_email', kwargs={'pk': self.rev.pk}),
+                              {'message_id': msg_id, 'direction': direction})
+
+    def test_deleting_one_message_leaves_the_others_in_order(self):
+        from costing.models import RevisionEmailMessage
+        self._link('m1', 'out')
+        self._link('m2', 'in')
+        self._link('m3', 'out')
+        middle = RevisionEmailMessage.objects.get(graph_message_id='m2')
+        resp = self.client.post(
+            reverse('costing:delete_revision_email_message', kwargs={'message_pk': middle.pk}))
+        self.assertEqual(resp.status_code, 302)
+        remaining = list(RevisionEmailMessage.objects.values_list('graph_message_id', flat=True))
+        self.assertEqual(remaining, ['m1', 'm3'])  # gap left, not renumbered/reshuffled
+
+    def test_deleting_the_last_message_removes_the_thread_too(self):
+        """So the revision reverts to "not yet sent to a client" rather than
+        showing an empty, message-less conversation (which the "Sent on
+        Email" tag would otherwise still claim)."""
+        from costing.models import RevisionEmailThread, RevisionEmailMessage
+        self._link('m1', 'out')
+        msg = RevisionEmailMessage.objects.get(graph_message_id='m1')
+        self.client.post(reverse('costing:delete_revision_email_message', kwargs={'message_pk': msg.pk}))
+        self.rev.refresh_from_db()
+        self.assertFalse(hasattr(self.rev, 'email_thread'))
+        self.assertFalse(RevisionEmailThread.objects.filter(revision=self.rev).exists())
+
+    def test_deleting_the_only_reply_reverts_status_to_sent(self):
+        from costing.models import RevisionEmailThread, RevisionEmailMessage
+        self._link('m1', 'out')
+        self._link('m2', 'in')
+        thread = RevisionEmailThread.objects.get(revision=self.rev)
+        self.assertEqual(thread.status, 'replied')
+        reply = RevisionEmailMessage.objects.get(graph_message_id='m2')
+        self.client.post(reverse('costing:delete_revision_email_message', kwargs={'message_pk': reply.pk}))
+        thread.refresh_from_db()
+        self.assertEqual(thread.status, 'sent')
+
+    def test_unauthorized_user_cannot_delete(self):
+        from costing.models import RevisionEmailMessage
+        self._link('m1', 'out')
+        msg = RevisionEmailMessage.objects.get(graph_message_id='m1')
+        outsider = User.objects.create_user('outsider_del', password='x')
+        self.client.force_login(outsider)
+        resp = self.client.post(
+            reverse('costing:delete_revision_email_message', kwargs={'message_pk': msg.pk}))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(RevisionEmailMessage.objects.filter(pk=msg.pk).exists())
+
+    def test_get_is_not_allowed(self):
+        from costing.models import RevisionEmailMessage
+        self._link('m1', 'out')
+        msg = RevisionEmailMessage.objects.get(graph_message_id='m1')
+        resp = self.client.get(
+            reverse('costing:delete_revision_email_message', kwargs={'message_pk': msg.pk}))
+        self.assertEqual(resp.status_code, 405)
+
+    def test_delete_button_only_shows_when_can_edit(self):
+        from costing.models import RevisionEmailMessage
+        self._link('m1', 'out')
+        msg = RevisionEmailMessage.objects.get(graph_message_id='m1')
+        resp = self.client.get(reverse('costing:revision_email_thread', kwargs={'pk': self.rev.pk}))
+        self.assertContains(
+            resp, reverse('costing:delete_revision_email_message', kwargs={'message_pk': msg.pk}))
+
+
 class LineItemUnitChoicesTests(TestCase):
     """The A.1 unit dropdown, and the places that have to agree with it.
 

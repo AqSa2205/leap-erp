@@ -48,28 +48,47 @@ python manage.py migrate
 echo "=== Showing migration status ==="
 python manage.py showmigrations
 
-echo "=== Loading initial data ==="
-python manage.py loaddata initial_data.json || python manage.py load_initial_data || echo "Data may already exist"
+echo "=== Seeding initial data (empty tables only) ==="
+# Deliberately NOT `loaddata initial_data.json`. That fixture carries explicit
+# primary keys, and loaddata overwrites a row outright - including fields the
+# fixture does not mention, which reset to their defaults. On a database first
+# initialised from it, every deploy put regions 1-4 and statuses 1-10 back:
+# renames, dashboard_group and excluded_from_won_tile included. Proven on a
+# disposable database before this change.
+#
+# load_initial_data seeds a table only while it is empty, so it is safe to run
+# on every deploy. No `|| echo`: it cannot fail for "already exists", so a
+# failure here is real and should stop the build.
+python manage.py load_initial_data
 
 echo "=== Creating superuser ==="
 python manage.py createsuperuser --noinput --username admin --email admin@leapnetworks.com || echo "Superuser may already exist"
 
-echo "=== Assigning admin role ==="
+echo "=== Assigning admin role (first boot only) ==="
+# Only when the account has no role yet. This used to run unconditionally, so
+# every deploy put the bootstrap 'admin' account back to the 'admin' role and
+# is_staff - undoing any change made to it in the ERP.
 python manage.py shell -c "
 from accounts.models import User, Role
 try:
     admin_user = User.objects.get(username='admin')
-    admin_role = Role.objects.get(name='admin')
-    admin_user.role = admin_role
-    admin_user.is_staff = True
-    admin_user.save()
-    print('Admin role assigned successfully')
+    if admin_user.role_id is None:
+        admin_user.role = Role.objects.get(name='admin')
+        admin_user.is_staff = True
+        admin_user.save()
+        print('Admin role assigned')
+    else:
+        print('Admin account already has a role - left as it is')
 except Exception as e:
     print(f'Could not assign role: {e}')
 "
 
-echo "=== Loading LNA project data ==="
-python manage.py loaddata fixtures/lna_data.json || echo "LNA data may already exist"
+# The LNA project fixture (fixtures/lna_data.json) is no longer loaded here.
+# It holds 325 objects with explicit primary keys, 311 of them projects, and
+# was replayed on every deploy. It currently fails to load at all ("Project has
+# no field named 'epc'"), and `|| echo` turned that failure into "LNA data may
+# already exist" - so the risk was latent, but repairing the fixture would have
+# started silently overwriting 311 live projects on the next deploy. Audit F07.
 
 echo "=== Loading exchange rates ==="
 python manage.py shell -c "

@@ -7,10 +7,12 @@ absence/leave totals, and late_dates is snapshotted at generation time
 rather than derived live, so the report reflects what was true when it
 ran even if underlying records are corrected afterward.
 
-Emails are sent synchronously. The only production caller is a one-shot
-management command (see hr/management/commands/generate_monthly_lateness_reports.py) -
-a background thread there would be silently killed when the process
-exits right after handle() returns, before SMTP delivery completes.
+Emails are sent synchronously. Callers are the management command (see
+hr/management/commands/generate_monthly_lateness_reports.py) and the
+Generate button on the Team Exceptions page, which goes through
+generate_for_completed_month below - production has no shell or cron, so
+that button is the route there. A background thread would be silently
+killed before SMTP delivery completes.
 That is not hypothetical: it was the original implementation, and it
 meant essentially no email was ever actually delivered in production
 despite report rows and logs looking correct.
@@ -28,7 +30,7 @@ staying inside the safe window.
 """
 import calendar
 import logging
-from datetime import date as date_cls
+from datetime import date as date_cls, timedelta
 
 from django.conf import settings
 from django.utils import timezone
@@ -298,3 +300,87 @@ def _build_lateness_report_email_html(employee_name, month_label, total_lates,
 </table>
 </body>
 </html>'''
+
+
+# ── Generating from the ERP ──────────────────────────────────────────────
+# The command above is the only thing that ever called the generator, and the
+# production web service has no shell and no cron job - so in production no
+# report has ever been generated. These are what the HR screen calls instead.
+#
+# They only ever target a month that has already FINISHED. That is not a
+# restriction bolted on for safety, it is the better way to run this at all:
+# the generator freezes each employee's snapshot the first time it runs for a
+# month (get_or_create), so the cron design had to guess a moment late on the
+# last day and lose anything after it. Run once the month is over, the whole
+# month is in, and the partial-month lock the module docstring warns about
+# cannot happen.
+
+def _month_start(d):
+    return d.replace(day=1)
+
+
+def is_completed_month(target_month, today=None):
+    """True if target_month is strictly before the current (Riyadh) month."""
+    today = today or timezone.localtime(timezone.now()).date()
+    return _month_start(target_month) < _month_start(today)
+
+
+def generate_for_completed_month(target_month, today=None):
+    """Generate and email the reports for a month that has already ended.
+
+    Raises ValueError for the current or a future month rather than quietly
+    doing nothing: a report generated mid-month is locked in forever by the
+    idempotency above, so refusing loudly is the whole point.
+
+    Safe to repeat. Existing reports are never regenerated, and an email that
+    failed last time is retried.
+    """
+    today = today or timezone.localtime(timezone.now()).date()
+    if not is_completed_month(target_month, today):
+        raise ValueError(
+            f'{target_month:%B %Y} has not finished yet. A report generated now '
+            f'would be frozen with only part of the month in it, so it can only '
+            f'be generated once the month is over.')
+    return generate_monthly_lateness_reports(
+        today=today, _skip_last_day_check=True,
+        target_month=_month_start(target_month))
+
+
+def completed_months_needing_reports(today=None, lookback=6):
+    """Finished months that have late arrivals but no reports at all.
+
+    A month with nobody late produces no report rows, so "no rows" cannot on
+    its own mean "never generated". Having undisputed lates and no rows can -
+    that is the case worth putting in front of HR, because it means employees
+    are owed a notice they never received.
+    """
+    from hr.models import AttendanceRecord, MonthlyLatenessReport, LateQuery
+
+    today = today or timezone.localtime(timezone.now()).date()
+    current = _month_start(today)
+    disputed = set(LateQuery.objects.filter(status='pending')
+                   .values_list('attendance_record_id', flat=True))
+    months = []
+    cursor = current
+    for _ in range(lookback):
+        cursor = (cursor - timedelta(days=1)).replace(day=1)
+        last = date_cls(cursor.year, cursor.month,
+                        calendar.monthrange(cursor.year, cursor.month)[1])
+        has_lates = (AttendanceRecord.objects
+                     .filter(status='late', date__gte=cursor, date__lte=last,
+                             employee__is_active=True)
+                     .exclude(pk__in=disputed).exists())
+        if has_lates and not MonthlyLatenessReport.objects.filter(month=cursor).exists():
+            months.append(cursor)
+    return months
+
+
+def recent_completed_months(today=None, count=12):
+    """The finished months HR may pick from, newest first."""
+    today = today or timezone.localtime(timezone.now()).date()
+    cursor = _month_start(today)
+    months = []
+    for _ in range(count):
+        cursor = (cursor - timedelta(days=1)).replace(day=1)
+        months.append(cursor)
+    return months

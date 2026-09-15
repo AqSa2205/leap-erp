@@ -1596,9 +1596,13 @@
                     </ul>
                 </div>
             </li>
-            {% if user.is_super_admin_user or user.is_admin_user %}
+            {% comment %} Capability-gated, unlike the app it replaces, which was
+            hardcoded to super_admin/admin and so could not be granted from the
+            permission grid at all. The seeded default is the same two roles, so
+            nobody gains or loses access on deploy. {% endcomment %}
+            {% if user|can:'manpowercost.nav' %}
             <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.app_name == 'manpower' %}active{% endif %}" href="{% url 'manpower:sheet_list' %}" data-title="Manpower Costing">
+                <a class="nav-link {% if request.resolver_match.app_name == 'manpowercost' %}active{% endif %}" href="{% url 'manpowercost:sheet_list' %}" data-title="Manpower Costing">
                     <i class="bi bi-person-lines-fill"></i> <span>Manpower Costing</span>
                 </a>
             </li>

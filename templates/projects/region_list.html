@@ -26,7 +26,7 @@
                             <th>Currency</th>
                             <th>Dashboard Group</th>
                             <th>Status</th>
-                            <th width="80">Actions</th>
+                            <th width="100">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -44,9 +44,14 @@
                                 {% endif %}
                             </td>
                             <td>
-                                <a href="{% url 'projects:region_edit' region.pk %}" class="btn btn-sm btn-outline-primary">
-                                    <i class="bi bi-pencil"></i>
-                                </a>
+                                <div class="btn-group btn-group-sm">
+                                    <a href="{% url 'projects:region_edit' region.pk %}" class="btn btn-outline-primary" title="Edit">
+                                        <i class="bi bi-pencil"></i>
+                                    </a>
+                                    <a href="{% url 'projects:region_delete' region.pk %}" class="btn btn-outline-danger" title="Delete">
+                                        <i class="bi bi-trash"></i>
+                                    </a>
+                                </div>
                             </td>
                         </tr>
                         {% empty %}

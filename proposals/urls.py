@@ -27,6 +27,7 @@ urlpatterns = [
     path('<int:pk>/link-email/', login_required(views.link_proposal_email), name='link_proposal_email'),
     path('<int:pk>/linked-emails/', login_required(views.proposal_linked_emails), name='proposal_linked_emails'),
     path('proposal-email/<int:message_pk>/attachment/', login_required(views.download_proposal_email_attachment), name='download_proposal_email_attachment'),
+    path('proposal-email/<int:message_pk>/delete/', login_required(views.delete_proposal_linked_email), name='delete_proposal_linked_email'),
 
     # Prequalification Documents (PQD)
     path('pqd/', views.PQDListView.as_view(), name='pqd_list'),

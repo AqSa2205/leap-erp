@@ -139,7 +139,7 @@
                                         <div class="d-inline-flex flex-nowrap" style="gap:.25rem;">
                                             <a href="{{ doc.file.url }}" class="btn btn-sm btn-outline-primary" title="Download" download><i class="bi bi-download"></i></a>
                                             <a href="{% url 'hr:vehicle_doc_edit' doc.pk %}" class="btn btn-sm btn-outline-secondary" title="Edit"><i class="bi bi-pencil"></i></a>
-                                            <a href="{% url 'hr:vehicle_doc_delete' doc.pk %}" class="btn btn-sm btn-outline-danger" title="Delete" onclick="return confirm('Delete this document?')"><i class="bi bi-trash"></i></a>
+                                            <form method="post" action="{% url 'hr:vehicle_doc_delete' doc.pk %}" class="d-inline" onsubmit="return confirm('Delete this document?')">{% csrf_token %}<button type="submit" class="btn btn-sm btn-outline-danger" title="Delete"><i class="bi bi-trash"></i></button></form>
                                         </div>
                                     </td>
                                 </tr>

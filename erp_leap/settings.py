@@ -125,6 +125,7 @@ INSTALLED_APPS = [
     "notifications",
     "hr",
     "manpower",
+    "manpowercost",
     "proposals",
     "procurement",
     "devtracking",

@@ -142,6 +142,13 @@
                                     {% endif %}
                                     <li><hr class="dropdown-divider"></li>
                                     <li>
+                                        <a class="dropdown-item" href="{% url 'procurement:po_export_unpriced' po.pk %}"
+                                           title="Excel without any pricing — safe to share scope only">
+                                            <i class="bi bi-file-earmark-excel me-2 text-secondary"></i>Unpriced Excel
+                                            <div class="small text-muted ms-4 ps-1">No pricing — safe to share</div>
+                                        </a>
+                                    </li>
+                                    <li>
                                         <a class="dropdown-item" href="{% url 'procurement:po_export_pdf_unpriced' po.pk %}" target="_blank"
                                            title="PDF without any pricing — safe to share scope only">
                                             <i class="bi bi-file-earmark-pdf me-2 text-secondary"></i>Unpriced PDF

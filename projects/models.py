@@ -781,6 +781,64 @@ class Document(models.Model):
             size /= 1024
         return f"{size:.1f} TB"
 
+class MonitoredMailbox(models.Model):
+    """One employee's own mailbox for the "Add Emails" live-inbox flow (see
+    projects/graph_mail.py) — never shared. Each row links exactly one ERP
+    user to exactly one mailbox address (OneToOne both ways: one user can't
+    have two mailboxes, one address can't be linked to two users), and
+    projects/views.py:_user_mailbox() only ever returns the CURRENT
+    request's own user's row — there is no way, by request parameter or
+    otherwise, for one person to browse another's linked mailbox through
+    this feature. An admin assigns one row per employee who needs "Add
+    Emails" from the Email Assigning app (Administration → Email Assigning
+    → Commercial Pipeline tab) — not Django admin, which no longer manages
+    this model at all — linking their ERP account to their real mailbox
+    address.
+
+    No legacy/shared fallback of any kind: access exists only once an admin
+    has explicitly linked this exact user to a row here. (A prior version
+    fell back to a single shared PIPELINE_EMAIL_MAILBOX setting until the
+    first row was ever created, meaning every unlinked user could browse
+    and pull documents from that shared mailbox before any admin action was
+    ever taken — the same exposure caught live on the costing-revision
+    feature's identical pattern. Removed before this ever shipped; see
+    _user_mailbox()'s docstring in views.py.)
+
+    Every mailbox here is reachable via the same Graph app registration
+    and its existing Mail.Read application permission — no new Azure AD
+    consent is needed to link another employee; that permission is already
+    tenant-wide (see the security note atop graph_mail.py). What's scoped
+    per-user is which mailbox this ERP feature will ever ask Graph for on
+    that person's behalf, not the underlying Graph permission itself."""
+
+    owner = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='monitored_mailbox',
+        help_text='The employee this mailbox belongs to. Only they can browse it.',
+    )
+    email_address = models.EmailField(unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+',
+        help_text='The admin who assigned this mailbox.',
+    )
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+',
+        help_text='The admin who last revoked this mailbox. Cleared on reactivation.',
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['owner__username']
+
+    def __str__(self):
+        return f'{self.owner} — {self.email_address}'
+
+
 def pipeline_email_upload_path(instance, filename):
     """Generate upload path for the raw linked email file (.eml)."""
     return f'pipeline_emails/{instance.project_id}/{filename}'
@@ -805,6 +863,12 @@ class PipelineEmail(models.Model):
         on_delete=models.CASCADE,
         related_name='linked_emails',
     )
+
+    # Which MonitoredMailbox this was fetched from (its address, not a FK —
+    # a mailbox can be edited/deactivated later without orphaning history
+    # of where an already-linked email actually came from). Blank for rows
+    # linked before multiple mailboxes existed.
+    source_mailbox = models.EmailField(blank=True)
 
     # Outlook-style headers, pulled straight from the uploaded .eml file.
     subject = models.CharField(max_length=500, blank=True)

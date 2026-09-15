@@ -113,6 +113,39 @@ def _user_can_see_pricing(user):
                 or getattr(user, 'is_pcc_engineer_user', False))
 
 
+def _manpower_rate_lookup():
+    """Standard charge rate and cost per catalogue role, keyed by name.
+
+    Imported inside the function because manpowercost.views imports this
+    module for its pricing gate; importing its models at the top here would
+    close the loop.
+
+    Keyed on the lowercased catalogue name because that is what the A.4 grid
+    actually has: it stores a typed description and resolves the catalogue
+    link from it, so the join has to survive the same free text.
+    """
+    from manpowercost.models import ChargeRate
+    from manpowercost import rates as mp_rates
+
+    lookup = {}
+    for cr in ChargeRate.objects.select_related('position', 'basis'):
+        if not cr.position_id:
+            continue
+        rate = mp_rates.effective_hourly_rate(cr)
+        cost = mp_rates.hourly_cost_from_monthly(cr.monthly_cost, cr.basis)
+        key = cr.position.name.strip().lower()
+        # Several classifications can share a role. The first is offered and
+        # the rest are reachable from the rate card; silently averaging them
+        # would produce a number that matches no actual rate.
+        lookup.setdefault(key, {
+            'rate': f'{rate:.2f}',
+            'cost': f'{cost:.2f}',
+            'margin': f'{mp_rates.margin_pct(rate, cost):.1f}',
+            'label': cr.position.name,
+        })
+    return lookup
+
+
 def _user_can_view_margin_analysis(user, sheet):
     """Margin analysis exposes cost & profit and drives finance approval, so it
     is restricted to the finance team and super admin only."""
@@ -1150,6 +1183,15 @@ class CostingDetailView(CostingPermissionMixin, DetailView):
         context['resources_total'] = sheet.resources_total
         context['resource_catalogue'] = list(
             ResourceCatalogueItem.objects.filter(is_active=True))
+        # A.4 rates have always been typed from memory. The manpower module
+        # derives a rate per role from what that role actually costs, so the
+        # standard rate is offered here rather than looked up on another page
+        # and retyped. It is a suggestion, not an override: a negotiated
+        # sheet still wins, and nothing is changed without a click.
+        context['manpower_rates'] = _manpower_rate_lookup()
+        context['show_manpower_margin'] = (
+            _user_can_see_pricing(self.request.user)
+            and self.request.user.has_capability('manpowercost.margin'))
         # From the model, not recomputed here. A.4 resource lines outrank the
         # A.2 rows when present, and this page and the PDF disagreeing about
         # the contract price is not a failure anybody would catch quickly.
@@ -3421,6 +3463,45 @@ def link_revision_email(request, pk):
         thread.save(update_fields=['status'])
 
     messages.success(request, f'Revision {rev.revision_label} — email linked.')
+    return redirect('costing:detail', pk=sheet.pk)
+
+
+@require_POST
+def delete_revision_email_message(request, message_pk):
+    """Remove one message from a revision's linked conversation — the undo
+    for linking the wrong email by mistake. Same permission as linking one
+    in the first place, since removing a wrong pick is the natural other
+    half of that same action.
+
+    Deleting a message never renumbers or reorders the ones that remain —
+    RevisionEmailMessage.Meta.ordering is ['pk'] (insertion order), and a
+    delete just leaves a gap in that sequence, not a reshuffle.
+
+    If this was the thread's last message, the thread record itself is
+    removed too, so the revision reverts to "not yet sent to a client"
+    rather than showing an empty, message-less conversation."""
+    from .models import RevisionEmailMessage
+
+    msg = get_object_or_404(RevisionEmailMessage, pk=message_pk)
+    thread = msg.thread
+    rev = thread.revision
+    sheet = rev.sheet
+    if not (_user_can_see_pricing(request.user) and _user_can_edit_sheet(request.user, sheet)):
+        messages.error(request, 'Permission denied.')
+        return redirect('costing:detail', pk=sheet.pk)
+
+    direction = msg.direction
+    msg.delete()
+
+    if not thread.messages.exists():
+        thread.delete()
+    elif direction == 'in' and not thread.messages.filter(direction='in').exists():
+        # The only client reply just got removed — this thread no longer
+        # has one, so it shouldn't still claim "Client Replied".
+        thread.status = 'sent'
+        thread.save(update_fields=['status'])
+
+    messages.success(request, 'Email removed from the conversation.')
     return redirect('costing:detail', pk=sheet.pk)
 
 

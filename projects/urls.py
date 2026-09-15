@@ -12,6 +12,7 @@ urlpatterns = [
     path('regions/', views.RegionListView.as_view(), name='region_list'),
     path('regions/create/', views.RegionCreateView.as_view(), name='region_create'),
     path('regions/<int:pk>/edit/', views.RegionUpdateView.as_view(), name='region_edit'),
+    path('regions/<int:pk>/delete/', views.RegionDeleteView.as_view(), name='region_delete'),
     path('<int:pk>/', views.ProjectDetailView.as_view(), name='detail'),
     path('<int:pk>/edit/', views.ProjectUpdateView.as_view(), name='edit'),
     path('<int:pk>/delete/', views.ProjectDeleteView.as_view(), name='delete'),

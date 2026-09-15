@@ -8,9 +8,20 @@
                 <i class="bi bi-arrow-down-left"></i>
             </div>
             <div class="flex-grow-1">
-                <div class="d-flex justify-content-between">
+                <div class="d-flex justify-content-between align-items-start">
                     <span class="fw-bold">{{ msg.sender_name|default:msg.sender_email }}</span>
-                    <span class="small text-muted">{{ msg.sent_at|date:"d M Y H:i"|default:"—" }}</span>
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="small text-muted">{{ msg.sent_at|date:"d M Y H:i"|default:"—" }}</span>
+                        {% if is_email_admin %}
+                        <form method="post" action="{% url 'proposals:delete_proposal_linked_email' msg.pk %}"
+                              onsubmit="return confirm('Remove this linked email? If it\'s the only one, this proposal will be locked again until another is linked. This can\'t be undone.')">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-outline-danger btn-sm py-0 px-1" title="Remove this email (Admin/Super Admin only)">
+                                <i class="bi bi-trash" style="font-size:0.7rem;"></i>
+                            </button>
+                        </form>
+                        {% endif %}
+                    </div>
                 </div>
                 <div class="small text-muted">From: {{ msg.sender_email }}</div>
             </div>

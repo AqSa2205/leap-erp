@@ -2,7 +2,10 @@
 # required by the PQD export flow). If you deploy without Docker, PQD exports
 # will fall back to a reportlab-drawn body with the attachments merged.
 
-FROM python:3.11-slim
+# Python 3.12: Django 6 declares Requires-Python >=3.12, so a 3.11 image
+# cannot install requirements.txt at all. Keep this in step with runtime.txt
+# and PYTHON_VERSION in render.yaml - a test fails if they drift apart.
+FROM python:3.12-slim
 
 # System deps: libreoffice headless for DOCX/PPTX → PDF, plus fonts
 ENV DEBIAN_FRONTEND=noninteractive

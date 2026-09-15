@@ -39,7 +39,8 @@ from django.utils.text import slugify
 import openpyxl
 from datetime import datetime, timedelta
 from accounts.permissions import require_capability, CapabilityRequiredMixin
-from .budget_status import approved_budgets_for, budget_status, exchange_rates
+from .budget_status import (approved_budgets_for, budget_status, exchange_rates,
+                            RELEASED_STATUSES)
 from .system_breakdown import breakdown
 from .po_pdf import render_po_pdf
 from .po_columns import excel_headers
@@ -983,7 +984,7 @@ def po_create_from_bom(request, sheet_pk):
             item.set_sheet_cache(sheet)
             picks.append((section, item))
 
-    placeholder_po_number = f'DRAFT-S{sheet.pk}-{int(datetime.now().timestamp())}'
+    placeholder_po_number = f'DRAFT-S{sheet.pk}-{int(datetime.now().timestamp() * 1_000_000)}'
     po = PurchaseOrder.objects.create(
         po_date=datetime.now().date(),
         po_number=placeholder_po_number,
@@ -1088,21 +1089,51 @@ def bom_procurement_tracker(request, sheet_pk):
         if not item_ids:
             messages.error(request, 'Pick at least one item to add to the PO.')
         else:
-            picked = list(
+            picked_items = list(
                 CostingLineItem.objects
                 .filter(pk__in=item_ids, section__costing_sheet=sheet, section__is_optional=False)
                 .select_related('section'))
-            # Skip items claimed by another PO between render and POST.
-            picked = [li for li in picked if not li.procured_po_items.exists()]
-            if not picked:
-                messages.warning(request, 'Every item you picked is already on another PO — nothing to add.')
+
+            # A budget line item can be split across several POs (e.g. order
+            # part of the quantity now, the rest later or from a different
+            # vendor). Remaining quantity is re-checked here, not just
+            # trusted from the rendered page, since another PO may have
+            # claimed some of it between render and POST. The requested
+            # quantity per item comes from a same-named form field and is
+            # clamped to what's actually left - never trusted as-is.
+            to_order = []
+            skipped_full = 0
+            for li in picked_items:
+                # Cancelled POs are excluded: those units were never bought,
+                # so they return to the line. Counting them would lock the
+                # quantity out of the budget permanently - the line would
+                # read 'fully ordered' for something nobody received.
+                already_ordered = (li.procured_po_items
+                                   .exclude(purchase_order__status__in=RELEASED_STATUSES)
+                                   .aggregate(total=Sum('quantity'))['total']
+                                   or Decimal('0'))
+                remaining = li.quantity - already_ordered
+                if remaining <= 0:
+                    skipped_full += 1
+                    continue
+                requested_raw = request.POST.get(f'qty_{li.pk}', '').strip()
+                try:
+                    requested = Decimal(requested_raw) if requested_raw else remaining
+                except InvalidOperation:
+                    requested = remaining
+                if requested <= 0:
+                    continue
+                to_order.append((li, min(requested, remaining)))
+
+            if not to_order:
+                messages.warning(request, 'Every item you picked is already fully ordered — nothing to add.')
                 return redirect('procurement:bom_procurement_tracker', sheet_pk=sheet.pk)
 
-            placeholder_po_number = f'DRAFT-S{sheet.pk}-{int(datetime.now().timestamp())}'
+            placeholder_po_number = f'DRAFT-S{sheet.pk}-{int(datetime.now().timestamp() * 1_000_000)}'
             po = PurchaseOrder.objects.create(
                 po_date=datetime.now().date(),
                 po_number=placeholder_po_number,
-                vendor_name=_uniform_vendor(picked),
+                vendor_name=_uniform_vendor([li for li, _qty in to_order]),
                 po_issued_by=user.get_full_name() or user.username,
                 issuer_email=user.email or '',
                 project=sheet.project,
@@ -1110,7 +1141,7 @@ def bom_procurement_tracker(request, sheet_pk):
                 created_by=user,
             )
             serial = 1
-            for li in picked:
+            for li, qty in to_order:
                 li.set_exchange_rates_cache(rates)
                 li.set_sheet_cache(sheet)
                 make_model = ' '.join(filter(None, [li.make, li.model_number])).strip()
@@ -1121,22 +1152,27 @@ def bom_procurement_tracker(request, sheet_pk):
                     make_model=make_model,
                     vendor_name=li.vendor_name or '',
                     description=li.description,
-                    quantity=li.quantity,
+                    quantity=qty,
                     uom=li.unit or 'Nos',
                     rate_per_unit=li.budget_unit_price(),
                     order=serial,
                     source_bom_item=li,
                 )
                 serial += 1
+            skip_note = ''
+            if skipped_full:
+                skip_note = f' ({skipped_full} item{"" if skipped_full == 1 else "s"} skipped — already fully ordered.)'
             messages.success(
                 request,
-                f'Draft PO seeded with {serial - 1} budgeted item{"" if serial - 1 == 1 else "s"}. '
+                f'Draft PO seeded with {serial - 1} budgeted item{"" if serial - 1 == 1 else "s"}.{skip_note} '
                 f'Replace the placeholder PO number, confirm the vendor, then save.')
             return redirect('procurement:po_update', pk=po.pk)
 
     # Build per-section rows (A.1 supply, non-optional) with budgeted prices.
+    # A line item stays "available" as long as any quantity remains
+    # unordered, even if it already has one or more POs against it.
     rows = []
-    available_count = procured_count = 0
+    available_count = fully_procured_count = 0
     budget_total = Decimal('0')
     for section in (sheet.sections.filter(is_optional=False)
                     .prefetch_related('line_items__procured_po_items__purchase_order')
@@ -1146,14 +1182,29 @@ def bom_procurement_tracker(request, sheet_pk):
             li.set_exchange_rates_cache(rates)
             li.set_sheet_cache(sheet)
             procured = list(li.procured_po_items.select_related('purchase_order').all())
+            # Same rule as the POST path above, or the page would show a
+            # different remaining quantity from the one it will actually
+            # let you order. The cancelled PO stays in `procured` so the
+            # history is still visible - it just stops counting.
+            already_ordered = sum(
+                (pi.quantity for pi in procured
+                 if pi.purchase_order.status not in RELEASED_STATUSES),
+                Decimal('0'))
+            remaining = li.quantity - already_ordered
             line_price = li.budget_line_price()
             budget_total += line_price
-            if procured:
-                procured_count += 1
-            else:
+            is_available = remaining > 0
+            if is_available:
                 available_count += 1
+            else:
+                fully_procured_count += 1
             section_items.append({
-                'item': li, 'procured_in': procured, 'is_available': not procured,
+                'item': li, 'procured_in': procured, 'is_available': is_available,
+                # Driven by what is actually still on order, not by whether
+                # any PO row exists: a cancelled one would otherwise leave
+                # the line reading 'Partial - 0 of 2 ordered'.
+                'is_partial': already_ordered > 0 and is_available,
+                'already_ordered': already_ordered, 'remaining': remaining,
                 'unit_price': li.budget_unit_price(), 'line_price': line_price,
             })
         if section_items:
@@ -1162,9 +1213,9 @@ def bom_procurement_tracker(request, sheet_pk):
     return render(request, 'procurement/bom_procurement_tracker.html', {
         'sheet': sheet,
         'rows': rows,
-        'total_count': available_count + procured_count,
+        'total_count': available_count + fully_procured_count,
         'available_count': available_count,
-        'procured_count': procured_count,
+        'procured_count': fully_procured_count,
         'budget_total': budget_total,
     })
 
@@ -1475,16 +1526,28 @@ class PODeleteView(ProcurementPermissionMixin, DeleteView):
 # ─── Excel Export ─────────────────────────────────────────────
 
 @login_required
-def po_export_excel(request, pk):
-    """Export a Purchase Order to Excel matching the original format."""
+def po_export_excel(request, pk, unpriced=False):
+    """Export a Purchase Order to Excel matching the original format.
+
+    When ``unpriced`` is True, the Rate/Unit and Total columns are dropped
+    entirely (not just blanked) and the remaining columns are recomputed
+    from po_columns.py - the same source the PDF's unpriced layout reads,
+    so the two stay in lockstep rather than drifting the way the header
+    wording once did. The totals block and amount-in-words line are
+    omitted too, mirroring the PDF's unpriced copy.
+    """
     import openpyxl
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from .po_columns import excel_columns
 
     # Region/role scoped — guessing a PK from outside the user's scope
     # returns 404, so this also enforces the same region rules the list
     # and detail views use.
     po = get_object_or_404(_visible_pos_for(request.user), pk=pk)
-    if not po.is_released:
+    # The priced export stays locked until release - it carries commercial
+    # figures. The unpriced export carries none, so it's available anytime,
+    # the same way the unpriced PDF already is.
+    if not po.is_released and not unpriced:
         cur = po.current_stage['label'] if po.current_stage else 'approval'
         messages.error(request, f'PO not released yet — pending {cur}. Excel export is locked until all required approvals are signed.')
         return redirect('procurement:po_detail', pk=pk)
@@ -1494,12 +1557,24 @@ def po_export_excel(request, pk):
     ws = wb.active
     ws.title = 'PURCHASE ORDER'
 
-    # One field per column — no merged item cells. The previous version merged
-    # the description across C:E but only bordered the top-left cell, so Excel
-    # rendered half-open boxes; a flat grid keeps every cell bordered.
-    COL_SNO, COL_SYSTEM, COL_MAKE, COL_DESC = 1, 2, 3, 4
-    COL_QTY, COL_UOM, COL_RATE, COL_TOTAL, COL_REMARKS = 5, 6, 7, 8, 9
-    LAST_COL = COL_REMARKS
+    # Column positions come from po_columns.py rather than fixed constants,
+    # so the unpriced layout can drop Rate/Unit and Total entirely and
+    # compact the rest - the same approach the PDF's unpriced layout uses.
+    chosen_cols = excel_columns(unpriced=unpriced)
+    col_index = {c.key: i + 1 for i, c in enumerate(chosen_cols)}
+    LAST_COL = len(chosen_cols)
+    COL_UOM = col_index['uom']
+    # Where the right-hand header block's values start: right after the
+    # label column (UOM's position), merged out to whatever the last real
+    # column is - generalises correctly whether that's Remarks (priced) or
+    # the same Remarks shifted left (unpriced, two fewer columns).
+    HDR_VALUE_START = COL_UOM + 1
+
+    col_widths_by_key = {
+        'serial_number': 8, 'system': 14, 'make_model': 22, 'description': 55,
+        'quantity': 11, 'uom': 9, 'rate_per_unit': 15, 'total_value': 17,
+        'remarks': 26,
+    }
 
     # Styles
     bold = Font(bold=True)
@@ -1520,7 +1595,8 @@ def po_export_excel(request, pk):
 
     # ── Title ──
     ws.merge_cells(start_row=1, start_column=1, end_row=2, end_column=LAST_COL)
-    title_cell = ws.cell(row=1, column=1, value='PURCHASE ORDER')
+    title_value = 'PURCHASE ORDER' + (' (UNPRICED)' if unpriced else '')
+    title_cell = ws.cell(row=1, column=1, value=title_value)
     title_cell.font = title_font
     title_cell.alignment = center
     ws.row_dimensions[1].height = 24
@@ -1564,17 +1640,17 @@ def po_export_excel(request, pk):
         lc = ws.cell(row=r, column=COL_UOM, value=label)
         lc.font = label_font
         lc.border = thin_border
-        vc = ws.cell(row=r, column=COL_RATE, value=str(value or ''))
+        vc = ws.cell(row=r, column=HDR_VALUE_START, value=str(value or ''))
         vc.alignment = Alignment(vertical='center')
-        ws.merge_cells(start_row=r, start_column=COL_RATE, end_row=r, end_column=LAST_COL)
-        for c in (COL_RATE, COL_TOTAL, COL_REMARKS):
+        ws.merge_cells(start_row=r, start_column=HDR_VALUE_START, end_row=r, end_column=LAST_COL)
+        for c in range(HDR_VALUE_START, LAST_COL + 1):
             ws.cell(row=r, column=c).border = thin_border
 
     # ── Line Items Table ──
     table_row = header_start + max(len(headers_left), len(headers_right)) + 1
     # From po_columns.py, the same table the PDF builder reads. The two used to
     # keep separate lists and had drifted on three of the headings.
-    col_headers = excel_headers(po.currency)
+    col_headers = excel_headers(po.currency, unpriced=unpriced)
     for col, h in enumerate(col_headers, 1):
         cell = ws.cell(row=table_row, column=col, value=h)
         cell.font = header_font
@@ -1585,57 +1661,61 @@ def po_export_excel(request, pk):
 
     row = table_row + 1
     for item in items:
-        ws.cell(row=row, column=COL_SNO, value=item.serial_number).alignment = center
-        ws.cell(row=row, column=COL_SYSTEM, value=item.system or '')
-        ws.cell(row=row, column=COL_MAKE, value=item.make_model or '')
-        ws.cell(row=row, column=COL_DESC, value=item.description or '').alignment = wrap
-        qty_cell = ws.cell(row=row, column=COL_QTY, value=float(item.quantity))
+        ws.cell(row=row, column=col_index['serial_number'], value=item.serial_number).alignment = center
+        if 'system' in col_index:
+            ws.cell(row=row, column=col_index['system'], value=item.system or '')
+        ws.cell(row=row, column=col_index['make_model'], value=item.make_model or '')
+        ws.cell(row=row, column=col_index['description'], value=item.description or '').alignment = wrap
+        qty_cell = ws.cell(row=row, column=col_index['quantity'], value=float(item.quantity))
         qty_cell.alignment = center
         qty_cell.number_format = qty_fmt
-        ws.cell(row=row, column=COL_UOM, value=item.uom or '').alignment = center
-        rate_cell = ws.cell(row=row, column=COL_RATE, value=float(item.rate_per_unit))
-        rate_cell.number_format = money_fmt
-        tot_cell = ws.cell(row=row, column=COL_TOTAL, value=float(item.total_value))
-        tot_cell.number_format = money_fmt
-        tot_cell.font = bold
-        ws.cell(row=row, column=COL_REMARKS, value=item.remarks or '').alignment = wrap
+        ws.cell(row=row, column=col_index['uom'], value=item.uom or '').alignment = center
+        if not unpriced:
+            rate_cell = ws.cell(row=row, column=col_index['rate_per_unit'], value=float(item.rate_per_unit))
+            rate_cell.number_format = money_fmt
+            tot_cell = ws.cell(row=row, column=col_index['total_value'], value=float(item.total_value))
+            tot_cell.number_format = money_fmt
+            tot_cell.font = bold
+        ws.cell(row=row, column=col_index['remarks'], value=item.remarks or '').alignment = wrap
         for c in range(1, LAST_COL + 1):
             ws.cell(row=row, column=c).border = thin_border
         row += 1
 
-    # ── Totals ──
+    # ── Totals ── (omitted entirely on unpriced copies, mirroring the PDF)
     # Label sits in the Rate column and the figure in the Total column, so the
     # numbers line up under the item totals instead of floating mid-table.
-    row += 1
-    totals = [('Base Amount', float(po.base_amount), None)]
-    if po.discount_rate:
-        totals.append(('Discount (%.0f%%)' % po.discount_rate, -float(po.discount_amount), None))
-    totals.append(('Gross Value', float(po.gross_value), None))
-    totals.append(('VAT (%.0f%%)' % po.vat_rate, float(po.vat_amount), None))
-    totals.append(('Total Value in %s' % po.currency, float(po.total_value), 'grand'))
-
-    for label, val, kind in totals:
-        label_cell = ws.cell(row=row, column=COL_RATE, value=label)
-        label_cell.font = bold
-        label_cell.alignment = Alignment(horizontal='right')
-        label_cell.border = thin_border
-        val_cell = ws.cell(row=row, column=COL_TOTAL, value=val)
-        val_cell.font = bold
-        val_cell.number_format = money_fmt
-        val_cell.border = thin_border
-        if kind == 'grand':
-            label_cell.fill = total_fill
-            val_cell.fill = total_fill
+    if not unpriced:
         row += 1
+        totals = [('Base Amount', float(po.base_amount), None)]
+        if po.discount_rate:
+            totals.append(('Discount (%.0f%%)' % po.discount_rate, -float(po.discount_amount), None))
+        totals.append(('Gross Value', float(po.gross_value), None))
+        totals.append(('VAT (%.0f%%)' % po.vat_rate, float(po.vat_amount), None))
+        totals.append(('Total Value in %s' % po.currency, float(po.total_value), 'grand'))
 
-    # Amount in words — mirrors the PDF so both documents read identically.
-    row += 1
-    words_cell = ws.cell(
-        row=row, column=1,
-        value='Amount in words: %s' % _amount_in_words(po.total_value, currency=po.currency))
-    words_cell.font = bold
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=LAST_COL)
-    words_cell.alignment = Alignment(wrap_text=True, vertical='center')
+        for label, val, kind in totals:
+            label_cell = ws.cell(row=row, column=col_index['rate_per_unit'], value=label)
+            label_cell.font = bold
+            label_cell.alignment = Alignment(horizontal='right')
+            label_cell.border = thin_border
+            val_cell = ws.cell(row=row, column=col_index['total_value'], value=val)
+            val_cell.font = bold
+            val_cell.number_format = money_fmt
+            val_cell.border = thin_border
+            if kind == 'grand':
+                label_cell.fill = total_fill
+                val_cell.fill = total_fill
+            row += 1
+
+        # Amount in words — mirrors the PDF so both documents read identically.
+        # Omitted on unpriced copies since it restates the total value.
+        row += 1
+        words_cell = ws.cell(
+            row=row, column=1,
+            value='Amount in words: %s' % _amount_in_words(po.total_value, currency=po.currency))
+        words_cell.font = bold
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=LAST_COL)
+        words_cell.alignment = Alignment(wrap_text=True, vertical='center')
 
     # ── T&C ──
     # Read through resolved_terms() so a PO-specific edit of a term appears
@@ -1658,10 +1738,10 @@ def po_export_excel(request, pk):
                     ws.cell(row=row, column=2, value=line.strip()).alignment = wrap
                     row += 1
 
-    # Column widths — one entry per column, in the order defined above.
-    widths = [8, 14, 22, 55, 11, 9, 15, 17, 26]
-    for i, w in enumerate(widths, 1):
-        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    # Column widths — derived from the same chosen_cols list, so the unpriced
+    # layout does not carry stale widths for columns it no longer has.
+    for i, c in enumerate(chosen_cols, 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = col_widths_by_key[c.key]
 
     # Keep the item header visible while scrolling, and make the sheet print as
     # a tidy landscape page rather than spilling columns onto a second sheet.
@@ -1675,10 +1755,19 @@ def po_export_excel(request, pk):
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
-    filename = _safe_filename(po.po_number, prefix='PO', extension='xlsx')
+    prefix = 'PO_DRAFT' if not po.is_released else 'PO'
+    if unpriced:
+        prefix += '_UNPRICED'
+    filename = _safe_filename(po.po_number, prefix=prefix, extension='xlsx')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(response)
     return response
+
+
+@login_required
+def po_export_excel_unpriced(request, pk):
+    """Unpriced PO Excel — same layout with all commercial figures removed."""
+    return po_export_excel(request, pk, unpriced=True)
 
 
 # ─── PDF Export ───────────────────────────────────────────────

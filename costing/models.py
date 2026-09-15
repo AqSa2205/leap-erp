@@ -1308,6 +1308,17 @@ class RevisionMailbox(models.Model):
     email_address = models.EmailField(unique=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+',
+        help_text='The admin who assigned this mailbox.',
+    )
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+',
+        help_text='The admin who last revoked this mailbox. Cleared on reactivation.',
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['owner__username']

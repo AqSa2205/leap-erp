@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.db.models.functions import Lower
 
 
 class Role(models.Model):
@@ -170,6 +171,33 @@ class User(AbstractUser):
 
     class Meta:
         ordering = ['username']
+        constraints = [
+            # One account per address, compared case-insensitively, blanks
+            # exempt.
+            #
+            # Why: login accepts username-or-email, and accounts/backends.py
+            # resolved a duplicate with order_by('id').first() - so of two
+            # accounts sharing an address only the lower id could ever sign in
+            # by email. More seriously, a mailbox is read from this address
+            # through app-only Mail.Read, which reads whichever mailbox it is
+            # handed; two accounts claiming one address is the shape of a
+            # colleague's inbox reachable from the wrong account.
+            #
+            # Lower(), because a plain unique index treats ceo@x.com and
+            # CEO@x.com as different values while Graph and email__iexact treat
+            # them as one - the same hole in a different spelling.
+            #
+            # The condition, because most accounts have no address and '' is a
+            # value: an unconditional index makes the second blank collide.
+            # Keeping '' (rather than switching blanks to NULL) matters too -
+            # every consumer, template and PDF in the app treats '' as 'no
+            # email', and NULL renders as the text 'None'.
+            models.UniqueConstraint(
+                Lower('email'),
+                condition=~models.Q(email=''),
+                name='unique_user_email_ci_nonblank',
+            ),
+        ]
 
     def __str__(self):
         return f"{self.get_full_name() or self.username}"
