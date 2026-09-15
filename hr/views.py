@@ -2261,6 +2261,7 @@ def employee_document_upload(request, pk):
 
 
 @login_required
+@require_POST
 def employee_document_delete(request, pk):
     """Delete an employee document."""
     if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):
@@ -2390,6 +2391,7 @@ def vehicle_document_edit(request, pk):
 
 
 @login_required
+@require_POST
 def vehicle_document_delete(request, pk):
     """Delete a vehicle document (its file is reclaimed by the cleanup signal)."""
     if not (request.user.is_super_admin_user or request.user.is_erp_admin_user):

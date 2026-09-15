@@ -1,5 +1,6 @@
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.views.decorators.http import require_POST
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect, render
@@ -84,6 +85,7 @@ def company_document_edit(request, pk):
 
 
 @login_required
+@require_POST
 def company_document_delete(request, pk):
     if not _is_company_admin(request.user):
         messages.error(request, 'Admin access required.')

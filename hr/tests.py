@@ -2194,7 +2194,7 @@ class VehicleDocumentTests(TestCase):
         doc = VehicleDocument.objects.first()
         name = doc.file.name
         self.assertTrue(default_storage.exists(name))
-        self.client.get(reverse('hr:vehicle_doc_delete', kwargs={'pk': doc.pk}))
+        self.client.post(reverse('hr:vehicle_doc_delete', kwargs={'pk': doc.pk}))
         self.assertFalse(default_storage.exists(name))
 
     def test_other_type_requires_custom_label(self):
