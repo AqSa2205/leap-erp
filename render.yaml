@@ -30,8 +30,11 @@ services:
         value: production
       - key: DEBUG
         value: "False"
+      # Must match runtime.txt and the Dockerfile. Django 6 requires 3.12+,
+      # so 3.11 cannot install requirements.txt. On Render this variable
+      # outranks runtime.txt, which is what made the old 3.11.0 dangerous.
       - key: PYTHON_VERSION
-        value: "3.11.0"
+        value: "3.12.0"
       # Cloudflare R2 (object storage for uploaded documents).
       # USE_R2 toggles the S3 backend on. The four R2 secrets are set via
       # the Render dashboard → Environment, never committed to git.
