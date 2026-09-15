@@ -94,7 +94,10 @@ def procurement_dashboard(request):
 
     po_total = po_qs.count()
     po_by_status = {}
-    for s in ['draft', 'issued', 'client_acknowledged', 'completed', 'cancelled']:
+    # Every status in the choices list, not a hand-copied subset - a status
+    # added to the model and missed here would silently vanish from the
+    # breakdown while still counting toward po_total.
+    for s, _label in PurchaseOrder.STATUS_CHOICES:
         po_by_status[s] = po_qs.filter(status=s).count()
 
     # DN stats
