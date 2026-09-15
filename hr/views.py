@@ -4008,6 +4008,10 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
             from hr.models import MonthlyLatenessReport
             ctx['monthly_lateness_reports'] = MonthlyLatenessReport.objects.select_related(
                 'employee').order_by('-month', 'employee__full_name')[:100]
+            from hr.lateness_report_services import (
+                completed_months_needing_reports, recent_completed_months)
+            ctx['lateness_month_options'] = recent_completed_months()
+            ctx['lateness_months_missing'] = completed_months_needing_reports()
         ctx['late_queries_tab_count'] = LateQuery.objects.filter(status='pending').count() if is_hr else 0
         return ctx
 
@@ -4109,6 +4113,35 @@ class TeamExceptionsView(LoginRequiredMixin, UserPassesTestMixin, ListView):
                         target_url=reverse('hr:my_profile'),
                     )
                 messages.success(request, 'Query decision recorded.')
+        elif action == 'generate_lateness_report':
+            # HR only - the same gate as the Late Queries tab this lives on.
+            if not (request.user.is_super_admin_user or request.user.is_admin_user
+                    or request.user.is_erp_admin_user):
+                raise Http404('No such action.')
+            from hr.lateness_report_services import generate_for_completed_month
+            try:
+                target = datetime.strptime(request.POST.get('month', ''), '%Y-%m').date()
+            except ValueError:
+                messages.error(request, 'Pick a month to generate.')
+            else:
+                try:
+                    created = generate_for_completed_month(target)
+                except ValueError as e:
+                    messages.error(request, str(e))
+                else:
+                    # Synchronous on purpose: the service docstring records that
+                    # a background thread was killed before SMTP finished and no
+                    # email was ever delivered. A few seconds on this click is
+                    # the price of the emails actually going out.
+                    if created:
+                        messages.success(
+                            request,
+                            f'{target:%B %Y}: {created} report(s) generated and emailed.')
+                    else:
+                        messages.info(
+                            request,
+                            f'{target:%B %Y}: no new reports - either nobody was late, '
+                            f'or the reports already existed (any unsent emails were retried).')
         # Preserve whatever tab the manager was viewing when they acted.
         tab = request.POST.get('tab', '')
         url = reverse('hr:team_exceptions')
