@@ -133,19 +133,31 @@ class _MailboxAssignTestsBase:
         self.assertEqual(resp.status_code, 302)
         self.assertFalse(self.model.objects.filter(owner=no_email_employee).exists())
 
-    def test_duplicate_email_address_on_file_is_rejected(self):
-        """Two User accounts sharing the same email on file (a pre-existing
-        HR data issue) must not be able to collide into one mailbox row via
-        a raw IntegrityError — the form should catch it cleanly."""
+    def test_two_accounts_can_no_longer_share_an_address_at_all(self):
+        """This used to assert the form caught two User accounts sharing an
+        address - "a pre-existing HR data issue". User.email is unique now,
+        case-insensitively, so the database refuses that state before any
+        form runs - a stronger guarantee than catching it afterwards, and now
+        asserted for every mailbox type rather than one.
+
+        It matters here specifically: the mailbox is read from this address
+        through app-only Mail.Read, which reads whichever mailbox it is
+        handed. Two accounts claiming one address is the shape of a
+        colleague's inbox reachable from the wrong account.
+        """
+        from django.db import IntegrityError, transaction
         other = User.objects.create_user(
             f'{self.username_prefix}_other', password='x',
             email=f'dup_{self.username_prefix}@leap-arabia.com')
         self.model.objects.create(owner=other, email_address=other.email)
-        dup_employee = User.objects.create_user(
-            f'{self.username_prefix}_dup', password='x', email=other.email)
-        resp = self.client.post(reverse(self.assign_url), {'owner': dup_employee.pk})
-        self.assertEqual(resp.status_code, 302)
-        self.assertFalse(self.model.objects.filter(owner=dup_employee).exists())
+        for variant in (other.email, other.email.upper()):
+            with self.assertRaises(IntegrityError):
+                with transaction.atomic():
+                    User.objects.create_user(
+                        f'{self.username_prefix}_dup', password='x',
+                        email=variant)
+        self.assertEqual(
+            User.objects.filter(email__iexact=other.email).count(), 1)
 
     def test_toggle_revokes_then_reactivates(self):
         mailbox = self.model.objects.create(owner=self.employee, email_address=self.employee.email)
