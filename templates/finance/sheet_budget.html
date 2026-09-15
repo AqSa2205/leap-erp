@@ -39,6 +39,12 @@
     .var-neg { color:#2e7d32; }   /* under sales price */
     .var-zero { color:#888; }
     #bud-table input[readonly] { background:#f4f4f4; color:#555; }
+
+    /* Electric-purple marks a line procurement added after this budget was
+       approved. It never changes the totals above - the colour is the only
+       signal anything was added. */
+    #bud-table tr.bud-row-sub-item { background: #f8f3ff; }
+    #bud-table tr.bud-row-sub-item td { border-left: 3px solid #8F00FF; }
 </style>
 {% endblock %}
 
@@ -78,6 +84,13 @@
             {% if not editable %}
             <div class="alert alert-secondary d-flex align-items-center"><i class="bi bi-lock-fill me-2"></i>
                 This budget is approved and released for procurement — read-only. (A super admin can still edit.)</div>
+            {% endif %}
+
+            {% if sub_item_count %}
+            <div class="alert d-flex align-items-center" style="background:#f8f3ff; border:1px solid #d9b8ff; color:#5b1fa0;">
+                <i class="bi bi-plus-circle-fill me-2" style="color:#8F00FF;"></i>
+                <span>Procurement has added {{ sub_item_count }} item{{ sub_item_count|pluralize }} to this budget since approval (shown in <span style="color:#8F00FF; font-weight:600;">purple</span> below). The approved totals above are unaffected.</span>
+            </div>
             {% endif %}
 
             <form method="post">

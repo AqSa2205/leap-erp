@@ -8,7 +8,7 @@ from django.views.decorators.http import require_POST
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import Q
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 
 from .pdf_common import (  # shared PDF helpers, moved out of this module
     a4_portrait_document,
@@ -1123,7 +1123,14 @@ def bom_procurement_tracker(request, sheet_pk):
                     requested = remaining
                 if requested <= 0:
                     continue
-                to_order.append((li, min(requested, remaining)))
+                # Whole numbers only. Rounded down rather than to the
+                # nearest, so a fractional request (however it got here -
+                # not something the input itself allows any more) can never
+                # end up exceeding what's actually left after clamping.
+                qty = min(requested, remaining).quantize(Decimal('1'), rounding=ROUND_DOWN)
+                if qty <= 0:
+                    continue
+                to_order.append((li, qty))
 
             if not to_order:
                 messages.warning(request, 'Every item you picked is already fully ordered — nothing to add.')
@@ -1192,7 +1199,12 @@ def bom_procurement_tracker(request, sheet_pk):
                 Decimal('0'))
             remaining = li.quantity - already_ordered
             line_price = li.budget_line_price()
-            budget_total += line_price
+            # Sub items procurement adds after finance approval carry their
+            # own price but must never move the approved budget figure, so
+            # they're left out of this sum - the only thing that changes
+            # about the budget total when one is added is nothing.
+            if not li.added_by_procurement:
+                budget_total += line_price
             is_available = remaining > 0
             if is_available:
                 available_count += 1
@@ -1218,6 +1230,93 @@ def bom_procurement_tracker(request, sheet_pk):
         'procured_count': fully_procured_count,
         'budget_total': budget_total,
     })
+
+
+@login_required
+def add_sub_line_item(request, item_pk):
+    """Procurement adds a sub item under a budget line item (e.g. printer
+    cartridges under a printer), after the budget is finance-approved.
+
+    A sub item is a normal CostingLineItem nested under its parent via
+    parent_item, flagged added_by_procurement so the approved-budget view
+    can highlight it and exclude it from the budget total - adding one must
+    never move the finance-approved figure. Quantity has no cap for now;
+    see CostingLineItem.max_sub_item_quantity() for where a future limit
+    would be enforced - one change there, not a hunt through this view.
+    """
+    from costing.models import CostingLineItem
+    parent = get_object_or_404(CostingLineItem, pk=item_pk)
+    sheet = parent.section.costing_sheet
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user or user.is_procurement_user):
+        messages.error(request, 'Only procurement team members can add sub items.')
+        return redirect('procurement:approved_budgets')
+    if (not (user.is_super_admin_user or user.is_admin_user)
+            and (not sheet.project or sheet.project.region_id != user.region_id)):
+        messages.error(request, 'You can only add items to budgets for projects in your region.')
+        return redirect('procurement:approved_budgets')
+    if sheet.workflow_stage != 'finance_approved':
+        messages.error(request, 'This budget is not finance-approved yet.')
+        return redirect('procurement:approved_budgets')
+
+    if request.method == 'POST':
+        description = request.POST.get('description', '').strip()
+        quantity_raw = request.POST.get('quantity', '').strip()
+        unit = request.POST.get('unit') or 'EA'
+        rate_raw = request.POST.get('rate_per_unit', '').strip()
+        vendor_name = request.POST.get('vendor_name', '').strip()
+
+        errors = []
+        if not description:
+            errors.append('Description is required.')
+
+        quantity = None
+        try:
+            quantity = Decimal(quantity_raw).quantize(Decimal('1'), rounding=ROUND_DOWN)
+            if quantity <= 0:
+                errors.append('Quantity must be a positive whole number.')
+        except InvalidOperation:
+            errors.append('Quantity must be a whole number.')
+
+        max_qty = CostingLineItem.max_sub_item_quantity()
+        if quantity is not None and max_qty is not None and quantity > max_qty:
+            errors.append(f'Quantity cannot exceed {max_qty}.')
+
+        try:
+            rate_per_unit = Decimal(rate_raw) if rate_raw else Decimal('0')
+            if rate_per_unit < 0:
+                errors.append('Rate must not be negative.')
+        except InvalidOperation:
+            rate_per_unit = Decimal('0')
+            errors.append('Rate must be a number.')
+
+        if errors:
+            for e in errors:
+                messages.error(request, e)
+            return redirect('procurement:bom_procurement_tracker', sheet_pk=sheet.pk)
+
+        next_number = f'{parent.item_number}-{parent.sub_items.count() + 1}'
+        CostingLineItem.objects.create(
+            section=parent.section,
+            parent_item=parent,
+            item_number=next_number,
+            description=description,
+            quantity=quantity,
+            unit=unit,
+            vendor_name=vendor_name,
+            supplier_currency=sheet.default_supplier_currency or 'SAR',
+            base_unit_cost=Decimal('0'),
+            budget_price=rate_per_unit * quantity,
+            order=parent.order,
+            added_by_procurement=True,
+            added_by=user,
+            added_at=timezone.now(),
+        )
+        messages.success(
+            request,
+            f'Sub item "{description}" added under {parent.description}. '
+            'The approved budget total is unchanged.')
+    return redirect('procurement:bom_procurement_tracker', sheet_pk=sheet.pk)
 
 
 def _read_and_validate_signature(request):
