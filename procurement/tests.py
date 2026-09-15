@@ -2370,3 +2370,27 @@ class ProcurementBoardTests(TestCase):
         body = self.client.get(reverse('procurement:po_by_project')).content.decode()
         self.assertIn(
             reverse('procurement:po_board_remove', args=[self.chosen.pk]), body)
+
+
+class DashboardStatusBreakdownTests(TestCase):
+    """procurement_dashboard's po_by_status must cover every status
+    PurchaseOrder can actually have - a status left out of the breakdown
+    still counts toward po_total, so the numbers stop adding up."""
+
+    def setUp(self):
+        sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('dash_sa', password='x', role=sa_role)
+        self.client.force_login(self.user)
+
+    def test_every_status_is_represented_in_the_breakdown(self):
+        for key, _label in PurchaseOrder.STATUS_CHOICES:
+            PurchaseOrder.objects.create(
+                po_date=date(2026, 1, 1), po_number=f'PO-DASH-{key}',
+                vendor_name='ACME', po_issued_by='Tester',
+                created_by=self.user, status=key)
+        resp = self.client.get(reverse('procurement:dashboard'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            resp.context['po_total'], sum(resp.context['po_by_status'].values()))
+        for key, _label in PurchaseOrder.STATUS_CHOICES:
+            self.assertIn(key, resp.context['po_by_status'])
