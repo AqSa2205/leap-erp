@@ -2,8 +2,8 @@
 import calendar
 import json
 import zipfile
-from datetime import date
 from decimal import Decimal, InvalidOperation
+from functools import wraps
 from io import BytesIO
 
 from django.contrib import messages
@@ -66,6 +66,36 @@ def can_update_progress(user):
         or user.is_project_manager_user
         or user.is_site_manager_user
     )
+
+
+def delivery_required(view_func):
+    """Gate a view behind can_see_delivery.
+
+    The PM Dashboard, Manpower Status and Issue Log views all share this one
+    check with the same message — pulled into a decorator instead of
+    hand-repeating `if not can_see_delivery(...): raise PermissionDenied(...)`
+    at the top of every one of them, which is easy to forget or reword
+    slightly differently at any single call site.
+    """
+    @wraps(view_func)
+    def _wrapped(request, *args, **kwargs):
+        if not can_see_delivery(request.user):
+            raise PermissionDenied('The Project Management department is not open to your role.')
+        return view_func(request, *args, **kwargs)
+    return _wrapped
+
+
+def update_access_required(message):
+    """Gate a view behind the narrower can_update_progress, with a message
+    specific to what that view lets someone change."""
+    def _decorator(view_func):
+        @wraps(view_func)
+        def _wrapped(request, *args, **kwargs):
+            if not can_update_progress(request.user):
+                raise PermissionDenied(message)
+            return view_func(request, *args, **kwargs)
+        return _wrapped
+    return _decorator
 
 
 def _visible_projects(user):
@@ -368,12 +398,10 @@ def _pm_visible_project_or_404(request, pk):
 
 
 @login_required
+@delivery_required
 def pm_dashboard_index(request):
     """Portfolio landing page: graphical overview of every delivery project
     this user can see, then the searchable table to pick one and drill in."""
-    if not can_see_delivery(request.user):
-        raise PermissionDenied('The Project Management department is not open to your role.')
-
     projects_qs = _visible_projects(request.user)
 
     q = (request.GET.get('q') or '').strip()
@@ -425,17 +453,38 @@ def pm_dashboard_index(request):
     })
 
 
+def _style_export_header_and_grid(ws, header_idx, ncols):
+    """Shared openpyxl look for this module's Excel exports: a dark header
+    row, a thin grey border on every cell from the header down, and the
+    header row frozen. Pulled into one place so pm_dashboard_export_excel
+    and _build_issue_log_workbook don't each hand-declare the same
+    PatternFill/Font/Border boilerplate."""
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+    header_fill = PatternFill('solid', fgColor='2C3E50')
+    header_font = Font(bold=True, color='FFFFFF', size=10)
+    thin = Side(style='thin', color='D5D5D5')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    for c in ws[header_idx]:
+        c.fill = header_fill
+        c.font = header_font
+        c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    for row in ws.iter_rows(min_row=header_idx, max_row=ws.max_row, min_col=1, max_col=ncols):
+        for c in row:
+            c.border = border
+    ws.freeze_panes = ws.cell(row=header_idx + 1, column=1)
+
+
 @login_required
+@delivery_required
 def pm_dashboard_export_excel(request):
     """The PM Dashboard's project list as an .xlsx, one row per project, in
     the same column order as the PM's own tracking workbook. Honours the
     same search box as the page it's exported from."""
-    if not can_see_delivery(request.user):
-        raise PermissionDenied('The Project Management department is not open to your role.')
-
     import openpyxl
     from openpyxl.formatting.rule import ColorScaleRule
-    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     projects_qs = _visible_projects(request.user)
@@ -461,10 +510,6 @@ def pm_dashboard_export_excel(request):
     ws.title = 'PM Dashboard'
     ncols = len(columns)
 
-    header_fill = PatternFill('solid', fgColor='2C3E50')
-    header_font = Font(bold=True, color='FFFFFF', size=10)
-    thin = Side(style='thin', color='D5D5D5')
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
     delay_fill = PatternFill('solid', fgColor='FFC7CE')
     green_font = Font(bold=True, color='198754')
     red_font = Font(bold=True, color='DC3545')
@@ -480,10 +525,6 @@ def pm_dashboard_export_excel(request):
 
     header_idx = ws.max_row + 1
     ws.append(columns)
-    for c in ws[header_idx]:
-        c.fill = header_fill
-        c.font = header_font
-        c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
     for row in rows:
         project = row['project']
@@ -543,10 +584,7 @@ def pm_dashboard_export_excel(request):
     widths = [40, 20, 16, 16, 20, 12, 16, 14, 16, 18, 16]
     for i, w in enumerate(widths[:ncols], start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
-    for row in ws.iter_rows(min_row=header_idx, max_row=ws.max_row, min_col=1, max_col=ncols):
-        for c in row:
-            c.border = border
-    ws.freeze_panes = ws.cell(row=header_idx + 1, column=1)
+    _style_export_header_and_grid(ws, header_idx, ncols)
 
     buf = BytesIO()
     wb.save(buf)
@@ -559,12 +597,10 @@ def pm_dashboard_export_excel(request):
 
 
 @login_required
+@delivery_required
 def pm_project_overview(request, pk):
     """Graphical snapshot of one project — status tiles + a milestone chart,
     then cards linking into the dedicated PO / BOQ / matrix pages."""
-    if not can_see_delivery(request.user):
-        raise PermissionDenied('The Project Management department is not open to your role.')
-
     project = _pm_visible_project_or_404(request, pk)
     po_document_count = project.documents.filter(document_type='po_document').count()
     costing_sheet_count = project.costing_sheets.count()
@@ -589,10 +625,8 @@ def pm_project_overview(request, pk):
 
 
 @login_required
+@delivery_required
 def pm_project_po(request, pk):
-    if not can_see_delivery(request.user):
-        raise PermissionDenied('The Project Management department is not open to your role.')
-
     project = _pm_visible_project_or_404(request, pk)
     po_documents = project.documents.filter(document_type='po_document').order_by('-uploaded_at')
     return render(request, 'pmo/pm_project_po.html', {
@@ -602,10 +636,8 @@ def pm_project_po(request, pk):
 
 
 @login_required
+@delivery_required
 def pm_project_boq(request, pk):
-    if not can_see_delivery(request.user):
-        raise PermissionDenied('The Project Management department is not open to your role.')
-
     project = _pm_visible_project_or_404(request, pk)
     costing_sheets = project.costing_sheets.all().order_by('-updated_at')
     return render(request, 'pmo/pm_project_boq.html', {
@@ -614,98 +646,82 @@ def pm_project_boq(request, pk):
     })
 
 
+def _matrix_detail(request, pk, related_name, default_columns, template):
+    """Shared by pm_responsibility_matrix and pm_communication_matrix — the
+    two grids differ only in which relation/defaults they read."""
+    project = _pm_visible_project_or_404(request, pk)
+    matrix = getattr(project, related_name, None)
+    return render(request, template, {
+        'project': project,
+        'columns': matrix.columns if matrix else default_columns(),
+        'rows': matrix.rows if matrix else [],
+    })
+
+
 @login_required
+@delivery_required
 def pm_responsibility_matrix(request, pk):
-    if not can_see_delivery(request.user):
-        raise PermissionDenied('The Project Management department is not open to your role.')
-
-    project = _pm_visible_project_or_404(request, pk)
-    matrix = getattr(project, 'responsibility_matrix', None)
-    return render(request, 'pmo/pm_responsibility_matrix.html', {
-        'project': project,
-        'columns': matrix.columns if matrix else default_responsibility_columns(),
-        'rows': matrix.rows if matrix else [],
-    })
+    return _matrix_detail(request, pk, 'responsibility_matrix',
+                           default_responsibility_columns, 'pmo/pm_responsibility_matrix.html')
 
 
 @login_required
+@delivery_required
 def pm_communication_matrix(request, pk):
-    if not can_see_delivery(request.user):
-        raise PermissionDenied('The Project Management department is not open to your role.')
+    return _matrix_detail(request, pk, 'communication_matrix',
+                           default_communication_columns, 'pmo/pm_communication_matrix.html')
 
+
+def _matrix_edit(request, pk, model, related_name, default_columns, matrix_title,
+                  success_message, view_url_name):
+    """Shared by pm_responsibility_matrix_edit and pm_communication_matrix_edit
+    — same get/parse/sanitize/save shape either way, differing only in which
+    model and defaults back it. `matrix` is built in memory rather than
+    fetched-or-created: opening this page is a GET and must not itself write
+    a blank matrix row."""
     project = _pm_visible_project_or_404(request, pk)
-    matrix = getattr(project, 'communication_matrix', None)
-    return render(request, 'pmo/pm_communication_matrix.html', {
+    matrix = getattr(project, related_name, None) or model(project=project)
+    if request.method == 'POST':
+        try:
+            columns_raw = json.loads(request.POST.get('columns_json') or '[]')
+            rows_raw = json.loads(request.POST.get('rows_json') or '[]')
+        except (ValueError, TypeError):
+            columns_raw, rows_raw = [], []
+        matrix.columns, matrix.rows = sanitize_grid(columns_raw, rows_raw, default_columns())
+        matrix.updated_by = request.user
+        matrix.save()
+        messages.success(request, success_message)
+        return redirect(view_url_name, pk=project.pk)
+    return render(request, 'pmo/pm_matrix_edit.html', {
         'project': project,
-        'columns': matrix.columns if matrix else default_communication_columns(),
-        'rows': matrix.rows if matrix else [],
+        'matrix_title': matrix_title,
+        'cancel_url_name': view_url_name,
+        'columns_json': json.dumps(matrix.columns or default_columns()),
+        'rows_json': json.dumps(matrix.rows or []),
     })
 
 
 @login_required
+@delivery_required
 def pm_responsibility_matrix_edit(request, pk):
-    if not can_see_delivery(request.user):
-        raise PermissionDenied('The Project Management department is not open to your role.')
-
-    project = _pm_visible_project_or_404(request, pk)
-    matrix, _ = ResponsibilityMatrix.objects.get_or_create(project=project)
-    if request.method == 'POST':
-        try:
-            columns_raw = json.loads(request.POST.get('columns_json') or '[]')
-            rows_raw = json.loads(request.POST.get('rows_json') or '[]')
-        except (ValueError, TypeError):
-            columns_raw, rows_raw = [], []
-        matrix.columns, matrix.rows = sanitize_grid(
-            columns_raw, rows_raw, default_responsibility_columns())
-        matrix.updated_by = request.user
-        matrix.save()
-        messages.success(request, 'Responsibility matrix updated.')
-        return redirect('pmo:pm_responsibility_matrix', pk=project.pk)
-    return render(request, 'pmo/pm_matrix_edit.html', {
-        'project': project,
-        'matrix_title': 'Responsibility Matrix',
-        'cancel_url_name': 'pmo:pm_responsibility_matrix',
-        'columns_json': json.dumps(matrix.columns or default_responsibility_columns()),
-        'rows_json': json.dumps(matrix.rows or []),
-    })
+    return _matrix_edit(request, pk, ResponsibilityMatrix, 'responsibility_matrix',
+                         default_responsibility_columns, 'Responsibility Matrix',
+                         'Responsibility matrix updated.', 'pmo:pm_responsibility_matrix')
 
 
 @login_required
+@delivery_required
 def pm_communication_matrix_edit(request, pk):
-    if not can_see_delivery(request.user):
-        raise PermissionDenied('The Project Management department is not open to your role.')
-
-    project = _pm_visible_project_or_404(request, pk)
-    matrix, _ = CommunicationMatrix.objects.get_or_create(project=project)
-    if request.method == 'POST':
-        try:
-            columns_raw = json.loads(request.POST.get('columns_json') or '[]')
-            rows_raw = json.loads(request.POST.get('rows_json') or '[]')
-        except (ValueError, TypeError):
-            columns_raw, rows_raw = [], []
-        matrix.columns, matrix.rows = sanitize_grid(
-            columns_raw, rows_raw, default_communication_columns())
-        matrix.updated_by = request.user
-        matrix.save()
-        messages.success(request, 'Communication matrix updated.')
-        return redirect('pmo:pm_communication_matrix', pk=project.pk)
-    return render(request, 'pmo/pm_matrix_edit.html', {
-        'project': project,
-        'matrix_title': 'Communication Matrix',
-        'cancel_url_name': 'pmo:pm_communication_matrix',
-        'columns_json': json.dumps(matrix.columns or default_communication_columns()),
-        'rows_json': json.dumps(matrix.rows or []),
-    })
+    return _matrix_edit(request, pk, CommunicationMatrix, 'communication_matrix',
+                         default_communication_columns, 'Communication Matrix',
+                         'Communication matrix updated.', 'pmo:pm_communication_matrix')
 
 
 @login_required
+@delivery_required
 def pm_communication_matrix_export_pdf(request, pk):
     """Client-facing PDF report of the communication matrix — plain table,
     no pricing/internal data, safe to share externally."""
-    if not can_see_delivery(request.user):
-        raise PermissionDenied('The Project Management department is not open to your role.')
-
-    from django.utils import timezone
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -713,9 +729,10 @@ def pm_communication_matrix_export_pdf(request, pk):
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     project = _pm_visible_project_or_404(request, pk)
-    matrix, _ = CommunicationMatrix.objects.get_or_create(project=project)
-    columns = matrix.columns or default_communication_columns()
-    rows = matrix.rows or []
+    # Read-only export — never create a row just because someone viewed it.
+    matrix = getattr(project, 'communication_matrix', None)
+    columns = matrix.columns if matrix else default_communication_columns()
+    rows = matrix.rows if matrix else []
 
     base = getSampleStyleSheet()
     st_title = ParagraphStyle('t', parent=base['Title'], fontName='Helvetica-Bold',
@@ -785,10 +802,8 @@ def pm_communication_matrix_export_pdf(request, pk):
 # a milestone figure.
 
 @login_required
+@delivery_required
 def manpower_list(request):
-    if not can_see_delivery(request.user):
-        raise PermissionDenied('The Project Management department is not open to your role.')
-
     from hr.models import Employee
 
     employees = Employee.objects.select_related('manpower_resource').order_by('full_name')
@@ -807,11 +822,9 @@ def manpower_list(request):
 
 
 @login_required
+@update_access_required('Only Project Management can add employees.')
 def manpower_create(request):
     """Onboard someone who isn't in HR at all yet."""
-    if not can_update_progress(request.user):
-        raise PermissionDenied('Only Project Management can add employees.')
-
     if request.method == 'POST':
         form = NewEmployeeManpowerForm(request.POST)
         if form.is_valid():
@@ -824,16 +837,17 @@ def manpower_create(request):
 
 
 @login_required
+@update_access_required('Only Project Management can edit manpower details.')
 def manpower_edit(request, employee_pk):
     """Fill in / update the Project-Management fields for one employee who
     already exists in HR."""
-    if not can_update_progress(request.user):
-        raise PermissionDenied('Only Project Management can edit manpower details.')
-
     from hr.models import Employee
 
     employee = get_object_or_404(Employee, pk=employee_pk)
-    resource, _ = ManpowerResource.objects.get_or_create(employee=employee)
+    # Built in memory, not fetched-or-created: opening this page is a GET and
+    # must not itself write a row — only an actual save should. Same pattern
+    # as the responsibility/communication matrix edit views above.
+    resource = getattr(employee, 'manpower_resource', None) or ManpowerResource(employee=employee)
     if request.method == 'POST':
         form = ManpowerDetailsForm(request.POST, instance=resource)
         if form.is_valid():
@@ -849,13 +863,11 @@ def manpower_edit(request, employee_pk):
 
 @require_POST
 @login_required
+@update_access_required('Only Project Management can clear manpower details.')
 def manpower_clear(request, employee_pk):
     """Reset an employee's Project-Management fields back to blank — they
     stay on the list (they're still a real HR employee), just without any
     of the extra details filled in."""
-    if not can_update_progress(request.user):
-        raise PermissionDenied('Only Project Management can clear manpower details.')
-
     resource = get_object_or_404(ManpowerResource, employee_id=employee_pk)
     resource.delete()
     messages.success(request, 'Details cleared.')
@@ -871,7 +883,7 @@ def manpower_clear(request, employee_pk):
 def _resolve_year_month(request):
     """Read year/month from the query string, falling back to today when
     absent or invalid — same rule engineer_calendar's month paging uses."""
-    today = date.today()
+    today = timezone.localdate()
     try:
         year = int(request.GET.get('year', today.year))
         month = int(request.GET.get('month', today.month))
@@ -893,15 +905,21 @@ def _adjacent_month(year, month, delta):
     return year, month
 
 
-def _build_issue_log_workbook(year, month):
+def _build_issue_log_workbook(year, month, visible_projects):
     """Build one month's Issue Log workbook. Pulled out of the export view so
-    the all-months zip can reuse it without duplicating the styling."""
+    the all-months zip can reuse it without duplicating the styling.
+
+    `visible_projects` scopes the issues to what this user may see — the
+    same region/ownership ladder as everywhere else in pmo — so an export
+    can't be used to pull issues for a project someone couldn't otherwise
+    reach."""
     import openpyxl
-    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     issues = (ProjectIssue.objects
-              .filter(date_identified__year=year, date_identified__month=month)
+              .filter(date_identified__year=year, date_identified__month=month,
+                      project__in=visible_projects)
               .select_related('project', 'logged_by')
               .order_by('date_identified', 'pk'))
 
@@ -917,10 +935,6 @@ def _build_issue_log_workbook(year, month):
     ws.title = calendar.month_abbr[month].upper()
     ncols = len(columns)
 
-    thin = Side(style='thin', color='D5D5D5')
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    header_fill = PatternFill('solid', fgColor='2C3E50')
-    header_font = Font(bold=True, color='FFFFFF', size=10)
     wrap = Alignment(vertical='top', wrap_text=True)
 
     # Severity legend, same as the top of the source workbook.
@@ -945,10 +959,6 @@ def _build_issue_log_workbook(year, month):
 
     header_idx = ws.max_row + 1
     ws.append(columns)
-    for c in ws[header_idx]:
-        c.fill = header_fill
-        c.font = header_font
-        c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
     for issue in issues:
         ws.append([
@@ -982,23 +992,19 @@ def _build_issue_log_workbook(year, month):
     widths = [6, 10, 10, 40, 32, 14, 18, 14, 30, 30, 15, 16, 20, 40]
     for i, w in enumerate(widths[:ncols], start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
-    for row in ws.iter_rows(min_row=header_idx, max_row=ws.max_row, min_col=1, max_col=ncols):
-        for c in row:
-            c.border = border
-    ws.freeze_panes = ws.cell(row=header_idx + 1, column=1)
+    _style_export_header_and_grid(ws, header_idx, ncols)
 
     filename = f'Issue_Log_{calendar.month_name[month]}_{year}.xlsx'
     return wb, filename
 
 
 @login_required
+@delivery_required
 def issue_log_list(request):
-    if not can_see_delivery(request.user):
-        raise PermissionDenied('The Project Management department is not open to your role.')
-
     year, month = _resolve_year_month(request)
     issues = (ProjectIssue.objects
-              .filter(date_identified__year=year, date_identified__month=month)
+              .filter(date_identified__year=year, date_identified__month=month,
+                      project__in=projects_visible_to(request.user))
               .select_related('project', 'logged_by'))
     prev_year, prev_month = _adjacent_month(year, month, -1)
     next_year, next_month = _adjacent_month(year, month, 1)
@@ -1015,10 +1021,8 @@ def issue_log_list(request):
 
 
 @login_required
+@update_access_required('Only Project Management can log issues.')
 def issue_log_create(request):
-    if not can_update_progress(request.user):
-        raise PermissionDenied('Only Project Management can log issues.')
-
     if request.method == 'POST':
         form = ProjectIssueForm(request.POST, user=request.user)
         if form.is_valid():
@@ -1029,16 +1033,15 @@ def issue_log_create(request):
             return redirect(
                 f"{reverse('pmo:issue_log_list')}?year={issue.date_identified.year}&month={issue.date_identified.month}")
     else:
-        form = ProjectIssueForm(user=request.user, initial={'date_identified': date.today()})
+        form = ProjectIssueForm(user=request.user, initial={'date_identified': timezone.localdate()})
     return render(request, 'pmo/issue_log_form.html', {'form': form, 'is_new': True})
 
 
 @login_required
+@update_access_required('Only Project Management can edit issues.')
 def issue_log_edit(request, pk):
-    if not can_update_progress(request.user):
-        raise PermissionDenied('Only Project Management can edit issues.')
-
-    issue = get_object_or_404(ProjectIssue, pk=pk)
+    issue = get_object_or_404(
+        ProjectIssue.objects.filter(project__in=projects_visible_to(request.user)), pk=pk)
     if request.method == 'POST':
         form = ProjectIssueForm(request.POST, instance=issue, user=request.user)
         if form.is_valid():
@@ -1054,12 +1057,10 @@ def issue_log_edit(request, pk):
 
 
 @login_required
+@delivery_required
 def issue_log_export_excel(request):
-    if not can_see_delivery(request.user):
-        raise PermissionDenied('The Project Management department is not open to your role.')
-
     year, month = _resolve_year_month(request)
-    wb, filename = _build_issue_log_workbook(year, month)
+    wb, filename = _build_issue_log_workbook(year, month, projects_visible_to(request.user))
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
@@ -1068,14 +1069,14 @@ def issue_log_export_excel(request):
 
 
 @login_required
+@delivery_required
 def issue_log_export_all_zip(request):
     """One zip with a full Issue Log workbook for every month that has any
     issues at all — same format as the single-month Export to Excel button."""
-    if not can_see_delivery(request.user):
-        raise PermissionDenied('The Project Management department is not open to your role.')
-
+    visible_projects = projects_visible_to(request.user)
     months = list(
-        ProjectIssue.objects.values_list('date_identified__year', 'date_identified__month')
+        ProjectIssue.objects.filter(project__in=visible_projects)
+        .values_list('date_identified__year', 'date_identified__month')
         .distinct().order_by('-date_identified__year', '-date_identified__month')
     )
     if not months:
@@ -1085,7 +1086,7 @@ def issue_log_export_all_zip(request):
     buf = BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         for yr, mo in months:
-            month_wb, month_filename = _build_issue_log_workbook(yr, mo)
+            month_wb, month_filename = _build_issue_log_workbook(yr, mo, visible_projects)
             month_buf = BytesIO()
             month_wb.save(month_buf)
             zf.writestr(month_filename, month_buf.getvalue())

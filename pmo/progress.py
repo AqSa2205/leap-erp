@@ -234,7 +234,14 @@ def expected_completion_date(project):
 
     daily_rate = completion / Decimal(days_elapsed)
     days_remaining = (ONE - completion) / daily_rate
-    return today + timedelta(days=int(days_remaining))
+    try:
+        return today + timedelta(days=int(days_remaining))
+    except OverflowError:
+        # A sliver of progress (weightage's smallest step is 0.0001) over a
+        # long-running project projects a "finish line" centuries out —
+        # beyond what `date` can represent. Same rule as everywhere else in
+        # this function: no fabricated date is better than a wrong one.
+        return None
 
 
 def delay_months(expected, planned):
@@ -246,6 +253,12 @@ def delay_months(expected, planned):
     if not expected or not planned:
         return None
     months = (expected.year - planned.year) * 12 + (expected.month - planned.month)
+    # A month hasn't actually elapsed yet if we haven't reached the day of
+    # month `planned` fell on — same rule as counting whole years of age.
+    # Without this, one day past a month-end (e.g. planned 31 Jan, expected
+    # 1 Feb) overstates a full month of delay.
+    if expected.day < planned.day:
+        months -= 1
     return max(months, 0)
 
 

@@ -1,4 +1,5 @@
 from django import forms
+from django.db import transaction
 
 from .models import ManpowerResource, ProjectIssue
 
@@ -73,6 +74,7 @@ class NewEmployeeManpowerForm(forms.Form):
                 'find them in the list below and use Edit instead.')
         return value
 
+    @transaction.atomic
     def save(self, created_by):
         from hr.models import Employee
 
