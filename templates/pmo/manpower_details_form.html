@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+
+{% block title %}Edit {{ employee.full_name }} - Manpower Status{% endblock %}
+{% block page_title %}Edit Resource{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+    <a href="{% url 'pmo:manpower_list' %}" class="text-muted small"><i class="bi bi-arrow-left"></i> Back to Manpower Status</a>
+</div>
+
+<div class="card" style="max-width: 640px;">
+    <div class="card-header">
+        <i class="bi bi-person-badge me-2"></i>{{ employee.full_name }}
+        <span class="text-muted small">&middot; {{ employee.iqama_number|default:"no ID number on file" }}</span>
+    </div>
+    <div class="card-body">
+        <form method="post">
+            {% csrf_token %}
+            {% if form.non_field_errors %}
+            <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+            {% endif %}
+            {% for field in form %}
+            <div class="mb-3">
+                <label class="form-label fw-semibold">{{ field.label }}</label>
+                {{ field }}
+                {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                {% if field.errors %}<div class="text-danger small">{{ field.errors.0 }}</div>{% endif %}
+            </div>
+            {% endfor %}
+            <div class="d-flex justify-content-between">
+                <a href="{% url 'pmo:manpower_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                <button type="submit" class="btn btn-danger"><i class="bi bi-check-lg me-1"></i> Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

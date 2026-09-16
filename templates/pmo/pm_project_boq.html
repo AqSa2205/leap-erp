@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+
+{% block title %}BOQ (Unpriced) - {{ project.project_name }}{% endblock %}
+{% block page_title %}BOQ (Unpriced){% endblock %}
+
+{% block extra_css %}
+<style>
+    .pmd-card { border-radius: 12px; border: none; box-shadow: 0 4px 15px rgba(0,0,0,0.06); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+    <a href="{% url 'pmo:pm_project_overview' project.pk %}" class="text-muted small"><i class="bi bi-arrow-left"></i> Back to {{ project.project_name }}</a>
+</div>
+
+<div class="card pmd-card">
+    <div class="card-header"><i class="bi bi-list-check me-2"></i>Costing Sheets (Bill of Quantities)</div>
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light"><tr><th>Sheet</th><th>Stage</th><th>Updated</th><th class="text-end">Unpriced export</th></tr></thead>
+            <tbody>
+                {% for sheet in costing_sheets %}
+                <tr>
+                    <td>{{ sheet.title }}</td>
+                    <td><span class="badge bg-secondary">{{ sheet.get_workflow_stage_display }}</span></td>
+                    <td>{{ sheet.updated_at|date:"d M Y" }}</td>
+                    <td class="text-end">
+                        <a href="{% url 'costing:export_pdf' sheet.pk %}?unpriced=1" class="btn btn-sm btn-outline-dark" target="_blank">
+                            <i class="bi bi-file-earmark-pdf me-1"></i>PDF
+                        </a>
+                        <a href="{% url 'costing:export' sheet.pk %}?unpriced=1" class="btn btn-sm btn-outline-dark">
+                            <i class="bi bi-file-earmark-excel me-1"></i>Excel
+                        </a>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-4">No costing sheet linked to this project yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="card-footer text-muted small">
+        Unpriced exports omit all rates/totals — safe to share outside Leap.
+    </div>
+</div>
+{% endblock %}

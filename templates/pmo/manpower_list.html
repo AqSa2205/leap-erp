@@ -1,0 +1,97 @@
+{% extends 'base.html' %}
+
+{% block title %}Manpower Status - Leap Networks ERP{% endblock %}
+{% block page_title %}Manpower Status{% endblock %}
+
+{% block extra_css %}
+<style>
+    .pmd-table-card { border-radius: 12px; border: none; box-shadow: 0 4px 15px rgba(0,0,0,0.08); overflow: hidden; }
+    .pmd-table-card .card-header { background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%); color: #fff; padding: 1rem 1.25rem; }
+    .pmd-table-card .card-header h5 { color: #fff; margin: 0; }
+    table.manpower th { white-space: nowrap; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.3px; }
+    table.manpower td { font-size: 0.85rem; white-space: nowrap; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card pmd-table-card">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <h5><i class="bi bi-people me-2"></i>Manpower Status</h5>
+        <div class="d-flex gap-2">
+            <form method="get" class="d-flex" role="search">
+                <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Search name, ID number, title…" style="min-width: 240px;">
+            </form>
+            {% if can_manage %}
+            <a href="{% url 'pmo:manpower_create' %}" class="btn btn-danger btn-sm">
+                <i class="bi bi-person-plus me-1"></i> Add Employee
+            </a>
+            {% endif %}
+        </div>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0 manpower">
+            <thead class="table-light">
+                <tr>
+                    <th>#</th>
+                    <th>Resource Name</th>
+                    <th>ID Number</th>
+                    <th>Title LEAP</th>
+                    <th>Title</th>
+                    <th>Start Contract Date</th>
+                    <th>End Contract Date</th>
+                    <th>Contract Type</th>
+                    <th class="text-end">Experience (days)</th>
+                    <th class="text-end">Experience (Months)</th>
+                    <th class="text-end">Experience (Years)</th>
+                    <th>Status</th>
+                    <th>Discipline</th>
+                    <th>Levels of Employment</th>
+                    {% if can_manage %}<th></th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for employee in employees %}
+                <tr>
+                    <td>{{ forloop.counter }}</td>
+                    <td class="fw-semibold">{{ employee.full_name }}</td>
+                    <td>{{ employee.iqama_number|default:"—" }}</td>
+                    <td>{{ employee.designation|default:"—" }}</td>
+                    <td>{{ employee.manpower_resource.title|default:"—" }}</td>
+                    <td>{{ employee.manpower_resource.start_contract_date|date:"d M Y"|default:"—" }}</td>
+                    <td>{{ employee.manpower_resource.end_contract_date|date:"d M Y"|default:"—" }}</td>
+                    <td>{{ employee.manpower_resource.get_engagement_type_display|default:"—" }}</td>
+                    <td class="text-end">{{ employee.manpower_resource.experience_days|default:"—" }}</td>
+                    <td class="text-end">{{ employee.manpower_resource.experience_months|default:"—" }}</td>
+                    <td class="text-end">{{ employee.manpower_resource.experience_years|default:"—" }}</td>
+                    <td>
+                        {% if employee.is_active %}
+                        <span class="badge bg-success">Active</span>
+                        {% else %}
+                        <span class="badge bg-secondary">Inactive</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ employee.manpower_resource.get_discipline_display|default:"—" }}</td>
+                    <td>{{ employee.manpower_resource.get_employment_level_display|default:"—" }}</td>
+                    {% if can_manage %}
+                    <td class="text-end">
+                        <a href="{% url 'pmo:manpower_edit' employee.pk %}" class="btn btn-sm btn-outline-dark">
+                            <i class="bi bi-pencil"></i>
+                        </a>
+                        {% if employee.manpower_resource %}
+                        <form method="post" action="{% url 'pmo:manpower_clear' employee.pk %}" class="d-inline"
+                              onsubmit="return confirm('Clear the Project Management details for {{ employee.full_name }}? They will stay on this list.');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-sm btn-outline-danger" title="Clear details"><i class="bi bi-eraser"></i></button>
+                        </form>
+                        {% endif %}
+                    </td>
+                    {% endif %}
+                </tr>
+                {% empty %}
+                <tr><td colspan="15" class="text-center text-muted py-4">No employees found.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

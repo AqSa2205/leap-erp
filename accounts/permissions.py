@@ -76,7 +76,7 @@ CAPABILITIES = [
     Capability('manpowercost.edit', 'Manpower Costing', 'edit',
                'Create & edit cost sheets and rates', enforced=True, order=2),
     Capability('manpowercost.margin', 'Manpower Costing', 'margin',
-               'See margin between charge rate and cost', enforced=True, order=3),    
+               'See margin between charge rate and cost', enforced=True, order=3),
 ]
 
 

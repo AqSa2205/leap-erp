@@ -1155,12 +1155,23 @@ class POClientAcknowledgedLockTests(TestCase):
     # ── the status itself ───────────────────────────────────────────────────
 
     def test_only_the_new_status_locks(self):
-        for status in ('draft', 'issued', 'completed', 'cancelled'):
+        for status in ('draft', 'issued', 'supplier_acknowledged', 'completed', 'cancelled'):
             self.po.status = status
             with self.subTest(status=status):
                 self.assertFalse(self.po.is_locked)
         self.po.status = 'client_acknowledged'
         self.assertTrue(self.po.is_locked)
+
+    def test_supplier_acknowledged_does_not_stamp_the_client_ack_fields(self):
+        """Supplier Acknowledged is a plain status note, deliberately
+        distinct from Client Acknowledged - it must not touch the
+        client_acknowledged_at/by stamps, which describe a different
+        acknowledgement and are what the lock guarantee is built on."""
+        self.po.record_status_change(
+            to_status='supplier_acknowledged', changed_by=self.procurement)
+        self.po.refresh_from_db()
+        self.assertIsNone(self.po.client_acknowledged_at)
+        self.assertIsNone(self.po.client_acknowledged_by)
 
     def test_acknowledging_stamps_who_and_when(self):
         self._lock()
@@ -1332,6 +1343,47 @@ class POClientAcknowledgedLockTests(TestCase):
         self.assertIsNone(self.po.client_acknowledged_by)
         # The history still knows it happened.
         self.assertEqual(self.po.status_changes.count(), 2)
+
+
+class POSCMDeleteAccessTests(TestCase):
+    """SCM (procurement manager) gets the same PO delete access as Admin -
+    any PO in the unsigned/unlocked window, not just ones they created
+    themselves."""
+
+    def setUp(self):
+        scm_role, _ = Role.objects.get_or_create(name=Role.PROCUREMENT_MGR)
+        self.scm = User.objects.create_user('scm_del', password='x', role=scm_role)
+
+        officer_role, _ = Role.objects.get_or_create(name=Role.PROCUREMENT_OFF)
+        self.officer = User.objects.create_user('officer_del', password='x', role=officer_role)
+
+        other_creator = User.objects.create_user('other_creator', password='x', role=officer_role)
+
+        self.po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-SCMDEL-1',
+            vendor_name='ACME', po_issued_by='Tester',
+            created_by=other_creator, status='issued')
+
+    def test_scm_can_delete_a_po_they_did_not_create(self):
+        self.client.force_login(self.scm)
+        self.client.post(reverse('procurement:po_delete', args=[self.po.pk]))
+        self.assertFalse(PurchaseOrder.objects.filter(pk=self.po.pk).exists())
+
+    def test_scm_cannot_delete_once_any_stage_is_signed(self):
+        """The audit-trail gate applies to SCM the same as everyone but
+        super admin - signing a stage closes the delete window regardless
+        of who did the signing."""
+        from django.utils import timezone
+        self.po.scm_approved_at = timezone.now()
+        self.po.save()
+        self.client.force_login(self.scm)
+        self.client.post(reverse('procurement:po_delete', args=[self.po.pk]))
+        self.assertTrue(PurchaseOrder.objects.filter(pk=self.po.pk).exists())
+
+    def test_a_non_manager_procurement_user_still_cannot_delete_someone_elses_po(self):
+        self.client.force_login(self.officer)
+        self.client.post(reverse('procurement:po_delete', args=[self.po.pk]))
+        self.assertTrue(PurchaseOrder.objects.filter(pk=self.po.pk).exists())
 
 
 class POWorkflowStatusTests(TestCase):
@@ -2359,3 +2411,27 @@ class ProcurementBoardTests(TestCase):
         body = self.client.get(reverse('procurement:po_by_project')).content.decode()
         self.assertIn(
             reverse('procurement:po_board_remove', args=[self.chosen.pk]), body)
+
+
+class DashboardStatusBreakdownTests(TestCase):
+    """procurement_dashboard's po_by_status must cover every status
+    PurchaseOrder can actually have - a status left out of the breakdown
+    still counts toward po_total, so the numbers stop adding up."""
+
+    def setUp(self):
+        sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('dash_sa', password='x', role=sa_role)
+        self.client.force_login(self.user)
+
+    def test_every_status_is_represented_in_the_breakdown(self):
+        for key, _label in PurchaseOrder.STATUS_CHOICES:
+            PurchaseOrder.objects.create(
+                po_date=date(2026, 1, 1), po_number=f'PO-DASH-{key}',
+                vendor_name='ACME', po_issued_by='Tester',
+                created_by=self.user, status=key)
+        resp = self.client.get(reverse('procurement:dashboard'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            resp.context['po_total'], sum(resp.context['po_by_status'].values()))
+        for key, _label in PurchaseOrder.STATUS_CHOICES:
+            self.assertIn(key, resp.context['po_by_status'])

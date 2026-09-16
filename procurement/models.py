@@ -48,6 +48,10 @@ class PurchaseOrder(models.Model):
     STATUS_CHOICES = [
         ('draft', 'Draft'),
         ('issued', 'Issued'),
+        # Plain status — a note the supplier has acknowledged the PO,
+        # nothing more. Deliberately does not lock the PO the way
+        # client_acknowledged does; see is_locked below.
+        ('supplier_acknowledged', 'Supplier Acknowledged'),
         # Renamed from 'acknowledged', which carried no behaviour beyond a badge
         # colour. This one locks the PO — see is_locked below.
         ('client_acknowledged', 'Client Acknowledged'),
@@ -110,7 +114,7 @@ class PurchaseOrder(models.Model):
         max_length=30, choices=COST_CENTER_CHOICES, default='projects',
         verbose_name="Cost Center"
     )
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    status = models.CharField(max_length=25, choices=STATUS_CHOICES, default='draft')
     # Stamped when the PO enters Client Acknowledged. Kept on the PO as well as
     # in POStatusChange so the common question — when was this accepted — does
     # not need a join.
