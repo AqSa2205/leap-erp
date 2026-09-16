@@ -12,6 +12,9 @@
             finance's payment records and the purchase orders. Nothing on this page is typed.
         </div>
     </div>
+    <a href="{% url 'pmo:pm_dashboard_index' %}" class="btn btn-outline-dark btn-sm">
+        <i class="bi bi-file-earmark-text me-1"></i> PM Dashboard (PO, BOQ, matrices)
+    </a>
 </div>
 
 {% comment %} Shown at the top rather than beside the project, because a wrong
@@ -69,6 +72,11 @@ a board scans the numbers, not the warnings beside them. {% endcomment %}
                     <th>Ref</th>
                     <th>Location</th>
                     <th style="width:190px;">Completion</th>
+                    <th class="text-center">Milestones</th>
+                    <th>Planned End</th>
+                    <th>Expected Completion</th>
+                    <th class="text-center">Delay</th>
+                    <th>Action By</th>
                     <th class="text-end">PO Value</th>
                     <th class="text-end">Cash In</th>
                     <th class="text-end">Cash Out</th>
@@ -99,6 +107,19 @@ a board scans the numbers, not the warnings beside them. {% endcomment %}
                             </div>
                         </div>
                     </td>
+                    <td class="text-center small">
+                        <span class="text-success">{{ row.achieved_milestones }}</span> / <span class="text-muted">{{ row.pending_milestones }}</span>
+                    </td>
+                    <td class="small">{{ row.end_date|date:"d M Y"|default:"—" }}</td>
+                    <td class="small">{{ row.expected_completion_date|date:"d M Y"|default:"—" }}</td>
+                    <td class="text-center small">
+                        {% if row.delay_months %}
+                        <span class="badge bg-danger">{{ row.delay_months }}m</span>
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="small">{{ row.action_by|default:"—" }}</td>
                     <td class="text-end">{% if row.po_value %}{{ row.po_value|floatformat:2|intcomma }}{% else %}—{% endif %}</td>
                     <td class="text-end">{{ row.cash_in|floatformat:2|intcomma }}</td>
                     <td class="text-end">{{ row.cash_out|floatformat:2|intcomma }}</td>
@@ -119,7 +140,7 @@ a board scans the numbers, not the warnings beside them. {% endcomment %}
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="9" class="text-center text-muted py-4">
+                    <td colspan="14" class="text-center text-muted py-4">
                         No projects to show.
                     </td>
                 </tr>

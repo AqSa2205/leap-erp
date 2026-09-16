@@ -172,10 +172,23 @@ class CommitmentTests(TestCase):
 
     def test_an_acknowledged_or_completed_order_still_counts(self):
         """Money committed does not become uncommitted by progressing."""
-        for i, status in enumerate(('client_acknowledged', 'completed')):
+        for i, status in enumerate(('supplier_acknowledged', 'client_acknowledged', 'completed')):
             self._po(f'PO-S{i}', '100', status=status)
         self.assertEqual(
-            commitment(PurchaseOrder.objects.all())['committed'], Decimal('200'))
+            commitment(PurchaseOrder.objects.all())['committed'], Decimal('300'))
+
+    def test_moving_to_supplier_acknowledged_does_not_zero_out_committed_spend(self):
+        """Regression guard: supplier_acknowledged is a plain status note (it
+        doesn't lock the PO), but it must still land in the same 'committed'
+        bucket as issued - not fall through to the else branch meant only
+        for cancelled orders, which would silently zero out its spend."""
+        po = self._po('PO-SA1', '1000', status='issued')
+        before = commitment([po])['committed']
+        po.status = 'supplier_acknowledged'
+        po.save()
+        after = commitment([po])['committed']
+        self.assertEqual(before, Decimal('1000'))
+        self.assertEqual(before, after)
 
     def test_a_foreign_currency_order_is_converted_not_added_raw(self):
         """1000 USD is 3750 SAR, not 1000 SAR. Adding it raw would understate

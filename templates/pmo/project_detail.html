@@ -25,6 +25,9 @@ the DOM. There is no form on this page, so it carries its own.
         <div class="small text-muted">Completion</div>
         <div class="h3 mb-0">{{ completion_pct|floatformat:2 }}%</div>
         <div class="small text-muted">across {{ leaf_count }} activit{{ leaf_count|pluralize:"y,ies" }}</div>
+        <a href="{% url 'pmo:pm_project_overview' project.pk %}" class="small text-decoration-none">
+            <i class="bi bi-kanban me-1"></i>PM Dashboard for this project
+        </a>
     </div>
 </div>
 

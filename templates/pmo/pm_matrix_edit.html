@@ -1,0 +1,222 @@
+{% extends 'base.html' %}
+
+{% block title %}Edit {{ matrix_title }} - {{ project.project_name }}{% endblock %}
+{% block page_title %}{{ matrix_title }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    #grid-table { table-layout: fixed; }
+    #grid-table thead th { background: #1a1a1a; color: #fff; font-weight: 600; vertical-align: top; }
+    #grid-table td { padding: 0; vertical-align: top; }
+    #grid-table td.cell-num, #grid-table td.cell-actions { padding: 6px; vertical-align: middle; text-align: center; }
+    #grid-table textarea.cell-input {
+        border: 0; box-shadow: none; background: transparent; resize: vertical;
+        width: 100%; min-height: 38px; padding: 6px 8px; border-radius: 0;
+        font-size: 0.875rem; line-height: 1.35;
+    }
+    #grid-table textarea.cell-input:focus { background: #FFF8F9; outline: 2px solid #C41E3A; outline-offset: -2px; }
+    #grid-table th .col-head-wrap { display: flex; align-items: center; gap: 4px; }
+    #grid-table input.col-name {
+        border: 1px solid transparent; background: transparent; font-weight: 600; color: #fff;
+        width: 100%; padding: 4px 6px; border-radius: 4px; font-size: 0.875rem;
+    }
+    #grid-table input.col-name::placeholder { color: #ccc; }
+    #grid-table input.col-name:hover { border-color: rgba(255,255,255,0.4); }
+    #grid-table input.col-name:focus { background: #fff; color: #333; border-color: #C41E3A; outline: none; }
+    #grid-table th.col-head { min-width: 160px; }
+    #grid-table .btn-del-col { --bs-btn-padding-y: 0; --bs-btn-padding-x: 4px; line-height: 1.1; border: 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<form method="post" id="grid-form">
+    {% csrf_token %}
+    <input type="hidden" name="columns_json" id="columns_json">
+    <input type="hidden" name="rows_json" id="rows_json">
+
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <span><i class="bi bi-table me-2"></i>{{ matrix_title }} &mdash; {{ project.project_name }}</span>
+            <div>
+                <button type="button" class="btn btn-sm btn-outline-primary" id="btn-add-col">
+                    <i class="bi bi-layout-three-columns me-1"></i> Add column
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-dark" id="btn-add-row">
+                    <i class="bi bi-plus-lg me-1"></i> Add row
+                </button>
+            </div>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-bordered align-middle mb-0" id="grid-table">
+                    <thead>
+                        <tr id="grid-head-row">
+                            <th style="width:32px;">#</th>
+                            <th style="width:50px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="grid-tbody"></tbody>
+                </table>
+            </div>
+            <div id="empty-hint" class="text-muted small p-3 d-none">
+                No rows yet. Use <strong>Add row</strong> to begin.
+            </div>
+        </div>
+    </div>
+
+    <div class="d-flex justify-content-between mt-3">
+        <a href="{% url cancel_url_name project.pk %}" class="btn btn-outline-secondary">Cancel</a>
+        <button type="submit" class="btn btn-danger"><i class="bi bi-check-lg me-1"></i> Save</button>
+    </div>
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+    const INITIAL_COLUMNS = JSON.parse('{{ columns_json|escapejs }}');
+    const INITIAL_ROWS = JSON.parse('{{ rows_json|escapejs }}');
+
+    const headRow = document.getElementById('grid-head-row');
+    const tbody = document.getElementById('grid-tbody');
+    const emptyHint = document.getElementById('empty-hint');
+    const form = document.getElementById('grid-form');
+
+    let keyCounter = 0;
+    (INITIAL_COLUMNS || []).forEach((c) => {
+        const m = /^c(\d+)$/.exec(c && c.key || '');
+        if (m) keyCounter = Math.max(keyCounter, parseInt(m[1], 10));
+    });
+    function nextKey() { keyCounter += 1; return 'c' + keyCounter; }
+
+    function makeHeaderTh(key, name) {
+        const th = document.createElement('th');
+        th.className = 'col-head';
+        th.dataset.key = key;
+        const wrap = document.createElement('div');
+        wrap.className = 'col-head-wrap';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'col-name';
+        input.value = name || '';
+        input.placeholder = 'Column name';
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'btn btn-sm btn-outline-light btn-del-col';
+        del.title = 'Delete column';
+        del.innerHTML = '<i class="bi bi-x-lg"></i>';
+        del.addEventListener('click', () => deleteColumn(key));
+        wrap.appendChild(input);
+        wrap.appendChild(del);
+        th.appendChild(wrap);
+        return th;
+    }
+
+    function makeBodyCell(key, text) {
+        const td = document.createElement('td');
+        td.className = 'cell-body';
+        td.dataset.key = key;
+        const ta = document.createElement('textarea');
+        ta.className = 'cell-input';
+        ta.rows = 2;
+        ta.value = text || '';
+        td.appendChild(ta);
+        return td;
+    }
+
+    function columnKeys() {
+        return Array.from(headRow.querySelectorAll('th.col-head')).map((th) => th.dataset.key);
+    }
+
+    function renumber() {
+        let i = 0;
+        tbody.querySelectorAll('tr.grid-row').forEach((row) => {
+            i += 1;
+            const rn = row.querySelector('.row-num');
+            if (rn) rn.textContent = i;
+        });
+        emptyHint.classList.toggle('d-none', i > 0);
+    }
+
+    function makeRow(cellData) {
+        cellData = cellData || {};
+        const tr = document.createElement('tr');
+        tr.className = 'grid-row';
+        const numTd = document.createElement('td');
+        numTd.className = 'cell-num text-muted small row-num';
+        tr.appendChild(numTd);
+        columnKeys().forEach((key) => {
+            const d = cellData[key] || {};
+            tr.appendChild(makeBodyCell(key, d.text));
+        });
+        const actTd = document.createElement('td');
+        actTd.className = 'cell-actions';
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'btn btn-sm btn-outline-danger btn-delete-row';
+        del.title = 'Remove row';
+        del.innerHTML = '<i class="bi bi-trash"></i>';
+        del.addEventListener('click', () => { tr.remove(); renumber(); });
+        actTd.appendChild(del);
+        tr.appendChild(actTd);
+        return tr;
+    }
+
+    function addRow(cellData) {
+        const tr = makeRow(cellData);
+        tbody.appendChild(tr);
+        renumber();
+        return tr;
+    }
+
+    function addColumn(name) {
+        const key = nextKey();
+        const th = makeHeaderTh(key, name || '');
+        headRow.insertBefore(th, headRow.lastElementChild);
+        tbody.querySelectorAll('tr.grid-row').forEach((row) => {
+            row.insertBefore(makeBodyCell(key, ''), row.lastElementChild);
+        });
+        return key;
+    }
+
+    function deleteColumn(key) {
+        const cols = columnKeys();
+        if (cols.length <= 1) {
+            alert('The matrix needs at least one column.');
+            return;
+        }
+        const th = headRow.querySelector('th.col-head[data-key="' + key + '"]');
+        if (th) th.remove();
+        tbody.querySelectorAll('td.cell-body[data-key="' + key + '"]').forEach((td) => td.remove());
+    }
+
+    let cols = (INITIAL_COLUMNS && INITIAL_COLUMNS.length) ? INITIAL_COLUMNS : [{ key: 'c1', name: 'Column 1' }];
+    cols.forEach((c) => {
+        headRow.insertBefore(makeHeaderTh(c.key, c.name), headRow.lastElementChild);
+    });
+    (INITIAL_ROWS || []).forEach((r) => addRow((r && r.cells) || {}));
+    if (!(INITIAL_ROWS || []).length) addRow({});
+    renumber();
+
+    document.getElementById('btn-add-row').addEventListener('click', () => addRow({}));
+    document.getElementById('btn-add-col').addEventListener('click', () => addColumn('New column'));
+
+    form.addEventListener('submit', () => {
+        const columns = Array.from(headRow.querySelectorAll('th.col-head')).map((th) => ({
+            key: th.dataset.key,
+            name: (th.querySelector('input.col-name').value || '').trim(),
+        }));
+        const rows = [];
+        tbody.querySelectorAll('tr.grid-row').forEach((row) => {
+            const cells = {};
+            row.querySelectorAll('td.cell-body').forEach((td) => {
+                cells[td.dataset.key] = { text: td.querySelector('textarea.cell-input').value };
+            });
+            rows.push({ cells: cells });
+        });
+        document.getElementById('columns_json').value = JSON.stringify(columns);
+        document.getElementById('rows_json').value = JSON.stringify(rows);
+    });
+})();
+</script>
+{% endblock %}

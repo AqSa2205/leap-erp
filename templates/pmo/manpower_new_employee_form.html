@@ -1,0 +1,40 @@
+{% extends 'base.html' %}
+
+{% block title %}Add Employee - Manpower Status{% endblock %}
+{% block page_title %}Add Employee{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+    <a href="{% url 'pmo:manpower_list' %}" class="text-muted small"><i class="bi bi-arrow-left"></i> Back to Manpower Status</a>
+</div>
+
+<div class="card" style="max-width: 640px;">
+    <div class="card-header">
+        <i class="bi bi-person-plus me-2"></i>Onboard a new employee
+        <div class="text-muted small mt-1">
+            For someone not already in the HR system. If they're already an
+            employee, find them on the Manpower Status list and use Edit instead.
+        </div>
+    </div>
+    <div class="card-body">
+        <form method="post">
+            {% csrf_token %}
+            {% if form.non_field_errors %}
+            <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+            {% endif %}
+            {% for field in form %}
+            <div class="mb-3">
+                <label class="form-label fw-semibold">{{ field.label }}</label>
+                {{ field }}
+                {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                {% if field.errors %}<div class="text-danger small">{{ field.errors.0 }}</div>{% endif %}
+            </div>
+            {% endfor %}
+            <div class="d-flex justify-content-between">
+                <a href="{% url 'pmo:manpower_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                <button type="submit" class="btn btn-danger"><i class="bi bi-check-lg me-1"></i> Add</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

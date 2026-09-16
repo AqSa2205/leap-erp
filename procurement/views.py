@@ -94,7 +94,10 @@ def procurement_dashboard(request):
 
     po_total = po_qs.count()
     po_by_status = {}
-    for s in ['draft', 'issued', 'client_acknowledged', 'completed', 'cancelled']:
+    # Every status in the choices list, not a hand-copied subset - a status
+    # added to the model and missed here would silently vanish from the
+    # breakdown while still counting toward po_total.
+    for s, _label in PurchaseOrder.STATUS_CHOICES:
         po_by_status[s] = po_qs.filter(status=s).count()
 
     # DN stats
@@ -1514,7 +1517,10 @@ class PODeleteView(ProcurementPermissionMixin, DeleteView):
         )
         if any_signed and not user.is_super_admin_user:
             return False
-        if user.is_super_admin_user or user.is_admin_user:
+        # SCM (procurement manager) gets the same delete access as Admin -
+        # any PO in this unsigned/unlocked window, not just their own.
+        if (user.is_super_admin_user or user.is_admin_user
+                or getattr(user, 'is_procurement_manager_user', False)):
             return True
         return obj.created_by == user
 

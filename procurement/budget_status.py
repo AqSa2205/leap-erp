@@ -35,7 +35,7 @@ from decimal import Decimal
 
 # What counts as money committed. A cancelled PO commits nothing and is absent
 # from both tuples on purpose.
-COMMITTED_STATUSES = ('issued', 'client_acknowledged', 'completed')
+COMMITTED_STATUSES = ('issued', 'supplier_acknowledged', 'client_acknowledged', 'completed')
 PENDING_STATUSES = ('draft',)
 
 # The same rule for QUANTITY rather than money: which POs still hold a claim

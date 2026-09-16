@@ -244,6 +244,7 @@
                 {% elif po.status == 'client_acknowledged' %}<span class="badge bg-secondary"><i class="bi bi-lock-fill"></i> Client Acknowledged</span>
                 {% elif po.status == 'completed' %}<span class="badge bg-success">Completed</span>
                 {% elif po.status == 'cancelled' %}<span class="badge bg-danger">Cancelled</span>
+                {% else %}<span class="badge bg-secondary">{{ po.get_status_display }}</span>
                 {% endif %}
               </td>
               {% comment %} The reason to open a card at all: whether anything

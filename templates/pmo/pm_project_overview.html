@@ -1,0 +1,250 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ project.project_name }} - PM Dashboard{% endblock %}
+{% block page_title %}{{ project.project_name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .kpi-card { border: none; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+    .kpi-card .kpi-icon { width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.3rem; }
+    .kpi-card .kpi-value { font-size: 1.5rem; font-weight: 700; line-height: 1; }
+    .kpi-card .kpi-label { font-size: 0.72rem; color: #6c757d; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+    .chart-card { border: none; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+    .chart-card .card-header { background: transparent; border-bottom: 2px solid #f0f0f0; }
+    .chart-card .card-header h6 { font-weight: 700; font-size: 0.85rem; color: #333; margin: 0; }
+    .pmd-nav-card { border: none; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); text-decoration: none; color: inherit; transition: transform 0.15s, box-shadow 0.15s; display: block; }
+    .pmd-nav-card:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); color: inherit; }
+    .pmd-nav-card .nav-icon { width: 52px; height: 52px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; }
+    .pmd-gauge-wrap { position: relative; height: 170px; }
+    .pmd-gauge-label { position: absolute; top: 62%; left: 50%; transform: translate(-50%, -50%); text-align: center; }
+    .pmd-gauge-label .pct { font-size: 2rem; font-weight: 800; color: #1a1a1a; line-height: 1; }
+    .pmd-big-bar { height: 34px; border-radius: 10px; }
+    .pmd-big-bar .progress-bar { font-size: 1rem; font-weight: 700; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div>
+        <a href="{% url 'pmo:pm_dashboard_index' %}" class="text-muted small"><i class="bi bi-arrow-left"></i> Back to PM Dashboard</a>
+        <div class="text-muted small">{{ project.serial_number }} &middot; {{ project.customer|default:"—" }}</div>
+    </div>
+    <div>
+        <a href="{% url 'pmo:project_detail' project.pk %}" class="btn btn-outline-dark btn-sm">
+            <i class="bi bi-kanban me-1"></i> Delivery WBS &amp; Progress
+        </a>
+        <a href="{% url 'projects:detail' project.pk %}" class="btn btn-outline-dark btn-sm">
+            <i class="bi bi-folder2-open me-1"></i> Open in Commercial Pipeline
+        </a>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-lg-3 col-md-6">
+        <div class="card kpi-card h-100"><div class="card-body">
+            <div class="d-flex align-items-center gap-3">
+                <div class="kpi-icon bg-{% if project.milestone_overall_status == 'success' %}success{% elif project.milestone_overall_status == 'danger' %}danger{% elif project.milestone_overall_status == 'warning' %}warning{% else %}secondary{% endif %} bg-opacity-10 text-{% if project.milestone_overall_status == 'success' %}success{% elif project.milestone_overall_status == 'danger' %}danger{% elif project.milestone_overall_status == 'warning' %}warning{% else %}secondary{% endif %}">
+                    <i class="bi bi-speedometer2"></i>
+                </div>
+                <div>
+                    <div class="kpi-value text-dark">
+                        {% if project.milestone_overall_status == 'success' %}On time
+                        {% elif project.milestone_overall_status == 'danger' %}Behind
+                        {% elif project.milestone_overall_status == 'warning' %}In progress
+                        {% else %}No data{% endif %}
+                    </div>
+                    <div class="kpi-label">Schedule status</div>
+                </div>
+            </div>
+        </div></div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+        <div class="card kpi-card h-100"><div class="card-body">
+            <div class="d-flex align-items-center gap-3">
+                <div class="kpi-icon bg-primary bg-opacity-10 text-primary"><i class="bi bi-file-earmark-text"></i></div>
+                <div><div class="kpi-value text-dark">{{ po_document_count }}</div><div class="kpi-label">PO document{{ po_document_count|pluralize }}</div></div>
+            </div>
+        </div></div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+        <div class="card kpi-card h-100"><div class="card-body">
+            <div class="d-flex align-items-center gap-3">
+                <div class="kpi-icon bg-info bg-opacity-10 text-info"><i class="bi bi-list-check"></i></div>
+                <div><div class="kpi-value text-dark">{{ costing_sheet_count }}</div><div class="kpi-label">Costing sheet{{ costing_sheet_count|pluralize }}</div></div>
+            </div>
+        </div></div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+        <div class="card kpi-card h-100"><div class="card-body">
+            <div class="d-flex align-items-center gap-3">
+                <div class="kpi-icon bg-secondary bg-opacity-10 text-secondary"><i class="bi bi-diagram-3"></i></div>
+                <div><div class="kpi-value text-dark">{{ responsibility_row_count }} / {{ communication_row_count }}</div><div class="kpi-label">Resp. / Comm. rows</div></div>
+            </div>
+        </div></div>
+    </div>
+</div>
+
+{% if delivery %}
+<div class="card chart-card mb-4">
+    <div class="card-header"><h6><i class="bi bi-speedometer2 me-2"></i>Project Completion</h6></div>
+    <div class="card-body">
+        <div class="row align-items-center g-4">
+            <div class="col-md-4">
+                <div class="pmd-gauge-wrap">
+                    <canvas id="completionGauge"></canvas>
+                    <div class="pmd-gauge-label">
+                        <div class="pct">{{ delivery.completion_pct|floatformat:0 }}%</div>
+                        <div class="text-muted small">Complete</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-8">
+                <div class="d-flex justify-content-between small text-muted mb-1">
+                    <span>Overall progress</span>
+                    <span>{{ delivery.achieved_milestones }} of {{ delivery.achieved_milestones|add:delivery.pending_milestones }} milestones achieved</span>
+                </div>
+                <div class="progress pmd-big-bar">
+                    <div class="progress-bar {% if delivery.weightage_problems %}bg-warning{% else %}bg-success{% endif %}"
+                         role="progressbar" style="width: {{ delivery.completion_pct|floatformat:0 }}%;">
+                        {{ delivery.completion_pct|floatformat:1 }}%
+                    </div>
+                </div>
+                <div class="row g-3 mt-1">
+                    <div class="col-6 col-lg-3">
+                        <div class="text-muted small">Planned End</div>
+                        <div class="fw-semibold small">{{ delivery.end_date|date:"d M Y"|default:"—" }}</div>
+                    </div>
+                    <div class="col-6 col-lg-3">
+                        <div class="text-muted small">Expected Completion</div>
+                        <div class="fw-semibold small">{{ delivery.expected_completion_date|date:"d M Y"|default:"—" }}</div>
+                    </div>
+                    <div class="col-6 col-lg-3">
+                        <div class="text-muted small">Delay</div>
+                        <div class="fw-semibold small">
+                            {% if delivery.delay_months %}{{ delivery.delay_months }} month{{ delivery.delay_months|pluralize }}{% else %}On schedule{% endif %}
+                        </div>
+                    </div>
+                    <div class="col-6 col-lg-3">
+                        <div class="text-muted small">Action By</div>
+                        <div class="fw-semibold small">{{ delivery.action_by|default:"—" }}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card chart-card mb-4">
+    <div class="card-header"><h6><i class="bi bi-list-check me-2"></i>Milestones</h6></div>
+    <div class="list-group list-group-flush">
+        {% for m in milestone_checklist %}
+        <div class="list-group-item d-flex align-items-center gap-3">
+            <input type="checkbox" class="form-check-input flex-shrink-0" style="width:1.15em; height:1.15em;" {% if m.is_done %}checked{% endif %} disabled>
+            <div class="flex-grow-1">
+                <div class="fw-semibold {% if m.is_done %}text-decoration-line-through text-muted{% endif %}">{{ m.number }}. {{ m.label }}</div>
+                {% if not m.is_done %}<div class="text-muted small">{{ m.pct|floatformat:0 }}% complete</div>{% endif %}
+            </div>
+            <div class="text-end small text-muted" style="min-width: 130px;">
+                {% if m.is_done %}
+                    {% if m.finish_date %}Completed {{ m.finish_date|date:"d M Y" }}{% else %}Completed{% endif %}
+                {% else %}
+                    In progress
+                {% endif %}
+            </div>
+        </div>
+        {% empty %}
+        <div class="list-group-item text-center text-muted py-3">No milestones defined yet.</div>
+        {% endfor %}
+    </div>
+</div>
+{% else %}
+<div class="card chart-card mb-4">
+    <div class="card-body text-center text-muted py-4">
+        No delivery milestones set up for this project yet — completion, expected finish date and delay will appear here once its WBS exists on the Delivery Board.
+        <div class="mt-2"><a href="{% url 'pmo:project_detail' project.pk %}" class="btn btn-sm btn-outline-dark">Set up milestones</a></div>
+    </div>
+</div>
+{% endif %}
+
+<div class="card chart-card mb-4">
+    <div class="card-header"><h6><i class="bi bi-bar-chart-steps me-2"></i>Milestone schedule variance</h6></div>
+    <div class="card-body" style="height: 240px;">
+        <canvas id="milestoneChart"></canvas>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-3 col-md-6">
+        <a href="{% url 'pmo:pm_project_po' project.pk %}" class="card pmd-nav-card h-100"><div class="card-body">
+            <div class="nav-icon bg-danger bg-opacity-10 text-danger mb-3"><i class="bi bi-file-earmark-text"></i></div>
+            <h6 class="fw-bold mb-1">Client PO</h6>
+            <div class="text-muted small">PO number, dates, and uploaded PO documents</div>
+        </div></a>
+    </div>
+    <div class="col-lg-3 col-md-6">
+        <a href="{% url 'pmo:pm_project_boq' project.pk %}" class="card pmd-nav-card h-100"><div class="card-body">
+            <div class="nav-icon bg-dark bg-opacity-10 text-dark mb-3"><i class="bi bi-list-check"></i></div>
+            <h6 class="fw-bold mb-1">BOQ (Unpriced)</h6>
+            <div class="text-muted small">Costing sheets, exportable with no pricing</div>
+        </div></a>
+    </div>
+    <div class="col-lg-3 col-md-6">
+        <a href="{% url 'pmo:pm_responsibility_matrix' project.pk %}" class="card pmd-nav-card h-100"><div class="card-body">
+            <div class="nav-icon bg-info bg-opacity-10 text-info mb-3"><i class="bi bi-diagram-3"></i></div>
+            <h6 class="fw-bold mb-1">Responsibility Matrix</h6>
+            <div class="text-muted small">Who is Responsible / Accountable / Consulted / Informed</div>
+        </div></a>
+    </div>
+    <div class="col-lg-3 col-md-6">
+        <a href="{% url 'pmo:pm_communication_matrix' project.pk %}" class="card pmd-nav-card h-100"><div class="card-body">
+            <div class="nav-icon bg-success bg-opacity-10 text-success mb-3"><i class="bi bi-chat-left-text"></i></div>
+            <h6 class="fw-bold mb-1">Communication Matrix</h6>
+            <div class="text-muted small">The project's client-facing communication plan</div>
+        </div></a>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    {% if delivery %}
+    const completionPct = {{ delivery.completion_pct|floatformat:1 }};
+    const gaugeColor = completionPct >= 90 ? '#198754' : completionPct >= 50 ? '#ffc107' : '#dc3545';
+    new Chart(document.getElementById('completionGauge'), {
+        type: 'doughnut',
+        data: { datasets: [{ data: [completionPct, 100 - completionPct], backgroundColor: [gaugeColor, '#e9ecef'], borderWidth: 0 }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            rotation: -90, circumference: 180, cutout: '75%',
+            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+        }
+    });
+    {% endif %}
+
+    const rows = JSON.parse('{{ milestone_rows_json|escapejs }}');
+    const labels = rows.map(r => r.label);
+    const data = rows.map(r => {
+        if (!r.variance_display) return 0;
+        return parseInt(r.variance_display.replace('d', ''), 10) || 0;
+    });
+    const colors = rows.map(r => {
+        if (!r.variance_display) return '#adb5bd';
+        return r.variance_display.startsWith('-') ? '#dc3545' : '#198754';
+    });
+    new Chart(document.getElementById('milestoneChart'), {
+        type: 'bar',
+        data: { labels: labels, datasets: [{ data: data, backgroundColor: colors, borderRadius: 6 }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: (ctx) => (ctx.raw >= 0 ? '+' : '') + ctx.raw + ' days vs deadline' } },
+            },
+            scales: { y: { title: { display: true, text: 'Days ahead (+) / behind (−)' } }, x: { grid: { display: false } } },
+        }
+    });
+});
+</script>
+{% endblock %}
