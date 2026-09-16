@@ -74,6 +74,8 @@
                                 <span class="status-pill bg-success text-white">Completed</span>
                                 {% elif po.status == 'cancelled' %}
                                 <span class="status-pill bg-danger text-white">Cancelled</span>
+                                {% else %}
+                                <span class="status-pill bg-secondary text-white">{{ po.get_status_display }}</span>
                                 {% endif %}
                             </div>
                             {% comment %} Says what the PO is waiting on

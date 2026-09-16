@@ -1155,12 +1155,23 @@ class POClientAcknowledgedLockTests(TestCase):
     # ── the status itself ───────────────────────────────────────────────────
 
     def test_only_the_new_status_locks(self):
-        for status in ('draft', 'issued', 'completed', 'cancelled'):
+        for status in ('draft', 'issued', 'supplier_acknowledged', 'completed', 'cancelled'):
             self.po.status = status
             with self.subTest(status=status):
                 self.assertFalse(self.po.is_locked)
         self.po.status = 'client_acknowledged'
         self.assertTrue(self.po.is_locked)
+
+    def test_supplier_acknowledged_does_not_stamp_the_client_ack_fields(self):
+        """Supplier Acknowledged is a plain status note, deliberately
+        distinct from Client Acknowledged - it must not touch the
+        client_acknowledged_at/by stamps, which describe a different
+        acknowledgement and are what the lock guarantee is built on."""
+        self.po.record_status_change(
+            to_status='supplier_acknowledged', changed_by=self.procurement)
+        self.po.refresh_from_db()
+        self.assertIsNone(self.po.client_acknowledged_at)
+        self.assertIsNone(self.po.client_acknowledged_by)
 
     def test_acknowledging_stamps_who_and_when(self):
         self._lock()
@@ -2359,3 +2370,27 @@ class ProcurementBoardTests(TestCase):
         body = self.client.get(reverse('procurement:po_by_project')).content.decode()
         self.assertIn(
             reverse('procurement:po_board_remove', args=[self.chosen.pk]), body)
+
+
+class DashboardStatusBreakdownTests(TestCase):
+    """procurement_dashboard's po_by_status must cover every status
+    PurchaseOrder can actually have - a status left out of the breakdown
+    still counts toward po_total, so the numbers stop adding up."""
+
+    def setUp(self):
+        sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('dash_sa', password='x', role=sa_role)
+        self.client.force_login(self.user)
+
+    def test_every_status_is_represented_in_the_breakdown(self):
+        for key, _label in PurchaseOrder.STATUS_CHOICES:
+            PurchaseOrder.objects.create(
+                po_date=date(2026, 1, 1), po_number=f'PO-DASH-{key}',
+                vendor_name='ACME', po_issued_by='Tester',
+                created_by=self.user, status=key)
+        resp = self.client.get(reverse('procurement:dashboard'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            resp.context['po_total'], sum(resp.context['po_by_status'].values()))
+        for key, _label in PurchaseOrder.STATUS_CHOICES:
+            self.assertIn(key, resp.context['po_by_status'])

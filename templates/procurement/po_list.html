@@ -92,6 +92,8 @@
                                 <span class="badge bg-success">Completed</span>
                                 {% elif po.status == 'cancelled' %}
                                 <span class="badge bg-danger">Cancelled</span>
+                                {% else %}
+                                <span class="badge bg-secondary">{{ po.get_status_display }}</span>
                                 {% endif %}
                             </td>
                             {% comment %} Which stage the PO is actually waiting
