@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+
+{% block title %}Communication Matrix - {{ project.project_name }}{% endblock %}
+{% block page_title %}Communication Matrix{% endblock %}
+
+{% block extra_css %}
+<style>
+    .pmd-card { border-radius: 12px; border: none; box-shadow: 0 4px 15px rgba(0,0,0,0.06); }
+    .pmd-grid-preview { width: 100%; border-collapse: collapse; }
+    .pmd-grid-preview th { background: #1a1a1a; color: #fff; font-size: 0.8rem; padding: 8px 10px; text-align: left; }
+    .pmd-grid-preview td { border: 1px solid #eee; padding: 8px 10px; font-size: 0.85rem; vertical-align: top; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+    <a href="{% url 'pmo:pm_project_overview' project.pk %}" class="text-muted small"><i class="bi bi-arrow-left"></i> Back to {{ project.project_name }}</a>
+</div>
+
+<div class="card pmd-card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-chat-left-text me-2"></i>Communication Matrix</span>
+        <div>
+            <a href="{% url 'pmo:pm_communication_matrix_export_pdf' project.pk %}" class="btn btn-sm btn-outline-dark" target="_blank">
+                <i class="bi bi-file-earmark-pdf me-1"></i> Export PDF
+            </a>
+            <a href="{% url 'pmo:pm_communication_matrix_edit' project.pk %}" class="btn btn-sm btn-outline-dark">
+                <i class="bi bi-pencil me-1"></i> Edit
+            </a>
+        </div>
+    </div>
+    <div class="card-body p-0">
+        {% include 'pmo/pm_matrix_preview.html' with columns=columns rows=rows empty_message="No communication matrix defined yet." %}
+    </div>
+    <div class="card-footer text-muted small">
+        Export a PDF to share this plan with the client.
+    </div>
+</div>
+{% endblock %}
