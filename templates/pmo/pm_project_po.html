@@ -11,7 +11,7 @@
 
 {% block content %}
 <div class="mb-3">
-    <a href="{% url 'pm_dashboard:project_overview' project.pk %}" class="text-muted small"><i class="bi bi-arrow-left"></i> Back to {{ project.project_name }}</a>
+    <a href="{% url 'pmo:pm_project_overview' project.pk %}" class="text-muted small"><i class="bi bi-arrow-left"></i> Back to {{ project.project_name }}</a>
 </div>
 
 <div class="card pmd-card mb-3">

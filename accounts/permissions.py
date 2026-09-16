@@ -77,7 +77,6 @@ CAPABILITIES = [
                'Create & edit cost sheets and rates', enforced=True, order=2),
     Capability('manpowercost.margin', 'Manpower Costing', 'margin',
                'See margin between charge rate and cost', enforced=True, order=3),
-    *_module('pm_dashboard', 'PM Dashboard'),
 ]
 
 
@@ -171,8 +170,8 @@ DEFAULT_MODULE_ACCESS = {
                                        'manpowercost'},
     # `admin` loses engineer_calendar with the rest of Administration; its
     # access to costing/procurement/pipeline is untouched.
-    'admin':           _OPEN_TO_ALL | {'devtracking', 'manpowercost', 'pm_dashboard'},
-    'manager':         set(_OPEN_TO_ALL) | {'pm_dashboard'},
+    'admin':           _OPEN_TO_ALL | {'devtracking', 'manpowercost'},
+    'manager':         set(_OPEN_TO_ALL),
     'sales_rep':       set(_OPEN_TO_ALL),
     'procurement_mgr': set(_OPEN_TO_ALL),
     'procurement_off': set(_OPEN_TO_ALL),
@@ -197,12 +196,7 @@ DEFAULT_MODULE_ACCESS = {
     # Department KPIs module (scoped to their own team inside the KPI views).
     # Their other features (attendance/leave/assets/exceptions/org chart) are
     # role-gated in the HR app, not capability-gated, so they need no module here.
-    # project_manager also gets pm_dashboard — note this Role is the HR-scoped
-    # "PM" persona (org-chart delegation), separate in intent from whichever
-    # actual project-delivery PMs use the PM Dashboard; it's granted here as a
-    # reasonable v1 default and is just an admin-grid toggle away from being
-    # right for any other role that should see it too.
-    'project_manager':     {'dashboard', 'kpis', 'pm_dashboard'},
+    'project_manager':     {'dashboard', 'kpis'},
     'site_manager':        {'dashboard', 'kpis'},
     'document_controller': {'dashboard', 'kpis'},
     'pcc_engineer':        {'dashboard', 'kpis', 'costing'},

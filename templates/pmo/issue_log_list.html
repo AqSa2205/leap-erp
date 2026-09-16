@@ -1,0 +1,109 @@
+{% extends 'base.html' %}
+
+{% block title %}Issue Log - Leap Networks ERP{% endblock %}
+{% block page_title %}Issue Log{% endblock %}
+
+{% block extra_css %}
+<style>
+    .pmd-table-card { border-radius: 12px; border: none; box-shadow: 0 4px 15px rgba(0,0,0,0.08); overflow: hidden; }
+    .pmd-table-card .card-header { background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%); color: #fff; padding: 1rem 1.25rem; }
+    .pmd-table-card .card-header h5 { color: #fff; margin: 0; }
+    table.issue-log td { font-size: 0.83rem; }
+    table.issue-log th { white-space: nowrap; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.3px; }
+    .cell-clamp { max-width: 260px; white-space: normal; }
+    .legend-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div class="d-flex align-items-center gap-2">
+        <a href="?year={{ prev_year }}&month={{ prev_month }}" class="btn btn-outline-secondary btn-sm">&laquo; Prev</a>
+        <h5 class="mb-0">{{ month_name }} {{ year }}</h5>
+        <a href="?year={{ next_year }}&month={{ next_month }}" class="btn btn-outline-secondary btn-sm">Next &raquo;</a>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{% url 'pmo:issue_log_export_excel' %}?year={{ year }}&month={{ month }}" class="btn btn-outline-dark btn-sm">
+            <i class="bi bi-file-earmark-excel me-1"></i> Export This Month
+        </a>
+        <a href="{% url 'pmo:issue_log_export_all_zip' %}" class="btn btn-outline-dark btn-sm">
+            <i class="bi bi-file-earmark-zip me-1"></i> Export All Months
+        </a>
+        {% if can_manage %}
+        <a href="{% url 'pmo:issue_log_create' %}" class="btn btn-danger btn-sm">
+            <i class="bi bi-plus-lg me-1"></i> Log Issue
+        </a>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body py-2 d-flex flex-wrap gap-3 small">
+        <span class="fw-semibold">Severity:</span>
+        <span><span class="legend-swatch" style="background:#FF0000;"></span>Critical — stops project progress</span>
+        <span><span class="legend-swatch" style="background:#ED7D31;"></span>High — likely impacts budget/schedule/scope</span>
+        <span><span class="legend-swatch" style="background:#FFC000;"></span>Medium — can be mitigated</span>
+        <span><span class="legend-swatch" style="background:#70AD47;"></span>Low — low impact/effort</span>
+    </div>
+</div>
+
+<div class="card pmd-table-card">
+    <div class="card-header">
+        <h5><i class="bi bi-exclamation-triangle me-2"></i>Issue Log</h5>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0 issue-log">
+            <thead class="table-light">
+                <tr>
+                    <th>ID</th>
+                    <th>Status</th>
+                    <th>Priority</th>
+                    <th>Description</th>
+                    <th>Project</th>
+                    <th>Owner</th>
+                    <th>Est. Resolution</th>
+                    <th>Escalation</th>
+                    <th>Impact</th>
+                    <th>Actions</th>
+                    <th>Date Identified</th>
+                    <th>Logged By</th>
+                    <th>Actual Resolution</th>
+                    <th>Final Resolution</th>
+                    {% if can_manage %}<th></th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for issue in issues %}
+                <tr>
+                    <td>{{ issue.pk }}</td>
+                    <td>
+                        <span class="badge {% if issue.status == 'closed' %}bg-success{% else %}bg-danger{% endif %}">
+                            {{ issue.get_status_display }}
+                        </span>
+                    </td>
+                    <td><span class="badge" style="background:#{{ issue.priority_color }};">{{ issue.get_priority_display }}</span></td>
+                    <td class="cell-clamp">{{ issue.description }}</td>
+                    <td>{{ issue.project.project_name }}</td>
+                    <td>{{ issue.owner|default:"—" }}</td>
+                    <td>{{ issue.estimated_resolution_date|date:"d M Y"|default:"—" }}</td>
+                    <td>{% if issue.escalation_needed %}<span class="badge bg-warning text-dark">Y</span>{% else %}N{% endif %}</td>
+                    <td class="cell-clamp">{{ issue.impact|default:"—" }}</td>
+                    <td class="cell-clamp">{{ issue.actions|default:"—" }}</td>
+                    <td>{{ issue.date_identified|date:"d M Y" }}</td>
+                    <td>{{ issue.logged_by.get_full_name|default:issue.logged_by.username|default:"—" }}</td>
+                    <td>{{ issue.actual_resolution_date|date:"d M Y"|default:"—" }}</td>
+                    <td class="cell-clamp">{{ issue.final_resolution|default:"—" }}</td>
+                    {% if can_manage %}
+                    <td class="text-end">
+                        <a href="{% url 'pmo:issue_log_edit' issue.pk %}" class="btn btn-sm btn-outline-dark"><i class="bi bi-pencil"></i></a>
+                    </td>
+                    {% endif %}
+                </tr>
+                {% empty %}
+                <tr><td colspan="15" class="text-center text-muted py-4">No issues logged for {{ month_name }} {{ year }}.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

@@ -17,12 +17,36 @@
     .pmd-table-card { border-radius: 12px; border: none; box-shadow: 0 4px 15px rgba(0,0,0,0.08); overflow: hidden; }
     .pmd-table-card .card-header { background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%); color: #fff; padding: 1rem 1.25rem; }
     .pmd-table-card .card-header h5 { color: #fff; margin: 0; }
-    .clickable-row { cursor: pointer; transition: background-color 0.15s; }
-    .clickable-row:hover { background-color: rgba(196, 30, 58, 0.06); }
+
+    /* Project list: each project is one card, its stats wrapping onto new
+       lines as the window narrows, instead of a wide table forcing a
+       horizontal scroll to see the last few columns. */
+    .pmd-project-list { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.75rem; }
+    .pmd-project-row {
+        border: 1px solid #eee; border-radius: 10px; padding: 0.9rem 1.1rem;
+        cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .pmd-project-row:hover { border-color: #C41E3A; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+    .pmd-project-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; margin-bottom: 0.65rem; }
+    .pmd-project-head .name { font-weight: 700; font-size: 0.95rem; }
+    .pmd-project-head .serial { color: #868e96; font-size: 0.78rem; }
+    .pmd-stats { display: flex; flex-wrap: wrap; gap: 1.1rem 1.75rem; }
+    .pmd-stat { min-width: 96px; }
+    .pmd-stat .stat-label { font-size: 0.68rem; color: #868e96; text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; margin-bottom: 2px; }
+    .pmd-stat .stat-value { font-size: 0.86rem; font-weight: 600; color: #212529; }
+    .pmd-stat.completion { min-width: 130px; }
+    .pmd-stat.completion .progress { height: 14px; }
 </style>
 {% endblock %}
 
 {% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div></div>
+    <a href="{% url 'pmo:board' %}" class="btn btn-outline-dark btn-sm">
+        <i class="bi bi-kanban me-1"></i> Delivery Board (completion &amp; cash)
+    </a>
+</div>
+
 <div class="card pmd-header mb-4">
     <div class="card-body p-4">
         <h1 class="h4 mb-1 text-white"><i class="bi bi-kanban me-2"></i>PM Dashboard</h1>
@@ -95,42 +119,75 @@
 <div class="card pmd-table-card">
     <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
         <h5><i class="bi bi-list-ul me-2"></i>Projects</h5>
-        <form method="get" class="d-flex" role="search">
-            <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Search project, client, PO number…" style="min-width: 260px;">
-        </form>
+        <div class="d-flex gap-2">
+            <form method="get" class="d-flex" role="search">
+                <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Search project, client, PO number…" style="min-width: 260px;">
+            </form>
+            <a href="{% url 'pmo:pm_dashboard_export_excel' %}?q={{ q }}" class="btn btn-outline-light btn-sm">
+                <i class="bi bi-file-earmark-excel me-1"></i> Export to Excel
+            </a>
+        </div>
     </div>
-    <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0">
-            <thead class="table-light">
-                <tr>
-                    <th>Project</th>
-                    <th>Client</th>
-                    <th>Region</th>
-                    <th>Status</th>
-                    <th>PO Number</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for project in projects %}
-                <tr class="clickable-row" onclick="window.location='{% url 'pm_dashboard:project_overview' project.pk %}'">
-                    <td>
-                        <div class="fw-semibold">{{ project.project_name }}</div>
-                        <div class="text-muted small">{{ project.serial_number }}</div>
-                    </td>
-                    <td>{{ project.customer|default:"—" }}</td>
-                    <td>{{ project.region.code|default:"—" }}</td>
-                    <td>
-                        {% if project.status %}
-                        <span class="badge" style="background: {{ project.status.color|default:'#6c757d' }};">{{ project.status.name }}</span>
-                        {% else %}—{% endif %}
-                    </td>
-                    <td>{{ project.po_number|default:"—" }}</td>
-                </tr>
-                {% empty %}
-                <tr><td colspan="5" class="text-center text-muted py-4">No projects to show.</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    <div class="pmd-project-list">
+        {% for row in rows %}
+        <div class="pmd-project-row" onclick="window.location='{% url 'pmo:pm_project_overview' row.project.pk %}'">
+            <div class="pmd-project-head">
+                <span class="name">{{ row.project.project_name }}</span>
+                <span class="serial">{{ row.project.serial_number }}</span>
+                {% if row.project.status %}
+                <span class="badge" style="background: {{ row.project.status.color|default:'#6c757d' }};">{{ row.project.status.name }}</span>
+                {% endif %}
+                {% if row.project.region %}
+                <span class="badge bg-dark bg-opacity-75">{{ row.project.region.code }}</span>
+                {% endif %}
+                <span class="text-muted small">{{ row.project.customer|default:"No client on file" }}</span>
+                <span class="text-muted small ms-auto">PO# {{ row.project.po_number|default:"—" }}</span>
+            </div>
+            <div class="pmd-stats">
+                <div class="pmd-stat completion">
+                    <div class="stat-label">Completion</div>
+                    <div class="progress">
+                        <div class="progress-bar {% if row.weightage_problems %}bg-warning{% endif %}"
+                             role="progressbar" style="width: {{ row.completion_pct|floatformat:0 }}%;">
+                            {{ row.completion_pct|floatformat:0 }}%
+                        </div>
+                    </div>
+                </div>
+                <div class="pmd-stat">
+                    <div class="stat-label">Milestones</div>
+                    <div class="stat-value"><span class="text-success">{{ row.achieved_milestones }}</span> / <span class="text-muted">{{ row.pending_milestones }}</span></div>
+                </div>
+                <div class="pmd-stat">
+                    <div class="stat-label">Planned End</div>
+                    <div class="stat-value">{{ row.end_date|date:"d M Y"|default:"—" }}</div>
+                </div>
+                <div class="pmd-stat">
+                    <div class="stat-label">Expected Completion</div>
+                    <div class="stat-value">{{ row.expected_completion_date|date:"d M Y"|default:"—" }}</div>
+                </div>
+                <div class="pmd-stat">
+                    <div class="stat-label">Delay</div>
+                    <div class="stat-value">
+                        {% if row.delay_months %}
+                        <span class="badge bg-danger">{{ row.delay_months }}m</span>
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="pmd-stat">
+                    <div class="stat-label">Action By</div>
+                    <div class="stat-value">{{ row.action_by|default:"—" }}</div>
+                </div>
+                <div class="pmd-stat">
+                    <div class="stat-label">Cash In</div>
+                    <div class="stat-value">{{ row.cash_in|floatformat:0|intcomma }}</div>
+                </div>
+            </div>
+        </div>
+        {% empty %}
+        <div class="text-center text-muted py-4">No projects to show.</div>
+        {% endfor %}
     </div>
 </div>
 {% endblock %}

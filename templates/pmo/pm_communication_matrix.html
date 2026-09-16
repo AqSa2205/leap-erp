@@ -14,23 +14,23 @@
 
 {% block content %}
 <div class="mb-3">
-    <a href="{% url 'pm_dashboard:project_overview' project.pk %}" class="text-muted small"><i class="bi bi-arrow-left"></i> Back to {{ project.project_name }}</a>
+    <a href="{% url 'pmo:pm_project_overview' project.pk %}" class="text-muted small"><i class="bi bi-arrow-left"></i> Back to {{ project.project_name }}</a>
 </div>
 
 <div class="card pmd-card">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-chat-left-text me-2"></i>Communication Matrix</span>
         <div>
-            <a href="{% url 'pm_dashboard:communication_matrix_export_pdf' project.pk %}" class="btn btn-sm btn-outline-dark" target="_blank">
+            <a href="{% url 'pmo:pm_communication_matrix_export_pdf' project.pk %}" class="btn btn-sm btn-outline-dark" target="_blank">
                 <i class="bi bi-file-earmark-pdf me-1"></i> Export PDF
             </a>
-            <a href="{% url 'pm_dashboard:communication_matrix_edit' project.pk %}" class="btn btn-sm btn-outline-dark">
+            <a href="{% url 'pmo:pm_communication_matrix_edit' project.pk %}" class="btn btn-sm btn-outline-dark">
                 <i class="bi bi-pencil me-1"></i> Edit
             </a>
         </div>
     </div>
     <div class="card-body p-0">
-        {% include 'pm_dashboard/_matrix_preview.html' with columns=columns rows=rows empty_message="No communication matrix defined yet." %}
+        {% include 'pmo/pm_matrix_preview.html' with columns=columns rows=rows empty_message="No communication matrix defined yet." %}
     </div>
     <div class="card-footer text-muted small">
         Export a PDF to share this plan with the client.
