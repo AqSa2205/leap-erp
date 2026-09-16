@@ -1345,6 +1345,47 @@ class POClientAcknowledgedLockTests(TestCase):
         self.assertEqual(self.po.status_changes.count(), 2)
 
 
+class POSCMDeleteAccessTests(TestCase):
+    """SCM (procurement manager) gets the same PO delete access as Admin -
+    any PO in the unsigned/unlocked window, not just ones they created
+    themselves."""
+
+    def setUp(self):
+        scm_role, _ = Role.objects.get_or_create(name=Role.PROCUREMENT_MGR)
+        self.scm = User.objects.create_user('scm_del', password='x', role=scm_role)
+
+        officer_role, _ = Role.objects.get_or_create(name=Role.PROCUREMENT_OFF)
+        self.officer = User.objects.create_user('officer_del', password='x', role=officer_role)
+
+        other_creator = User.objects.create_user('other_creator', password='x', role=officer_role)
+
+        self.po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='PO-SCMDEL-1',
+            vendor_name='ACME', po_issued_by='Tester',
+            created_by=other_creator, status='issued')
+
+    def test_scm_can_delete_a_po_they_did_not_create(self):
+        self.client.force_login(self.scm)
+        self.client.post(reverse('procurement:po_delete', args=[self.po.pk]))
+        self.assertFalse(PurchaseOrder.objects.filter(pk=self.po.pk).exists())
+
+    def test_scm_cannot_delete_once_any_stage_is_signed(self):
+        """The audit-trail gate applies to SCM the same as everyone but
+        super admin - signing a stage closes the delete window regardless
+        of who did the signing."""
+        from django.utils import timezone
+        self.po.scm_approved_at = timezone.now()
+        self.po.save()
+        self.client.force_login(self.scm)
+        self.client.post(reverse('procurement:po_delete', args=[self.po.pk]))
+        self.assertTrue(PurchaseOrder.objects.filter(pk=self.po.pk).exists())
+
+    def test_a_non_manager_procurement_user_still_cannot_delete_someone_elses_po(self):
+        self.client.force_login(self.officer)
+        self.client.post(reverse('procurement:po_delete', args=[self.po.pk]))
+        self.assertTrue(PurchaseOrder.objects.filter(pk=self.po.pk).exists())
+
+
 class POWorkflowStatusTests(TestCase):
     """What a PO is waiting on, derived rather than stored."""
 

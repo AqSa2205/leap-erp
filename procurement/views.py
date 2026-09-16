@@ -1517,7 +1517,10 @@ class PODeleteView(ProcurementPermissionMixin, DeleteView):
         )
         if any_signed and not user.is_super_admin_user:
             return False
-        if user.is_super_admin_user or user.is_admin_user:
+        # SCM (procurement manager) gets the same delete access as Admin -
+        # any PO in this unsigned/unlocked window, not just their own.
+        if (user.is_super_admin_user or user.is_admin_user
+                or getattr(user, 'is_procurement_manager_user', False)):
             return True
         return obj.created_by == user
 
