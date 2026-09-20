@@ -29,6 +29,12 @@
       Where a stage has nobody set, everyone holding that stage's role is
       emailed instead — noisier, but a missed approval costs more than a
       redundant email.
+      <br>
+      <strong>Named on the PO</strong> is what prints under the signature line
+      on the document. It also decides whose <em>waiting on me</em> list a
+      purchase order appears in, so it is worth matching the account name
+      beside it. Purchase orders already signed keep the approver and date
+      recorded against them; only the printed name follows this.
     </div>
   </div>
 
@@ -50,9 +56,32 @@
           {% for row in rows %}
           <tr>
             <td class="fw-semibold">{{ row.label }}</td>
-            {% comment %} The plain-text signer printed on the document, shown
-            beside the account so a mismatch is obvious. {% endcomment %}
-            <td class="text-muted small">{{ row.signer_name|default:"—" }}</td>
+            {% comment %} The name printed on the document, editable here and
+            shown beside the account so a mismatch is obvious. Clearing the
+            box restores the built-in name rather than printing nothing.
+            {% endcomment %}
+            <td>
+              <form method="post" action="{% url 'procurement:po_stage_signer' %}"
+                    class="d-flex gap-1 align-items-center">
+                {% csrf_token %}
+                <input type="hidden" name="stage" value="{{ row.key }}">
+                <input type="text" name="signer_name" maxlength="120"
+                       class="form-control form-control-sm" style="min-width:12rem"
+                       value="{% if not row.is_default %}{{ row.signer_name }}{% endif %}"
+                       placeholder="{{ row.default_signer }}"
+                       aria-label="Name printed for {{ row.label }}">
+                <button type="submit" class="btn btn-sm btn-outline-danger">Save</button>
+              </form>
+              {% if row.is_default %}
+              <div class="text-muted small mt-1">
+                Built-in default: <strong>{{ row.default_signer }}</strong>
+              </div>
+              {% else %}
+              <div class="text-muted small mt-1">
+                Clear the box to go back to {{ row.default_signer }}.
+              </div>
+              {% endif %}
+            </td>
             <td>
               {% if row.approver %}
                 {{ row.approver.get_full_name|default:row.approver.username }}

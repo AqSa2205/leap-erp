@@ -252,6 +252,9 @@ def purchase_orders(user):
                                 'coo_approved_by', 'ceo_approved_by')
                 .prefetch_related('items')
                 .order_by('-id'))
+    # One lookup of the printed names for the whole list: approval_status
+    # reads them, and this loop runs on every page in the app.
+    open_pos = PurchaseOrder.prime_signer_names(open_pos)
     items = []
     for po in open_pos:
         stage = po.current_stage
