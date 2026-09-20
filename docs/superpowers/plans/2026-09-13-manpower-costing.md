@@ -67,6 +67,31 @@ parsed is **refused**, and the previous value stands; the Excel importer this
 replaced turned anything it could not read into a silent zero, which is how
 both source workbooks came to under-report.
 
+### The rate card
+
+`/manpower-costing/rates/` is where charge rates are **created, edited and
+removed**, and where the cost bases they are built from are edited. Both lived
+in the Django admin until now, which meant the people who price work could not
+make a rate and A.4 showed a dash until somebody with admin access did it for
+them.
+
+Each row shows the full build-up - monthly cost, overhead, profit, per-invoice,
+hourly - and the editable cells are the three that decide it: the monthly cost,
+the basis, and the manual rate. A row saves as a row, not a cell at a time, so
+a half-edited rate cannot sit on the page.
+
+Refusals are **said out loud** rather than silently ignored: an unparseable
+number, an unknown basis or classification, a blank basis name, and a duplicate
+(role, class, basis) each leave the stored value untouched and report why. The
+duplicate is pre-checked because the uniqueness lives in `Meta.constraints`,
+which `validate_unique()` does not cover - `validate_constraints()` does, and
+the difference is a readable message versus an IntegrityError 500. A caught
+mutation proved that distinction rather than a reading of the docs.
+
+Editing a basis moves every rate built on it at once, and the row says how
+many. That is safe precisely because nothing derived is stored - there is no
+recalculation step and no rate can be left on the old parameters.
+
 ### In the costing sheet
 
 A.4 Resources now shows a **Std rate** column: the charge-out rate this module

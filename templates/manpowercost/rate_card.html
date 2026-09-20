@@ -12,10 +12,67 @@
             rather than taken on trust.
         </div>
     </div>
-    <a href="{% url 'manpowercost:sheet_list' %}" class="btn btn-outline-secondary btn-sm">
-        <i class="bi bi-arrow-left"></i> Cost sheets
-    </a>
+    <div class="d-flex gap-2">
+        {% if can_edit %}
+        <button class="btn btn-primary btn-sm" type="button" data-bs-toggle="collapse"
+                data-bs-target="#new-rate">
+            <i class="bi bi-plus-lg"></i> New rate
+        </button>
+        {% endif %}
+        <a href="{% url 'manpowercost:sheet_list' %}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-arrow-left"></i> Cost sheets
+        </a>
+    </div>
 </div>
+
+{% if can_edit %}
+<div class="collapse mb-3" id="new-rate">
+    <div class="card card-body">
+        <form method="post" action="{% url 'manpowercost:rate_create' %}" class="row g-2 align-items-end">
+            {% csrf_token %}
+            <div class="col-md-4">
+                <label class="form-label small mb-1" for="new-rate-position">Position</label>
+                <select name="position" id="new-rate-position" class="form-select form-select-sm" required>
+                    <option value="">Pick a role&hellip;</option>
+                    {% for position in positions %}
+                    <option value="{{ position.pk }}">{{ position.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small mb-1" for="new-rate-class">Class</label>
+                <select name="classification" id="new-rate-class" class="form-select form-select-sm">
+                    <option value="">&mdash;</option>
+                    {% for value, label in classifications %}
+                    <option value="{{ value }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small mb-1" for="new-rate-basis">Cost basis</label>
+                <select name="basis" id="new-rate-basis" class="form-select form-select-sm" required>
+                    {% for basis in bases %}
+                    <option value="{{ basis.pk }}"{% if basis.is_default %} selected{% endif %}>{{ basis.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small mb-1" for="new-rate-cost">Monthly cost</label>
+                <input type="text" name="monthly_cost" id="new-rate-cost"
+                       class="form-control form-control-sm text-end" placeholder="0.00">
+            </div>
+            <div class="col-md-1 d-grid">
+                <button class="btn btn-sm btn-primary" type="submit">Add</button>
+            </div>
+        </form>
+        <div class="form-text">
+            One rate per role, class and basis. The hourly rate is derived from the
+            monthly cost through the basis below &mdash; leave the manual rate blank
+            unless the price was negotiated.
+        </div>
+    </div>
+</div>
+{% endif %}
 
 <div class="card">
     <div class="table-responsive">
@@ -31,16 +88,34 @@
                     <th class="text-end">Per invoice</th>
                     <th class="text-end">Hourly rate</th>
                     {% if show_margin %}<th class="text-end">Margin</th>{% endif %}
-                    {% if can_edit %}<th></th>{% endif %}
+                    {% if can_edit %}<th class="text-end">Manual rate</th><th></th>{% endif %}
                 </tr>
             </thead>
             <tbody>
             {% for row in rows %}
+                {% comment %} The editable cells are tied to the form in the last cell by
+                the HTML form attribute: a form element cannot span table cells, and one
+                form per cell would mean one round trip per field. {% endcomment %}
                 <tr>
                     <td>{{ row.rate.position.name }}</td>
                     <td class="text-muted">{{ row.rate.get_classification_display|default:"—" }}</td>
-                    <td class="text-muted small">{{ row.rate.basis.name }}</td>
-                    <td class="text-end">{{ row.build_up.monthly_cost|floatformat:2|intcomma }}</td>
+                    <td class="text-muted small">
+                        {% if can_edit %}
+                        <select name="basis" form="rate-{{ row.rate.pk }}"
+                                class="form-select form-select-sm" style="width:11rem">
+                            {% for basis in bases %}
+                            <option value="{{ basis.pk }}"{% if basis.pk == row.rate.basis_id %} selected{% endif %}>{{ basis.name }}</option>
+                            {% endfor %}
+                        </select>
+                        {% else %}{{ row.rate.basis.name }}{% endif %}
+                    </td>
+                    <td class="text-end">
+                        {% if can_edit %}
+                        <input type="text" name="monthly_cost" form="rate-{{ row.rate.pk }}"
+                               class="form-control form-control-sm text-end" style="width:8rem"
+                               value="{{ row.rate.monthly_cost|floatformat:2 }}">
+                        {% else %}{{ row.build_up.monthly_cost|floatformat:2|intcomma }}{% endif %}
+                    </td>
                     <td class="text-end text-muted">{{ row.build_up.overhead|floatformat:2|intcomma }}</td>
                     <td class="text-end text-muted">{{ row.build_up.profit|floatformat:2|intcomma }}</td>
                     <td class="text-end text-muted">{{ row.build_up.monthly_invoice|floatformat:2|intcomma }}</td>
@@ -50,7 +125,7 @@
                         number that looks derived is how a sheet comes to disagree with
                         the cost it claims to be based on. {% endcomment %}
                         {% if row.rate.is_overridden %}
-                        <span class="badge bg-info text-dark ms-1" title="Manual rate — does not follow cost">fixed</span>
+                        <span class="badge bg-info text-dark ms-1" title="Manual rate &mdash; does not follow cost">fixed</span>
                         {% endif %}
                     </td>
                     {% if show_margin %}
@@ -60,19 +135,29 @@
                     {% endif %}
                     {% if can_edit %}
                     <td class="text-end">
-                        <form method="post" action="{% url 'manpowercost:rate_override' row.rate.pk %}"
-                              class="d-flex gap-1 justify-content-end">
+                        <input type="text" name="manual_rate" form="rate-{{ row.rate.pk }}"
+                               class="form-control form-control-sm text-end" style="width:7rem"
+                               placeholder="follow cost"
+                               value="{% if row.rate.manual_rate %}{{ row.rate.manual_rate }}{% endif %}">
+                    </td>
+                    <td class="text-end text-nowrap">
+                        <form method="post" id="rate-{{ row.rate.pk }}"
+                              action="{% url 'manpowercost:rate_update' row.rate.pk %}"
+                              class="d-inline">
                             {% csrf_token %}
-                            <input type="text" name="manual_rate" class="form-control form-control-sm"
-                                   style="width:7rem" placeholder="follow cost"
-                                   value="{% if row.rate.manual_rate %}{{ row.rate.manual_rate }}{% endif %}">
-                            <button class="btn btn-sm btn-outline-primary" type="submit">Set</button>
+                            <button class="btn btn-sm btn-outline-primary" type="submit">Save</button>
+                        </form>
+                        <form method="post" action="{% url 'manpowercost:rate_delete' row.rate.pk %}"
+                              class="d-inline js-confirm-delete">
+                            {% csrf_token %}
+                            <button class="btn btn-sm btn-outline-danger" type="submit"
+                                    title="Remove this rate"><i class="bi bi-trash"></i></button>
                         </form>
                     </td>
                     {% endif %}
                 </tr>
             {% empty %}
-                <tr><td colspan="10" class="text-center text-muted py-4">
+                <tr><td colspan="11" class="text-center text-muted py-4">
                     No charge rates defined yet.
                 </td></tr>
             {% endfor %}
@@ -83,7 +168,105 @@
 
 {% if not show_margin %}
 <p class="small text-muted mt-2">
-    Margin is hidden — it needs the <em>See margin</em> permission.
+    Margin is hidden &mdash; it needs the <em>See margin</em> permission.
 </p>
+{% endif %}
+
+<div class="card mt-4">
+    <div class="card-header bg-light">
+        <strong>Cost bases</strong>
+        <span class="small text-muted ms-2">
+            The parameters every rate above is built from. Nothing derived is stored, so a
+            change here moves every rate on that basis at once.
+        </span>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Name</th>
+                    <th class="text-end">Overhead %</th>
+                    <th class="text-end">Profit %</th>
+                    <th class="text-end">Billable months</th>
+                    <th class="text-end">Hours / month</th>
+                    <th class="text-end">Days / month</th>
+                    <th class="text-end">Rates</th>
+                    {% if can_edit %}<th></th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+            {% for basis in bases %}
+                <tr>
+                    <td>
+                        {% if can_edit %}
+                        <input type="text" name="name" form="basis-{{ basis.pk }}"
+                               class="form-control form-control-sm" style="min-width:12rem"
+                               value="{{ basis.name }}">
+                        {% else %}{{ basis.name }}{% endif %}
+                        {% if basis.is_default %}<span class="badge bg-secondary ms-1">default</span>{% endif %}
+                    </td>
+                    <td class="text-end">
+                        {% if can_edit %}
+                        <input type="text" name="overhead_pct" form="basis-{{ basis.pk }}"
+                               class="form-control form-control-sm text-end" style="width:6rem"
+                               value="{{ basis.overhead_pct|floatformat:2 }}">
+                        {% else %}{{ basis.overhead_pct|floatformat:2 }}{% endif %}
+                    </td>
+                    <td class="text-end">
+                        {% if can_edit %}
+                        <input type="text" name="profit_pct" form="basis-{{ basis.pk }}"
+                               class="form-control form-control-sm text-end" style="width:6rem"
+                               value="{{ basis.profit_pct|floatformat:2 }}">
+                        {% else %}{{ basis.profit_pct|floatformat:2 }}{% endif %}
+                    </td>
+                    <td class="text-end">
+                        {% if can_edit %}
+                        <input type="text" name="billable_months" form="basis-{{ basis.pk }}"
+                               class="form-control form-control-sm text-end" style="width:6rem"
+                               value="{{ basis.billable_months|floatformat:2 }}">
+                        {% else %}{{ basis.billable_months|floatformat:2 }}{% endif %}
+                    </td>
+                    <td class="text-end">
+                        {% if can_edit %}
+                        <input type="text" name="hours_per_month" form="basis-{{ basis.pk }}"
+                               class="form-control form-control-sm text-end" style="width:6rem"
+                               value="{{ basis.hours_per_month|floatformat:2 }}">
+                        {% else %}{{ basis.hours_per_month|floatformat:2 }}{% endif %}
+                    </td>
+                    <td class="text-end">
+                        {% if can_edit %}
+                        <input type="text" name="working_days_per_month" form="basis-{{ basis.pk }}"
+                               class="form-control form-control-sm text-end" style="width:6rem"
+                               value="{{ basis.working_days_per_month|floatformat:2 }}">
+                        {% else %}{{ basis.working_days_per_month|floatformat:2 }}{% endif %}
+                    </td>
+                    <td class="text-end text-muted">{{ basis.rate_count }}</td>
+                    {% if can_edit %}
+                    <td class="text-end">
+                        <form method="post" id="basis-{{ basis.pk }}"
+                              action="{% url 'manpowercost:basis_update' basis.pk %}">
+                            {% csrf_token %}
+                            <button class="btn btn-sm btn-outline-primary" type="submit">Save</button>
+                        </form>
+                    </td>
+                    {% endif %}
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if can_edit %}
+<script>
+document.querySelectorAll('.js-confirm-delete').forEach(function (form) {
+    form.addEventListener('submit', function (event) {
+        var ok = window.confirm(
+            'Remove this charge rate? Costing sheets will show a dash for the role '
+            + 'until another rate is entered.');
+        if (!ok) { event.preventDefault(); }
+    });
+});
+</script>
 {% endif %}
 {% endblock %}
