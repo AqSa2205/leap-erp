@@ -33,7 +33,7 @@ from .forms import (
     FRCReportForm, FRCEntryFormSet, FRCInventoryForm,
 )
 from django.contrib.auth.decorators import login_required
-from django.db.models import Count, Sum, F
+from django.db.models import Count, Sum, F, Max
 from django.utils import timezone
 from django.utils.text import slugify
 import openpyxl
@@ -1132,18 +1132,43 @@ def bom_procurement_tracker(request, sheet_pk):
                 messages.warning(request, 'Every item you picked is already fully ordered — nothing to add.')
                 return redirect('procurement:bom_procurement_tracker', sheet_pk=sheet.pk)
 
-            placeholder_po_number = f'DRAFT-S{sheet.pk}-{int(datetime.now().timestamp() * 1_000_000)}'
-            po = PurchaseOrder.objects.create(
-                po_date=datetime.now().date(),
-                po_number=placeholder_po_number,
-                vendor_name=_uniform_vendor([li for li, _qty in to_order]),
-                po_issued_by=user.get_full_name() or user.username,
-                issuer_email=user.email or '',
-                project=sheet.project,
-                project_name=sheet.project.project_name if sheet.project else (sheet.title or ''),
-                created_by=user,
-            )
-            serial = 1
+            # Adding to an existing draft PO is opt-in via this field - blank
+            # (the default) keeps the original behaviour of always seeding a
+            # brand new draft. Only a draft on the same project is eligible:
+            # once issued, the vendor already has the original scope, so
+            # appending more items to it here would misrepresent what was
+            # actually sent.
+            existing_po_id = request.POST.get('existing_po_id', '').strip()
+            existing_po = None
+            if existing_po_id:
+                existing_po = PurchaseOrder.objects.filter(
+                    pk=existing_po_id, project=sheet.project, status='draft').first()
+                if not existing_po:
+                    messages.error(
+                        request,
+                        'The PO you picked to add these items to is no longer a draft, or no '
+                        'longer exists. Nothing was added — pick again or create a new PO instead.')
+                    return redirect('procurement:bom_procurement_tracker', sheet_pk=sheet.pk)
+
+            if existing_po:
+                po = existing_po
+                # Continue the existing item numbering rather than restart
+                # at 1, so serial numbers on one PO stay unique.
+                first_serial = (po.items.aggregate(Max('serial_number'))['serial_number__max'] or 0) + 1
+            else:
+                placeholder_po_number = f'DRAFT-S{sheet.pk}-{int(datetime.now().timestamp() * 1_000_000)}'
+                po = PurchaseOrder.objects.create(
+                    po_date=datetime.now().date(),
+                    po_number=placeholder_po_number,
+                    vendor_name=_uniform_vendor([li for li, _qty in to_order]),
+                    po_issued_by=user.get_full_name() or user.username,
+                    issuer_email=user.email or '',
+                    project=sheet.project,
+                    project_name=sheet.project.project_name if sheet.project else (sheet.title or ''),
+                    created_by=user,
+                )
+                first_serial = 1
+            serial = first_serial
             for li, qty in to_order:
                 li.set_exchange_rates_cache(rates)
                 li.set_sheet_cache(sheet)
@@ -1162,13 +1187,19 @@ def bom_procurement_tracker(request, sheet_pk):
                     source_bom_item=li,
                 )
                 serial += 1
+            added_count = serial - first_serial
             skip_note = ''
             if skipped_full:
                 skip_note = f' ({skipped_full} item{"" if skipped_full == 1 else "s"} skipped — already fully ordered.)'
-            messages.success(
-                request,
-                f'Draft PO seeded with {serial - 1} budgeted item{"" if serial - 1 == 1 else "s"}.{skip_note} '
-                f'Replace the placeholder PO number, confirm the vendor, then save.')
+            if existing_po:
+                messages.success(
+                    request,
+                    f'{added_count} budgeted item{"" if added_count == 1 else "s"} added to {po.po_number}.{skip_note}')
+            else:
+                messages.success(
+                    request,
+                    f'Draft PO seeded with {added_count} budgeted item{"" if added_count == 1 else "s"}.{skip_note} '
+                    f'Replace the placeholder PO number, confirm the vendor, then save.')
             return redirect('procurement:po_update', pk=po.pk)
 
     # Build per-section rows (A.1 supply, non-optional) with budgeted prices.
@@ -1213,6 +1244,13 @@ def bom_procurement_tracker(request, sheet_pk):
         if section_items:
             rows.append({'section': section, 'items': section_items})
 
+    # Eligible targets for "add to an existing PO" - same project, still a
+    # draft. Once issued, the vendor already has the original scope, so
+    # appending more items here afterward would misrepresent what was sent.
+    existing_draft_pos = (
+        PurchaseOrder.objects.filter(project=sheet.project, status='draft').order_by('-created_at')
+        if sheet.project else PurchaseOrder.objects.none())
+
     return render(request, 'procurement/bom_procurement_tracker.html', {
         'sheet': sheet,
         'rows': rows,
@@ -1220,6 +1258,7 @@ def bom_procurement_tracker(request, sheet_pk):
         'available_count': available_count,
         'procured_count': fully_procured_count,
         'budget_total': budget_total,
+        'existing_draft_pos': existing_draft_pos,
     })
 
 
