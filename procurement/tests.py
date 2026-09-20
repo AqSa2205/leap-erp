@@ -779,6 +779,64 @@ class BudgetProcurementFlowTests(TestCase):
         pos_after = PurchaseOrder.objects.filter(project=self.project).count()
         self.assertEqual(pos_before, pos_after)
 
+    def test_can_add_to_an_existing_draft_po(self):
+        """Picking an existing draft PO in the dropdown appends items to it
+        rather than always seeding a brand new one."""
+        from costing.models import CostingLineItem
+        from procurement.models import PurchaseOrder
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        self.client.post(turl, {'item_ids': [str(self.item.pk)], f'qty_{self.item.pk}': '1'})
+        po = PurchaseOrder.objects.filter(project=self.project).latest('id')
+
+        other_item = CostingLineItem.objects.create(
+            section=self.sec, item_number='2', description='Switch', quantity=Decimal('3'),
+            unit='EA', vendor_name='Acme', base_unit_cost=Decimal('50'), supplier_currency='SAR')
+        r2 = self.client.post(turl, {
+            'existing_po_id': str(po.pk),
+            'item_ids': [str(other_item.pk)],
+        })
+        self.assertEqual(r2.status_code, 302)
+        self.assertEqual(PurchaseOrder.objects.filter(project=self.project).count(), 1)
+        po.refresh_from_db()
+        self.assertEqual(po.items.count(), 2)
+        added = po.items.get(source_bom_item=other_item)
+        self.assertEqual(added.serial_number, 2)
+
+    def test_existing_po_dropdown_only_offers_drafts_on_the_same_project(self):
+        from projects.models import Region, ProjectStatus, Project
+        from procurement.models import PurchaseOrder
+        draft_here = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='DRAFT-HERE', vendor_name='Acme',
+            po_issued_by='T', project=self.project, created_by=self.proc, status='draft')
+        PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='ISSUED-HERE', vendor_name='Acme',
+            po_issued_by='T', project=self.project, created_by=self.proc, status='issued')
+        other_region = Region.objects.create(name='Elsewhere', code='ELS')
+        other_project = Project.objects.create(
+            project_name='Other', proposal_reference='OTHER-REF-1',
+            status=self.won, region=other_region)
+        PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='DRAFT-ELSEWHERE', vendor_name='Acme',
+            po_issued_by='T', project=other_project, created_by=self.proc, status='draft')
+
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        resp = self.client.get(turl)
+        offered = list(resp.context['existing_draft_pos'])
+        self.assertEqual(offered, [draft_here])
+
+    def test_an_invalid_existing_po_id_adds_nothing_and_fails_safely(self):
+        from procurement.models import PurchaseOrder
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        r = self.client.post(turl, {
+            'existing_po_id': '999999',
+            'item_ids': [str(self.item.pk)],
+        })
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(PurchaseOrder.objects.filter(project=self.project).count(), 0)
+
 
 class POTermOverrideTests(TestCase):
     """Terms are picked from the shared TermsTemplate library, but a PO can
