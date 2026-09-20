@@ -129,7 +129,7 @@ class MarginGateTests(TestCase):
             self.assertIn(step, build_up)
 
 
-class RateOverrideTests(TestCase):
+class RateUpdateTests(TestCase):
 
     def setUp(self):
         self.basis = CostBasis.objects.create(
@@ -139,7 +139,7 @@ class RateOverrideTests(TestCase):
         self.rate = ChargeRate.objects.create(
             position=ResourceCatalogueItem.objects.create(name='PM'),
             basis=self.basis, monthly_cost=Decimal('20000'))
-        self.url = reverse('manpowercost:rate_override', args=[self.rate.pk])
+        self.url = reverse('manpowercost:rate_update', args=[self.rate.pk])
 
     def test_editor_can_fix_a_negotiated_rate(self):
         self.client.force_login(make_user('sa5', Role.SUPER_ADMIN))
@@ -209,7 +209,7 @@ class EditControlVisibilityTests(TestCase):
         self.assertFalse(resp.context['can_edit'])
         self.assertNotContains(resp, 'newSheetModal')
 
-    def test_reader_is_not_offered_the_rate_override_form(self):
+    def test_reader_is_not_offered_the_rate_edit_controls(self):
         self.client.force_login(self._reader())
         resp = self.client.get(reverse('manpowercost:rate_card'))
         self.assertFalse(resp.context['can_edit'])
