@@ -133,9 +133,24 @@
                 <button type="button" class="btn btn-sm btn-link text-decoration-none" id="selectAllBtn">Select all</button>
                 <button type="button" class="btn btn-sm btn-link text-decoration-none" id="clearAllBtn">Clear</button>
             </div>
-            <button type="submit" class="btn btn-danger" id="createPoBtn" disabled>
-                <i class="bi bi-cart-plus me-1"></i> Create PO with selected items
-            </button>
+            <div class="d-flex align-items-center gap-2">
+                <input type="hidden" name="existing_po_id" id="existingPoIdInput" value="">
+                {% if existing_draft_pos %}
+                <div class="dropdown">
+                    <button class="btn btn-outline-danger dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" id="addToExistingBtn" disabled>
+                        <i class="bi bi-folder-plus me-1"></i> Add to Existing PO
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="addToExistingBtn">
+                        {% for dp in existing_draft_pos %}
+                        <li><a class="dropdown-item add-to-existing-item" href="#" data-po-id="{{ dp.pk }}">{{ dp.po_number }} ({{ dp.vendor_name|default:"no vendor yet" }})</a></li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+                <button type="submit" class="btn btn-danger" id="createPoBtn" disabled>
+                    <i class="bi bi-cart-plus me-1"></i> Create PO with selected items
+                </button>
+            </div>
         </div>
         {% else %}
         <div class="alert alert-success mt-3 mb-0"><i class="bi bi-check2-circle me-2"></i>Every supply item is already on a PO. Nothing left to procure for this budget.</div>
@@ -165,14 +180,28 @@
         qty.disabled = !check.checked;
         if (check.checked && !qty.value) qty.value = qty.getAttribute('max') || '';
     }
+    const addToExistingBtn = document.getElementById('addToExistingBtn');
+    const existingPoIdInput = document.getElementById('existingPoIdInput');
+    const trackerForm = existingPoIdInput ? existingPoIdInput.closest('form') : null;
     function refresh() {
         const n = Array.from(checks).filter(c => c.checked).length;
         if (countEl) countEl.textContent = n;
         if (submitBtn) submitBtn.disabled = n === 0;
+        if (addToExistingBtn) addToExistingBtn.disabled = n === 0;
     }
     checks.forEach(c => c.addEventListener('change', () => { syncQty(c); refresh(); }));
     if (selectAllBtn) selectAllBtn.addEventListener('click', () => { checks.forEach(c => { c.checked = true; syncQty(c); }); refresh(); });
     if (clearAllBtn) clearAllBtn.addEventListener('click', () => { checks.forEach(c => { c.checked = false; syncQty(c); }); refresh(); });
+    // Each dropdown item sets which existing PO to add to, then submits the
+    // same form the "Create PO" button uses - existing_po_id is what tells
+    // the server to append instead of seeding a new PO.
+    document.querySelectorAll('.add-to-existing-item').forEach(function(link) {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            if (existingPoIdInput) existingPoIdInput.value = this.getAttribute('data-po-id');
+            if (trackerForm) trackerForm.submit();
+        });
+    });
     checks.forEach(syncQty);
     refresh();
 })();
