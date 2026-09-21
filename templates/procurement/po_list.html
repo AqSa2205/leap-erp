@@ -114,7 +114,7 @@
                               {% endif %}
                               {% endwith %}
                             </td>
-                            <td>{{ po.created_by.get_full_name|default:po.created_by.username }}</td>
+                            <td>{% if po.created_by %}{{ po.created_by.get_full_name|default:po.created_by.username }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
                             <td>
                                 <div class="btn-group btn-group-sm">
                                     <a href="{% url 'procurement:po_detail' po.pk %}" class="btn btn-outline-danger" title="View">

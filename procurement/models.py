@@ -390,7 +390,8 @@ class PurchaseOrder(models.Model):
         """
         out = []
         seen_pending = False
-        for key, label, signer in self.APPROVAL_STAGES:
+        names = self.signer_names()
+        for key, label, default_signer in self.APPROVAL_STAGES:
             if key not in self.required_stages:
                 continue
             ts = getattr(self, f'{key}_approved_at')
@@ -404,7 +405,7 @@ class PurchaseOrder(models.Model):
             out.append({
                 'key': key,
                 'label': label,
-                'signer': signer,
+                'signer': names.get(key) or default_signer,
                 'approved_at': ts,
                 'approved_by': by,
                 'is_approved': is_approved,
@@ -484,11 +485,38 @@ class PurchaseOrder(models.Model):
 
     @classmethod
     def stage_signer_name(cls, stage_key):
-        """The person named against a stage in APPROVAL_STAGES, or ''."""
-        for key, _label, signer in cls.APPROVAL_STAGES:
-            if key == stage_key:
-                return signer or ''
-        return ''
+        """The person named against a stage, or ''.
+
+        The configured name where one is set, else the APPROVAL_STAGES
+        default. Costs a query; instance code should use signer_names(),
+        which memoises, and bulk callers should prime it (see below).
+        """
+        return POStageApprover.effective_signer_names().get(stage_key, '')
+
+    def signer_names(self):
+        """{stage key: printed name} for this PO, read at most once per PO.
+
+        Memoised because the sidebar badge walks every open purchase order on
+        every page in the app (see hr/approvals.py), so an unguarded read here
+        is a query per PO on every request.
+        """
+        if getattr(self, '_signer_names', None) is None:
+            self._signer_names = POStageApprover.effective_signer_names()
+        return self._signer_names
+
+    @classmethod
+    def prime_signer_names(cls, purchase_orders):
+        """Share one names lookup across a list of POs.
+
+        The alternative is a query per PO, which is exactly the N+1 the
+        approvals sidebar was hand-optimised to avoid. Returns the list so it
+        can wrap a queryset inline.
+        """
+        purchase_orders = list(purchase_orders)
+        names = POStageApprover.effective_signer_names()
+        for po in purchase_orders:
+            po._signer_names = names
+        return purchase_orders
 
     def is_designated_approver(self, user, stage_key):
         """Whether this stage is actually THIS user's to sign, as opposed to
@@ -516,7 +544,7 @@ class PurchaseOrder(models.Model):
         if not user or not user.is_authenticated:
             return False
 
-        signer = self.stage_signer_name(stage_key)
+        signer = self.signer_names().get(stage_key, '')
         if signer and _same_person(user, signer):
             return True
         if user.is_super_admin_user:
@@ -574,11 +602,13 @@ class POStatusChange(models.Model):
 
 
 class POStageApprover(models.Model):
-    """Which user signs a given approval stage.
+    """Which user signs a given approval stage, and the name printed for them.
 
     PurchaseOrder.APPROVAL_STAGES names its signers as plain text, which is
     enough to print on a PDF and useless for sending an email. This maps a
-    stage to a real account so the person waiting on a PO can be told about it.
+    stage to a real account so the person waiting on a PO can be told about it,
+    and carries the printed name so a change of PM does not need a code
+    release.
 
     It decides who is NOTIFIED, never who is ALLOWED — can_user_approve_stage()
     remains the only permission gate.
@@ -586,9 +616,17 @@ class POStageApprover(models.Model):
     STAGE_CHOICES = [(k, l) for k, l, _signer in PurchaseOrder.APPROVAL_STAGES]
 
     stage = models.CharField(max_length=8, choices=STAGE_CHOICES, unique=True)
+    # Nullable so a stage's printed name can be corrected without also
+    # committing to route its emails at one account - the two are the same
+    # person in practice, but a name change should never be blocked on
+    # deciding that.
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
-        related_name='po_stages_to_approve')
+        null=True, blank=True, related_name='po_stages_to_approve')
+    signer_name = models.CharField(
+        max_length=120, blank=True,
+        help_text='Printed under this stage on the purchase order. Blank '
+                  'uses the built-in default.')
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
         null=True, blank=True, related_name='+')
@@ -599,7 +637,20 @@ class POStageApprover(models.Model):
         verbose_name = 'PO stage approver'
 
     def __str__(self):
-        return f'{self.get_stage_display()} -> {self.user}'
+        return f'{self.get_stage_display()} -> {self.user or "unrouted"}'
+
+    @classmethod
+    def effective_signer_names(cls):
+        """{stage key: the name to print}, one query.
+
+        A stored name wins; otherwise the built-in default stands. Blank is
+        therefore never a name - it means "the default", which is what makes
+        clearing the field a way back rather than a way to print nothing.
+        """
+        stored = dict(cls.objects.exclude(signer_name='')
+                      .values_list('stage', 'signer_name'))
+        return {key: stored.get(key, default)
+                for key, _label, default in PurchaseOrder.APPROVAL_STAGES}
 
 
 class ProcurementProject(models.Model):
