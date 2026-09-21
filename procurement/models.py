@@ -464,22 +464,37 @@ class PurchaseOrder(models.Model):
         ]
 
     def can_user_approve_stage(self, user, stage_key):
-        """Permission gate per stage.
+        """Permission gate per stage. Two questions, both must pass.
 
-        Mapping (super_admin can do anything):
+        MAY THIS ROLE SIGN ANYTHING - the `po.approve` capability, toggled per
+        role in the permission grid. Wired so that who may approve is an
+        administrative decision rather than a code change.
+
+        WHICH STAGE IS THEIRS - the mapping below, which is the part that
+        cannot be a single switch: the whole point of four stages is that one
+        person does not hold all of them.
+
           - SCM  → procurement manager (Shaker)
-          - PM   → admin (Ali)
+          - PM   → admin (Ali) or project manager
           - COO  → admin (Babar)
           - CEO  → super_admin only (Asif) — high-value escalation
+
+        Super admin passes both, as the standing override that stops work
+        stalling when somebody is away.
         """
         if not user or not user.is_authenticated:
             return False
         if user.is_super_admin_user:
             return True
+        if not user.has_capability('po.approve'):
+            return False
         if stage_key == 'scm':
             return getattr(user, 'is_procurement_manager_user', False)
-        if stage_key in ('pm', 'coo'):
-            return user.is_admin_user
+        if stage_key == 'pm':
+            return bool(user.is_admin_user
+                        or getattr(user, 'is_project_manager_user', False))
+        if stage_key == 'coo':
+            return bool(user.is_admin_user)
         # CEO stays super-admin-only.
         return False
 
@@ -551,9 +566,17 @@ class PurchaseOrder(models.Model):
             # CEO is super-admin-only by design, so nobody else could hold it;
             # falling through would leave that stage in no inbox at all.
             return stage_key == 'ceo'
+        if not user.has_capability('po.approve'):
+            # Not theirs to sign, so not their inbox either. The name match
+            # above still stands: being named on the document is a reason to
+            # be told, whatever the grid says.
+            return False
         if stage_key == 'scm':
             return getattr(user, 'is_procurement_manager_user', False)
-        if stage_key in ('pm', 'coo'):
+        if stage_key == 'pm':
+            return bool(user.is_admin_user
+                        or getattr(user, 'is_project_manager_user', False))
+        if stage_key == 'coo':
             return bool(user.is_admin_user)
         return False
 
