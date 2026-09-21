@@ -364,8 +364,72 @@ class ManpowerResource(models.Model):
         days = self.experience_days
         return round(days / 365.25, 2) if days is not None else None
 
+    @property
+    def current_assignments(self):
+        """Every ManpowerAssignment for this resource whose date range
+        covers today. Computed rather than filtered in the DB, since the
+        list is small per resource and this keeps is_current as the one
+        place "covers today" is decided."""
+        return [a for a in self.assignments.all() if a.is_current]
 
-# ── Issue Log ─────────────────────────────────────────────────────────────
+    @property
+    def engagement_status(self):
+        """Not Occupied / Occupied / Overoccupied, derived from how many
+        projects this resource is currently assigned to - never stored, so
+        it can't go stale the way a manually-ticked checkbox can. Someone
+        falls out of Occupied automatically the day their assignment's
+        end_date passes."""
+        n = len(self.current_assignments)
+        if n == 0:
+            return 'not_occupied'
+        return 'occupied' if n == 1 else 'overoccupied'
+
+
+class ManpowerAssignment(models.Model):
+    """One stint of a manpower resource on one project, with a date range.
+
+    A resource can have several of these overlapping at once (that's what
+    makes them Overoccupied) or none at all (Not Occupied) - see
+    ManpowerResource.engagement_status, which is derived from these rows
+    and never stored separately.
+    """
+    resource = models.ForeignKey(
+        ManpowerResource, on_delete=models.CASCADE, related_name='assignments')
+    project = models.ForeignKey(
+        'projects.Project', on_delete=models.CASCADE, related_name='manpower_assignments')
+    start_date = models.DateField()
+    end_date = models.DateField(
+        null=True, blank=True,
+        help_text='Leave blank while the assignment is still ongoing.')
+    role_on_project = models.CharField(
+        max_length=255, blank=True,
+        help_text="Only needed if this resource's role on this specific "
+                  "project differs from their general title.")
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='+',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-start_date']
+
+    def __str__(self):
+        return f'{self.resource.employee.full_name} — {self.project.project_name}'
+
+    @property
+    def is_current(self):
+        """Whether today falls within this assignment's date range. The
+        single place "is this assignment active right now" is decided, so
+        engagement_status and every view built on it stay in lockstep."""
+        today = date.today()
+        if self.start_date > today:
+            return False
+        return self.end_date is None or self.end_date >= today
+
+
+# ── Issue Log ────────────────────────────────────────────────────────────
 #
 # The project delivery team's own risk/issue register — replaces the
 # "All Projects Overview" issue log sheet. Browsed and exported one month

@@ -1,0 +1,133 @@
+{% extends 'base.html' %}
+
+{% block title %}Manpower Dashboard - Leap Networks ERP{% endblock %}
+{% block page_title %}Manpower Dashboard{% endblock %}
+
+{% block extra_css %}
+<style>
+    .kpi-tile { border-radius: 12px; border: none; box-shadow: 0 4px 15px rgba(0,0,0,0.08); padding: 1.25rem; text-align: center; }
+    .kpi-tile .kpi-value { font-size: 2rem; font-weight: 700; }
+    .kpi-tile .kpi-label { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.4px; color: #6c757d; }
+    .overoccupied-card { border-radius: 12px; border: 1px solid #f5c2c7; background: #fff5f5; }
+    /* !important needed: Bootstrap's own table CSS sets a background on
+       every td/th via a higher-specificity selector than a plain class. */
+    .heat-level-0 { color: #adb5bd; }
+    .heat-level-1 { background: #fde2e2 !important; }
+    .heat-level-2 { background: #f8b4b4 !important; font-weight: 600; }
+    .heat-level-3 { background: #f1706e !important; color: #fff; font-weight: 600; }
+    .heat-level-4 { background: #C41E3A !important; color: #fff; font-weight: 700; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+    <a href="{% url 'pmo:manpower_list' %}" class="text-muted small"><i class="bi bi-arrow-left"></i> Back to Manpower Status</a>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+        <div class="kpi-tile bg-white">
+            <div class="kpi-value">{{ total }}</div>
+            <div class="kpi-label">Total Manpower</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="kpi-tile bg-white">
+            <div class="kpi-value text-success">{{ occupied }}</div>
+            <div class="kpi-label">Occupied</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="kpi-tile bg-white">
+            <div class="kpi-value text-secondary">{{ not_occupied }}</div>
+            <div class="kpi-label">Not Occupied</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="kpi-tile bg-white">
+            <div class="kpi-value text-danger">{{ overoccupied }}</div>
+            <div class="kpi-label">Overoccupied</div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    {% for label, count in engagement_type_counts.items %}
+    <div class="col-6 col-md-3">
+        <div class="kpi-tile bg-white">
+            <div class="kpi-value">{{ count }}</div>
+            <div class="kpi-label">{{ label }}</div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="card overoccupied-card">
+    <div class="card-body">
+        <h6 class="text-danger fw-bold mb-3">
+            <i class="bi bi-exclamation-triangle-fill me-1"></i>
+            {{ overoccupied }} resource{{ overoccupied|pluralize }} spread across multiple projects at once
+        </h6>
+        {% if overoccupied_list %}
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>Resource</th>
+                        <th>Current Projects</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in overoccupied_list %}
+                    <tr>
+                        <td class="fw-semibold">
+                            <a href="{% url 'pmo:manpower_edit' r.employee.pk %}">{{ r.employee.full_name }}</a>
+                        </td>
+                        <td>
+                            {% for a in r.current_assignments %}{{ a.project.project_name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted small mb-0">No one is currently double-booked across projects.</p>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card mt-4">
+    <div class="card-header bg-white">
+        <h6 class="mb-0"><i class="bi bi-grid-3x3 me-1"></i> Project &times; Discipline</h6>
+    </div>
+    <div class="card-body">
+        {% if heatmap_rows %}
+        <div class="table-responsive">
+            <table class="table table-sm table-bordered text-center mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="text-start">Discipline</th>
+                        {% for p in heatmap_projects %}<th>{{ p }}</th>{% endfor %}
+                        <th>Total</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in heatmap_rows %}
+                    <tr>
+                        <td class="text-start fw-semibold">{{ row.discipline }}</td>
+                        {% for c in row.cells %}
+                        <td class="heat-level-{{ c.level }}">{{ c.count|default:"" }}</td>
+                        {% endfor %}
+                        <td class="fw-bold">{{ row.total }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted small mb-0">No current assignments to chart yet.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

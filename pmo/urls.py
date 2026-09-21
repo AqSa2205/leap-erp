@@ -27,9 +27,11 @@ urlpatterns = [
     # Manpower Status: every HR employee, with the extra fields Project
     # Management tracks about them.
     path('manpower/', views.manpower_list, name='manpower_list'),
+    path('manpower/dashboard/', views.manpower_dashboard, name='manpower_dashboard'),
     path('manpower/add/', views.manpower_create, name='manpower_create'),
     path('manpower/<int:employee_pk>/edit/', views.manpower_edit, name='manpower_edit'),
     path('manpower/<int:employee_pk>/clear/', views.manpower_clear, name='manpower_clear'),
+    path('manpower/<int:employee_pk>/assign/', views.manpower_assign, name='manpower_assign'),
 
     # Issue Log: the delivery team's risk/issue register, one month at a time.
     path('issues/', views.issue_log_list, name='issue_log_list'),
