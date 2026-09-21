@@ -2435,3 +2435,85 @@ class DashboardStatusBreakdownTests(TestCase):
             resp.context['po_total'], sum(resp.context['po_by_status'].values()))
         for key, _label in PurchaseOrder.STATUS_CHOICES:
             self.assertIn(key, resp.context['po_by_status'])
+
+
+class POBudgetBreakdownTests(TestCase):
+    """PurchaseOrder.budget_breakdown() - budget vs actual variance scoped
+    to just this PO's own line items, not the whole sheet or other POs."""
+
+    def setUp(self):
+        from projects.models import Region, ProjectStatus, Project
+        from costing.models import CostingSheet, CostingSection, CostingLineItem
+        sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('bd_sa', password='x', role=sa_role)
+        region = Region.objects.create(name='BD Region', code='BDREG')
+        won = ProjectStatus.objects.create(name='Won-BD', category='won')
+        project = Project.objects.create(
+            project_name='BD Project', proposal_reference='BD-REF-1', status=won, region=region)
+        self.sheet = CostingSheet.objects.create(
+            title='BD Sheet', project=project, margin=Decimal('30'),
+            discount_rate=Decimal('0'), workflow_stage='finance_approved')
+        self.sec = CostingSection.objects.create(
+            costing_sheet=self.sheet, section_number='A.1', title='Supply', order=0)
+        # budget_unit_price() with no override = base_total_price / quantity,
+        # scaled by the 30% margin set on the sheet.
+        self.item = CostingLineItem.objects.create(
+            section=self.sec, item_number='1', description='Cam', quantity=Decimal('10'),
+            unit='EA', base_unit_cost=Decimal('100'), supplier_currency='SAR')
+
+    def test_none_when_the_po_has_no_budget_sourced_items(self):
+        po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='BD-PO-1', vendor_name='ACME',
+            po_issued_by='T', created_by=self.user, status='draft')
+        po.items.create(description='Ad-hoc item', quantity=Decimal('1'), rate_per_unit=Decimal('50'))
+        self.assertIsNone(po.budget_breakdown())
+
+    def test_deducted_and_remaining_reflect_this_pos_own_price(self):
+        budget_rate = self.item.budget_unit_price()
+        po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='BD-PO-2', vendor_name='ACME',
+            po_issued_by='T', created_by=self.user, status='draft')
+        # Priced below the budgeted rate, on purpose, to produce a
+        # positive remaining/under-budget variance.
+        po.items.create(
+            description='Cam', quantity=Decimal('4'),
+            rate_per_unit=budget_rate - Decimal('10'), source_bom_item=self.item)
+
+        breakdown = po.budget_breakdown()
+        expected_budget = budget_rate * Decimal('4')
+        expected_deducted = (budget_rate - Decimal('10')) * Decimal('4')
+        self.assertEqual(breakdown['budget_reference'], expected_budget)
+        self.assertEqual(breakdown['deducted'], expected_deducted)
+        self.assertEqual(breakdown['remaining'], expected_budget - expected_deducted)
+        self.assertGreater(breakdown['remaining'], 0)
+        self.assertEqual(breakdown['sheet_pk'], self.sheet.pk)
+
+    def test_a_po_priced_above_budget_shows_negative_remaining(self):
+        budget_rate = self.item.budget_unit_price()
+        po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='BD-PO-3', vendor_name='ACME',
+            po_issued_by='T', created_by=self.user, status='draft')
+        po.items.create(
+            description='Cam', quantity=Decimal('2'),
+            rate_per_unit=budget_rate + Decimal('50'), source_bom_item=self.item)
+
+        breakdown = po.budget_breakdown()
+        self.assertLess(breakdown['remaining'], 0)
+        self.assertGreater(breakdown['deducted_pct'], 100)
+
+    def test_only_budget_sourced_items_are_counted(self):
+        """A PO can mix budget-sourced and ad-hoc line items - only the
+        former contribute to the breakdown."""
+        budget_rate = self.item.budget_unit_price()
+        po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='BD-PO-4', vendor_name='ACME',
+            po_issued_by='T', created_by=self.user, status='draft')
+        po.items.create(
+            description='Cam', quantity=Decimal('1'),
+            rate_per_unit=budget_rate, source_bom_item=self.item)
+        po.items.create(
+            description='Ad-hoc extra', quantity=Decimal('5'), rate_per_unit=Decimal('999'))
+
+        breakdown = po.budget_breakdown()
+        self.assertEqual(breakdown['budget_reference'], budget_rate)
+        self.assertEqual(breakdown['deducted'], budget_rate)
