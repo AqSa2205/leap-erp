@@ -1,7 +1,7 @@
 from django import forms
 from django.db import transaction
 
-from .models import ManpowerResource, ProjectIssue
+from .models import ManpowerAssignment, ManpowerResource, ProjectIssue
 
 
 def _bootstrapify(fields):
@@ -27,6 +27,24 @@ class ManpowerDetailsForm(forms.ModelForm):
             'start_contract_date': forms.DateInput(attrs={'type': 'date'}),
             'end_contract_date': forms.DateInput(attrs={'type': 'date'}),
             'notes': forms.Textarea(attrs={'rows': 2}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _bootstrapify(self.fields)
+
+
+class ManpowerAssignmentForm(forms.ModelForm):
+    """Assign a manpower resource to a project for a date range. The
+    resource itself is fixed by the URL this form is reached from, not
+    picked here."""
+
+    class Meta:
+        model = ManpowerAssignment
+        fields = ['project', 'start_date', 'end_date', 'role_on_project']
+        widgets = {
+            'start_date': forms.DateInput(attrs={'type': 'date'}),
+            'end_date': forms.DateInput(attrs={'type': 'date'}),
         }
 
     def __init__(self, *args, **kwargs):
