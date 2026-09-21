@@ -182,7 +182,11 @@ def _visible_pos_for(user):
         return qs.none()
     if user.is_super_admin_user or user.is_procurement_user:
         return qs
-    if user.is_admin_user or user.is_manager_user:
+    if (user.is_admin_user or user.is_manager_user
+            or getattr(user, 'is_project_manager_user', False)):
+        # Project managers sign the PM stage, so they need the same regional
+        # view Admin and Manager already have - a PO they cannot open is a PO
+        # they cannot sign.
         return qs.filter(
             Q(created_by=user) |
             Q(project__region=user.region)
