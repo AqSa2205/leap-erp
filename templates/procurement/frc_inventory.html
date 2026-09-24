@@ -38,9 +38,11 @@
                     <h1 class="h3 mb-1 text-white"><i class="bi bi-box2-heart me-2"></i>FRC / PPE Stock Inventory</h1>
                     <p class="mb-0 opacity-75">Track available PPE stock by type and size</p>
                 </div>
+                {% if not user.is_project_manager_user %}
                 <a href="{% url 'procurement:frc_inventory_create' %}" class="btn btn-warning fw-semibold" style="border-radius:8px;">
                     <i class="bi bi-plus-lg me-1"></i> Add Stock Item
                 </a>
+                {% endif %}
             </div>
             <div class="row g-3">
                 <div class="col-auto"><div class="kpi-mini"><div class="kpi-num">{{ total_items }}</div><div class="kpi-lbl">Stock Items</div></div></div>
@@ -164,8 +166,10 @@
                 </div>
 
                 <div class="col-md-2 text-end">
+                    {% if not user.is_project_manager_user %}
                     <a href="{% url 'procurement:frc_inventory_update' item.pk %}" class="btn btn-sm btn-outline-secondary" title="Edit"><i class="bi bi-pencil"></i></a>
                     <a href="{% url 'procurement:frc_inventory_delete' item.pk %}" class="btn btn-sm btn-outline-danger" title="Delete"><i class="bi bi-trash"></i></a>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -173,7 +177,9 @@
         <div class="text-center py-5 text-muted">
             <i class="bi bi-box2-heart display-4"></i>
             <p class="mt-3">No PPE stock items yet.</p>
+            {% if not user.is_project_manager_user %}
             <a href="{% url 'procurement:frc_inventory_create' %}" class="btn btn-warning"><i class="bi bi-plus-lg me-1"></i>Add Stock Item</a>
+            {% endif %}
         </div>
         {% endfor %}
     </div>

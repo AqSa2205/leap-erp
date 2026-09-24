@@ -1212,6 +1212,7 @@
                     <i class="bi bi-box2-heart"></i> <span>FRC Stock</span>
                 </a>
             </li>
+            {% if not user.is_project_manager_user %}
             <li class="nav-item">
                 {% comment %}
                 The T&C library lives in the costing app, but procurement users
@@ -1222,6 +1223,7 @@
                     <i class="bi bi-file-text"></i> <span>T&amp;C Templates</span>
                 </a>
             </li>
+            {% endif %}
         </ul>
         {% endif %}
 

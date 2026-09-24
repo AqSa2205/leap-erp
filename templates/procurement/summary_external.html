@@ -340,7 +340,7 @@
                     <tr>
                         <td colspan="{% if show_project_column %}16{% else %}15{% endif %}" class="text-center text-muted py-4">
                             No purchase orders for this project yet.
-                            <a href="{% url 'procurement:po_create' %}">Create one</a>.
+                            {% if not user.is_project_manager_user %}<a href="{% url 'procurement:po_create' %}">Create one</a>.{% endif %}
                         </td>
                     </tr>
                     {% endfor %}
@@ -502,9 +502,11 @@
         });
     }
 
+    {% if not user.is_project_manager_user %}
     document.querySelectorAll('.editable').forEach(function(td) {
         td.addEventListener('click', function() { openEditor(td); });
     });
+    {% endif %}
 })();
 </script>
 {% endblock %}

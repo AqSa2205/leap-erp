@@ -371,7 +371,9 @@
                     {% endfor %}
                     {% endfor %}
                     {% if not rows %}
-                    <tr><td colspan="13" class="text-center text-muted py-4">No purchase orders yet. <a href="{% url 'procurement:po_create' %}">Create one</a> to populate the summary.</td></tr>
+                    <tr><td colspan="13" class="text-center text-muted py-4">No purchase orders yet.
+                        {% if not user.is_project_manager_user %}<a href="{% url 'procurement:po_create' %}">Create one</a> to populate the summary.{% endif %}
+                    </td></tr>
                     {% endif %}
                 </tbody>
             </table>
@@ -522,11 +524,13 @@
         });
     }
 
+    {% if not user.is_project_manager_user %}
     document.querySelectorAll('.editable-date, .editable-remarks').forEach(function(td) {
         td.addEventListener('click', function() {
             openEditor(td);
         });
     });
+    {% endif %}
 
     // Smooth scroll when clicking system chips
     document.querySelectorAll('.system-chip').forEach(function(chip) {

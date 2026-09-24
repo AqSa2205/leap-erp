@@ -207,7 +207,13 @@ def _scoped_by_region(qs, user):
         return qs.none()
     if user.is_super_admin_user or getattr(user, 'is_procurement_user', False):
         return qs
-    if user.is_admin_user or user.is_manager_user:
+    if (user.is_admin_user or user.is_manager_user
+            or getattr(user, 'is_procurement_read_only_user', False)):
+        # Project managers (and, later, anyone else is_procurement_read_only_user
+        # covers) get the same regional view as Admin/Manager - matching
+        # _visible_pos_for(), which already does this for POs. Without it, a
+        # read-only viewer who did not personally create the record would see
+        # an empty list/404 on export despite the section being open to them.
         return qs.filter(Q(created_by=user) | Q(project__region=user.region))
     return qs.filter(created_by=user)
 
@@ -259,6 +265,38 @@ def _validate_signature_image(raw_bytes, *, max_bytes=2 * 1024 * 1024):
     out = BytesIO()
     out_img.save(out, format='PNG', optimize=True)
     return out.getvalue()
+
+
+class ProcurementReadOnlyRedirectMixin:
+    """Turns a Project Manager's blocked write attempt into a message +
+    redirect instead of Django's bare 403 page.
+
+    Every test_func() on the views that mix this in denies a project manager
+    unconditionally, before checking anything else (locked PO, wrong owner,
+    wrong stage) - so for this role, landing here always means the same
+    thing: read-only access, not some other rule. Anyone else's denial still
+    gets the normal 403, unchanged.
+
+    Must come first in the base-class list so this handle_no_permission()
+    wins over the one UserPassesTestMixin/AccessMixin provide.
+    """
+    read_only_redirect_url_name = 'procurement:dashboard'
+    read_only_redirect_needs_pk = False
+
+    def get_read_only_redirect_url(self):
+        if self.read_only_redirect_needs_pk:
+            return reverse(self.read_only_redirect_url_name, kwargs={'pk': self.kwargs['pk']})
+        return reverse(self.read_only_redirect_url_name)
+
+    def handle_no_permission(self):
+        user = getattr(self.request, 'user', None)
+        if user is not None and getattr(user, 'is_project_manager_user', False):
+            messages.info(
+                self.request,
+                'You have read-only access to Procurement — viewing and exporting is '
+                'available, but this action needs a procurement or admin account.')
+            return redirect(self.get_read_only_redirect_url())
+        return super().handle_no_permission()
 
 
 class ProcurementPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
@@ -662,12 +700,15 @@ def _save_po_term_overrides(po, post_data, user=None):
     po.term_overrides.exclude(template_id__in=selected_ids).delete()
 
 
-class POCreateView(ProcurementPermissionMixin, CreateView):
+class POCreateView(ProcurementReadOnlyRedirectMixin, ProcurementPermissionMixin, CreateView):
     model = PurchaseOrder
     form_class = PurchaseOrderForm
     template_name = 'procurement/po_form.html'
+    read_only_redirect_url_name = 'procurement:po_list'
 
     def test_func(self):
+        if self.request.user.is_project_manager_user:
+            return False
         return True
 
     def get_form_kwargs(self):
@@ -917,14 +958,18 @@ class PODetailView(ProcurementPermissionMixin, DetailView):
         return context
 
 
-class POUpdateView(ProcurementPermissionMixin, UpdateView):
+class POUpdateView(ProcurementReadOnlyRedirectMixin, ProcurementPermissionMixin, UpdateView):
     model = PurchaseOrder
     form_class = PurchaseOrderForm
     template_name = 'procurement/po_form.html'
+    read_only_redirect_url_name = 'procurement:po_detail'
+    read_only_redirect_needs_pk = True
 
     def test_func(self):
-        obj = self.get_object()
         user = self.request.user
+        if user.is_project_manager_user:
+            return False
+        obj = self.get_object()
         if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
             return True
         return obj.created_by == user
@@ -1081,7 +1126,8 @@ def approved_budgets(request):
     """Procurement landing — finance-approved budgets ready to procure, in the
     user's region. Procurement works from these budgets, not the costing sheet."""
     user = request.user
-    if not (user.is_super_admin_user or user.is_admin_user or user.is_procurement_user):
+    if not (user.is_super_admin_user or user.is_admin_user or user.is_procurement_user
+            or user.is_project_manager_user):
         messages.error(request, 'Only procurement team members can view approved budgets.')
         return redirect('procurement:dashboard')
 
@@ -1601,13 +1647,17 @@ def po_release_lock(request, pk):
     return redirect('procurement:po_detail', pk=po.pk)
 
 
-class PODeleteView(ProcurementPermissionMixin, DeleteView):
+class PODeleteView(ProcurementReadOnlyRedirectMixin, ProcurementPermissionMixin, DeleteView):
     model = PurchaseOrder
     template_name = 'procurement/po_confirm_delete.html'
     success_url = reverse_lazy('procurement:po_list')
+    read_only_redirect_url_name = 'procurement:po_detail'
+    read_only_redirect_needs_pk = True
 
     def test_func(self):
         user = self.request.user
+        if user.is_project_manager_user:
+            return False
         obj = self.get_object()
         if obj.is_locked:
             # Deleting is the most complete change of all. Release it first.
@@ -1975,6 +2025,9 @@ def po_import_items(request, pk):
 
     po = get_object_or_404(PurchaseOrder, pk=pk)
     user = request.user
+    if user.is_project_manager_user:
+        messages.error(request, 'Project managers have read-only access to procurement.')
+        return redirect('procurement:po_detail', pk=po.pk)
     if not (user.is_super_admin_user or user.is_admin_user
             or user.is_procurement_user or po.created_by_id == user.id):
         messages.error(request, 'You cannot change this purchase order.')
@@ -2032,6 +2085,7 @@ def po_import_items(request, pk):
     return redirect('procurement:po_detail', pk=po.pk)
 
 
+@login_required
 def po_import_excel(request):
     """Import Purchase Orders from files matching the PO export template.
 
@@ -2043,6 +2097,9 @@ def po_import_excel(request):
     write them. Spreadsheets from anyone else go through excel_import.py, which
     maps columns by name instead.
     """
+    if request.user.is_project_manager_user:
+        messages.error(request, 'Project managers have read-only access to procurement.')
+        return redirect('procurement:po_list')
     if request.method != 'POST':
         return redirect('procurement:po_list')
 
@@ -2393,8 +2450,9 @@ def ajax_summary_entry_update(request, pk):
 
     user = request.user
     can_edit = (
-        user.is_super_admin_user or user.is_admin_user or user.is_procurement_user
-        or po.created_by_id == user.id
+        not user.is_project_manager_user
+        and (user.is_super_admin_user or user.is_admin_user or user.is_procurement_user
+             or po.created_by_id == user.id)
     )
     if not can_edit:
         return JsonResponse({'error': 'Permission denied'}, status=403)
@@ -2474,8 +2532,9 @@ def ajax_po_item_field_update(request, pk):
 
     user = request.user
     can_edit = (
-        user.is_super_admin_user or user.is_admin_user or user.is_procurement_user
-        or po.created_by_id == user.id
+        not user.is_project_manager_user
+        and (user.is_super_admin_user or user.is_admin_user or user.is_procurement_user
+             or po.created_by_id == user.id)
     )
     if not can_edit:
         return JsonResponse({'error': 'Permission denied'}, status=403)
@@ -2928,12 +2987,15 @@ class DNListView(CapabilityRequiredMixin, DNPermissionMixin, ListView):
         return context
 
 
-class DNCreateView(DNPermissionMixin, CreateView):
+class DNCreateView(ProcurementReadOnlyRedirectMixin, DNPermissionMixin, CreateView):
     model = DeliveryNote
     form_class = DeliveryNoteForm
     template_name = 'procurement/dn_form.html'
+    read_only_redirect_url_name = 'procurement:dn_list'
 
     def test_func(self):
+        if self.request.user.is_project_manager_user:
+            return False
         return True
 
     def get_form_kwargs(self):
@@ -2998,6 +3060,10 @@ def dn_create_from_po(request, po_pk):
         pk=po_pk,
     )
     user = request.user
+
+    if user.is_project_manager_user:
+        messages.error(request, 'Project managers have read-only access to procurement.')
+        return redirect('procurement:po_detail', pk=po.pk)
 
     # Region scope — non-super-admins only touch POs in their region.
     if (
@@ -3099,13 +3165,17 @@ class DNDetailView(DNPermissionMixin, DetailView):
         return context
 
 
-class DNUpdateView(DNPermissionMixin, UpdateView):
+class DNUpdateView(ProcurementReadOnlyRedirectMixin, DNPermissionMixin, UpdateView):
     model = DeliveryNote
     form_class = DeliveryNoteForm
     template_name = 'procurement/dn_form.html'
+    read_only_redirect_url_name = 'procurement:dn_detail'
+    read_only_redirect_needs_pk = True
 
     def test_func(self):
         user = self.request.user
+        if user.is_project_manager_user:
+            return False
         if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
             return True
         return self.get_object().created_by == user
@@ -3139,13 +3209,17 @@ class DNUpdateView(DNPermissionMixin, UpdateView):
         return reverse('procurement:dn_detail', kwargs={'pk': self.object.pk})
 
 
-class DNDeleteView(DNPermissionMixin, DeleteView):
+class DNDeleteView(ProcurementReadOnlyRedirectMixin, DNPermissionMixin, DeleteView):
     model = DeliveryNote
     template_name = 'procurement/dn_confirm_delete.html'
     success_url = reverse_lazy('procurement:dn_list')
+    read_only_redirect_url_name = 'procurement:dn_detail'
+    read_only_redirect_needs_pk = True
 
     def test_func(self):
         user = self.request.user
+        if user.is_project_manager_user:
+            return False
         if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
             return True
         return self.get_object().created_by == user
@@ -3407,6 +3481,9 @@ def dn_export_pdf(request, pk):
 
 @login_required
 def dn_import_excel(request):
+    if request.user.is_project_manager_user:
+        messages.error(request, 'Project managers have read-only access to procurement.')
+        return redirect('procurement:dn_list')
     if request.method != 'POST':
         return redirect('procurement:dn_list')
 
@@ -3555,12 +3632,15 @@ class InventoryListView(InventoryPermissionMixin, ListView):
         return context
 
 
-class InventoryCreateView(InventoryPermissionMixin, CreateView):
+class InventoryCreateView(ProcurementReadOnlyRedirectMixin, InventoryPermissionMixin, CreateView):
     model = InventoryReport
     form_class = InventoryReportForm
     template_name = 'procurement/inventory_form.html'
+    read_only_redirect_url_name = 'procurement:inventory_list'
 
     def test_func(self):
+        if self.request.user.is_project_manager_user:
+            return False
         return True
 
     def get_form_kwargs(self):
@@ -3608,13 +3688,17 @@ class InventoryDetailView(InventoryPermissionMixin, DetailView):
         return context
 
 
-class InventoryUpdateView(InventoryPermissionMixin, UpdateView):
+class InventoryUpdateView(ProcurementReadOnlyRedirectMixin, InventoryPermissionMixin, UpdateView):
     model = InventoryReport
     form_class = InventoryReportForm
     template_name = 'procurement/inventory_form.html'
+    read_only_redirect_url_name = 'procurement:inventory_detail'
+    read_only_redirect_needs_pk = True
 
     def test_func(self):
         user = self.request.user
+        if user.is_project_manager_user:
+            return False
         if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
             return True
         return self.get_object().created_by == user
@@ -3648,13 +3732,17 @@ class InventoryUpdateView(InventoryPermissionMixin, UpdateView):
         return reverse('procurement:inventory_detail', kwargs={'pk': self.object.pk})
 
 
-class InventoryDeleteView(InventoryPermissionMixin, DeleteView):
+class InventoryDeleteView(ProcurementReadOnlyRedirectMixin, InventoryPermissionMixin, DeleteView):
     model = InventoryReport
     template_name = 'procurement/inventory_confirm_delete.html'
     success_url = reverse_lazy('procurement:inventory_list')
+    read_only_redirect_url_name = 'procurement:inventory_detail'
+    read_only_redirect_needs_pk = True
 
     def test_func(self):
         user = self.request.user
+        if user.is_project_manager_user:
+            return False
         if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
             return True
         return self.get_object().created_by == user
@@ -3853,6 +3941,9 @@ def inventory_export_pdf(request, pk):
 
 @login_required
 def inventory_import_excel(request):
+    if request.user.is_project_manager_user:
+        messages.error(request, 'Project managers have read-only access to procurement.')
+        return redirect('procurement:inventory_list')
     if request.method != 'POST':
         return redirect('procurement:inventory_list')
 
@@ -3980,12 +4071,15 @@ class FRCListView(FRCPermissionMixin, ListView):
         return context
 
 
-class FRCCreateView(FRCPermissionMixin, CreateView):
+class FRCCreateView(ProcurementReadOnlyRedirectMixin, FRCPermissionMixin, CreateView):
     model = FRCReport
     form_class = FRCReportForm
     template_name = 'procurement/frc_form.html'
+    read_only_redirect_url_name = 'procurement:frc_list'
 
     def test_func(self):
+        if self.request.user.is_project_manager_user:
+            return False
         return True
 
     def get_form_kwargs(self):
@@ -4106,13 +4200,17 @@ class FRCDetailView(FRCPermissionMixin, DetailView):
         return context
 
 
-class FRCUpdateView(FRCPermissionMixin, UpdateView):
+class FRCUpdateView(ProcurementReadOnlyRedirectMixin, FRCPermissionMixin, UpdateView):
     model = FRCReport
     form_class = FRCReportForm
     template_name = 'procurement/frc_form.html'
+    read_only_redirect_url_name = 'procurement:frc_detail'
+    read_only_redirect_needs_pk = True
 
     def test_func(self):
         user = self.request.user
+        if user.is_project_manager_user:
+            return False
         if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
             return True
         return self.get_object().created_by == user
@@ -4146,13 +4244,17 @@ class FRCUpdateView(FRCPermissionMixin, UpdateView):
         return reverse('procurement:frc_detail', kwargs={'pk': self.object.pk})
 
 
-class FRCDeleteView(FRCPermissionMixin, DeleteView):
+class FRCDeleteView(ProcurementReadOnlyRedirectMixin, FRCPermissionMixin, DeleteView):
     model = FRCReport
     template_name = 'procurement/frc_confirm_delete.html'
     success_url = reverse_lazy('procurement:frc_list')
+    read_only_redirect_url_name = 'procurement:frc_detail'
+    read_only_redirect_needs_pk = True
 
     def test_func(self):
         user = self.request.user
+        if user.is_project_manager_user:
+            return False
         if user.is_super_admin_user or user.is_admin_user or user.is_procurement_user:
             return True
         return self.get_object().created_by == user
@@ -4290,6 +4392,9 @@ def frc_export_pdf(request, pk):
 
 @login_required
 def frc_import_excel(request):
+    if request.user.is_project_manager_user:
+        messages.error(request, 'Project managers have read-only access to procurement.')
+        return redirect('procurement:frc_list')
     if request.method != 'POST':
         return redirect('procurement:frc_list')
 
@@ -4448,11 +4553,15 @@ def frc_inventory_list(request):
     return render(request, 'procurement/frc_inventory.html', context)
 
 
-class FRCInventoryCreateView(LoginRequiredMixin, CreateView):
+class FRCInventoryCreateView(ProcurementReadOnlyRedirectMixin, LoginRequiredMixin, UserPassesTestMixin, CreateView):
     model = FRCInventory
     form_class = FRCInventoryForm
     template_name = 'procurement/frc_inventory_form.html'
     success_url = reverse_lazy('procurement:frc_inventory')
+    read_only_redirect_url_name = 'procurement:frc_inventory'
+
+    def test_func(self):
+        return not self.request.user.is_project_manager_user
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -4465,11 +4574,15 @@ class FRCInventoryCreateView(LoginRequiredMixin, CreateView):
         return super().form_valid(form)
 
 
-class FRCInventoryUpdateView(LoginRequiredMixin, UpdateView):
+class FRCInventoryUpdateView(ProcurementReadOnlyRedirectMixin, LoginRequiredMixin, UserPassesTestMixin, UpdateView):
     model = FRCInventory
     form_class = FRCInventoryForm
     template_name = 'procurement/frc_inventory_form.html'
     success_url = reverse_lazy('procurement:frc_inventory')
+    read_only_redirect_url_name = 'procurement:frc_inventory'
+
+    def test_func(self):
+        return not self.request.user.is_project_manager_user
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -4505,8 +4618,9 @@ def ajax_po_toggle_term(request, pk):
 
     user = request.user
     can_edit = (
-        user.is_super_admin_user or user.is_admin_user or user.is_procurement_user
-        or po.created_by_id == user.id
+        not user.is_project_manager_user
+        and (user.is_super_admin_user or user.is_admin_user or user.is_procurement_user
+             or po.created_by_id == user.id)
     )
     if not can_edit:
         return JsonResponse({'error': 'Permission denied'}, status=403)

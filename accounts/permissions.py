@@ -210,7 +210,7 @@ DEFAULT_MODULE_ACCESS = {
     # Project Manager signs the PM stage on purchase orders, so the module
     # they sign in has to be open to them - approving a PO you cannot open is
     # not a permission, it is a dead end.
-    'project_manager':     {'dashboard', 'kpis', 'po'},
+    'project_manager':     {'dashboard', 'kpis', 'po', 'procurement', 'dn'},
     'site_manager':        {'dashboard', 'kpis'},
     'document_controller': {'dashboard', 'kpis'},
     'pcc_engineer':        {'dashboard', 'kpis', 'costing'},

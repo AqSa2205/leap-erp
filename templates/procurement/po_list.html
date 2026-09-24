@@ -15,6 +15,7 @@
             <p class="text-muted mb-0">{{ total_count }} total</p>
         </div>
         <div>
+            {% if not user.is_project_manager_user %}
             <a href="{% url 'procurement:quotation_import' %}" class="btn btn-primary me-2" title="Upload a supplier quotation PDF and auto-create a PO">
                 <i class="bi bi-magic"></i> Import Quotation
             </a>
@@ -24,6 +25,7 @@
             <a href="{% url 'procurement:po_create' %}" class="btn btn-danger">
                 <i class="bi bi-plus-lg"></i> New PO
             </a>
+            {% endif %}
         </div>
     </div>
 
@@ -137,9 +139,11 @@
                             <td colspan="9" class="text-center py-5">
                                 <i class="bi bi-box-seam display-4 text-muted"></i>
                                 <p class="text-muted mt-3">No purchase orders found.</p>
+                                {% if not user.is_project_manager_user %}
                                 <a href="{% url 'procurement:po_create' %}" class="btn btn-danger">
                                     <i class="bi bi-plus-lg"></i> Create First PO
                                 </a>
+                                {% endif %}
                             </td>
                         </tr>
                         {% endfor %}
