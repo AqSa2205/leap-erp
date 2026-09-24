@@ -511,6 +511,54 @@
                                 <span class="fw-bold">Total ({{ po.currency }})</span>
                                 <span class="fw-bold" style="font-size:1.3rem;">{{ po.total_value|floatformat:2|intcomma }}</span>
                             </div>
+                            {% with breakdown=po.budget_breakdown %}
+                            {% if breakdown %}
+                            {% comment %}
+                            Scoped to just this PO's own line items that trace back to a
+                            budget - what those specific items were budgeted for at this
+                            PO's quantity, versus what this PO is actually charging for
+                            them. Not the whole sheet's budget, and not other POs against
+                            it - that's the tracker page the link below goes to.
+                            {% endcomment %}
+                            <div class="mt-3 pt-3" style="border-top: 1px dashed #dee2e6;">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <span class="small fw-semibold text-muted text-uppercase" style="letter-spacing:0.4px;">Budget vs Actual (this PO)</span>
+                                    <a href="{% url 'procurement:bom_procurement_tracker' sheet_pk=breakdown.sheet_pk %}" class="small text-decoration-none">
+                                        <i class="bi bi-arrow-return-left me-1"></i>Back to budget
+                                    </a>
+                                </div>
+                                <div class="total-row">
+                                    <span>Budgeted (this PO)</span>
+                                    <span class="fw-semibold">{{ breakdown.budget_reference|floatformat:2|intcomma }}</span>
+                                </div>
+                                <div class="total-row">
+                                    <span>Deducted from budget</span>
+                                    <span class="fw-semibold">
+                                        {{ breakdown.deducted|floatformat:2|intcomma }}
+                                        {% if breakdown.deducted_pct is not None %}<span class="text-muted small">({{ breakdown.deducted_pct }}%)</span>{% endif %}
+                                    </span>
+                                </div>
+                                <div class="total-row">
+                                    <span>Remaining vs budget</span>
+                                    <span class="fw-semibold {% if breakdown.remaining < 0 %}text-danger{% else %}text-success{% endif %}">
+                                        {{ breakdown.remaining|floatformat:2|intcomma }}
+                                        {% if breakdown.remaining_pct is not None %}<span class="text-muted small">({{ breakdown.remaining_pct }}%)</span>{% endif %}
+                                    </span>
+                                </div>
+                                <a class="small text-decoration-none d-inline-flex align-items-center gap-1 mt-1" data-bs-toggle="collapse" href="#budgetCalcExplain" role="button" aria-expanded="false" aria-controls="budgetCalcExplain">
+                                    <i class="bi bi-question-circle"></i> How is this calculated?
+                                </a>
+                                <div class="collapse mt-2" id="budgetCalcExplain">
+                                    <div class="small text-muted" style="background:#f8f9fa; border-radius:6px; padding:0.6rem 0.75rem; line-height:1.6;">
+                                        <div><strong>Budgeted (this PO)</strong> = quantity &times; the budgeted rate for these items, summed across every budget-linked line = <strong>{{ po.currency }} {{ breakdown.budget_reference|floatformat:2|intcomma }}</strong></div>
+                                        <div><strong>Deducted</strong> = quantity &times; this PO's own rate for the same items = <strong>{{ po.currency }} {{ breakdown.deducted|floatformat:2|intcomma }}</strong>{% if breakdown.deducted_pct is not None %} ({{ breakdown.deducted_pct }}% of budgeted){% endif %}</div>
+                                        <div><strong>Remaining</strong> = Budgeted &minus; Deducted = {{ po.currency }} {{ breakdown.budget_reference|floatformat:2|intcomma }} &minus; {{ po.currency }} {{ breakdown.deducted|floatformat:2|intcomma }} = <strong>{{ po.currency }} {{ breakdown.remaining|floatformat:2|intcomma }}</strong>{% if breakdown.remaining_pct is not None %} ({{ breakdown.remaining_pct }}%){% endif %}</div>
+                                        <div class="mt-1 fst-italic">Only this PO's own budget-linked line items are included - not the whole sheet's budget, and not other POs against it.</div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
+                            {% endwith %}
                         </div>
                     </div>
                 </div>

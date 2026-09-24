@@ -290,6 +290,38 @@ class PurchaseOrder(models.Model):
     def total_value(self):
         return self.gross_value + self.vat_amount
 
+    def budget_breakdown(self):
+        """Budget vs actual variance for this PO's own line items that
+        trace back to a budget (source_bom_item set) - not the whole
+        sheet's budget, and not other POs against the same budget.
+
+        For each such item: what it was budgeted for at this PO's own
+        quantity (deducted from the budget), versus what this PO is
+        actually charging for it (the variance). None if this PO has no
+        budget-sourced items at all - there's nothing to compare.
+        """
+        items = [i for i in self.items.all() if i.source_bom_item_id]
+        if not items:
+            return None
+        budget_reference = sum(
+            (i.quantity * i.source_bom_item.budget_unit_price() for i in items),
+            Decimal('0'))
+        deducted = sum((i.total_value for i in items), Decimal('0'))
+        remaining = budget_reference - deducted
+        if budget_reference:
+            deducted_pct = (deducted / budget_reference * 100).quantize(Decimal('0.1'))
+            remaining_pct = Decimal('100') - deducted_pct
+        else:
+            deducted_pct = remaining_pct = None
+        return {
+            'budget_reference': budget_reference,
+            'deducted': deducted,
+            'deducted_pct': deducted_pct,
+            'remaining': remaining,
+            'remaining_pct': remaining_pct,
+            'sheet_pk': items[0].source_bom_item.section.costing_sheet_id,
+        }
+
     LOCKED_STATUS = 'client_acknowledged'
 
     def record_status_change(self, *, to_status, changed_by=None, reason=''):
