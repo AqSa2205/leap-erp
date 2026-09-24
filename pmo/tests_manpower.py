@@ -252,13 +252,44 @@ class ManpowerDashboardViewTests(TestCase):
         self.assertContains(r, 'Overoccupied Person')
         self.assertNotContains(r, 'Occupied Person')
 
+    def test_on_vacation_list_includes_approved_leave_covering_today(self):
+        from hr.models import LeaveType, LeaveRequest
+        leave_type, _ = LeaveType.objects.get_or_create(name='Annual', code='annual')
+        LeaveRequest.objects.create(
+            employee=self.not_occ.employee, leave_type=leave_type,
+            start_date=date.today(), end_date=date.today(), status='approved')
+        self.client.force_login(self.pm_user)
+        r = self.client.get(reverse('pmo:manpower_dashboard'))
+        self.assertEqual(list(r.context['on_vacation_list']), [self.not_occ])
+
+    def test_a_pending_leave_request_does_not_count_as_on_vacation(self):
+        from hr.models import LeaveType, LeaveRequest
+        leave_type, _ = LeaveType.objects.get_or_create(name='Annual', code='annual')
+        LeaveRequest.objects.create(
+            employee=self.not_occ.employee, leave_type=leave_type,
+            start_date=date.today(), end_date=date.today(), status='pending')
+        self.client.force_login(self.pm_user)
+        r = self.client.get(reverse('pmo:manpower_dashboard'))
+        self.assertEqual(list(r.context['on_vacation_list']), [])
+
+    def test_exited_list_reflects_hr_employee_is_active(self):
+        self.not_occ.employee.is_active = False
+        self.not_occ.employee.save(update_fields=['is_active'])
+        self.client.force_login(self.pm_user)
+        r = self.client.get(reverse('pmo:manpower_dashboard'))
+        self.assertEqual(list(r.context['exited_list']), [self.not_occ])
+
     def test_heatmap_counts_current_assignments_by_project_and_discipline(self):
         """Three current assignments total (occ on A, over on A and B),
         all with no discipline set, so they collapse into one
         Uncategorized row: 2 on Project A, 1 on Project B."""
         self.client.force_login(self.pm_user)
         r = self.client.get(reverse('pmo:manpower_dashboard'))
-        self.assertEqual(r.context['heatmap_projects'], ['DB Project A', 'DB Project B'])
+        self.assertEqual(
+            [p['name'] for p in r.context['heatmap_projects']],
+            ['DB Project A', 'DB Project B'])
+        self.assertEqual(r.context['heatmap_projects'][0]['pk'], self.project_a.pk)
+        self.assertEqual(r.context['heatmap_projects'][1]['pk'], self.project_b.pk)
         rows = r.context['heatmap_rows']
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['discipline'], 'Uncategorized')
@@ -266,3 +297,51 @@ class ManpowerDashboardViewTests(TestCase):
             rows[0]['cells'],
             [{'count': 2, 'level': 4}, {'count': 1, 'level': 2}])
         self.assertEqual(rows[0]['total'], 3)
+
+
+class ManpowerProjectBreakdownViewTests(TestCase):
+    """manpower_project_breakdown - current headcount on one project, by
+    discipline and contract type, drilling into a single heatmap column."""
+
+    def setUp(self):
+        from projects.models import Region, ProjectStatus, Project
+        self.pm_role, _ = Role.objects.get_or_create(name=Role.PROJECT_MANAGER)
+        self.pm_user = User.objects.create_user('pb_pm', password='pw', role=self.pm_role)
+        region = Region.objects.create(name='PB Region', code='PBREG')
+        won = ProjectStatus.objects.create(name='Won-PB', category='won')
+        self.project = Project.objects.create(
+            project_name='PB Project', proposal_reference='PB-REF-1', status=won, region=region)
+        self.other_project = Project.objects.create(
+            project_name='PB Other Project', proposal_reference='PB-REF-2', status=won, region=region)
+
+        emp1 = Employee.objects.create(
+            iqama_number='5000000001', full_name='PB Eng', designation='Engineer')
+        self.eng = ManpowerResource.objects.create(
+            employee=emp1, discipline='engineering', engagement_type='direct')
+        emp2 = Employee.objects.create(
+            iqama_number='5000000002', full_name='PB Tech', designation='Technician')
+        self.tech = ManpowerResource.objects.create(
+            employee=emp2, discipline='technical', engagement_type='subcontract')
+        emp3 = Employee.objects.create(
+            iqama_number='5000000003', full_name='PB Elsewhere', designation='Engineer')
+        self.elsewhere = ManpowerResource.objects.create(employee=emp3, discipline='engineering')
+
+        self.eng.assignments.create(project=self.project, start_date=date.today())
+        self.tech.assignments.create(project=self.project, start_date=date.today())
+        self.elsewhere.assignments.create(project=self.other_project, start_date=date.today())
+
+    def test_counts_only_this_projects_current_assignments(self):
+        self.client.force_login(self.pm_user)
+        r = self.client.get(
+            reverse('pmo:manpower_project_breakdown', args=[self.project.pk]))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(r.context['current_assignments']), 2)
+        self.assertEqual(r.context['discipline_counts'], {
+            'Engineering': 1, 'Technical': 1,
+        })
+        self.assertEqual(r.context['contract_counts'], {
+            'Direct': 1, 'Subcontract': 1,
+        })
+        self.assertContains(r, 'PB Eng')
+        self.assertContains(r, 'PB Tech')
+        self.assertNotContains(r, 'PB Elsewhere')

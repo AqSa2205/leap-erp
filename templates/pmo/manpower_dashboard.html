@@ -20,8 +20,12 @@
 {% endblock %}
 
 {% block content %}
-<div class="mb-3">
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
     <a href="{% url 'pmo:manpower_list' %}" class="text-muted small"><i class="bi bi-arrow-left"></i> Back to Manpower Status</a>
+    <form method="get" action="{% url 'pmo:manpower_list' %}" class="d-flex" role="search">
+        <input type="text" name="q" class="form-control form-control-sm" placeholder="Search name, ID number, title…" style="min-width: 240px;">
+        <button type="submit" class="btn btn-sm btn-outline-danger ms-2">Search</button>
+    </form>
 </div>
 
 <div class="row g-3 mb-4">
@@ -97,6 +101,45 @@
     </div>
 </div>
 
+<div class="row g-3 mt-1">
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header bg-white">
+                <h6 class="mb-0"><i class="bi bi-airplane me-1"></i> On Vacation ({{ on_vacation_list|length }})</h6>
+            </div>
+            <div class="card-body">
+                {% if on_vacation_list %}
+                <ul class="list-unstyled mb-0 small">
+                    {% for r in on_vacation_list %}
+                    <li class="mb-1"><a href="{% url 'pmo:manpower_edit' r.employee.pk %}">{{ r.employee.full_name }}</a></li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="text-muted small mb-0">No one is currently on approved leave.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header bg-white">
+                <h6 class="mb-0"><i class="bi bi-box-arrow-right me-1"></i> Exited ({{ exited_list|length }})</h6>
+            </div>
+            <div class="card-body">
+                {% if exited_list %}
+                <ul class="list-unstyled mb-0 small">
+                    {% for r in exited_list %}
+                    <li class="mb-1 text-muted">{{ r.employee.full_name }}</li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="text-muted small mb-0">No exited employees still tracked here.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="card mt-4">
     <div class="card-header bg-white">
         <h6 class="mb-0"><i class="bi bi-grid-3x3 me-1"></i> Project &times; Discipline</h6>
@@ -108,7 +151,7 @@
                 <thead class="table-light">
                     <tr>
                         <th class="text-start">Discipline</th>
-                        {% for p in heatmap_projects %}<th>{{ p }}</th>{% endfor %}
+                        {% for p in heatmap_projects %}<th><a href="{% url 'pmo:manpower_project_breakdown' p.pk %}" class="text-decoration-none">{{ p.name }}</a></th>{% endfor %}
                         <th>Total</th>
                     </tr>
                 </thead>
