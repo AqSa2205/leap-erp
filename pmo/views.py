@@ -23,9 +23,10 @@ from projects.models import Project
 
 from .forms import (ManpowerAssignmentForm, ManpowerDetailsForm,
                     NewEmployeeManpowerForm, ProjectIssueForm)
-from .models import (ONE, ZERO, CommunicationMatrix, ManpowerResource,
-                      MilestoneProgressEntry, ProjectIssue, ProjectMilestone,
-                      ResponsibilityMatrix, default_communication_columns,
+from .models import (ONE, ZERO, CommunicationMatrix, ManpowerAssignment,
+                      ManpowerResource, MilestoneProgressEntry, ProjectIssue,
+                      ProjectMilestone, ResponsibilityMatrix,
+                      default_communication_columns,
                       default_responsibility_columns, sanitize_grid)
 from .progress import (board_row, board_rows, leaves, milestone_checklist,
                        project_completion, validate_weightages)
@@ -945,16 +946,36 @@ def manpower_dashboard(request):
     # (only ones with a live assignment show up), disciplines are rows.
     from collections import defaultdict
     cell_counts = defaultdict(lambda: defaultdict(int))
-    project_names = set()
+    # Keyed by project name for the grid lookup, but each project's pk is
+    # tracked alongside it so the column header can link to its own
+    # per-project breakdown (manpower_project_breakdown).
+    project_pks_by_name = {}
     discipline_labels = set()
     for r in resources:
         discipline_label = r.get_discipline_display() or 'Uncategorized'
         for a in r.current_assignments:
             cell_counts[discipline_label][a.project.project_name] += 1
-            project_names.add(a.project.project_name)
+            project_pks_by_name[a.project.project_name] = a.project_id
             discipline_labels.add(discipline_label)
 
-    heatmap_projects = sorted(project_names)
+    # Vacation/Exit: on-vacation is a live check against HR's own leave
+    # data (an approved LeaveRequest covering today), not tracked here -
+    # this model has no vacation field of its own to keep in sync. Exit
+    # reuses hr.Employee.is_active, the same flag the Manpower Status
+    # list's own Active/Inactive badge already reads.
+    from hr.models import LeaveRequest
+    today = timezone.localdate()
+    on_vacation_ids = set(
+        LeaveRequest.objects.filter(
+            status='approved', start_date__lte=today, end_date__gte=today
+        ).values_list('employee_id', flat=True))
+    on_vacation_list = [r for r in resources if r.employee_id in on_vacation_ids]
+    exited_list = [r for r in resources if not r.employee.is_active]
+
+    heatmap_project_names = sorted(project_pks_by_name)
+    heatmap_projects = [
+        {'name': name, 'pk': project_pks_by_name[name]} for name in heatmap_project_names
+    ]
     max_cell = max(
         (v for row in cell_counts.values() for v in row.values()), default=0)
 
@@ -977,7 +998,10 @@ def manpower_dashboard(request):
         {
             'discipline': disc,
             'cells': [
-                {'count': cell_counts[disc].get(p, 0), 'level': _level(cell_counts[disc].get(p, 0))}
+                {
+                    'count': cell_counts[disc].get(p['name'], 0),
+                    'level': _level(cell_counts[disc].get(p['name'], 0)),
+                }
                 for p in heatmap_projects
             ],
             'total': sum(cell_counts[disc].values()),
@@ -994,10 +1018,40 @@ def manpower_dashboard(request):
         'engagement_type_counts': engagement_type_counts,
         'heatmap_projects': heatmap_projects,
         'heatmap_rows': heatmap_rows,
+        'on_vacation_list': on_vacation_list,
+        'exited_list': exited_list,
     })
 
 
-# ── Issue Log ────────────────────────────────────────────────────────────
+@login_required
+def manpower_project_breakdown(request, project_pk):
+    """Current headcount on one project, by discipline and contract type -
+    drilling into a single column of the dashboard's heatmap rather than
+    the aggregate view across every project."""
+    from projects.models import Project
+    project = get_object_or_404(Project, pk=project_pk)
+    assignments = (ManpowerAssignment.objects
+                   .filter(project=project)
+                   .select_related('resource__employee'))
+    current = [a for a in assignments if a.is_current]
+
+    discipline_counts = {}
+    contract_counts = {}
+    for a in current:
+        disc = a.resource.get_discipline_display() or 'Uncategorized'
+        discipline_counts[disc] = discipline_counts.get(disc, 0) + 1
+        contract = a.resource.get_engagement_type_display() or 'Unspecified'
+        contract_counts[contract] = contract_counts.get(contract, 0) + 1
+
+    return render(request, 'pmo/manpower_project_breakdown.html', {
+        'project': project,
+        'current_assignments': current,
+        'discipline_counts': discipline_counts,
+        'contract_counts': contract_counts,
+    })
+
+
+# ── Issue Log ───────────────────────────────────────────────────────────
 #
 # The delivery team's risk/issue register, browsed and exported one month
 # at a time by date_identified — same "?year=&month=" paging and per-month

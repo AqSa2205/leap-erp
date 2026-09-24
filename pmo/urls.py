@@ -28,6 +28,7 @@ urlpatterns = [
     # Management tracks about them.
     path('manpower/', views.manpower_list, name='manpower_list'),
     path('manpower/dashboard/', views.manpower_dashboard, name='manpower_dashboard'),
+    path('manpower/dashboard/project/<int:project_pk>/', views.manpower_project_breakdown, name='manpower_project_breakdown'),
     path('manpower/add/', views.manpower_create, name='manpower_create'),
     path('manpower/<int:employee_pk>/edit/', views.manpower_edit, name='manpower_edit'),
     path('manpower/<int:employee_pk>/clear/', views.manpower_clear, name='manpower_clear'),
