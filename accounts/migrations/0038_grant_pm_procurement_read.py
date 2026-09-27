@@ -11,8 +11,18 @@ administrator set them" rule protects a deliberate admin choice, and there
 has never been one here - these rows have sat at the default nobody chose.
 
 Read-only is enforced in code (procurement/views.py test_func checks +
-template button guards for is_project_manager_user), not by withholding a
-capability - po.access/po.nav proved that pattern already works for PM.
+template button guards for user.is_procurement_read_only_user), not by
+withholding a capability - po.access/po.nav proved that pattern already
+works for PM.
+
+GRANTS is keyed by role name because RolePermission rows are per-Role - an
+Assistant Project Manager role, when it's created, needs this same grant
+under its own role name (a follow-up migration mirroring this one is the
+whole job; nothing here can be made to apply to a Role that doesn't exist
+yet). Once granted, it inherits the exact same read-only behaviour for
+free by way of is_procurement_read_only_user on the User model - that
+property, not this migration, is what every procurement view and template
+actually reads.
 """
 from django.db import migrations
 

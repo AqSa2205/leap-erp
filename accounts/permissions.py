@@ -210,6 +210,17 @@ DEFAULT_MODULE_ACCESS = {
     # Project Manager signs the PM stage on purchase orders, so the module
     # they sign in has to be open to them - approving a PO you cannot open is
     # not a permission, it is a dead end.
+    #
+    # procurement/dn are read-only for this role - view and export
+    # everywhere, no create/edit/delete/import - enforced in procurement
+    # views/templates via user.is_procurement_read_only_user, not by
+    # withholding a capability here. An Assistant Project Manager role is
+    # planned; when it exists, give it the same four capabilities (a small
+    # migration mirroring 0038_grant_pm_procurement_read is enough - RolePermission
+    # rows are per-Role, so this dict/migration step can't be skipped), and add
+    # it to is_procurement_read_only_user on the User model so it inherits the
+    # exact same read-only enforcement without touching procurement's views or
+    # templates again.
     'project_manager':     {'dashboard', 'kpis', 'po', 'procurement', 'dn'},
     'site_manager':        {'dashboard', 'kpis'},
     'document_controller': {'dashboard', 'kpis'},

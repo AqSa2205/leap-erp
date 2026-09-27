@@ -189,18 +189,21 @@
         <div class="col-12">
             <h6 class="text-muted text-uppercase fw-bold mb-3" style="font-size: 0.75rem; letter-spacing: 1px;">Quick Actions</h6>
         </div>
+        {% if not user.is_procurement_read_only_user %}
         <div class="col-lg-2 col-md-4 col-6">
             <a href="{% url 'procurement:po_create' %}" class="quick-action">
                 <i class="bi bi-plus-circle"></i>
                 <small class="fw-semibold">New PO</small>
             </a>
         </div>
+        {% endif %}
         <div class="col-lg-2 col-md-4 col-6">
             <a href="{% url 'procurement:summary_internal' %}" class="quick-action">
                 <i class="bi bi-clipboard-data"></i>
                 <small class="fw-semibold">Open Summary</small>
             </a>
         </div>
+        {% if not user.is_procurement_read_only_user %}
         <div class="col-lg-2 col-md-4 col-6">
             <a href="{% url 'procurement:dn_create' %}" class="quick-action">
                 <i class="bi bi-truck"></i>
@@ -213,6 +216,7 @@
                 <small class="fw-semibold">New Inventory</small>
             </a>
         </div>
+        {% endif %}
         <div class="col-lg-2 col-md-4 col-6">
             <a href="{% url 'procurement:po_list' %}" class="quick-action">
                 <i class="bi bi-search"></i>

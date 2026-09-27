@@ -160,7 +160,7 @@
                                 </ul>
                             </div>
 
-                            {% if not user.is_project_manager_user %}
+                            {% if not user.is_procurement_read_only_user %}
                             <a href="{% url 'procurement:dn_create_from_po' po.pk %}" class="btn btn-outline-light"><i class="bi bi-truck me-1"></i>Delivery Note</a>
                             {% comment %} The endpoints refuse a locked PO on
                             their own; the buttons go too, because offering an
@@ -408,7 +408,7 @@
                               {% comment %} Import is offered only where it
                               would work: a locked PO refuses it server-side
                               anyway. {% endcomment %}
-                              {% if not po.is_locked and not user.is_project_manager_user %}
+                              {% if not po.is_locked and not user.is_procurement_read_only_user %}
                               <button class="btn btn-sm btn-outline-success" type="button"
                                       data-bs-toggle="collapse" data-bs-target="#importItems">
                                 <i class="bi bi-file-earmark-excel me-1"></i> Import items
@@ -416,7 +416,7 @@
                               {% endif %}
                             </div>
                         </div>
-                        {% if not po.is_locked and not user.is_project_manager_user %}
+                        {% if not po.is_locked and not user.is_procurement_read_only_user %}
                         <div class="collapse" id="importItems">
                           <div class="card-body border-bottom bg-light">
                             <form method="post" enctype="multipart/form-data"
@@ -532,7 +532,7 @@
             <div class="card mb-4">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span><i class="bi bi-file-text me-2"></i> PDF Terms & Conditions</span>
-                    {% if not user.is_project_manager_user %}
+                    {% if not user.is_procurement_read_only_user %}
                     <div class="d-flex gap-2">
                         <button type="button" class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#quickAddTermsModal">
                             <i class="bi bi-plus-lg me-1"></i> Quick Add
@@ -556,7 +556,7 @@
                                        id="po-term-{{ item.template.pk }}"
                                        data-term-id="{{ item.template.pk }}"
                                        {% if item.selected %}checked{% endif %}
-                                       {% if user.is_project_manager_user %}disabled{% endif %}>
+                                       {% if user.is_procurement_read_only_user %}disabled{% endif %}>
                                 <label class="form-check-label" for="po-term-{{ item.template.pk }}">
                                     <strong>{{ item.template.name }}</strong>
                                     {% if item.is_overridden %}

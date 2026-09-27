@@ -15,7 +15,7 @@
             <p class="text-muted mb-0">{{ total_count }} total</p>
         </div>
         <div>
-            {% if not user.is_project_manager_user %}
+            {% if not user.is_procurement_read_only_user %}
             <a href="{% url 'procurement:quotation_import' %}" class="btn btn-primary me-2" title="Upload a supplier quotation PDF and auto-create a PO">
                 <i class="bi bi-magic"></i> Import Quotation
             </a>
@@ -122,9 +122,11 @@
                                     <a href="{% url 'procurement:po_detail' po.pk %}" class="btn btn-outline-danger" title="View">
                                         <i class="bi bi-eye"></i>
                                     </a>
+                                    {% if not user.is_procurement_read_only_user %}
                                     <a href="{% url 'procurement:po_update' po.pk %}" class="btn btn-outline-secondary" title="Edit">
                                         <i class="bi bi-pencil"></i>
                                     </a>
+                                    {% endif %}
                                     <a href="{% url 'procurement:po_export' po.pk %}" class="btn btn-outline-success" title="Export Excel">
                                         <i class="bi bi-file-earmark-excel"></i>
                                     </a>
@@ -139,7 +141,7 @@
                             <td colspan="9" class="text-center py-5">
                                 <i class="bi bi-box-seam display-4 text-muted"></i>
                                 <p class="text-muted mt-3">No purchase orders found.</p>
-                                {% if not user.is_project_manager_user %}
+                                {% if not user.is_procurement_read_only_user %}
                                 <a href="{% url 'procurement:po_create' %}" class="btn btn-danger">
                                     <i class="bi bi-plus-lg"></i> Create First PO
                                 </a>

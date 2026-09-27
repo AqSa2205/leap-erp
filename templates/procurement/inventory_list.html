@@ -11,7 +11,7 @@
             <p class="text-muted mb-0">{{ total_count }} total</p>
         </div>
         <div>
-            {% if not user.is_project_manager_user %}
+            {% if not user.is_procurement_read_only_user %}
             <button type="button" class="btn btn-outline-success me-2" data-bs-toggle="modal" data-bs-target="#importModal">
                 <i class="bi bi-upload"></i> Import
             </button>
@@ -74,7 +74,9 @@
                             <td>
                                 <div class="btn-group btn-group-sm">
                                     <a href="{% url 'procurement:inventory_detail' report.pk %}" class="btn btn-outline-danger" title="View"><i class="bi bi-eye"></i></a>
+                                    {% if not user.is_procurement_read_only_user %}
                                     <a href="{% url 'procurement:inventory_update' report.pk %}" class="btn btn-outline-secondary" title="Edit"><i class="bi bi-pencil"></i></a>
+                                    {% endif %}
                                     <a href="{% url 'procurement:inventory_export' report.pk %}" class="btn btn-outline-success" title="Excel"><i class="bi bi-file-earmark-excel"></i></a>
                                     <a href="{% url 'procurement:inventory_export_pdf' report.pk %}" class="btn btn-outline-danger" title="PDF"><i class="bi bi-file-earmark-pdf"></i></a>
                                 </div>
@@ -85,7 +87,7 @@
                             <td colspan="8" class="text-center py-5">
                                 <i class="bi bi-box-seam display-4 text-muted"></i>
                                 <p class="text-muted mt-3">No inventory reports yet.</p>
-                                {% if not user.is_project_manager_user %}
+                                {% if not user.is_procurement_read_only_user %}
                                 <a href="{% url 'procurement:inventory_create' %}" class="btn btn-danger me-2"><i class="bi bi-plus-lg"></i> Create</a>
                                 <button class="btn btn-outline-success" data-bs-toggle="modal" data-bs-target="#importModal"><i class="bi bi-upload"></i> Import</button>
                                 {% endif %}
