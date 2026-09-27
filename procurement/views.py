@@ -194,6 +194,41 @@ def _visible_pos_for(user):
     return qs.filter(created_by=user)
 
 
+def _scoped_by_region(qs, user):
+    """The region rule the procurement lists have always used, in one place.
+
+    Every list mixin and every by-pk endpoint for delivery notes, inventory
+    reports and FRC reports reads this. It was written out four times before,
+    and the exports simply did not have it - which is how they came to hand
+    any authenticated user any record by pk while the matching detail page
+    refused the same person.
+    """
+    if not getattr(user, 'is_authenticated', False):
+        return qs.none()
+    if user.is_super_admin_user or getattr(user, 'is_procurement_user', False):
+        return qs
+    if user.is_admin_user or user.is_manager_user:
+        return qs.filter(Q(created_by=user) | Q(project__region=user.region))
+    return qs.filter(created_by=user)
+
+
+def _visible_dns_for(user):
+    return _scoped_by_region(
+        DeliveryNote.objects.select_related(
+            'project', 'created_by', 'purchase_order').all(), user)
+
+
+def _visible_inventory_for(user):
+    return _scoped_by_region(
+        InventoryReport.objects.select_related('project', 'created_by').all(),
+        user)
+
+
+def _visible_frc_for(user):
+    return _scoped_by_region(
+        FRCReport.objects.select_related('project', 'created_by').all(), user)
+
+
 def _validate_signature_image(raw_bytes, *, max_bytes=2 * 1024 * 1024):
     """Verify ``raw_bytes`` is a real image and re-encode as a clean PNG.
 
@@ -2853,14 +2888,7 @@ def internal_summary_export(request):
 
 class DNPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
-        queryset = DeliveryNote.objects.select_related('project', 'created_by', 'purchase_order').all()
-        user = self.request.user
-        if user.is_super_admin_user or user.is_procurement_user:
-            return queryset
-        elif user.is_admin_user or user.is_manager_user:
-            return queryset.filter(Q(created_by=user) | Q(project__region=user.region))
-        else:
-            return queryset.filter(created_by=user)
+        return _visible_dns_for(self.request.user)
 
 
 class DNListView(CapabilityRequiredMixin, DNPermissionMixin, ListView):
@@ -3133,7 +3161,7 @@ class DNDeleteView(DNPermissionMixin, DeleteView):
 def dn_export_excel(request, pk):
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-    dn = get_object_or_404(DeliveryNote, pk=pk)
+    dn = get_object_or_404(_visible_dns_for(request.user), pk=pk)
     items = dn.items.all()
 
     wb = openpyxl.Workbook()
@@ -3225,7 +3253,7 @@ def dn_export_pdf(request, pk):
     from io import BytesIO
     from django.contrib.staticfiles.finders import find as find_static
 
-    dn = get_object_or_404(DeliveryNote, pk=pk)
+    dn = get_object_or_404(_visible_dns_for(request.user), pk=pk)
     items = dn.items.all()
 
     NumberedCanvas = _make_numbered_canvas()
@@ -3475,14 +3503,7 @@ def dn_import_excel(request):
 
 class InventoryPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
-        queryset = InventoryReport.objects.select_related('project', 'created_by').all()
-        user = self.request.user
-        if user.is_super_admin_user or user.is_procurement_user:
-            return queryset
-        elif user.is_admin_user or user.is_manager_user:
-            return queryset.filter(Q(created_by=user) | Q(project__region=user.region))
-        else:
-            return queryset.filter(created_by=user)
+        return _visible_inventory_for(self.request.user)
 
 
 class InventoryListView(InventoryPermissionMixin, ListView):
@@ -3649,7 +3670,7 @@ class InventoryDeleteView(InventoryPermissionMixin, DeleteView):
 def inventory_export_excel(request, pk):
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-    report = get_object_or_404(InventoryReport, pk=pk)
+    report = get_object_or_404(_visible_inventory_for(request.user), pk=pk)
     items = report.items.all()
 
     wb = openpyxl.Workbook()
@@ -3728,7 +3749,7 @@ def inventory_export_pdf(request, pk):
     from io import BytesIO
     from django.contrib.staticfiles.finders import find as find_static
 
-    report = get_object_or_404(InventoryReport, pk=pk)
+    report = get_object_or_404(_visible_inventory_for(request.user), pk=pk)
     items = report.items.all()
 
     buf = BytesIO()
@@ -3934,14 +3955,7 @@ def inventory_import_excel(request):
 
 class FRCPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
-        queryset = FRCReport.objects.select_related('project', 'created_by').all()
-        user = self.request.user
-        if user.is_super_admin_user or user.is_procurement_user:
-            return queryset
-        elif user.is_admin_user or user.is_manager_user:
-            return queryset.filter(Q(created_by=user) | Q(project__region=user.region))
-        else:
-            return queryset.filter(created_by=user)
+        return _visible_frc_for(self.request.user)
 
 
 class FRCListView(FRCPermissionMixin, ListView):
@@ -4154,7 +4168,7 @@ class FRCDeleteView(FRCPermissionMixin, DeleteView):
 def frc_export_excel(request, pk):
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-    report = get_object_or_404(FRCReport, pk=pk)
+    report = get_object_or_404(_visible_frc_for(request.user), pk=pk)
     entries = report.entries.all()
 
     wb = openpyxl.Workbook()
@@ -4210,7 +4224,7 @@ def frc_export_pdf(request, pk):
     from io import BytesIO
     from django.contrib.staticfiles.finders import find as find_static
 
-    report = get_object_or_404(FRCReport, pk=pk)
+    report = get_object_or_404(_visible_frc_for(request.user), pk=pk)
     entries = report.entries.all()
 
     buf = BytesIO()

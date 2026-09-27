@@ -189,12 +189,16 @@ class QueryCountTests(TestCase):
                  if 'postageapprover' in q['sql'].lower()]), 1)
 
 
-class POListRendersWithoutACreatorTests(TestCase):
+class POPagesRenderWithoutACreatorTests(TestCase):
     """created_by is SET_NULL, so deleting a user leaves purchase orders whose
-    creator is None. The list rendered that through a `default:` FILTER
-    ARGUMENT, and a failed filter argument raises where a failed variable is
-    silently blank - so one deleted account took the whole page down with a
-    500 for everybody. Found by a query-count test, not by anyone reading it.
+    creator is None. Both the list and the detail page rendered that through a
+    `default:` FILTER ARGUMENT, and a failed filter argument raises where a
+    failed variable is silently blank - so one deleted account took the page
+    down with a 500 for everybody.
+
+    The list was fixed first and the same pattern was deliberately left
+    unaudited elsewhere; the detail page turned out to carry it too. Found by
+    rendering the page in a scratch test, not by anyone reading it.
     """
 
     def test_a_po_with_no_creator_still_renders(self):
@@ -203,6 +207,27 @@ class POListRendersWithoutACreatorTests(TestCase):
         resp = self.client.get(reverse('procurement:po_list'))
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, 'PO-NOCREATOR')
+
+    def test_the_detail_page_with_no_creator_still_renders(self):
+        po = a_po('PO-NOCREATOR-DETAIL')
+        self.client.force_login(a_super_admin('boss_detail'))
+        resp = self.client.get(
+            reverse('procurement:po_detail', args=[po.pk]))
+        self.assertEqual(resp.status_code, 200)
+        # Said plainly rather than left blank: "Created by  on 12 Jan" reads
+        # as a rendering fault, which is how a real one goes unreported.
+        self.assertContains(resp, 'a deleted account')
+
+    def test_the_detail_page_names_a_creator_who_exists(self):
+        boss = a_super_admin('named_detail')
+        boss.first_name, boss.last_name = 'Nadia', 'Rahman'
+        boss.save()
+        po = a_po('PO-CREATOR-DETAIL', created_by=boss)
+        self.client.force_login(a_super_admin('viewer_detail'))
+        resp = self.client.get(
+            reverse('procurement:po_detail', args=[po.pk]))
+        self.assertContains(resp, 'Nadia Rahman')
+        self.assertNotContains(resp, 'a deleted account')
 
     def test_a_creators_name_is_still_shown(self):
         boss = a_super_admin('named')
