@@ -147,7 +147,9 @@ def my_work(request):
     # keep the page fast; that's far more than any healthy backlog.
     if flags['is_procurement'] or flags['is_admin'] or user.is_super_admin_user:
         from procurement.views import _visible_pos_for
-        recent_pos = _visible_pos_for(user).order_by('-updated_at')[:50]
+        from procurement.models import PurchaseOrder
+        recent_pos = PurchaseOrder.prime_signer_names(
+            _visible_pos_for(user).order_by('-updated_at')[:50])
         for po in recent_pos:
             cur = po.current_stage
             if not cur or not po.can_user_approve_stage(user, cur['key']):

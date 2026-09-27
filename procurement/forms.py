@@ -107,6 +107,10 @@ class POStageApproverForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         from accounts.models import User
+        # The model allows an unrouted stage - a row that only carries the
+        # printed name - but routing somebody is the whole point of THIS form,
+        # so here a person is required.
+        self.fields['user'].required = True
         self.fields['user'].queryset = User.objects.filter(
             is_active=True).order_by('first_name', 'last_name', 'username')
         # Naming somebody who cannot sign the stage would produce an email

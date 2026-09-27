@@ -20,14 +20,21 @@ class Capability:
     order: int = 0
 
 
-def _module(key, label, *, granular=()):
-    """Build access + nav (enforced) plus optional granular (not-yet-enforced) caps."""
+def _module(key, label, *, granular=(), enforced_actions=()):
+    """Build access + nav (enforced) plus optional granular caps.
+
+    Granular caps default to enforced=False - declared so the grid can show
+    them, with no code path reading them yet. `enforced_actions` names the
+    ones that ARE read, so the grid does not promise a toggle that does
+    nothing.
+    """
     caps = [
         Capability(f'{key}.access', label, 'access', f'Open {label}', enforced=True, order=0),
         Capability(f'{key}.nav', label, 'nav', f'Show {label} in sidebar', enforced=True, order=1),
     ]
     for i, (action, lbl) in enumerate(granular, start=2):
-        caps.append(Capability(f'{key}.{action}', label, action, lbl, enforced=False, order=i))
+        caps.append(Capability(f'{key}.{action}', label, action, lbl,
+                               enforced=action in enforced_actions, order=i))
     return caps
 
 
@@ -39,10 +46,14 @@ CAPABILITIES = [
         ('delete', 'Delete sheets/items'), ('export', 'Export PDF'), ('approve', 'Approve / release'),
     ]),
     *_module('procurement', 'Procurement'),
+    # `approve` is read by PurchaseOrder.can_user_approve_stage(): it decides
+    # whether a role may sign any stage at all, and the stage-to-role mapping
+    # there decides which one. The other granular PO caps are still declared
+    # but unwired.
     *_module('po', 'Purchase Orders', granular=[
         ('create', 'Create PO'), ('edit', 'Edit PO'), ('delete', 'Delete PO'),
         ('export', 'Export PO'), ('approve', 'Approve PO'),
-    ]),
+    ], enforced_actions={'approve'}),
     *_module('dn', 'Delivery Notes', granular=[
         ('create', 'Create DN'), ('edit', 'Edit DN'), ('delete', 'Delete DN'), ('export', 'Export DN'),
     ]),
@@ -196,7 +207,10 @@ DEFAULT_MODULE_ACCESS = {
     # Department KPIs module (scoped to their own team inside the KPI views).
     # Their other features (attendance/leave/assets/exceptions/org chart) are
     # role-gated in the HR app, not capability-gated, so they need no module here.
-    'project_manager':     {'dashboard', 'kpis'},
+    # Project Manager signs the PM stage on purchase orders, so the module
+    # they sign in has to be open to them - approving a PO you cannot open is
+    # not a permission, it is a dead end.
+    'project_manager':     {'dashboard', 'kpis', 'po'},
     'site_manager':        {'dashboard', 'kpis'},
     'document_controller': {'dashboard', 'kpis'},
     'pcc_engineer':        {'dashboard', 'kpis', 'costing'},
@@ -215,13 +229,18 @@ DEFAULT_MODULE_ACCESS = {
 # independently-toggleable capabilities.
 DEFAULT_CODENAME_GRANTS = {
     'super_admin':  {'devtracking.admin', 'devtracking.mywork', 'kpis.manage', 'kpis.activity','timesheets.review',
-                     'manpowercost.edit', 'manpowercost.margin'},
+                     'manpowercost.edit', 'manpowercost.margin', 'po.approve'},
     # timesheets.review drives the Request Timesheets page in Administration,
     # so it follows that section: erp_admin gains it, admin loses it.
     # Matches the old manpower AdminRequiredMixin: admin could already read,
     # edit and export every sheet, so both caps come with the module.
+    # po.approve for the three roles that could already sign a stage before
+    # it became a capability - admin (PM, COO), procurement manager (SCM) and
+    # super admin (all). Seeded ON so the wiring changes who CAN be granted
+    # it, not who holds it today.
     'admin':        {'devtracking.admin', 'devtracking.mywork',
-                     'manpowercost.edit', 'manpowercost.margin'},
+                     'manpowercost.edit', 'manpowercost.margin', 'po.approve'},
+    'procurement_mgr': {'po.approve'},
     'erp_admin':    {'timesheets.review'},
     'developer':    {'devtracking.mywork'},
     'ai_head':            {'devtracking.admin', 'devtracking.mywork'},
@@ -233,7 +252,7 @@ DEFAULT_CODENAME_GRANTS = {
     # kpis.manage — entering department KPI targets/values is a company-level
     # admin action, not a team-scoped one. The KPI views restrict per-person
     # data to their reports (see kpis/views.py).
-    'project_manager':     {'kpis.activity'},
+    'project_manager':     {'kpis.activity', 'po.approve'},
     'site_manager':        {'kpis.activity'},
     'document_controller': {'kpis.activity'},
     'pcc_engineer':        {'kpis.activity'},

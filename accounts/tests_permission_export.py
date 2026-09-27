@@ -138,9 +138,14 @@ class PermissionExportTests(TestCase):
         """
         text = pdf_text(self.get())
         self.assertIn('Create sheets (pending)', text)
-        self.assertIn('Approve PO (pending)', text)
         # And an enforced capability must not be marked.
         self.assertNotIn('Open Costing (pending)', text)
+        # Approve PO used to be listed here as pending. It is read by
+        # PurchaseOrder.can_user_approve_stage() now, so the marker has
+        # to come off - leaving it would tell an administrator that the
+        # switch they just used does nothing.
+        self.assertIn('Approve PO', text)
+        self.assertNotIn('Approve PO (pending)', text)
 
     # ── it must report the live grid, not the defaults ──────────────────────
 

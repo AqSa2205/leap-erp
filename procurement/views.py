@@ -182,12 +182,51 @@ def _visible_pos_for(user):
         return qs.none()
     if user.is_super_admin_user or user.is_procurement_user:
         return qs
-    if user.is_admin_user or user.is_manager_user:
+    if (user.is_admin_user or user.is_manager_user
+            or getattr(user, 'is_project_manager_user', False)):
+        # Project managers sign the PM stage, so they need the same regional
+        # view Admin and Manager already have - a PO they cannot open is a PO
+        # they cannot sign.
         return qs.filter(
             Q(created_by=user) |
             Q(project__region=user.region)
         )
     return qs.filter(created_by=user)
+
+
+def _scoped_by_region(qs, user):
+    """The region rule the procurement lists have always used, in one place.
+
+    Every list mixin and every by-pk endpoint for delivery notes, inventory
+    reports and FRC reports reads this. It was written out four times before,
+    and the exports simply did not have it - which is how they came to hand
+    any authenticated user any record by pk while the matching detail page
+    refused the same person.
+    """
+    if not getattr(user, 'is_authenticated', False):
+        return qs.none()
+    if user.is_super_admin_user or getattr(user, 'is_procurement_user', False):
+        return qs
+    if user.is_admin_user or user.is_manager_user:
+        return qs.filter(Q(created_by=user) | Q(project__region=user.region))
+    return qs.filter(created_by=user)
+
+
+def _visible_dns_for(user):
+    return _scoped_by_region(
+        DeliveryNote.objects.select_related(
+            'project', 'created_by', 'purchase_order').all(), user)
+
+
+def _visible_inventory_for(user):
+    return _scoped_by_region(
+        InventoryReport.objects.select_related('project', 'created_by').all(),
+        user)
+
+
+def _visible_frc_for(user):
+    return _scoped_by_region(
+        FRCReport.objects.select_related('project', 'created_by').all(), user)
 
 
 def _validate_signature_image(raw_bytes, *, max_bytes=2 * 1024 * 1024):
@@ -262,10 +301,14 @@ def _po_project_groups(user, include_empty=True):
 
     # Prefetch items: total_value walks them, so grouping without this issues a
     # query per PO and the page degrades quietly as the PO count grows.
-    pos = (_visible_pos_for(user)
-           .select_related('project', 'project__region')
-           .prefetch_related('items')
-           .order_by('-po_date', '-id'))
+    # prime_signer_names for the same reason as the prefetch: workflow_status
+    # -> current_stage -> approval_status reads the printed names, so without
+    # it the page issues one more query per PO.
+    pos = PurchaseOrder.prime_signer_names(
+        _visible_pos_for(user)
+        .select_related('project', 'project__region')
+        .prefetch_related('items')
+        .order_by('-po_date', '-id'))
 
     groups = OrderedDict()
     unassigned = []
@@ -501,6 +544,9 @@ class POListView(CapabilityRequiredMixin, ProcurementPermissionMixin, ListView):
         context = super().get_context_data(**kwargs)
         context['filter_form'] = POFilterForm(self.request.GET)
         context['total_count'] = self.get_queryset().count()
+        # Each row renders workflow_status, which reads the printed signer
+        # names. One lookup for the page rather than one per row.
+        PurchaseOrder.prime_signer_names(context['purchase_orders'])
         return context
 
 
@@ -1451,10 +1497,17 @@ def po_stage_approvers(request):
     mapped = {row.stage: row for row in
               POStageApprover.objects.select_related('user', 'updated_by')}
     rows = []
-    for key, label, signer in PurchaseOrder.APPROVAL_STAGES:
+    for key, label, default_signer in PurchaseOrder.APPROVAL_STAGES:
         row = mapped.get(key)
+        custom = (row.signer_name if row else '') or ''
         rows.append({
-            'key': key, 'label': label, 'signer_name': signer,
+            'key': key, 'label': label,
+            # Both are shown: the name in use, and the built-in one it would
+            # fall back to, so "why does it say that" has an answer on the
+            # page rather than in the source.
+            'signer_name': custom or default_signer,
+            'default_signer': default_signer,
+            'is_default': not custom,
             'approver': row.user if row else None,
             'updated_at': row.updated_at if row else None,
             'updated_by': row.updated_by if row else None,
@@ -1462,6 +1515,58 @@ def po_stage_approvers(request):
     return render(request, 'procurement/stage_approvers.html', {
         'rows': rows, 'form': form,
     })
+
+
+@login_required
+@require_POST
+def po_stage_signer(request):
+    """Set the name printed under one approval stage on the purchase order.
+
+    Super admin only, like the routing it sits beside: this is the name that
+    appears on a signed company document, and it also decides whose "waiting
+    on me" list a PO lands in (is_designated_approver matches the signed-in
+    user against it).
+
+    Blank restores the built-in default rather than printing nothing - a PO
+    with an empty name under a signature line is worse than a stale one.
+    """
+    from .models import POStageApprover
+
+    if not request.user.is_super_admin_user:
+        messages.error(request, 'Only a super admin can change the printed name.')
+        return redirect('procurement:dashboard')
+
+    stage = (request.POST.get('stage') or '').strip()
+    defaults = {key: signer for key, _label, signer
+                in PurchaseOrder.APPROVAL_STAGES}
+    if stage not in defaults:
+        messages.error(request, 'Unknown approval stage.')
+        return redirect('procurement:po_stage_approvers')
+
+    # Collapse internal whitespace: the name is matched against user records
+    # by _same_person(), which normalises the same way, and a double space
+    # typed here would otherwise be invisible on the page.
+    name = ' '.join((request.POST.get('signer_name') or '').split())
+    if len(name) > 120:
+        messages.error(request, 'That name is too long — 120 characters maximum.')
+        return redirect('procurement:po_stage_approvers')
+
+    row, _created = POStageApprover.objects.get_or_create(stage=stage)
+    row.signer_name = name
+    row.updated_by = request.user
+    row.save()
+
+    label = dict((k, l) for k, l, _s in PurchaseOrder.APPROVAL_STAGES)[stage]
+    if name:
+        messages.success(
+            request,
+            f'{label} will now print as {name}. Purchase orders already '
+            f'signed keep the approver and date recorded against them.')
+    else:
+        messages.success(
+            request,
+            f'{label} is back to the built-in name, {defaults[stage]}.')
+    return redirect('procurement:po_stage_approvers')
 
 
 @login_required
@@ -2783,14 +2888,7 @@ def internal_summary_export(request):
 
 class DNPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
-        queryset = DeliveryNote.objects.select_related('project', 'created_by', 'purchase_order').all()
-        user = self.request.user
-        if user.is_super_admin_user or user.is_procurement_user:
-            return queryset
-        elif user.is_admin_user or user.is_manager_user:
-            return queryset.filter(Q(created_by=user) | Q(project__region=user.region))
-        else:
-            return queryset.filter(created_by=user)
+        return _visible_dns_for(self.request.user)
 
 
 class DNListView(CapabilityRequiredMixin, DNPermissionMixin, ListView):
@@ -3063,7 +3161,7 @@ class DNDeleteView(DNPermissionMixin, DeleteView):
 def dn_export_excel(request, pk):
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-    dn = get_object_or_404(DeliveryNote, pk=pk)
+    dn = get_object_or_404(_visible_dns_for(request.user), pk=pk)
     items = dn.items.all()
 
     wb = openpyxl.Workbook()
@@ -3155,7 +3253,7 @@ def dn_export_pdf(request, pk):
     from io import BytesIO
     from django.contrib.staticfiles.finders import find as find_static
 
-    dn = get_object_or_404(DeliveryNote, pk=pk)
+    dn = get_object_or_404(_visible_dns_for(request.user), pk=pk)
     items = dn.items.all()
 
     NumberedCanvas = _make_numbered_canvas()
@@ -3405,14 +3503,7 @@ def dn_import_excel(request):
 
 class InventoryPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
-        queryset = InventoryReport.objects.select_related('project', 'created_by').all()
-        user = self.request.user
-        if user.is_super_admin_user or user.is_procurement_user:
-            return queryset
-        elif user.is_admin_user or user.is_manager_user:
-            return queryset.filter(Q(created_by=user) | Q(project__region=user.region))
-        else:
-            return queryset.filter(created_by=user)
+        return _visible_inventory_for(self.request.user)
 
 
 class InventoryListView(InventoryPermissionMixin, ListView):
@@ -3579,7 +3670,7 @@ class InventoryDeleteView(InventoryPermissionMixin, DeleteView):
 def inventory_export_excel(request, pk):
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-    report = get_object_or_404(InventoryReport, pk=pk)
+    report = get_object_or_404(_visible_inventory_for(request.user), pk=pk)
     items = report.items.all()
 
     wb = openpyxl.Workbook()
@@ -3658,7 +3749,7 @@ def inventory_export_pdf(request, pk):
     from io import BytesIO
     from django.contrib.staticfiles.finders import find as find_static
 
-    report = get_object_or_404(InventoryReport, pk=pk)
+    report = get_object_or_404(_visible_inventory_for(request.user), pk=pk)
     items = report.items.all()
 
     buf = BytesIO()
@@ -3864,14 +3955,7 @@ def inventory_import_excel(request):
 
 class FRCPermissionMixin(LoginRequiredMixin, UserPassesTestMixin):
     def get_queryset(self):
-        queryset = FRCReport.objects.select_related('project', 'created_by').all()
-        user = self.request.user
-        if user.is_super_admin_user or user.is_procurement_user:
-            return queryset
-        elif user.is_admin_user or user.is_manager_user:
-            return queryset.filter(Q(created_by=user) | Q(project__region=user.region))
-        else:
-            return queryset.filter(created_by=user)
+        return _visible_frc_for(self.request.user)
 
 
 class FRCListView(FRCPermissionMixin, ListView):
@@ -4084,7 +4168,7 @@ class FRCDeleteView(FRCPermissionMixin, DeleteView):
 def frc_export_excel(request, pk):
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-    report = get_object_or_404(FRCReport, pk=pk)
+    report = get_object_or_404(_visible_frc_for(request.user), pk=pk)
     entries = report.entries.all()
 
     wb = openpyxl.Workbook()
@@ -4140,7 +4224,7 @@ def frc_export_pdf(request, pk):
     from io import BytesIO
     from django.contrib.staticfiles.finders import find as find_static
 
-    report = get_object_or_404(FRCReport, pk=pk)
+    report = get_object_or_404(_visible_frc_for(request.user), pk=pk)
     entries = report.entries.all()
 
     buf = BytesIO()

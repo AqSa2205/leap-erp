@@ -312,7 +312,8 @@ def render_po_pdf(po, unpriced=False):
             )
             for s in approvals
         ]
-        # Row 3: signer name (hardcoded, e.g. Shaker Alkhalifah).
+        # Row 3: signer name, e.g. Shaker Alkhalifah - the built-in default
+        # unless Approval Routing set a different one for the stage.
         name_row = [
             Paragraph(
                 f'<para align="center">Name: <u>{_xml_escape(s["signer"])}</u></para>',

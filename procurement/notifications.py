@@ -35,7 +35,11 @@ def stage_recipients(stage_key):
     active = User.objects.filter(is_active=True)
     if stage_key == 'scm':
         return [u for u in active if getattr(u, 'is_procurement_manager_user', False)]
-    if stage_key in ('pm', 'coo'):
+    if stage_key == 'pm':
+        return [u for u in active
+                if u.is_admin_user
+                or getattr(u, 'is_project_manager_user', False)]
+    if stage_key == 'coo':
         return [u for u in active if u.is_admin_user]
     if stage_key == 'ceo':
         return [u for u in active if u.is_super_admin_user]
