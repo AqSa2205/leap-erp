@@ -274,7 +274,7 @@
         <div class="p-3 text-muted small">
           Finance has approved a budget for this project, but nothing has been
           ordered against it yet.
-          {% if g.project %}
+          {% if g.project and not user.is_procurement_read_only_user %}
           <a href="{% url 'procurement:po_create' %}" class="ms-1">Raise a purchase order</a>.
           {% endif %}
         </div>
