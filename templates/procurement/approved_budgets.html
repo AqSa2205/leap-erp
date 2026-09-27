@@ -72,9 +72,11 @@
                                     {% if s.finance_approved_by %}<br>by {{ s.finance_approved_by.get_full_name|default:s.finance_approved_by.username }}{% endif %}
                                 </td>
                                 <td class="text-end">
+                                    {% if not user.is_procurement_read_only_user %}
                                     <a href="{% url 'procurement:bom_procurement_tracker' s.pk %}" class="btn btn-sm btn-outline-danger">
                                         Procure <i class="bi bi-chevron-right"></i>
                                     </a>
+                                    {% endif %}
                                 </td>
                             </tr>
                             {% empty %}

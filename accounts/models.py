@@ -289,6 +289,19 @@ class User(AbstractUser):
         return bool(self.role and self.role.is_project_manager)
 
     @property
+    def is_procurement_read_only_user(self):
+        """Whoever gets read-only access to the whole Procurement section -
+        view and export everywhere, create/edit/delete/import nowhere.
+
+        Just Project Manager today. An Assistant Project Manager role is
+        planned; when it's added, extend the check here rather than at the
+        ~20 call sites in procurement/views.py and its templates that read
+        this property - that indirection is the entire reason those sites
+        don't read `is_project_manager_user` directly.
+        """
+        return self.is_project_manager_user
+
+    @property
     def is_site_manager_user(self):
         return bool(self.role and self.role.is_site_manager)
 
