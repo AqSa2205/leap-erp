@@ -13,13 +13,15 @@ from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.db.models import Count
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from accounts.permissions import require_capability
+from costing.models import ResourceCatalogueItem
 from costing.views import _user_can_see_pricing
 
 from . import rates
@@ -59,6 +61,20 @@ def _can_see_margin(user):
 def _require_edit(user):
     if not _can_edit(user):
         raise PermissionDenied
+
+
+def _pk(raw):
+    """A primary key from a form field, or None.
+
+    `filter(pk=...)` raises ValueError on anything non-numeric rather than
+    returning nothing, so a hand-edited select would 500 instead of being
+    refused. None here means "not found", which is what the callers already
+    handle.
+    """
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _decimal_or_error(raw):
@@ -297,27 +313,171 @@ def rate_card(request):
         'rows': rows,
         'show_margin': show_margin,
         'can_edit': _can_edit(request.user),
-        'bases': CostBasis.objects.all(),
+        'bases': CostBasis.objects.annotate(rate_count=Count('charge_rates')),
+        'positions': ResourceCatalogueItem.objects.filter(is_active=True),
+        'classifications': Classification.choices,
     })
 
 
 @login_required
 @require_capability('manpowercost.edit')
 @require_POST
-def rate_override(request, pk):
-    """Set or clear the manual rate on one charge rate."""
+def rate_create(request):
+    """Add a charge rate for a role.
+
+    These existed only in the Django admin until now, so A.4's Std rate
+    column read as a dash until somebody with admin access went and made
+    one - and the people who price work are not the people with admin
+    access.
+    """
+    _require_pricing(request.user)
+    position = ResourceCatalogueItem.objects.filter(
+        pk=_pk(request.POST.get('position'))).first()
+    basis = CostBasis.objects.filter(pk=_pk(request.POST.get('basis'))).first()
+    classification = (request.POST.get('classification') or '').strip()
+
+    if position is None or basis is None:
+        messages.error(request, 'Pick a role and a cost basis.')
+        return redirect('manpowercost:rate_card')
+    if classification and classification not in dict(Classification.choices):
+        messages.error(request, 'Unknown classification.')
+        return redirect('manpowercost:rate_card')
+
+    monthly, error = _decimal_or_error(request.POST.get('monthly_cost'))
+    if error:
+        messages.error(request, error)
+        return redirect('manpowercost:rate_card')
+
+    # One rate per (role, classification, basis) - the same uniqueness the
+    # model enforces, caught here so it reads as a sentence rather than as
+    # an IntegrityError page.
+    if ChargeRate.objects.filter(position=position, basis=basis,
+                                 classification=classification).exists():
+        messages.error(
+            request,
+            f'{position.name} already has a rate on {basis.name} for that '
+            f'classification. Edit that one instead.')
+        return redirect('manpowercost:rate_card')
+
+    ChargeRate.objects.create(
+        position=position, basis=basis, classification=classification,
+        monthly_cost=monthly)
+    messages.success(request, f'Added a charge rate for {position.name}.')
+    return redirect('manpowercost:rate_card')
+
+
+@login_required
+@require_capability('manpowercost.edit')
+@require_POST
+def rate_update(request, pk):
+    """Edit one charge rate: its cost, its basis, or its manual override.
+
+    The monthly cost is editable because a rate derived from a stale cost is
+    worse than one typed in - it still looks derived.
+    """
     _require_pricing(request.user)
     cr = get_object_or_404(ChargeRate, pk=pk)
-    raw = (request.POST.get('manual_rate') or '').strip()
-    if raw == '':
-        cr.manual_rate = None
-        messages.success(request, f'{cr} now follows cost.')
-    else:
-        try:
-            cr.manual_rate = Decimal(raw)
-        except (InvalidOperation, ValueError):
-            messages.error(request, 'Enter a number, or leave blank to follow cost.')
+
+    if 'monthly_cost' in request.POST:
+        monthly, error = _decimal_or_error(request.POST.get('monthly_cost'))
+        if error:
+            messages.error(request, error)
             return redirect('manpowercost:rate_card')
-        messages.success(request, f'{cr} fixed at {cr.manual_rate}/hr.')
-    cr.save(update_fields=['manual_rate', 'updated_at'])
+        cr.monthly_cost = monthly
+
+    if 'basis' in request.POST:
+        basis = CostBasis.objects.filter(pk=_pk(request.POST.get('basis'))).first()
+        if basis is None:
+            messages.error(request, 'Unknown cost basis.')
+            return redirect('manpowercost:rate_card')
+        cr.basis = basis
+
+    if 'manual_rate' in request.POST:
+        raw = (request.POST.get('manual_rate') or '').strip().replace(',', '')
+        if raw == '':
+            cr.manual_rate = None
+        else:
+            try:
+                cr.manual_rate = Decimal(raw)
+            except (InvalidOperation, ValueError):
+                messages.error(request, 'Enter a number, or leave blank to follow cost.')
+                return redirect('manpowercost:rate_card')
+            if cr.manual_rate < 0:
+                messages.error(request, 'A rate cannot be negative.')
+                return redirect('manpowercost:rate_card')
+
+    try:
+        # The unique key spans (position, classification, basis), so a basis
+        # change can collide with an existing row. It is a Meta constraint,
+        # which validate_unique() does NOT cover - that sees only unique=True
+        # fields and unique_together, and would let this through to an
+        # IntegrityError 500.
+        cr.validate_constraints()
+    except ValidationError:
+        messages.error(
+            request,
+            f'{cr.position.name} already has a rate on that basis for this '
+            f'classification.')
+        return redirect('manpowercost:rate_card')
+    cr.save()
+    messages.success(request, f'{cr} updated.')
+    return redirect('manpowercost:rate_card')
+
+
+@login_required
+@require_capability('manpowercost.edit')
+@require_POST
+def rate_delete(request, pk):
+    _require_pricing(request.user)
+    cr = get_object_or_404(ChargeRate, pk=pk)
+    label = str(cr)
+    cr.delete()
+    # A.4 goes back to a dash for that role, which is the honest answer once
+    # no rate exists - better than leaving the last known one in place.
+    messages.success(request, f'Removed the charge rate for {label}.')
+    return redirect('manpowercost:rate_card')
+
+
+@login_required
+@require_capability('manpowercost.edit')
+@require_POST
+def basis_update(request, pk):
+    """Edit a cost basis: overhead, profit, billable months, hours, days.
+
+    Every rate built on it moves, which is the point - the basis is the one
+    place those numbers are meant to live. Nothing derived is stored, so
+    there is no recalculation step and no rate can be left stale.
+    """
+    _require_pricing(request.user)
+    basis = get_object_or_404(CostBasis, pk=pk)
+
+    for field in ('overhead_pct', 'profit_pct', 'billable_months',
+                  'hours_per_month', 'working_days_per_month'):
+        if field not in request.POST:
+            continue
+        value, error = _decimal_or_error(request.POST.get(field))
+        if error:
+            messages.error(request, f'{field.replace("_", " ")}: {error}')
+            return redirect('manpowercost:rate_card')
+        setattr(basis, field, value)
+
+    if 'name' in request.POST:
+        name = (request.POST.get('name') or '').strip()
+        if not name:
+            messages.error(request, 'A basis needs a name.')
+            return redirect('manpowercost:rate_card')
+        basis.name = name[:120]
+
+    try:
+        basis.full_clean()
+    except ValidationError as exc:
+        messages.error(request, '; '.join(
+            m for msgs in exc.message_dict.values() for m in msgs))
+        return redirect('manpowercost:rate_card')
+    basis.save()
+    affected = basis.charge_rates.count()
+    messages.success(
+        request,
+        f'{basis.name} updated - {affected} charge rate'
+        f'{"" if affected == 1 else "s"} rebuilt from it.')
     return redirect('manpowercost:rate_card')
