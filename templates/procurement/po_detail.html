@@ -616,7 +616,7 @@
             <!-- Metadata -->
             <div class="text-center py-3">
                 <small class="text-muted">
-                    Created by {{ po.created_by.get_full_name|default:po.created_by.username }} on {{ po.created_at|date:"d M Y, H:i" }}
+                    Created by {% if po.created_by %}{{ po.created_by.get_full_name|default:po.created_by.username }}{% else %}a deleted account{% endif %} on {{ po.created_at|date:"d M Y, H:i" }}
                     &middot; Last updated {{ po.updated_at|date:"d M Y, H:i" }}
                 </small>
             </div>
