@@ -81,16 +81,11 @@ def procurement_dashboard(request):
     """Procurement dashboard with KPIs, recent activity, and stats."""
     user = request.user
 
-    # Procurement roles get full access
-    has_full_access = user.is_super_admin_user or user.is_procurement_user
-
-    # PO stats
-    po_qs = PurchaseOrder.objects.all()
-    if not has_full_access:
-        if user.is_admin_user or user.is_manager_user:
-            po_qs = po_qs.filter(Q(created_by=user) | Q(project__region=user.region))
-        else:
-            po_qs = po_qs.filter(created_by=user)
+    # Scoped exactly like the pages these numbers summarise. Kept as its own
+    # copy of the rule before, which is how a project manager came to land on
+    # a dashboard reading zero while the list beside it showed their whole
+    # region.
+    po_qs = _visible_pos_for(user)
 
     po_total = po_qs.count()
     po_by_status = {}
@@ -101,12 +96,7 @@ def procurement_dashboard(request):
         po_by_status[s] = po_qs.filter(status=s).count()
 
     # DN stats
-    dn_qs = DeliveryNote.objects.all()
-    if not has_full_access:
-        if user.is_admin_user or user.is_manager_user:
-            dn_qs = dn_qs.filter(Q(created_by=user) | Q(project__region=user.region))
-        else:
-            dn_qs = dn_qs.filter(created_by=user)
+    dn_qs = _visible_dns_for(user)
     dn_total = dn_qs.count()
 
     # Summary stats — counted as the number of POs visible to the user
@@ -114,12 +104,7 @@ def procurement_dashboard(request):
     summary_total = po_qs.count()
 
     # Inventory stats
-    inv_qs = InventoryReport.objects.all()
-    if not has_full_access:
-        if user.is_admin_user or user.is_manager_user:
-            inv_qs = inv_qs.filter(Q(created_by=user) | Q(project__region=user.region))
-        else:
-            inv_qs = inv_qs.filter(created_by=user)
+    inv_qs = _visible_inventory_for(user)
     inv_total = inv_qs.count()
     total_inventory_items = InventoryItem.objects.filter(report__in=inv_qs).count()
 
@@ -406,7 +391,8 @@ def _can_see_all_projects(user):
     """Whether this viewer may be shown projects they have no PO against."""
     return bool(user.is_super_admin_user
                 or getattr(user, 'is_procurement_user', False)
-                or user.is_admin_user or user.is_manager_user)
+                or user.is_admin_user or user.is_manager_user
+                or getattr(user, 'is_procurement_read_only_user', False))
 
 
 def _build_group(project, rows, *, approved=False, selected=False,
@@ -2297,24 +2283,28 @@ SUMMARY_ENTRY_DATE_FIELDS = {
 
 
 def _scoped_items_for_summary(request):
-    """PO line items the user can see — scoped through the parent PO."""
-    user = request.user
-    qs = PurchaseOrderItem.objects.select_related(
+    """PO line items the user can see - scoped through the parent PO.
+
+    Derived from _visible_pos_for() rather than restating its rule: the
+    summary must show line items for exactly the purchase orders the PO list
+    shows, and a fourth copy of the rule is how it came to show a project
+    manager nothing at all.
+    """
+    return PurchaseOrderItem.objects.select_related(
         'purchase_order', 'purchase_order__project', 'purchase_order__project__region',
         'purchase_order__created_by',
-    ).all()
-    if user.is_super_admin_user or user.is_procurement_user:
-        return qs
-    elif user.is_admin_user or user.is_manager_user:
-        return qs.filter(
-            Q(purchase_order__created_by=user)
-            | Q(purchase_order__project__region=user.region)
-        )
-    return qs.filter(purchase_order__created_by=user)
+    ).filter(purchase_order__in=_visible_pos_for(request.user))
 
 
-def _ensure_summary_entries(items, summary_type):
-    """Make sure every line item in `items` has a matching POSummaryEntry of the given type."""
+def _ensure_summary_entries(items, summary_type, *, create_missing=True):
+    """Every line item in `items` paired with its POSummaryEntry.
+
+    `create_missing=False` looks without writing. Opening a page is a read,
+    and this one quietly bulk_created a row per line item - which for a
+    read-only role would mean browsing the summary writes to the database.
+    A row that does not exist reads as `pending` (see _row_status), which is
+    what it means anyway.
+    """
     item_ids = [i.id for i in items]
     existing = {
         e.purchase_order_item_id: e
@@ -2322,7 +2312,7 @@ def _ensure_summary_entries(items, summary_type):
             purchase_order_item_id__in=item_ids, summary_type=summary_type
         )
     }
-    missing = [i for i in items if i.id not in existing]
+    missing = [i for i in items if i.id not in existing] if create_missing else []
     if missing:
         POSummaryEntry.objects.bulk_create([
             POSummaryEntry(purchase_order_item=i, summary_type=summary_type)
@@ -2364,7 +2354,9 @@ def internal_summary(request):
     items = list(_scoped_items_for_summary(request).order_by(
         'system', 'purchase_order__po_number', 'serial_number',
     ))
-    entries_by_item = _ensure_summary_entries(items, 'internal')
+    entries_by_item = _ensure_summary_entries(
+        items, 'internal',
+        create_missing=not request.user.is_procurement_read_only_user)
 
     from collections import OrderedDict
     groups = OrderedDict()
@@ -2840,7 +2832,9 @@ def internal_summary_export(request):
     items = list(_scoped_items_for_summary(request).order_by(
         'system', 'purchase_order__po_number', 'serial_number',
     ))
-    entries_by_item = _ensure_summary_entries(items, 'internal')
+    entries_by_item = _ensure_summary_entries(
+        items, 'internal',
+        create_missing=not request.user.is_procurement_read_only_user)
 
     wb = openpyxl.Workbook()
     ws = wb.active
