@@ -1,0 +1,377 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Grade Structure - {{ project.project_name }}{% endblock %}
+{% block page_title %}Grade Structure{% endblock %}
+
+{% block extra_css %}
+<style>
+    .gs-shell { background: #fff; border: 1px solid #e9ecef; border-radius: 10px; overflow: hidden; margin-bottom: 1.25rem; }
+    .gs-shell .gs-title { padding: 10px 14px; font-weight: 700; font-size: 0.95rem; color: #1F4E79; }
+    table.gs-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.85rem; margin-bottom: 0; }
+    table.gs-table th, table.gs-table td { padding: 6px 8px; border: 1px solid #cfd8e3; vertical-align: middle; background: #fff; }
+    table.gs-table thead th { background: #1F4E79; color: #fff; font-weight: 700; text-align: center; white-space: nowrap; }
+    table.gs-table tfoot td { background: #DCE6F1; font-weight: 700; }
+    table.gs-table input, table.gs-table select, table.gs-table textarea { font-size: 0.83rem; width: 100%; border: 1px solid #dee2e6; border-radius: 4px; padding: 3px 6px; }
+    .gs-input-color, .gs-input-color input { color: #0000FF; }
+    .gs-addrow { padding: 8px 12px; border-top: 1px solid #cfd8e3; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <a href="{% url 'pmo:mpc_project_overview' project.pk %}" class="text-muted small"><i class="bi bi-arrow-left"></i> {{ project.project_name }}</a>
+    <a href="{% url 'pmo:mpc_grade_structure_export_excel' project.pk %}" class="btn btn-outline-success btn-sm">
+        <i class="bi bi-file-earmark-excel me-1"></i> Export to Excel
+    </a>
+</div>
+
+<datalist id="grade-discipline-suggestions">
+    {% for d in discipline_suggestions %}
+    <option value="{{ d }}"></option>
+    {% endfor %}
+</datalist>
+
+<form method="post" novalidate>
+    {% csrf_token %}
+
+    {% if grade_formset.non_form_errors or designation_formset.non_form_errors %}
+    <div class="alert alert-danger">
+        {{ grade_formset.non_form_errors }}
+        {{ designation_formset.non_form_errors }}
+    </div>
+    {% endif %}
+    {% if grade_formset.errors or designation_formset.errors %}
+    <div class="alert alert-danger"><strong>Some lines need fixing — see the highlighted cells below.</strong></div>
+    {% endif %}
+
+    <!-- GRADE CATEGORIES (fixed reference list) -->
+    <div class="gs-shell">
+        <div class="gs-title">Grade Categories</div>
+        <table class="gs-table">
+            <thead><tr><th style="width:120px;">Code</th><th>Category</th></tr></thead>
+            <tbody>
+                {% for code, label in category_choices %}
+                <tr><td class="text-center fw-semibold">{{ code }}</td><td>{{ label }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- INDIVIDUAL GRADES -->
+    <div class="gs-shell">
+        <div class="gs-title">Individual Grades — Criteria, Discipline, Designation &amp; Manpower</div>
+        <div class="table-responsive">
+            {{ grade_formset.management_form }}
+            <table class="gs-table" id="grade-table">
+                <thead>
+                    <tr>
+                        <th>Category</th>
+                        <th style="width:100px;">Grade</th>
+                        <th style="width:130px;">Discipline</th>
+                        <th style="width:170px;">Typical Designation</th>
+                        <th style="width:220px;">Criteria / Eligibility</th>
+                        <th style="width:90px;">Manpower</th>
+                        <th style="width:150px;">Indicative Monthly Salary</th>
+                        <th style="width:130px;">Monthly Cost</th>
+                        <th style="width:130px;">Annual Cost</th>
+                        {% if can_edit %}<th style="width:40px;">Del</th>{% endif %}
+                    </tr>
+                </thead>
+                <tbody id="grade-rows">
+                    {% for form in grade_formset %}
+                    <tr class="grade-row">
+                        {% if can_edit %}
+                        <td>{{ form.category }}{{ form.order.as_hidden }}{{ form.id }}</td>
+                        <td>{{ form.grade_code }}</td>
+                        <td>{{ form.discipline }}</td>
+                        <td>{{ form.typical_designation }}</td>
+                        <td>{{ form.criteria }}</td>
+                        <td class="text-center">{{ form.instance.headcount }}</td>
+                        <td class="gs-input-color">{{ form.indicative_monthly_salary }}</td>
+                        <td class="text-end">{{ form.instance.monthly_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ form.instance.annual_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-center">
+                            <span class="d-none">{{ form.DELETE }}</span>
+                            <button type="button" class="btn btn-sm btn-outline-danger {% if form.instance.pk %}delete-saved-row{% else %}remove-row{% endif %}" title="Remove"><i class="bi bi-trash"></i></button>
+                        </td>
+                        {% else %}
+                        <td>{{ form.instance.get_category_display }}</td>
+                        <td class="text-center fw-semibold">{{ form.instance.grade_code }}</td>
+                        <td class="text-center">{{ form.instance.discipline|default:"—" }}</td>
+                        <td class="text-center">{{ form.instance.typical_designation|default:"—" }}</td>
+                        <td>{{ form.instance.criteria|default:"—" }}</td>
+                        <td class="text-center">{{ form.instance.headcount }}</td>
+                        <td class="text-end gs-input-color">{{ form.instance.indicative_monthly_salary|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ form.instance.monthly_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ form.instance.annual_cost|floatformat:2|intcomma }}</td>
+                        {% endif %}
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="{% if can_edit %}10{% else %}9{% endif %}" class="text-center text-muted py-3">No grades yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td colspan="4" class="text-end">TOTAL</td>
+                        <td class="text-center">{{ total_headcount|intcomma }}</td>
+                        <td></td>
+                        <td></td>
+                        <td class="text-end">{{ total_monthly_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ total_annual_cost|floatformat:2|intcomma }}</td>
+                        {% if can_edit %}<td></td>{% endif %}
+                    </tr>
+                </tfoot>
+            </table>
+            {% if can_edit %}
+            <template id="grade-row-template">
+                <tr class="grade-row">
+                    <td>{{ grade_formset.empty_form.category }}{{ grade_formset.empty_form.order.as_hidden }}{{ grade_formset.empty_form.id }}</td>
+                    <td>{{ grade_formset.empty_form.grade_code }}</td>
+                    <td>{{ grade_formset.empty_form.discipline }}</td>
+                    <td>{{ grade_formset.empty_form.typical_designation }}</td>
+                    <td>{{ grade_formset.empty_form.criteria }}</td>
+                    <td class="text-center text-muted">—</td>
+                    <td class="gs-input-color">{{ grade_formset.empty_form.indicative_monthly_salary }}</td>
+                    <td class="text-end text-muted">—</td>
+                    <td class="text-end text-muted">—</td>
+                    <td class="text-center">
+                        <span class="d-none">{{ grade_formset.empty_form.DELETE }}</span>
+                        <button type="button" class="btn btn-sm btn-outline-danger remove-row" title="Remove"><i class="bi bi-trash"></i></button>
+                    </td>
+                </tr>
+            </template>
+            {% endif %}
+        </div>
+        {% if can_edit %}
+        <div class="gs-addrow">
+            <button type="button" class="btn btn-sm btn-primary add-row-btn" data-target="grades">
+                <i class="bi bi-plus-lg"></i> Add Grade
+            </button>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- SUMMARY BY CATEGORY (read-only, derived) -->
+    <div class="gs-shell">
+        <div class="gs-title">Summary by Category</div>
+        <div class="table-responsive">
+            <table class="gs-table">
+                <thead>
+                    <tr>
+                        <th>Category</th>
+                        <th>Code</th>
+                        <th>Manpower (No.)</th>
+                        <th>Monthly Cost (SAR)</th>
+                        <th>Annual Cost (SAR)</th>
+                        <th>% of Manpower</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for cat in categories %}
+                    <tr>
+                        <td>{{ cat.label }}</td>
+                        <td class="text-center">{{ cat.code }}</td>
+                        <td class="text-center">{{ cat.headcount }}</td>
+                        <td class="text-end">{{ cat.monthly_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ cat.annual_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ cat.pct_of_manpower|floatformat:1 }}%</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td colspan="2">TOTAL</td>
+                        <td class="text-center">{{ total_headcount|intcomma }}</td>
+                        <td class="text-end">{{ total_monthly_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ total_annual_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">100.0%</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>
+
+    <!-- DESIGNATION-WISE MANPOWER -->
+    <div class="gs-shell">
+        <div class="gs-title">Designation-wise Manpower</div>
+        <div class="table-responsive">
+            {{ designation_formset.management_form }}
+            <table class="gs-table" id="designation-table">
+                <thead>
+                    <tr>
+                        <th>Designation</th>
+                        <th style="width:150px;">Category</th>
+                        <th style="width:100px;">Grade</th>
+                        <th style="width:130px;">Discipline</th>
+                        <th style="width:90px;">Manpower</th>
+                        <th style="width:140px;">Monthly Salary</th>
+                        <th style="width:130px;">Monthly Cost</th>
+                        <th style="width:130px;">Annual Cost</th>
+                        {% if can_edit %}<th style="width:40px;">Del</th>{% endif %}
+                    </tr>
+                </thead>
+                <tbody id="designation-rows">
+                    {% for form in designation_formset %}
+                    <tr class="designation-row">
+                        {% if can_edit %}
+                        <td>{{ form.designation }}{{ form.order.as_hidden }}{{ form.id }}</td>
+                        <td>{{ form.category }}</td>
+                        <td>{{ form.grade_code }}</td>
+                        <td>{{ form.discipline }}</td>
+                        <td>{{ form.headcount }}</td>
+                        <td class="gs-input-color">{{ form.monthly_salary }}</td>
+                        <td class="text-end">{{ form.instance.monthly_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ form.instance.annual_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-center">
+                            <span class="d-none">{{ form.DELETE }}</span>
+                            <button type="button" class="btn btn-sm btn-outline-danger {% if form.instance.pk %}delete-saved-row{% else %}remove-row{% endif %}" title="Remove"><i class="bi bi-trash"></i></button>
+                        </td>
+                        {% else %}
+                        <td>{{ form.instance.designation }}</td>
+                        <td class="text-center">{{ form.instance.get_category_display }}</td>
+                        <td class="text-center fw-semibold">{{ form.instance.grade_code }}</td>
+                        <td class="text-center">{{ form.instance.discipline|default:"—" }}</td>
+                        <td class="text-center">{{ form.instance.headcount }}</td>
+                        <td class="text-end gs-input-color">{{ form.instance.monthly_salary|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ form.instance.monthly_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ form.instance.annual_cost|floatformat:2|intcomma }}</td>
+                        {% endif %}
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="{% if can_edit %}9{% else %}8{% endif %}" class="text-center text-muted py-3">No designations yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% if can_edit %}
+            <template id="designation-row-template">
+                <tr class="designation-row">
+                    <td>{{ designation_formset.empty_form.designation }}{{ designation_formset.empty_form.order.as_hidden }}{{ designation_formset.empty_form.id }}</td>
+                    <td>{{ designation_formset.empty_form.category }}</td>
+                    <td>{{ designation_formset.empty_form.grade_code }}</td>
+                    <td>{{ designation_formset.empty_form.discipline }}</td>
+                    <td>{{ designation_formset.empty_form.headcount }}</td>
+                    <td class="gs-input-color">{{ designation_formset.empty_form.monthly_salary }}</td>
+                    <td class="text-end text-muted">—</td>
+                    <td class="text-end text-muted">—</td>
+                    <td class="text-center">
+                        <span class="d-none">{{ designation_formset.empty_form.DELETE }}</span>
+                        <button type="button" class="btn btn-sm btn-outline-danger remove-row" title="Remove"><i class="bi bi-trash"></i></button>
+                    </td>
+                </tr>
+            </template>
+            {% endif %}
+        </div>
+        {% if can_edit %}
+        <div class="gs-addrow">
+            <button type="button" class="btn btn-sm btn-primary add-row-btn" data-target="designations">
+                <i class="bi bi-plus-lg"></i> Add Designation
+            </button>
+            <span class="text-muted small ms-2">A grade's Manpower/Monthly/Annual Cost above are the sum of its matching designation rows here — enter headcount and salary per designation, not on the grade itself.</span>
+        </div>
+        {% endif %}
+    </div>
+
+    {% if can_edit %}
+    <div class="d-flex gap-2 mb-4">
+        <button type="submit" class="btn btn-danger"><i class="bi bi-check-lg"></i> Save Changes</button>
+    </div>
+    {% endif %}
+</form>
+
+{% if can_edit %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    function setupTable(prefix, tbodyId, templateId, totalFormsId) {
+        const tbody = document.getElementById(tbodyId);
+        const tmpl = document.getElementById(templateId);
+        const totalForms = document.getElementById(totalFormsId);
+        if (!tbody || !tmpl || !totalForms) return;
+
+        function addRow() {
+            const formIdx = parseInt(totalForms.value, 10);
+            const html = tmpl.innerHTML.replace(/__prefix__/g, formIdx);
+            const temp = document.createElement('tbody');
+            temp.innerHTML = html.trim();
+            const newRow = temp.querySelector('tr');
+            const orderInput = newRow.querySelector('[name$="-order"]');
+            if (orderInput) orderInput.value = formIdx;
+            tbody.appendChild(newRow);
+            totalForms.value = formIdx + 1;
+            const first = newRow.querySelector('input:not([type=hidden]), select');
+            if (first) first.focus();
+        }
+
+        document.querySelectorAll('.add-row-btn[data-target="' + prefix + '"]').forEach(function(btn) {
+            btn.addEventListener('click', addRow);
+        });
+
+        tbody.addEventListener('click', function(e) {
+            const removeBtn = e.target.closest('.remove-row');
+            if (removeBtn) {
+                removeBtn.closest('tr').remove();
+                totalForms.value = parseInt(totalForms.value, 10) - 1;
+                return;
+            }
+            const delBtn = e.target.closest('.delete-saved-row');
+            if (delBtn) {
+                const row = delBtn.closest('tr');
+                const checkbox = row.querySelector('input[type="checkbox"][name$="-DELETE"]');
+                if (!checkbox) return;
+                checkbox.checked = true;
+                row.style.opacity = '0.45';
+                row.style.textDecoration = 'line-through';
+                delBtn.classList.remove('btn-outline-danger', 'delete-saved-row');
+                delBtn.classList.add('btn-outline-secondary', 'undo-delete-row');
+                delBtn.title = 'Undo delete';
+                delBtn.innerHTML = '<i class="bi bi-arrow-counterclockwise"></i>';
+                return;
+            }
+            const undoBtn = e.target.closest('.undo-delete-row');
+            if (undoBtn) {
+                const row = undoBtn.closest('tr');
+                const checkbox = row.querySelector('input[type="checkbox"][name$="-DELETE"]');
+                if (checkbox) checkbox.checked = false;
+                row.style.opacity = '';
+                row.style.textDecoration = '';
+                undoBtn.classList.remove('btn-outline-secondary', 'undo-delete-row');
+                undoBtn.classList.add('btn-outline-danger', 'delete-saved-row');
+                undoBtn.title = 'Mark for delete';
+                undoBtn.innerHTML = '<i class="bi bi-trash"></i>';
+            }
+        });
+    }
+
+    setupTable('grades', 'grade-rows', 'grade-row-template', 'id_grades-TOTAL_FORMS');
+    setupTable('designations', 'designation-rows', 'designation-row-template', 'id_designations-TOTAL_FORMS');
+
+    // ─── Auto-fill the next Grade Code for a category ───────────────
+    // Picking "Executive" with EX-1 and EX-2 already used anywhere on the
+    // page (Individual Grades or Designation-wise Manpower, saved or just
+    // typed) fills in EX-3 — scans both tables live so it stays right
+    // within the same editing session, no server round-trip needed.
+    function nextGradeCode(categoryCode) {
+        const prefix = categoryCode + '-';
+        let max = 0;
+        document.querySelectorAll('input[name$="-grade_code"]').forEach(function(input) {
+            const code = input.value.trim();
+            if (code.toUpperCase().indexOf(prefix.toUpperCase()) !== 0) return;
+            const num = parseInt(code.slice(prefix.length), 10);
+            if (!isNaN(num) && num > max) max = num;
+        });
+        return prefix + (max + 1);
+    }
+
+    document.addEventListener('change', function(e) {
+        if (!e.target.matches('select[name$="-category"]')) return;
+        if (!e.target.value) return;
+        const row = e.target.closest('tr');
+        if (!row) return;
+        const gradeInput = row.querySelector('input[name$="-grade_code"]');
+        if (!gradeInput || gradeInput.value.trim()) return;
+        gradeInput.value = nextGradeCode(e.target.value);
+    });
+});
+</script>
+{% endif %}
+{% endblock %}

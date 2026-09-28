@@ -1,0 +1,331 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}First Year Maintenance - {{ project.project_name }}{% endblock %}
+{% block page_title %}First Year Maintenance{% endblock %}
+
+{% block extra_css %}
+<style>
+    .kpi-card { border: none; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+    .kpi-card .kpi-icon { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; }
+    .kpi-card .kpi-value { font-size: 1.25rem; font-weight: 700; line-height: 1; }
+    .kpi-card .kpi-label { font-size: 0.68rem; color: #6c757d; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+
+    /* Table shell borrowed from Procurement Summary's look. */
+    .mpc-shell { background: #fff; border: 1px solid #e9ecef; border-radius: 10px; overflow: hidden; margin-bottom: 1.25rem; }
+    .mpc-shell .mpc-banner { background: #C41E3A; color: #fff; font-weight: 700; font-size: 0.85rem; padding: 8px 14px; text-transform: uppercase; letter-spacing: 0.5px; display: flex; justify-content: space-between; align-items: center; }
+    .mpc-shell .mpc-banner.dark { background: #1a1a1a; }
+    table.mpc-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.84rem; margin-bottom: 0; }
+    table.mpc-table th, table.mpc-table td { padding: 7px 10px; border-right: 1px solid #ececec; border-bottom: 1px solid #ececec; vertical-align: middle; background: #fff; }
+    table.mpc-table thead th { background: #F5D7DC; color: #495057; font-weight: 700; font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.3px; white-space: nowrap; }
+    table.mpc-table tfoot td { background: #FBF3F4; font-weight: 700; }
+    table.mpc-table input, table.mpc-table select { font-size: 0.83rem; width: 100%; border: 1px solid #dee2e6; border-radius: 4px; padding: 3px 6px; }
+    table.mpc-table .text-end input { text-align: right; }
+    .mpc-addrow { padding: 8px 12px; border-top: 1px solid #ececec; }
+
+    /* Project/bid detail editable strip */
+    .detail-field label { font-size: 0.68rem; color: #6c757d; text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; margin-bottom: 2px; display: block; }
+    .detail-field .static-value { font-size: 0.9rem; font-weight: 600; }
+    .detail-field input { font-size: 0.85rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <a href="{% url 'pmo:mpc_project_overview' project.pk %}" class="text-muted small"><i class="bi bi-arrow-left"></i> {{ project.project_name }}</a>
+    <a href="{% url 'pmo:mpc_first_year_export_excel' project.pk %}" class="btn btn-outline-success btn-sm">
+        <i class="bi bi-file-earmark-excel me-1"></i> Export to Excel
+    </a>
+</div>
+
+<form method="post" novalidate>
+    {% csrf_token %}
+
+    {% if header_form.non_field_errors or po_form.non_field_errors or formset.non_form_errors %}
+    <div class="alert alert-danger">
+        {{ header_form.non_field_errors }}
+        {{ po_form.non_field_errors }}
+        {{ formset.non_form_errors }}
+    </div>
+    {% endif %}
+    {% if po_form.errors %}
+    <div class="alert alert-danger"><strong>Please fix the PO Number/Date field(s) above.</strong></div>
+    {% endif %}
+    {% if formset.errors %}
+    <div class="alert alert-danger"><strong>Some lines need fixing — see the highlighted cells below.</strong></div>
+    {% endif %}
+
+    <!-- Project & Bid Details -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <div class="row row-cols-2 row-cols-md-4 g-3">
+                <div class="detail-field"><label>Client</label><div class="static-value">{{ project.customer|default:"—" }}</div></div>
+                <div class="detail-field"><label>Project</label><div class="static-value">{{ project.project_name }}</div></div>
+                <div class="detail-field"><label>LNA Proposal Ref</label><div class="static-value">{{ project.proposal_reference|default:"—" }}</div></div>
+                <div class="detail-field">
+                    <label>PO Number</label>
+                    {% if can_edit %}{{ po_form.po_number }}{% else %}<div class="static-value">{{ project.po_number|default:"—" }}</div>{% endif %}
+                </div>
+                <div class="detail-field">
+                    <label>PO Date</label>
+                    {% if can_edit %}{{ po_form.estimated_po_date }}{% else %}<div class="static-value">{{ project.estimated_po_date|date:"d M Y"|default:"—" }}</div>{% endif %}
+                </div>
+                <div class="detail-field">
+                    <label>PO Type</label>
+                    {% if can_edit %}{{ header_form.po_type }}{% else %}<div class="static-value">{{ header.po_type|default:"—" }}</div>{% endif %}
+                </div>
+                <div class="detail-field">
+                    <label>PO Value</label>
+                    {% if can_edit %}{{ header_form.po_value }}{% else %}<div class="static-value">{{ header.currency }} {{ header.po_value|floatformat:2|intcomma|default:"—" }}</div>{% endif %}
+                </div>
+                <div class="detail-field">
+                    <label>Currency Override</label>
+                    {% if can_edit %}{{ header_form.currency_override }}<div class="form-text">Defaults to {{ project.region.currency }}.</div>{% else %}<div class="static-value">{{ header.currency }}</div>{% endif %}
+                </div>
+                <div class="detail-field">
+                    <label>VAT %</label>
+                    {% if can_edit %}{{ header_form.vat_rate }}{% else %}<div class="static-value">{{ header.vat_rate }}%</div>{% endif %}
+                </div>
+                <div class="detail-field">
+                    <label>Target Profit Margin %</label>
+                    {% if can_edit %}{{ header_form.profit_margin_pct }}<div class="form-text">Blank = value defaults to cost.</div>{% else %}<div class="static-value">{{ header.profit_margin_pct|default:"—" }}{% if header.profit_margin_pct %}%{% endif %}</div>{% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bid-value KPI tiles -->
+    <div class="row g-3 mb-4">
+        <div class="col-lg-3 col-md-6">
+            <div class="card kpi-card h-100"><div class="card-body">
+                <div class="d-flex align-items-center gap-2">
+                    <div class="kpi-icon bg-dark bg-opacity-10 text-dark"><i class="bi bi-stack"></i></div>
+                    <div><div class="kpi-value text-dark">{{ header.currency }} {{ header.total_annual_cost|floatformat:0|intcomma }}</div><div class="kpi-label">Total Annual Cost</div></div>
+                </div>
+            </div></div>
+        </div>
+        <div class="col-lg-3 col-md-6">
+            <div class="card kpi-card h-100"><div class="card-body">
+                <div class="d-flex align-items-center gap-2">
+                    <div class="kpi-icon bg-success bg-opacity-10 text-success"><i class="bi bi-cash-stack"></i></div>
+                    <div><div class="kpi-value text-dark">{{ header.currency }} {{ header.proposed_contract_value|floatformat:0|intcomma }}</div><div class="kpi-label">Proposed Contract Value</div></div>
+                </div>
+            </div></div>
+        </div>
+        <div class="col-lg-3 col-md-6">
+            <div class="card kpi-card h-100"><div class="card-body">
+                <div class="d-flex align-items-center gap-2">
+                    <div class="kpi-icon bg-primary bg-opacity-10 text-primary"><i class="bi bi-graph-up-arrow"></i></div>
+                    <div><div class="kpi-value text-dark">{{ header.currency }} {{ header.profit|floatformat:0|intcomma }}</div><div class="kpi-label">Profit</div></div>
+                </div>
+            </div></div>
+        </div>
+        <div class="col-lg-3 col-md-6">
+            <div class="card kpi-card h-100"><div class="card-body">
+                <div class="d-flex align-items-center gap-2">
+                    <div class="kpi-icon bg-info bg-opacity-10 text-info"><i class="bi bi-receipt"></i></div>
+                    <div><div class="kpi-value text-dark">{{ header.currency }} {{ header.proposed_contract_value_incl_vat|floatformat:0|intcomma }}</div><div class="kpi-label">Incl. VAT</div></div>
+                </div>
+            </div></div>
+        </div>
+    </div>
+    {% if not header.profit_margin_pct %}
+    <div class="alert alert-light border small">No target profit margin set yet — Proposed Contract Value currently shows cost only (zero profit).</div>
+    {% endif %}
+
+    <!-- TOTAL COSTS — ANNUAL -->
+    <div class="mpc-shell">
+        <div class="mpc-banner dark"><span>Total Costs — Annual</span></div>
+        <table class="mpc-table">
+            <tbody>
+                {% for row in header.section_annual_breakdown %}
+                <tr>
+                    <td>{{ row.label }}</td>
+                    <td class="text-end" style="width:220px;">{{ header.currency }} {{ row.annual_total|floatformat:2|intcomma }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td>TOTAL ANNUAL COST</td>
+                    <td class="text-end">{{ header.currency }} {{ header.total_annual_cost|floatformat:2|intcomma }}</td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+
+    <!-- GRAND TOTAL: Monthly / Daily / Annual -->
+    <div class="mpc-shell">
+        <div class="mpc-banner dark"><span>Grand Total</span></div>
+        <table class="mpc-table">
+            <tbody>
+                <tr><td>Monthly Cost</td><td class="text-end" style="width:220px;">{{ header.currency }} {{ header.total_monthly_cost|floatformat:2|intcomma }}</td></tr>
+                <tr><td>Daily Cost <span class="text-muted small">(Monthly ÷ 26 working days)</span></td><td class="text-end">{{ header.currency }} {{ header.total_daily_cost|floatformat:2|intcomma }}</td></tr>
+                <tr><td>Annual Cost</td><td class="text-end">{{ header.currency }} {{ header.total_annual_cost|floatformat:2|intcomma }}</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    {{ formset.management_form }}
+
+    {% for sec in sections %}
+    <div class="mpc-shell">
+        <div class="mpc-banner">
+            <span>{{ sec.label }}</span>
+            <span class="badge {% if sec.is_monthly %}bg-light text-dark{% else %}bg-dark{% endif %}">
+                {% if sec.is_monthly %}Monthly × 12{% else %}One Time{% endif %}
+            </span>
+        </div>
+        <div class="table-responsive">
+            <table class="mpc-table" id="fym-table-{{ sec.code }}">
+                <thead>
+                    <tr>
+                        <th>Description</th>
+                        <th style="width:150px;">Nature</th>
+                        <th style="width:120px;">Amount</th>
+                        <th style="width:90px;">Qty</th>
+                        <th style="width:150px;">{% if sec.is_monthly %}Monthly Contribution{% else %}Total{% endif %}</th>
+                        <th>Remarks</th>
+                        {% if can_edit %}<th style="width:40px;">Del</th>{% endif %}
+                    </tr>
+                </thead>
+                <tbody id="fym-rows-{{ sec.code }}">
+                    {% for form in sec.forms %}
+                    <tr class="fym-row">
+                        {% if can_edit %}
+                        <td>{{ form.description }}{{ form.section.as_hidden }}{{ form.order.as_hidden }}{{ form.id }}
+                            {% if form.description.errors %}<div class="invalid-feedback d-block">{{ form.description.errors.0 }}</div>{% endif %}</td>
+                        <td>{{ form.nature_of_expense }}</td>
+                        <td>{{ form.amount }}</td>
+                        <td>{{ form.qty }}</td>
+                        <td class="text-end fw-semibold">
+                            {% if sec.is_monthly %}{{ form.instance.monthly_contribution|floatformat:2|intcomma }}{% else %}{{ form.instance.one_time_total|floatformat:2|intcomma }}{% endif %}
+                        </td>
+                        <td>{{ form.remarks }}</td>
+                        <td class="text-center">
+                            <span class="d-none">{{ form.DELETE }}</span>
+                            <button type="button" class="btn btn-sm btn-outline-danger {% if form.instance.pk %}delete-saved-row{% else %}remove-row{% endif %}" title="Remove"><i class="bi bi-trash"></i></button>
+                        </td>
+                        {% else %}
+                        <td>{{ form.instance.description }}</td>
+                        <td class="text-muted">{{ form.instance.get_nature_of_expense_display }}</td>
+                        <td class="text-end">{{ form.instance.amount|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ form.instance.qty|floatformat:2 }}</td>
+                        <td class="text-end fw-semibold">
+                            {% if sec.is_monthly %}{{ form.instance.monthly_contribution|floatformat:2|intcomma }}{% else %}{{ form.instance.one_time_total|floatformat:2|intcomma }}{% endif %}
+                        </td>
+                        <td class="text-muted small">{{ form.instance.remarks|default:"—" }}</td>
+                        {% endif %}
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="7" class="text-center text-muted py-3">No lines yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td colspan="4" class="text-end">{% if sec.is_monthly %}Section Subtotal (monthly) → ×12{% else %}Section Subtotal{% endif %}</td>
+                        <td class="text-end">{{ sec.subtotal|floatformat:2|intcomma }}</td>
+                        <td colspan="2"></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+        {% if can_edit %}
+        <div class="mpc-addrow">
+            <button type="button" class="btn btn-sm btn-primary add-row-btn" data-section="{{ sec.code }}">
+                <i class="bi bi-plus-lg"></i> Add Line
+            </button>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+
+    {% if can_edit %}
+    <template id="fym-row-template">
+        <tr class="fym-row">
+            <td>{{ formset.empty_form.description }}{{ formset.empty_form.section.as_hidden }}{{ formset.empty_form.order.as_hidden }}{{ formset.empty_form.id }}</td>
+            <td>{{ formset.empty_form.nature_of_expense }}</td>
+            <td>{{ formset.empty_form.amount }}</td>
+            <td>{{ formset.empty_form.qty }}</td>
+            <td class="text-end text-muted">—</td>
+            <td>{{ formset.empty_form.remarks }}</td>
+            <td class="text-center">
+                <span class="d-none">{{ formset.empty_form.DELETE }}</span>
+                <button type="button" class="btn btn-sm btn-outline-danger remove-row" title="Remove"><i class="bi bi-trash"></i></button>
+            </td>
+        </tr>
+    </template>
+
+    <div class="d-flex gap-2 mb-4">
+        <button type="submit" class="btn btn-danger"><i class="bi bi-check-lg"></i> Save Changes</button>
+    </div>
+    {% endif %}
+</form>
+
+{% if can_edit %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const totalForms = document.getElementById('id_first_year_maintenance_lines-TOTAL_FORMS');
+    const tmpl = document.getElementById('fym-row-template');
+
+    function addRow(sectionCode) {
+        const formIdx = parseInt(totalForms.value, 10);
+        const html = tmpl.innerHTML.replace(/__prefix__/g, formIdx);
+        const temp = document.createElement('tbody');
+        temp.innerHTML = html.trim();
+        const newRow = temp.querySelector('tr');
+        const sectionInput = newRow.querySelector('[name$="-section"]');
+        if (sectionInput) sectionInput.value = sectionCode;
+        const orderInput = newRow.querySelector('[name$="-order"]');
+        if (orderInput) orderInput.value = formIdx;
+        const tbody = document.getElementById('fym-rows-' + sectionCode);
+        tbody.appendChild(newRow);
+        totalForms.value = formIdx + 1;
+        const first = newRow.querySelector('input:not([type=hidden]), select');
+        if (first) first.focus();
+    }
+
+    document.querySelectorAll('.add-row-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() { addRow(btn.dataset.section); });
+    });
+
+    document.querySelectorAll('tbody[id^="fym-rows-"]').forEach(function(tbody) {
+        tbody.addEventListener('click', function(e) {
+            const removeBtn = e.target.closest('.remove-row');
+            if (removeBtn) {
+                removeBtn.closest('tr').remove();
+                totalForms.value = parseInt(totalForms.value, 10) - 1;
+                return;
+            }
+            const delBtn = e.target.closest('.delete-saved-row');
+            if (delBtn) {
+                const row = delBtn.closest('tr');
+                const checkbox = row.querySelector('input[type="checkbox"][name$="-DELETE"]');
+                if (!checkbox) return;
+                checkbox.checked = true;
+                row.style.opacity = '0.45';
+                row.style.textDecoration = 'line-through';
+                delBtn.classList.remove('btn-outline-danger', 'delete-saved-row');
+                delBtn.classList.add('btn-outline-secondary', 'undo-delete-row');
+                delBtn.title = 'Undo delete';
+                delBtn.innerHTML = '<i class="bi bi-arrow-counterclockwise"></i>';
+                return;
+            }
+            const undoBtn = e.target.closest('.undo-delete-row');
+            if (undoBtn) {
+                const row = undoBtn.closest('tr');
+                const checkbox = row.querySelector('input[type="checkbox"][name$="-DELETE"]');
+                if (checkbox) checkbox.checked = false;
+                row.style.opacity = '';
+                row.style.textDecoration = '';
+                undoBtn.classList.remove('btn-outline-secondary', 'undo-delete-row');
+                undoBtn.classList.add('btn-outline-danger', 'delete-saved-row');
+                undoBtn.title = 'Mark for delete';
+                undoBtn.innerHTML = '<i class="bi bi-trash"></i>';
+            }
+        });
+    });
+});
+</script>
+{% endif %}
+{% endblock %}
