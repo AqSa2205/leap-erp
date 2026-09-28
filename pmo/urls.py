@@ -37,4 +37,19 @@ urlpatterns = [
     path('issues/<int:pk>/edit/', views.issue_log_edit, name='issue_log_edit'),
     path('issues/export/', views.issue_log_export_excel, name='issue_log_export_excel'),
     path('issues/export/all/', views.issue_log_export_all_zip, name='issue_log_export_all_zip'),
+
+    # Project Manpower Costing: bid-stage staffing-cost estimation per project.
+    # Nested under /delivery/, so this is /delivery/manpower-costing/... —
+    # distinct from the top-level /manpower-costing/ mount of the unrelated
+    # manpowercost (HR payroll) app in erp_leap/urls.py. URL *names* also get
+    # their own mpc_ prefix so base.html's substring-based active-link checks
+    # can't confuse the two.
+    path('manpower-costing/', views.mpc_index, name='mpc_index'),
+    path('manpower-costing/<int:pk>/', views.mpc_project_overview, name='mpc_project_overview'),
+    path('manpower-costing/<int:pk>/first-year-maintenance/', views.mpc_first_year_detail, name='mpc_first_year_detail'),
+    path('manpower-costing/<int:pk>/first-year-maintenance/export/', views.mpc_first_year_export_excel, name='mpc_first_year_export_excel'),
+    path('manpower-costing/<int:pk>/grade-structure/', views.mpc_grade_structure_detail, name='mpc_grade_structure_detail'),
+    path('manpower-costing/<int:pk>/grade-structure/export/', views.mpc_grade_structure_export_excel, name='mpc_grade_structure_export_excel'),
+    path('manpower-costing/<int:pk>/engineer-rate-table/', views.mpc_engineer_rate_table, name='mpc_engineer_rate_table'),
+    path('manpower-costing/<int:pk>/manpower-consolidated/', views.mpc_manpower_consolidated, name='mpc_manpower_consolidated'),
 ]
