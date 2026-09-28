@@ -1170,8 +1170,10 @@ def bom_procurement_tracker(request, sheet_pk):
         if not item_ids:
             messages.error(request, 'Pick at least one item to add to the PO.')
         else:
+            # all_objects: the default manager hides procurement-added sub
+            # items, but they have to stay pickable for a PO.
             picked_items = list(
-                CostingLineItem.objects
+                CostingLineItem.all_objects
                 .filter(pk__in=item_ids, section__costing_sheet=sheet, section__is_optional=False)
                 .select_related('section'))
 
@@ -1263,10 +1265,15 @@ def bom_procurement_tracker(request, sheet_pk):
     available_count = fully_procured_count = 0
     budget_total = Decimal('0')
     for section in (sheet.sections.filter(is_optional=False)
-                    .prefetch_related('line_items__procured_po_items__purchase_order')
                     .order_by('order', 'section_number')):
         section_items = []
-        for li in section.line_items.all().order_by('order', 'item_number'):
+        # CostingLineItem.all_objects, not section.line_items: the default
+        # manager hides procurement-added sub items so no budget total can
+        # pick one up by accident, but this page is where procurement picks
+        # them for a PO, so it asks for them explicitly.
+        for li in (CostingLineItem.all_objects.filter(section=section)
+                   .prefetch_related('procured_po_items__purchase_order')
+                   .order_by('order', 'item_number')):
             li.set_exchange_rates_cache(rates)
             li.set_sheet_cache(sheet)
             procured = list(li.procured_po_items.select_related('purchase_order').all())
@@ -1326,6 +1333,9 @@ def add_sub_line_item(request, item_pk):
     would be enforced - one change there, not a hunt through this view.
     """
     from costing.models import CostingLineItem
+    # The default manager hides sub items, so a sub item's pk 404s here -
+    # which is what keeps nesting to one level (a sub item cannot be the
+    # parent of another).
     parent = get_object_or_404(CostingLineItem, pk=item_pk)
     sheet = parent.section.costing_sheet
     user = request.user
@@ -1376,7 +1386,12 @@ def add_sub_line_item(request, item_pk):
                 messages.error(request, e)
             return redirect('procurement:bom_procurement_tracker', sheet_pk=sheet.pk)
 
-        next_number = f'{parent.item_number}-{parent.sub_items.count() + 1}'
+        # all_objects: parent.sub_items goes through the default manager,
+        # which hides sub items, so it would always count zero and every new
+        # sub item would be numbered -1.
+        next_number = (
+            f'{parent.item_number}-'
+            f'{CostingLineItem.all_objects.filter(parent_item=parent).count() + 1}')
         CostingLineItem.objects.create(
             section=parent.section,
             parent_item=parent,

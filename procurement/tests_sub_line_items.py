@@ -26,7 +26,7 @@ class SubLineItemCreationTests(TestCase):
             title='Sub-item test sheet', workflow_stage='finance_approved')
         self.section = CostingSection.objects.create(
             costing_sheet=self.sheet, section_number='A.1', title='Scope of Supply')
-        self.parent = CostingLineItem.objects.create(
+        self.parent = CostingLineItem.all_objects.create(
             section=self.section, item_number='1', description='Printer',
             quantity=Decimal('2'), unit='EA')
 
@@ -42,7 +42,7 @@ class SubLineItemCreationTests(TestCase):
 
     def test_super_admin_can_add_a_sub_item(self):
         self._post(self.super_admin)
-        sub = self.parent.sub_items.get()
+        sub = CostingLineItem.all_objects.filter(parent_item=self.parent).get()
         self.assertEqual(sub.description, 'Cartridge (Black)')
         self.assertEqual(sub.quantity, Decimal('3'))
         self.assertEqual(sub.parent_item_id, self.parent.pk)
@@ -55,45 +55,45 @@ class SubLineItemCreationTests(TestCase):
 
     def test_finance_user_cannot_add_a_sub_item(self):
         self._post(self.finance)
-        self.assertEqual(self.parent.sub_items.count(), 0)
+        self.assertEqual(CostingLineItem.all_objects.filter(parent_item=self.parent).count(), 0)
 
     def test_cannot_add_before_the_budget_is_finance_approved(self):
         self.sheet.workflow_stage = 'finance_review'
         self.sheet.save()
         self._post(self.super_admin)
-        self.assertEqual(self.parent.sub_items.count(), 0)
+        self.assertEqual(CostingLineItem.all_objects.filter(parent_item=self.parent).count(), 0)
 
     def test_quantity_must_be_a_whole_number(self):
         self._post(self.super_admin, quantity='not-a-number')
-        self.assertEqual(self.parent.sub_items.count(), 0)
+        self.assertEqual(CostingLineItem.all_objects.filter(parent_item=self.parent).count(), 0)
 
     def test_fractional_quantity_that_still_rounds_down_to_a_valid_whole_number(self):
         """3.2 has no fractional-quantity error to raise post-rounding - it
         rounds down to a valid 3, so the sub item should still be created."""
         self._post(self.super_admin, quantity='3.2')
-        self.assertEqual(self.parent.sub_items.get().quantity, Decimal('3'))
+        self.assertEqual(CostingLineItem.all_objects.filter(parent_item=self.parent).get().quantity, Decimal('3'))
 
     def test_quantity_must_be_positive(self):
         self._post(self.super_admin, quantity='0')
-        self.assertEqual(self.parent.sub_items.count(), 0)
+        self.assertEqual(CostingLineItem.all_objects.filter(parent_item=self.parent).count(), 0)
 
     def test_description_is_required(self):
         self._post(self.super_admin, description='')
-        self.assertEqual(self.parent.sub_items.count(), 0)
+        self.assertEqual(CostingLineItem.all_objects.filter(parent_item=self.parent).count(), 0)
 
     def test_negative_rate_is_rejected(self):
         self._post(self.super_admin, rate_per_unit='-5')
-        self.assertEqual(self.parent.sub_items.count(), 0)
+        self.assertEqual(CostingLineItem.all_objects.filter(parent_item=self.parent).count(), 0)
 
     def test_no_quantity_cap_is_enforced_for_now(self):
         self.assertIsNone(CostingLineItem.max_sub_item_quantity())
         self._post(self.super_admin, quantity='100000')
-        self.assertEqual(self.parent.sub_items.get().quantity, Decimal('100000'))
+        self.assertEqual(CostingLineItem.all_objects.filter(parent_item=self.parent).get().quantity, Decimal('100000'))
 
     def test_sub_item_number_is_derived_from_the_parent(self):
         self._post(self.super_admin)
         self._post(self.super_admin, description='Cartridge (Color)')
-        numbers = sorted(self.parent.sub_items.values_list('item_number', flat=True))
+        numbers = sorted(CostingLineItem.all_objects.filter(parent_item=self.parent).values_list('item_number', flat=True))
         self.assertEqual(numbers, ['1-1', '1-2'])
 
 
@@ -112,7 +112,7 @@ class SubLineItemBudgetIsolationTests(TestCase):
             title='Isolation test sheet', project=project, workflow_stage='finance_approved')
         self.section = CostingSection.objects.create(
             costing_sheet=self.sheet, section_number='A.1', title='Scope of Supply')
-        self.parent = CostingLineItem.objects.create(
+        self.parent = CostingLineItem.all_objects.create(
             section=self.section, item_number='1', description='Printer',
             quantity=Decimal('2'), unit='EA', base_unit_cost=Decimal('500'),
             budget_price=Decimal('1200'))
@@ -167,7 +167,7 @@ class SubLineItemBudgetIsolationTests(TestCase):
         self.client.post(
             reverse('procurement:add_sub_line_item', args=[self.parent.pk]),
             {'description': 'Cartridge', 'quantity': '5', 'unit': 'EA', 'rate_per_unit': '99.00'})
-        sub = self.parent.sub_items.get()
+        sub = CostingLineItem.all_objects.filter(parent_item=self.parent).get()
         self.assertEqual(sub.budget_price, Decimal('495.00'))
 
         self.client.post(reverse('finance:sheet_budget', args=[self.sheet.pk]), {
@@ -177,6 +177,75 @@ class SubLineItemBudgetIsolationTests(TestCase):
         })
         sub.refresh_from_db()
         self.assertEqual(sub.budget_price, Decimal('495.00'))
+
+
+    def _add_sub_item(self):
+        self.client.force_login(self.super_admin)
+        return self.client.post(
+            reverse('procurement:add_sub_line_item', args=[self.parent.pk]),
+            {'description': 'Cartridge', 'quantity': '5', 'unit': 'EA', 'rate_per_unit': '99.00'})
+
+    @staticmethod
+    def _sub_item_count():
+        # _base_manager is unfiltered whatever the default manager hides, so
+        # these tests can prove a sub item really was created rather than
+        # passing vacuously because it silently wasn't.
+        return CostingLineItem._base_manager.filter(added_by_procurement=True).count()
+
+    def test_approved_budget_for_the_project_is_unaffected(self):
+        """The figure the procurement board and every over/under-budget
+        calculation compare committed spend against."""
+        from procurement.budget_status import approved_budgets_for
+        project = self.sheet.project
+        before = approved_budgets_for([project])[project.pk]
+        self._add_sub_item()
+        self.assertEqual(self._sub_item_count(), 1)
+        self.assertEqual(before, approved_budgets_for([project])[project.pk])
+
+    def test_costing_sheet_contract_total_is_unaffected(self):
+        """contract_total is the quoted, client-facing value. A sub item that
+        carries a cost basis (e.g. one a costing user later prices) must
+        still never raise it."""
+        def contract_total():
+            sheet = CostingSheet.objects.get(pk=self.sheet.pk)
+            value = sheet.contract_total
+            return value() if callable(value) else value
+
+        before = contract_total()
+        self._add_sub_item()
+        self.assertEqual(self._sub_item_count(), 1)
+        CostingLineItem._base_manager.filter(added_by_procurement=True).update(
+            base_unit_cost=Decimal('400'))
+        self.assertEqual(before, contract_total())
+
+    def test_sub_item_still_appears_on_the_procurement_tracker(self):
+        """Hidden from every total, but the tracker is where procurement
+        picks it for a PO, so it has to stay listed there."""
+        self._add_sub_item()
+        self.client.force_login(self.super_admin)
+        resp = self.client.get(
+            reverse('procurement:bom_procurement_tracker', args=[self.sheet.pk]))
+        descriptions = [
+            it['item'].description for row in resp.context['rows'] for it in row['items']]
+        self.assertIn('Cartridge', descriptions)
+
+    def test_second_sub_item_gets_the_next_number_not_the_first_again(self):
+        self._add_sub_item()
+        self._add_sub_item()
+        numbers = sorted(CostingLineItem._base_manager.filter(
+            added_by_procurement=True).values_list('item_number', flat=True))
+        self.assertEqual(numbers, ['1-1', '1-2'])
+
+    def test_a_sub_item_cannot_be_the_parent_of_another(self):
+        """Nesting is one level only - otherwise item_number builds up as
+        1-1-1 and a sub item could parent its own budget."""
+        self._add_sub_item()
+        sub = CostingLineItem._base_manager.get(added_by_procurement=True)
+        self.client.force_login(self.super_admin)
+        self.client.post(
+            reverse('procurement:add_sub_line_item', args=[sub.pk]),
+            {'description': 'Nested', 'quantity': '1', 'unit': 'EA', 'rate_per_unit': '10'})
+        self.assertEqual(self._sub_item_count(), 1)
 
 
 class SubLineItemProcurementFlowTests(TestCase):
@@ -194,14 +263,14 @@ class SubLineItemProcurementFlowTests(TestCase):
             title='Flow test sheet', project=project, workflow_stage='finance_approved')
         self.section = CostingSection.objects.create(
             costing_sheet=self.sheet, section_number='A.1', title='Scope of Supply')
-        self.parent = CostingLineItem.objects.create(
+        self.parent = CostingLineItem.all_objects.create(
             section=self.section, item_number='1', description='Printer',
             quantity=Decimal('2'), unit='EA')
         self.client.force_login(self.user)
         self.client.post(
             reverse('procurement:add_sub_line_item', args=[self.parent.pk]),
             {'description': 'Cartridge', 'quantity': '5', 'unit': 'EA', 'rate_per_unit': '20.00'})
-        self.sub = self.parent.sub_items.get()
+        self.sub = CostingLineItem.all_objects.filter(parent_item=self.parent).get()
 
     def test_sub_item_can_be_picked_for_a_po(self):
         resp = self.client.post(

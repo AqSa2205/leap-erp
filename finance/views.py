@@ -593,11 +593,15 @@ def sheet_budget(request, sheet_pk):
             'sales_price': sales_price, 'variance': price - sales_price,
         }
 
+    from costing.models import CostingLineItem as _LineItem
     sections = []
     sub_item_count = 0
     for section in sheet.sections.filter(is_optional=False).order_by('order', 'section_number'):
         lines, sec_cost, sec_price, sec_sales = [], Decimal('0'), Decimal('0'), Decimal('0')
-        for item in section.line_items.all().order_by('order', 'item_number'):
+        # all_objects: this screen shows procurement-added sub items (flagged,
+        # and left out of every total below), but section.line_items no
+        # longer returns them.
+        for item in _LineItem.all_objects.filter(section=section).order_by('order', 'item_number'):
             item.set_exchange_rates_cache(rates)
             item.set_sheet_cache(sheet)
             base_cost = item.base_total_cost_sar

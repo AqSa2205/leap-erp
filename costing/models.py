@@ -859,6 +859,24 @@ class CostingSection(models.Model):
         return self._compute_subtotals()['base_total_price']
 
 
+class BudgetLineItemManager(models.Manager):
+    """Default manager for CostingLineItem: budget lines only.
+
+    Procurement-added sub items (added_by_procurement) are deliberately
+    invisible here, and so through every relation that goes via the default
+    manager - section.line_items, prefetch_related('...line_items'), a
+    parent's sub_items. That is what makes "adding a sub item never moves a
+    finance-approved figure" structural: sheet totals, the approved budget,
+    exports, revision snapshots and dashboards all walk section.line_items,
+    so none of them can pick one up by forgetting a filter. A screen that
+    genuinely shows sub items - the procurement tracker, the finance budget
+    view - asks for them explicitly with CostingLineItem.all_objects.
+    """
+
+    def get_queryset(self):
+        return super().get_queryset().filter(added_by_procurement=False)
+
+
 class CostingLineItem(models.Model):
     UNIT_CHOICES = [
         ('EA', 'EA'),
@@ -947,6 +965,15 @@ class CostingLineItem(models.Model):
     @staticmethod
     def max_sub_item_quantity():
         return None
+
+    # The first manager declared is the default one. `objects` hides sub
+    # items (see BudgetLineItemManager); `all_objects` sees everything.
+    # Forward lookups (a PO line's source_bom_item), cascade deletes and
+    # save() go through Django's base manager, which stays unfiltered, so a
+    # PO line pointing at a sub item still resolves and deleting a parent
+    # still removes its sub items.
+    objects = BudgetLineItemManager()
+    all_objects = models.Manager()
 
     class Meta:
         ordering = ['order', 'item_number']
