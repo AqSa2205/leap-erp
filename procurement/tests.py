@@ -2437,6 +2437,97 @@ class DashboardStatusBreakdownTests(TestCase):
             self.assertIn(key, resp.context['po_by_status'])
 
 
+class POBudgetBreakdownCostTests(TestCase):
+    """budget_breakdown() runs on every PO detail render, so it must not issue
+    queries in proportion to the size of the PO; it must say so when a PO draws
+    on more than one budget; and it must render cleanly when nothing was
+    budgeted."""
+
+    def setUp(self):
+        from projects.models import Region, ProjectStatus, Project
+        from costing.models import CostingSheet, CostingSection
+        sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('bdc_sa', password='x', role=sa_role)
+        region = Region.objects.create(name='BDC Region', code='BDCREG')
+        won = ProjectStatus.objects.create(name='Won-BDC', category='won')
+        self.project = Project.objects.create(
+            project_name='BDC Project', proposal_reference='BDC-REF-1', status=won, region=region)
+        self.sheet = CostingSheet.objects.create(
+            title='BDC Sheet', project=self.project, margin=Decimal('30'),
+            discount_rate=Decimal('0'), workflow_stage='finance_approved')
+        self.sec = CostingSection.objects.create(
+            costing_sheet=self.sheet, section_number='A.1', title='Supply', order=0)
+
+    def _line(self, number, section=None, base_unit_cost='10'):
+        from costing.models import CostingLineItem
+        return CostingLineItem.objects.create(
+            section=section or self.sec, item_number=str(number),
+            description=f'Line {number}', quantity=Decimal('5'), unit='EA',
+            base_unit_cost=Decimal(base_unit_cost), supplier_currency='SAR')
+
+    def _po(self, lines):
+        from procurement.models import PurchaseOrder
+        po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number=f'BDC-{PurchaseOrder.objects.count() + 1}',
+            vendor_name='Acme', po_issued_by='T', project=self.project,
+            created_by=self.user, status='draft')
+        for n, line in enumerate(lines, start=1):
+            po.items.create(
+                serial_number=n, description=f'Item {n}', quantity=Decimal('2'),
+                rate_per_unit=Decimal('20'), source_bom_item=line)
+        return po
+
+    def _queries_for_breakdown(self, po):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        from procurement.models import PurchaseOrder
+        fresh = PurchaseOrder.objects.get(pk=po.pk)   # no cached relations
+        with CaptureQueriesContext(connection) as ctx:
+            fresh.budget_breakdown()
+        return len(ctx)
+
+    def test_query_count_does_not_grow_with_the_number_of_budget_lines(self):
+        small = self._queries_for_breakdown(self._po([self._line(i) for i in range(1, 3)]))
+        large = self._queries_for_breakdown(self._po([self._line(i) for i in range(10, 16)]))
+        self.assertEqual(small, large)
+
+    def test_a_po_drawing_on_two_budgets_is_flagged(self):
+        from costing.models import CostingSheet, CostingSection
+        sheet_b = CostingSheet.objects.create(
+            title='BDC Sheet B', project=self.project, margin=Decimal('30'),
+            discount_rate=Decimal('0'), workflow_stage='finance_approved')
+        sec_b = CostingSection.objects.create(
+            costing_sheet=sheet_b, section_number='A.1', title='Supply', order=0)
+        po = self._po([self._line(1), self._line(2, section=sec_b)])
+        breakdown = po.budget_breakdown()
+        self.assertTrue(breakdown['multiple_budgets'])
+        self.assertEqual(breakdown['sheet_pk'], min(self.sheet.pk, sheet_b.pk))
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('procurement:po_detail', args=[po.pk]))
+        self.assertContains(resp, 'more than one budget')
+
+    def test_a_po_from_a_single_budget_is_not_flagged(self):
+        po = self._po([self._line(1), self._line(2)])
+        breakdown = po.budget_breakdown()
+        self.assertFalse(breakdown['multiple_budgets'])
+        self.assertEqual(breakdown['sheet_pk'], self.sheet.pk)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('procurement:po_detail', args=[po.pk]))
+        self.assertNotContains(resp, 'more than one budget')
+
+    def test_nothing_budgeted_renders_without_a_stray_percentage(self):
+        """Only reachable when every budgeted line prices at zero: the
+        percentages are None and the page must simply leave them out."""
+        po = self._po([self._line(1, base_unit_cost='0')])
+        breakdown = po.budget_breakdown()
+        self.assertIsNone(breakdown['deducted_pct'])
+        self.assertIsNone(breakdown['remaining_pct'])
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('procurement:po_detail', args=[po.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, '(None')
+
+
 class POBudgetBreakdownTests(TestCase):
     """PurchaseOrder.budget_breakdown() - budget vs actual variance scoped
     to just this PO's own line items, not the whole sheet or other POs."""

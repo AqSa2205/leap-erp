@@ -300,12 +300,33 @@ class PurchaseOrder(models.Model):
         actually charging for it (the variance). None if this PO has no
         budget-sourced items at all - there's nothing to compare.
         """
-        items = [i for i in self.items.all() if i.source_bom_item_id]
+        from procurement.budget_status import exchange_rates
+        # Two queries however large the PO: the budget-sourced lines with the
+        # FK chain pricing walks, and the exchange rates, primed onto each
+        # line the way the tracker does. Left to itself, budget_unit_price()
+        # walks the FK and looks up ExchangeRate again per item (about three
+        # queries each), and this runs on every render of the PO detail page.
+        items = list(self.items
+                     .filter(source_bom_item__isnull=False)
+                     .select_related('source_bom_item__section__costing_sheet'))
         if not items:
             return None
-        budget_reference = sum(
-            (i.quantity * i.source_bom_item.budget_unit_price() for i in items),
-            Decimal('0'))
+        rates = exchange_rates()
+        sheets = {}
+        budget_reference = Decimal('0')
+        for i in items:
+            line = i.source_bom_item
+            # One sheet object per budget, so its caches are primed once.
+            sheet = sheets.setdefault(line.section.costing_sheet_id, line.section.costing_sheet)
+            sheet.set_rates_cache(rates)
+            line.set_exchange_rates_cache(rates)
+            line.set_sheet_cache(sheet)
+            budget_reference += i.quantity * line.budget_unit_price()
+        # A PO is meant to draw on one budget. If it somehow holds lines from
+        # more than one (older data, or a path that bypasses the tracker's
+        # one-budget rule) the figures combine them and the link can only
+        # open one, so say so rather than reading as a single comparison.
+        sheet_ids = set(sheets)
         deducted = sum((i.total_value for i in items), Decimal('0'))
         remaining = budget_reference - deducted
         if budget_reference:
@@ -319,7 +340,8 @@ class PurchaseOrder(models.Model):
             'deducted_pct': deducted_pct,
             'remaining': remaining,
             'remaining_pct': remaining_pct,
-            'sheet_pk': items[0].source_bom_item.section.costing_sheet_id,
+            'sheet_pk': min(sheet_ids),
+            'multiple_budgets': len(sheet_ids) > 1,
         }
 
     LOCKED_STATUS = 'client_acknowledged'
