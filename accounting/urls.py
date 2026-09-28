@@ -13,6 +13,10 @@ urlpatterns = [
     path('zoho/connection/', views.zoho_connection, name='zoho_connection'),
     path('zoho/mapping/', views.zoho_mapping, name='zoho_mapping'),
     path('zoho/mapping/save/', views.zoho_mapping_save, name='zoho_mapping_save'),
+    path('zoho/mapping/bulk-ignore/', views.zoho_mapping_bulk_ignore,
+         name='zoho_mapping_bulk_ignore'),
+    path('zoho/mapping/bulk-ignore/apply/', views.zoho_mapping_bulk_ignore_apply,
+         name='zoho_mapping_bulk_ignore_apply'),
     path('zoho/mapping/apply-certain/', views.zoho_mapping_apply_certain,
          name='zoho_mapping_apply_certain'),
 ]
