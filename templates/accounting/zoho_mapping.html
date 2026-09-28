@@ -101,6 +101,42 @@
       </div>
       {% endif %}
 
+      {% comment %} Bulk ignore. Finance keeps the "do not map these" list
+      outside the ERP - employee current accounts, Zoho's own default expense
+      categories - and ignoring them one row at a time, fifty to a page, is
+      where a mis-tick goes unnoticed. Paste the list; the next screen shows
+      what it matched before anything changes. {% endcomment %}
+      <div class="card mb-3">
+        <div class="card-header bg-white py-2 d-flex justify-content-between align-items-center"
+             role="button" data-bs-toggle="collapse" data-bs-target="#bulkIgnore">
+          <span class="fw-semibold small">
+            <i class="bi bi-eye-slash me-2"></i>Ignore a list of accounts
+          </span>
+          <i class="bi bi-chevron-down small text-muted"></i>
+        </div>
+        <div class="collapse" id="bulkIgnore">
+          <div class="card-body">
+            <form method="post" action="{% url 'accounting:zoho_mapping_bulk_ignore' %}">
+              {% csrf_token %}
+              <input type="hidden" name="back" value="{{ querystring }}">
+              <label class="form-label small mb-1" for="bulkIgnoreNames">
+                One account name per line
+              </label>
+              <textarea class="form-control form-control-sm" id="bulkIgnoreNames"
+                        name="names" rows="6"
+                        placeholder="Accrued SAGIA Fees&#10;STCPAY Business&#10;Sharib Abbas"></textarea>
+              <div class="form-text">
+                Nothing changes yet &mdash; the next screen shows exactly what matched,
+                what only came close, and what it could not find.
+              </div>
+              <button type="submit" class="btn btn-outline-primary btn-sm mt-2">
+                Check the list
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-header bg-white py-3">
           <form method="get" class="row g-2 align-items-center">
