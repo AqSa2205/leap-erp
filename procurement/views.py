@@ -1039,6 +1039,34 @@ def _uniform_vendor(items):
     return vendors.pop() if len(vendors) == 1 else ''
 
 
+def _appendable_draft_pos(sheet):
+    """Draft POs that "add to an existing PO" may append to from this sheet's
+    tracker. One definition, used both to build the dropdown and to validate
+    the posted id, so the two can never disagree.
+
+    Two rules:
+    - Drafts only: once issued, the vendor already has the original scope, so
+      appending more items would misrepresent what was sent.
+    - One budget per PO: a draft that already holds lines from a different
+      budget is not offered. The PO budget breakdown shows a single budget vs
+      actual figure and one link back per PO, so a PO spanning two budgets
+      would blend them. A draft with no budget-linked lines yet (e.g. typed
+      in by hand) has nothing to conflict with and is offered.
+
+    The sheet always has a project here - the tracker redirects away before
+    this point when it does not.
+    """
+    from django.db.models import Exists, OuterRef
+    other_budget_lines = PurchaseOrderItem.objects.filter(
+        purchase_order=OuterRef('pk'), source_bom_item__isnull=False,
+    ).exclude(source_bom_item__section__costing_sheet=sheet)
+    return (PurchaseOrder.objects
+            .filter(project=sheet.project, status='draft')
+            .annotate(has_other_budget_lines=Exists(other_budget_lines))
+            .filter(has_other_budget_lines=False)
+            .order_by('-created_at'))
+
+
 @login_required
 def po_create_from_bom(request, sheet_pk):
     """Seed a draft PO with every supply line from a finance-approved budget,
@@ -1218,53 +1246,84 @@ def bom_procurement_tracker(request, sheet_pk):
             # actually sent.
             existing_po_id = request.POST.get('existing_po_id', '').strip()
             existing_po = None
-            if existing_po_id:
-                existing_po = PurchaseOrder.objects.filter(
-                    pk=existing_po_id, project=sheet.project, status='draft').first()
-                if not existing_po:
-                    messages.error(
-                        request,
-                        'The PO you picked to add these items to is no longer a draft, or no '
-                        'longer exists. Nothing was added — pick again or create a new PO instead.')
-                    return redirect('procurement:bom_procurement_tracker', sheet_pk=sheet.pk)
+            # One transaction for the whole write. select_for_update on the
+            # target PO serialises two people appending to it at once (they
+            # would otherwise both read the same Max serial and hand out
+            # duplicate numbers - serial_number has no uniqueness constraint),
+            # and re-checks "still a draft" at the moment of writing rather
+            # than at some earlier point in the request.
+            with transaction.atomic():
+                if existing_po_id:
+                    # isdigit: a tampered non-numeric id must fail like a stale
+                    # one, not raise from the pk lookup.
+                    if existing_po_id.isdigit():
+                        existing_po = (_appendable_draft_pos(sheet)
+                                       .select_for_update()
+                                       .filter(pk=int(existing_po_id)).first())
+                    if not existing_po:
+                        messages.error(
+                            request,
+                            'The PO you picked cannot take these items: it is no longer a draft, no longer '
+                            'exists, or already holds items from a different budget. Nothing was added '
+                            '— pick again or create a new PO instead.')
+                        return redirect('procurement:bom_procurement_tracker', sheet_pk=sheet.pk)
 
-            if existing_po:
-                po = existing_po
-                # Continue the existing item numbering rather than restart
-                # at 1, so serial numbers on one PO stay unique.
-                first_serial = (po.items.aggregate(Max('serial_number'))['serial_number__max'] or 0) + 1
-            else:
-                placeholder_po_number = f'DRAFT-S{sheet.pk}-{int(datetime.now().timestamp() * 1_000_000)}'
-                po = PurchaseOrder.objects.create(
-                    po_date=datetime.now().date(),
-                    po_number=placeholder_po_number,
-                    vendor_name=_uniform_vendor([li for li, _qty in to_order]),
-                    po_issued_by=user.get_full_name() or user.username,
-                    issuer_email=user.email or '',
-                    project=sheet.project,
-                    project_name=sheet.project.project_name if sheet.project else (sheet.title or ''),
-                    created_by=user,
-                )
-                first_serial = 1
-            serial = first_serial
-            for li, qty in to_order:
-                li.set_exchange_rates_cache(rates)
-                li.set_sheet_cache(sheet)
-                make_model = ' '.join(filter(None, [li.make, li.model_number])).strip()
-                PurchaseOrderItem.objects.create(
-                    purchase_order=po,
-                    serial_number=serial,
-                    system=li.section.title or '',
-                    make_model=make_model,
-                    vendor_name=li.vendor_name or '',
-                    description=li.description,
-                    quantity=qty,
-                    uom=li.unit or 'Nos',
-                    rate_per_unit=li.budget_unit_price(),
-                    order=serial,
-                    source_bom_item=li,
-                )
-                serial += 1
+                if existing_po:
+                    po = existing_po
+                    # The header vendor is what prints on the PO, but each line
+                    # carries its own. A new PO's header is only set when every
+                    # line shares one vendor; appending has to keep that true.
+                    # If any added line names a different vendor the header is
+                    # cleared and must be re-confirmed before saving - the PDF
+                    # must never go to one supplier with another's line on it.
+                    header_vendor = (po.vendor_name or '').strip()
+                    if header_vendor and any(
+                            (li.vendor_name or '').strip()
+                            and (li.vendor_name or '').strip().casefold() != header_vendor.casefold()
+                            for li, _qty in to_order):
+                        cleared_vendor = po.vendor_name
+                        po.vendor_name = ''
+                        po.save(update_fields=['vendor_name'])
+                        messages.warning(
+                            request,
+                            f'Some of the added items are from a different vendor than '
+                            f'"{cleared_vendor}", so the vendor on {po.po_number} was cleared. '
+                            f'Confirm the vendor before saving.')
+                    # Continue the existing item numbering rather than restart
+                    # at 1, so serial numbers on one PO stay unique.
+                    first_serial = (po.items.aggregate(Max('serial_number'))['serial_number__max'] or 0) + 1
+                else:
+                    placeholder_po_number = f'DRAFT-S{sheet.pk}-{int(datetime.now().timestamp() * 1_000_000)}'
+                    po = PurchaseOrder.objects.create(
+                        po_date=datetime.now().date(),
+                        po_number=placeholder_po_number,
+                        vendor_name=_uniform_vendor([li for li, _qty in to_order]),
+                        po_issued_by=user.get_full_name() or user.username,
+                        issuer_email=user.email or '',
+                        project=sheet.project,
+                        project_name=sheet.project.project_name if sheet.project else (sheet.title or ''),
+                        created_by=user,
+                    )
+                    first_serial = 1
+                serial = first_serial
+                for li, qty in to_order:
+                    li.set_exchange_rates_cache(rates)
+                    li.set_sheet_cache(sheet)
+                    make_model = ' '.join(filter(None, [li.make, li.model_number])).strip()
+                    PurchaseOrderItem.objects.create(
+                        purchase_order=po,
+                        serial_number=serial,
+                        system=li.section.title or '',
+                        make_model=make_model,
+                        vendor_name=li.vendor_name or '',
+                        description=li.description,
+                        quantity=qty,
+                        uom=li.unit or 'Nos',
+                        rate_per_unit=li.budget_unit_price(),
+                        order=serial,
+                        source_bom_item=li,
+                    )
+                    serial += 1
             added_count = serial - first_serial
             skip_note = ''
             if skipped_full:
@@ -1322,12 +1381,8 @@ def bom_procurement_tracker(request, sheet_pk):
         if section_items:
             rows.append({'section': section, 'items': section_items})
 
-    # Eligible targets for "add to an existing PO" - same project, still a
-    # draft. Once issued, the vendor already has the original scope, so
-    # appending more items here afterward would misrepresent what was sent.
-    existing_draft_pos = (
-        PurchaseOrder.objects.filter(project=sheet.project, status='draft').order_by('-created_at')
-        if sheet.project else PurchaseOrder.objects.none())
+    # Eligible targets for "add to an existing PO" - see _appendable_draft_pos.
+    existing_draft_pos = _appendable_draft_pos(sheet)
 
     return render(request, 'procurement/bom_procurement_tracker.html', {
         'sheet': sheet,

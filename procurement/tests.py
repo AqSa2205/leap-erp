@@ -826,6 +826,113 @@ class BudgetProcurementFlowTests(TestCase):
         offered = list(resp.context['existing_draft_pos'])
         self.assertEqual(offered, [draft_here])
 
+    def _other_budget_item(self):
+        """A line on a second finance-approved budget on the same project."""
+        from costing.models import CostingSheet, CostingSection, CostingLineItem
+        sheet2 = CostingSheet.objects.create(
+            title='S2', project=self.project, margin=Decimal('30'),
+            discount_rate=Decimal('0'), workflow_stage='finance_approved')
+        sec2 = CostingSection.objects.create(
+            costing_sheet=sheet2, section_number='A.1', title='Other', order=0)
+        return CostingLineItem.objects.create(
+            section=sec2, item_number='1', description='Other budget item',
+            quantity=Decimal('2'), unit='EA', vendor_name='Acme',
+            base_unit_cost=Decimal('10'), supplier_currency='SAR')
+
+    def _draft_po(self, po_number, source_item=None):
+        from procurement.models import PurchaseOrder
+        po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number=po_number, vendor_name='Acme',
+            po_issued_by='T', project=self.project, created_by=self.proc, status='draft')
+        if source_item is not None:
+            po.items.create(
+                description='Seeded line', quantity=Decimal('1'),
+                rate_per_unit=Decimal('1'), source_bom_item=source_item)
+        return po
+
+    def test_a_draft_holding_lines_from_another_budget_is_not_offered(self):
+        """One budget per PO: the breakdown panel shows a single figure and a
+        single link back, so a two-budget PO would blend them."""
+        self._draft_po('DRAFT-OTHER-BUDGET', self._other_budget_item())
+        self._draft_po('DRAFT-THIS-BUDGET', self.item)
+        self._draft_po('DRAFT-MANUAL')
+        self.client.force_login(self.proc)
+        resp = self.client.get(
+            reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk}))
+        offered = {po.po_number for po in resp.context['existing_draft_pos']}
+        self.assertEqual(offered, {'DRAFT-THIS-BUDGET', 'DRAFT-MANUAL'})
+
+    def test_appending_to_a_draft_from_another_budget_is_refused(self):
+        """The same rule holds when the id is posted directly, not just in
+        what the dropdown offers."""
+        from_other_budget = self._draft_po('DRAFT-OTHER-BUDGET', self._other_budget_item())
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        r = self.client.post(turl, {
+            'existing_po_id': str(from_other_budget.pk),
+            'item_ids': [str(self.item.pk)],
+        })
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(from_other_budget.items.count(), 1)
+
+    def _draft_po_with_vendor_acme(self):
+        """A draft PO seeded from self.item (vendor Acme), so its header
+        vendor is Acme."""
+        from procurement.models import PurchaseOrder
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        self.client.post(turl, {'item_ids': [str(self.item.pk)], f'qty_{self.item.pk}': '1'})
+        po = PurchaseOrder.objects.filter(project=self.project).latest('id')
+        self.assertEqual(po.vendor_name, 'Acme')
+        return turl, po
+
+    def _extra_item(self, number, vendor):
+        from costing.models import CostingLineItem
+        return CostingLineItem.objects.create(
+            section=self.sec, item_number=number, description=f'Extra {number}',
+            quantity=Decimal('3'), unit='EA', vendor_name=vendor,
+            base_unit_cost=Decimal('50'), supplier_currency='SAR')
+
+    def test_appending_an_item_from_another_vendor_clears_the_header_vendor(self):
+        """The PDF prints the header vendor, so a PO must not keep 'Acme' in
+        the header while carrying another supplier's line."""
+        turl, po = self._draft_po_with_vendor_acme()
+        other = self._extra_item('2', 'Other Supplier')
+        r = self.client.post(turl, {'existing_po_id': str(po.pk), 'item_ids': [str(other.pk)]})
+        self.assertEqual(r.status_code, 302)
+        po.refresh_from_db()
+        self.assertEqual(po.vendor_name, '')
+        self.assertEqual(po.items.count(), 2)
+
+    def test_appending_items_from_the_same_or_no_vendor_keeps_the_header_vendor(self):
+        """Same vendor (whatever the case) and lines with no vendor at all
+        never conflict with the header."""
+        turl, po = self._draft_po_with_vendor_acme()
+        same_vendor = self._extra_item('2', 'acme')
+        no_vendor = self._extra_item('3', '')
+        self.client.post(turl, {
+            'existing_po_id': str(po.pk),
+            'item_ids': [str(same_vendor.pk), str(no_vendor.pk)]})
+        po.refresh_from_db()
+        self.assertEqual(po.vendor_name, 'Acme')
+        self.assertEqual(po.items.count(), 3)
+
+    def test_a_po_issued_after_the_page_loaded_cannot_be_appended_to(self):
+        turl, po = self._draft_po_with_vendor_acme()
+        po.status = 'issued'
+        po.save(update_fields=['status'])
+        other = self._extra_item('2', 'Acme')
+        self.client.post(turl, {'existing_po_id': str(po.pk), 'item_ids': [str(other.pk)]})
+        self.assertEqual(po.items.count(), 1)
+
+    def test_a_non_numeric_existing_po_id_fails_safely(self):
+        from procurement.models import PurchaseOrder
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        r = self.client.post(turl, {'existing_po_id': 'abc', 'item_ids': [str(self.item.pk)]})
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(PurchaseOrder.objects.filter(project=self.project).count(), 0)
+
     def test_an_invalid_existing_po_id_adds_nothing_and_fails_safely(self):
         from procurement.models import PurchaseOrder
         self.client.force_login(self.proc)
