@@ -20,6 +20,11 @@ from .chart_import import (
     ChartImportError, apply as apply_chart, parse_rows, plan, read_grid,
 )
 from .mapping import certain_matches, index_accounts, suggest
+from .bulk_ignore import GROUP_LABELS as IGNORE_GROUP_LABELS
+from .bulk_ignore import group as group_ignore_resolutions
+from .bulk_ignore import ignorable_pks as ignorable_ignore_pks
+from .bulk_ignore import parse_names as parse_ignore_names
+from .bulk_ignore import resolve as resolve_ignore_names
 from .models import (
     Account, Voucher, VoucherLine, ZohoAccountMap, ZohoCredentials, build_tree,
     descendant_ids, subtree_counts,
@@ -367,6 +372,87 @@ def zoho_mapping_save(request):
         messages.success(request, f'{changed} mapping(s) saved.')
     else:
         messages.info(request, 'Nothing changed.')
+    return redirect(f"{reverse('accounting:zoho_mapping')}?{request.POST.get('back', '')}")
+
+
+@login_required
+@require_POST
+def zoho_mapping_bulk_ignore(request):
+    """Preview a pasted list of Zoho account names against the worklist.
+
+    Writes nothing. Renders what would be ignored, what is close but not
+    exact, and what the list got wrong - with the exact matches pre-ticked and
+    the near misses offered unticked. See accounting.bulk_ignore for why a
+    near miss is never resolved automatically.
+    """
+    if not _can_view_accounting(request.user):
+        raise PermissionDenied
+
+    raw = request.POST.get('names') or ''
+    names = parse_ignore_names(raw)
+    if not names:
+        messages.info(request, 'Paste one account name per line to ignore.')
+        return redirect(f"{reverse('accounting:zoho_mapping')}?{request.POST.get('back', '')}")
+
+    resolutions = resolve_ignore_names(names, ZohoAccountMap.objects.all())
+    return render(request, 'accounting/zoho_bulk_ignore.html', {
+        'raw': raw,
+        'names': names,
+        'groups': [
+            {'outcome': outcome,
+             'label': IGNORE_GROUP_LABELS[outcome],
+             'rows': rows}
+            for outcome, rows in group_ignore_resolutions(resolutions).items()
+        ],
+        'preticked': set(ignorable_ignore_pks(resolutions)),
+        'actionable_count': sum(1 for r in resolutions if r.is_actionable),
+        'back': request.POST.get('back', ''),
+    })
+
+
+@login_required
+@require_POST
+def zoho_mapping_bulk_ignore_apply(request):
+    """Mark the rows ticked on the preview as ignored.
+
+    Re-checks each row rather than trusting the preview: a row mapped since
+    the preview was rendered is left alone, because ignoring it would throw
+    that mapping away and a stale page is exactly when that happens. Keeps the
+    invariant the per-row save keeps - ignored means unmapped, never both.
+    """
+    if not _can_view_accounting(request.user):
+        raise PermissionDenied
+
+    pks = [pk for pk in request.POST.getlist('ignore') if pk.isdigit()]
+    rows = ZohoAccountMap.objects.filter(pk__in=pks)
+
+    ignored = skipped_mapped = 0
+    with transaction.atomic():
+        for row in rows:
+            if row.account_id is not None:
+                skipped_mapped += 1
+                continue
+            if row.is_ignored:
+                continue
+            row.is_ignored = True
+            row.note = _stamp(
+                row.note, f'Ignored in bulk by {request.user.get_username()}')
+            row.save(update_fields=['is_ignored', 'note', 'last_seen_at'])
+            ignored += 1
+
+    if ignored:
+        messages.success(
+            request,
+            f'{ignored} account(s) marked ignored. They are off the worklist '
+            f'and listed under the Ignored filter, each with a note saying who '
+            f'did it and when.')
+    else:
+        messages.info(request, 'Nothing was ignored.')
+    if skipped_mapped:
+        messages.warning(
+            request,
+            f'{skipped_mapped} left alone because they are mapped to an ERP '
+            f'account - unmap them first if they really should be ignored.')
     return redirect(f"{reverse('accounting:zoho_mapping')}?{request.POST.get('back', '')}")
 
 
