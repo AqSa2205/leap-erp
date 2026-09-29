@@ -437,3 +437,83 @@ class ProjectIssue(models.Model):
     @property
     def priority_color(self):
         return self.PRIORITY_COLORS.get(self.priority, '6c757d')
+
+
+class FaultLossEntry(models.Model):
+    """A logged fault, loss, or delay against a project, and what's being
+    done to stop it recurring - the digital equivalent of the Faults &
+    Losses Prevention tracking sheet."""
+
+    STATUS_OPEN = 'open'
+    STATUS_CLOSED = 'closed'
+    STATUS_CHOICES = [
+        (STATUS_OPEN, 'Open'),
+        (STATUS_CLOSED, 'Closed'),
+    ]
+
+    DEVIATION_MAJOR = 'major'
+    DEVIATION_MODERATE = 'moderate'
+    DEVIATION_MINOR = 'minor'
+    DEVIATION_CHOICES = [
+        (DEVIATION_MAJOR, 'Major'),
+        (DEVIATION_MODERATE, 'Moderate'),
+        (DEVIATION_MINOR, 'Minor'),
+    ]
+    # Matches the source workbook's own colour-coded severity: pink for
+    # Major, orange for Moderate, green for Minor. Blank stays uncoloured.
+    DEVIATION_COLORS = {
+        DEVIATION_MAJOR: 'F8D7DA',
+        DEVIATION_MODERATE: 'FFE5B4',
+        DEVIATION_MINOR: 'D1E7DD',
+    }
+
+    project = models.ForeignKey(
+        'projects.Project', on_delete=models.CASCADE, related_name='fault_loss_entries')
+    system = models.CharField(max_length=255, blank=True)
+    lna_ref = models.CharField(
+        max_length=100, blank=True, verbose_name='LNA Ref#',
+        help_text="Pre-filled from the project's own reference when a project is picked, "
+                  "but editable - a project can carry several systems, each with its own ref.")
+    po_number = models.CharField(max_length=100, blank=True, verbose_name='PO#')
+    location = models.CharField(max_length=255, blank=True)
+
+    delivery_time_impact = models.BooleanField(default=False)
+    delay_days = models.PositiveIntegerField(default=0, verbose_name='Duration of Delay (days)')
+    cost_impact = models.BooleanField(default=False)
+    cost_amount = models.DecimalField(
+        max_digits=14, decimal_places=2, null=True, blank=True, verbose_name='Amount of Cost (SAR)',
+        help_text='Blank means not yet estimated; 0 means confirmed no cost.')
+    change_order_required = models.BooleanField(default=False)
+
+    root_causes = models.TextField(blank=True, verbose_name='Root Causes/Faults')
+    deviation_category = models.CharField(
+        max_length=10, choices=DEVIATION_CHOICES, blank=True)
+    responsibility_departments = models.CharField(
+        max_length=500, blank=True, verbose_name='Responsibility (Departments)')
+    corrective_action = models.TextField(
+        blank=True, verbose_name='Corrective Action',
+        help_text='Action to reduce repetitive faults & losses in future.')
+    corrective_action_by = models.CharField(
+        max_length=255, blank=True, verbose_name='Corrective Action By (Departments)')
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_OPEN)
+    closed_on = models.DateField(null=True, blank=True, help_text='Left blank while still open.')
+    latest_update = models.DateField(null=True, blank=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='logged_fault_loss_entries')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at', '-pk']
+        verbose_name = 'Fault & Loss Entry'
+        verbose_name_plural = 'Faults & Losses'
+
+    def __str__(self):
+        return f'{self.project.project_name} — {self.system or "Fault/Loss #" + str(self.pk)}'
+
+    @property
+    def deviation_color(self):
+        return self.DEVIATION_COLORS.get(self.deviation_category, '')
