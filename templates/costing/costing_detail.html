@@ -139,6 +139,11 @@
     .section-chevron { transition: transform 0.15s; display: inline-block; }
     .section-chevron.expanded { transform: rotate(90deg); }
     .section-item-count { font-weight: 400; font-size: 0.7rem; color: #6c757d; }
+
+    /* Electric-purple marks a line procurement added after this budget was
+       approved - matches the same treatment on finance's budget screen. */
+    tr.row-sub-item { background: #f8f3ff; }
+    tr.row-sub-item td { border-left: 3px solid #8F00FF; }
 </style>
 {% endblock %}
 

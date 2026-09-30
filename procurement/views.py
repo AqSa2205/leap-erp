@@ -8,7 +8,7 @@ from django.views.decorators.http import require_POST
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import Q
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 
 from .pdf_common import (  # shared PDF helpers, moved out of this module
     a4_portrait_document,
@@ -33,7 +33,7 @@ from .forms import (
     FRCReportForm, FRCEntryFormSet, FRCInventoryForm,
 )
 from django.contrib.auth.decorators import login_required
-from django.db.models import Count, Sum, F
+from django.db.models import Count, Sum, F, Max
 from django.utils import timezone
 from django.utils.text import slugify
 import openpyxl
@@ -1039,6 +1039,34 @@ def _uniform_vendor(items):
     return vendors.pop() if len(vendors) == 1 else ''
 
 
+def _appendable_draft_pos(sheet):
+    """Draft POs that "add to an existing PO" may append to from this sheet's
+    tracker. One definition, used both to build the dropdown and to validate
+    the posted id, so the two can never disagree.
+
+    Two rules:
+    - Drafts only: once issued, the vendor already has the original scope, so
+      appending more items would misrepresent what was sent.
+    - One budget per PO: a draft that already holds lines from a different
+      budget is not offered. The PO budget breakdown shows a single budget vs
+      actual figure and one link back per PO, so a PO spanning two budgets
+      would blend them. A draft with no budget-linked lines yet (e.g. typed
+      in by hand) has nothing to conflict with and is offered.
+
+    The sheet always has a project here - the tracker redirects away before
+    this point when it does not.
+    """
+    from django.db.models import Exists, OuterRef
+    other_budget_lines = PurchaseOrderItem.objects.filter(
+        purchase_order=OuterRef('pk'), source_bom_item__isnull=False,
+    ).exclude(source_bom_item__section__costing_sheet=sheet)
+    return (PurchaseOrder.objects
+            .filter(project=sheet.project, status='draft')
+            .annotate(has_other_budget_lines=Exists(other_budget_lines))
+            .filter(has_other_budget_lines=False)
+            .order_by('-created_at'))
+
+
 @login_required
 def po_create_from_bom(request, sheet_pk):
     """Seed a draft PO with every supply line from a finance-approved budget,
@@ -1170,8 +1198,10 @@ def bom_procurement_tracker(request, sheet_pk):
         if not item_ids:
             messages.error(request, 'Pick at least one item to add to the PO.')
         else:
+            # all_objects: the default manager hides procurement-added sub
+            # items, but they have to stay pickable for a PO.
             picked_items = list(
-                CostingLineItem.objects
+                CostingLineItem.all_objects
                 .filter(pk__in=item_ids, section__costing_sheet=sheet, section__is_optional=False)
                 .select_related('section'))
 
@@ -1204,49 +1234,118 @@ def bom_procurement_tracker(request, sheet_pk):
                     requested = remaining
                 if requested <= 0:
                     continue
-                to_order.append((li, min(requested, remaining)))
+                # Whole numbers only. Rounded down rather than to the
+                # nearest, so a fractional request (however it got here -
+                # not something the input itself allows any more) can never
+                # end up exceeding what's actually left after clamping.
+                qty = min(requested, remaining).quantize(Decimal('1'), rounding=ROUND_DOWN)
+                if qty <= 0:
+                    continue
+                to_order.append((li, qty))
 
             if not to_order:
                 messages.warning(request, 'Every item you picked is already fully ordered — nothing to add.')
                 return redirect('procurement:bom_procurement_tracker', sheet_pk=sheet.pk)
 
-            placeholder_po_number = f'DRAFT-S{sheet.pk}-{int(datetime.now().timestamp() * 1_000_000)}'
-            po = PurchaseOrder.objects.create(
-                po_date=datetime.now().date(),
-                po_number=placeholder_po_number,
-                vendor_name=_uniform_vendor([li for li, _qty in to_order]),
-                po_issued_by=user.get_full_name() or user.username,
-                issuer_email=user.email or '',
-                project=sheet.project,
-                project_name=sheet.project.project_name if sheet.project else (sheet.title or ''),
-                created_by=user,
-            )
-            serial = 1
-            for li, qty in to_order:
-                li.set_exchange_rates_cache(rates)
-                li.set_sheet_cache(sheet)
-                make_model = ' '.join(filter(None, [li.make, li.model_number])).strip()
-                PurchaseOrderItem.objects.create(
-                    purchase_order=po,
-                    serial_number=serial,
-                    system=li.section.title or '',
-                    make_model=make_model,
-                    vendor_name=li.vendor_name or '',
-                    description=li.description,
-                    quantity=qty,
-                    uom=li.unit or 'Nos',
-                    rate_per_unit=li.budget_unit_price(),
-                    order=serial,
-                    source_bom_item=li,
-                )
-                serial += 1
+            # Adding to an existing draft PO is opt-in via this field - blank
+            # (the default) keeps the original behaviour of always seeding a
+            # brand new draft. Only a draft on the same project is eligible:
+            # once issued, the vendor already has the original scope, so
+            # appending more items to it here would misrepresent what was
+            # actually sent.
+            existing_po_id = request.POST.get('existing_po_id', '').strip()
+            existing_po = None
+            # One transaction for the whole write. select_for_update on the
+            # target PO serialises two people appending to it at once (they
+            # would otherwise both read the same Max serial and hand out
+            # duplicate numbers - serial_number has no uniqueness constraint),
+            # and re-checks "still a draft" at the moment of writing rather
+            # than at some earlier point in the request.
+            with transaction.atomic():
+                if existing_po_id:
+                    # isdigit: a tampered non-numeric id must fail like a stale
+                    # one, not raise from the pk lookup.
+                    if existing_po_id.isdigit():
+                        existing_po = (_appendable_draft_pos(sheet)
+                                       .select_for_update()
+                                       .filter(pk=int(existing_po_id)).first())
+                    if not existing_po:
+                        messages.error(
+                            request,
+                            'The PO you picked cannot take these items: it is no longer a draft, no longer '
+                            'exists, or already holds items from a different budget. Nothing was added '
+                            '— pick again or create a new PO instead.')
+                        return redirect('procurement:bom_procurement_tracker', sheet_pk=sheet.pk)
+
+                if existing_po:
+                    po = existing_po
+                    # The header vendor is what prints on the PO, but each line
+                    # carries its own. A new PO's header is only set when every
+                    # line shares one vendor; appending has to keep that true.
+                    # If any added line names a different vendor the header is
+                    # cleared and must be re-confirmed before saving - the PDF
+                    # must never go to one supplier with another's line on it.
+                    header_vendor = (po.vendor_name or '').strip()
+                    if header_vendor and any(
+                            (li.vendor_name or '').strip()
+                            and (li.vendor_name or '').strip().casefold() != header_vendor.casefold()
+                            for li, _qty in to_order):
+                        cleared_vendor = po.vendor_name
+                        po.vendor_name = ''
+                        po.save(update_fields=['vendor_name'])
+                        messages.warning(
+                            request,
+                            f'Some of the added items are from a different vendor than '
+                            f'"{cleared_vendor}", so the vendor on {po.po_number} was cleared. '
+                            f'Confirm the vendor before saving.')
+                    # Continue the existing item numbering rather than restart
+                    # at 1, so serial numbers on one PO stay unique.
+                    first_serial = (po.items.aggregate(Max('serial_number'))['serial_number__max'] or 0) + 1
+                else:
+                    placeholder_po_number = f'DRAFT-S{sheet.pk}-{int(datetime.now().timestamp() * 1_000_000)}'
+                    po = PurchaseOrder.objects.create(
+                        po_date=datetime.now().date(),
+                        po_number=placeholder_po_number,
+                        vendor_name=_uniform_vendor([li for li, _qty in to_order]),
+                        po_issued_by=user.get_full_name() or user.username,
+                        issuer_email=user.email or '',
+                        project=sheet.project,
+                        project_name=sheet.project.project_name if sheet.project else (sheet.title or ''),
+                        created_by=user,
+                    )
+                    first_serial = 1
+                serial = first_serial
+                for li, qty in to_order:
+                    li.set_exchange_rates_cache(rates)
+                    li.set_sheet_cache(sheet)
+                    make_model = ' '.join(filter(None, [li.make, li.model_number])).strip()
+                    PurchaseOrderItem.objects.create(
+                        purchase_order=po,
+                        serial_number=serial,
+                        system=li.section.title or '',
+                        make_model=make_model,
+                        vendor_name=li.vendor_name or '',
+                        description=li.description,
+                        quantity=qty,
+                        uom=li.unit or 'Nos',
+                        rate_per_unit=li.budget_unit_price(),
+                        order=serial,
+                        source_bom_item=li,
+                    )
+                    serial += 1
+            added_count = serial - first_serial
             skip_note = ''
             if skipped_full:
                 skip_note = f' ({skipped_full} item{"" if skipped_full == 1 else "s"} skipped — already fully ordered.)'
-            messages.success(
-                request,
-                f'Draft PO seeded with {serial - 1} budgeted item{"" if serial - 1 == 1 else "s"}.{skip_note} '
-                f'Replace the placeholder PO number, confirm the vendor, then save.')
+            if existing_po:
+                messages.success(
+                    request,
+                    f'{added_count} budgeted item{"" if added_count == 1 else "s"} added to {po.po_number}.{skip_note}')
+            else:
+                messages.success(
+                    request,
+                    f'Draft PO seeded with {added_count} budgeted item{"" if added_count == 1 else "s"}.{skip_note} '
+                    f'Replace the placeholder PO number, confirm the vendor, then save.')
             return redirect('procurement:po_update', pk=po.pk)
 
     # Build per-section rows (A.1 supply, non-optional) with budgeted prices.
@@ -1256,10 +1355,15 @@ def bom_procurement_tracker(request, sheet_pk):
     available_count = fully_procured_count = 0
     budget_total = Decimal('0')
     for section in (sheet.sections.filter(is_optional=False)
-                    .prefetch_related('line_items__procured_po_items__purchase_order')
                     .order_by('order', 'section_number')):
         section_items = []
-        for li in section.line_items.all().order_by('order', 'item_number'):
+        # CostingLineItem.all_objects, not section.line_items: the default
+        # manager hides procurement-added sub items so no budget total can
+        # pick one up by accident, but this page is where procurement picks
+        # them for a PO, so it asks for them explicitly.
+        for li in (CostingLineItem.all_objects.filter(section=section)
+                   .prefetch_related('procured_po_items__purchase_order')
+                   .order_by('order', 'item_number')):
             li.set_exchange_rates_cache(rates)
             li.set_sheet_cache(sheet)
             procured = list(li.procured_po_items.select_related('purchase_order').all())
@@ -1273,7 +1377,12 @@ def bom_procurement_tracker(request, sheet_pk):
                 Decimal('0'))
             remaining = li.quantity - already_ordered
             line_price = li.budget_line_price()
-            budget_total += line_price
+            # Sub items procurement adds after finance approval carry their
+            # own price but must never move the approved budget figure, so
+            # they're left out of this sum - the only thing that changes
+            # about the budget total when one is added is nothing.
+            if not li.added_by_procurement:
+                budget_total += line_price
             is_available = remaining > 0
             if is_available:
                 available_count += 1
@@ -1291,6 +1400,9 @@ def bom_procurement_tracker(request, sheet_pk):
         if section_items:
             rows.append({'section': section, 'items': section_items})
 
+    # Eligible targets for "add to an existing PO" - see _appendable_draft_pos.
+    existing_draft_pos = _appendable_draft_pos(sheet)
+
     return render(request, 'procurement/bom_procurement_tracker.html', {
         'sheet': sheet,
         'rows': rows,
@@ -1298,7 +1410,103 @@ def bom_procurement_tracker(request, sheet_pk):
         'available_count': available_count,
         'procured_count': fully_procured_count,
         'budget_total': budget_total,
+        'existing_draft_pos': existing_draft_pos,
     })
+
+
+@login_required
+def add_sub_line_item(request, item_pk):
+    """Procurement adds a sub item under a budget line item (e.g. printer
+    cartridges under a printer), after the budget is finance-approved.
+
+    A sub item is a normal CostingLineItem nested under its parent via
+    parent_item, flagged added_by_procurement so the approved-budget view
+    can highlight it and exclude it from the budget total - adding one must
+    never move the finance-approved figure. Quantity has no cap for now;
+    see CostingLineItem.max_sub_item_quantity() for where a future limit
+    would be enforced - one change there, not a hunt through this view.
+    """
+    from costing.models import CostingLineItem
+    # The default manager hides sub items, so a sub item's pk 404s here -
+    # which is what keeps nesting to one level (a sub item cannot be the
+    # parent of another).
+    parent = get_object_or_404(CostingLineItem, pk=item_pk)
+    sheet = parent.section.costing_sheet
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user or user.is_procurement_user):
+        messages.error(request, 'Only procurement team members can add sub items.')
+        return redirect('procurement:approved_budgets')
+    if (not (user.is_super_admin_user or user.is_admin_user)
+            and (not sheet.project or sheet.project.region_id != user.region_id)):
+        messages.error(request, 'You can only add items to budgets for projects in your region.')
+        return redirect('procurement:approved_budgets')
+    if sheet.workflow_stage != 'finance_approved':
+        messages.error(request, 'This budget is not finance-approved yet.')
+        return redirect('procurement:approved_budgets')
+
+    if request.method == 'POST':
+        description = request.POST.get('description', '').strip()
+        quantity_raw = request.POST.get('quantity', '').strip()
+        unit = request.POST.get('unit') or 'EA'
+        rate_raw = request.POST.get('rate_per_unit', '').strip()
+        vendor_name = request.POST.get('vendor_name', '').strip()
+
+        errors = []
+        if not description:
+            errors.append('Description is required.')
+
+        quantity = None
+        try:
+            quantity = Decimal(quantity_raw).quantize(Decimal('1'), rounding=ROUND_DOWN)
+            if quantity <= 0:
+                errors.append('Quantity must be a positive whole number.')
+        except InvalidOperation:
+            errors.append('Quantity must be a whole number.')
+
+        max_qty = CostingLineItem.max_sub_item_quantity()
+        if quantity is not None and max_qty is not None and quantity > max_qty:
+            errors.append(f'Quantity cannot exceed {max_qty}.')
+
+        try:
+            rate_per_unit = Decimal(rate_raw) if rate_raw else Decimal('0')
+            if rate_per_unit < 0:
+                errors.append('Rate must not be negative.')
+        except InvalidOperation:
+            rate_per_unit = Decimal('0')
+            errors.append('Rate must be a number.')
+
+        if errors:
+            for e in errors:
+                messages.error(request, e)
+            return redirect('procurement:bom_procurement_tracker', sheet_pk=sheet.pk)
+
+        # all_objects: parent.sub_items goes through the default manager,
+        # which hides sub items, so it would always count zero and every new
+        # sub item would be numbered -1.
+        next_number = (
+            f'{parent.item_number}-'
+            f'{CostingLineItem.all_objects.filter(parent_item=parent).count() + 1}')
+        CostingLineItem.objects.create(
+            section=parent.section,
+            parent_item=parent,
+            item_number=next_number,
+            description=description,
+            quantity=quantity,
+            unit=unit,
+            vendor_name=vendor_name,
+            supplier_currency=sheet.default_supplier_currency or 'SAR',
+            base_unit_cost=Decimal('0'),
+            budget_price=rate_per_unit * quantity,
+            order=parent.order,
+            added_by_procurement=True,
+            added_by=user,
+            added_at=timezone.now(),
+        )
+        messages.success(
+            request,
+            f'Sub item "{description}" added under {parent.description}. '
+            'The approved budget total is unchanged.')
+    return redirect('procurement:bom_procurement_tracker', sheet_pk=sheet.pk)
 
 
 def _read_and_validate_signature(request):

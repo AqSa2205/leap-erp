@@ -24,6 +24,7 @@ urlpatterns = [
     path('approval-routing/name/', views.po_stage_signer, name='po_stage_signer'),
     path('po/from-bom/<int:sheet_pk>/', views.po_create_from_bom, name='po_create_from_bom'),
     path('po/bom/<int:sheet_pk>/tracker/', views.bom_procurement_tracker, name='bom_procurement_tracker'),
+    path('bom-item/<int:item_pk>/add-sub-item/', views.add_sub_line_item, name='add_sub_line_item'),
     path('po/import/', views.po_import_excel, name='po_import'),
     path('po/<int:pk>/import-items/', views.po_import_items, name='po_import_items'),
     path('po/<int:pk>/', views.PODetailView.as_view(), name='po_detail'),

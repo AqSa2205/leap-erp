@@ -779,6 +779,171 @@ class BudgetProcurementFlowTests(TestCase):
         pos_after = PurchaseOrder.objects.filter(project=self.project).count()
         self.assertEqual(pos_before, pos_after)
 
+    def test_can_add_to_an_existing_draft_po(self):
+        """Picking an existing draft PO in the dropdown appends items to it
+        rather than always seeding a brand new one."""
+        from costing.models import CostingLineItem
+        from procurement.models import PurchaseOrder
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        self.client.post(turl, {'item_ids': [str(self.item.pk)], f'qty_{self.item.pk}': '1'})
+        po = PurchaseOrder.objects.filter(project=self.project).latest('id')
+
+        other_item = CostingLineItem.objects.create(
+            section=self.sec, item_number='2', description='Switch', quantity=Decimal('3'),
+            unit='EA', vendor_name='Acme', base_unit_cost=Decimal('50'), supplier_currency='SAR')
+        r2 = self.client.post(turl, {
+            'existing_po_id': str(po.pk),
+            'item_ids': [str(other_item.pk)],
+        })
+        self.assertEqual(r2.status_code, 302)
+        self.assertEqual(PurchaseOrder.objects.filter(project=self.project).count(), 1)
+        po.refresh_from_db()
+        self.assertEqual(po.items.count(), 2)
+        added = po.items.get(source_bom_item=other_item)
+        self.assertEqual(added.serial_number, 2)
+
+    def test_existing_po_dropdown_only_offers_drafts_on_the_same_project(self):
+        from projects.models import Region, ProjectStatus, Project
+        from procurement.models import PurchaseOrder
+        draft_here = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='DRAFT-HERE', vendor_name='Acme',
+            po_issued_by='T', project=self.project, created_by=self.proc, status='draft')
+        PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='ISSUED-HERE', vendor_name='Acme',
+            po_issued_by='T', project=self.project, created_by=self.proc, status='issued')
+        other_region = Region.objects.create(name='Elsewhere', code='ELS')
+        other_project = Project.objects.create(
+            project_name='Other', proposal_reference='OTHER-REF-1',
+            status=self.won, region=other_region)
+        PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='DRAFT-ELSEWHERE', vendor_name='Acme',
+            po_issued_by='T', project=other_project, created_by=self.proc, status='draft')
+
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        resp = self.client.get(turl)
+        offered = list(resp.context['existing_draft_pos'])
+        self.assertEqual(offered, [draft_here])
+
+    def _other_budget_item(self):
+        """A line on a second finance-approved budget on the same project."""
+        from costing.models import CostingSheet, CostingSection, CostingLineItem
+        sheet2 = CostingSheet.objects.create(
+            title='S2', project=self.project, margin=Decimal('30'),
+            discount_rate=Decimal('0'), workflow_stage='finance_approved')
+        sec2 = CostingSection.objects.create(
+            costing_sheet=sheet2, section_number='A.1', title='Other', order=0)
+        return CostingLineItem.objects.create(
+            section=sec2, item_number='1', description='Other budget item',
+            quantity=Decimal('2'), unit='EA', vendor_name='Acme',
+            base_unit_cost=Decimal('10'), supplier_currency='SAR')
+
+    def _draft_po(self, po_number, source_item=None):
+        from procurement.models import PurchaseOrder
+        po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number=po_number, vendor_name='Acme',
+            po_issued_by='T', project=self.project, created_by=self.proc, status='draft')
+        if source_item is not None:
+            po.items.create(
+                description='Seeded line', quantity=Decimal('1'),
+                rate_per_unit=Decimal('1'), source_bom_item=source_item)
+        return po
+
+    def test_a_draft_holding_lines_from_another_budget_is_not_offered(self):
+        """One budget per PO: the breakdown panel shows a single figure and a
+        single link back, so a two-budget PO would blend them."""
+        self._draft_po('DRAFT-OTHER-BUDGET', self._other_budget_item())
+        self._draft_po('DRAFT-THIS-BUDGET', self.item)
+        self._draft_po('DRAFT-MANUAL')
+        self.client.force_login(self.proc)
+        resp = self.client.get(
+            reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk}))
+        offered = {po.po_number for po in resp.context['existing_draft_pos']}
+        self.assertEqual(offered, {'DRAFT-THIS-BUDGET', 'DRAFT-MANUAL'})
+
+    def test_appending_to_a_draft_from_another_budget_is_refused(self):
+        """The same rule holds when the id is posted directly, not just in
+        what the dropdown offers."""
+        from_other_budget = self._draft_po('DRAFT-OTHER-BUDGET', self._other_budget_item())
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        r = self.client.post(turl, {
+            'existing_po_id': str(from_other_budget.pk),
+            'item_ids': [str(self.item.pk)],
+        })
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(from_other_budget.items.count(), 1)
+
+    def _draft_po_with_vendor_acme(self):
+        """A draft PO seeded from self.item (vendor Acme), so its header
+        vendor is Acme."""
+        from procurement.models import PurchaseOrder
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        self.client.post(turl, {'item_ids': [str(self.item.pk)], f'qty_{self.item.pk}': '1'})
+        po = PurchaseOrder.objects.filter(project=self.project).latest('id')
+        self.assertEqual(po.vendor_name, 'Acme')
+        return turl, po
+
+    def _extra_item(self, number, vendor):
+        from costing.models import CostingLineItem
+        return CostingLineItem.objects.create(
+            section=self.sec, item_number=number, description=f'Extra {number}',
+            quantity=Decimal('3'), unit='EA', vendor_name=vendor,
+            base_unit_cost=Decimal('50'), supplier_currency='SAR')
+
+    def test_appending_an_item_from_another_vendor_clears_the_header_vendor(self):
+        """The PDF prints the header vendor, so a PO must not keep 'Acme' in
+        the header while carrying another supplier's line."""
+        turl, po = self._draft_po_with_vendor_acme()
+        other = self._extra_item('2', 'Other Supplier')
+        r = self.client.post(turl, {'existing_po_id': str(po.pk), 'item_ids': [str(other.pk)]})
+        self.assertEqual(r.status_code, 302)
+        po.refresh_from_db()
+        self.assertEqual(po.vendor_name, '')
+        self.assertEqual(po.items.count(), 2)
+
+    def test_appending_items_from_the_same_or_no_vendor_keeps_the_header_vendor(self):
+        """Same vendor (whatever the case) and lines with no vendor at all
+        never conflict with the header."""
+        turl, po = self._draft_po_with_vendor_acme()
+        same_vendor = self._extra_item('2', 'acme')
+        no_vendor = self._extra_item('3', '')
+        self.client.post(turl, {
+            'existing_po_id': str(po.pk),
+            'item_ids': [str(same_vendor.pk), str(no_vendor.pk)]})
+        po.refresh_from_db()
+        self.assertEqual(po.vendor_name, 'Acme')
+        self.assertEqual(po.items.count(), 3)
+
+    def test_a_po_issued_after_the_page_loaded_cannot_be_appended_to(self):
+        turl, po = self._draft_po_with_vendor_acme()
+        po.status = 'issued'
+        po.save(update_fields=['status'])
+        other = self._extra_item('2', 'Acme')
+        self.client.post(turl, {'existing_po_id': str(po.pk), 'item_ids': [str(other.pk)]})
+        self.assertEqual(po.items.count(), 1)
+
+    def test_a_non_numeric_existing_po_id_fails_safely(self):
+        from procurement.models import PurchaseOrder
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        r = self.client.post(turl, {'existing_po_id': 'abc', 'item_ids': [str(self.item.pk)]})
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(PurchaseOrder.objects.filter(project=self.project).count(), 0)
+
+    def test_an_invalid_existing_po_id_adds_nothing_and_fails_safely(self):
+        from procurement.models import PurchaseOrder
+        self.client.force_login(self.proc)
+        turl = reverse('procurement:bom_procurement_tracker', kwargs={'sheet_pk': self.sheet.pk})
+        r = self.client.post(turl, {
+            'existing_po_id': '999999',
+            'item_ids': [str(self.item.pk)],
+        })
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(PurchaseOrder.objects.filter(project=self.project).count(), 0)
+
 
 class POTermOverrideTests(TestCase):
     """Terms are picked from the shared TermsTemplate library, but a PO can
@@ -2435,3 +2600,176 @@ class DashboardStatusBreakdownTests(TestCase):
             resp.context['po_total'], sum(resp.context['po_by_status'].values()))
         for key, _label in PurchaseOrder.STATUS_CHOICES:
             self.assertIn(key, resp.context['po_by_status'])
+
+
+class POBudgetBreakdownCostTests(TestCase):
+    """budget_breakdown() runs on every PO detail render, so it must not issue
+    queries in proportion to the size of the PO; it must say so when a PO draws
+    on more than one budget; and it must render cleanly when nothing was
+    budgeted."""
+
+    def setUp(self):
+        from projects.models import Region, ProjectStatus, Project
+        from costing.models import CostingSheet, CostingSection
+        sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('bdc_sa', password='x', role=sa_role)
+        region = Region.objects.create(name='BDC Region', code='BDCREG')
+        won = ProjectStatus.objects.create(name='Won-BDC', category='won')
+        self.project = Project.objects.create(
+            project_name='BDC Project', proposal_reference='BDC-REF-1', status=won, region=region)
+        self.sheet = CostingSheet.objects.create(
+            title='BDC Sheet', project=self.project, margin=Decimal('30'),
+            discount_rate=Decimal('0'), workflow_stage='finance_approved')
+        self.sec = CostingSection.objects.create(
+            costing_sheet=self.sheet, section_number='A.1', title='Supply', order=0)
+
+    def _line(self, number, section=None, base_unit_cost='10'):
+        from costing.models import CostingLineItem
+        return CostingLineItem.objects.create(
+            section=section or self.sec, item_number=str(number),
+            description=f'Line {number}', quantity=Decimal('5'), unit='EA',
+            base_unit_cost=Decimal(base_unit_cost), supplier_currency='SAR')
+
+    def _po(self, lines):
+        from procurement.models import PurchaseOrder
+        po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number=f'BDC-{PurchaseOrder.objects.count() + 1}',
+            vendor_name='Acme', po_issued_by='T', project=self.project,
+            created_by=self.user, status='draft')
+        for n, line in enumerate(lines, start=1):
+            po.items.create(
+                serial_number=n, description=f'Item {n}', quantity=Decimal('2'),
+                rate_per_unit=Decimal('20'), source_bom_item=line)
+        return po
+
+    def _queries_for_breakdown(self, po):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        from procurement.models import PurchaseOrder
+        fresh = PurchaseOrder.objects.get(pk=po.pk)   # no cached relations
+        with CaptureQueriesContext(connection) as ctx:
+            fresh.budget_breakdown()
+        return len(ctx)
+
+    def test_query_count_does_not_grow_with_the_number_of_budget_lines(self):
+        small = self._queries_for_breakdown(self._po([self._line(i) for i in range(1, 3)]))
+        large = self._queries_for_breakdown(self._po([self._line(i) for i in range(10, 16)]))
+        self.assertEqual(small, large)
+
+    def test_a_po_drawing_on_two_budgets_is_flagged(self):
+        from costing.models import CostingSheet, CostingSection
+        sheet_b = CostingSheet.objects.create(
+            title='BDC Sheet B', project=self.project, margin=Decimal('30'),
+            discount_rate=Decimal('0'), workflow_stage='finance_approved')
+        sec_b = CostingSection.objects.create(
+            costing_sheet=sheet_b, section_number='A.1', title='Supply', order=0)
+        po = self._po([self._line(1), self._line(2, section=sec_b)])
+        breakdown = po.budget_breakdown()
+        self.assertTrue(breakdown['multiple_budgets'])
+        self.assertEqual(breakdown['sheet_pk'], min(self.sheet.pk, sheet_b.pk))
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('procurement:po_detail', args=[po.pk]))
+        self.assertContains(resp, 'more than one budget')
+
+    def test_a_po_from_a_single_budget_is_not_flagged(self):
+        po = self._po([self._line(1), self._line(2)])
+        breakdown = po.budget_breakdown()
+        self.assertFalse(breakdown['multiple_budgets'])
+        self.assertEqual(breakdown['sheet_pk'], self.sheet.pk)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('procurement:po_detail', args=[po.pk]))
+        self.assertNotContains(resp, 'more than one budget')
+
+    def test_nothing_budgeted_renders_without_a_stray_percentage(self):
+        """Only reachable when every budgeted line prices at zero: the
+        percentages are None and the page must simply leave them out."""
+        po = self._po([self._line(1, base_unit_cost='0')])
+        breakdown = po.budget_breakdown()
+        self.assertIsNone(breakdown['deducted_pct'])
+        self.assertIsNone(breakdown['remaining_pct'])
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse('procurement:po_detail', args=[po.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, '(None')
+
+
+class POBudgetBreakdownTests(TestCase):
+    """PurchaseOrder.budget_breakdown() - budget vs actual variance scoped
+    to just this PO's own line items, not the whole sheet or other POs."""
+
+    def setUp(self):
+        from projects.models import Region, ProjectStatus, Project
+        from costing.models import CostingSheet, CostingSection, CostingLineItem
+        sa_role, _ = Role.objects.get_or_create(name=Role.SUPER_ADMIN)
+        self.user = User.objects.create_user('bd_sa', password='x', role=sa_role)
+        region = Region.objects.create(name='BD Region', code='BDREG')
+        won = ProjectStatus.objects.create(name='Won-BD', category='won')
+        project = Project.objects.create(
+            project_name='BD Project', proposal_reference='BD-REF-1', status=won, region=region)
+        self.sheet = CostingSheet.objects.create(
+            title='BD Sheet', project=project, margin=Decimal('30'),
+            discount_rate=Decimal('0'), workflow_stage='finance_approved')
+        self.sec = CostingSection.objects.create(
+            costing_sheet=self.sheet, section_number='A.1', title='Supply', order=0)
+        # budget_unit_price() with no override = base_total_price / quantity,
+        # scaled by the 30% margin set on the sheet.
+        self.item = CostingLineItem.objects.create(
+            section=self.sec, item_number='1', description='Cam', quantity=Decimal('10'),
+            unit='EA', base_unit_cost=Decimal('100'), supplier_currency='SAR')
+
+    def test_none_when_the_po_has_no_budget_sourced_items(self):
+        po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='BD-PO-1', vendor_name='ACME',
+            po_issued_by='T', created_by=self.user, status='draft')
+        po.items.create(description='Ad-hoc item', quantity=Decimal('1'), rate_per_unit=Decimal('50'))
+        self.assertIsNone(po.budget_breakdown())
+
+    def test_deducted_and_remaining_reflect_this_pos_own_price(self):
+        budget_rate = self.item.budget_unit_price()
+        po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='BD-PO-2', vendor_name='ACME',
+            po_issued_by='T', created_by=self.user, status='draft')
+        # Priced below the budgeted rate, on purpose, to produce a
+        # positive remaining/under-budget variance.
+        po.items.create(
+            description='Cam', quantity=Decimal('4'),
+            rate_per_unit=budget_rate - Decimal('10'), source_bom_item=self.item)
+
+        breakdown = po.budget_breakdown()
+        expected_budget = budget_rate * Decimal('4')
+        expected_deducted = (budget_rate - Decimal('10')) * Decimal('4')
+        self.assertEqual(breakdown['budget_reference'], expected_budget)
+        self.assertEqual(breakdown['deducted'], expected_deducted)
+        self.assertEqual(breakdown['remaining'], expected_budget - expected_deducted)
+        self.assertGreater(breakdown['remaining'], 0)
+        self.assertEqual(breakdown['sheet_pk'], self.sheet.pk)
+
+    def test_a_po_priced_above_budget_shows_negative_remaining(self):
+        budget_rate = self.item.budget_unit_price()
+        po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='BD-PO-3', vendor_name='ACME',
+            po_issued_by='T', created_by=self.user, status='draft')
+        po.items.create(
+            description='Cam', quantity=Decimal('2'),
+            rate_per_unit=budget_rate + Decimal('50'), source_bom_item=self.item)
+
+        breakdown = po.budget_breakdown()
+        self.assertLess(breakdown['remaining'], 0)
+        self.assertGreater(breakdown['deducted_pct'], 100)
+
+    def test_only_budget_sourced_items_are_counted(self):
+        """A PO can mix budget-sourced and ad-hoc line items - only the
+        former contribute to the breakdown."""
+        budget_rate = self.item.budget_unit_price()
+        po = PurchaseOrder.objects.create(
+            po_date=date(2026, 1, 1), po_number='BD-PO-4', vendor_name='ACME',
+            po_issued_by='T', created_by=self.user, status='draft')
+        po.items.create(
+            description='Cam', quantity=Decimal('1'),
+            rate_per_unit=budget_rate, source_bom_item=self.item)
+        po.items.create(
+            description='Ad-hoc extra', quantity=Decimal('5'), rate_per_unit=Decimal('999'))
+
+        breakdown = po.budget_breakdown()
+        self.assertEqual(breakdown['budget_reference'], budget_rate)
+        self.assertEqual(breakdown['deducted'], budget_rate)
