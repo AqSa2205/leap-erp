@@ -1141,7 +1141,8 @@ def mpc_index(request):
     table with each project's headcount and bid-value chips."""
     projects_qs = (
         _visible_projects(request.user)
-        .prefetch_related('grade_structure_lines', 'first_year_maintenance_lines')
+        .prefetch_related('grade_structure_lines', 'designation_manpower_lines',
+                           'first_year_maintenance_lines')
         .select_related('manpower_costing_header')
     )
 
@@ -1159,7 +1160,11 @@ def mpc_index(request):
     rows = []
     for project in filtered:
         header = _mpc_header_for(project)
-        headcount = sum((line.headcount for line in project.grade_structure_lines.all()), 0)
+        # Summed straight from the prefetched designation rows rather than
+        # via GradeStructureLine.headcount, which would issue one query per
+        # grade line per project on this portfolio-wide page — fine on a
+        # single project's own page, not here.
+        headcount = sum((d.headcount for d in project.designation_manpower_lines.all()), 0)
         rows.append({
             'project': project,
             'headcount': headcount,
@@ -1438,11 +1443,25 @@ def mpc_first_year_export_excel(request, pk):
     return response
 
 
-def _gs_categories(project):
-    lines = list(project.grade_structure_lines.all())
+def _attach_designations_cache(project, grade_lines):
+    """One query for every designation on the project, grouped by grade
+    code and stashed on each grade line — every headcount/monthly_cost/
+    annual_cost access on these specific instances (the template's, and
+    _gs_categories' own) then reuses it instead of re-querying per line."""
+    by_code = {}
+    for d in project.designation_manpower_lines.all():
+        by_code.setdefault(d.grade_code, []).append(d)
+    for line in grade_lines:
+        line._designations_cache = by_code.get(line.grade_code, [])
+
+
+def _gs_categories(project, grade_lines=None):
+    if grade_lines is None:
+        grade_lines = list(project.grade_structure_lines.all())
+        _attach_designations_cache(project, grade_lines)
     categories = []
     for code, label in GradeStructureLine.CATEGORY_CHOICES:
-        cat_lines = [line for line in lines if line.category == code]
+        cat_lines = [line for line in grade_lines if line.category == code]
         categories.append({
             'code': code, 'label': label, 'lines': cat_lines,
             'headcount': sum((line.headcount for line in cat_lines), 0),
@@ -1498,7 +1517,9 @@ def mpc_grade_structure_detail(request, pk):
         grade_formset = GradeStructureLineFormSet(instance=project, prefix='grades')
         designation_formset = DesignationManpowerLineFormSet(instance=project, prefix='designations')
 
-    categories = _gs_categories(project)
+    grade_lines = [f.instance for f in grade_formset.forms]
+    _attach_designations_cache(project, grade_lines)
+    categories = _gs_categories(project, grade_lines=grade_lines)
     total_headcount = sum((c['headcount'] for c in categories), 0)
     for c in categories:
         c['pct_of_manpower'] = (c['headcount'] * 100 / total_headcount) if total_headcount else 0

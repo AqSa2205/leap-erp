@@ -505,6 +505,16 @@ class GradeStructureLine(models.Model):
         return f'{self.grade_code} — {self.project.project_name}'
 
     def _matching_designations(self):
+        """A view rendering many grade lines at once (Grade Structure's own
+        page, the portfolio list) should set `_designations_cache` to a
+        pre-fetched {grade_code: [designations]} lookup and assign the
+        matching list here directly — without it, each grade line queries
+        designation_manpower_lines on its own, which is fine for a single
+        line in isolation (the demo seeder, a shell session, a test) but is
+        an N+1 across a whole table of them."""
+        cached = getattr(self, '_designations_cache', None)
+        if cached is not None:
+            return cached
         return [d for d in self.project.designation_manpower_lines.all() if d.grade_code == self.grade_code]
 
     @property
