@@ -1,5 +1,11 @@
 {% load humanize costing_tags %}
-<tr data-item-id="{{ item.pk }}">
+{% comment %}
+A row whose item.added_by_procurement is set was added by procurement after
+this budget was approved - electric purple marks it here too, matching the
+same treatment on finance's budget approval screen. Styling only; nothing
+about how the row is edited changes.
+{% endcomment %}
+<tr data-item-id="{{ item.pk }}" class="{% if item.added_by_procurement %}row-sub-item{% endif %}">
     <td class="sticky-col sticky-col-1">
         {% if can_edit %}
         <input type="text" class="text-edit item-num-edit" data-item-id="{{ item.pk }}" data-field="item_number" value="{{ item.item_number }}">
@@ -8,11 +14,13 @@
         {% endif %}
     </td>
     <td class="sticky-col sticky-col-2">
+        {% if item.added_by_procurement %}<i class="bi bi-arrow-return-right" style="color:#8F00FF;" title="Added by procurement"></i>{% endif %}
         {% if can_edit %}
         <textarea class="text-edit desc-edit" data-item-id="{{ item.pk }}" data-field="description" rows="1" placeholder="Description">{{ item.description }}</textarea>
         {% else %}
         {{ item.description }}
         {% endif %}
+        {% if item.added_by_procurement %}<span class="badge ms-1" style="background:#f3e9ff; color:#8F00FF; border:1px solid #d9b8ff; font-size:0.68rem;">Added by procurement</span>{% endif %}
     </td>
     <td>
         {% if can_edit %}
