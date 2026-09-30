@@ -525,9 +525,16 @@
                             <div class="mt-3 pt-3" style="border-top: 1px dashed #dee2e6;">
                                 <div class="d-flex justify-content-between align-items-center mb-2">
                                     <span class="small fw-semibold text-muted text-uppercase" style="letter-spacing:0.4px;">Budget vs Actual (this PO)</span>
+                                    <span class="d-inline-flex gap-2">
+                                    {% if not user.is_procurement_read_only_user and not po.is_locked %}
+                                    <a href="{% url 'procurement:po_link_budget' po.pk %}" class="small text-decoration-none">
+                                        <i class="bi bi-link-45deg me-1"></i>Edit links
+                                    </a>
+                                    {% endif %}
                                     <a href="{% url 'procurement:bom_procurement_tracker' sheet_pk=breakdown.sheet_pk %}" class="small text-decoration-none">
                                         <i class="bi bi-arrow-return-left me-1"></i>Back to budget
                                     </a>
+                                    </span>
                                 </div>
                                 <div class="total-row">
                                     <span>Budgeted (this PO)</span>
@@ -563,6 +570,21 @@
                                         <div class="mt-1 fst-italic">Only this PO's own budget-linked line items are included - not the whole sheet's budget, and not other POs against it.</div>
                                     </div>
                                 </div>
+                            </div>
+                            {% elif not user.is_procurement_read_only_user and not po.is_locked and po.project_id %}
+                            {% comment %} No budget link at all. An order raised
+                            outside the tracker has none, and without one it is
+                            invisible to the budget it spends - so offer the way
+                            to connect it rather than showing nothing. {% endcomment %}
+                            <div class="mt-3 pt-3" style="border-top: 1px dashed #dee2e6;">
+                                <div class="small text-muted mb-2">
+                                    <i class="bi bi-link-45deg me-1"></i>Not linked to a budget,
+                                    so the tracker still counts these lines as unordered.
+                                </div>
+                                <a href="{% url 'procurement:po_link_budget' po.pk %}"
+                                   class="btn btn-sm btn-outline-primary">
+                                    Link to budget
+                                </a>
                             </div>
                             {% endif %}
                             {% endwith %}
