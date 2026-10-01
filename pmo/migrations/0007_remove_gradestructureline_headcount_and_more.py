@@ -27,6 +27,25 @@ def copy_headcount_to_designations(apps, schema_editor):
         )
 
 
+def restore_headcount_on_gradestructureline(apps, schema_editor):
+    """Reverse of copy_headcount_to_designations. By the time this runs, the
+    headcount column has already been re-added (RemoveField's own reverse
+    runs before this, since operations reverse in last-to-first order) and
+    DesignationManpowerLine still exists (its CreateModel reverses last of
+    all) — so summing each grade's matching designation rows back here
+    restores real data instead of leaving every grade's headcount at the
+    re-added column's default of 0."""
+    GradeStructureLine = apps.get_model('pmo', 'GradeStructureLine')
+    DesignationManpowerLine = apps.get_model('pmo', 'DesignationManpowerLine')
+    for line in GradeStructureLine.objects.all():
+        total = sum(
+            d.headcount for d in DesignationManpowerLine.objects.filter(
+                project_id=line.project_id, grade_code=line.grade_code))
+        if total:
+            line.headcount = total
+            line.save(update_fields=['headcount'])
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -54,7 +73,7 @@ class Migration(migrations.Migration):
                 'ordering': ['category', 'grade_code', 'order', 'pk'],
             },
         ),
-        migrations.RunPython(copy_headcount_to_designations, migrations.RunPython.noop),
+        migrations.RunPython(copy_headcount_to_designations, restore_headcount_on_gradestructureline),
         migrations.RemoveField(
             model_name='gradestructureline',
             name='headcount',

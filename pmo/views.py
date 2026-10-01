@@ -23,13 +23,13 @@ from projects.models import Project
 
 from .forms import (ManpowerDetailsForm, NewEmployeeManpowerForm, ProjectIssueForm,
                      GradeStructureLineFormSet, DesignationManpowerLineFormSet,
-                     FirstYearMaintenanceLineFormSet,
+                     EmploymentCostAssumptionsForm, FirstYearMaintenanceLineFormSet,
                      ManpowerCostingHeaderForm, ProjectPOBasicsForm)
 from .models import (ONE, ZERO, CommunicationMatrix, ManpowerResource,
                       MilestoneProgressEntry, ProjectIssue, ProjectMilestone,
                       ResponsibilityMatrix, default_communication_columns,
                       default_responsibility_columns, sanitize_grid,
-                      GradeStructureLine, DesignationManpowerLine,
+                      GradeStructureLine, DesignationManpowerLine, EmploymentCostAssumptions,
                       FirstYearMaintenanceLine, ManpowerCostingHeader)
 from .progress import (board_row, board_rows, leaves, milestone_checklist,
                        project_completion, validate_weightages)
@@ -1176,6 +1176,11 @@ def mpc_index(request):
         'rows': rows,
         'q': q,
         'total_projects': projects_qs.count(),
+        # Proposed Contract Value sits right next to Total Annual Cost on
+        # this page — showing both to a viewer who can't edit the bid would
+        # hand them the margin by subtraction, the same concern the review
+        # raised for the project overview and First Year Maintenance pages.
+        'can_edit': can_manage_manpower_costing(request.user),
     })
 
 
@@ -1200,19 +1205,16 @@ def _fym_sections(formset):
     """Group the (already-built) formset's forms by section, in the same
     order/shape the read-only view used to build by hand — one table per
     section, each carrying its own forms (for rendering inputs) and
-    instances (for computing the subtotal)."""
+    instances (for computing the subtotal). The subtotal is a plain sum of
+    each line's own annual_contribution — section membership no longer
+    decides how a line annualises, only how it's grouped on the page."""
     sections = []
     for section, label in FirstYearMaintenanceLine.SECTION_CHOICES:
         section_forms = [f for f in formset.forms if f.instance.section == section]
         section_lines = [f.instance for f in section_forms]
-        is_monthly = section in FirstYearMaintenanceLine.MONTHLY_SECTIONS
-        if is_monthly:
-            subtotal = sum((line.monthly_contribution for line in section_lines), Decimal('0'))
-        else:
-            subtotal = sum((line.one_time_total for line in section_lines), Decimal('0'))
+        subtotal = sum((line.annual_contribution for line in section_lines), Decimal('0'))
         sections.append({
-            'code': section, 'label': label, 'forms': section_forms,
-            'subtotal': subtotal, 'is_monthly': is_monthly,
+            'code': section, 'label': label, 'forms': section_forms, 'subtotal': subtotal,
         })
     return sections
 
@@ -1286,6 +1288,11 @@ def mpc_first_year_export_excel(request, pk):
     header = _mpc_header_for(project)
     formset = FirstYearMaintenanceLineFormSet(instance=project)
     sections = _fym_sections(formset)
+    # Same narrowing as the HTML page's KPI tiles: a viewer who can't edit
+    # the bid (e.g. Site Manager) doesn't get Proposed Contract Value/
+    # Profit/VAT-inclusive value here either — an exported file is a more
+    # durable leak than a page element, so it needs the same gate.
+    can_see_bid_value = can_manage_manpower_costing(request.user)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -1355,50 +1362,43 @@ def mpc_first_year_export_excel(request, pk):
 
     r = 14
 
-    def section_table(row, section, it_label):
+    def section_table(row, section):
         cell(row, 1, section['label'], size=10, bold=True)
         underline_row(row)
         row += 1
-        for col, text in zip('FGHIJ', ['Nature of Expense', 'Amount', 'Qty', it_label, 'remarks']):
+        for col, text in zip('FGHIJ', ['Nature of Expense', 'Amount', 'Qty', 'Annual Contribution', 'remarks']):
             cell(row, ord(col) - 64, text, size=8, color=GRAY, align=CENTER)
         underline_row(row)
         row += 1
         for i, form in enumerate(section['forms'], start=1):
             line = form.instance
-            total = line.monthly_contribution if section['is_monthly'] else line.one_time_total
             cell(row, 1, i, align=CENTER)
             cell(row, 2, line.description)
             cell(row, 6, line.get_nature_of_expense_display(), size=8, align=CENTER)
             cell(row, 7, float(line.amount), fmt=money)
             cell(row, 8, float(line.qty), align=CENTER)
-            cell(row, 9, float(total), fmt=money)
+            cell(row, 9, float(line.annual_contribution), fmt=money)
             cell(row, 10, line.remarks)
             row += 1
         cell(row, 1, 'TOTAL', size=11, bold=True, align=CENTER)
-        cell(row, 9, float(section['subtotal']), size=10, bold=(not section['is_monthly']), fmt=money)
+        cell(row, 9, float(section['subtotal']), size=10, bold=True, fmt=money)
         total_border_row(row)
         return row + 2
 
-    it_labels = {'A': 'Monthly Exp.', 'B': 'One Time HR Cost', 'C': 'Monthly Exp.', 'D': 'One Time Exp'}
     for section in sections:
-        r = section_table(r, section, it_labels[section['code']])
+        r = section_table(r, section)
 
     # ── TOTAL COSTS (Annual) ──
     cell(r, 1, 'TOTAL COSTS (Annual)', size=12, bold=True)
     underline_row(r)
     r += 1
-    for col, text in zip('FGHI', ['Nature of Expense', 'Amount', 'Qty', 'Total']):
+    for col, text in zip('FI', ['Section', 'Annual Total']):
         cell(r, ord(col) - 64, text, size=8, color=GRAY, align=CENTER)
     underline_row(r)
     r += 1
     for row_data in header.section_annual_breakdown():
-        is_monthly = row_data['code'] in FirstYearMaintenanceLine.MONTHLY_SECTIONS
-        section = next(s for s in sections if s['code'] == row_data['code'])
         cell(r, 1, row_data['code'], align=CENTER)
-        cell(r, 2, f'Total of {row_data["code"]}')
-        cell(r, 6, 'Monthy' if is_monthly else 'One time', size=8, align=CENTER)
-        cell(r, 7, float(section['subtotal']), fmt=money)
-        cell(r, 8, 12 if is_monthly else 1, align=CENTER)
+        cell(r, 2, f"Total of {row_data['code']} — {row_data['label']}")
         cell(r, 9, float(row_data['annual_total']), fmt=money)
         r += 1
     cell(r, 1, 'GRAND TOTAL', size=11, bold=True, align=CENTER)
@@ -1412,25 +1412,26 @@ def mpc_first_year_export_excel(request, pk):
     cell(r, 3, 'DAILY COST'); cell(r, 9, float(header.total_daily_cost), fmt=money); r += 2
 
     # ── Bid value (red labels, bold green figures — matches the source exactly) ──
-    cell(r, 5, 'Proposed Contract Value', size=16, color=RED)
-    cell(r, 9, float(header.proposed_contract_value), size=14, bold=True, color=GREEN, fmt=bid_money)
-    r += 1
-    for col, text in zip('MNOP', ['Daily', 'Monthly', 'Yearly', 'Qtrly']):
-        cell(r, ord(col) - 64, text)
-    r += 1
-    contract_value = header.proposed_contract_value
-    cell(r, 13, float(contract_value / 12 / 26), fmt=bid_money)
-    cell(r, 14, float(contract_value / 12), fmt=bid_money)
-    cell(r, 15, float(contract_value), fmt=bid_money)
-    cell(r, 16, float(contract_value / 4), fmt=bid_money)
-    r += 1
-    cell(r, 5, 'Profit', size=16, color=RED)
-    cell(r, 9, float(header.profit), size=14, bold=True, color=GREEN, fmt=bid_money)
-    r += 2
-    cell(r, 1, 'Applied VAT', size=16, color=RED)
-    cell(r, 4, float(header.vat_rate) / 100, size=12, bold=True, color=GREEN, fmt='0.0%')
-    cell(r, 5, 'Proposed Contract Value including VAT', size=16, color=RED)
-    cell(r, 9, float(header.proposed_contract_value_incl_vat), size=14, bold=True, color=GREEN, fmt=bid_money)
+    if can_see_bid_value:
+        cell(r, 5, 'Proposed Contract Value', size=16, color=RED)
+        cell(r, 9, float(header.proposed_contract_value), size=14, bold=True, color=GREEN, fmt=bid_money)
+        r += 1
+        for col, text in zip('MNOP', ['Daily', 'Monthly', 'Yearly', 'Qtrly']):
+            cell(r, ord(col) - 64, text)
+        r += 1
+        contract_value = header.proposed_contract_value
+        cell(r, 13, float(contract_value / 12 / 26), fmt=bid_money)
+        cell(r, 14, float(contract_value / 12), fmt=bid_money)
+        cell(r, 15, float(contract_value), fmt=bid_money)
+        cell(r, 16, float(contract_value / 4), fmt=bid_money)
+        r += 1
+        cell(r, 5, 'Profit', size=16, color=RED)
+        cell(r, 9, float(header.profit), size=14, bold=True, color=GREEN, fmt=bid_money)
+        r += 2
+        cell(r, 1, 'Applied VAT', size=16, color=RED)
+        cell(r, 4, float(header.vat_rate) / 100, size=12, bold=True, color=GREEN, fmt='0.0%')
+        cell(r, 5, 'Proposed Contract Value including VAT', size=16, color=RED)
+        cell(r, 9, float(header.proposed_contract_value_incl_vat), size=14, bold=True, color=GREEN, fmt=bid_money)
 
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
@@ -1491,6 +1492,14 @@ def _sync_grades_from_designations(project):
         )
 
 
+def _eca_for(project):
+    """The employment-cost-assumptions row, built in memory when none
+    exists yet — same 'a GET must never write one' rule as
+    _mpc_header_for."""
+    return (getattr(project, 'employment_cost_assumptions', None)
+            or EmploymentCostAssumptions(project=project))
+
+
 @login_required
 @delivery_required
 def mpc_grade_structure_detail(request, pk):
@@ -1499,6 +1508,7 @@ def mpc_grade_structure_detail(request, pk):
     with no separate edit page to navigate to and back from."""
     project = _pm_visible_project_or_404(request, pk)
     can_edit = can_manage_manpower_costing(request.user)
+    eca = _eca_for(project)
 
     if request.method == 'POST':
         if not can_edit:
@@ -1506,16 +1516,22 @@ def mpc_grade_structure_detail(request, pk):
         grade_formset = GradeStructureLineFormSet(request.POST, instance=project, prefix='grades')
         designation_formset = DesignationManpowerLineFormSet(
             request.POST, instance=project, prefix='designations')
-        if grade_formset.is_valid() and designation_formset.is_valid():
+        eca_form = EmploymentCostAssumptionsForm(request.POST, instance=eca)
+        if grade_formset.is_valid() and designation_formset.is_valid() and eca_form.is_valid():
             with transaction.atomic():
                 grade_formset.save()
                 designation_formset.save()
                 _sync_grades_from_designations(project)
+                eca = eca_form.save(commit=False)
+                eca.project = project
+                eca.updated_by = request.user
+                eca.save()
             messages.success(request, 'Grade Structure saved.')
             return redirect('pmo:mpc_grade_structure_detail', pk=project.pk)
     else:
         grade_formset = GradeStructureLineFormSet(instance=project, prefix='grades')
         designation_formset = DesignationManpowerLineFormSet(instance=project, prefix='designations')
+        eca_form = EmploymentCostAssumptionsForm(instance=eca)
 
     grade_lines = [f.instance for f in grade_formset.forms]
     _attach_designations_cache(project, grade_lines)
@@ -1524,6 +1540,13 @@ def mpc_grade_structure_detail(request, pk):
     for c in categories:
         c['pct_of_manpower'] = (c['headcount'] * 100 / total_headcount) if total_headcount else 0
 
+    # Every designation row's Additional Cost / breakdown reads
+    # _assumptions_cache instead of looking its own project's
+    # EmploymentCostAssumptions up — one query for the whole table instead
+    # of one per row, same reasoning as _attach_designations_cache above.
+    for f in designation_formset.forms:
+        f.instance._assumptions_cache = eca
+
     response = render(request, 'pmo/mpc_grade_structure_detail.html', {
         'project': project,
         'category_choices': GradeStructureLine.CATEGORY_CHOICES,
@@ -1531,8 +1554,11 @@ def mpc_grade_structure_detail(request, pk):
         'total_headcount': total_headcount,
         'total_monthly_cost': sum((c['monthly_cost'] for c in categories), Decimal('0')),
         'total_annual_cost': sum((c['annual_cost'] for c in categories), Decimal('0')),
+        'total_fully_loaded_monthly_cost': sum((line.fully_loaded_monthly_cost for line in grade_lines), Decimal('0')),
+        'total_fully_loaded_annual_cost': sum((line.fully_loaded_annual_cost for line in grade_lines), Decimal('0')),
         'grade_formset': grade_formset,
         'designation_formset': designation_formset,
+        'eca_form': eca_form,
         'discipline_suggestions': GradeStructureLine.DISCIPLINE_SUGGESTIONS,
         'can_edit': can_edit,
     })
@@ -1555,11 +1581,14 @@ def mpc_grade_structure_export_excel(request, pk):
     total_headcount = sum((c['headcount'] for c in categories), 0)
     total_monthly = sum((c['monthly_cost'] for c in categories), Decimal('0'))
     total_annual = sum((c['annual_cost'] for c in categories), Decimal('0'))
+    total_fully_loaded_monthly = sum(
+        (line.fully_loaded_monthly_cost for c in categories for line in c['lines']), Decimal('0'))
+    total_fully_loaded_annual = total_fully_loaded_monthly * 12
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = 'Grade Structure'
-    for col, width in zip('ABCDEFGHI', [40, 12, 18, 35, 55, 14, 20, 18, 18]):
+    for col, width in zip('ABCDEFGHIJKLM', [40, 35, 18, 35, 55, 14, 20, 20, 20, 18, 18, 20, 20]):
         ws.column_dimensions[col].width = width
 
     FONT = 'Calibri'
@@ -1610,7 +1639,8 @@ def mpc_grade_structure_export_excel(request, pk):
     r += 1
     header_row(r, ['Category', 'Grade', 'Discipline / Specialization', 'Typical Designation',
                     'Criteria / Eligibility', 'Manpower (No.)', 'Indicative Monthly Salary (SAR)',
-                    'Monthly Cost (SAR)', 'Annual Cost (SAR)'])
+                    'Monthly Cost (SAR)', 'Annual Cost (SAR)', 'Fully Loaded Monthly Cost (SAR)',
+                    'Fully Loaded Annual Cost (SAR)'])
     r += 1
     for category in categories:
         for line in category['lines']:
@@ -1623,8 +1653,11 @@ def mpc_grade_structure_export_excel(request, pk):
             cell(r, 7, float(line.indicative_monthly_salary), color=INPUT_BLUE, fmt=number_fmt)
             cell(r, 8, float(line.monthly_cost), fmt=number_fmt)
             cell(r, 9, float(line.annual_cost), fmt=number_fmt)
+            cell(r, 10, float(line.fully_loaded_monthly_cost), fmt=number_fmt)
+            cell(r, 11, float(line.fully_loaded_annual_cost), fmt=number_fmt)
             r += 1
-    total_row(r, ['', '', '', '', 'TOTAL', total_headcount, '', float(total_monthly), float(total_annual)])
+    total_row(r, ['', '', '', '', 'TOTAL', total_headcount, '', float(total_monthly), float(total_annual),
+                   float(total_fully_loaded_monthly), float(total_fully_loaded_annual)])
     r += 2
 
     ws.cell(row=r, column=1, value='SUMMARY BY CATEGORY').font = Font(
@@ -1648,11 +1681,17 @@ def mpc_grade_structure_export_excel(request, pk):
     r += 2
 
     designations = list(project.designation_manpower_lines.all())
+    eca = _eca_for(project)
+    for d in designations:
+        d._assumptions_cache = eca
+    nationality_labels = dict(DesignationManpowerLine.NATIONALITY_CHOICES)
     ws.cell(row=r, column=1, value='DESIGNATION-WISE MANPOWER').font = Font(
         name=FONT, size=12, bold=True, color=NAVY)
     r += 1
-    header_row(r, ['Designation', 'Category', 'Grade', 'Discipline / Specialization',
-                    'Manpower (No.)', 'Monthly Salary (SAR)', 'Monthly Cost (SAR)', 'Annual Cost (SAR)'])
+    header_row(r, ['Designation', 'Category', 'Grade', 'Discipline / Specialization', 'Nationality',
+                    'Manpower (No.)', 'Monthly Salary (SAR)', 'Additional Cost / Head (SAR)',
+                    'Fully Loaded / Head (SAR)', 'Monthly Cost (SAR)', 'Annual Cost (SAR)',
+                    'Fully Loaded Monthly Cost (SAR)', 'Fully Loaded Annual Cost (SAR)'])
     r += 1
     category_labels = dict(GradeStructureLine.CATEGORY_CHOICES)
     for d in designations:
@@ -1660,16 +1699,24 @@ def mpc_grade_structure_export_excel(request, pk):
         cell(r, 2, category_labels.get(d.category, d.category), align=CENTER)
         cell(r, 3, d.grade_code, align=CENTER)
         cell(r, 4, d.discipline, align=CENTER)
-        cell(r, 5, d.headcount, align=CENTER)
-        cell(r, 6, float(d.monthly_salary), color=INPUT_BLUE, fmt=number_fmt)
-        cell(r, 7, float(d.monthly_cost), fmt=number_fmt)
-        cell(r, 8, float(d.annual_cost), fmt=number_fmt)
+        cell(r, 5, nationality_labels.get(d.nationality, d.nationality), align=CENTER)
+        cell(r, 6, d.headcount, align=CENTER)
+        cell(r, 7, float(d.monthly_salary), color=INPUT_BLUE, fmt=number_fmt)
+        cell(r, 8, float(d.additional_cost_monthly), fmt=number_fmt)
+        cell(r, 9, float(d.fully_loaded_monthly_cost), fmt=number_fmt)
+        cell(r, 10, float(d.monthly_cost), fmt=number_fmt)
+        cell(r, 11, float(d.annual_cost), fmt=number_fmt)
+        cell(r, 12, float(d.fully_loaded_monthly_cost_total), fmt=number_fmt)
+        cell(r, 13, float(d.fully_loaded_annual_cost_total), fmt=number_fmt)
         r += 1
     designation_headcount = sum((d.headcount for d in designations), 0)
     designation_monthly = sum((d.monthly_cost for d in designations), Decimal('0'))
     designation_annual = sum((d.annual_cost for d in designations), Decimal('0'))
-    total_row(r, ['TOTAL', '', '', '', designation_headcount, '',
-                   float(designation_monthly), float(designation_annual)])
+    designation_fully_loaded_monthly = sum((d.fully_loaded_monthly_cost_total for d in designations), Decimal('0'))
+    designation_fully_loaded_annual = sum((d.fully_loaded_annual_cost_total for d in designations), Decimal('0'))
+    total_row(r, ['TOTAL', '', '', '', '', designation_headcount, '', '', '',
+                   float(designation_monthly), float(designation_annual),
+                   float(designation_fully_loaded_monthly), float(designation_fully_loaded_annual)])
 
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
