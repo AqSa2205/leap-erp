@@ -1258,7 +1258,7 @@
         <div class="nav-section" data-section="delivery"><span>Project Management</span><i class="bi bi-chevron-down section-chevron"></i></div>
         <ul class="nav flex-column nav-section-items" data-section-items="delivery">
             <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.app_name == 'pmo' and request.resolver_match.url_name != 'milestone_import' and 'pm_' not in request.resolver_match.url_name and 'manpower' not in request.resolver_match.url_name and 'issue' not in request.resolver_match.url_name %}active{% endif %}" href="{% url 'pmo:board' %}" data-title="Project Management — Delivery Board">
+                <a class="nav-link {% if request.resolver_match.app_name == 'pmo' and request.resolver_match.url_name != 'milestone_import' and 'pm_' not in request.resolver_match.url_name and 'manpower' not in request.resolver_match.url_name and 'issue' not in request.resolver_match.url_name and 'mpc_' not in request.resolver_match.url_name %}active{% endif %}" href="{% url 'pmo:board' %}" data-title="Project Management — Delivery Board">
                     <i class="bi bi-kanban"></i> <span>Delivery Board</span>
                 </a>
             </li>
@@ -1268,7 +1268,12 @@
                 </a>
             </li>
             <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.app_name == 'pmo' and 'manpower' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'pmo:manpower_list' %}" data-title="Project Management — Manpower Status">
+                <a class="nav-link {% if request.resolver_match.app_name == 'pmo' and 'mpc_' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'pmo:mpc_index' %}" data-title="Project Management — Project Manpower Costing">
+                    <i class="bi bi-calculator"></i> <span>Project Manpower Costing</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'pmo' and 'manpower' in request.resolver_match.url_name and 'mpc_' not in request.resolver_match.url_name %}active{% endif %}" href="{% url 'pmo:manpower_list' %}" data-title="Project Management — Manpower Status">
                     <i class="bi bi-people"></i> <span>Manpower Status</span>
                 </a>
             </li>

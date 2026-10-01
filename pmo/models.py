@@ -437,3 +437,450 @@ class ProjectIssue(models.Model):
     @property
     def priority_color(self):
         return self.PRIORITY_COLORS.get(self.priority, '6c757d')
+
+
+# ── Project Manpower Costing ─────────────────────────────────────────────────
+#
+# A bid-stage staffing-cost estimate per project — grade headcounts and
+# indicative salaries rolling up into a proposed contract value. Distinct
+# from manpowercost (that app prices real/prospective employees' actual
+# payroll cost, HR-facing, not tied to a Project row); this is the Project
+# Manager's own pre-award estimate for one specific job. Inputs are real
+# typed fields, calculated columns are properties computed live from them —
+# never stored — so a changed rate or headcount is correct everywhere the
+# moment it's saved, matching costing.CostingLineItem's rate x qty pattern
+# rather than the JSON-grid matrices above (those are for freeform text,
+# not arithmetic that has to stay right).
+
+class GradeStructureLine(models.Model):
+    """One grade row in a project's staffing plan: a category, a grade code,
+    and an indicative (reference) salary. Headcount and cost are NOT typed
+    here — they're aggregated from DesignationManpowerLine, exactly like the
+    source workbook's Individual Grades table pulls its Manpower/Monthly
+    Cost columns via SUMIF from the Designation-wise Manpower roster below
+    it. That roster is the real headcount source because one grade can
+    genuinely cover several designations (e.g. E-2 might be both "Engineer"
+    and "HSE Engineer") each with their own headcount — collapsing that onto
+    a single headcount field here would either lose that breakdown or force
+    the same number to be re-typed in two places that could disagree."""
+
+    CATEGORY_EXECUTIVE = 'EX'
+    CATEGORY_ADMIN = 'A'
+    CATEGORY_ENGINEERING = 'E'
+    CATEGORY_TECHNICIAN = 'T'
+    CATEGORY_OPERATOR = 'O'
+    CATEGORY_CHOICES = [
+        (CATEGORY_EXECUTIVE, 'EX — Executive / Management'),
+        (CATEGORY_ADMIN, 'A — Administration / Support'),
+        (CATEGORY_ENGINEERING, 'E — Engineering / Technical Professional'),
+        (CATEGORY_TECHNICIAN, 'T — Technician / Skilled Trade'),
+        (CATEGORY_OPERATOR, 'O — Operator / General Labour'),
+    ]
+    # Suggestions for a <datalist>, not a fixed choice set — same "pick from
+    # the list or type your own" convention as PurchaseOrder.SYSTEM_SUGGESTIONS.
+    DISCIPLINE_SUGGESTIONS = [
+        'Telecom', 'Security', 'AI', 'Hydraulics', 'Cyber', 'IT', 'General/N/A',
+    ]
+
+    project = models.ForeignKey(
+        'projects.Project', on_delete=models.CASCADE, related_name='grade_structure_lines')
+    order = models.PositiveIntegerField(default=0)
+    category = models.CharField(max_length=2, choices=CATEGORY_CHOICES)
+    grade_code = models.CharField(max_length=20, help_text='e.g. EX-1, A-1, E-3')
+    discipline = models.CharField(max_length=100, blank=True)
+    typical_designation = models.CharField(max_length=255, blank=True)
+    criteria = models.TextField(blank=True, verbose_name='Criteria / Eligibility')
+    indicative_monthly_salary = models.DecimalField(
+        max_digits=15, decimal_places=2, default=0, verbose_name='Indicative Monthly Salary',
+        help_text='A reference salary for this grade — the real cost below is '
+                   'summed from its Designation-wise Manpower rows, not this figure.')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['category', 'order', 'pk']
+
+    def __str__(self):
+        return f'{self.grade_code} — {self.project.project_name}'
+
+    def _matching_designations(self):
+        """A view rendering many grade lines at once (Grade Structure's own
+        page, the portfolio list) should set `_designations_cache` to a
+        pre-fetched {grade_code: [designations]} lookup and assign the
+        matching list here directly — without it, each grade line queries
+        designation_manpower_lines on its own, which is fine for a single
+        line in isolation (the demo seeder, a shell session, a test) but is
+        an N+1 across a whole table of them."""
+        cached = getattr(self, '_designations_cache', None)
+        if cached is not None:
+            return cached
+        return [d for d in self.project.designation_manpower_lines.all() if d.grade_code == self.grade_code]
+
+    @property
+    def headcount(self):
+        return sum((d.headcount for d in self._matching_designations()), 0)
+
+    @property
+    def monthly_cost(self):
+        return sum((d.monthly_cost for d in self._matching_designations()), Decimal('0'))
+
+    @property
+    def annual_cost(self):
+        return self.monthly_cost * 12
+
+    @property
+    def fully_loaded_monthly_cost(self):
+        return sum(
+            (d.fully_loaded_monthly_cost_total for d in self._matching_designations()), Decimal('0'))
+
+    @property
+    def fully_loaded_annual_cost(self):
+        return self.fully_loaded_monthly_cost * 12
+
+
+class EmploymentCostAssumptions(models.Model):
+    """The statutory/benefit rates the source workbook's Engineer Rate
+    Tables sheet calls 'Additional Employment Cost Assumptions' — per
+    project (not a fixed company-wide constant) since a bid's benefit
+    package can differ from job to job, same as VAT/margin on
+    ManpowerCostingHeader. Built in memory with these defaults when a
+    project has none yet, matching that same pattern.
+
+    Iqama, the air ticket and GOSI-Expat only apply to an expat row;
+    GOSI-Saudi only to a Saudi row; medical and the overhead % apply to
+    everyone — see DesignationManpowerLine's own properties for the
+    per-row split, which is where these rates actually get used."""
+
+    project = models.OneToOneField(
+        'projects.Project', on_delete=models.CASCADE, related_name='employment_cost_assumptions')
+    overhead_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('12'), verbose_name='Overhead %',
+        help_text='Accommodation / transport / IT / PPE, applied as a flat % of salary.')
+    iqama_annual = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('10350'),
+        verbose_name='Residence Permit (Iqama) — Annual (SAR)', help_text='Expat only.')
+    medical_annual = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('2500'),
+        verbose_name='Medical Insurance — Annual (SAR)', help_text='Everyone.')
+    ticket_annual = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('2500'),
+        verbose_name='Air Ticket — Annual (SAR)', help_text='Expat only.')
+    esb_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('8.33'),
+        verbose_name='ESB (End of Service) %',
+        help_text='% of monthly salary, accrued — everyone.')
+    gosi_expat_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('2'),
+        verbose_name='GOSI — Expat %', help_text='Occupational hazard only.')
+    gosi_saudi_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('11.75'),
+        verbose_name='GOSI — Saudi %', help_text="Employer's share.")
+
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'Employment Cost Assumptions — {self.project.project_name}'
+
+
+class DesignationManpowerLine(models.Model):
+    """One real position — the source workbook's Designation-wise Manpower
+    roster. Several of these can share a GradeStructureLine's grade_code
+    (matched by value, the same loose SUMIF-style match the sheet itself
+    uses — not a FK, so a typo'd grade code just doesn't count toward any
+    grade's total rather than blocking a save)."""
+
+    NATIONALITY_EXPAT = 'expat'
+    NATIONALITY_SAUDI = 'saudi'
+    NATIONALITY_CHOICES = [
+        (NATIONALITY_EXPAT, 'Expat'),
+        (NATIONALITY_SAUDI, 'Saudi'),
+    ]
+
+    project = models.ForeignKey(
+        'projects.Project', on_delete=models.CASCADE, related_name='designation_manpower_lines')
+    order = models.PositiveIntegerField(default=0)
+    designation = models.CharField(max_length=255, verbose_name='Designation')
+    category = models.CharField(max_length=2, choices=GradeStructureLine.CATEGORY_CHOICES)
+    grade_code = models.CharField(max_length=20, verbose_name='Grade', help_text='e.g. EX-1, A-1, E-3')
+    discipline = models.CharField(max_length=100, blank=True)
+    nationality = models.CharField(
+        max_length=10, choices=NATIONALITY_CHOICES, default=NATIONALITY_EXPAT,
+        help_text='Drives which statutory add-ons apply — see the Additional Cost breakdown.')
+    headcount = models.PositiveIntegerField(default=0, verbose_name='Manpower')
+    monthly_salary = models.DecimalField(
+        max_digits=15, decimal_places=2, default=0, verbose_name='Monthly Salary')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['category', 'grade_code', 'order', 'pk']
+
+    def __str__(self):
+        return f'{self.designation} — {self.project.project_name}'
+
+    @property
+    def monthly_cost(self):
+        return self.headcount * self.monthly_salary
+
+    @property
+    def annual_cost(self):
+        return self.monthly_cost * 12
+
+    @property
+    def is_expat(self):
+        return self.nationality == self.NATIONALITY_EXPAT
+
+    def _assumptions(self):
+        """A view rendering a whole roster should set `_assumptions_cache`
+        to the project's single EmploymentCostAssumptions row directly —
+        without it, each row looks the FK up on its own, fine in isolation
+        but an N+1 across a table of them (same reasoning as
+        GradeStructureLine._matching_designations)."""
+        cached = getattr(self, '_assumptions_cache', None)
+        if cached is not None:
+            return cached
+        return (getattr(self.project, 'employment_cost_assumptions', None)
+                or EmploymentCostAssumptions(project=self.project))
+
+    @property
+    def overhead_monthly(self):
+        return self.monthly_salary * self._assumptions().overhead_pct / Decimal('100')
+
+    @property
+    def iqama_monthly(self):
+        if not self.is_expat:
+            return Decimal('0')
+        return self._assumptions().iqama_annual / 12
+
+    @property
+    def medical_monthly(self):
+        return self._assumptions().medical_annual / 12
+
+    @property
+    def ticket_monthly(self):
+        if not self.is_expat:
+            return Decimal('0')
+        return self._assumptions().ticket_annual / 12
+
+    @property
+    def esb_monthly(self):
+        return self.monthly_salary * self._assumptions().esb_pct / Decimal('100')
+
+    @property
+    def gosi_monthly(self):
+        a = self._assumptions()
+        pct = a.gosi_expat_pct if self.is_expat else a.gosi_saudi_pct
+        return self.monthly_salary * pct / Decimal('100')
+
+    @property
+    def additional_cost_monthly(self):
+        """The source sheet's 'Total Additional Monthly Cost' (K59) —
+        Iqama + Medical + Ticket + ESB + GOSI. Deliberately excludes
+        overhead, which the sheet folds into the base salary markup
+        instead of counting as a 'benefit' line — see
+        fully_loaded_monthly_cost for the figure that includes it."""
+        return (self.iqama_monthly + self.medical_monthly + self.ticket_monthly
+                + self.esb_monthly + self.gosi_monthly)
+
+    @property
+    def fully_loaded_monthly_cost(self):
+        return self.monthly_salary + self.overhead_monthly + self.additional_cost_monthly
+
+    @property
+    def fully_loaded_monthly_cost_total(self):
+        """fully_loaded_monthly_cost is a PER-HEAD figure — this multiplies
+        it by headcount, matching how monthly_cost/annual_cost are already
+        row totals rather than per-head."""
+        return self.headcount * self.fully_loaded_monthly_cost
+
+    @property
+    def fully_loaded_annual_cost_total(self):
+        return self.fully_loaded_monthly_cost_total * 12
+
+    def additional_cost_breakdown(self):
+
+        """One row per component that feeds additional_cost_monthly, for a
+        hover tooltip — each showing the rate that was applied and what it
+        came to, so 'how did we get this number' is never a mystery."""
+        a = self._assumptions()
+        rows = [
+            {'label': 'Iqama', 'rate': f'{a.iqama_annual:,.0f}/yr' if self.is_expat else 'N/A (Saudi)',
+             'amount': self.iqama_monthly},
+            {'label': 'Medical', 'rate': f'{a.medical_annual:,.0f}/yr', 'amount': self.medical_monthly},
+            {'label': 'Ticket', 'rate': f'{a.ticket_annual:,.0f}/yr' if self.is_expat else 'N/A (Saudi)',
+             'amount': self.ticket_monthly},
+            {'label': 'ESB', 'rate': f'{a.esb_pct}%', 'amount': self.esb_monthly},
+            {'label': f'GOSI ({self.get_nationality_display()})',
+             'rate': f'{a.gosi_expat_pct if self.is_expat else a.gosi_saudi_pct}%',
+             'amount': self.gosi_monthly},
+        ]
+        return rows
+
+
+class FirstYearMaintenanceLine(models.Model):
+    """One cost line in a project's First Year Maintenance sheet. Sectioned
+    A-D exactly as the source workbook groups them, but the section is a
+    presentational grouping only — how a line annualises is decided solely
+    by its own nature_of_expense (see annual_contribution below), never by
+    which section it happens to sit in. Earlier this was decided by section
+    membership instead, which let a line's section and its nature disagree
+    (e.g. a one-time cost typed into a "monthly" section) and silently
+    mis-cost the bid by a factor of 12."""
+
+    SECTION_A = 'A'
+    SECTION_B = 'B'
+    SECTION_C = 'C'
+    SECTION_D = 'D'
+    SECTION_CHOICES = [
+        (SECTION_A, 'A — Manpower Cost (Monthly / Recurring)'),
+        (SECTION_B, 'B — Manpower Cost (One Time)'),
+        (SECTION_C, 'C — Vehicle / Consumables / Support (Monthly)'),
+        (SECTION_D, 'D — Tools / Equipment (One Time)'),
+    ]
+
+    NATURE_MONTHLY = 'monthly'
+    NATURE_ANNUAL = 'annual'
+    NATURE_ONE_TIME = 'one_time'
+    NATURE_CHOICES = [
+        (NATURE_MONTHLY, 'Monthly'),
+        (NATURE_ANNUAL, 'Annual'),
+        (NATURE_ONE_TIME, 'One Time'),
+    ]
+
+    project = models.ForeignKey(
+        'projects.Project', on_delete=models.CASCADE, related_name='first_year_maintenance_lines')
+    section = models.CharField(max_length=1, choices=SECTION_CHOICES)
+    order = models.PositiveIntegerField(default=0)
+    description = models.CharField(max_length=255, verbose_name='Description (Role / Item)')
+    nature_of_expense = models.CharField(
+        max_length=20, choices=NATURE_CHOICES, default=NATURE_MONTHLY)
+    amount = models.DecimalField(
+        max_digits=15, decimal_places=2, default=0, verbose_name='Amount (Rate)')
+    qty = models.DecimalField(max_digits=10, decimal_places=2, default=1)
+    remarks = models.CharField(max_length=500, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['section', 'order', 'pk']
+
+    def __str__(self):
+        return f'{self.description} — {self.project.project_name}'
+
+    @property
+    def annual_contribution(self):
+        """This line's contribution to the project's annual cost — decided
+        solely by its own nature_of_expense. A monthly line recurs 12 times
+        a year; an annual line's amount is already the yearly figure (e.g.
+        a per-head Iqama/medical/ticket cost); a one-time line is counted
+        once. Nature-only, never section-conditional — see the class
+        docstring for why that matters."""
+        if self.nature_of_expense == self.NATURE_MONTHLY:
+            return self.amount * self.qty * 12
+        return self.amount * self.qty
+
+
+class ManpowerCostingHeader(models.Model):
+    """Per-project fields the First Year Maintenance sheet needs that
+    Project has no equivalent of (PO type/value, VAT, target margin).
+    Everything else on the sheet's header — client, project name, LNA
+    reference, PO number/date, currency — is read live from Project/Region;
+    duplicating it here is exactly the kind of drift this ERP's other
+    per-project records (ResponsibilityMatrix, ManpowerResource) avoid by
+    linking instead of retyping."""
+
+    project = models.OneToOneField(
+        'projects.Project', on_delete=models.CASCADE, related_name='manpower_costing_header')
+    po_type = models.CharField(max_length=100, blank=True, help_text='e.g. "1 Year", "Call-off"')
+    po_value = models.DecimalField(
+        max_digits=15, decimal_places=2, null=True, blank=True,
+        help_text="The client PO's own stated value — distinct from the "
+                  "pipeline's Project.estimated_value.")
+    currency_override = models.CharField(
+        max_length=3, blank=True,
+        help_text='Overrides the project region currency if this bid is priced differently.')
+    vat_rate = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('15'), verbose_name='VAT %')
+    profit_margin_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        verbose_name='Target Profit Margin %',
+        help_text='Blank = Proposed Contract Value defaults to cost, zero profit shown.')
+
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # Same clamp costing.CostingLineItem.effective_margin uses — a margin at
+    # or above 100% divides by zero or goes negative, neither of which is a
+    # sale price.
+    MAX_MARGIN = Decimal('0.99')
+
+    def __str__(self):
+        return f'Manpower Costing Header — {self.project.project_name}'
+
+    @property
+    def currency(self):
+        return self.currency_override or self.project.region.currency
+
+    def section_annual_breakdown(self):
+        """Row-by-row per-section annual contribution — the same rollup
+        total_annual_cost sums, exposed per-row for the sheet's TOTAL COSTS
+        (Annual) summary table. Each line annualises according to its own
+        nature_of_expense (FirstYearMaintenanceLine.annual_contribution);
+        the section is just a grouping label, so this is a plain sum, not a
+        second place that decides whether ×12 applies."""
+        lines = list(self.project.first_year_maintenance_lines.all())
+        rows = []
+        for section, label in FirstYearMaintenanceLine.SECTION_CHOICES:
+            section_lines = [line for line in lines if line.section == section]
+            annual_total = sum((line.annual_contribution for line in section_lines), Decimal('0'))
+            rows.append({'code': section, 'label': label, 'annual_total': annual_total})
+        return rows
+
+    @property
+    def total_annual_cost(self):
+        return sum((row['annual_total'] for row in self.section_annual_breakdown()), Decimal('0'))
+
+    @property
+    def total_monthly_cost(self):
+        return (self.total_annual_cost / Decimal('12')).quantize(Decimal('0.01'))
+
+    @property
+    def total_daily_cost(self):
+        """Monthly ÷ 26 — the source workbook's own DAILY COST row
+        (=MONTHLY COST/26), a 26-working-day/month convention, not a
+        calendar-day rate."""
+        return (self.total_monthly_cost / Decimal('26')).quantize(Decimal('0.01'))
+
+    @property
+    def effective_margin(self):
+        if not self.profit_margin_pct:
+            return Decimal('0')
+        margin = self.profit_margin_pct / Decimal('100')
+        return max(Decimal('0'), min(self.MAX_MARGIN, margin))
+
+    @property
+    def proposed_contract_value(self):
+        cost = self.total_annual_cost
+        margin = self.effective_margin
+        if margin <= 0:
+            return cost
+        return (cost / (1 - margin)).quantize(Decimal('0.01'))
+
+    @property
+    def profit(self):
+        """Never entered independently — the gap between the sale price and
+        the cost, computed rather than typed twice, so the two can't
+        disagree the way completed_weightage/pending_weightage above are
+        also deliberately derived rather than stored."""
+        return self.proposed_contract_value - self.total_annual_cost
+
+    @property
+    def proposed_contract_value_incl_vat(self):
+        return (self.proposed_contract_value
+                * (1 + self.vat_rate / Decimal('100'))).quantize(Decimal('0.01'))
