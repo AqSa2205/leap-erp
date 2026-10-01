@@ -7,14 +7,14 @@
 {% block extra_css %}
 <style>
     .gs-shell { background: #fff; border: 1px solid #e9ecef; border-radius: 10px; overflow: hidden; margin-bottom: 1.25rem; }
-    .gs-shell .gs-title { padding: 10px 14px; font-weight: 700; font-size: 0.95rem; color: #1F4E79; }
+    .gs-shell .gs-title { padding: 10px 14px; font-weight: 700; font-size: 0.95rem; color: #1a1a1a; }
     table.gs-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.85rem; margin-bottom: 0; }
-    table.gs-table th, table.gs-table td { padding: 6px 8px; border: 1px solid #cfd8e3; vertical-align: middle; background: #fff; }
-    table.gs-table thead th { background: #1F4E79; color: #fff; font-weight: 700; text-align: center; white-space: nowrap; }
-    table.gs-table tfoot td { background: #DCE6F1; font-weight: 700; }
+    table.gs-table th, table.gs-table td { padding: 6px 8px; border: 1px solid #dee2e6; vertical-align: middle; background: #fff; }
+    table.gs-table thead th { background: #343a40; color: #fff; font-weight: 700; text-align: center; white-space: nowrap; }
+    table.gs-table tfoot td { background: #f1f1f1; font-weight: 700; }
     table.gs-table input, table.gs-table select, table.gs-table textarea { font-size: 0.83rem; width: 100%; border: 1px solid #dee2e6; border-radius: 4px; padding: 3px 6px; }
     .gs-input-color, .gs-input-color input { color: #0000FF; }
-    .gs-addrow { padding: 8px 12px; border-top: 1px solid #cfd8e3; }
+    .gs-addrow { padding: 8px 12px; border-top: 1px solid #dee2e6; }
 </style>
 {% endblock %}
 
@@ -75,6 +75,8 @@
                         <th style="width:150px;">Indicative Monthly Salary</th>
                         <th style="width:130px;">Monthly Cost</th>
                         <th style="width:130px;">Annual Cost</th>
+                        <th style="width:150px;">Fully Loaded Monthly Cost</th>
+                        <th style="width:150px;">Fully Loaded Annual Cost</th>
                         {% if can_edit %}<th style="width:40px;">Del</th>{% endif %}
                     </tr>
                 </thead>
@@ -91,6 +93,8 @@
                         <td class="gs-input-color">{{ form.indicative_monthly_salary }}</td>
                         <td class="text-end">{{ form.instance.monthly_cost|floatformat:2|intcomma }}</td>
                         <td class="text-end">{{ form.instance.annual_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ form.instance.fully_loaded_monthly_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ form.instance.fully_loaded_annual_cost|floatformat:2|intcomma }}</td>
                         <td class="text-center">
                             <span class="d-none">{{ form.DELETE }}</span>
                             <button type="button" class="btn btn-sm btn-outline-danger {% if form.instance.pk %}delete-saved-row{% else %}remove-row{% endif %}" title="Remove"><i class="bi bi-trash"></i></button>
@@ -105,10 +109,12 @@
                         <td class="text-end gs-input-color">{{ form.instance.indicative_monthly_salary|floatformat:2|intcomma }}</td>
                         <td class="text-end">{{ form.instance.monthly_cost|floatformat:2|intcomma }}</td>
                         <td class="text-end">{{ form.instance.annual_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ form.instance.fully_loaded_monthly_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ form.instance.fully_loaded_annual_cost|floatformat:2|intcomma }}</td>
                         {% endif %}
                     </tr>
                     {% empty %}
-                    <tr><td colspan="{% if can_edit %}10{% else %}9{% endif %}" class="text-center text-muted py-3">No grades yet.</td></tr>
+                    <tr><td colspan="{% if can_edit %}12{% else %}11{% endif %}" class="text-center text-muted py-3">No grades yet.</td></tr>
                     {% endfor %}
                 </tbody>
                 <tfoot>
@@ -119,6 +125,8 @@
                         <td></td>
                         <td class="text-end">{{ total_monthly_cost|floatformat:2|intcomma }}</td>
                         <td class="text-end">{{ total_annual_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ total_fully_loaded_monthly_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ total_fully_loaded_annual_cost|floatformat:2|intcomma }}</td>
                         {% if can_edit %}<td></td>{% endif %}
                     </tr>
                 </tfoot>
@@ -133,6 +141,8 @@
                     <td>{{ grade_formset.empty_form.criteria }}</td>
                     <td class="text-center text-muted">—</td>
                     <td class="gs-input-color">{{ grade_formset.empty_form.indicative_monthly_salary }}</td>
+                    <td class="text-end text-muted">—</td>
+                    <td class="text-end text-muted">—</td>
                     <td class="text-end text-muted">—</td>
                     <td class="text-end text-muted">—</td>
                     <td class="text-center">
@@ -192,6 +202,48 @@
         </div>
     </div>
 
+    <!-- EMPLOYMENT COST ASSUMPTIONS -->
+    <div class="gs-shell">
+        <div class="gs-title">Employment Cost Assumptions</div>
+        <div class="p-3">
+            <p class="text-muted small mb-3">
+                These rates drive each designation's <strong>Additional Cost</strong> and <strong>Fully Loaded</strong>
+                figures below — Iqama, Air Ticket and GOSI-Expat apply only to Expat rows; GOSI-Saudi only to Saudi
+                rows; Medical and Overhead apply to everyone.
+            </p>
+            <div class="row row-cols-2 row-cols-md-4 g-3">
+                <div>
+                    <label class="form-label small fw-semibold">Overhead %</label>
+                    {% if can_edit %}{{ eca_form.overhead_pct }}{% else %}<div>{{ eca_form.instance.overhead_pct }}%</div>{% endif %}
+                </div>
+                <div>
+                    <label class="form-label small fw-semibold">Iqama — Annual (SAR)</label>
+                    {% if can_edit %}{{ eca_form.iqama_annual }}{% else %}<div>{{ eca_form.instance.iqama_annual|floatformat:2|intcomma }}</div>{% endif %}
+                </div>
+                <div>
+                    <label class="form-label small fw-semibold">Medical — Annual (SAR)</label>
+                    {% if can_edit %}{{ eca_form.medical_annual }}{% else %}<div>{{ eca_form.instance.medical_annual|floatformat:2|intcomma }}</div>{% endif %}
+                </div>
+                <div>
+                    <label class="form-label small fw-semibold">Air Ticket — Annual (SAR)</label>
+                    {% if can_edit %}{{ eca_form.ticket_annual }}{% else %}<div>{{ eca_form.instance.ticket_annual|floatformat:2|intcomma }}</div>{% endif %}
+                </div>
+                <div>
+                    <label class="form-label small fw-semibold">ESB %</label>
+                    {% if can_edit %}{{ eca_form.esb_pct }}{% else %}<div>{{ eca_form.instance.esb_pct }}%</div>{% endif %}
+                </div>
+                <div>
+                    <label class="form-label small fw-semibold">GOSI — Expat %</label>
+                    {% if can_edit %}{{ eca_form.gosi_expat_pct }}{% else %}<div>{{ eca_form.instance.gosi_expat_pct }}%</div>{% endif %}
+                </div>
+                <div>
+                    <label class="form-label small fw-semibold">GOSI — Saudi %</label>
+                    {% if can_edit %}{{ eca_form.gosi_saudi_pct }}{% else %}<div>{{ eca_form.instance.gosi_saudi_pct }}%</div>{% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- DESIGNATION-WISE MANPOWER -->
     <div class="gs-shell">
         <div class="gs-title">Designation-wise Manpower</div>
@@ -204,10 +256,15 @@
                         <th style="width:150px;">Category</th>
                         <th style="width:100px;">Grade</th>
                         <th style="width:130px;">Discipline</th>
+                        <th style="width:100px;">Nationality</th>
                         <th style="width:90px;">Manpower</th>
                         <th style="width:140px;">Monthly Salary</th>
+                        <th style="width:150px;">Additional Cost <span class="fw-normal">(per head)</span></th>
+                        <th style="width:150px;">Fully Loaded <span class="fw-normal">(per head)</span></th>
                         <th style="width:130px;">Monthly Cost</th>
                         <th style="width:130px;">Annual Cost</th>
+                        <th style="width:160px;">Fully Loaded Monthly Cost</th>
+                        <th style="width:160px;">Fully Loaded Annual Cost</th>
                         {% if can_edit %}<th style="width:40px;">Del</th>{% endif %}
                     </tr>
                 </thead>
@@ -219,10 +276,17 @@
                         <td>{{ form.category }}</td>
                         <td>{{ form.grade_code }}</td>
                         <td>{{ form.discipline }}</td>
+                        <td>{{ form.nationality }}</td>
                         <td>{{ form.headcount }}</td>
                         <td class="gs-input-color">{{ form.monthly_salary }}</td>
+                        <td class="text-end" data-bs-toggle="tooltip" title="{% for item in form.instance.additional_cost_breakdown %}{{ item.label }} ({{ item.rate }}): {{ item.amount|floatformat:2 }}{% if not forloop.last %} | {% endif %}{% endfor %}">
+                            {{ form.instance.additional_cost_monthly|floatformat:2|intcomma }} <i class="bi bi-info-circle text-muted small"></i>
+                        </td>
+                        <td class="text-end">{{ form.instance.fully_loaded_monthly_cost|floatformat:2|intcomma }}</td>
                         <td class="text-end">{{ form.instance.monthly_cost|floatformat:2|intcomma }}</td>
                         <td class="text-end">{{ form.instance.annual_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ form.instance.fully_loaded_monthly_cost_total|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ form.instance.fully_loaded_annual_cost_total|floatformat:2|intcomma }}</td>
                         <td class="text-center">
                             <span class="d-none">{{ form.DELETE }}</span>
                             <button type="button" class="btn btn-sm btn-outline-danger {% if form.instance.pk %}delete-saved-row{% else %}remove-row{% endif %}" title="Remove"><i class="bi bi-trash"></i></button>
@@ -232,14 +296,21 @@
                         <td class="text-center">{{ form.instance.get_category_display }}</td>
                         <td class="text-center fw-semibold">{{ form.instance.grade_code }}</td>
                         <td class="text-center">{{ form.instance.discipline|default:"—" }}</td>
+                        <td class="text-center">{{ form.instance.get_nationality_display }}</td>
                         <td class="text-center">{{ form.instance.headcount }}</td>
                         <td class="text-end gs-input-color">{{ form.instance.monthly_salary|floatformat:2|intcomma }}</td>
+                        <td class="text-end" data-bs-toggle="tooltip" title="{% for item in form.instance.additional_cost_breakdown %}{{ item.label }} ({{ item.rate }}): {{ item.amount|floatformat:2 }}{% if not forloop.last %} | {% endif %}{% endfor %}">
+                            {{ form.instance.additional_cost_monthly|floatformat:2|intcomma }} <i class="bi bi-info-circle text-muted small"></i>
+                        </td>
+                        <td class="text-end">{{ form.instance.fully_loaded_monthly_cost|floatformat:2|intcomma }}</td>
                         <td class="text-end">{{ form.instance.monthly_cost|floatformat:2|intcomma }}</td>
                         <td class="text-end">{{ form.instance.annual_cost|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ form.instance.fully_loaded_monthly_cost_total|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ form.instance.fully_loaded_annual_cost_total|floatformat:2|intcomma }}</td>
                         {% endif %}
                     </tr>
                     {% empty %}
-                    <tr><td colspan="{% if can_edit %}9{% else %}8{% endif %}" class="text-center text-muted py-3">No designations yet.</td></tr>
+                    <tr><td colspan="{% if can_edit %}14{% else %}13{% endif %}" class="text-center text-muted py-3">No designations yet.</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
@@ -250,8 +321,13 @@
                     <td>{{ designation_formset.empty_form.category }}</td>
                     <td>{{ designation_formset.empty_form.grade_code }}</td>
                     <td>{{ designation_formset.empty_form.discipline }}</td>
+                    <td>{{ designation_formset.empty_form.nationality }}</td>
                     <td>{{ designation_formset.empty_form.headcount }}</td>
                     <td class="gs-input-color">{{ designation_formset.empty_form.monthly_salary }}</td>
+                    <td class="text-end text-muted">—</td>
+                    <td class="text-end text-muted">—</td>
+                    <td class="text-end text-muted">—</td>
+                    <td class="text-end text-muted">—</td>
                     <td class="text-end text-muted">—</td>
                     <td class="text-end text-muted">—</td>
                     <td class="text-center">

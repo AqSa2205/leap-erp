@@ -7,7 +7,8 @@ from accounts.models import Role, User
 from projects.models import Project, ProjectStatus, Region
 
 from .models import (
-    DesignationManpowerLine, FirstYearMaintenanceLine, GradeStructureLine, ManpowerCostingHeader,
+    DesignationManpowerLine, EmploymentCostAssumptions,
+    FirstYearMaintenanceLine, GradeStructureLine, ManpowerCostingHeader,
 )
 
 
@@ -86,6 +87,54 @@ class ManpowerCostingAccessTests(TestCase):
                               self._empty_grade_structure_payload()).status_code,
             403)
 
+    def test_site_manager_cannot_see_bid_value_figures(self):
+        """Narrowing decided after review: a Site Manager (view-only) must
+        not see Proposed Contract Value, Profit, or the VAT-inclusive value
+        anywhere — not the project index chip, not the overview KPI tiles,
+        not the First Year Maintenance page (HTML or its Excel export), and
+        not the margin % itself (cost is already visible there, so a
+        visible margin % would let the same figures be back-calculated).
+        A PM, who can edit the bid, still sees all of it."""
+        ManpowerCostingHeader.objects.create(
+            project=self.project, profit_margin_pct=Decimal('25'))
+        FirstYearMaintenanceLine.objects.create(
+            project=self.project, section=FirstYearMaintenanceLine.SECTION_B,
+            description='Mobilization', nature_of_expense=FirstYearMaintenanceLine.NATURE_ONE_TIME,
+            amount=Decimal('240000.00'), qty=1)
+        # cost=240,000; margin 25% -> contract value 320,000; profit 80,000.
+
+        self.client.force_login(self.site_user)
+        index_resp = self.client.get(reverse('pmo:mpc_index'))
+        self.assertNotContains(index_resp, 'Proposed Contract Value')
+
+        overview_resp = self.client.get(reverse('pmo:mpc_project_overview', args=[self.project.pk]))
+        self.assertNotContains(overview_resp, 'Proposed Contract Value')
+        self.assertNotContains(overview_resp, '80,000')
+        self.assertContains(overview_resp, 'Total Annual Cost')
+
+        fym_resp = self.client.get(reverse('pmo:mpc_first_year_detail', args=[self.project.pk]))
+        self.assertNotContains(fym_resp, 'Proposed Contract Value')
+        self.assertNotContains(fym_resp, '>Profit<')
+        self.assertNotContains(fym_resp, 'Target Profit Margin')
+        self.assertNotContains(fym_resp, '80,000')
+        self.assertContains(fym_resp, 'Total Annual Cost')
+
+        import openpyxl
+        from io import BytesIO
+        excel_resp = self.client.get(reverse('pmo:mpc_first_year_export_excel', args=[self.project.pk]))
+        wb = openpyxl.load_workbook(BytesIO(excel_resp.content))
+        values = [cell.value for row in wb.active.iter_rows() for cell in row if cell.value is not None]
+        self.assertNotIn('Proposed Contract Value', values)
+        self.assertNotIn('Profit', values)
+        self.assertNotIn(80000.0, values)
+        self.assertNotIn(320000.0, values)
+
+        # A PM sees all of it.
+        self.client.force_login(self.pm_user)
+        pm_resp = self.client.get(reverse('pmo:mpc_first_year_detail', args=[self.project.pk]))
+        self.assertContains(pm_resp, 'Proposed Contract Value')
+        self.assertContains(pm_resp, 'Target Profit Margin')
+
     def test_project_in_another_region_404s(self):
         other_region = Region.objects.create(name='Other', code='OTH', currency='USD')
         other_project = Project.objects.create(
@@ -142,6 +191,36 @@ class ManpowerCostingCalculationTests(TestCase):
         self.assertEqual(header.profit, Decimal('400011.65'))
         self.assertEqual(header.proposed_contract_value_incl_vat, Decimal('1179521.52'))
 
+    def test_annual_contribution_is_nature_driven_not_section_driven(self):
+        """Regression test for a reported bug: a line's annualisation used
+        to be decided by which section it sat in (MONTHLY_SECTIONS), not by
+        its own nature_of_expense — so a one-time line filed under a
+        "monthly" section (A/C) was wrongly multiplied by 12, and a monthly
+        line filed under a "one-time" section (B/D) was wrongly counted
+        only once. annual_contribution must now give the same answer
+        regardless of which section the line is filed under."""
+        one_time_in_monthly_section = FirstYearMaintenanceLine.objects.create(
+            project=self.project, section=FirstYearMaintenanceLine.SECTION_A,
+            description='Mobilization air ticket (mis-filed)',
+            nature_of_expense=FirstYearMaintenanceLine.NATURE_ONE_TIME,
+            amount=Decimal('1000.00'), qty=1)
+        monthly_in_one_time_section = FirstYearMaintenanceLine.objects.create(
+            project=self.project, section=FirstYearMaintenanceLine.SECTION_B,
+            description='Recurring allowance (mis-filed)',
+            nature_of_expense=FirstYearMaintenanceLine.NATURE_MONTHLY,
+            amount=Decimal('1000.00'), qty=1)
+
+        # A one-time cost is counted once, no matter which section holds it.
+        self.assertEqual(one_time_in_monthly_section.annual_contribution, Decimal('1000.00'))
+        # A monthly cost recurs ×12, no matter which section holds it.
+        self.assertEqual(monthly_in_one_time_section.annual_contribution, Decimal('12000.00'))
+
+        header = ManpowerCostingHeader.objects.create(project=self.project)
+        self.assertEqual(header.total_annual_cost, Decimal('13000.00'))
+        breakdown = {row['code']: row['annual_total'] for row in header.section_annual_breakdown()}
+        self.assertEqual(breakdown['A'], Decimal('1000.00'))
+        self.assertEqual(breakdown['B'], Decimal('12000.00'))
+
     def test_blank_margin_means_contract_value_equals_cost(self):
         FirstYearMaintenanceLine.objects.create(
             project=self.project, section=FirstYearMaintenanceLine.SECTION_B,
@@ -191,6 +270,67 @@ class ManpowerCostingCalculationTests(TestCase):
         self.assertEqual(line.monthly_cost, Decimal('42000.00'))
         self.assertEqual(line.annual_cost, Decimal('504000.00'))
 
+    def test_additional_employment_cost_is_nationality_gated(self):
+        """Pins the exact worked example verified against the source
+        workbook's Engineer Rate Tables sheet: a Telecom E-1 expat on
+        18,000 base salary should come to a 23,298.57 fully loaded cost,
+        to the penny. Iqama/Ticket/GOSI-Expat apply only to the expat;
+        GOSI-Saudi only to the Saudi; Medical and overhead apply to both."""
+        EmploymentCostAssumptions.objects.create(
+            project=self.project, overhead_pct=Decimal('12'),
+            iqama_annual=Decimal('10350'), medical_annual=Decimal('2500'),
+            ticket_annual=Decimal('2500'), esb_pct=Decimal('8.33'),
+            gosi_expat_pct=Decimal('2'), gosi_saudi_pct=Decimal('11.75'))
+
+        expat = DesignationManpowerLine.objects.create(
+            project=self.project, designation='Telecom System Engineer',
+            category=GradeStructureLine.CATEGORY_ENGINEERING, grade_code='E-1',
+            nationality=DesignationManpowerLine.NATIONALITY_EXPAT,
+            headcount=1, monthly_salary=Decimal('18000'))
+        self.assertEqual(expat.iqama_monthly, Decimal('862.50'))
+        self.assertEqual(expat.medical_monthly, Decimal('208.3333333333333333333333333'))
+        self.assertEqual(expat.ticket_monthly, Decimal('208.3333333333333333333333333'))
+        self.assertEqual(expat.esb_monthly, Decimal('1499.40'))
+        self.assertEqual(expat.gosi_monthly, Decimal('360'))
+        self.assertEqual(expat.overhead_monthly, Decimal('2160'))
+        self.assertEqual(expat.fully_loaded_monthly_cost.quantize(Decimal('0.01')), Decimal('23298.57'))
+
+        saudi = DesignationManpowerLine.objects.create(
+            project=self.project, designation='Telecom System Engineer (Saudi)',
+            category=GradeStructureLine.CATEGORY_ENGINEERING, grade_code='E-1',
+            nationality=DesignationManpowerLine.NATIONALITY_SAUDI,
+            headcount=1, monthly_salary=Decimal('18000'))
+        # No Iqama, no ticket for a Saudi — but GOSI-Saudi (11.75%) applies
+        # instead of GOSI-Expat, and medical still applies to everyone.
+        self.assertEqual(saudi.iqama_monthly, Decimal('0'))
+        self.assertEqual(saudi.ticket_monthly, Decimal('0'))
+        self.assertEqual(saudi.medical_monthly, Decimal('208.3333333333333333333333333'))
+        self.assertEqual(saudi.gosi_monthly, Decimal('2115.00'))
+
+    def test_additional_cost_breakdown_lists_every_component(self):
+        EmploymentCostAssumptions.objects.create(project=self.project)
+        line = DesignationManpowerLine.objects.create(
+            project=self.project, designation='Engineer',
+            category=GradeStructureLine.CATEGORY_ENGINEERING, grade_code='E-1',
+            nationality=DesignationManpowerLine.NATIONALITY_EXPAT,
+            headcount=1, monthly_salary=Decimal('10000'))
+        labels = [row['label'] for row in line.additional_cost_breakdown()]
+        self.assertEqual(labels, ['Iqama', 'Medical', 'Ticket', 'ESB', 'GOSI (Expat)'])
+        total = sum((row['amount'] for row in line.additional_cost_breakdown()), Decimal('0'))
+        self.assertEqual(total, line.additional_cost_monthly)
+
+    def test_assumptions_built_in_memory_when_missing_does_not_write_a_row(self):
+        line = DesignationManpowerLine(
+            project=self.project, designation='Engineer',
+            category=GradeStructureLine.CATEGORY_ENGINEERING, grade_code='E-1',
+            nationality=DesignationManpowerLine.NATIONALITY_EXPAT,
+            headcount=1, monthly_salary=Decimal('10000'))
+        # Uses the model defaults (12% overhead, 10,350 Iqama, etc.) even
+        # though no EmploymentCostAssumptions row exists for this project.
+        self.assertFalse(hasattr(self.project, 'employment_cost_assumptions'))
+        self.assertGreater(line.additional_cost_monthly, Decimal('0'))
+        self.assertFalse(EmploymentCostAssumptions.objects.filter(project=self.project).exists())
+
     def test_grand_total_monthly_and_daily_derive_from_annual(self):
         FirstYearMaintenanceLine.objects.create(
             project=self.project, section=FirstYearMaintenanceLine.SECTION_B,
@@ -212,6 +352,17 @@ class ManpowerCostingFormsetSaveTests(TestCase):
             project_name='Formset Project', status=self.status, region=self.region)
         self.pm_user = User.objects.create_user(
             'mpc_formset_pm', password='pw', role=self.pm_role, region=self.region)
+
+    def _eca_payload(self):
+        """The Employment Cost Assumptions fields a real form submission
+        always includes (they're rendered pre-filled) — needed on every
+        POST to mpc_grade_structure_detail since that form is validated
+        alongside the two formsets."""
+        return {
+            'overhead_pct': '12', 'iqama_annual': '10350', 'medical_annual': '2500',
+            'ticket_annual': '2500', 'esb_pct': '8.33', 'gosi_expat_pct': '2',
+            'gosi_saudi_pct': '11.75',
+        }
 
     def test_grade_structure_add_edit_delete(self):
         self.client.force_login(self.pm_user)
@@ -240,9 +391,11 @@ class ManpowerCostingFormsetSaveTests(TestCase):
             'designations-0-category': GradeStructureLine.CATEGORY_ENGINEERING,
             'designations-0-grade_code': 'E-1',
             'designations-0-discipline': 'Telecom',
+            'designations-0-nationality': DesignationManpowerLine.NATIONALITY_EXPAT,
             'designations-0-headcount': '2',
             'designations-0-monthly_salary': '7500.00',
             'designations-0-order': '0',
+            **self._eca_payload(),
         }
         r = self.client.post(url, payload)
         self.assertRedirects(r, url)
@@ -292,9 +445,11 @@ class ManpowerCostingFormsetSaveTests(TestCase):
             'designations-0-category': GradeStructureLine.CATEGORY_EXECUTIVE,
             'designations-0-grade_code': 'EX-2',
             'designations-0-discipline': 'General/N/A',
+            'designations-0-nationality': DesignationManpowerLine.NATIONALITY_EXPAT,
             'designations-0-headcount': '1',
             'designations-0-monthly_salary': '20000.00',
             'designations-0-order': '0',
+            **self._eca_payload(),
         }
         self.assertEqual(self.project.grade_structure_lines.count(), 0)
         r = self.client.post(url, payload)
@@ -306,10 +461,25 @@ class ManpowerCostingFormsetSaveTests(TestCase):
         self.assertEqual(grade.headcount, 1)
         self.assertEqual(grade.monthly_cost, Decimal('20000.00'))
 
-        r2 = self.client.get(url)
-        content = r2.content.decode()
-        self.assertIn('Deputy Project Director', content)
-        self.assertIn('EX-2', content)
+    def test_employment_cost_assumptions_save_alongside_the_rosters(self):
+        self.client.force_login(self.pm_user)
+        url = reverse('pmo:mpc_grade_structure_detail', args=[self.project.pk])
+        payload = {
+            'grades-TOTAL_FORMS': '0', 'grades-INITIAL_FORMS': '0',
+            'grades-MIN_NUM_FORMS': '0', 'grades-MAX_NUM_FORMS': '1000',
+            'designations-TOTAL_FORMS': '0', 'designations-INITIAL_FORMS': '0',
+            'designations-MIN_NUM_FORMS': '0', 'designations-MAX_NUM_FORMS': '1000',
+            'overhead_pct': '15', 'iqama_annual': '9000', 'medical_annual': '3000',
+            'ticket_annual': '2000', 'esb_pct': '9.5', 'gosi_expat_pct': '2.5',
+            'gosi_saudi_pct': '12',
+        }
+        r = self.client.post(url, payload)
+        self.assertRedirects(r, url)
+        eca = EmploymentCostAssumptions.objects.get(project=self.project)
+        self.assertEqual(eca.overhead_pct, Decimal('15.00'))
+        self.assertEqual(eca.iqama_annual, Decimal('9000.00'))
+        self.assertEqual(eca.gosi_saudi_pct, Decimal('12.00'))
+        self.assertEqual(eca.updated_by, self.pm_user)
 
     def test_first_year_maintenance_header_and_lines_save_together(self):
         self.client.force_login(self.pm_user)

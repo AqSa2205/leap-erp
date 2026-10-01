@@ -609,6 +609,61 @@ class GradeStructureLine(models.Model):
     def annual_cost(self):
         return self.monthly_cost * 12
 
+    @property
+    def fully_loaded_monthly_cost(self):
+        return sum(
+            (d.fully_loaded_monthly_cost_total for d in self._matching_designations()), Decimal('0'))
+
+    @property
+    def fully_loaded_annual_cost(self):
+        return self.fully_loaded_monthly_cost * 12
+
+
+class EmploymentCostAssumptions(models.Model):
+    """The statutory/benefit rates the source workbook's Engineer Rate
+    Tables sheet calls 'Additional Employment Cost Assumptions' — per
+    project (not a fixed company-wide constant) since a bid's benefit
+    package can differ from job to job, same as VAT/margin on
+    ManpowerCostingHeader. Built in memory with these defaults when a
+    project has none yet, matching that same pattern.
+
+    Iqama, the air ticket and GOSI-Expat only apply to an expat row;
+    GOSI-Saudi only to a Saudi row; medical and the overhead % apply to
+    everyone — see DesignationManpowerLine's own properties for the
+    per-row split, which is where these rates actually get used."""
+
+    project = models.OneToOneField(
+        'projects.Project', on_delete=models.CASCADE, related_name='employment_cost_assumptions')
+    overhead_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('12'), verbose_name='Overhead %',
+        help_text='Accommodation / transport / IT / PPE, applied as a flat % of salary.')
+    iqama_annual = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('10350'),
+        verbose_name='Residence Permit (Iqama) — Annual (SAR)', help_text='Expat only.')
+    medical_annual = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('2500'),
+        verbose_name='Medical Insurance — Annual (SAR)', help_text='Everyone.')
+    ticket_annual = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('2500'),
+        verbose_name='Air Ticket — Annual (SAR)', help_text='Expat only.')
+    esb_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('8.33'),
+        verbose_name='ESB (End of Service) %',
+        help_text='% of monthly salary, accrued — everyone.')
+    gosi_expat_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('2'),
+        verbose_name='GOSI — Expat %', help_text='Occupational hazard only.')
+    gosi_saudi_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('11.75'),
+        verbose_name='GOSI — Saudi %', help_text="Employer's share.")
+
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'Employment Cost Assumptions — {self.project.project_name}'
+
 
 class DesignationManpowerLine(models.Model):
     """One real position — the source workbook's Designation-wise Manpower
@@ -617,6 +672,13 @@ class DesignationManpowerLine(models.Model):
     uses — not a FK, so a typo'd grade code just doesn't count toward any
     grade's total rather than blocking a save)."""
 
+    NATIONALITY_EXPAT = 'expat'
+    NATIONALITY_SAUDI = 'saudi'
+    NATIONALITY_CHOICES = [
+        (NATIONALITY_EXPAT, 'Expat'),
+        (NATIONALITY_SAUDI, 'Saudi'),
+    ]
+
     project = models.ForeignKey(
         'projects.Project', on_delete=models.CASCADE, related_name='designation_manpower_lines')
     order = models.PositiveIntegerField(default=0)
@@ -624,6 +686,9 @@ class DesignationManpowerLine(models.Model):
     category = models.CharField(max_length=2, choices=GradeStructureLine.CATEGORY_CHOICES)
     grade_code = models.CharField(max_length=20, verbose_name='Grade', help_text='e.g. EX-1, A-1, E-3')
     discipline = models.CharField(max_length=100, blank=True)
+    nationality = models.CharField(
+        max_length=10, choices=NATIONALITY_CHOICES, default=NATIONALITY_EXPAT,
+        help_text='Drives which statutory add-ons apply — see the Additional Cost breakdown.')
     headcount = models.PositiveIntegerField(default=0, verbose_name='Manpower')
     monthly_salary = models.DecimalField(
         max_digits=15, decimal_places=2, default=0, verbose_name='Monthly Salary')
@@ -645,12 +710,106 @@ class DesignationManpowerLine(models.Model):
     def annual_cost(self):
         return self.monthly_cost * 12
 
+    @property
+    def is_expat(self):
+        return self.nationality == self.NATIONALITY_EXPAT
+
+    def _assumptions(self):
+        """A view rendering a whole roster should set `_assumptions_cache`
+        to the project's single EmploymentCostAssumptions row directly —
+        without it, each row looks the FK up on its own, fine in isolation
+        but an N+1 across a table of them (same reasoning as
+        GradeStructureLine._matching_designations)."""
+        cached = getattr(self, '_assumptions_cache', None)
+        if cached is not None:
+            return cached
+        return (getattr(self.project, 'employment_cost_assumptions', None)
+                or EmploymentCostAssumptions(project=self.project))
+
+    @property
+    def overhead_monthly(self):
+        return self.monthly_salary * self._assumptions().overhead_pct / Decimal('100')
+
+    @property
+    def iqama_monthly(self):
+        if not self.is_expat:
+            return Decimal('0')
+        return self._assumptions().iqama_annual / 12
+
+    @property
+    def medical_monthly(self):
+        return self._assumptions().medical_annual / 12
+
+    @property
+    def ticket_monthly(self):
+        if not self.is_expat:
+            return Decimal('0')
+        return self._assumptions().ticket_annual / 12
+
+    @property
+    def esb_monthly(self):
+        return self.monthly_salary * self._assumptions().esb_pct / Decimal('100')
+
+    @property
+    def gosi_monthly(self):
+        a = self._assumptions()
+        pct = a.gosi_expat_pct if self.is_expat else a.gosi_saudi_pct
+        return self.monthly_salary * pct / Decimal('100')
+
+    @property
+    def additional_cost_monthly(self):
+        """The source sheet's 'Total Additional Monthly Cost' (K59) —
+        Iqama + Medical + Ticket + ESB + GOSI. Deliberately excludes
+        overhead, which the sheet folds into the base salary markup
+        instead of counting as a 'benefit' line — see
+        fully_loaded_monthly_cost for the figure that includes it."""
+        return (self.iqama_monthly + self.medical_monthly + self.ticket_monthly
+                + self.esb_monthly + self.gosi_monthly)
+
+    @property
+    def fully_loaded_monthly_cost(self):
+        return self.monthly_salary + self.overhead_monthly + self.additional_cost_monthly
+
+    @property
+    def fully_loaded_monthly_cost_total(self):
+        """fully_loaded_monthly_cost is a PER-HEAD figure — this multiplies
+        it by headcount, matching how monthly_cost/annual_cost are already
+        row totals rather than per-head."""
+        return self.headcount * self.fully_loaded_monthly_cost
+
+    @property
+    def fully_loaded_annual_cost_total(self):
+        return self.fully_loaded_monthly_cost_total * 12
+
+    def additional_cost_breakdown(self):
+
+        """One row per component that feeds additional_cost_monthly, for a
+        hover tooltip — each showing the rate that was applied and what it
+        came to, so 'how did we get this number' is never a mystery."""
+        a = self._assumptions()
+        rows = [
+            {'label': 'Iqama', 'rate': f'{a.iqama_annual:,.0f}/yr' if self.is_expat else 'N/A (Saudi)',
+             'amount': self.iqama_monthly},
+            {'label': 'Medical', 'rate': f'{a.medical_annual:,.0f}/yr', 'amount': self.medical_monthly},
+            {'label': 'Ticket', 'rate': f'{a.ticket_annual:,.0f}/yr' if self.is_expat else 'N/A (Saudi)',
+             'amount': self.ticket_monthly},
+            {'label': 'ESB', 'rate': f'{a.esb_pct}%', 'amount': self.esb_monthly},
+            {'label': f'GOSI ({self.get_nationality_display()})',
+             'rate': f'{a.gosi_expat_pct if self.is_expat else a.gosi_saudi_pct}%',
+             'amount': self.gosi_monthly},
+        ]
+        return rows
+
 
 class FirstYearMaintenanceLine(models.Model):
     """One cost line in a project's First Year Maintenance sheet. Sectioned
-    A-D exactly as the source workbook groups them, each section carrying
-    its own subtotal and its own annualisation rule (see
-    ManpowerCostingHeader.total_annual_cost)."""
+    A-D exactly as the source workbook groups them, but the section is a
+    presentational grouping only — how a line annualises is decided solely
+    by its own nature_of_expense (see annual_contribution below), never by
+    which section it happens to sit in. Earlier this was decided by section
+    membership instead, which let a line's section and its nature disagree
+    (e.g. a one-time cost typed into a "monthly" section) and silently
+    mis-cost the bid by a factor of 12."""
 
     SECTION_A = 'A'
     SECTION_B = 'B'
@@ -662,9 +821,6 @@ class FirstYearMaintenanceLine(models.Model):
         (SECTION_C, 'C — Vehicle / Consumables / Support (Monthly)'),
         (SECTION_D, 'D — Tools / Equipment (One Time)'),
     ]
-    # Sections whose lines recur every month and so get annualised (x12) as
-    # a section total, rather than counted once like a B/D one-time section.
-    MONTHLY_SECTIONS = {SECTION_A, SECTION_C}
 
     NATURE_MONTHLY = 'monthly'
     NATURE_ANNUAL = 'annual'
@@ -697,18 +853,15 @@ class FirstYearMaintenanceLine(models.Model):
         return f'{self.description} — {self.project.project_name}'
 
     @property
-    def monthly_contribution(self):
-        """What this line adds to its section's monthly bucket, before that
-        bucket is (or isn't) annualised. Not meaningful for a one-time line —
-        use one_time_total for those instead."""
-        if self.nature_of_expense == self.NATURE_ANNUAL:
-            # A per-head annual cost (Iqama, medical, air tickets) spread
-            # evenly across the year, exactly as the source sheet does.
-            return (self.amount * self.qty) / 12
-        return self.amount * self.qty
-
-    @property
-    def one_time_total(self):
+    def annual_contribution(self):
+        """This line's contribution to the project's annual cost — decided
+        solely by its own nature_of_expense. A monthly line recurs 12 times
+        a year; an annual line's amount is already the yearly figure (e.g.
+        a per-head Iqama/medical/ticket cost); a one-time line is counted
+        once. Nature-only, never section-conditional — see the class
+        docstring for why that matters."""
+        if self.nature_of_expense == self.NATURE_MONTHLY:
+            return self.amount * self.qty * 12
         return self.amount * self.qty
 
 
@@ -757,17 +910,15 @@ class ManpowerCostingHeader(models.Model):
     def section_annual_breakdown(self):
         """Row-by-row per-section annual contribution — the same rollup
         total_annual_cost sums, exposed per-row for the sheet's TOTAL COSTS
-        (Annual) summary table: a Monthly-nature section's subtotal is
-        x12'd, a One-Time section's subtotal is taken as-is."""
+        (Annual) summary table. Each line annualises according to its own
+        nature_of_expense (FirstYearMaintenanceLine.annual_contribution);
+        the section is just a grouping label, so this is a plain sum, not a
+        second place that decides whether ×12 applies."""
         lines = list(self.project.first_year_maintenance_lines.all())
         rows = []
         for section, label in FirstYearMaintenanceLine.SECTION_CHOICES:
             section_lines = [line for line in lines if line.section == section]
-            if section in FirstYearMaintenanceLine.MONTHLY_SECTIONS:
-                subtotal = sum((line.monthly_contribution for line in section_lines), Decimal('0'))
-                annual_total = subtotal * 12
-            else:
-                annual_total = sum((line.one_time_total for line in section_lines), Decimal('0'))
+            annual_total = sum((line.annual_contribution for line in section_lines), Decimal('0'))
             rows.append({'code': section, 'label': label, 'annual_total': annual_total})
         return rows
 

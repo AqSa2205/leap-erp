@@ -6,7 +6,8 @@ from projects.models import Project
 
 from .models import (
     FaultLossEntry, ManpowerResource, ProjectIssue,
-    GradeStructureLine, DesignationManpowerLine, FirstYearMaintenanceLine, ManpowerCostingHeader,
+    GradeStructureLine, DesignationManpowerLine, EmploymentCostAssumptions,
+    FirstYearMaintenanceLine, ManpowerCostingHeader,
 )
 
 
@@ -203,7 +204,7 @@ class DesignationManpowerLineForm(forms.ModelForm):
     class Meta:
         model = DesignationManpowerLine
         fields = [
-            'designation', 'category', 'grade_code', 'discipline',
+            'designation', 'category', 'grade_code', 'discipline', 'nationality',
             'headcount', 'monthly_salary', 'order',
         ]
         widgets = {
@@ -234,6 +235,29 @@ DesignationManpowerLineFormSet = inlineformset_factory(
     extra=0,
     can_delete=True,
 )
+
+
+class EmploymentCostAssumptionsForm(forms.ModelForm):
+    class Meta:
+        model = EmploymentCostAssumptions
+        fields = [
+            'overhead_pct', 'iqama_annual', 'medical_annual', 'ticket_annual',
+            'esb_pct', 'gosi_expat_pct', 'gosi_saudi_pct',
+        ]
+        widgets = {
+            'overhead_pct': forms.NumberInput(attrs={'step': '0.01', 'min': '0'}),
+            'iqama_annual': forms.NumberInput(attrs={'step': '0.01', 'min': '0'}),
+            'medical_annual': forms.NumberInput(attrs={'step': '0.01', 'min': '0'}),
+            'ticket_annual': forms.NumberInput(attrs={'step': '0.01', 'min': '0'}),
+            'esb_pct': forms.NumberInput(attrs={'step': '0.01', 'min': '0'}),
+            'gosi_expat_pct': forms.NumberInput(attrs={'step': '0.01', 'min': '0'}),
+            'gosi_saudi_pct': forms.NumberInput(attrs={'step': '0.01', 'min': '0'}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            field.widget.attrs['class'] = 'form-control form-control-sm'
 
 
 class FirstYearMaintenanceLineForm(forms.ModelForm):

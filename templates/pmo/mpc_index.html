@@ -73,10 +73,12 @@
                     <div class="stat-label">Total Annual Cost</div>
                     <div class="stat-value">{{ row.total_annual_cost|floatformat:0|intcomma }}</div>
                 </div>
+                {% if can_edit %}
                 <div class="pmd-stat">
                     <div class="stat-label">Proposed Contract Value</div>
                     <div class="stat-value">{{ row.proposed_contract_value|floatformat:0|intcomma }}</div>
                 </div>
+                {% endif %}
             </div>
         </div>
         {% empty %}

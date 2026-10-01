@@ -13,12 +13,12 @@
 
     /* Table shell borrowed from Procurement Summary's look. */
     .mpc-shell { background: #fff; border: 1px solid #e9ecef; border-radius: 10px; overflow: hidden; margin-bottom: 1.25rem; }
-    .mpc-shell .mpc-banner { background: #C41E3A; color: #fff; font-weight: 700; font-size: 0.85rem; padding: 8px 14px; text-transform: uppercase; letter-spacing: 0.5px; display: flex; justify-content: space-between; align-items: center; }
+    .mpc-shell .mpc-banner { background: #343a40; color: #fff; font-weight: 700; font-size: 0.85rem; padding: 8px 14px; text-transform: uppercase; letter-spacing: 0.5px; display: flex; justify-content: space-between; align-items: center; }
     .mpc-shell .mpc-banner.dark { background: #1a1a1a; }
     table.mpc-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.84rem; margin-bottom: 0; }
-    table.mpc-table th, table.mpc-table td { padding: 7px 10px; border-right: 1px solid #ececec; border-bottom: 1px solid #ececec; vertical-align: middle; background: #fff; }
-    table.mpc-table thead th { background: #F5D7DC; color: #495057; font-weight: 700; font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.3px; white-space: nowrap; }
-    table.mpc-table tfoot td { background: #FBF3F4; font-weight: 700; }
+    table.mpc-table th, table.mpc-table td { padding: 7px 10px; border-right: 1px solid #e9ecef; border-bottom: 1px solid #e9ecef; vertical-align: middle; background: #fff; }
+    table.mpc-table thead th { background: #e9ecef; color: #343a40; font-weight: 700; font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.3px; white-space: nowrap; }
+    table.mpc-table tfoot td { background: #f1f1f1; font-weight: 700; }
     table.mpc-table input, table.mpc-table select { font-size: 0.83rem; width: 100%; border: 1px solid #dee2e6; border-radius: 4px; padding: 3px 6px; }
     table.mpc-table .text-end input { text-align: right; }
     .mpc-addrow { padding: 8px 12px; border-top: 1px solid #ececec; }
@@ -86,10 +86,12 @@
                     <label>VAT %</label>
                     {% if can_edit %}{{ header_form.vat_rate }}{% else %}<div class="static-value">{{ header.vat_rate }}%</div>{% endif %}
                 </div>
+                {% if can_edit %}
                 <div class="detail-field">
                     <label>Target Profit Margin %</label>
-                    {% if can_edit %}{{ header_form.profit_margin_pct }}<div class="form-text">Blank = value defaults to cost.</div>{% else %}<div class="static-value">{{ header.profit_margin_pct|default:"—" }}{% if header.profit_margin_pct %}%{% endif %}</div>{% endif %}
+                    {{ header_form.profit_margin_pct }}<div class="form-text">Blank = value defaults to cost.</div>
                 </div>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -104,10 +106,11 @@
                 </div>
             </div></div>
         </div>
+        {% if can_edit %}
         <div class="col-lg-3 col-md-6">
             <div class="card kpi-card h-100"><div class="card-body">
                 <div class="d-flex align-items-center gap-2">
-                    <div class="kpi-icon bg-success bg-opacity-10 text-success"><i class="bi bi-cash-stack"></i></div>
+                    <div class="kpi-icon bg-secondary bg-opacity-10 text-secondary"><i class="bi bi-cash-stack"></i></div>
                     <div><div class="kpi-value text-dark">{{ header.currency }} {{ header.proposed_contract_value|floatformat:0|intcomma }}</div><div class="kpi-label">Proposed Contract Value</div></div>
                 </div>
             </div></div>
@@ -115,7 +118,7 @@
         <div class="col-lg-3 col-md-6">
             <div class="card kpi-card h-100"><div class="card-body">
                 <div class="d-flex align-items-center gap-2">
-                    <div class="kpi-icon bg-primary bg-opacity-10 text-primary"><i class="bi bi-graph-up-arrow"></i></div>
+                    <div class="kpi-icon bg-dark bg-opacity-25 text-dark"><i class="bi bi-graph-up-arrow"></i></div>
                     <div><div class="kpi-value text-dark">{{ header.currency }} {{ header.profit|floatformat:0|intcomma }}</div><div class="kpi-label">Profit</div></div>
                 </div>
             </div></div>
@@ -123,13 +126,14 @@
         <div class="col-lg-3 col-md-6">
             <div class="card kpi-card h-100"><div class="card-body">
                 <div class="d-flex align-items-center gap-2">
-                    <div class="kpi-icon bg-info bg-opacity-10 text-info"><i class="bi bi-receipt"></i></div>
+                    <div class="kpi-icon bg-secondary bg-opacity-25 text-secondary"><i class="bi bi-receipt"></i></div>
                     <div><div class="kpi-value text-dark">{{ header.currency }} {{ header.proposed_contract_value_incl_vat|floatformat:0|intcomma }}</div><div class="kpi-label">Incl. VAT</div></div>
                 </div>
             </div></div>
         </div>
+        {% endif %}
     </div>
-    {% if not header.profit_margin_pct %}
+    {% if can_edit and not header.profit_margin_pct %}
     <div class="alert alert-light border small">No target profit margin set yet — Proposed Contract Value currently shows cost only (zero profit).</div>
     {% endif %}
 
@@ -172,9 +176,6 @@
     <div class="mpc-shell">
         <div class="mpc-banner">
             <span>{{ sec.label }}</span>
-            <span class="badge {% if sec.is_monthly %}bg-light text-dark{% else %}bg-dark{% endif %}">
-                {% if sec.is_monthly %}Monthly × 12{% else %}One Time{% endif %}
-            </span>
         </div>
         <div class="table-responsive">
             <table class="mpc-table" id="fym-table-{{ sec.code }}">
@@ -184,7 +185,7 @@
                         <th style="width:150px;">Nature</th>
                         <th style="width:120px;">Amount</th>
                         <th style="width:90px;">Qty</th>
-                        <th style="width:150px;">{% if sec.is_monthly %}Monthly Contribution{% else %}Total{% endif %}</th>
+                        <th style="width:170px;">Annual Contribution</th>
                         <th>Remarks</th>
                         {% if can_edit %}<th style="width:40px;">Del</th>{% endif %}
                     </tr>
@@ -198,9 +199,7 @@
                         <td>{{ form.nature_of_expense }}</td>
                         <td>{{ form.amount }}</td>
                         <td>{{ form.qty }}</td>
-                        <td class="text-end fw-semibold">
-                            {% if sec.is_monthly %}{{ form.instance.monthly_contribution|floatformat:2|intcomma }}{% else %}{{ form.instance.one_time_total|floatformat:2|intcomma }}{% endif %}
-                        </td>
+                        <td class="text-end fw-semibold">{{ form.instance.annual_contribution|floatformat:2|intcomma }}</td>
                         <td>{{ form.remarks }}</td>
                         <td class="text-center">
                             <span class="d-none">{{ form.DELETE }}</span>
@@ -211,9 +210,7 @@
                         <td class="text-muted">{{ form.instance.get_nature_of_expense_display }}</td>
                         <td class="text-end">{{ form.instance.amount|floatformat:2|intcomma }}</td>
                         <td class="text-end">{{ form.instance.qty|floatformat:2 }}</td>
-                        <td class="text-end fw-semibold">
-                            {% if sec.is_monthly %}{{ form.instance.monthly_contribution|floatformat:2|intcomma }}{% else %}{{ form.instance.one_time_total|floatformat:2|intcomma }}{% endif %}
-                        </td>
+                        <td class="text-end fw-semibold">{{ form.instance.annual_contribution|floatformat:2|intcomma }}</td>
                         <td class="text-muted small">{{ form.instance.remarks|default:"—" }}</td>
                         {% endif %}
                     </tr>
@@ -223,7 +220,7 @@
                 </tbody>
                 <tfoot>
                     <tr>
-                        <td colspan="4" class="text-end">{% if sec.is_monthly %}Section Subtotal (monthly) → ×12{% else %}Section Subtotal{% endif %}</td>
+                        <td colspan="4" class="text-end">Section Subtotal (Annual)</td>
                         <td class="text-end">{{ sec.subtotal|floatformat:2|intcomma }}</td>
                         <td colspan="2"></td>
                     </tr>
