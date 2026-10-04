@@ -229,7 +229,8 @@ def _finalize(leave_request, status):
         )
 
 
-def submit_leave_request(*, employee, leave_type, start_date, end_date, employee_reason='', document=None, created_by):
+def submit_leave_request(*, employee, leave_type, start_date, end_date, employee_reason='', document=None,
+                         created_by, replacement=None):
     """Create a LeaveRequest and snapshot the currently-active
     LeaveDashboardAccess roster onto it as LeaveRequestApproval rows — the
     single entry point for ALL leave creation (admin-logged, legacy
@@ -264,6 +265,7 @@ def submit_leave_request(*, employee, leave_type, start_date, end_date, employee
             employee=employee, leave_type=leave_type, start_date=start_date, end_date=end_date,
             employee_reason=employee_reason, document=document, created_by=created_by,
             exceeds_balance=exceeds_balance, logged_by_manager=logged_by_manager,
+            replacement=replacement,
         )
         # A held (balance-exceeding) request goes through the exact same
         # approver roster and decide/override flow as any other request —
@@ -298,7 +300,7 @@ def grant_exception_days(*, employee, leave_type, year, days, granted_by, reason
 
 
 def edit_leave_request(leave_request, editing_user, *, leave_type, start_date, end_date,
-                       employee_reason='', document=None):
+                       employee_reason='', document=None, replacement=None):
     """The creator edits their own still-pending request in place — the
     entire pending window, same as cancel_leave_request, not just the
     undecided portion of it. Re-runs the exact same balance/overlap
@@ -343,6 +345,7 @@ def edit_leave_request(leave_request, editing_user, *, leave_type, start_date, e
         leave_request.start_date = start_date
         leave_request.end_date = end_date
         leave_request.employee_reason = employee_reason
+        leave_request.replacement = replacement
         if document is False:
             if leave_request.document:
                 leave_request.document.delete(save=False)
@@ -354,7 +357,7 @@ def edit_leave_request(leave_request, editing_user, *, leave_type, start_date, e
         leave_request.exceeds_balance = exceeds_balance
         leave_request.days = leave_request.computed_days()
         leave_request.save(update_fields=[
-            'leave_type', 'start_date', 'end_date', 'employee_reason', 'document',
+            'leave_type', 'start_date', 'end_date', 'employee_reason', 'replacement', 'document',
             'exceeds_balance', 'days', 'updated_at'])
         if decided_approvals:
             leave_request.approvals.exclude(decision='pending').update(

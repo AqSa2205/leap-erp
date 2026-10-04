@@ -190,7 +190,7 @@
         </div>
         {% if pending_requests %}
         <table class="table table-hover align-middle mb-0">
-          <thead class="table-light"><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Days</th><th>Waiting On</th><th></th></tr></thead>
+          <thead class="table-light"><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Days</th><th>Replacement</th><th>Waiting On</th><th></th></tr></thead>
           <tbody>
             {% for r in pending_requests %}
             {% url 'hr:leave_request_detail' r.pk as detail_url %}
@@ -211,6 +211,7 @@
               <td>{{ r.leave_type.name }}</td>
               <td>{{ r.start_date }} – {{ r.end_date }}</td>
               <td>{{ r.days }}</td>
+              <td>{{ r.replacement.full_name|default:"—" }}</td>
               <td class="text-muted small">
                 {% with waiting=r.pending_approvers %}
                   {% if waiting %}{% for a in waiting %}{{ a.get_full_name|default:a.username }}{% if not forloop.last %}, {% endif %}{% endfor %}
@@ -303,6 +304,17 @@
                       <label class="form-label small">Reason</label>
                       <input type="text" name="employee_reason" class="form-control form-control-sm" value="{{ r.retry_reason }}">
                     </div>
+                    {% if r.replacement_options %}
+                    <div class="col-md-6">
+                      <label class="form-label small">Replacement</label>
+                      <select name="replacement" class="form-select form-select-sm" required>
+                        <option value="">— Select replacement —</option>
+                        {% for p in r.replacement_options %}
+                        <option value="{{ p.pk }}" {% if p.pk == r.retry_replacement_id %}selected{% endif %}>{{ p.full_name }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
+                    {% endif %}
                     <div class="col-md-6">
                       <label class="form-label small">Document</label>
                       {% if r.document %}
