@@ -1,7 +1,7 @@
 from django import forms
 from django.db import transaction
 
-from .models import ManpowerResource, ProjectIssue
+from .models import FaultLossEntry, ManpowerResource, ProjectIssue
 
 
 def _bootstrapify(fields):
@@ -120,6 +120,33 @@ class ProjectIssueForm(forms.ModelForm):
         _bootstrapify(self.fields)
         # Keep the picker to projects this user could already reach through
         # the pipeline — same scoping ladder as everywhere else in pmo.
+        if user is not None:
+            from dashboard.views import projects_visible_to
+            self.fields['project'].queryset = projects_visible_to(user).order_by('-id')
+
+
+class FaultLossEntryForm(forms.ModelForm):
+    class Meta:
+        model = FaultLossEntry
+        fields = [
+            'project', 'system', 'lna_ref', 'po_number', 'location',
+            'delivery_time_impact', 'delay_days', 'cost_impact', 'cost_amount',
+            'change_order_required', 'root_causes', 'deviation_category',
+            'responsibility_departments', 'corrective_action', 'corrective_action_by',
+            'status', 'closed_on', 'latest_update',
+        ]
+        widgets = {
+            'root_causes': forms.Textarea(attrs={'rows': 3}),
+            'corrective_action': forms.Textarea(attrs={'rows': 2}),
+            'closed_on': forms.DateInput(attrs={'type': 'date'}),
+            'latest_update': forms.DateInput(attrs={'type': 'date'}),
+        }
+
+    def __init__(self, *args, user=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        _bootstrapify(self.fields)
+        # Keep the picker to projects this user could already reach through
+        # the pipeline - same scoping ladder as everywhere else in pmo.
         if user is not None:
             from dashboard.views import projects_visible_to
             self.fields['project'].queryset = projects_visible_to(user).order_by('-id')

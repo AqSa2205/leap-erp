@@ -1,0 +1,127 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Faults & Losses Prevention - Leap Networks ERP{% endblock %}
+{% block page_title %}Faults & Losses Prevention{% endblock %}
+
+{% block extra_css %}
+<style>
+    .pmd-table-card { border-radius: 12px; border: none; box-shadow: 0 4px 15px rgba(0,0,0,0.08); overflow: hidden; }
+    .pmd-table-card .card-header { background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%); color: #fff; padding: 1rem 1.25rem; }
+    .pmd-table-card .card-header h5 { color: #fff; margin: 0; }
+    table.fault-loss td { font-size: 0.83rem; }
+    table.fault-loss th { white-space: nowrap; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.3px; }
+    .cell-clamp { max-width: 220px; white-space: normal; }
+    .legend-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; }
+    /* Same hex palette as FaultLossEntry.DEVIATION_COLORS, applied here to
+       the Yes/No and numeric columns too so the whole row reads consistently.
+       !important needed: Bootstrap's own table CSS sets a background on every
+       td/th via a higher-specificity selector than a plain class. */
+    .fl-pink { background: #F8D7DA !important; }
+    .fl-green { background: #D1E7DD !important; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div></div>
+    <div class="d-flex gap-2">
+        <a href="{% url 'pmo:fault_loss_export_excel' %}" class="btn btn-outline-dark btn-sm">
+            <i class="bi bi-file-earmark-excel me-1"></i> Export to Excel
+        </a>
+        {% if can_manage %}
+        <a href="{% url 'pmo:fault_loss_create' %}" class="btn btn-danger btn-sm">
+            <i class="bi bi-plus-lg me-1"></i> Log Fault/Loss
+        </a>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body py-2 d-flex flex-wrap gap-3 small">
+        <span class="fw-semibold">Legend:</span>
+        <span><span class="legend-swatch fl-pink"></span>Impact / delay / cost / Major</span>
+        <span><span class="legend-swatch" style="background:#FFE5B4;"></span>Moderate</span>
+        <span><span class="legend-swatch fl-green"></span>No impact / Minor</span>
+    </div>
+</div>
+
+<div class="card pmd-table-card">
+    <div class="card-header">
+        <h5><i class="bi bi-shield-exclamation me-2"></i>Faults & Losses Prevention</h5>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0 fault-loss">
+            <thead class="table-light">
+                <tr>
+                    <th>Project</th>
+                    <th>System</th>
+                    <th>LNA Ref#</th>
+                    <th>PO#</th>
+                    <th>Location</th>
+                    <th>Delivery Time Impact</th>
+                    <th>Duration of Delay</th>
+                    <th>Cost Impact</th>
+                    <th>Amount of Cost (SAR)</th>
+                    <th>Change Order</th>
+                    <th>Root Causes/Faults</th>
+                    <th>Deviation Category</th>
+                    <th>Responsibility</th>
+                    <th>Corrective Action</th>
+                    <th>Corrective Action By</th>
+                    <th>Status</th>
+                    <th>Latest Update</th>
+                    {% if can_manage %}<th></th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in entries %}
+                <tr>
+                    <td>{{ entry.project.project_name }}</td>
+                    <td>{{ entry.system|default:"—" }}</td>
+                    <td>{{ entry.lna_ref|default:"—" }}</td>
+                    <td>{{ entry.po_number|default:"—" }}</td>
+                    <td>{{ entry.location|default:"—" }}</td>
+                    <td class="{% if entry.delivery_time_impact %}fl-pink{% else %}fl-green{% endif %}">
+                        {{ entry.delivery_time_impact|yesno:"Yes,No" }}
+                    </td>
+                    <td class="{% if entry.delay_days > 0 %}fl-pink{% else %}fl-green{% endif %}">
+                        {{ entry.delay_days }} day{{ entry.delay_days|pluralize }}
+                    </td>
+                    <td class="{% if entry.cost_impact %}fl-pink{% else %}fl-green{% endif %}">
+                        {{ entry.cost_impact|yesno:"Yes,No" }}
+                    </td>
+                    <td{% if entry.cost_amount is not None %} class="{% if entry.cost_amount > 0 %}fl-pink{% else %}fl-green{% endif %}"{% endif %}>
+                        {% if entry.cost_amount is not None %}{{ entry.cost_amount|floatformat:2|intcomma }}{% else %}—{% endif %}
+                    </td>
+                    <td class="{% if entry.change_order_required %}fl-pink{% else %}fl-green{% endif %}">
+                        {{ entry.change_order_required|yesno:"Yes,No" }}
+                    </td>
+                    <td class="cell-clamp">{{ entry.root_causes|default:"—" }}</td>
+                    <td{% if entry.deviation_category %} style="background:#{{ entry.deviation_color }};"{% endif %}>
+                        {{ entry.get_deviation_category_display|default:"—" }}
+                    </td>
+                    <td class="cell-clamp">{{ entry.responsibility_departments|default:"—" }}</td>
+                    <td class="cell-clamp">{{ entry.corrective_action|default:"—" }}</td>
+                    <td>{{ entry.corrective_action_by|default:"—" }}</td>
+                    <td>
+                        <span class="badge {% if entry.status == 'closed' %}bg-success{% else %}bg-danger{% endif %}">
+                            {{ entry.get_status_display }}
+                        </span>
+                        {% if entry.status == 'closed' and entry.closed_on %}<div class="small text-muted">{{ entry.closed_on|date:"d M Y" }}</div>{% endif %}
+                    </td>
+                    <td>{{ entry.latest_update|date:"d M Y"|default:"—" }}</td>
+                    {% if can_manage %}
+                    <td class="text-end">
+                        <a href="{% url 'pmo:fault_loss_edit' entry.pk %}" class="btn btn-sm btn-outline-dark"><i class="bi bi-pencil"></i></a>
+                    </td>
+                    {% endif %}
+                </tr>
+                {% empty %}
+                <tr><td colspan="18" class="text-center text-muted py-4">No faults or losses logged yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

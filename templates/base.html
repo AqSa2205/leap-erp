@@ -1258,7 +1258,7 @@
         <div class="nav-section" data-section="delivery"><span>Project Management</span><i class="bi bi-chevron-down section-chevron"></i></div>
         <ul class="nav flex-column nav-section-items" data-section-items="delivery">
             <li class="nav-item">
-                <a class="nav-link {% if request.resolver_match.app_name == 'pmo' and request.resolver_match.url_name != 'milestone_import' and 'pm_' not in request.resolver_match.url_name and 'manpower' not in request.resolver_match.url_name and 'issue' not in request.resolver_match.url_name %}active{% endif %}" href="{% url 'pmo:board' %}" data-title="Project Management — Delivery Board">
+                <a class="nav-link {% if request.resolver_match.app_name == 'pmo' and request.resolver_match.url_name != 'milestone_import' and 'pm_' not in request.resolver_match.url_name and 'manpower' not in request.resolver_match.url_name and 'issue' not in request.resolver_match.url_name and 'fault' not in request.resolver_match.url_name %}active{% endif %}" href="{% url 'pmo:board' %}" data-title="Project Management — Delivery Board">
                     <i class="bi bi-kanban"></i> <span>Delivery Board</span>
                 </a>
             </li>
@@ -1275,6 +1275,11 @@
             <li class="nav-item">
                 <a class="nav-link {% if request.resolver_match.app_name == 'pmo' and 'issue' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'pmo:issue_log_list' %}" data-title="Project Management — Issue Log">
                     <i class="bi bi-exclamation-triangle"></i> <span>Issue Log</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.resolver_match.app_name == 'pmo' and 'fault' in request.resolver_match.url_name %}active{% endif %}" href="{% url 'pmo:fault_loss_list' %}" data-title="Project Management — Faults & Losses Prevention">
+                    <i class="bi bi-shield-exclamation"></i> <span>Faults & Losses Prevention</span>
                 </a>
             </li>
             {# Import rewrites a project's whole WBS, so it is admin-only —      #}
