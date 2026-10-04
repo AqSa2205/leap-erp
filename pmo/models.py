@@ -12,11 +12,11 @@ sheet — the delivery team updates progress weekly and cannot work behind that
 lock. The two are joined by an optional FK instead, so a milestone that bills
 can say which invoice it bills against without either side owning the other.
 """
-from datetime import date
 from decimal import Decimal
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 ONE = Decimal('1')
 ZERO = Decimal('0')
@@ -351,7 +351,7 @@ class ManpowerResource(models.Model):
         than stored, so it's never out of date."""
         if not self.start_contract_date:
             return None
-        end = self.end_contract_date or date.today()
+        end = self.end_contract_date or timezone.localdate()
         return (end - self.start_contract_date).days
 
     @property
@@ -423,7 +423,7 @@ class ManpowerAssignment(models.Model):
         """Whether today falls within this assignment's date range. The
         single place "is this assignment active right now" is decided, so
         engagement_status and every view built on it stay in lockstep."""
-        today = date.today()
+        today = timezone.localdate()
         if self.start_date > today:
             return False
         return self.end_date is None or self.end_date >= today

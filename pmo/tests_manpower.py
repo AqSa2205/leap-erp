@@ -22,7 +22,14 @@ class ManpowerAccessTests(TestCase):
 
     def test_role_without_delivery_access_is_denied(self):
         self.client.force_login(self.dev_user)
-        self.assertEqual(self.client.get(reverse('pmo:manpower_list')).status_code, 403)
+        for url in (
+            reverse('pmo:manpower_list'),
+            reverse('pmo:manpower_dashboard'),
+            # Access is refused before the project is looked up, so any pk will do.
+            reverse('pmo:manpower_project_breakdown', args=[1]),
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 403)
 
     def test_manager_can_view_but_not_add(self):
         self.client.force_login(self.manager_user)

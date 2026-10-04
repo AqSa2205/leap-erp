@@ -914,6 +914,7 @@ def manpower_assign(request, employee_pk):
 
 
 @login_required
+@delivery_required
 def manpower_dashboard(request):
     """KPI summary and Overoccupied alert for manpower engagement - the
     live equivalent of the Excel sheet's Manpower Summary block, derived
@@ -1024,6 +1025,7 @@ def manpower_dashboard(request):
 
 
 @login_required
+@delivery_required
 def manpower_project_breakdown(request, project_pk):
     """Current headcount on one project, by discipline and contract type -
     drilling into a single column of the dashboard's heatmap rather than
