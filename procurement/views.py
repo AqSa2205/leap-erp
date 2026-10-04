@@ -41,6 +41,9 @@ from datetime import datetime, timedelta
 from accounts.permissions import require_capability, CapabilityRequiredMixin
 from .budget_status import (approved_budgets_for, budget_status, exchange_rates,
                             RELEASED_STATUSES)
+from .budget_status import APPROVED_STAGE
+from .budget_linking import remaining as budget_remaining
+from .budget_linking import validate as validate_budget_links
 from .system_breakdown import breakdown
 from .po_pdf import render_po_pdf
 from .po_columns import excel_headers
@@ -1807,6 +1810,176 @@ def po_stage_signer(request):
             request,
             f'{label} is back to the built-in name, {defaults[stage]}.')
     return redirect('procurement:po_stage_approvers')
+
+
+@login_required
+def po_link_budget(request, pk):
+    """Link an existing PO's lines to a finance-approved budget.
+
+    The two paths that seed a PO from a budget set source_bom_item as they go.
+    A PO typed by hand or imported from a quotation has never had a way to get
+    one, so it stayed invisible to the budget: the tracker kept offering those
+    lines, the cash-outflow schedule never learned the PO number, and Budget vs
+    Actual had nothing to compare. This is that way.
+
+    Same gate as the tracker - procurement or an admin tier, and the PO must be
+    one they can already see, so a pk from another region is a 404 rather than
+    a refusal that confirms it exists.
+
+    Deliberately allowed on an issued PO, not just a draft: the whole point is
+    reconciling orders somebody already raised. A client-acknowledged PO is
+    refused with everything else that writes to it - a super admin can release
+    the lock if a link really has to change.
+    """
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user
+            or getattr(user, 'is_procurement_user', False)):
+        messages.error(request, 'Only procurement team members can link a purchase order to a budget.')
+        return redirect('procurement:po_list')
+
+    po = get_object_or_404(
+        _visible_pos_for(user).prefetch_related('items__source_bom_item'), pk=pk)
+
+    if po.is_locked:
+        messages.error(request, LOCKED_PO_MESSAGE)
+        return redirect('procurement:po_detail', pk=po.pk)
+    if po.project_id is None:
+        messages.error(
+            request,
+            'This purchase order is not on a project yet, and a budget belongs '
+            'to one. Set the project first, then link it.')
+        return redirect('procurement:po_detail', pk=po.pk)
+
+    from costing.models import CostingLineItem, CostingSheet
+    sheets = list(CostingSheet.objects.filter(
+        project_id=po.project_id, workflow_stage=APPROVED_STAGE).order_by('title'))
+    if not sheets:
+        messages.error(
+            request,
+            'This project has no finance-approved budget to link against yet.')
+        return redirect('procurement:po_detail', pk=po.pk)
+
+    items = list(po.items.select_related(
+        'source_bom_item__section__costing_sheet').order_by('order', 'serial_number'))
+
+    # A PO already drawing on a budget is pinned to it - the same one-budget
+    # rule the tracker applies when appending. Otherwise the chosen sheet comes
+    # from the form, defaulting to the only one when there is only one.
+    linked_sheet_ids = {i.source_bom_item.section.costing_sheet_id
+                        for i in items if i.source_bom_item_id}
+    pinned_sheet_id = linked_sheet_ids.pop() if len(linked_sheet_ids) == 1 else None
+
+    raw_sheet = (request.POST.get('sheet') or request.GET.get('sheet') or '').strip()
+    sheet_id = pinned_sheet_id
+    if sheet_id is None:
+        if raw_sheet.isdigit() and int(raw_sheet) in {s.pk for s in sheets}:
+            sheet_id = int(raw_sheet)
+        elif len(sheets) == 1:
+            sheet_id = sheets[0].pk
+
+    if request.method == 'POST' and sheet_id is not None:
+        # No exchange rates here on purpose: saving links reads quantities
+        # only. Prices are needed to RENDER the page, not to write it.
+        sheet = next(s for s in sheets if s.pk == sheet_id)
+        # all_objects: procurement's own sub items are legitimate targets here
+        # even though they are kept out of every approved-figure aggregation.
+        offered = {
+            li.pk: li for li in CostingLineItem.all_objects
+            .filter(section__costing_sheet_id=sheet_id, section__is_optional=False)
+            .select_related('section__costing_sheet')
+            .prefetch_related('procured_po_items__purchase_order')}
+
+        choices, unknown = {}, False
+        for item in items:
+            raw = (request.POST.get(f'line_{item.pk}') or '').strip()
+            if not raw:
+                choices[item] = None
+                continue
+            if not raw.isdigit() or int(raw) not in offered:
+                unknown = True
+                continue
+            choices[item] = offered[int(raw)]
+
+        if unknown:
+            messages.error(
+                request,
+                'One of the budget lines you picked is no longer available. '
+                'Nothing was linked — the page below is current, try again.')
+        else:
+            errors, changes = validate_budget_links(po, sheet_id, choices)
+            if errors:
+                for error in errors:
+                    messages.error(request, error)
+            elif not changes:
+                messages.info(request, 'Nothing changed.')
+                return redirect('procurement:po_detail', pk=po.pk)
+            else:
+                with transaction.atomic():
+                    for item, line in changes:
+                        item.source_bom_item = line
+                        item.save(update_fields=['source_bom_item'])
+                # An already-issued PO has passed the point where committing
+                # normally fills the schedule, so do it now. Never overwrites,
+                # and refuses a draft or a placeholder number on its own.
+                #
+                # Re-fetched: this view prefetches items to render the page, so
+                # the instance in hand still carries the links as they were
+                # before the writes above and fill_po_numbers would find none.
+                from finance.outflow_links import fill_po_numbers
+                filled = fill_po_numbers(
+                    PurchaseOrder.objects.get(pk=po.pk))
+
+                linked = sum(1 for _i, line in changes if line is not None)
+                unlinked = len(changes) - linked
+                parts = []
+                if linked:
+                    parts.append(f'{linked} line{"" if linked == 1 else "s"} linked to {sheet.title}')
+                if unlinked:
+                    parts.append(f'{unlinked} unlinked')
+                messages.success(
+                    request,
+                    f'{" and ".join(parts)}. The budget tracker now counts '
+                    f'this order against those lines.')
+                if filled:
+                    messages.info(
+                        request,
+                        f'{filled} cash-outflow row{"" if filled == 1 else "s"} '
+                        f'picked up this PO number.')
+                return redirect('procurement:po_detail', pk=po.pk)
+
+    # ── the page ─────────────────────────────────────────────────────────
+    budget_lines = []
+    if sheet_id is not None:
+        rates = exchange_rates()
+        sheet = next(s for s in sheets if s.pk == sheet_id)
+        for line in (CostingLineItem.all_objects
+                     .filter(section__costing_sheet_id=sheet_id, section__is_optional=False)
+                     .select_related('section')
+                     .prefetch_related('procured_po_items__purchase_order')
+                     .order_by('section__section_number', 'order', 'item_number')):
+            line.set_exchange_rates_cache(rates)
+            line.set_sheet_cache(sheet)
+            budget_lines.append({
+                'line': line,
+                'left': budget_remaining(line, exclude_po=po),
+                'quantity': line.quantity,
+            })
+
+    rows = [{'item': item,
+             'current': item.source_bom_item_id,
+             'current_sheet': (item.source_bom_item.section.costing_sheet_id
+                               if item.source_bom_item_id else None)}
+            for item in items]
+
+    return render(request, 'procurement/po_link_budget.html', {
+        'po': po,
+        'rows': rows,
+        'sheets': sheets,
+        'sheet_id': sheet_id,
+        'pinned_sheet_id': pinned_sheet_id,
+        'budget_lines': budget_lines,
+        'linked_count': sum(1 for r in rows if r['current']),
+    })
 
 
 @login_required

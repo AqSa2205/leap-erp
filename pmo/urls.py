@@ -37,4 +37,9 @@ urlpatterns = [
     path('issues/<int:pk>/edit/', views.issue_log_edit, name='issue_log_edit'),
     path('issues/export/', views.issue_log_export_excel, name='issue_log_export_excel'),
     path('issues/export/all/', views.issue_log_export_all_zip, name='issue_log_export_all_zip'),
+
+    path('faults-losses/', views.fault_loss_list, name='fault_loss_list'),
+    path('faults-losses/export/', views.fault_loss_export_excel, name='fault_loss_export_excel'),
+    path('faults-losses/add/', views.fault_loss_create, name='fault_loss_create'),
+    path('faults-losses/<int:pk>/edit/', views.fault_loss_edit, name='fault_loss_edit'),
 ]
