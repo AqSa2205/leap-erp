@@ -21,8 +21,9 @@ from django.views.decorators.http import require_POST
 from dashboard.views import projects_visible_to
 from projects.models import Project
 
-from .forms import ManpowerDetailsForm, NewEmployeeManpowerForm, ProjectIssueForm
-from .models import (ONE, ZERO, CommunicationMatrix, ManpowerResource,
+from .forms import (FaultLossEntryForm, ManpowerDetailsForm, NewEmployeeManpowerForm,
+                     ProjectIssueForm)
+from .models import (ONE, ZERO, CommunicationMatrix, FaultLossEntry, ManpowerResource,
                       MilestoneProgressEntry, ProjectIssue, ProjectMilestone,
                       ResponsibilityMatrix, default_communication_columns,
                       default_responsibility_columns, sanitize_grid)
@@ -1054,6 +1055,156 @@ def issue_log_edit(request, pk):
     return render(request, 'pmo/issue_log_form.html', {
         'form': form, 'is_new': False, 'issue': issue,
     })
+
+
+@login_required
+@delivery_required
+def fault_loss_list(request):
+    """All logged faults, losses and delays across the projects this user
+    can see - the digital equivalent of the Faults & Losses Prevention
+    tracking sheet, one row per project system rather than per month."""
+    entries = (FaultLossEntry.objects
+               .filter(project__in=projects_visible_to(request.user))
+               .select_related('project', 'created_by'))
+    return render(request, 'pmo/fault_loss_list.html', {
+        'entries': entries,
+        'can_manage': can_update_progress(request.user),
+    })
+
+
+@login_required
+@update_access_required('Only Project Management can log faults and losses.')
+def fault_loss_create(request):
+    if request.method == 'POST':
+        form = FaultLossEntryForm(request.POST, user=request.user)
+        if form.is_valid():
+            entry = form.save(commit=False)
+            entry.created_by = request.user
+            entry.save()
+            messages.success(request, 'Fault/loss entry logged.')
+            return redirect('pmo:fault_loss_list')
+    else:
+        form = FaultLossEntryForm(user=request.user)
+    project_refs = {p.pk: p.proposal_reference for p in form.fields['project'].queryset}
+    return render(request, 'pmo/fault_loss_form.html', {
+        'form': form, 'is_new': True, 'project_refs': project_refs,
+    })
+
+
+@login_required
+@update_access_required('Only Project Management can edit fault/loss entries.')
+def fault_loss_edit(request, pk):
+    entry = get_object_or_404(
+        FaultLossEntry.objects.filter(project__in=projects_visible_to(request.user)), pk=pk)
+    if request.method == 'POST':
+        form = FaultLossEntryForm(request.POST, instance=entry, user=request.user)
+        if form.is_valid():
+            form.save()
+            messages.success(request, 'Fault/loss entry updated.')
+            return redirect('pmo:fault_loss_list')
+    else:
+        form = FaultLossEntryForm(instance=entry, user=request.user)
+    project_refs = {p.pk: p.proposal_reference for p in form.fields['project'].queryset}
+    return render(request, 'pmo/fault_loss_form.html', {
+        'form': form, 'is_new': False, 'entry': entry, 'project_refs': project_refs,
+    })
+
+
+def _build_fault_loss_workbook(visible_projects):
+    """Build the Faults & Losses Prevention workbook - every logged entry
+    across the projects this user may see, in the source sheet's own
+    column order. Not month-scoped like the Issue Log export: this tab
+    has no date-driven grouping, so one workbook covers everything."""
+    import openpyxl
+    from openpyxl.styles import Alignment, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    entries = (FaultLossEntry.objects
+               .filter(project__in=visible_projects)
+               .select_related('project', 'created_by')
+               .order_by('project__project_name', 'pk'))
+
+    columns = [
+        'Project', 'System', 'LNA Ref#', 'PO#', 'Location',
+        'Delivery Time Impact', 'Duration of Delay (days)', 'Cost Impact',
+        'Amount of Cost (SAR)', 'Change Order Required', 'Root Causes/Faults',
+        'Deviation Category', 'Responsibility (Departments)', 'Corrective Action',
+        'Corrective Action By (Departments)', 'Status', 'Closed On', 'Latest Update',
+    ]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Faults & Losses'
+    ncols = len(columns)
+    wrap = Alignment(vertical='top', wrap_text=True)
+
+    header_idx = 1
+    ws.append(columns)
+
+    # Same hex pair as the on-screen .fl-pink/.fl-green classes, so the
+    # export and the page never show a different colour for the same cell.
+    PINK = 'F8D7DA'
+    GREEN = 'D1E7DD'
+
+    for entry in entries:
+        ws.append([
+            entry.project.project_name,
+            entry.system,
+            entry.lna_ref,
+            entry.po_number,
+            entry.location,
+            'Yes' if entry.delivery_time_impact else 'No',
+            entry.delay_days,
+            'Yes' if entry.cost_impact else 'No',
+            entry.cost_amount,
+            'Yes' if entry.change_order_required else 'No',
+            entry.root_causes,
+            entry.get_deviation_category_display(),
+            entry.responsibility_departments,
+            entry.corrective_action,
+            entry.corrective_action_by,
+            entry.get_status_display(),
+            entry.closed_on,
+            entry.latest_update,
+        ])
+        r = ws.max_row
+        for c in ws[r]:
+            c.alignment = wrap
+        for col_idx in (17, 18):
+            ws.cell(row=r, column=col_idx).number_format = 'dd mmm yyyy'
+        # Same colour rules as the on-screen table.
+        ws.cell(row=r, column=6).fill = PatternFill(
+            'solid', fgColor=PINK if entry.delivery_time_impact else GREEN)
+        ws.cell(row=r, column=7).fill = PatternFill(
+            'solid', fgColor=PINK if entry.delay_days > 0 else GREEN)
+        ws.cell(row=r, column=8).fill = PatternFill(
+            'solid', fgColor=PINK if entry.cost_impact else GREEN)
+        if entry.cost_amount is not None:
+            ws.cell(row=r, column=9).fill = PatternFill(
+                'solid', fgColor=PINK if entry.cost_amount > 0 else GREEN)
+        ws.cell(row=r, column=10).fill = PatternFill(
+            'solid', fgColor=PINK if entry.change_order_required else GREEN)
+        if entry.deviation_category:
+            ws.cell(row=r, column=12).fill = PatternFill('solid', fgColor=entry.deviation_color)
+
+    widths = [28, 20, 16, 14, 14, 12, 12, 10, 14, 12, 40, 14, 24, 36, 24, 10, 14, 14]
+    for i, w in enumerate(widths[:ncols], start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    _style_export_header_and_grid(ws, header_idx, ncols)
+
+    filename = 'Faults_and_Losses_Prevention.xlsx'
+    return wb, filename
+
+
+@login_required
+@delivery_required
+def fault_loss_export_excel(request):
+    wb, filename = _build_fault_loss_workbook(projects_visible_to(request.user))
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    wb.save(response)
+    return response
 
 
 @login_required

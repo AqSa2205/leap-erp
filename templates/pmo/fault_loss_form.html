@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+
+{% block title %}{% if is_new %}Log Fault/Loss{% else %}Edit Fault/Loss{% endif %} - Faults & Losses Prevention{% endblock %}
+{% block page_title %}{% if is_new %}Log Fault/Loss{% else %}Edit Entry #{{ entry.pk }}{% endif %}{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+    <a href="{% url 'pmo:fault_loss_list' %}" class="text-muted small"><i class="bi bi-arrow-left"></i> Back to Faults & Losses Prevention</a>
+</div>
+
+<div class="card" style="max-width: 720px;">
+    <div class="card-header"><i class="bi bi-shield-exclamation me-2"></i>{% if is_new %}Log a new fault/loss entry{% else %}Edit entry{% endif %}</div>
+    <div class="card-body">
+        <form method="post">
+            {% csrf_token %}
+            {% if form.non_field_errors %}
+            <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+            {% endif %}
+            {% for field in form %}
+            <div class="mb-3">
+                <label class="form-label fw-semibold">{{ field.label }}</label>
+                {{ field }}
+                {% if field.name == 'lna_ref' %}<div class="form-text">Pre-fills from the selected project's own reference; edit if this entry needs a different one.</div>{% endif %}
+                {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                {% if field.errors %}<div class="text-danger small">{{ field.errors.0 }}</div>{% endif %}
+            </div>
+            {% endfor %}
+            <div class="d-flex justify-content-between">
+                <a href="{% url 'pmo:fault_loss_list' %}" class="btn btn-outline-secondary">Cancel</a>
+                <button type="submit" class="btn btn-danger">
+                    <i class="bi bi-check-lg me-1"></i> {% if is_new %}Log Entry{% else %}Save{% endif %}
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{{ project_refs|json_script:"project-refs-data" }}
+<script>
+// Pre-fill LNA Ref# from the selected project's own reference. Only when
+// the field is currently empty, so it never overwrites a ref the user
+// already typed or edited - a project can carry several systems, each
+// with its own ref, so this is a convenience default, not a fixed link.
+(function () {
+    const projectField = document.getElementById('id_project');
+    const refField = document.getElementById('id_lna_ref');
+    const dataEl = document.getElementById('project-refs-data');
+    if (!projectField || !refField || !dataEl) return;
+    const projectRefs = JSON.parse(dataEl.textContent);
+    projectField.addEventListener('change', function () {
+        if (refField.value.trim() !== '') return;
+        const ref = projectRefs[this.value];
+        if (ref) refField.value = ref;
+    });
+})();
+</script>
+{% endblock %}
