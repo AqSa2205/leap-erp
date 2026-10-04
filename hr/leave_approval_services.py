@@ -209,6 +209,11 @@ def _finalize(leave_request, status):
                 note=f'Approved via leave request #{leave_request.pk}',
             )
             leave_request.leave_record = record
+            # The days this leave covers may already have a stored 'absent'
+            # row (sick leave is approved after the fact) - re-derive them so
+            # the register shows the leave instead.
+            from hr.attendance_services import sync_attendence_with_leave
+            sync_attendence_with_leave(record.employee, record.start_date, record.end_date)
         elif status == 'disapproved':
             leave_request.salary_deduction_applicable = True
         leave_request.save(update_fields=[
@@ -416,7 +421,14 @@ def revoke_leave_request(leave_request, revoking_user, reason):
         if current.status != 'approved':
             raise ValueError(f'This request is {current.status}; only an approved request can be revoked.')
         if current.leave_record_id:
-            LeaveRecord.objects.filter(pk=current.leave_record_id).delete()
+            lr = LeaveRecord.objects.filter(pk=current.leave_record_id).first()
+            if lr:
+                emp, start, end = lr.employee, lr.start_date, lr.end_date
+                lr.delete()
+                # Delete first so derive_status no longer sees the leave and
+                # the days fall back to present/late/absent.
+                from hr.attendance_services import sync_attendence_with_leave
+                sync_attendence_with_leave(emp, start, end)
         current.status = 'revoked'
         current.revoked_by = revoking_user
         current.revoked_at = timezone.now()

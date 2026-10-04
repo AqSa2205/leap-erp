@@ -2756,6 +2756,15 @@ class LeaveRecordDeleteView(AdminRequiredMixin, DeleteView):
     model = LeaveRecord
     template_name = 'hr/leaverecord_confirm_delete.html'
 
+    def form_valid(self, form):
+        # Capture the range before the delete, then re-derive those days so
+        # they fall back from 'leave' to present/late/absent.
+        emp, start, end = self.object.employee, self.object.start_date, self.object.end_date
+        response = super().form_valid(form)
+        from hr.attendance_services import sync_attendence_with_leave
+        sync_attendence_with_leave(emp, start, end)
+        return response
+
     def get_success_url(self):
         return reverse_lazy('hr:leave_summary', kwargs={'pk': self.object.employee_id})
 
