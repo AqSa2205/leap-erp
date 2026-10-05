@@ -2978,6 +2978,9 @@ class LeaveRequestCreateView(HRScopedAccessMixin, FormView):
         # An out-of-scope pk fails ModelChoiceField validation.
         form.fields['employee'].queryset = _loggable_employees(
             self.request.user, form.fields['employee'].queryset)
+        # Re-derive the replacement choices from the narrowed dropdown, so a
+        # posted out-of-scope employee can't reveal their team's names.
+        form.scope_replacement()
         return form
 
     def get_initial(self):
@@ -3713,6 +3716,13 @@ def attendance_unmark_leave(request):
         return JsonResponse({'error': 'Employee is not in your team.'}, status=403)
     if lr.start_date != lr.end_date:
         return JsonResponse({'error': 'Part of a multi-day leave — edit from the leave summary.'}, status=400)
+    # A leave created by approving a leave request belongs to that request.
+    # Deleting it from here refunded the balance while the request still read
+    # "Approved" - and certificate-required leave (Sick) could not be put back
+    # from the register. Revoke keeps the request and the leave in step.
+    if LeaveRequest.objects.filter(leave_record=lr).exists():
+        return JsonResponse({'error': 'This leave was approved through a leave request — '
+                                      'revoke it from the request instead.'}, status=400)
 
     emp, emp_id, day = lr.employee, lr.employee_id, lr.start_date
     with transaction.atomic():

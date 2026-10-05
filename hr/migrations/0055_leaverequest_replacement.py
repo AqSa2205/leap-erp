@@ -14,6 +14,6 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='leaverequest',
             name='replacement',
-            field=models.ForeignKey(blank=True, help_text='Who covers for the employee while they are on leave. Picked by the employee from Employee.replacement_candidates(); blank on requests logged on their behalf.', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='leave_replacements', to='hr.employee'),
+            field=models.ForeignKey(blank=True, help_text='Who covers for the employee while they are on leave, picked from Employee.replacement_candidates(). Blank when the employee has no main manager, or on requests from before this field existed.', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='leave_replacements', to='hr.employee'),
         ),
     ]

@@ -12013,6 +12013,28 @@ class LeaveReplacementTests(TestCase):
         req.refresh_from_db()
         self.assertEqual(req.replacement, self.sec)
 
+    def test_out_of_scope_employee_does_not_reveal_their_team(self):
+        # A plain manager may log only for their own reports; posting someone
+        # else is rejected - and the re-shown form must not list that
+        # employee's team.
+        mgr_user = make_user('rep_mgr2')
+        mgr_user.set_password('testpass123')
+        mgr_user.save()
+        self.other_boss.user = mgr_user
+        self.other_boss.save(update_fields=['user'])
+        self.client.login(username='rep_mgr2', password='testpass123')
+        resp = self._log_on_behalf(replacement=self.mate.pk)
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.emp).exists())
+        self.assertFalse(resp.context['form'].fields['replacement'].queryset.exists())
+        self.assertNotContains(resp, 'Teammate')
+
+    def test_on_behalf_required_message_is_not_worded_for_the_employee(self):
+        self._hr()
+        resp = self._log_on_behalf()
+        self.assertContains(resp, "Please select who will cover for them while they")
+        self.assertNotContains(resp, 'cover for you')
+
     def test_approvers_see_the_replacement(self):
         from accounts.models import Role
         hr = make_user('rep_approver')
@@ -12127,3 +12149,30 @@ class SickLeaveAttendanceSyncTests(TestCase):
         cells = {c['date']: c for c in rows[0]['cells']}
         self.assertEqual((cells[self.day]['status'], cells[self.day]['leave_code']), ('leave', 'sick'))
         self.assertEqual((cells[other_day]['status'], cells[other_day]['leave_code']), ('leave', 'annual'))
+
+    def _unmark(self, leave_record_id):
+        import json
+        from accounts.models import Role
+        hr = make_user('sick_unmark_hr')
+        hr.set_password('testpass123')
+        hr.role, _ = Role.objects.get_or_create(name='super_admin')
+        hr.save()
+        self.client.login(username='sick_unmark_hr', password='testpass123')
+        return self.client.post(reverse('hr:attendance_unmark_leave'),
+                                json.dumps({'leave_record_id': leave_record_id}), content_type='application/json')
+
+    def test_register_click_cannot_remove_a_leave_approved_through_a_request(self):
+        rec = self._absent_row()
+        req = self._approve()
+        resp = self._unmark(req.leave_record_id)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('revoke it from the request', resp.json()['error'])
+        self.assertTrue(LeaveRecord.objects.filter(pk=req.leave_record_id).exists())
+        rec.refresh_from_db()
+        self.assertEqual(rec.status, 'leave')
+
+    def test_register_click_still_removes_a_leave_marked_on_the_register(self):
+        lr = LeaveRecord.objects.create(employee=self.emp, leave_type=self.sick, start_date=self.day, end_date=self.day)
+        resp = self._unmark(lr.pk)
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(LeaveRecord.objects.filter(pk=lr.pk).exists())
