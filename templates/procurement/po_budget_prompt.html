@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+{% block title %}Link {{ po.po_number }} to a budget?{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-lg-7">
+            <div class="card">
+                <div class="card-body p-4">
+                    <h1 class="h4 mb-2"><i class="bi bi-link-45deg me-2"></i>Link {{ po.po_number }} to an approved budget?</h1>
+                    <p class="text-muted">
+                        This purchase order has been saved, but it isn't linked to an approved budget yet.
+                        Its project, <strong>{{ po.project.project_name }}</strong>, has
+                        {{ budgets|length }} finance-approved budget{{ budgets|length|pluralize }}:
+                    </p>
+                    <ul class="mb-4">
+                        {% for b in budgets %}<li>{{ b.title }}</li>{% endfor %}
+                    </ul>
+                    <p class="small text-muted mb-4">
+                        Linking lets the budget track this order, and flags it for COO approval if it takes the budget over.
+                        If you continue without a budget, the order still goes through the normal approvals and can be printed,
+                        but it is marked <strong>Not linked to any approved budget</strong>.
+                    </p>
+                    <div class="d-flex gap-2 flex-wrap">
+                        {% if can_link %}
+                        <a href="{% url 'procurement:po_link_budget' po.pk %}" class="btn btn-primary">
+                            <i class="bi bi-link-45deg me-1"></i>Link to an approved budget
+                        </a>
+                        {% endif %}
+                        <a href="{% url 'procurement:po_detail' po.pk %}" class="btn btn-outline-secondary">Continue without a budget</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

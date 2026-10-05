@@ -71,7 +71,7 @@
         <div class="col-md-3"><div class="stat-tile tile-total"><div class="stat-label">Supply Items</div><div class="stat-value">{{ total_count|intcomma }}</div></div></div>
         <div class="col-md-3"><div class="stat-tile tile-available"><div class="stat-label">Available to Procure</div><div class="stat-value">{{ available_count|intcomma }}</div></div></div>
         <div class="col-md-3"><div class="stat-tile tile-procured"><div class="stat-label">Already on a PO</div><div class="stat-value">{{ procured_count|intcomma }}</div></div></div>
-        <div class="col-md-3"><div class="stat-tile tile-budget"><div class="stat-label">Budget Total (SAR)</div><div class="stat-value">{{ budget_total|floatformat:2|intcomma }}</div></div></div>
+        <div class="col-md-3"><div class="stat-tile tile-budget"><div class="stat-label">Budget Total (SAR)</div><div class="stat-value">{{ budget_total|floatformat:2|intcomma }}</div>{% if approved_overrun_total %}<div class="small text-muted mt-1" title="Over-budget spend approved by the COO. The finance-approved budget is unchanged.">+ {{ approved_overrun_total|floatformat:2|intcomma }} approved overrun = <strong>{{ budget_with_overruns|floatformat:2|intcomma }}</strong></div>{% endif %}</div></div>
     </div>
 
     <form method="post">
@@ -103,7 +103,7 @@
                             <td>{{ it.item.item_number|default:"—" }}</td>
                             <td>
                                 {% if it.item.added_by_procurement %}<i class="bi bi-arrow-return-right sub-item-indent" title="Added by procurement"></i>{% endif %}
-                                {{ it.item.description|truncatechars:110 }}
+                                {{ it.item.description|truncatechars:110 }}{% if it.overrun_status %}<span class="badge {% if it.overrun_status == 'approved' %}bg-success{% elif it.overrun_status == 'rejected' %}bg-secondary{% else %}bg-danger{% endif %} ms-1" title="Committed purchase orders exceed this line's approved budget. See the PO for details.">Over budget &middot; {% if it.overrun_status == 'approved' %}approved{% elif it.overrun_status == 'rejected' %}rejected{% else %}awaiting approval{% endif %}</span>{% endif %}
                                 {% if it.item.added_by_procurement %}<span class="badge sub-item-badge ms-1">Added by procurement</span>{% endif %}
                                 {% if not it.item.parent_item_id %}
                                 <button type="button" class="btn btn-sm btn-outline-secondary add-sub-btn py-0 px-1 ms-1" title="Add a sub item (e.g. cartridges under a printer)"
@@ -126,7 +126,7 @@
                             </td>
                             <td>{{ it.item.unit|default:"—" }}</td>
                             <td class="num fw-semibold">{{ it.unit_price|floatformat:2|intcomma }}</td>
-                            <td class="num fw-semibold">{{ it.line_price|floatformat:2|intcomma }}</td>
+                            <td class="num fw-semibold">{{ it.line_price|floatformat:2|intcomma }}{% if it.approved_overrun %}<div class="small fw-normal" style="color:#3cb371;" title="Over-budget spend approved by the COO. The finance-approved budget is unchanged.">+ {{ it.approved_overrun|floatformat:2|intcomma }} approved overrun</div><div class="small">= {{ it.approved_total|floatformat:2|intcomma }}</div>{% endif %}</td>
                             <td>
                                 {% if it.is_partial %}
                                 <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">Partial — {{ it.already_ordered|floatformat:"-2"|intcomma }} of {{ it.item.quantity|floatformat:"-2"|intcomma }} ordered</span>
