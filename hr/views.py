@@ -3423,7 +3423,8 @@ def attendance_matrix_export_excel(request):
     COLOR_ANNUAL_LEAVE = 'FCE4D6'
     COLOR_NATIONAL = '00B050'
     COLOR_EID = 'FFFF00'
-    COLOR_OTHER = 'BDD7EE'  # light blue - shared fallback for WFH, non-Annual leave types, and ungrouped holidays
+    COLOR_OTHER = 'BDD7EE'  # light blue - shared fallback for WFH, other leave types, and ungrouped holidays
+    COLOR_SICK = 'E75480'  # pink - matches the register's S badge, so paid sick days never read as an absence
 
     def fill_for(cell_data, emp_id):
         status = cell_data['status']
@@ -3438,6 +3439,8 @@ def attendance_matrix_export_excel(request):
         if status == 'weekend':
             return COLOR_WEEKEND
         if status == 'leave':
+            if cell_data.get('leave_code') == 'sick':
+                return COLOR_SICK
             code = leave_type_map.get((emp_id, cell_data['date']))
             if code == 'annual':
                 return COLOR_ANNUAL_LEAVE
@@ -3450,7 +3453,7 @@ def attendance_matrix_export_excel(request):
                 return COLOR_EID
             return COLOR_OTHER
         # AUTHOR'S NOTE: 'wfh' status currently falls through to COLOR_OTHER below,
-        # same as Sick/Marriage/other leave types and ungrouped holidays.
+        # same as Marriage/other leave types and ungrouped holidays.
         # To give WFH its own distinct color in the future: add
         # if status == 'wfh': return COLOR_WFH here (above this comment),
         # define a new COLOR_WFH constant near the other COLOR_ constants above,
@@ -3483,7 +3486,8 @@ def attendance_matrix_export_excel(request):
         row += 1
         ws.cell(row=row, column=1, value=r['employee'].full_name).border = thin_border
         for col, cell_data in enumerate(r['cells'], 2):
-            label = status_labels.get(cell_data['status'], cell_data['status'])
+            # Sick leave gets its own letter, same as the register's S badge.
+            label = 'S' if cell_data.get('leave_code') == 'sick' else status_labels.get(cell_data['status'], cell_data['status'])
             # Stack the check-in (and check-out) time beneath the status letter,
             # e.g. "P" over "09:12-17:30". Non-present days keep just the letter.
             times = cell_time_lines(cell_data)
@@ -3560,7 +3564,8 @@ def attendance_matrix_export_pdf(request):
     COLOR_ANNUAL_LEAVE = colors.HexColor('#FCE4D6')
     COLOR_NATIONAL = colors.HexColor('#00B050')
     COLOR_EID = colors.HexColor('#FFFF00')
-    COLOR_OTHER = colors.HexColor('#BDD7EE')  # light blue - shared fallback for WFH, non-Annual leave types, and ungrouped holidays
+    COLOR_OTHER = colors.HexColor('#BDD7EE')  # light blue - shared fallback for WFH, other leave types, and ungrouped holidays
+    COLOR_SICK = colors.HexColor('#E75480')  # pink - matches the register's S badge, so paid sick days never read as an absence
 
     def pdf_fill_for(cell_data, emp_id):
         status = cell_data['status']
@@ -3575,6 +3580,8 @@ def attendance_matrix_export_pdf(request):
         if status == 'weekend':
             return COLOR_WEEKEND
         if status == 'leave':
+            if cell_data.get('leave_code') == 'sick':
+                return COLOR_SICK
             code = leave_type_map.get((emp_id, cell_data['date']))
             if code == 'annual':
                 return COLOR_ANNUAL_LEAVE
@@ -3587,7 +3594,7 @@ def attendance_matrix_export_pdf(request):
                 return COLOR_EID
             return COLOR_OTHER
         # AUTHOR'S NOTE: 'wfh' status currently falls through to COLOR_OTHER below,
-        # same as Sick/Marriage/other leave types and ungrouped holidays.
+        # same as Marriage/other leave types and ungrouped holidays.
         # To give WFH its own distinct color in the future: add
         # if status == 'wfh': return COLOR_WFH here (above this comment),
         # define a new COLOR_WFH constant near the other COLOR_ constants above,
@@ -3608,7 +3615,8 @@ def attendance_matrix_export_pdf(request):
     for row_idx, r in enumerate(rows, 1):
         row_data = [Paragraph(r['employee'].full_name, name_style)]
         for col_idx, c in enumerate(r['cells'], 1):
-            label = status_labels.get(c['status'], c['status'])
+            # Sick leave gets its own letter, same as the register's S badge.
+            label = 'S' if c.get('leave_code') == 'sick' else status_labels.get(c['status'], c['status'])
             times = cell_time_lines(c)
             # Stack the status letter over the check-in/out times, each on its
             display_lines = list(times)

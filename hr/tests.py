@@ -12176,3 +12176,36 @@ class SickLeaveAttendanceSyncTests(TestCase):
         resp = self._unmark(lr.pk)
         self.assertEqual(resp.status_code, 200)
         self.assertFalse(LeaveRecord.objects.filter(pk=lr.pk).exists())
+
+    def _export_as_admin(self, name):
+        from accounts.models import Role
+        admin = make_user('sick_export_admin')
+        admin.role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
+        admin.save()
+        self.client.force_login(admin)
+        return self.client.get(reverse(name) + '?period=month&date=2026-10-06')
+
+    def test_excel_export_shows_sick_leave_as_pink_s(self):
+        import io
+        import openpyxl as _op
+        annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual'})
+        other_day = _date(2026, 10, 7)
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.sick, start_date=self.day, end_date=self.day)
+        LeaveRecord.objects.create(employee=self.emp, leave_type=annual, start_date=other_day, end_date=other_day)
+        resp = self._export_as_admin('hr:attendance_matrix_export_excel')
+        self.assertEqual(resp.status_code, 200)
+        ws = _op.load_workbook(io.BytesIO(resp.content)).active
+        header = [c.value for c in ws[3]]
+        row = next(r for r in ws.iter_rows(min_row=4) if r[0].value == 'Sicky')
+        sick_cell = row[header.index('06-Oct')]
+        annual_cell = row[header.index('07-Oct')]
+        self.assertEqual(sick_cell.value, 'S')
+        self.assertEqual(sick_cell.fill.start_color.rgb[-6:].upper(), 'E75480')
+        self.assertEqual(annual_cell.value, 'L')
+        self.assertEqual(annual_cell.fill.start_color.rgb[-6:].upper(), 'FCE4D6')
+
+    def test_pdf_export_renders_with_sick_leave(self):
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.sick, start_date=self.day, end_date=self.day)
+        resp = self._export_as_admin('hr:attendance_matrix_export_pdf')
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.content.startswith(b'%PDF'))
