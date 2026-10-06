@@ -248,6 +248,10 @@ class PurchaseOrder(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+',
+        help_text='Who made the save that last moved updated_at. Empty for saves made outside a request, and for changes made before this was recorded.')
 
     # Hardcoded signers per stage. Order matters — first to last is the
     # required sequence. CEO is only required for high-value POs.
@@ -266,6 +270,22 @@ class PurchaseOrder(models.Model):
 
     def __str__(self):
         return f"{self.po_number} - {self.vendor_name}"
+
+    def save(self, *args, **kwargs):
+        """Stamp updated_by on exactly the saves that move updated_at.
+
+        A save limited to update_fields without updated_at leaves the
+        timestamp alone, so it leaves updated_by alone too - the two always
+        describe the same save. The user comes from the current request;
+        outside one it is None.
+        """
+        update_fields = kwargs.get('update_fields')
+        if update_fields is None or 'updated_at' in update_fields:
+            from .request_user import current_user
+            self.updated_by = current_user()
+            if update_fields is not None and 'updated_by' not in update_fields:
+                kwargs['update_fields'] = list(update_fields) + ['updated_by']
+        super().save(*args, **kwargs)
 
     @property
     def base_amount(self):

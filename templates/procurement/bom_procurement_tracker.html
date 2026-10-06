@@ -20,6 +20,7 @@
     .stat-tile.tile-available { border-left: 4px solid #198754; }
     .stat-tile.tile-procured { border-left: 4px solid #C41E3A; }
     .stat-tile.tile-budget { border-left: 4px solid #5b3fa0; }
+    .stat-tile.tile-selected { border-left: 4px solid #0d6efd; }
 
     #bp-table { font-size: 0.84rem; }
     #bp-table thead th { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.4px; color: #6c757d; white-space: nowrap; background:#f0f3f5; }
@@ -67,11 +68,12 @@
     </div>
 
     <!-- Stats -->
-    <div class="row g-3 mb-4">
-        <div class="col-md-3"><div class="stat-tile tile-total"><div class="stat-label">Supply Items</div><div class="stat-value">{{ total_count|intcomma }}</div></div></div>
-        <div class="col-md-3"><div class="stat-tile tile-available"><div class="stat-label">Available to Procure</div><div class="stat-value">{{ available_count|intcomma }}</div></div></div>
-        <div class="col-md-3"><div class="stat-tile tile-procured"><div class="stat-label">Already on a PO</div><div class="stat-value">{{ procured_count|intcomma }}</div></div></div>
-        <div class="col-md-3"><div class="stat-tile tile-budget"><div class="stat-label">Budget Total (SAR)</div><div class="stat-value">{{ budget_total|floatformat:2|intcomma }}</div></div></div>
+    <div class="row row-cols-1 row-cols-sm-2 row-cols-lg-5 g-3 mb-4">
+        <div class="col"><div class="stat-tile tile-total"><div class="stat-label">Supply Items</div><div class="stat-value">{{ total_count|intcomma }}</div></div></div>
+        <div class="col"><div class="stat-tile tile-available"><div class="stat-label">Available to Procure</div><div class="stat-value">{{ available_count|intcomma }}</div></div></div>
+        <div class="col"><div class="stat-tile tile-procured"><div class="stat-label">Already on a PO</div><div class="stat-value">{{ procured_count|intcomma }}</div></div></div>
+        <div class="col"><div class="stat-tile tile-budget"><div class="stat-label">Budget Total (SAR)</div><div class="stat-value">{{ budget_total|floatformat:2|intcomma }}</div></div></div>
+        <div class="col"><div class="stat-tile tile-selected"><div class="stat-label">Selected Total (SAR)</div><div class="stat-value" id="selectedTotal">0.00</div></div></div>
     </div>
 
     <form method="post">
@@ -99,7 +101,7 @@
                         <tr class="sec-head"><td colspan="11"><i class="bi bi-stack me-1"></i>{% if row.section.section_number %}{{ row.section.section_number }} · {% endif %}{{ row.section.title }}</td></tr>
                         {% for it in row.items %}
                         <tr class="{% if not it.is_available %}row-procured{% endif %} {% if it.item.added_by_procurement %}row-sub-item{% endif %}">
-                            <td>{% if it.is_available %}<input type="checkbox" class="form-check-input item-check" name="item_ids" value="{{ it.item.pk }}" data-remaining="{{ it.remaining|floatformat:'-2' }}">{% else %}<i class="bi bi-check-circle-fill text-success" title="Fully ordered"></i>{% endif %}</td>
+                            <td>{% if it.is_available %}<input type="checkbox" class="form-check-input item-check" name="item_ids" value="{{ it.item.pk }}" data-remaining="{{ it.remaining|floatformat:'-2' }}" data-unit-price="{{ it.unit_price|stringformat:'s' }}">{% else %}<i class="bi bi-check-circle-fill text-success" title="Fully ordered"></i>{% endif %}</td>
                             <td>{{ it.item.item_number|default:"—" }}</td>
                             <td>
                                 {% if it.item.added_by_procurement %}<i class="bi bi-arrow-return-right sub-item-indent" title="Added by procurement"></i>{% endif %}
@@ -254,6 +256,7 @@
 (function() {
     const checks = document.querySelectorAll('.item-check');
     const countEl = document.getElementById('selectedCount');
+    const totalEl = document.getElementById('selectedTotal');
     const submitBtn = document.getElementById('createPoBtn');
     const selectAllBtn = document.getElementById('selectAllBtn');
     const clearAllBtn = document.getElementById('clearAllBtn');
@@ -278,12 +281,27 @@
     function refresh() {
         const n = Array.from(checks).filter(c => c.checked).length;
         if (countEl) countEl.textContent = n;
+        // Selected total: quantity for this PO x budgeted unit price, for
+        // ticked rows only. Back to 0 when nothing is ticked.
+        let total = 0;
+        checks.forEach(c => {
+            if (!c.checked) return;
+            const qty = qtyInputFor(c);
+            const max = qty ? Number(qty.getAttribute('max')) : 0;
+            let q = qty ? Math.floor(Number(qty.value) || 0) : 0;
+            if (max && q > max) q = max;
+            if (q < 0) q = 0;
+            total += q * (Number(c.dataset.unitPrice) || 0);
+        });
+        if (totalEl) totalEl.textContent = total.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
         if (submitBtn) submitBtn.disabled = n === 0;
         if (addToExistingBtn) addToExistingBtn.disabled = n === 0;
     }
     checks.forEach(c => c.addEventListener('change', () => { syncQty(c); refresh(); }));
     if (selectAllBtn) selectAllBtn.addEventListener('click', () => { checks.forEach(c => { c.checked = true; syncQty(c); }); refresh(); });
     if (clearAllBtn) clearAllBtn.addEventListener('click', () => { checks.forEach(c => { c.checked = false; syncQty(c); }); refresh(); });
+    // Changing a quantity changes the selected total.
+    document.querySelectorAll('.qty-input').forEach(q => q.addEventListener('input', refresh));
     // Each dropdown item sets which existing PO to add to, then submits the
     // same form the "Create PO" button uses - existing_po_id is what tells
     // the server to append instead of seeding a new PO.

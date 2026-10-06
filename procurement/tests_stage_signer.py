@@ -229,14 +229,17 @@ class POPagesRenderWithoutACreatorTests(TestCase):
         self.assertContains(resp, 'Nadia Rahman')
         self.assertNotContains(resp, 'a deleted account')
 
-    def test_a_creators_name_is_still_shown(self):
-        boss = a_super_admin('named')
-        boss.first_name, boss.last_name = 'Nadia', 'Rahman'
-        boss.save()
-        a_po('PO-CREATOR', created_by=boss)
+    def test_the_list_shows_when_each_po_was_last_updated(self):
+        """The list's Created By column became Updated At. The creator is
+        still named on the detail page (the two tests above). The list now
+        shows the time of the last save, which every PO has, so it cannot
+        fail on a missing account the way the creator column once did."""
+        a_po('PO-UPDATED')
         self.client.force_login(a_super_admin())
         resp = self.client.get(reverse('procurement:po_list'))
-        self.assertContains(resp, 'Nadia Rahman')
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, '<th>Updated At</th>')
+        self.assertNotContains(resp, '<th>Created By</th>')
 
 
 class SetSignerViewTests(TestCase):
