@@ -12209,3 +12209,34 @@ class SickLeaveAttendanceSyncTests(TestCase):
         resp = self._export_as_admin('hr:attendance_matrix_export_pdf')
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.content.startswith(b'%PDF'))
+
+    def test_backfill_migration_marks_stored_days_inside_a_leave(self):
+        # 0056 fixes rows saved before approval kept the register in step -
+        # production has no shell, so this runs on deploy.
+        import importlib
+        from django.apps import apps
+        from django.core import mail
+        backfill = importlib.import_module('hr.migrations.0056_backfill_leave_attendance')
+        inside = AttendanceRecord.objects.create(
+            employee=self.emp, date=self.day, status='late', check_in=time(9, 10), hours_worked=8)
+        outside = AttendanceRecord.objects.create(employee=self.emp, date=_date(2026, 10, 7), status='absent')
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.sick, start_date=self.day, end_date=self.day)
+        backfill.mark_leave_days(apps, None)
+        backfill.mark_leave_days(apps, None)  # idempotent
+        inside.refresh_from_db()
+        outside.refresh_from_db()
+        self.assertEqual((inside.status, inside.hours_worked, inside.check_in), ('leave', None, time(9, 10)))
+        self.assertEqual(outside.status, 'absent')
+        self.assertEqual(mail.outbox, [])
+
+    def test_late_warning_description_names_the_month_it_counts(self):
+        # Revoking an old leave can tip a past month to three lates; the
+        # message must name that month, not say "this month".
+        from notifications.models import Notification
+        user = make_user('sick_late_user')
+        self.emp.user = user
+        self.emp.save(update_fields=['user'])
+        for d in (5, 6, 7):
+            AttendanceRecord.objects.create(employee=self.emp, date=_date(2026, 8, d), status='late', check_in=time(9, 0))
+        note = Notification.objects.get(recipient=user, verb='You were late 3 times this month')
+        self.assertIn('in August 2026', note.description)
