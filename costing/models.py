@@ -122,6 +122,7 @@ class TermsTemplate(models.Model):
         related_name='terms_templates',
     )
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['category', 'name']
