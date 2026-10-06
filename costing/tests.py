@@ -2313,3 +2313,54 @@ class PCCEngineerBOMAccessTests(TestCase):
         rows = self._rows(self.sales)
         self.assertContains(rows, 'item-num-edit')
         self.assertContains(rows, 'unit-edit')
+
+
+class TermsTemplateAddFormTests(TestCase):
+    """The Add Template content box is a TinyMCE editor, which hides the real
+    <textarea>. A browser `required` attribute on that hidden field made the
+    browser silently cancel every Add submit, so it must not be rendered."""
+
+    def setUp(self):
+        from accounts.permissions import seed_default_permissions
+        sales_role, _ = Role.objects.get_or_create(name=Role.SALES_REP)
+        seed_default_permissions()
+        User.objects.create_user(
+            username='termsuser', password='testpass123', role=sales_role,
+        )
+        self.client.login(username='termsuser', password='testpass123')
+
+    def test_content_textarea_has_no_browser_required_attribute(self):
+        from costing.forms import TermsTemplateForm
+        html = str(TermsTemplateForm()['content'])
+        self.assertIn('tinymce-editor', html)
+        self.assertNotIn('required', html)
+
+    def test_content_still_required_server_side(self):
+        from costing.forms import TermsTemplateForm
+        form = TermsTemplateForm(data={
+            'name': 'Standard', 'category': 'terms_and_conditions',
+            'usage': 'sales', 'content': '',
+        })
+        self.assertFalse(form.is_valid())
+        self.assertIn('content', form.errors)
+
+    def test_add_template_creates_and_tracks_updated_at(self):
+        from costing.models import TermsTemplate
+        response = self.client.post(reverse('costing:terms_template_create'), {
+            'name': 'NET 30', 'category': 'payment_terms',
+            'usage': 'sales', 'content': '<p>30 days</p>',
+        })
+        self.assertEqual(response.status_code, 302)
+        tmpl = TermsTemplate.objects.get(name='NET 30')
+        self.assertIsNotNone(tmpl.updated_at)
+
+        first = tmpl.updated_at
+        self.client.post(reverse('costing:terms_template_edit', args=[tmpl.pk]), {
+            'name': 'NET 30', 'category': 'payment_terms',
+            'usage': 'sales', 'content': '<p>30 days net</p>',
+        })
+        tmpl.refresh_from_db()
+        self.assertGreater(tmpl.updated_at, first)
+
+        page = self.client.get(reverse('costing:terms_templates'))
+        self.assertContains(page, '<th>Updated</th>', html=True)

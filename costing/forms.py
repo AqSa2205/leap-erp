@@ -86,12 +86,25 @@ class ExchangeRateForm(forms.ModelForm):
             field.widget.attrs['class'] = 'form-control'
 
 
+class RichTextarea(forms.Textarea):
+    """Textarea that TinyMCE replaces with its own editor.
+
+    TinyMCE hides the real <textarea> and only copies the typed text back on
+    the form's submit event — but the browser runs its `required` check before
+    that event, sees an empty hidden field and silently cancels the submit.
+    So the browser attribute is dropped here; the field is still required and
+    validated server-side."""
+
+    def use_required_attribute(self, initial):
+        return False
+
+
 class TermsTemplateForm(forms.ModelForm):
     class Meta:
         model = TermsTemplate
         fields = ['name', 'category', 'usage', 'content']
         widgets = {
-            'content': forms.Textarea(attrs={'rows': 5}),
+            'content': RichTextarea(attrs={'rows': 5}),
         }
 
     def __init__(self, *args, **kwargs):

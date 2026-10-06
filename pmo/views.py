@@ -22,11 +22,16 @@ from dashboard.views import projects_visible_to
 from projects.models import Project
 
 from .forms import (FaultLossEntryForm, ManpowerDetailsForm, NewEmployeeManpowerForm,
-                     ProjectIssueForm)
+                     ProjectIssueForm,
+                     GradeStructureLineFormSet, DesignationManpowerLineFormSet,
+                     EmploymentCostAssumptionsForm, FirstYearMaintenanceLineFormSet,
+                     ManpowerCostingHeaderForm, ProjectPOBasicsForm)
 from .models import (ONE, ZERO, CommunicationMatrix, FaultLossEntry, ManpowerResource,
                       MilestoneProgressEntry, ProjectIssue, ProjectMilestone,
                       ResponsibilityMatrix, default_communication_columns,
-                      default_responsibility_columns, sanitize_grid)
+                      default_responsibility_columns, sanitize_grid,
+                      GradeStructureLine, DesignationManpowerLine, EmploymentCostAssumptions,
+                      FirstYearMaintenanceLine, ManpowerCostingHeader)
 from .progress import (board_row, board_rows, leaves, milestone_checklist,
                        project_completion, validate_weightages)
 from .workbook_import import (deserialise_activities, plan_workbook,
@@ -97,6 +102,23 @@ def update_access_required(message):
             return view_func(request, *args, **kwargs)
         return _wrapped
     return _decorator
+
+
+def can_manage_manpower_costing(user):
+    """Who may add/edit/remove Project Manpower Costing rows.
+
+    Deliberately narrower than can_update_progress: Site Manager has reason
+    to move a delivery progress figure, but redrafting a bid-stage staffing
+    cost estimate is the Project Manager's call, plus the usual
+    super_admin/admin override.
+    """
+    if not getattr(user, 'is_authenticated', False):
+        return False
+    return bool(
+        user.is_super_admin_user
+        or user.is_admin_user
+        or user.is_project_manager_user
+    )
 
 
 def _visible_projects(user):
@@ -1245,3 +1267,637 @@ def issue_log_export_all_zip(request):
     response = HttpResponse(buf.getvalue(), content_type='application/zip')
     response['Content-Disposition'] = 'attachment; filename="Issue_Log_All_Months.zip"'
     return response
+
+
+# ── Project Manpower Costing ─────────────────────────────────────────────────
+#
+# A second, PM-facing view onto the same projects `board`/`pm_dashboard_index`
+# cover — same audience (can_see_delivery) for viewing, but a narrower
+# audience (can_manage_manpower_costing) for editing, since this is one
+# person's bid-stage estimate, not a delivery figure the whole department
+# reports against.
+
+def _mpc_header_for(project):
+    """The header row, built in memory when none exists yet — a GET must
+    never write one, matching the ResponsibilityMatrix/ManpowerResource rule
+    elsewhere in this file."""
+    return getattr(project, 'manpower_costing_header', None) or ManpowerCostingHeader(project=project)
+
+
+@login_required
+@delivery_required
+def mpc_index(request):
+    """Portfolio landing page for Project Manpower Costing: the same project
+    list pm_dashboard_index covers, without its charts — a plain searchable
+    table with each project's headcount and bid-value chips."""
+    projects_qs = (
+        _visible_projects(request.user)
+        .prefetch_related('grade_structure_lines', 'designation_manpower_lines',
+                           'first_year_maintenance_lines')
+        .select_related('manpower_costing_header')
+    )
+
+    q = (request.GET.get('q') or '').strip()
+    filtered = projects_qs
+    if q:
+        filtered = filtered.filter(
+            Q(project_name__icontains=q)
+            | Q(serial_number__icontains=q)
+            | Q(customer__icontains=q)
+            | Q(po_number__icontains=q)
+        )
+    filtered = filtered.order_by('-id')
+
+    rows = []
+    for project in filtered:
+        header = _mpc_header_for(project)
+        # Summed straight from the prefetched designation rows rather than
+        # via GradeStructureLine.headcount, which would issue one query per
+        # grade line per project on this portfolio-wide page — fine on a
+        # single project's own page, not here.
+        headcount = sum((d.headcount for d in project.designation_manpower_lines.all()), 0)
+        rows.append({
+            'project': project,
+            'headcount': headcount,
+            'total_annual_cost': header.total_annual_cost,
+            'proposed_contract_value': header.proposed_contract_value,
+        })
+
+    return render(request, 'pmo/mpc_index.html', {
+        'rows': rows,
+        'q': q,
+        'total_projects': projects_qs.count(),
+        # Proposed Contract Value sits right next to Total Annual Cost on
+        # this page — showing both to a viewer who can't edit the bid would
+        # hand them the margin by subtraction, the same concern the review
+        # raised for the project overview and First Year Maintenance pages.
+        'can_edit': can_manage_manpower_costing(request.user),
+    })
+
+
+@login_required
+@delivery_required
+def mpc_project_overview(request, pk):
+    """One project's Manpower Costing snapshot: the 3 bid-value stat tiles,
+    then cards linking into First Year Maintenance / Grade Structure /
+    Engineer Rate Table / Manpower Consolidated."""
+    project = _pm_visible_project_or_404(request, pk)
+    header = _mpc_header_for(project)
+    return render(request, 'pmo/mpc_project_overview.html', {
+        'project': project,
+        'header': header,
+        'can_edit': can_manage_manpower_costing(request.user),
+        'grade_structure_row_count': project.grade_structure_lines.count(),
+        'first_year_maintenance_row_count': project.first_year_maintenance_lines.count(),
+    })
+
+
+def _fym_sections(formset):
+    """Group the (already-built) formset's forms by section, in the same
+    order/shape the read-only view used to build by hand — one table per
+    section, each carrying its own forms (for rendering inputs) and
+    instances (for computing the subtotal). The subtotal is a plain sum of
+    each line's own annual_contribution — section membership no longer
+    decides how a line annualises, only how it's grouped on the page."""
+    sections = []
+    for section, label in FirstYearMaintenanceLine.SECTION_CHOICES:
+        section_forms = [f for f in formset.forms if f.instance.section == section]
+        section_lines = [f.instance for f in section_forms]
+        subtotal = sum((line.annual_contribution for line in section_lines), Decimal('0'))
+        sections.append({
+            'code': section, 'label': label, 'forms': section_forms, 'subtotal': subtotal,
+        })
+    return sections
+
+
+@login_required
+@delivery_required
+def mpc_first_year_detail(request, pk):
+    """First Year Maintenance: one page, always showing the real data.
+    A PM edits every table directly here (project header fields, all 4
+    section tables) and saves once — there is no separate edit page to
+    navigate to and back from, which was also how a stale back-navigation
+    could show pre-save data instead of what was just added."""
+    project = _pm_visible_project_or_404(request, pk)
+    header = _mpc_header_for(project)
+    can_edit = can_manage_manpower_costing(request.user)
+
+    if request.method == 'POST':
+        if not can_edit:
+            raise PermissionDenied('Only the Project Manager can edit the First Year Maintenance sheet.')
+        header_form = ManpowerCostingHeaderForm(request.POST, instance=header)
+        po_form = ProjectPOBasicsForm(request.POST, instance=project)
+        formset = FirstYearMaintenanceLineFormSet(request.POST, instance=project)
+        if header_form.is_valid() and po_form.is_valid() and formset.is_valid():
+            with transaction.atomic():
+                po_form.save()
+                header = header_form.save(commit=False)
+                header.project = project
+                header.updated_by = request.user
+                header.save()
+                formset.save()
+            messages.success(request, 'First Year Maintenance saved.')
+            return redirect('pmo:mpc_first_year_detail', pk=project.pk)
+    else:
+        header_form = ManpowerCostingHeaderForm(instance=header)
+        po_form = ProjectPOBasicsForm(instance=project)
+        formset = FirstYearMaintenanceLineFormSet(instance=project)
+
+    response = render(request, 'pmo/mpc_first_year_detail.html', {
+        'project': project,
+        'header': header,
+        'header_form': header_form,
+        'po_form': po_form,
+        'formset': formset,
+        'sections': _fym_sections(formset),
+        'can_edit': can_edit,
+    })
+    # This page is a live editing surface, not a static report — a stale
+    # cached/back-navigated copy would show pre-save rows as if they were
+    # current, which is exactly the confusing bug a no-store header rules out.
+    response['Cache-Control'] = 'no-store'
+    return response
+
+
+@login_required
+@delivery_required
+def mpc_first_year_export_excel(request, pk):
+    """First Year Maintenance as an .xlsx replicating the source workbook's
+    own look, verified cell-by-cell against the uploaded template: Leap logo
+    top-left, a plain white sheet (no banner fills), Cambria font throughout,
+    gray column-header labels, bold section/TOTAL titles, and the bid-value
+    block's red labels + bold green figures."""
+    import os
+
+    import openpyxl
+    from django.conf import settings
+    from django.contrib.staticfiles import finders
+    from openpyxl.drawing.image import Image as XLImage
+    from openpyxl.styles import Alignment, Border, Font, Side
+
+    project = _pm_visible_project_or_404(request, pk)
+    header = _mpc_header_for(project)
+    formset = FirstYearMaintenanceLineFormSet(instance=project)
+    sections = _fym_sections(formset)
+    # Same narrowing as the HTML page's KPI tiles: a viewer who can't edit
+    # the bid (e.g. Site Manager) doesn't get Proposed Contract Value/
+    # Profit/VAT-inclusive value here either — an exported file is a more
+    # durable leak than a page element, so it needs the same gate.
+    can_see_bid_value = can_manage_manpower_costing(request.user)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'First Year Maintenance'
+    for col, width in zip(
+        'ABCDEFGHIJKLMNOP',
+        [9, 40, 9, 40, 18, 15, 15, 17, 22, 24, 3, 3, 18, 18, 20, 18],
+    ):
+        ws.column_dimensions[col].width = width
+
+    FONT = 'Cambria'
+    # openpyxl silently treats a 6-digit hex colour as ARGB with a 00 (fully
+    # transparent) alpha channel, not FF — every colour below MUST be the
+    # full 8-digit form or it renders as invisible text.
+    GRAY = 'FF808080'
+    RED = 'FFFF0000'
+    GREEN = 'FF00B050'
+    money = '#,##0.00'
+    bid_money = f'[${header.currency}]\\ #,##0.00'
+    CENTER = Alignment(horizontal='center', vertical='center')
+    UNDERLINE = Border(top=Side(style='thin'), bottom=Side(style='double'))
+    TOTAL_BORDER = Border(top=Side(style='thin'), bottom=Side(style='medium'))
+
+    def cell(row, col, value=None, size=10, bold=False, color=None, fmt='General',
+             align=None, border=None):
+        c = ws.cell(row=row, column=col, value=value)
+        c.font = Font(name=FONT, size=size, bold=bold, color=color)
+        c.number_format = fmt
+        if align:
+            c.alignment = align
+        if border:
+            c.border = border
+        return c
+
+    def underline_row(row, last_col=10):
+        for col in range(1, last_col + 1):
+            ws.cell(row=row, column=col).border = UNDERLINE
+
+    def total_border_row(row, last_col=10):
+        for col in range(1, last_col + 1):
+            ws.cell(row=row, column=col).border = TOTAL_BORDER
+
+    # ── Logo (top-left, matching the source file's own anchor) ──
+    logo_path = finders.find('images/leap_logo.jpg')
+    if not logo_path:
+        candidate = os.path.join(str(settings.BASE_DIR), 'static', 'images', 'leap_logo.jpg')
+        if os.path.exists(candidate):
+            logo_path = candidate
+    if logo_path and os.path.exists(logo_path):
+        img = XLImage(logo_path)
+        img.width, img.height = 175, 60
+        ws.add_image(img, 'A1')
+
+    # ── Project / bid details (mirrors the source's A/D + G/H two-column layout) ──
+    cell(6, 1, 'Client'); cell(6, 4, project.customer or '—')
+    cell(6, 7, 'LNA Proposal'); cell(6, 8, project.proposal_reference or '—', color=RED)
+    cell(7, 1, 'Project Name'); cell(7, 4, project.project_name)
+    cell(7, 7, 'PO No.'); cell(7, 8, project.po_number or '—')
+    cell(8, 7, 'PO Date')
+    cell(8, 8, project.estimated_po_date.strftime('%d %B %Y') if project.estimated_po_date else 'TBA')
+    cell(9, 7, 'PO Type'); cell(9, 8, header.po_type or 'TBA', color=RED)
+    cell(10, 7, 'PO Value')
+    cell(10, 8, float(header.po_value) if header.po_value else 'TBA',
+         fmt=money if header.po_value else 'General')
+    cell(11, 7, 'Currency'); cell(11, 8, header.currency)
+    cell(12, 7, 'VAT %'); cell(12, 8, float(header.vat_rate) / 100, fmt='0.0%')
+
+    r = 14
+
+    def section_table(row, section):
+        cell(row, 1, section['label'], size=10, bold=True)
+        underline_row(row)
+        row += 1
+        for col, text in zip('FGHIJ', ['Nature of Expense', 'Amount', 'Qty', 'Annual Contribution', 'remarks']):
+            cell(row, ord(col) - 64, text, size=8, color=GRAY, align=CENTER)
+        underline_row(row)
+        row += 1
+        for i, form in enumerate(section['forms'], start=1):
+            line = form.instance
+            cell(row, 1, i, align=CENTER)
+            cell(row, 2, line.description)
+            cell(row, 6, line.get_nature_of_expense_display(), size=8, align=CENTER)
+            cell(row, 7, float(line.amount), fmt=money)
+            cell(row, 8, float(line.qty), align=CENTER)
+            cell(row, 9, float(line.annual_contribution), fmt=money)
+            cell(row, 10, line.remarks)
+            row += 1
+        cell(row, 1, 'TOTAL', size=11, bold=True, align=CENTER)
+        cell(row, 9, float(section['subtotal']), size=10, bold=True, fmt=money)
+        total_border_row(row)
+        return row + 2
+
+    for section in sections:
+        r = section_table(r, section)
+
+    # ── TOTAL COSTS (Annual) ──
+    cell(r, 1, 'TOTAL COSTS (Annual)', size=12, bold=True)
+    underline_row(r)
+    r += 1
+    for col, text in zip('FI', ['Section', 'Annual Total']):
+        cell(r, ord(col) - 64, text, size=8, color=GRAY, align=CENTER)
+    underline_row(r)
+    r += 1
+    for row_data in header.section_annual_breakdown():
+        cell(r, 1, row_data['code'], align=CENTER)
+        cell(r, 2, f"Total of {row_data['code']} — {row_data['label']}")
+        cell(r, 9, float(row_data['annual_total']), fmt=money)
+        r += 1
+    cell(r, 1, 'GRAND TOTAL', size=11, bold=True, align=CENTER)
+    cell(r, 9, float(header.total_annual_cost), size=10, bold=True, fmt=money)
+    total_border_row(r)
+    r += 2
+
+    # ── Annual / Monthly / Daily cost ──
+    cell(r, 3, 'ANNUAL COST'); cell(r, 9, float(header.total_annual_cost), fmt=money); r += 1
+    cell(r, 3, 'MONTHLY COST'); cell(r, 9, float(header.total_monthly_cost), fmt=money); r += 1
+    cell(r, 3, 'DAILY COST'); cell(r, 9, float(header.total_daily_cost), fmt=money); r += 2
+
+    # ── Bid value (red labels, bold green figures — matches the source exactly) ──
+    if can_see_bid_value:
+        cell(r, 5, 'Proposed Contract Value', size=16, color=RED)
+        cell(r, 9, float(header.proposed_contract_value), size=14, bold=True, color=GREEN, fmt=bid_money)
+        r += 1
+        for col, text in zip('MNOP', ['Daily', 'Monthly', 'Yearly', 'Qtrly']):
+            cell(r, ord(col) - 64, text)
+        r += 1
+        contract_value = header.proposed_contract_value
+        cell(r, 13, float(contract_value / 12 / 26), fmt=bid_money)
+        cell(r, 14, float(contract_value / 12), fmt=bid_money)
+        cell(r, 15, float(contract_value), fmt=bid_money)
+        cell(r, 16, float(contract_value / 4), fmt=bid_money)
+        r += 1
+        cell(r, 5, 'Profit', size=16, color=RED)
+        cell(r, 9, float(header.profit), size=14, bold=True, color=GREEN, fmt=bid_money)
+        r += 2
+        cell(r, 1, 'Applied VAT', size=16, color=RED)
+        cell(r, 4, float(header.vat_rate) / 100, size=12, bold=True, color=GREEN, fmt='0.0%')
+        cell(r, 5, 'Proposed Contract Value including VAT', size=16, color=RED)
+        cell(r, 9, float(header.proposed_contract_value_incl_vat), size=14, bold=True, color=GREEN, fmt=bid_money)
+
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    filename = f'First Year Maintenance - {project.project_name}.xlsx'.replace('/', '-')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    # A browser or intermediate cache serving a stale copy of this download
+    # would look identical to the bug being unfixed — rule that out outright.
+    response['Cache-Control'] = 'no-store'
+    wb.save(response)
+    return response
+
+
+def _attach_designations_cache(project, grade_lines):
+    """One query for every designation on the project, grouped by grade
+    code and stashed on each grade line — every headcount/monthly_cost/
+    annual_cost access on these specific instances (the template's, and
+    _gs_categories' own) then reuses it instead of re-querying per line."""
+    by_code = {}
+    for d in project.designation_manpower_lines.all():
+        by_code.setdefault(d.grade_code, []).append(d)
+    for line in grade_lines:
+        line._designations_cache = by_code.get(line.grade_code, [])
+
+
+def _gs_categories(project, grade_lines=None):
+    if grade_lines is None:
+        grade_lines = list(project.grade_structure_lines.all())
+        _attach_designations_cache(project, grade_lines)
+    categories = []
+    for code, label in GradeStructureLine.CATEGORY_CHOICES:
+        cat_lines = [line for line in grade_lines if line.category == code]
+        categories.append({
+            'code': code, 'label': label, 'lines': cat_lines,
+            'headcount': sum((line.headcount for line in cat_lines), 0),
+            'monthly_cost': sum((line.monthly_cost for line in cat_lines), Decimal('0')),
+            'annual_cost': sum((line.annual_cost for line in cat_lines), Decimal('0')),
+        })
+    return categories
+
+
+def _sync_grades_from_designations(project):
+    """A Designation-wise Manpower row entered under a grade code that has
+    no Individual Grade row yet would otherwise roll up nowhere — nothing
+    to SUMIF into, same as the source workbook's own roster/grade split.
+    Auto-create a minimal grade row for any such code so Individual Grades
+    (and, through it, Summary by Category) picks it up immediately instead
+    of silently dropping it; the PM can fill in criteria/reference salary
+    afterwards if they want to."""
+    existing_codes = set(project.grade_structure_lines.values_list('grade_code', flat=True))
+    seen = set()
+    for d in project.designation_manpower_lines.all():
+        if not d.grade_code or d.grade_code in existing_codes or d.grade_code in seen:
+            continue
+        seen.add(d.grade_code)
+        GradeStructureLine.objects.create(
+            project=project, category=d.category, grade_code=d.grade_code,
+            discipline=d.discipline, typical_designation=d.designation,
+        )
+
+
+def _eca_for(project):
+    """The employment-cost-assumptions row, built in memory when none
+    exists yet — same 'a GET must never write one' rule as
+    _mpc_header_for."""
+    return (getattr(project, 'employment_cost_assumptions', None)
+            or EmploymentCostAssumptions(project=project))
+
+
+@login_required
+@delivery_required
+def mpc_grade_structure_detail(request, pk):
+    """Grade Structure: one page, like First Year Maintenance — Individual
+    Grades and Designation-wise Manpower are both editable directly here,
+    with no separate edit page to navigate to and back from."""
+    project = _pm_visible_project_or_404(request, pk)
+    can_edit = can_manage_manpower_costing(request.user)
+    eca = _eca_for(project)
+
+    if request.method == 'POST':
+        if not can_edit:
+            raise PermissionDenied('Only the Project Manager can edit the Grade Structure.')
+        grade_formset = GradeStructureLineFormSet(request.POST, instance=project, prefix='grades')
+        designation_formset = DesignationManpowerLineFormSet(
+            request.POST, instance=project, prefix='designations')
+        eca_form = EmploymentCostAssumptionsForm(request.POST, instance=eca)
+        if grade_formset.is_valid() and designation_formset.is_valid() and eca_form.is_valid():
+            with transaction.atomic():
+                grade_formset.save()
+                designation_formset.save()
+                _sync_grades_from_designations(project)
+                eca = eca_form.save(commit=False)
+                eca.project = project
+                eca.updated_by = request.user
+                eca.save()
+            messages.success(request, 'Grade Structure saved.')
+            return redirect('pmo:mpc_grade_structure_detail', pk=project.pk)
+    else:
+        grade_formset = GradeStructureLineFormSet(instance=project, prefix='grades')
+        designation_formset = DesignationManpowerLineFormSet(instance=project, prefix='designations')
+        eca_form = EmploymentCostAssumptionsForm(instance=eca)
+
+    grade_lines = [f.instance for f in grade_formset.forms]
+    _attach_designations_cache(project, grade_lines)
+    categories = _gs_categories(project, grade_lines=grade_lines)
+    total_headcount = sum((c['headcount'] for c in categories), 0)
+    for c in categories:
+        c['pct_of_manpower'] = (c['headcount'] * 100 / total_headcount) if total_headcount else 0
+
+    # Every designation row's Additional Cost / breakdown reads
+    # _assumptions_cache instead of looking its own project's
+    # EmploymentCostAssumptions up — one query for the whole table instead
+    # of one per row, same reasoning as _attach_designations_cache above.
+    for f in designation_formset.forms:
+        f.instance._assumptions_cache = eca
+
+    response = render(request, 'pmo/mpc_grade_structure_detail.html', {
+        'project': project,
+        'category_choices': GradeStructureLine.CATEGORY_CHOICES,
+        'categories': categories,
+        'total_headcount': total_headcount,
+        'total_monthly_cost': sum((c['monthly_cost'] for c in categories), Decimal('0')),
+        'total_annual_cost': sum((c['annual_cost'] for c in categories), Decimal('0')),
+        'total_fully_loaded_monthly_cost': sum((line.fully_loaded_monthly_cost for line in grade_lines), Decimal('0')),
+        'total_fully_loaded_annual_cost': sum((line.fully_loaded_annual_cost for line in grade_lines), Decimal('0')),
+        'grade_formset': grade_formset,
+        'designation_formset': designation_formset,
+        'eca_form': eca_form,
+        'discipline_suggestions': GradeStructureLine.DISCIPLINE_SUGGESTIONS,
+        'can_edit': can_edit,
+    })
+    response['Cache-Control'] = 'no-store'
+    return response
+
+
+@login_required
+@delivery_required
+def mpc_grade_structure_export_excel(request, pk):
+    """Grade Structure as an .xlsx replicating the source workbook's own
+    "Grade Structure" sheet: dark-blue table headers with white bold text,
+    light-blue TOTAL rows, Calibri throughout (that sheet uses Calibri, not
+    the Cambria of First Year Maintenance — verified per-sheet, not assumed)."""
+    import openpyxl
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+    project = _pm_visible_project_or_404(request, pk)
+    categories = _gs_categories(project)
+    total_headcount = sum((c['headcount'] for c in categories), 0)
+    total_monthly = sum((c['monthly_cost'] for c in categories), Decimal('0'))
+    total_annual = sum((c['annual_cost'] for c in categories), Decimal('0'))
+    total_fully_loaded_monthly = sum(
+        (line.fully_loaded_monthly_cost for c in categories for line in c['lines']), Decimal('0'))
+    total_fully_loaded_annual = total_fully_loaded_monthly * 12
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Grade Structure'
+    for col, width in zip('ABCDEFGHIJKLM', [40, 35, 18, 35, 55, 14, 20, 20, 20, 18, 18, 20, 20]):
+        ws.column_dimensions[col].width = width
+
+    FONT = 'Calibri'
+    NAVY = 'FF1F4E79'
+    WHITE = 'FFFFFFFF'
+    LIGHT_BLUE = 'FFDCE6F1'
+    INPUT_BLUE = 'FF0000FF'
+    thin = Side(style='thin')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    number_fmt = '#,##0;\\(#,##0\\);\\-'
+    CENTER = Alignment(horizontal='center')
+
+    def cell(row, col, value=None, size=11, bold=False, color=None, fmt='General', align=None):
+        c = ws.cell(row=row, column=col, value=value)
+        c.font = Font(name=FONT, size=size, bold=bold, color=color)
+        c.number_format = fmt
+        c.border = border
+        if align:
+            c.alignment = align
+        return c
+
+    def header_row(row, headers):
+        for col, text in enumerate(headers, start=1):
+            c = cell(row, col, text, bold=True, color=WHITE, align=CENTER)
+            c.fill = PatternFill('solid', fgColor=NAVY)
+
+    def total_row(row, values):
+        for col, value in enumerate(values, start=1):
+            c = cell(row, col, value, bold=True,
+                     fmt=number_fmt if isinstance(value, (int, float)) else 'General')
+            c.fill = PatternFill('solid', fgColor=LIGHT_BLUE)
+
+    ws.cell(row=1, column=1, value='MANPOWER GRADE STRUCTURE').font = Font(
+        name=FONT, size=14, bold=True, color=NAVY)
+
+    ws.cell(row=3, column=1, value='GRADE CATEGORIES').font = Font(
+        name=FONT, size=12, bold=True, color=NAVY)
+    header_row(4, ['Code', 'Category'])
+    r = 5
+    for code, label in GradeStructureLine.CATEGORY_CHOICES:
+        cell(r, 1, code, align=CENTER)
+        cell(r, 2, label)
+        r += 1
+
+    r += 1
+    ws.cell(row=r, column=1, value='INDIVIDUAL GRADES').font = Font(
+        name=FONT, size=12, bold=True, color=NAVY)
+    r += 1
+    header_row(r, ['Category', 'Grade', 'Discipline / Specialization', 'Typical Designation',
+                    'Criteria / Eligibility', 'Manpower (No.)', 'Indicative Monthly Salary (SAR)',
+                    'Monthly Cost (SAR)', 'Annual Cost (SAR)', 'Fully Loaded Monthly Cost (SAR)',
+                    'Fully Loaded Annual Cost (SAR)'])
+    r += 1
+    for category in categories:
+        for line in category['lines']:
+            cell(r, 1, category['label'])
+            cell(r, 2, line.grade_code, align=CENTER)
+            cell(r, 3, line.discipline, align=CENTER)
+            cell(r, 4, line.typical_designation, align=CENTER)
+            cell(r, 5, line.criteria)
+            cell(r, 6, line.headcount, align=CENTER)
+            cell(r, 7, float(line.indicative_monthly_salary), color=INPUT_BLUE, fmt=number_fmt)
+            cell(r, 8, float(line.monthly_cost), fmt=number_fmt)
+            cell(r, 9, float(line.annual_cost), fmt=number_fmt)
+            cell(r, 10, float(line.fully_loaded_monthly_cost), fmt=number_fmt)
+            cell(r, 11, float(line.fully_loaded_annual_cost), fmt=number_fmt)
+            r += 1
+    total_row(r, ['', '', '', '', 'TOTAL', total_headcount, '', float(total_monthly), float(total_annual),
+                   float(total_fully_loaded_monthly), float(total_fully_loaded_annual)])
+    r += 2
+
+    ws.cell(row=r, column=1, value='SUMMARY BY CATEGORY').font = Font(
+        name=FONT, size=12, bold=True, color=NAVY)
+    r += 1
+    header_row(r, ['Category', 'Code', 'Manpower (No.)', 'Monthly Cost (SAR)',
+                    'Annual Cost (SAR)', '% of Manpower'])
+    r += 1
+    for category in categories:
+        pct = (category['headcount'] / total_headcount) if total_headcount else 0
+        cell(r, 1, category['label'])
+        cell(r, 2, category['code'], align=CENTER)
+        cell(r, 3, category['headcount'], align=CENTER)
+        cell(r, 4, float(category['monthly_cost']), fmt=number_fmt)
+        cell(r, 5, float(category['annual_cost']), fmt=number_fmt)
+        cell(r, 6, pct, fmt='0.0%')
+        r += 1
+    total_pct = 1 if total_headcount else 0
+    total_row(r, ['TOTAL', '', total_headcount, float(total_monthly), float(total_annual), total_pct])
+    ws.cell(row=r, column=6).number_format = '0.0%'
+    r += 2
+
+    designations = list(project.designation_manpower_lines.all())
+    eca = _eca_for(project)
+    for d in designations:
+        d._assumptions_cache = eca
+    nationality_labels = dict(DesignationManpowerLine.NATIONALITY_CHOICES)
+    ws.cell(row=r, column=1, value='DESIGNATION-WISE MANPOWER').font = Font(
+        name=FONT, size=12, bold=True, color=NAVY)
+    r += 1
+    header_row(r, ['Designation', 'Category', 'Grade', 'Discipline / Specialization', 'Nationality',
+                    'Manpower (No.)', 'Monthly Salary (SAR)', 'Additional Cost / Head (SAR)',
+                    'Fully Loaded / Head (SAR)', 'Monthly Cost (SAR)', 'Annual Cost (SAR)',
+                    'Fully Loaded Monthly Cost (SAR)', 'Fully Loaded Annual Cost (SAR)'])
+    r += 1
+    category_labels = dict(GradeStructureLine.CATEGORY_CHOICES)
+    for d in designations:
+        cell(r, 1, d.designation)
+        cell(r, 2, category_labels.get(d.category, d.category), align=CENTER)
+        cell(r, 3, d.grade_code, align=CENTER)
+        cell(r, 4, d.discipline, align=CENTER)
+        cell(r, 5, nationality_labels.get(d.nationality, d.nationality), align=CENTER)
+        cell(r, 6, d.headcount, align=CENTER)
+        cell(r, 7, float(d.monthly_salary), color=INPUT_BLUE, fmt=number_fmt)
+        cell(r, 8, float(d.additional_cost_monthly), fmt=number_fmt)
+        cell(r, 9, float(d.fully_loaded_monthly_cost), fmt=number_fmt)
+        cell(r, 10, float(d.monthly_cost), fmt=number_fmt)
+        cell(r, 11, float(d.annual_cost), fmt=number_fmt)
+        cell(r, 12, float(d.fully_loaded_monthly_cost_total), fmt=number_fmt)
+        cell(r, 13, float(d.fully_loaded_annual_cost_total), fmt=number_fmt)
+        r += 1
+    designation_headcount = sum((d.headcount for d in designations), 0)
+    designation_monthly = sum((d.monthly_cost for d in designations), Decimal('0'))
+    designation_annual = sum((d.annual_cost for d in designations), Decimal('0'))
+    designation_fully_loaded_monthly = sum((d.fully_loaded_monthly_cost_total for d in designations), Decimal('0'))
+    designation_fully_loaded_annual = sum((d.fully_loaded_annual_cost_total for d in designations), Decimal('0'))
+    total_row(r, ['TOTAL', '', '', '', '', designation_headcount, '', '', '',
+                   float(designation_monthly), float(designation_annual),
+                   float(designation_fully_loaded_monthly), float(designation_fully_loaded_annual)])
+
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    filename = f'Grade Structure - {project.project_name}.xlsx'.replace('/', '-')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    response['Cache-Control'] = 'no-store'
+    wb.save(response)
+    return response
+
+
+@login_required
+@delivery_required
+def mpc_engineer_rate_table(request, pk):
+    project = _pm_visible_project_or_404(request, pk)
+    return render(request, 'pmo/mpc_placeholder.html', {
+        'project': project,
+        'title': 'Engineer Rate Table',
+        'description': 'Per-discipline rate build-up — coming in a later phase.',
+        'icon': 'bi-calculator',
+    })
+
+
+@login_required
+@delivery_required
+def mpc_manpower_consolidated(request, pk):
+    project = _pm_visible_project_or_404(request, pk)
+    return render(request, 'pmo/mpc_placeholder.html', {
+        'project': project,
+        'title': 'Manpower Consolidated',
+        'description': 'A single live-linked view across Grade Structure, Rate Tables and '
+                        'First Year Maintenance — coming in a later phase.',
+        'icon': 'bi-diagram-3',
+    })
