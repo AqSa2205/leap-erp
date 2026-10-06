@@ -39,6 +39,7 @@
                                 <th>Used in</th>
                                 <th>Content Preview</th>
                                 <th>Created</th>
+                                <th>Updated</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
@@ -54,6 +55,7 @@
                                 </td>
                                 <td class="text-muted" style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ tmpl.content|terms_preview:20 }}</td>
                                 <td>{{ tmpl.created_at|date:"d M Y" }}</td>
+                                <td>{{ tmpl.updated_at|date:"d M Y" }}</td>
                                 <td>
                                     <a href="{% url 'costing:terms_template_edit' tmpl.pk %}" class="btn btn-sm btn-outline-secondary">
                                         <i class="bi bi-pencil"></i>
@@ -65,7 +67,7 @@
                             </tr>
                             {% empty %}
                             <tr>
-                                <td colspan="6" class="text-center py-3 text-muted">No templates defined yet. Create one to get started.</td>
+                                <td colspan="7" class="text-center py-3 text-muted">No templates defined yet. Create one to get started.</td>
                             </tr>
                             {% endfor %}
                         </tbody>
