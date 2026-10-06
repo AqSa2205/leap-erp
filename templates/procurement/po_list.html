@@ -65,7 +65,7 @@
                             <th>Total (SAR)</th>
                             <th>Status</th>
                             <th>Approval</th>
-                            <th>Created By</th>
+                            <th>Updated At</th>
                             <th width="120">Actions</th>
                         </tr>
                     </thead>
@@ -116,7 +116,7 @@
                               {% endif %}
                               {% endwith %}
                             </td>
-                            <td>{% if po.created_by %}{{ po.created_by.get_full_name|default:po.created_by.username }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                            <td class="small text-nowrap">{{ po.updated_at|date:"d M Y, H:i" }}</td>
                             <td>
                                 <div class="btn-group btn-group-sm">
                                     <a href="{% url 'procurement:po_detail' po.pk %}" class="btn btn-outline-danger" title="View">
