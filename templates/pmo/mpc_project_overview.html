@@ -1,0 +1,119 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}{{ project.project_name }} - Project Manpower Costing{% endblock %}
+{% block page_title %}{{ project.project_name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .kpi-card { border: none; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+    .kpi-card .kpi-icon { width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.3rem; }
+    .kpi-card .kpi-value { font-size: 1.5rem; font-weight: 700; line-height: 1; }
+    .kpi-card .kpi-label { font-size: 0.72rem; color: #6c757d; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+    .pmd-nav-card { border: none; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); text-decoration: none; color: inherit; transition: transform 0.15s, box-shadow 0.15s; display: block; }
+    .pmd-nav-card:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); color: inherit; }
+    .pmd-nav-card .nav-icon { width: 52px; height: 52px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div>
+        <a href="{% url 'pmo:mpc_index' %}" class="text-muted small"><i class="bi bi-arrow-left"></i> Back to Project Manpower Costing</a>
+        <div class="text-muted small">{{ project.serial_number }} &middot; {{ project.customer|default:"—" }}</div>
+    </div>
+    <div>
+        <a href="{% url 'pmo:pm_project_overview' project.pk %}" class="btn btn-outline-dark btn-sm">
+            <i class="bi bi-file-earmark-text me-1"></i> PM Dashboard
+        </a>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    {% if can_edit %}
+    <div class="col-lg-4 col-md-6">
+        <div class="card kpi-card h-100"><div class="card-body">
+            <div class="d-flex align-items-center gap-3">
+                <div class="kpi-icon bg-success bg-opacity-10 text-success"><i class="bi bi-cash-stack"></i></div>
+                <div>
+                    <div class="kpi-value text-dark">{{ header.currency }} {{ header.proposed_contract_value|floatformat:0|intcomma }}</div>
+                    <div class="kpi-label">Proposed Contract Value</div>
+                </div>
+            </div>
+        </div></div>
+    </div>
+    <div class="col-lg-4 col-md-6">
+        <div class="card kpi-card h-100"><div class="card-body">
+            <div class="d-flex align-items-center gap-3">
+                <div class="kpi-icon bg-primary bg-opacity-10 text-primary"><i class="bi bi-graph-up-arrow"></i></div>
+                <div>
+                    <div class="kpi-value text-dark">{{ header.currency }} {{ header.profit|floatformat:0|intcomma }}</div>
+                    <div class="kpi-label">Profit</div>
+                </div>
+            </div>
+        </div></div>
+    </div>
+    <div class="col-lg-4 col-md-6">
+        <div class="card kpi-card h-100"><div class="card-body">
+            <div class="d-flex align-items-center gap-3">
+                <div class="kpi-icon bg-info bg-opacity-10 text-info"><i class="bi bi-receipt"></i></div>
+                <div>
+                    <div class="kpi-value text-dark">{{ header.currency }} {{ header.proposed_contract_value_incl_vat|floatformat:0|intcomma }}</div>
+                    <div class="kpi-label">Proposed Contract Value incl. VAT</div>
+                </div>
+            </div>
+        </div></div>
+    </div>
+    {% else %}
+    <div class="col-lg-4 col-md-6">
+        <div class="card kpi-card h-100"><div class="card-body">
+            <div class="d-flex align-items-center gap-3">
+                <div class="kpi-icon bg-dark bg-opacity-10 text-dark"><i class="bi bi-stack"></i></div>
+                <div>
+                    <div class="kpi-value text-dark">{{ header.currency }} {{ header.total_annual_cost|floatformat:0|intcomma }}</div>
+                    <div class="kpi-label">Total Annual Cost</div>
+                </div>
+            </div>
+        </div></div>
+    </div>
+    {% endif %}
+</div>
+
+{% if not header.pk %}
+<div class="alert alert-light border small mb-4">
+    No First Year Maintenance data yet — the figures above are all zero until costs are entered.
+    {% if can_edit %}<a href="{% url 'pmo:mpc_first_year_detail' project.pk %}">Start now</a>.{% endif %}
+</div>
+{% endif %}
+
+<div class="row g-3">
+    <div class="col-lg-3 col-md-6">
+        <a href="{% url 'pmo:mpc_first_year_detail' project.pk %}" class="card pmd-nav-card h-100"><div class="card-body">
+            <div class="nav-icon bg-danger bg-opacity-10 text-danger mb-3"><i class="bi bi-calendar-check"></i></div>
+            <h6 class="fw-bold mb-1">First Year Maintenance</h6>
+            <div class="text-muted small">{{ first_year_maintenance_row_count }} line{{ first_year_maintenance_row_count|pluralize }} — manpower, vehicle &amp; one-time costs</div>
+        </div></a>
+    </div>
+    <div class="col-lg-3 col-md-6">
+        <a href="{% url 'pmo:mpc_grade_structure_detail' project.pk %}" class="card pmd-nav-card h-100"><div class="card-body">
+            <div class="nav-icon bg-dark bg-opacity-10 text-dark mb-3"><i class="bi bi-diagram-3"></i></div>
+            <h6 class="fw-bold mb-1">Grade Structure</h6>
+            <div class="text-muted small">{{ grade_structure_row_count }} grade{{ grade_structure_row_count|pluralize }} — categories, headcount &amp; salary</div>
+        </div></a>
+    </div>
+    <div class="col-lg-3 col-md-6">
+        <a href="{% url 'pmo:mpc_engineer_rate_table' project.pk %}" class="card pmd-nav-card h-100"><div class="card-body">
+            <div class="nav-icon bg-info bg-opacity-10 text-info mb-3"><i class="bi bi-calculator"></i></div>
+            <h6 class="fw-bold mb-1">Engineer Rate Table</h6>
+            <div class="text-muted small">Per-discipline rate build-up</div>
+        </div></a>
+    </div>
+    <div class="col-lg-3 col-md-6">
+        <a href="{% url 'pmo:mpc_manpower_consolidated' project.pk %}" class="card pmd-nav-card h-100"><div class="card-body">
+            <div class="nav-icon bg-success bg-opacity-10 text-success mb-3"><i class="bi bi-clipboard-data"></i></div>
+            <h6 class="fw-bold mb-1">Manpower Consolidated</h6>
+            <div class="text-muted small">A single live-linked view across every sheet</div>
+        </div></a>
+    </div>
+</div>
+{% endblock %}
