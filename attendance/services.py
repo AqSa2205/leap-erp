@@ -36,7 +36,7 @@ def sync_hr_attendance(day):
     Wi-Fi detection overrides a manual present/absent (Wi-Fi is authoritative for
     present/absent). Days marked leave / holiday / weekend / WFH are left alone.
     """
-    from hr.models import AttendanceRecord, AttendanceException
+    from hr.models import AttendanceRecord, AttendanceException, LeaveRecord
     try:
         from hr.models import AttendanceSettings
         expected_in_by = AttendanceSettings.load().expected_in_by
@@ -46,6 +46,12 @@ def sync_hr_attendance(day):
     rec = AttendanceRecord.objects.filter(employee=day.employee, date=day.date).first()
     if rec is not None and rec.status in _PROTECTED_STATUSES:
         return  # leave / holiday / weekend / WFH — HR-set, keep it
+    # An approved leave covering the day is just as authoritative even before
+    # any row says 'leave' (none is written until the day is saved) - without
+    # this a heartbeat turns a sick day into present/late.
+    if LeaveRecord.objects.filter(
+            employee=day.employee, start_date__lte=day.date, end_date__gte=day.date).exists():
+        return
 
     # An approved attendance exception excuses the day — the employee was
     # off-site with manager/HR sign-off, so a same-day Wi-Fi heartbeat must

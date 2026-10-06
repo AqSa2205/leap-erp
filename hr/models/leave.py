@@ -274,6 +274,12 @@ class LeaveRequest(models.Model):
     days = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True,
                                help_text='Auto-computed from the date range if left blank.')
     employee_reason = models.TextField(blank=True)
+    replacement = models.ForeignKey(
+        'hr.Employee', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='leave_replacements',
+        help_text='Who covers for the employee while they are on leave, picked from '
+                  'Employee.replacement_candidates(). Blank when the employee has no main '
+                  'manager, or on requests from before this field existed.')
     document = models.FileField(upload_to='leave_requests/%Y/%m/', null=True, blank=True)
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default='pending')
     exceeds_balance = models.BooleanField(

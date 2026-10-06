@@ -192,6 +192,21 @@ class Employee(models.Model):
             current = current.main_manager
         return False
 
+    def replacement_candidates(self):
+        """Who can cover this employee while they're on leave: their main
+        manager, everyone else reporting directly to that manager (their
+        teammates), and their own secondary managers. Active only, never the
+        employee themselves. Empty when there's no main manager - there's no
+        team to pick from, so the leave form must not demand a replacement."""
+        mgr = self.main_manager
+        if mgr is None:
+            return Employee.objects.none()
+        ids = {mgr.pk}
+        ids.update(Employee.objects.filter(main_manager=mgr).values_list('pk', flat=True))
+        ids.update(self.secondary_managers.values_list('pk', flat=True))
+        ids.discard(self.pk)
+        return Employee.objects.filter(pk__in=ids, is_active=True).order_by('full_name')
+
     @staticmethod
     def _days_until(target):
         if not target:

@@ -595,6 +595,10 @@ class LeaveRequestForm(forms.Form):
     end_date = forms.DateField(widget=forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}))
     employee_reason = forms.CharField(
         required=False, widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 3}))
+    replacement = forms.ModelChoiceField(
+        queryset=Employee.objects.none(), required=False, empty_label='— Select replacement —',
+        error_messages={'required': "Please select who will cover for you while you're away."},
+        widget=forms.Select(attrs={'class': 'form-select'}))
     document = forms.FileField(required=False, widget=forms.ClearableFileInput(attrs={'class': 'form-control'}))
 
     def __init__(self, *args, fixed_employee=None, exclude_request_id=None,
@@ -604,6 +608,12 @@ class LeaveRequestForm(forms.Form):
         self.exclude_request_id = exclude_request_id
         if fixed_employee is not None:
             del self.fields['employee']
+        else:
+            # "Log on behalf": the leave is someone else's, so don't say "you".
+            self.fields['replacement'].error_messages = {
+                **self.fields['replacement'].error_messages,
+                'required': "Please select who will cover for them while they're away."}
+        self.scope_replacement()
         # When editing a request whose leave type was later deactivated, keep
         # that exact type selectable so an unrelated date edit can't silently
         # switch it to a different (active) type.
@@ -611,6 +621,37 @@ class LeaveRequestForm(forms.Form):
             from django.db.models import Q
             self.fields['leave_type'].queryset = LeaveType.objects.filter(
                 Q(is_active=True) | Q(pk=allow_leave_type.pk)).order_by('name')
+
+    def scope_replacement(self):
+        """Point the replacement choices at the team of whoever the leave is
+        for - fixed (My Profile, edits), or picked on this same form ("log on
+        behalf"), where the page reloads the options via AJAX as the employee
+        changes and this re-derives them from the submitted pick. Limiting
+        the queryset is also the validation - anyone outside that team is
+        rejected as an invalid choice. Required only when there's someone to
+        pick: an employee with no main manager has an empty list and must
+        still be able to apply.
+
+        A view that narrows the employee dropdown afterwards (log on behalf
+        is scoped to the user's team) must call this again, so the choices
+        never show the team of an employee the user may not log leave for."""
+        leave_for = self.fixed_employee or self._picked_employee()
+        candidates = leave_for.replacement_candidates() if leave_for else Employee.objects.none()
+        self.fields['replacement'].queryset = candidates
+        self.fields['replacement'].required = candidates.exists()
+
+    def _picked_employee(self):
+        """The employee chosen in this form's Employee dropdown - from the
+        submitted data, or the ?employee= prefill on first load. Read raw
+        (before validation) only to scope the replacement choices, and only
+        from employees that dropdown actually offers."""
+        if 'employee' not in self.fields:
+            return None
+        raw = self.data.get(self.add_prefix('employee')) if self.is_bound else self.initial.get('employee')
+        raw = getattr(raw, 'pk', raw)
+        if raw is None or not str(raw).isdigit():
+            return None
+        return self.fields['employee'].queryset.filter(pk=int(raw)).first()
 
     def clean(self):
         cleaned = super().clean()

@@ -41,6 +41,30 @@ class LeaveRecordAdmin(admin.ModelAdmin):
     list_filter = ['leave_type']
     search_fields = ['employee__full_name']
 
+    # Adding, moving or deleting leave here must re-derive the attendance
+    # rows it covers, same as the approval/revoke/delete paths - otherwise a
+    # stored 'absent' keeps hiding the leave on the register.
+    def save_model(self, request, obj, form, change):
+        from hr.attendance_services import sync_attendence_with_leave
+        old = LeaveRecord.objects.filter(pk=obj.pk).first() if change else None
+        super().save_model(request, obj, form, change)
+        if old is not None:
+            sync_attendence_with_leave(old.employee, old.start_date, old.end_date)
+        sync_attendence_with_leave(obj.employee, obj.start_date, obj.end_date)
+
+    def delete_model(self, request, obj):
+        from hr.attendance_services import sync_attendence_with_leave
+        emp, start, end = obj.employee, obj.start_date, obj.end_date
+        super().delete_model(request, obj)
+        sync_attendence_with_leave(emp, start, end)
+
+    def delete_queryset(self, request, queryset):
+        from hr.attendance_services import sync_attendence_with_leave
+        ranges = [(lr.employee, lr.start_date, lr.end_date) for lr in queryset.select_related('employee')]
+        super().delete_queryset(request, queryset)
+        for emp, start, end in ranges:
+            sync_attendence_with_leave(emp, start, end)
+
 
 @admin.register(LeaveExceptionGrant)
 class LeaveExceptionGrantAdmin(admin.ModelAdmin):

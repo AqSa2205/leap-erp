@@ -368,6 +368,7 @@ def _edit_leave_retry_redirect(request, base_url_name, target, edit_form, extra_
         'retry_start_date': request.POST.get('start_date', ''),
         'retry_end_date': request.POST.get('end_date', ''),
         'retry_reason': request.POST.get('employee_reason', ''),
+        'retry_replacement': request.POST.get('replacement', ''),
     }
     if extra_params:
         params.update(extra_params)
@@ -385,6 +386,11 @@ def _apply_leave_edit_retry(request, r):
     r.retry_start_date = r.start_date
     r.retry_end_date = r.end_date
     r.retry_reason = r.employee_reason
+    r.retry_replacement_id = r.replacement_id
+    # Options for the edit panel's replacement dropdown - the team of whoever
+    # the leave is for. Only pending requests are editable, so decided rows
+    # skip the lookup; an empty list hides the dropdown.
+    r.replacement_options = r.employee.replacement_candidates() if r.status == 'pending' else None
     r.edit_error = None
     if request.GET.get('edit_error') and request.GET.get('opened_leave') == str(r.pk):
         r.edit_error = request.GET.get('edit_error')
@@ -394,6 +400,9 @@ def _apply_leave_edit_retry(request, r):
         r.retry_start_date = parse_date(request.GET.get('retry_start_date') or '') or r.start_date
         r.retry_end_date = parse_date(request.GET.get('retry_end_date') or '') or r.end_date
         r.retry_reason = request.GET.get('retry_reason', r.employee_reason)
+        retry_rep = request.GET.get('retry_replacement')
+        if retry_rep is not None:
+            r.retry_replacement_id = int(retry_rep) if retry_rep.isdigit() else None
 
 
 @login_required
@@ -443,7 +452,7 @@ def my_profile(request):
                         employee=emp, leave_type=form.cleaned_data['leave_type'],
                         start_date=form.cleaned_data['start_date'], end_date=form.cleaned_data['end_date'],
                         employee_reason=form.cleaned_data['employee_reason'], document=form.cleaned_data['document'],
-                        created_by=request.user,
+                        created_by=request.user, replacement=form.cleaned_data.get('replacement'),
                     )
                     messages.success(request, 'Leave request submitted and sent for approval.')
                     return redirect('hr:my_profile')
@@ -483,7 +492,8 @@ def my_profile(request):
                     target, request.user, leave_type=edit_form.cleaned_data['leave_type'],
                     start_date=edit_form.cleaned_data['start_date'], end_date=edit_form.cleaned_data['end_date'],
                     employee_reason=edit_form.cleaned_data['employee_reason'],
-                    document=edit_form.cleaned_data['document'])
+                    document=edit_form.cleaned_data['document'],
+                    replacement=edit_form.cleaned_data.get('replacement'))
                 messages.success(request, 'Leave request updated.')
             except ValueError as exc:
                 # Service-level failure (balance/overlap/concurrent decision) —
@@ -2756,6 +2766,15 @@ class LeaveRecordDeleteView(AdminRequiredMixin, DeleteView):
     model = LeaveRecord
     template_name = 'hr/leaverecord_confirm_delete.html'
 
+    def form_valid(self, form):
+        # Capture the range before the delete, then re-derive those days so
+        # they fall back from 'leave' to present/late/absent.
+        emp, start, end = self.object.employee, self.object.start_date, self.object.end_date
+        response = super().form_valid(form)
+        from hr.attendance_services import sync_attendence_with_leave
+        sync_attendence_with_leave(emp, start, end)
+        return response
+
     def get_success_url(self):
         return reverse_lazy('hr:leave_summary', kwargs={'pk': self.object.employee_id})
 
@@ -2777,7 +2796,7 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
         return can_view_leave_dashboard(self.request.user)
 
     def get_queryset(self):
-        qs = LeaveRequest.objects.filter(status='pending').select_related('employee', 'leave_type')
+        qs = LeaveRequest.objects.filter(status='pending').select_related('employee', 'leave_type', 'replacement')
         sort = self.request.GET.get('sort')
         if sort == 'vacation_date':
             return qs.order_by('start_date')
@@ -2853,7 +2872,8 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
                         target, request.user, leave_type=edit_form.cleaned_data['leave_type'],
                         start_date=edit_form.cleaned_data['start_date'], end_date=edit_form.cleaned_data['end_date'],
                         employee_reason=edit_form.cleaned_data['employee_reason'],
-                        document=edit_form.cleaned_data['document'])
+                        document=edit_form.cleaned_data['document'],
+                        replacement=edit_form.cleaned_data.get('replacement'))
                     messages.success(request, 'Leave request updated.')
                 except ValueError as exc:
                     # Service-level failure — preserve values + show the reason
@@ -2903,6 +2923,37 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
         return redirect('hr:leave_request_list')
 
 
+def _loggable_employees(user, queryset=None):
+    """Who `user` may log leave for: the union of their Role-based team scope
+    and their own live direct reports. A scoped role (or plain manager) thus
+    cannot log leave for - or look up the team of - anyone outside that set.
+    Shared by LeaveRequestCreateView and leave_replacement_options."""
+    if queryset is None:
+        queryset = Employee.objects.filter(is_active=True)
+    ids = scoped_employee_ids(user)
+    if ids is None:
+        return queryset  # unrestricted (admin tiers) — direct reports add nothing new
+    emp = getattr(user, 'employee_profile', None)
+    direct_report_ids = set(emp.main_reports.filter(is_active=True).values_list('pk', flat=True)) if emp else set()
+    return queryset.filter(pk__in=(ids | direct_report_ids))
+
+
+@login_required
+def leave_replacement_options(request):
+    """JSON options for the replacement dropdown on Log Leave Request - the
+    team of the employee just picked there. Same access as that page."""
+    if not (can_manage_hr_scoped(request.user) or is_direct_manager_of_anyone(request.user)):
+        raise PermissionDenied
+    raw = request.GET.get('employee', '')
+    emp = _loggable_employees(request.user).filter(pk=int(raw)).first() if raw.isdigit() else None
+    # 'for' echoes the request so the page can drop a stale reply when the
+    # employee was changed again before this one came back.
+    if emp is None:
+        return JsonResponse({'for': raw, 'options': []})
+    return JsonResponse({'for': raw, 'options': [
+        {'id': p.pk, 'name': p.full_name} for p in emp.replacement_candidates()]})
+
+
 class LeaveRequestCreateView(HRScopedAccessMixin, FormView):
     # HRScopedAccessMixin covers the Role-based tiers (admin/super_admin/
     # erp_admin, plus site/project_manager, document_controller); test_func
@@ -2924,17 +2975,12 @@ class LeaveRequestCreateView(HRScopedAccessMixin, FormView):
         form = super().get_form(form_class)
         if 'employee' not in form.fields:
             return form
-        # Restrict the employee dropdown to the union of the submitter's
-        # Role-based team scope and their own live direct reports. A scoped
-        # role (or plain manager) thus cannot log leave for anyone outside
-        # that set (an out-of-scope pk would also fail ModelChoiceField
-        # validation).
-        ids = scoped_employee_ids(self.request.user)
-        if ids is None:
-            return form  # unrestricted (admin tiers) — direct reports add nothing new
-        emp = getattr(self.request.user, 'employee_profile', None)
-        direct_report_ids = set(emp.main_reports.filter(is_active=True).values_list('pk', flat=True)) if emp else set()
-        form.fields['employee'].queryset = form.fields['employee'].queryset.filter(pk__in=(ids | direct_report_ids))
+        # An out-of-scope pk fails ModelChoiceField validation.
+        form.fields['employee'].queryset = _loggable_employees(
+            self.request.user, form.fields['employee'].queryset)
+        # Re-derive the replacement choices from the narrowed dropdown, so a
+        # posted out-of-scope employee can't reveal their team's names.
+        form.scope_replacement()
         return form
 
     def get_initial(self):
@@ -3015,7 +3061,7 @@ class LeaveRequestCreateView(HRScopedAccessMixin, FormView):
             submit_leave_request(
                 employee=employee, leave_type=leave_type, start_date=start_date, end_date=end_date,
                 employee_reason=form.cleaned_data['employee_reason'], document=form.cleaned_data['document'],
-                created_by=self.request.user,
+                created_by=self.request.user, replacement=form.cleaned_data.get('replacement'),
             )
         except ValueError as exc:
             # The form already passed its own (unlocked) balance/overlap
@@ -3377,7 +3423,8 @@ def attendance_matrix_export_excel(request):
     COLOR_ANNUAL_LEAVE = 'FCE4D6'
     COLOR_NATIONAL = '00B050'
     COLOR_EID = 'FFFF00'
-    COLOR_OTHER = 'BDD7EE'  # light blue - shared fallback for WFH, non-Annual leave types, and ungrouped holidays
+    COLOR_OTHER = 'BDD7EE'  # light blue - shared fallback for WFH, other leave types, and ungrouped holidays
+    COLOR_SICK = 'E75480'  # pink - matches the register's S badge, so paid sick days never read as an absence
 
     def fill_for(cell_data, emp_id):
         status = cell_data['status']
@@ -3392,6 +3439,8 @@ def attendance_matrix_export_excel(request):
         if status == 'weekend':
             return COLOR_WEEKEND
         if status == 'leave':
+            if cell_data.get('leave_code') == 'sick':
+                return COLOR_SICK
             code = leave_type_map.get((emp_id, cell_data['date']))
             if code == 'annual':
                 return COLOR_ANNUAL_LEAVE
@@ -3404,7 +3453,7 @@ def attendance_matrix_export_excel(request):
                 return COLOR_EID
             return COLOR_OTHER
         # AUTHOR'S NOTE: 'wfh' status currently falls through to COLOR_OTHER below,
-        # same as Sick/Marriage/other leave types and ungrouped holidays.
+        # same as Marriage/other leave types and ungrouped holidays.
         # To give WFH its own distinct color in the future: add
         # if status == 'wfh': return COLOR_WFH here (above this comment),
         # define a new COLOR_WFH constant near the other COLOR_ constants above,
@@ -3437,7 +3486,8 @@ def attendance_matrix_export_excel(request):
         row += 1
         ws.cell(row=row, column=1, value=r['employee'].full_name).border = thin_border
         for col, cell_data in enumerate(r['cells'], 2):
-            label = status_labels.get(cell_data['status'], cell_data['status'])
+            # Sick leave gets its own letter, same as the register's S badge.
+            label = 'S' if cell_data.get('leave_code') == 'sick' else status_labels.get(cell_data['status'], cell_data['status'])
             # Stack the check-in (and check-out) time beneath the status letter,
             # e.g. "P" over "09:12-17:30". Non-present days keep just the letter.
             times = cell_time_lines(cell_data)
@@ -3514,7 +3564,8 @@ def attendance_matrix_export_pdf(request):
     COLOR_ANNUAL_LEAVE = colors.HexColor('#FCE4D6')
     COLOR_NATIONAL = colors.HexColor('#00B050')
     COLOR_EID = colors.HexColor('#FFFF00')
-    COLOR_OTHER = colors.HexColor('#BDD7EE')  # light blue - shared fallback for WFH, non-Annual leave types, and ungrouped holidays
+    COLOR_OTHER = colors.HexColor('#BDD7EE')  # light blue - shared fallback for WFH, other leave types, and ungrouped holidays
+    COLOR_SICK = colors.HexColor('#E75480')  # pink - matches the register's S badge, so paid sick days never read as an absence
 
     def pdf_fill_for(cell_data, emp_id):
         status = cell_data['status']
@@ -3529,6 +3580,8 @@ def attendance_matrix_export_pdf(request):
         if status == 'weekend':
             return COLOR_WEEKEND
         if status == 'leave':
+            if cell_data.get('leave_code') == 'sick':
+                return COLOR_SICK
             code = leave_type_map.get((emp_id, cell_data['date']))
             if code == 'annual':
                 return COLOR_ANNUAL_LEAVE
@@ -3541,7 +3594,7 @@ def attendance_matrix_export_pdf(request):
                 return COLOR_EID
             return COLOR_OTHER
         # AUTHOR'S NOTE: 'wfh' status currently falls through to COLOR_OTHER below,
-        # same as Sick/Marriage/other leave types and ungrouped holidays.
+        # same as Marriage/other leave types and ungrouped holidays.
         # To give WFH its own distinct color in the future: add
         # if status == 'wfh': return COLOR_WFH here (above this comment),
         # define a new COLOR_WFH constant near the other COLOR_ constants above,
@@ -3562,7 +3615,8 @@ def attendance_matrix_export_pdf(request):
     for row_idx, r in enumerate(rows, 1):
         row_data = [Paragraph(r['employee'].full_name, name_style)]
         for col_idx, c in enumerate(r['cells'], 1):
-            label = status_labels.get(c['status'], c['status'])
+            # Sick leave gets its own letter, same as the register's S badge.
+            label = 'S' if c.get('leave_code') == 'sick' else status_labels.get(c['status'], c['status'])
             times = cell_time_lines(c)
             # Stack the status letter over the check-in/out times, each on its
             display_lines = list(times)
@@ -3670,6 +3724,13 @@ def attendance_unmark_leave(request):
         return JsonResponse({'error': 'Employee is not in your team.'}, status=403)
     if lr.start_date != lr.end_date:
         return JsonResponse({'error': 'Part of a multi-day leave — edit from the leave summary.'}, status=400)
+    # A leave created by approving a leave request belongs to that request.
+    # Deleting it from here refunded the balance while the request still read
+    # "Approved" - and certificate-required leave (Sick) could not be put back
+    # from the register. Revoke keeps the request and the leave in step.
+    if LeaveRequest.objects.filter(leave_record=lr).exists():
+        return JsonResponse({'error': 'This leave was approved through a leave request — '
+                                      'revoke it from the request instead.'}, status=400)
 
     emp, emp_id, day = lr.employee, lr.employee_id, lr.start_date
     with transaction.atomic():
