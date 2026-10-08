@@ -384,6 +384,9 @@ class PurchaseOrder(models.Model):
         from finance.outflow_links import fill_po_numbers
         fill_po_numbers(self)
 
+        from .budget_overrun import refresh_safely
+        refresh_safely(self, actor=changed_by)
+
         return change
 
     @property
@@ -1364,3 +1367,119 @@ class POTermOverride(models.Model):
 
     def __str__(self):
         return f"{self.purchase_order.po_number} — {self.template.name} (edited)"
+
+
+# ─── Over-budget approval ───────────────────────────────────────────────────
+#
+# A purchase order that takes a finance-approved budget over - one line, or
+# the budget as a whole - is never blocked. It carries on through the normal
+# SCM > PM > COO chain, and alongside it a BudgetOverrun asks for remarks from
+# the SCM and PM signers and a decision from the COO signer (who acts as the
+# CFO here). Who may act is decided by PurchaseOrder.can_user_approve_stage(),
+# the same gate as the normal chain, so there is one definition of each role.
+
+class BudgetOverrun(models.Model):
+    AWAITING_REMARKS = 'awaiting_remarks'
+    AWAITING_COO = 'awaiting_coo'
+    APPROVED = 'approved'
+    REJECTED = 'rejected'
+    RESOLVED = 'resolved'
+    STATUS_CHOICES = [
+        (AWAITING_REMARKS, 'Awaiting SCM and PM remarks'),
+        (AWAITING_COO, 'Awaiting COO decision'),
+        (APPROVED, 'Approved'),
+        (REJECTED, 'Rejected'),
+        (RESOLVED, 'Resolved - no longer over budget'),
+    ]
+    OPEN_STATUSES = (AWAITING_REMARKS, AWAITING_COO)
+
+    purchase_order = models.ForeignKey(
+        PurchaseOrder, on_delete=models.CASCADE, related_name='budget_overruns')
+    costing_sheet = models.ForeignKey(
+        'costing.CostingSheet', on_delete=models.CASCADE, related_name='budget_overruns')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=AWAITING_REMARKS)
+
+    # Latest figures, in SAR without VAT. Refreshed while the request is open;
+    # frozen once decided, so the decision always reads against what was seen.
+    budget_total = models.DecimalField(max_digits=16, decimal_places=2, default=Decimal('0'))
+    spend_total = models.DecimalField(max_digits=16, decimal_places=2, default=Decimal('0'))
+    over_total = models.DecimalField(max_digits=16, decimal_places=2, default=Decimal('0'))
+
+    scm_remarks = models.TextField(blank=True)
+    scm_remarks_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    scm_remarks_at = models.DateTimeField(null=True, blank=True)
+    pm_remarks = models.TextField(blank=True)
+    pm_remarks_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    pm_remarks_at = models.DateTimeField(null=True, blank=True)
+    decision_remarks = models.TextField(blank=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    decided_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['purchase_order', 'costing_sheet'],
+                condition=models.Q(status__in=['awaiting_remarks', 'awaiting_coo']),
+                name='one_open_overrun_per_po_and_budget'),
+        ]
+
+    def __str__(self):
+        return f'{self.purchase_order.po_number} over budget by {self.over_total} SAR'
+
+    @property
+    def is_open(self):
+        return self.status in self.OPEN_STATUSES
+
+
+class BudgetOverrunLine(models.Model):
+    """One budget line that is over. What flags the line item."""
+    overrun = models.ForeignKey(BudgetOverrun, on_delete=models.CASCADE, related_name='lines')
+    budget_line = models.ForeignKey(
+        'costing.CostingLineItem', on_delete=models.CASCADE, related_name='overrun_lines')
+    budget = models.DecimalField(max_digits=16, decimal_places=2)
+    spend = models.DecimalField(max_digits=16, decimal_places=2)
+    over = models.DecimalField(max_digits=16, decimal_places=2)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['overrun', 'budget_line'],
+                                    name='one_row_per_overrun_line'),
+        ]
+
+
+class BudgetOverrunEvent(models.Model):
+    """Audit history. Rows are only ever added, never edited or deleted."""
+    FLAGGED = 'flagged'
+    UPDATED = 'updated'
+    SCM_REMARKS = 'scm_remarks'
+    PM_REMARKS = 'pm_remarks'
+    APPROVED = 'approved'
+    REJECTED = 'rejected'
+    RESOLVED = 'resolved'
+    ACTION_CHOICES = [
+        (FLAGGED, 'Flagged as over budget'),
+        (UPDATED, 'Figures changed'),
+        (SCM_REMARKS, 'SCM remarks added'),
+        (PM_REMARKS, 'PM remarks added'),
+        (APPROVED, 'Approved by COO'),
+        (REJECTED, 'Rejected by COO'),
+        (RESOLVED, 'No longer over budget'),
+    ]
+
+    overrun = models.ForeignKey(BudgetOverrun, on_delete=models.CASCADE, related_name='events')
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    remarks = models.TextField(blank=True)
+    over_total = models.DecimalField(max_digits=16, decimal_places=2, default=Decimal('0'))
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at', 'pk']

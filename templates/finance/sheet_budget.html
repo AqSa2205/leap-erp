@@ -75,6 +75,8 @@
                     <div class="row g-3 mt-1">
                         <div class="col-auto"><div class="bud-stat"><div class="lbl">Budgeted Cost</div><div class="val" id="stat-cost">{{ cost_total|floatformat:2|intcomma }}</div></div></div>
                         <div class="col-auto"><div class="bud-stat"><div class="lbl">Budgeted Price</div><div class="val" id="stat-price">{{ price_total|floatformat:2|intcomma }}</div></div></div>
+                        {% if approved_overrun_total %}<div class="col-auto"><div class="bud-stat" title="Over-budget spend approved by the COO. Shown beside the budget, not added into the budgeted price."><div class="lbl">Approved Overrun</div><div class="val" style="color:#3cb371;">+ {{ approved_overrun_total|floatformat:2|intcomma }}</div></div></div>
+                        <div class="col-auto"><div class="bud-stat"><div class="lbl">Budget + Approved Overrun</div><div class="val">{{ price_with_overruns|floatformat:2|intcomma }}</div></div></div>{% endif %}
                         <div class="col-auto"><div class="bud-stat"><div class="lbl">Sales Price</div><div class="val">{{ sales_total|floatformat:2|intcomma }}</div></div></div>
                         <div class="col-auto"><div class="bud-stat"><div class="lbl">Variance vs Sales</div><div class="val" id="stat-var">{{ variance_total|floatformat:2|intcomma }}</div></div></div>
                     </div>

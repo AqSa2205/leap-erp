@@ -13,6 +13,7 @@ read-only here regardless of `editable`: it's procurement's price to set
     <td>
         {% if row.item.added_by_procurement %}<i class="bi bi-arrow-return-right" style="color:#8F00FF;" title="Added by procurement"></i>{% endif %}
         {{ row.item.description }}
+        {% if row.overrun_status %}<span class="badge {% if row.overrun_status == 'approved' %}bg-success{% elif row.overrun_status == 'rejected' %}bg-secondary{% else %}bg-danger{% endif %} ms-1" title="Committed purchase orders exceed this line's approved budget. See the purchase order for details.">Over budget &middot; {% if row.overrun_status == 'approved' %}approved{% elif row.overrun_status == 'rejected' %}rejected{% else %}awaiting approval{% endif %}</span>{% endif %}
         {% if row.item.added_by_procurement %}<span class="badge ms-1" style="background:#f3e9ff; color:#8F00FF; border:1px solid #d9b8ff; font-size:0.68rem;">Added by procurement</span>{% endif %}
     </td>
     <td class="text-end">{{ row.item.quantity|floatformat:"-2" }}</td>
@@ -22,6 +23,7 @@ read-only here regardless of `editable`: it's procurement's price to set
     <td class="col-price">
         <input type="number" step="0.01" class="text-end b-price" name="{{ prefix }}-{{ row.item.pk }}-price" value="{{ row.price|stringformat:'.2f' }}" {% if not editable or row.item.added_by_procurement %}readonly{% endif %}>
         <input type="hidden" class="b-price-manual" name="{{ prefix }}-{{ row.item.pk }}-price_manual" value="{% if row.price_manual %}1{% else %}0{% endif %}">
+        {% if row.approved_overrun %}<div class="small text-end mt-1" style="color:#3cb371;" title="Over-budget spend approved by the COO. The budgeted price is unchanged.">+ {{ row.approved_overrun|floatformat:2|intcomma }} approved overrun</div>{% endif %}
     </td>
     <td class="text-end sales-cell">{{ row.sales_price|floatformat:2|intcomma }}</td>
     <td class="text-end b-var">{{ row.variance|floatformat:2|intcomma }}</td>

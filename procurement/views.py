@@ -565,6 +565,17 @@ class POListView(CapabilityRequiredMixin, ProcurementPermissionMixin, ListView):
             )
         if status:
             queryset = queryset.filter(status=status)
+        # Budget badges for the Status column, worked out in this one query
+        # rather than per row: is any line linked to a budget, and is an
+        # over-budget request waiting on remarks or a COO decision.
+        from django.db.models import Exists, OuterRef
+        from .models import BudgetOverrun
+        queryset = queryset.annotate(
+            has_budget_link=Exists(PurchaseOrderItem.objects.filter(
+                purchase_order=OuterRef('pk'), source_bom_item__isnull=False)),
+            has_open_overrun=Exists(BudgetOverrun.objects.filter(
+                purchase_order=OuterRef('pk'), status__in=BudgetOverrun.OPEN_STATUSES)),
+        )
         return queryset
 
     def get_context_data(self, **kwargs):
@@ -750,6 +761,12 @@ class POCreateView(ProcurementReadOnlyRedirectMixin, ProcurementPermissionMixin,
             return self.form_invalid(form)
 
     def get_success_url(self):
+        # Use case 3: a PO typed by hand has no budget link. If its project
+        # has a finance-approved budget, ask straight away whether to link
+        # it. "No" is a valid answer: the PO carries on unlinked.
+        from .budget_overrun import needs_budget_prompt
+        if needs_budget_prompt(self.object):
+            return reverse('procurement:po_budget_prompt', kwargs={'pk': self.object.pk})
         return reverse('procurement:po_detail', kwargs={'pk': self.object.pk})
 
 
@@ -893,7 +910,7 @@ def quotation_review(request, pk):
             qi.status = 'converted'
             qi.save(update_fields=['purchase_order', 'status', 'updated_at'])
             messages.success(request, f'Purchase Order {po.po_number} created from quotation.')
-            return redirect('procurement:po_detail', pk=po.pk)
+            return _after_po_created(po)
         return _render(form, item_formset)
 
     # GET — pre-fill the PO editor from the extraction.
@@ -944,6 +961,8 @@ class PODetailView(ProcurementPermissionMixin, DetailView):
             key for key, _, _ in po.APPROVAL_STAGES
             if po.can_user_edit_signature(self.request.user, key)
         }
+        from .budget_overrun import overrun_context
+        context.update(overrun_context(po, self.request.user))
         return context
 
 
@@ -1025,6 +1044,8 @@ class POUpdateView(ProcurementReadOnlyRedirectMixin, ProcurementPermissionMixin,
             fill_po_numbers(self.object)
             _apply_po_terms(self.object, self.request.POST)
             _save_po_term_overrides(self.object, self.request.POST, self.request.user)
+            from .budget_overrun import refresh_safely
+            refresh_safely(self.object, actor=self.request.user, request=self.request)
             messages.success(self.request, f'Purchase Order {self.object.po_number} updated successfully.')
             return redirect(self.get_success_url())
         else:
@@ -1128,6 +1149,9 @@ def po_create_from_bom(request, sheet_pk):
             source_bom_item=item,
         )
         serial += 1
+
+    from .budget_overrun import refresh_safely
+    refresh_safely(po, actor=user, request=request)
 
     copied = serial - 1
     messages.success(
@@ -1336,6 +1360,8 @@ def bom_procurement_tracker(request, sheet_pk):
                         source_bom_item=li,
                     )
                     serial += 1
+            from .budget_overrun import refresh_safely
+            refresh_safely(po, actor=user, request=request)
             added_count = serial - first_serial
             skip_note = ''
             if skipped_full:
@@ -1356,6 +1382,10 @@ def bom_procurement_tracker(request, sheet_pk):
     # unordered, even if it already has one or more POs against it.
     rows = []
     available_count = fully_procured_count = 0
+    from .budget_overrun import line_flags
+    overrun_flags = line_flags(sheet)
+    from .budget_overrun import approved_overruns
+    approved_extra = approved_overruns(sheet)
     budget_total = Decimal('0')
     for section in (sheet.sections.filter(is_optional=False)
                     .order_by('order', 'section_number')):
@@ -1399,6 +1429,10 @@ def bom_procurement_tracker(request, sheet_pk):
                 'is_partial': already_ordered > 0 and is_available,
                 'already_ordered': already_ordered, 'remaining': remaining,
                 'unit_price': li.budget_unit_price(), 'line_price': line_price,
+                'overrun_status': overrun_flags.get(li.pk),
+                # Shown beside the budget, never added into it.
+                'approved_overrun': approved_extra.get(li.pk),
+                'approved_total': line_price + approved_extra.get(li.pk, Decimal('0')),
             })
         if section_items:
             rows.append({'section': section, 'items': section_items})
@@ -1413,6 +1447,8 @@ def bom_procurement_tracker(request, sheet_pk):
         'available_count': available_count,
         'procured_count': fully_procured_count,
         'budget_total': budget_total,
+        'approved_overrun_total': sum(approved_extra.values(), Decimal('0')),
+        'budget_with_overruns': budget_total + sum(approved_extra.values(), Decimal('0')),
         'existing_draft_pos': existing_draft_pos,
     })
 
@@ -1928,6 +1964,8 @@ def po_link_budget(request, pk):
                 from finance.outflow_links import fill_po_numbers
                 filled = fill_po_numbers(
                     PurchaseOrder.objects.get(pk=po.pk))
+                from .budget_overrun import refresh_safely
+                refresh_safely(po, actor=request.user, request=request)
 
                 linked = sum(1 for _i, line in changes if line is not None)
                 unlinked = len(changes) - linked
@@ -2341,6 +2379,7 @@ def _import_po_batch(request, uploads):
     from django.http import QueryDict
 
     imported, failed = [], []
+    created_pks = set()
     for upload in uploads:
         # Swap request.FILES for one holding a single file, call the real view,
         # then put it back. Re-entering the view is deliberate: the template
@@ -2354,6 +2393,7 @@ def _import_po_batch(request, uploads):
         finally:
             request._files = original_files
         added = set(PurchaseOrder.objects.values_list('pk', flat=True)) - before
+        created_pks |= added
         if added:
             imported.append(upload.name)
         else:
@@ -2369,6 +2409,19 @@ def _import_po_batch(request, uploads):
             request,
             f'{len(failed)} file{"" if len(failed) == 1 else "s"} did not '
             f'import: {", ".join(failed)}. The reason for each is above.')
+    # Use case 3 for imports: one PO out of the batch gets the same
+    # link-to-a-budget prompt as a PO typed by hand; several are listed.
+    from .budget_overrun import needs_budget_prompt
+    unlinked = [po for po in PurchaseOrder.objects.filter(pk__in=created_pks).order_by('pk')
+                if needs_budget_prompt(po)]
+    if len(created_pks) == 1 and unlinked:
+        return redirect('procurement:po_budget_prompt', pk=unlinked[0].pk)
+    if unlinked:
+        messages.info(
+            request,
+            'Not linked to an approved budget: '
+            + ', '.join(po.po_number for po in unlinked)
+            + '. Open each one to link it.')
     return redirect('procurement:po_list')
 
 
@@ -2628,6 +2681,9 @@ def po_import_excel(request):
             po_issued_by=po_issued_by,
             issuer_email=issuer_email,
             project_name=project_name,
+            # Attach the real project when the name matches exactly one, so an
+            # imported PO can be linked to its approved budget like any other.
+            project=_project_matching_name(project_name),
             end_user=end_user,
             mr_item_number=mr_item_number,
             delivery_incoterms=delivery_incoterms,
@@ -2646,7 +2702,7 @@ def po_import_excel(request):
         item_count = len(parsed_items)
 
         messages.success(request, f'Imported PO {po.po_number} with {item_count} line items.')
-        return redirect('procurement:po_detail', pk=po.pk)
+        return _after_po_created(po)
 
     except Exception as e:
         messages.error(request, f'Error importing file: {str(e)}')
@@ -5051,3 +5107,97 @@ def project_systems(request, project_id):
         'data': data,
         'budget_status': budget_status(budget, pos),
     })
+
+
+
+# --- Over-budget approval ---------------------------------------------------
+
+@login_required
+def po_overrun_remarks(request, pk, overrun_pk, stage):
+    """SCM or PM remarks on an over-budget request. Permission is checked in
+    add_remarks with the same gate as the normal approval chain."""
+    from .budget_overrun import add_remarks
+    from .models import BudgetOverrun
+    # Same visibility rule as the PO page and the approve view: a PO the user
+    # cannot open is a 404, not a form they can post to by guessing the IDs.
+    overrun = get_object_or_404(
+        BudgetOverrun, pk=overrun_pk, purchase_order_id=pk,
+        purchase_order__in=_visible_pos_for(request.user))
+    if request.method == 'POST':
+        try:
+            add_remarks(overrun, stage, request.user, request.POST.get('remarks', ''),
+                        base_url=request.build_absolute_uri('/'))
+            messages.success(request, 'Remarks saved.')
+        except (PermissionError, ValueError) as exc:
+            messages.error(request, str(exc))
+    return redirect('procurement:po_detail', pk=pk)
+
+
+@login_required
+def po_overrun_decide(request, pk, overrun_pk):
+    """The COO signer approves or rejects an over-budget request."""
+    from .budget_overrun import decide
+    from .models import BudgetOverrun
+    # Same visibility rule as the PO page and the approve view: a PO the user
+    # cannot open is a 404, not a form they can post to by guessing the IDs.
+    overrun = get_object_or_404(
+        BudgetOverrun, pk=overrun_pk, purchase_order_id=pk,
+        purchase_order__in=_visible_pos_for(request.user))
+    if request.method == 'POST':
+        choice = request.POST.get('decision')
+        if choice not in ('approve', 'reject'):
+            messages.error(request, 'Choose approve or reject.')
+        else:
+            try:
+                decide(overrun, request.user, choice == 'approve', request.POST.get('remarks', ''),
+                       base_url=request.build_absolute_uri('/'))
+                messages.success(request, 'Overrun approved.' if choice == 'approve' else 'Overrun rejected.')
+            except (PermissionError, ValueError) as exc:
+                messages.error(request, str(exc))
+    return redirect('procurement:po_detail', pk=pk)
+
+
+
+@login_required
+def po_budget_prompt(request, pk):
+    """Right after a PO is created by hand: link it to one of its project's
+    approved budgets, or carry on without one. Skipped (straight to the PO)
+    when it is already linked or its project has no approved budget."""
+    from .budget_overrun import approved_budgets_for_po
+    po = get_object_or_404(_visible_pos_for(request.user), pk=pk)
+    budgets = list(approved_budgets_for_po(po))
+    if not budgets or po.items.filter(source_bom_item__isnull=False).exists():
+        return redirect('procurement:po_detail', pk=pk)
+    can_link = not request.user.is_procurement_read_only_user and not po.is_locked
+    return render(request, 'procurement/po_budget_prompt.html', {
+        'po': po, 'budgets': budgets, 'can_link': can_link,
+    })
+
+
+
+def _after_po_created(po):
+    """Where to send someone who has just created a PO: the link-to-a-budget
+    prompt when it is unlinked and its project has an approved budget,
+    otherwise the PO itself. Shared by the New PO form and both imports."""
+    from .budget_overrun import needs_budget_prompt
+    if needs_budget_prompt(po):
+        return redirect('procurement:po_budget_prompt', pk=po.pk)
+    return redirect('procurement:po_detail', pk=po.pk)
+
+
+
+def _project_matching_name(name):
+    """The one project with exactly this name, ignoring case and surrounding
+    spaces, or None. None when nothing matches or several do: an import must
+    never guess which project a PO belongs to. Projects in the recycle bin are
+    never matched."""
+    from projects.models import Project
+    name = str(name or '').strip()
+    if not name:
+        return None
+    qs = Project.objects.filter(project_name__iexact=name)
+    fields = {f.name for f in Project._meta.get_fields()}
+    if 'is_deleted' in fields:
+        qs = qs.filter(is_deleted=False)
+    matches = list(qs[:2])
+    return matches[0] if len(matches) == 1 else None
