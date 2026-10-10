@@ -61,6 +61,7 @@
                 </div>
             </div>
             <div>
+                <a href="{% url 'procurement:bom_tracker_export_excel' sheet.pk %}" class="btn btn-outline-light btn-sm me-1" title="Download this budget tracker as an Excel file"><i class="bi bi-file-earmark-excel me-1"></i> Export Excel</a>
                 <a href="{% url 'procurement:po_list' %}" class="btn btn-outline-light btn-sm"><i class="bi bi-list me-1"></i> All POs</a>
             </div>
         </div>
