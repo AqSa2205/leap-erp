@@ -56,5 +56,6 @@ urlpatterns = [
     path('manpower-costing/<int:pk>/grade-structure/', views.mpc_grade_structure_detail, name='mpc_grade_structure_detail'),
     path('manpower-costing/<int:pk>/grade-structure/export/', views.mpc_grade_structure_export_excel, name='mpc_grade_structure_export_excel'),
     path('manpower-costing/<int:pk>/engineer-rate-table/', views.mpc_engineer_rate_table, name='mpc_engineer_rate_table'),
+    path('manpower-costing/<int:pk>/engineer-rate-table/export/', views.mpc_engineer_rate_table_export_excel, name='mpc_engineer_rate_table_export_excel'),
     path('manpower-costing/<int:pk>/manpower-consolidated/', views.mpc_manpower_consolidated, name='mpc_manpower_consolidated'),
 ]
