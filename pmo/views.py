@@ -26,7 +26,7 @@ from .forms import (FaultLossEntryForm, ManpowerDetailsForm, NewEmployeeManpower
                      GradeStructureLineFormSet, DesignationManpowerLineFormSet,
                      EmploymentCostAssumptionsForm, FirstYearMaintenanceLineFormSet,
                      ManpowerCostingHeaderForm, ProjectPOBasicsForm,
-                     EngineerRateAssumptionsForm)
+                     EngineerRateAssumptionsForm, ProjectCostingInputsForm)
 from .models import (ONE, ZERO, CommunicationMatrix, FaultLossEntry, ManpowerResource,
                       MilestoneProgressEntry, ProjectIssue, ProjectMilestone,
                       ResponsibilityMatrix, default_communication_columns,
@@ -35,6 +35,7 @@ from .models import (ONE, ZERO, CommunicationMatrix, FaultLossEntry, ManpowerRes
                       FirstYearMaintenanceLine, ManpowerCostingHeader)
 from .engineer_rates import (WORKING_DAYS_PER_MONTH, WORKING_HOURS_PER_DAY,
                              build_rate_tables)
+from .project_costing import build_project_costing
 from .progress import (board_row, board_rows, leaves, milestone_checklist,
                        project_completion, validate_weightages)
 from .workbook_import import (deserialise_activities, plan_workbook,
@@ -2094,6 +2095,258 @@ def mpc_engineer_rate_table_export_excel(request, pk):
         ws.column_dimensions[col].width = width
 
     filename = f'engineer-rate-table-{slugify(project.project_name) or project.pk}.xlsx'
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    wb.save(response)
+    return response
+
+
+@login_required
+@delivery_required
+def mpc_project_costing(request, pk):
+    """Project Costing (Integrated): the workbook's integrated costing sheet,
+    read-only except for its three own inputs (contract duration and the two
+    accommodation rates). Manpower comes from the Grade Structure, statutory
+    rates from the Employment Cost Assumptions, sections B-D from First Year
+    Maintenance - see pmo.project_costing for every calculation. Margin and
+    VAT are First Year Maintenance's; the bid value is hidden from users who
+    cannot edit the bid, the same rule as First Year Maintenance."""
+    project = _pm_visible_project_or_404(request, pk)
+    can_edit = can_manage_manpower_costing(request.user)
+    header = _mpc_header_for(project)
+
+    if request.method == 'POST':
+        if not can_edit:
+            raise PermissionDenied('Only the Project Manager can edit Project Costing.')
+        form = ProjectCostingInputsForm(request.POST, instance=header)
+        if form.is_valid():
+            header = form.save(commit=False)
+            header.project = project
+            header.updated_by = request.user
+            header.save()
+            messages.success(request, 'Project Costing saved.')
+            return redirect('pmo:mpc_project_costing', pk=project.pk)
+        # The form has written its (invalid) values onto the instance;
+        # calculate from what is actually saved instead.
+        header = (ManpowerCostingHeader.objects.filter(project=project).first()
+                  or ManpowerCostingHeader(project=project))
+    else:
+        form = ProjectCostingInputsForm(instance=header)
+
+    data = build_project_costing(
+        header, _eca_for(project),
+        list(project.designation_manpower_lines.all()),
+        list(project.first_year_maintenance_lines.exclude(section=FirstYearMaintenanceLine.SECTION_A)))
+    region = getattr(project, 'region', None)
+    response = render(request, 'pmo/mpc_project_costing.html', {
+        'project': project,
+        'header': header,
+        'form': form,
+        'can_edit': can_edit,
+        'can_see_bid_value': can_edit,
+        'currency': header.currency_override or (region.currency if region else 'SAR'),
+        **data,
+    })
+    response['Cache-Control'] = 'no-store'
+    return response
+
+
+@login_required
+@delivery_required
+def mpc_project_costing_export_excel(request, pk):
+    """Project Costing (Integrated) as an .xlsx laid out like the source
+    workbook's sheet: Calibri, dark-blue (1F4E79) titles and headers, green
+    for figures linked from Grade Structure / First Year Maintenance, blue for
+    this sheet's own inputs, grey sub-total, light-blue TOTAL rows. Values,
+    not formulas: the same figures as the page (pmo.project_costing). The bid
+    value is left out for users who cannot edit the bid, as on the page."""
+    import openpyxl
+    from django.utils.text import slugify
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+    project = _pm_visible_project_or_404(request, pk)
+    header = _mpc_header_for(project)
+    can_see_bid_value = can_manage_manpower_costing(request.user)
+    d = build_project_costing(
+        header, _eca_for(project),
+        list(project.designation_manpower_lines.all()),
+        list(project.first_year_maintenance_lines.exclude(section=FirstYearMaintenanceLine.SECTION_A)))
+    region = getattr(project, 'region', None)
+    currency = header.currency_override or (region.currency if region else 'SAR')
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Project Costing (Integrated)'
+    navy = '1F4E79'
+    body = Font(name='Calibri', size=11)
+    bold = Font(name='Calibri', size=11, bold=True)
+    green = Font(name='Calibri', size=11, color='008000')
+    blue = Font(name='Calibri', size=11, color='0000FF')
+    head_font = Font(name='Calibri', size=11, bold=True, color='FFFFFF')
+    navy_fill = PatternFill('solid', fgColor=navy)
+    grey_fill = PatternFill('solid', fgColor='F2F2F2')
+    total_fill = PatternFill('solid', fgColor='DCE6F1')
+    value_fill = PatternFill('solid', fgColor='E2EFDA')
+    vat_fill = PatternFill('solid', fgColor='FFF2CC')
+    section_font = Font(name='Calibri', size=12, bold=True, color=navy)
+    thin = Side(style='thin', color='BFBFBF')
+    box = Border(left=thin, right=thin, top=thin, bottom=thin)
+    money = '#,##0.00;\\(#,##0.00\\);\\-'
+
+    def put(r, c, value, font=body, fmt=None, fill=None, align=None, border=True):
+        x = ws.cell(row=r, column=c, value=value)
+        x.font = font
+        if fmt:
+            x.number_format = fmt
+        if fill:
+            x.fill = fill
+        if border:
+            x.border = box
+        if align:
+            x.alignment = Alignment(horizontal=align, vertical='center', wrap_text=True)
+        return x
+
+    def header_row(r, titles):
+        for c, title in titles:
+            put(r, c, title, head_font, fill=navy_fill, align='center')
+
+    def band(r, fill, font, last=11):
+        for c in range(1, last + 1):
+            ws.cell(row=r, column=c).fill = fill
+            ws.cell(row=r, column=c).font = font
+            ws.cell(row=r, column=c).border = box
+
+    ws.cell(row=1, column=1, value='PROJECT COSTING \u2014 INTEGRATED WITH GRADE STRUCTURE & FIRST YEAR MAINTENANCE'
+            ).font = Font(name='Calibri', size=14, bold=True, color=navy)
+    ws.cell(row=2, column=1, value=(
+        'Green: linked from Grade Structure (Designation-wise Manpower) and First Year Maintenance. '
+        'Blue: this sheet\'s own inputs. Accommodation is for expats only: Staff = EX, A, E; Technician = T, O. '
+        f'Exported {timezone.localtime():%d %b %Y %H:%M}.')).font = Font(name='Calibri', size=9, italic=True)
+
+    for r, label, value, font in (
+            (4, 'Client', project.customer or '', body),
+            (5, 'Project Name', project.project_name, body),
+            (6, 'Document Name', 'Integrated Manpower & Project Costing', body),
+            (7, 'Contract Duration (Months)', int(d['months']), blue),
+            (8, 'Currency', currency, body)):
+        ws.cell(row=r, column=1, value=label).font = bold
+        ws.cell(row=r, column=3, value=value).font = font
+
+    # A: manpower
+    r = 10
+    ws.cell(row=r, column=1, value='A: MANPOWER COST (MONTHLY / RECURRING EXPENSES)').font = section_font
+    r += 1
+    header_row(r, [(1, 'No.'), (2, 'Description'), (3, 'Grade'), (4, 'Discipline'), (5, 'Nationality'),
+                   (6, 'Nature of Expense'), (7, f'Rate / Amount ({currency})'), (8, 'Qty / Heads'),
+                   (9, f'Monthly Exp. ({currency})'), (10, 'Remarks'), (11, 'Accom. Group')])
+    r += 1
+    for row in d['manpower_rows']:
+        line = row['line']
+        put(r, 1, row['no'], align='center')
+        put(r, 2, line.designation, green)
+        put(r, 3, line.grade_code, green, align='center')
+        put(r, 4, line.discipline or '', green)
+        put(r, 5, line.get_nationality_display(), green, align='center')
+        put(r, 6, 'Monthly', align='center')
+        put(r, 7, row['rate'], green, money)
+        put(r, 8, row['heads'], green, '0')
+        put(r, 9, row['monthly'], body, money)
+        put(r, 10, None)
+        put(r, 11, row['group'], align='center')
+        r += 1
+    band(r, grey_fill, bold)
+    put(r, 2, 'Sub-total \u2014 Monthly Salaries', bold, fill=grey_fill)
+    put(r, 8, d['heads_total'], bold, '0', fill=grey_fill)
+    put(r, 9, d['salaries_total'], bold, money, fill=grey_fill)
+    r += 1
+    for s in d['statutory']:
+        put(r, 1, s['no'], align='center')
+        put(r, 2, s['label'])
+        for c in (3, 4, 5, 10, 11):
+            put(r, c, None)
+        put(r, 6, s['nature'], align='center')
+        if s['is_pct']:
+            put(r, 7, s['rate'] / 100, green, '0.00%')
+        else:
+            put(r, 7, s['rate'], blue if s['field'] else green, money)
+        put(r, 8, s['heads'], body, '0')
+        put(r, 9, s['monthly'], body, money)
+        r += 1
+    band(r, total_fill, bold)
+    put(r, 2, 'TOTAL A \u2014 Monthly Manpower Cost', bold, fill=total_fill)
+    put(r, 9, d['total_a'], bold, money, fill=total_fill)
+    r += 2
+
+    # B, C, D: First Year Maintenance
+    for sec in d['sections']:
+        ws.cell(row=r, column=1, value=sec['label'].upper()).font = section_font
+        r += 1
+        header_row(r, [(1, 'No.'), (2, 'Description'), (3, 'Grade'), (4, 'Discipline'), (5, 'Nationality'),
+                       (6, 'Nature of Expense'), (7, f'Rate / Amount ({currency})'), (8, 'Qty / Heads'),
+                       (9, f'Monthly / Total Exp. ({currency})'), (10, 'Remarks')])
+        r += 1
+        for l in sec['lines']:
+            line = l['line']
+            put(r, 1, l['no'], align='center')
+            put(r, 2, line.description, green)
+            for c in (3, 4, 5):
+                put(r, c, None)
+            put(r, 6, line.get_nature_of_expense_display(), green, align='center')
+            put(r, 7, line.amount, green, money)
+            put(r, 8, line.qty, green, '0.##')
+            put(r, 9, l['amount'], body, money)
+            put(r, 10, line.remarks or '')
+            r += 1
+        band(r, total_fill, bold, last=10)
+        put(r, 2, f"TOTAL {sec['code']}", bold, fill=total_fill)
+        put(r, 9, sec['total'], bold, money, fill=total_fill)
+        r += 2
+
+    # Total costs over the contract period
+    ws.cell(row=r, column=1, value=f"TOTAL COSTS (CONTRACT PERIOD: {int(d['months'])} MONTHS)").font = section_font
+    r += 1
+    header_row(r, [(1, 'Section'), (2, 'Description'), (6, f'Monthly / Recurring ({currency})'),
+                   (7, 'Months'), (8, f'One Time ({currency})'), (9, f'Total ({currency})')])
+    r += 1
+    for row in d['totals']:
+        put(r, 1, row['code'], bold, align='center')
+        put(r, 2, row['label'])
+        put(r, 6, row['monthly'], body, money)
+        put(r, 7, int(d['months']), body, '0')
+        put(r, 8, row['one_time'], body, money)
+        put(r, 9, row['contract_total'], body, money)
+        r += 1
+    band(r, navy_fill, head_font, last=9)
+    put(r, 2, 'GRAND TOTAL COST', head_font, fill=navy_fill)
+    put(r, 9, d['grand_total'], head_font, money, fill=navy_fill)
+    r += 2
+
+    # Cost summary & pricing
+    ws.cell(row=r, column=1, value='COST SUMMARY & PRICING').font = section_font
+    r += 1
+    summary = [
+        (f"Total Cost ({int(d['months'])} months)", d['grand_total'], money, body, None),
+        ('Monthly Cost', d['monthly_cost'], money, body, None),
+        ('Daily Cost (per calendar day)', d['daily_cost'], money, body, None),
+    ]
+    if can_see_bid_value:
+        summary += [
+            ('Target Profit Margin %', d['margin_pct'] / 100, '0.0%', blue, None),
+            ('Proposed Contract Value (excl. VAT)', d['contract_value'], money, bold, value_fill),
+            ('Profit', d['profit'], money, body, None),
+            ('VAT %', d['vat_pct'] / 100, '0.0%', blue, None),
+            ('Proposed Contract Value (incl. VAT)', d['contract_value_incl_vat'], money, bold, vat_fill),
+        ]
+    for label, value, fmt, font, fill in summary:
+        put(r, 2, label, bold, fill=fill)
+        put(r, 9, value, font, fmt, fill=fill)
+        r += 1
+
+    for col, width in zip('ABCDEFGHIJK', (8, 58, 12, 16, 12, 18, 20, 12, 22, 25, 16)):
+        ws.column_dimensions[col].width = width
+
+    filename = f'project-costing-{slugify(project.project_name) or project.pk}.xlsx'
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'

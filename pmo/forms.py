@@ -356,3 +356,41 @@ class EngineerRateAssumptionsForm(forms.ModelForm):
             if value is not None and value < 0:
                 self.add_error(name, 'Cannot be negative.')
         return cleaned
+
+
+class ProjectCostingInputsForm(forms.ModelForm):
+    """The only editable values on Project Costing (Integrated): contract
+    duration and the two accommodation rates. Everything else on that page is
+    read from Grade Structure, First Year Maintenance and the Employment Cost
+    Assumptions. A separate form, so First Year Maintenance's own header form
+    and its POSTs stay exactly as they were."""
+
+    MAX_MONTHS = 120
+
+    class Meta:
+        model = ManpowerCostingHeader
+        fields = ['contract_duration_months', 'accommodation_staff_annual',
+                  'accommodation_technician_annual']
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['contract_duration_months'].widget = forms.NumberInput(attrs={
+            'step': '1', 'min': '1', 'max': str(self.MAX_MONTHS),
+            'class': 'form-control form-control-sm text-end'})
+        for name in ('accommodation_staff_annual', 'accommodation_technician_annual'):
+            self.fields[name].widget = forms.NumberInput(attrs={
+                'step': '0.01', 'min': '0', 'class': 'form-control form-control-sm text-end'})
+
+    def clean_contract_duration_months(self):
+        months = self.cleaned_data['contract_duration_months']
+        if months is not None and not 1 <= months <= self.MAX_MONTHS:
+            raise forms.ValidationError(f'Must be between 1 and {self.MAX_MONTHS} months.')
+        return months
+
+    def clean(self):
+        cleaned = super().clean()
+        for name in ('accommodation_staff_annual', 'accommodation_technician_annual'):
+            value = cleaned.get(name)
+            if value is not None and value < 0:
+                self.add_error(name, 'Cannot be negative.')
+        return cleaned

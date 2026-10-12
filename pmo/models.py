@@ -908,6 +908,21 @@ class ManpowerCostingHeader(models.Model):
         verbose_name='Target Profit Margin %',
         help_text='Blank = Proposed Contract Value defaults to cost, zero profit shown.')
 
+    # Project Costing (Integrated) inputs - nothing else in the workbook holds
+    # them. Accommodation applies to expats only, by accommodation group
+    # (see pmo.project_costing.accommodation_group).
+    contract_duration_months = models.PositiveIntegerField(
+        default=12, verbose_name='Contract Duration (Months)',
+        help_text='Project Costing (Integrated): recurring costs are multiplied by this.')
+    accommodation_staff_annual = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('27000'),
+        verbose_name='Accommodation / Engineer & Staff (Annual)',
+        help_text='Per expat in grade categories EX, A and E.')
+    accommodation_technician_annual = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('25000'),
+        verbose_name='Accommodation / Technician & Helper (Annual)',
+        help_text='Per expat in grade categories T and O.')
+
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
