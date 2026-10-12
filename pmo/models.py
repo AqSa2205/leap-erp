@@ -562,6 +562,16 @@ class GradeStructureLine(models.Model):
         'Telecom', 'Security', 'AI', 'Hydraulics', 'Cyber', 'IT', 'General/N/A',
     ]
 
+    # Expat / Saudi decides which statutory add-ons (Iqama, air ticket,
+    # GOSI) apply to this grade's Engineer Rate Table row - the same choices
+    # and the same split as DesignationManpowerLine.
+    NATIONALITY_EXPAT = 'expat'
+    NATIONALITY_SAUDI = 'saudi'
+    NATIONALITY_CHOICES = [
+        (NATIONALITY_EXPAT, 'Expat'),
+        (NATIONALITY_SAUDI, 'Saudi'),
+    ]
+
     project = models.ForeignKey(
         'projects.Project', on_delete=models.CASCADE, related_name='grade_structure_lines')
     order = models.PositiveIntegerField(default=0)
@@ -574,6 +584,10 @@ class GradeStructureLine(models.Model):
         max_digits=15, decimal_places=2, default=0, verbose_name='Indicative Monthly Salary',
         help_text='A reference salary for this grade — the real cost below is '
                    'summed from its Designation-wise Manpower rows, not this figure.')
+    nationality = models.CharField(
+        max_length=10, choices=NATIONALITY_CHOICES, default=NATIONALITY_EXPAT,
+        help_text="Used by the Engineer Rate Table to decide which statutory add-ons "
+                  "(Iqama, air ticket, GOSI) apply to this grade's rate.")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -656,6 +670,9 @@ class EmploymentCostAssumptions(models.Model):
     gosi_saudi_pct = models.DecimalField(
         max_digits=5, decimal_places=2, default=Decimal('11.75'),
         verbose_name='GOSI — Saudi %', help_text="Employer's share.")
+    profit_markup_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('25'), verbose_name='Profit Markup %',
+        help_text='Engineer Rate Table: billing rate = fully loaded cost x (1 + markup).')
 
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)

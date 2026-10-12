@@ -54,6 +54,7 @@
             {% endif %}
           </p>
           <p class="mb-1"><strong>Reason:</strong> {{ leave_request.employee_reason|default:"—" }}</p>
+          <p class="mb-1"><strong>Replacement:</strong> {{ leave_request.replacement.full_name|default:"—" }}</p>
           <p class="mb-1"><strong>Status:</strong>
             {% if leave_request.status == 'approved' %}<span class="badge bg-success">Approved</span>
             {% elif leave_request.status == 'disapproved' %}<span class="badge bg-danger">Disapproved</span>

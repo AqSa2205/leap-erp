@@ -70,6 +70,7 @@ urlpatterns = [
     path('leave/record/<int:pk>/delete/', views.LeaveRecordDeleteView.as_view(), name='leave_record_delete'),
     path('leave-requests/', views.LeaveRequestListView.as_view(), name='leave_request_list'),
     path('leave-requests/create/', views.LeaveRequestCreateView.as_view(), name='leave_request_create'),
+    path('leave-requests/replacement-options/', views.leave_replacement_options, name='leave_replacement_options'),
     path('leave-requests/<int:pk>/document/', views.leave_request_document_download, name='leave_request_document'),
     path('leave-requests/<int:pk>/', views.LeaveRequestDetailView.as_view(), name='leave_request_detail'),
     path('leave/entitlements/', views.entitlement_year, name='entitlement_year'),

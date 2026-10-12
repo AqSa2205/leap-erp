@@ -372,6 +372,12 @@
                   <label class="form-label small">Reason</label>{{ leave_request_form.employee_reason }}
                   {% if leave_request_form.employee_reason.errors %}<div class="small text-danger">{{ leave_request_form.employee_reason.errors|join:", " }}</div>{% endif %}
                 </div>
+                {% if leave_request_form.replacement and leave_request_form.fields.replacement.queryset %}
+                <div class="mb-2">
+                  <label class="form-label small">Replacement <span class="text-muted">(who covers for you while you're away)</span></label>{{ leave_request_form.replacement }}
+                  {% if leave_request_form.replacement.errors %}<div class="small text-danger">{{ leave_request_form.replacement.errors|join:", " }}</div>{% endif %}
+                </div>
+                {% endif %}
                 <div class="mb-2">
                   <label class="form-label small">Document (optional)</label>{{ leave_request_form.document }}
                   {% if leave_request_form.document.errors %}<div class="small text-danger">{{ leave_request_form.document.errors|join:", " }}</div>{% endif %}
@@ -596,6 +602,17 @@
                           <label class="form-label small">Reason</label>
                           <input type="text" name="employee_reason" class="form-control form-control-sm" value="{{ r.retry_reason }}">
                         </div>
+                        {% if r.replacement_options %}
+                        <div class="col-md-6">
+                          <label class="form-label small">Replacement</label>
+                          <select name="replacement" class="form-select form-select-sm" required>
+                            <option value="">— Select replacement —</option>
+                            {% for p in r.replacement_options %}
+                            <option value="{{ p.pk }}" {% if p.pk == r.retry_replacement_id %}selected{% endif %}>{{ p.full_name }}</option>
+                            {% endfor %}
+                          </select>
+                        </div>
+                        {% endif %}
                         <div class="col-md-6">
                           <label class="form-label small">Document</label>
                           {% if r.document %}

@@ -121,12 +121,17 @@ class AttendanceRecord(models.Model):
         emp = self.employee
         month_label = month_start.strftime('%B %Y')
         n = LATE_WARNING_THRESHOLD
+        # The verbs stay fixed: My Profile and the HR late-queries tab look past
+        # warnings up by this exact text. The descriptions name the month,
+        # because revoking an old leave can re-derive a months-old day to
+        # 'late' and tip *that* month to the threshold - "this month" would
+        # then point at the wrong month.
         employee_verb = f'You were late {n} times this month'
         employee_description = (
-            f'You were late {n} times this month. An email has been sent to you.')
+            f'You were late {n} times in {month_label}. An email has been sent to you.')
         hr_verb = f'{emp.full_name} was late {n} times this month'
         hr_description = (
-            f'{emp.full_name} was late {n} times this month. An email has been sent.')
+            f'{emp.full_name} was late {n} times in {month_label}. An email has been sent.')
         from django.urls import reverse
         if emp.user_id:
             create_notification(

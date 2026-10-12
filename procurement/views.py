@@ -1159,6 +1159,97 @@ def approved_budgets(request):
     return render(request, 'procurement/approved_budgets.html', {'sheets': sheets})
 
 
+def _tracker_sheet_or_redirect(request, sheet_pk):
+    """Load a finance-approved budget for the procurement tracker, or say why not.
+
+    Returns (sheet, None) when the user may open it, or (None, redirect) with
+    the reason already added as a message. The tracker page and its Excel
+    export both use this, so they always apply exactly the same rules.
+    """
+    from costing.models import CostingSheet
+    user = request.user
+    if not (user.is_super_admin_user or user.is_admin_user or user.is_procurement_user):
+        messages.error(request, 'Only procurement team members can procure a budget.')
+        return None, redirect('procurement:approved_budgets')
+
+    sheet = get_object_or_404(CostingSheet, pk=sheet_pk)
+
+    # Region scope (super admin / admin bypass).
+    if (not (user.is_super_admin_user or user.is_admin_user)
+            and (not sheet.project or sheet.project.region_id != user.region_id)):
+        messages.error(request, 'You can only procure budgets for projects in your region.')
+        return None, redirect('procurement:approved_budgets')
+
+    project_status = sheet.project.status if sheet.project else None
+    if not project_status or project_status.category != 'won':
+        messages.error(request, 'Procurement is only available for Won projects.')
+        return None, redirect('procurement:approved_budgets')
+    if sheet.workflow_stage != 'finance_approved':
+        messages.error(
+            request,
+            f'This budget is not finance-approved yet. Current stage: {sheet.get_workflow_stage_display()}.')
+        return None, redirect('procurement:approved_budgets')
+    return sheet, None
+
+
+def _tracker_rows(sheet, rates):
+    """The tracker's per-section rows and counts, shared by the page and the
+    Excel export so the downloaded file always matches the screen.
+
+    Returns (rows, available_count, fully_procured_count, budget_total).
+    """
+    from costing.models import CostingLineItem
+    rows = []
+    available_count = fully_procured_count = 0
+    budget_total = Decimal('0')
+    for section in (sheet.sections.filter(is_optional=False)
+                    .order_by('order', 'section_number')):
+        section_items = []
+        # CostingLineItem.all_objects, not section.line_items: the default
+        # manager hides procurement-added sub items so no budget total can
+        # pick one up by accident, but this page is where procurement picks
+        # them for a PO, so it asks for them explicitly.
+        for li in (CostingLineItem.all_objects.filter(section=section)
+                   .prefetch_related('procured_po_items__purchase_order')
+                   .order_by('order', 'item_number')):
+            li.set_exchange_rates_cache(rates)
+            li.set_sheet_cache(sheet)
+            procured = list(li.procured_po_items.select_related('purchase_order').all())
+            # Same rule as the POST path above, or the page would show a
+            # different remaining quantity from the one it will actually
+            # let you order. The cancelled PO stays in `procured` so the
+            # history is still visible - it just stops counting.
+            already_ordered = sum(
+                (pi.quantity for pi in procured
+                 if pi.purchase_order.status not in RELEASED_STATUSES),
+                Decimal('0'))
+            remaining = li.quantity - already_ordered
+            line_price = li.budget_line_price()
+            # Sub items procurement adds after finance approval carry their
+            # own price but must never move the approved budget figure, so
+            # they're left out of this sum - the only thing that changes
+            # about the budget total when one is added is nothing.
+            if not li.added_by_procurement:
+                budget_total += line_price
+            is_available = remaining > 0
+            if is_available:
+                available_count += 1
+            else:
+                fully_procured_count += 1
+            section_items.append({
+                'item': li, 'procured_in': procured, 'is_available': is_available,
+                # Driven by what is actually still on order, not by whether
+                # any PO row exists: a cancelled one would otherwise leave
+                # the line reading 'Partial - 0 of 2 ordered'.
+                'is_partial': already_ordered > 0 and is_available,
+                'already_ordered': already_ordered, 'remaining': remaining,
+                'unit_price': li.budget_unit_price(), 'line_price': line_price,
+            })
+        if section_items:
+            rows.append({'section': section, 'items': section_items})
+    return rows, available_count, fully_procured_count, budget_total
+
+
 @login_required
 def bom_procurement_tracker(request, sheet_pk):
     """Approved-budget procurement page (procurement never sees the costing sheet).
@@ -1171,28 +1262,10 @@ def bom_procurement_tracker(request, sheet_pk):
     PO's header vendor is pre-filled when every picked line shares one vendor.
     """
     user = request.user
-    if not (user.is_super_admin_user or user.is_admin_user or user.is_procurement_user):
-        messages.error(request, 'Only procurement team members can procure a budget.')
-        return redirect('procurement:approved_budgets')
-
     from costing.models import CostingSheet, CostingLineItem, ExchangeRate
-    sheet = get_object_or_404(CostingSheet, pk=sheet_pk)
-
-    # Region scope (super admin / admin bypass).
-    if (not (user.is_super_admin_user or user.is_admin_user)
-            and (not sheet.project or sheet.project.region_id != user.region_id)):
-        messages.error(request, 'You can only procure budgets for projects in your region.')
-        return redirect('procurement:approved_budgets')
-
-    project_status = sheet.project.status if sheet.project else None
-    if not project_status or project_status.category != 'won':
-        messages.error(request, 'Procurement is only available for Won projects.')
-        return redirect('procurement:approved_budgets')
-    if sheet.workflow_stage != 'finance_approved':
-        messages.error(
-            request,
-            f'This budget is not finance-approved yet. Current stage: {sheet.get_workflow_stage_display()}.')
-        return redirect('procurement:approved_budgets')
+    sheet, denied = _tracker_sheet_or_redirect(request, sheet_pk)
+    if denied:
+        return denied
 
     rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
 
@@ -1354,54 +1427,7 @@ def bom_procurement_tracker(request, sheet_pk):
     # Build per-section rows (A.1 supply, non-optional) with budgeted prices.
     # A line item stays "available" as long as any quantity remains
     # unordered, even if it already has one or more POs against it.
-    rows = []
-    available_count = fully_procured_count = 0
-    budget_total = Decimal('0')
-    for section in (sheet.sections.filter(is_optional=False)
-                    .order_by('order', 'section_number')):
-        section_items = []
-        # CostingLineItem.all_objects, not section.line_items: the default
-        # manager hides procurement-added sub items so no budget total can
-        # pick one up by accident, but this page is where procurement picks
-        # them for a PO, so it asks for them explicitly.
-        for li in (CostingLineItem.all_objects.filter(section=section)
-                   .prefetch_related('procured_po_items__purchase_order')
-                   .order_by('order', 'item_number')):
-            li.set_exchange_rates_cache(rates)
-            li.set_sheet_cache(sheet)
-            procured = list(li.procured_po_items.select_related('purchase_order').all())
-            # Same rule as the POST path above, or the page would show a
-            # different remaining quantity from the one it will actually
-            # let you order. The cancelled PO stays in `procured` so the
-            # history is still visible - it just stops counting.
-            already_ordered = sum(
-                (pi.quantity for pi in procured
-                 if pi.purchase_order.status not in RELEASED_STATUSES),
-                Decimal('0'))
-            remaining = li.quantity - already_ordered
-            line_price = li.budget_line_price()
-            # Sub items procurement adds after finance approval carry their
-            # own price but must never move the approved budget figure, so
-            # they're left out of this sum - the only thing that changes
-            # about the budget total when one is added is nothing.
-            if not li.added_by_procurement:
-                budget_total += line_price
-            is_available = remaining > 0
-            if is_available:
-                available_count += 1
-            else:
-                fully_procured_count += 1
-            section_items.append({
-                'item': li, 'procured_in': procured, 'is_available': is_available,
-                # Driven by what is actually still on order, not by whether
-                # any PO row exists: a cancelled one would otherwise leave
-                # the line reading 'Partial - 0 of 2 ordered'.
-                'is_partial': already_ordered > 0 and is_available,
-                'already_ordered': already_ordered, 'remaining': remaining,
-                'unit_price': li.budget_unit_price(), 'line_price': line_price,
-            })
-        if section_items:
-            rows.append({'section': section, 'items': section_items})
+    rows, available_count, fully_procured_count, budget_total = _tracker_rows(sheet, rates)
 
     # Eligible targets for "add to an existing PO" - see _appendable_draft_pos.
     existing_draft_pos = _appendable_draft_pos(sheet)
@@ -1415,6 +1441,137 @@ def bom_procurement_tracker(request, sheet_pk):
         'budget_total': budget_total,
         'existing_draft_pos': existing_draft_pos,
     })
+
+
+def _qty_text(value):
+    """A quantity as the tracker shows it: 2, 1.5, 1,000 - no trailing zeros."""
+    return f'{Decimal(value).quantize(Decimal("0.01")).normalize():,f}'
+
+
+@login_required
+def bom_tracker_export_excel(request, sheet_pk):
+    """Download the budget tracker as an Excel file.
+
+    Same access rules and the same figures as the tracker page (both come
+    from _tracker_sheet_or_redirect and _tracker_rows), so the file can never
+    disagree with what the user sees on screen.
+    """
+    from costing.models import ExchangeRate
+    from django.utils import timezone
+    from django.utils.text import slugify
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    sheet, denied = _tracker_sheet_or_redirect(request, sheet_pk)
+    if denied:
+        return denied
+    rates = {r.currency_code: r.rate_to_usd for r in ExchangeRate.objects.all()}
+    rows, available_count, procured_count, budget_total = _tracker_rows(sheet, rates)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Budget Tracker'
+    red = 'A6192E'
+    bold = Font(bold=True)
+    thin = Side(style='thin', color='D9D9D9')
+    box = Border(left=thin, right=thin, top=thin, bottom=thin)
+    headers = ['Item No', 'Description', 'Make / Model', 'Vendor', 'Unit',
+               'Budgeted Qty', 'Already Ordered', 'Remaining',
+               'Budget Rate/Unit (SAR)', 'Budget Line Total (SAR)', 'Status', 'POs']
+    ncols = len(headers)
+
+    # Header block: what this is, and the four figures from the page.
+    project = sheet.project
+    ws['A1'] = sheet.title
+    ws['A1'].font = Font(bold=True, size=14, color=red)
+    info = [('Project', project.project_name if project else ''),
+            ('Region', project.region.name if project and project.region else ''),
+            ('Exported', timezone.localtime().strftime('%d %b %Y %H:%M')),
+            (None, None),
+            ('Supply Items', available_count + procured_count),
+            ('Available to Procure', available_count),
+            ('Already on a PO', procured_count),
+            ('Budget Total (SAR)', budget_total)]
+    for i, (label, value) in enumerate(info, start=2):
+        if label is None:
+            continue
+        ws.cell(row=i, column=1, value=label).font = bold
+        cell = ws.cell(row=i, column=2, value=value)
+        if label == 'Budget Total (SAR)':
+            cell.number_format = '#,##0.00'
+
+    header_row = 11
+    for col, title in enumerate(headers, start=1):
+        cell = ws.cell(row=header_row, column=col, value=title)
+        cell.font = Font(bold=True, color='FFFFFF')
+        cell.fill = PatternFill('solid', fgColor=red)
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        cell.border = box
+
+    r = header_row + 1
+    section_fill = PatternFill('solid', fgColor='F3E3E5')
+    has_sub_items = False
+    for row in rows:
+        section = row['section']
+        title = (f'{section.section_number} \u00b7 {section.title}'
+                 if section.section_number else section.title)
+        ws.cell(row=r, column=1, value=title).font = bold
+        for col in range(1, ncols + 1):
+            ws.cell(row=r, column=col).fill = section_fill
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=ncols)
+        r += 1
+        for it in row['items']:
+            li = it['item']
+            if not it['is_available']:
+                n = len(it['procured_in'])
+                status = f'Fully ordered \u2014 {n} PO{"" if n == 1 else "s"}'
+            elif it['is_partial']:
+                status = (f'Partial \u2014 {_qty_text(it["already_ordered"])} of '
+                          f'{_qty_text(li.quantity)} ordered')
+            else:
+                status = 'Available'
+            # Every PO the line appears on, as the page lists them; a
+            # cancelled one is marked, since it no longer counts.
+            pos = ', '.join(
+                f'{pi.purchase_order.po_number} ({_qty_text(pi.quantity)})'
+                + (' cancelled' if pi.purchase_order.status in RELEASED_STATUSES else '')
+                for pi in it['procured_in'])
+            description = li.description
+            if li.added_by_procurement:
+                has_sub_items = True
+                description = f'Sub item: {description}'
+            values = [li.item_number or '', description,
+                      ' \u00b7 '.join(x for x in (li.make, li.model_number) if x),
+                      li.vendor_name or '', li.unit or '',
+                      li.quantity, it['already_ordered'], it['remaining'],
+                      it['unit_price'], it['line_price'], status, pos]
+            for col, value in enumerate(values, start=1):
+                cell = ws.cell(row=r, column=col, value=value)
+                cell.border = box
+                cell.alignment = Alignment(vertical='top', wrap_text=col in (2, 3, 4, 11, 12))
+                if col in (9, 10):
+                    cell.number_format = '#,##0.00'
+            r += 1
+
+    ws.cell(row=r, column=9, value='Budget Total (SAR)').font = bold
+    total = ws.cell(row=r, column=10, value=budget_total)
+    total.font = bold
+    total.number_format = '#,##0.00'
+    if has_sub_items:
+        ws.cell(row=r + 1, column=1,
+                value='Sub items added by procurement are listed but not counted in the budget total.'
+                ).font = Font(italic=True, color='6B6B6B')
+
+    for i, width in enumerate([9, 45, 22, 22, 8, 12, 14, 12, 16, 18, 28, 32], start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+    ws.freeze_panes = ws.cell(row=header_row + 1, column=1)
+
+    filename = f'budget-tracker-{slugify(sheet.title) or sheet.pk}-{timezone.localdate():%Y-%m-%d}.xlsx'
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    wb.save(response)
+    return response
 
 
 @login_required
