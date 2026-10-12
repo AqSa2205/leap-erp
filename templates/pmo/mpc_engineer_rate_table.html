@@ -1,0 +1,346 @@
+﻿{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Engineer Rate Table - {{ project.project_name }}{% endblock %}
+{% block page_title %}Engineer Rate Table{% endblock %}
+
+{% block extra_css %}
+<style>
+    .gs-shell { background: #fff; border: 1px solid #e9ecef; border-radius: 10px; overflow: hidden; margin-bottom: 1.25rem; }
+    .gs-shell .gs-title { padding: 10px 14px; font-weight: 700; font-size: 0.95rem; color: #1a1a1a; }
+    table.gs-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.85rem; margin-bottom: 0; }
+    table.gs-table th, table.gs-table td { padding: 6px 8px; border: 1px solid #dee2e6; vertical-align: middle; background: #fff; }
+    table.gs-table thead th { background: #343a40; color: #fff; font-weight: 700; text-align: center; }
+    table.gs-table tfoot td { background: #f1f1f1; font-weight: 700; }
+    table.gs-table input, table.gs-table select { font-size: 0.83rem; border: 1px solid #dee2e6; border-radius: 4px; padding: 3px 6px; }
+    .gs-input-color, .gs-input-color input, .gs-input-color select { color: #0000FF; }
+    .er-num { text-align: right; white-space: nowrap; }
+    .er-total { background: #fff3cd !important; }
+    .er-assume td:first-child { width: 60%; }
+    .er-assume input { width: 130px; margin-left: auto; display: block; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <a href="{% url 'pmo:mpc_project_overview' project.pk %}" class="text-muted small"><i class="bi bi-arrow-left"></i> {{ project.project_name }}</a>
+    <div class="d-flex gap-2">
+        <a href="{% url 'pmo:mpc_grade_structure_detail' project.pk %}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-diagram-2 me-1"></i> Grade Structure
+        </a>
+        <a href="{% url 'pmo:mpc_engineer_rate_table_export_excel' project.pk %}" class="btn btn-outline-success btn-sm">
+            <i class="bi bi-file-earmark-excel me-1"></i> Export to Excel
+        </a>
+    </div>
+</div>
+
+<p class="text-muted small">
+    One rate table per engineering discipline. <strong>Grade, designation and base salary come from the Grade Structure</strong>
+    (its <em>E — Engineering</em> grades); change them there. Blue values are inputs. The assumptions below are shared with
+    this project's Grade Structure page, and every figure recalculates as you change them.
+</p>
+
+<form method="post" novalidate id="er-form">
+    {% csrf_token %}
+
+    {% if form.errors %}
+    <div class="alert alert-danger"><strong>Some assumptions need fixing:</strong> {{ form.errors }}</div>
+    {% endif %}
+
+    <div class="row g-3">
+        <!-- RATE BUILD-UP ASSUMPTIONS -->
+        <div class="col-lg-5">
+            <div class="gs-shell h-100">
+                <div class="gs-title">Rate Build-up Assumptions</div>
+                <table class="gs-table er-assume">
+                    <tbody>
+                        <tr><td>Working days per month</td><td class="er-num">{{ working_days }}</td></tr>
+                        <tr><td>Working hours per day</td><td class="er-num">{{ working_hours }}</td></tr>
+                        <tr>
+                            <td>Other overhead % <span class="text-muted small">(accommodation, transport, IT, PPE)</span></td>
+                            <td class="er-num gs-input-color">{% if can_edit %}{{ form.overhead_pct }}{% else %}{{ eca.overhead_pct|floatformat:2 }}%{% endif %}</td>
+                        </tr>
+                        {% if show_billing %}
+                        <tr>
+                            <td>Profit markup %</td>
+                            <td class="er-num gs-input-color">{% if can_edit %}{{ form.profit_markup_pct }}{% else %}{{ eca.profit_markup_pct|floatformat:2 }}%{% endif %}</td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- ADDITIONAL EMPLOYMENT COST ASSUMPTIONS -->
+        <div class="col-lg-7">
+            <div class="gs-shell h-100">
+                <div class="gs-title">Additional Employment Cost Assumptions</div>
+                <table class="gs-table er-assume">
+                    <thead><tr><th>Item</th><th>Annual / Rate</th><th>Monthly Equivalent</th></tr></thead>
+                    <tbody>
+                        <tr>
+                            <td>Residence Permit (Iqama) — Annual <span class="text-muted small">(expat only)</span></td>
+                            <td class="er-num gs-input-color">{% if can_edit %}{{ form.iqama_annual }}{% else %}{{ eca.iqama_annual|floatformat:2|intcomma }}{% endif %}</td>
+                            <td class="er-num" data-eq="iqama_annual">{{ monthly_equivalents.iqama|floatformat:2|intcomma }}</td>
+                        </tr>
+                        <tr>
+                            <td>Medical Insurance — Annual</td>
+                            <td class="er-num gs-input-color">{% if can_edit %}{{ form.medical_annual }}{% else %}{{ eca.medical_annual|floatformat:2|intcomma }}{% endif %}</td>
+                            <td class="er-num" data-eq="medical_annual">{{ monthly_equivalents.medical|floatformat:2|intcomma }}</td>
+                        </tr>
+                        <tr>
+                            <td>Air Tickets — Annual <span class="text-muted small">(expat only)</span></td>
+                            <td class="er-num gs-input-color">{% if can_edit %}{{ form.ticket_annual }}{% else %}{{ eca.ticket_annual|floatformat:2|intcomma }}{% endif %}</td>
+                            <td class="er-num" data-eq="ticket_annual">{{ monthly_equivalents.ticket|floatformat:2|intcomma }}</td>
+                        </tr>
+                        <tr>
+                            <td>ESB (End of Service) — % of monthly salary</td>
+                            <td class="er-num gs-input-color">{% if can_edit %}{{ form.esb_pct }}{% else %}{{ eca.esb_pct|floatformat:2 }}%{% endif %}</td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td>GOSI - Expat (occupational hazard) — %</td>
+                            <td class="er-num gs-input-color">{% if can_edit %}{{ form.gosi_expat_pct }}{% else %}{{ eca.gosi_expat_pct|floatformat:2 }}%{% endif %}</td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td>GOSI - Saudi (employer share) — %</td>
+                            <td class="er-num gs-input-color">{% if can_edit %}{{ form.gosi_saudi_pct }}{% else %}{{ eca.gosi_saudi_pct|floatformat:2 }}%{% endif %}</td>
+                            <td></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    {% if not rows %}
+    <div class="gs-shell mt-3">
+        <div class="p-4 text-center text-muted">
+            No engineering grades yet. Add grades with category <strong>E — Engineering</strong> and a discipline on the
+            <a href="{% url 'pmo:mpc_grade_structure_detail' project.pk %}">Grade Structure</a> page, and they appear here.
+        </div>
+    </div>
+    {% else %}
+
+    <!-- ONE RATE TABLE PER DISCIPLINE -->
+    <div class="mt-3"></div>
+    {% for table in tables %}
+    <div class="gs-shell">
+        <div class="gs-title">{{ table.discipline|upper }} ENGINEERS — RATE TABLE</div>
+        <div class="table-responsive">
+            <table class="gs-table">
+                <thead>
+                    <tr>
+                        <th style="width:80px;">Grade</th>
+                        <th>Designation</th>
+                        <th>Base Monthly Salary (SAR)</th>
+                        <th>Fully Loaded Monthly Cost (SAR)</th>
+                        <th>Daily Cost (SAR)</th>
+                        <th>Hourly Cost (SAR)</th>
+                        {% if show_billing %}
+                        <th>Monthly Billing Rate (SAR)</th>
+                        <th>Daily Billing Rate (SAR)</th>
+                        <th>Hourly Billing Rate (SAR)</th>
+                        {% endif %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in table.rows %}
+                    <tr>
+                        <td class="text-center fw-semibold">{{ r.line.grade_code }}</td>
+                        <td>{{ r.line.typical_designation|default:"—" }}</td>
+                        <td class="er-num gs-input-color">{{ r.line.indicative_monthly_salary|floatformat:2|intcomma }}</td>
+                        <td class="er-num" data-pk="{{ r.line.pk }}" data-k="loaded">{{ r.calc.loaded|floatformat:2|intcomma }}</td>
+                        <td class="er-num" data-pk="{{ r.line.pk }}" data-k="daily">{{ r.calc.daily|floatformat:2|intcomma }}</td>
+                        <td class="er-num" data-pk="{{ r.line.pk }}" data-k="hourly">{{ r.calc.hourly|floatformat:2|intcomma }}</td>
+                        {% if show_billing %}
+                        <td class="er-num" data-pk="{{ r.line.pk }}" data-k="bill_monthly">{{ r.calc.bill_monthly|floatformat:2|intcomma }}</td>
+                        <td class="er-num" data-pk="{{ r.line.pk }}" data-k="bill_daily">{{ r.calc.bill_daily|floatformat:2|intcomma }}</td>
+                        <td class="er-num fw-semibold" data-pk="{{ r.line.pk }}" data-k="bill_hourly">{{ r.calc.bill_hourly|floatformat:2|intcomma }}</td>
+                        {% endif %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endfor %}
+
+    {% if show_billing %}
+    <!-- HOURLY BILLING RATE MATRIX -->
+    <div class="gs-shell">
+        <div class="gs-title">Hourly Billing Rate Matrix (SAR / Hour)</div>
+        <div class="table-responsive">
+            <table class="gs-table">
+                <thead>
+                    <tr>
+                        <th>Discipline</th>
+                        {% for g in grade_codes %}<th>{{ g }}</th>{% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for m in matrix %}
+                    <tr>
+                        <td>{{ m.discipline }}</td>
+                        {% for c in m.cells %}
+                        {% if c %}
+                        <td class="er-num" data-pk="{{ c.pk }}" data-k="bill_hourly">{{ c.value|floatformat:2|intcomma }}</td>
+                        {% else %}
+                        <td class="er-num text-muted">—</td>
+                        {% endif %}
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    {% endif %}
+
+    <!-- ADDITIONAL EMPLOYMENT COSTS PER ENGINEER -->
+    <div class="gs-shell">
+        <div class="gs-title">Additional Employment Costs per Engineer (Monthly Equivalent, SAR)</div>
+        <div class="table-responsive">
+            <table class="gs-table">
+                <thead>
+                    <tr>
+                        <th>Discipline</th>
+                        <th>Grade</th>
+                        <th>Base Monthly Salary</th>
+                        <th style="width:110px;">Nationality</th>
+                        <th>Residence Permit (Iqama)</th>
+                        <th>Medical Insurance</th>
+                        <th>Air Tickets</th>
+                        <th>ESB</th>
+                        <th>GOSI - Expat</th>
+                        <th>GOSI - Saudi</th>
+                        <th>Total Additional Monthly Cost</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in rows %}
+                    <tr class="er-line" data-pk="{{ r.line.pk }}" data-salary="{{ r.line.indicative_monthly_salary }}" data-nationality="{{ r.line.nationality }}">
+                        <td>{{ r.discipline }}</td>
+                        <td class="text-center">{{ r.line.grade_code }}</td>
+                        <td class="er-num">{{ r.line.indicative_monthly_salary|floatformat:2|intcomma }}</td>
+                        <td class="text-center gs-input-color">
+                            {% if can_edit %}
+                            <select name="nationality_{{ r.line.pk }}" class="form-select form-select-sm">
+                                {% for code, label in nationality_choices %}
+                                <option value="{{ code }}" {% if r.line.nationality == code %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                            {% else %}{{ r.line.get_nationality_display }}{% endif %}
+                        </td>
+                        <td class="er-num" data-pk="{{ r.line.pk }}" data-k="iqama">{% if r.calc.iqama %}{{ r.calc.iqama|floatformat:2|intcomma }}{% else %}-{% endif %}</td>
+                        <td class="er-num" data-pk="{{ r.line.pk }}" data-k="medical">{{ r.calc.medical|floatformat:2|intcomma }}</td>
+                        <td class="er-num" data-pk="{{ r.line.pk }}" data-k="ticket">{% if r.calc.ticket %}{{ r.calc.ticket|floatformat:2|intcomma }}{% else %}-{% endif %}</td>
+                        <td class="er-num" data-pk="{{ r.line.pk }}" data-k="esb">{{ r.calc.esb|floatformat:2|intcomma }}</td>
+                        <td class="er-num" data-pk="{{ r.line.pk }}" data-k="gosi_expat">{% if r.calc.gosi_expat %}{{ r.calc.gosi_expat|floatformat:2|intcomma }}{% else %}-{% endif %}</td>
+                        <td class="er-num" data-pk="{{ r.line.pk }}" data-k="gosi_saudi">{% if r.calc.gosi_saudi %}{{ r.calc.gosi_saudi|floatformat:2|intcomma }}{% else %}-{% endif %}</td>
+                        <td class="er-num er-total fw-semibold" data-pk="{{ r.line.pk }}" data-k="additional">{{ r.calc.additional|floatformat:2|intcomma }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td colspan="2">TOTAL</td>
+                        <td class="er-num" data-total="salary">{{ totals.salary|floatformat:2|intcomma }}</td>
+                        <td></td>
+                        <td class="er-num" data-total="iqama">{{ totals.iqama|floatformat:2|intcomma }}</td>
+                        <td class="er-num" data-total="medical">{{ totals.medical|floatformat:2|intcomma }}</td>
+                        <td class="er-num" data-total="ticket">{{ totals.ticket|floatformat:2|intcomma }}</td>
+                        <td class="er-num" data-total="esb">{{ totals.esb|floatformat:2|intcomma }}</td>
+                        <td class="er-num" data-total="gosi_expat">{{ totals.gosi_expat|floatformat:2|intcomma }}</td>
+                        <td class="er-num" data-total="gosi_saudi">{{ totals.gosi_saudi|floatformat:2|intcomma }}</td>
+                        <td class="er-num er-total" data-total="additional">{{ totals.additional|floatformat:2|intcomma }}</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if can_edit %}
+    <div class="d-flex gap-2 mb-4 align-items-center">
+        <button type="submit" class="btn btn-danger"><i class="bi bi-check-lg"></i> Save Changes</button>
+        <span class="text-muted small">Figures update as you type; Save stores the assumptions and nationalities.</span>
+    </div>
+    {% endif %}
+</form>
+
+{% if can_edit %}
+<script>
+// Live recalculation, mirroring engineer_rates.rate_build_up exactly, so the
+// page shows the new figures as values change; the server recalculates the
+// same way on Save.
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('er-form');
+    if (!form) return;
+    const DAYS = {{ working_days }}, HOURS = {{ working_hours }};
+    const DASH_KEYS = ['iqama', 'ticket', 'gosi_expat', 'gosi_saudi'];
+
+    function num(name) {
+        const el = form.querySelector('[name="' + name + '"]');
+        const v = el ? parseFloat(el.value) : NaN;
+        return isNaN(v) ? 0 : v;
+    }
+    function fmt(v) {
+        return v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    }
+    function show(el, key, v) {
+        el.textContent = (DASH_KEYS.indexOf(key) !== -1 && v === 0) ? '-' : fmt(v);
+    }
+    function compute(salary, expat, a) {
+        const iqama = expat ? a.iqama / 12 : 0;
+        const medical = a.medical / 12;
+        const ticket = expat ? a.ticket / 12 : 0;
+        const esb = salary * a.esb / 100;
+        const gosi_expat = expat ? salary * a.gosiExpat / 100 : 0;
+        const gosi_saudi = expat ? 0 : salary * a.gosiSaudi / 100;
+        const additional = iqama + medical + ticket + esb + gosi_expat + gosi_saudi;
+        const loaded = salary + salary * a.overhead / 100 + additional;
+        const bill = loaded * (1 + a.markup / 100);
+        return {
+            iqama: iqama, medical: medical, ticket: ticket, esb: esb,
+            gosi_expat: gosi_expat, gosi_saudi: gosi_saudi, additional: additional,
+            loaded: loaded, daily: loaded / DAYS, hourly: loaded / DAYS / HOURS,
+            bill_monthly: bill, bill_daily: bill / DAYS, bill_hourly: bill / DAYS / HOURS
+        };
+    }
+    function recalc() {
+        const a = {
+            overhead: num('overhead_pct'), markup: num('profit_markup_pct'),
+            iqama: num('iqama_annual'), medical: num('medical_annual'), ticket: num('ticket_annual'),
+            esb: num('esb_pct'), gosiExpat: num('gosi_expat_pct'), gosiSaudi: num('gosi_saudi_pct')
+        };
+        document.querySelectorAll('[data-eq]').forEach(function(el) {
+            el.textContent = fmt(num(el.dataset.eq) / 12);
+        });
+        const totals = {salary: 0};
+        document.querySelectorAll('tr.er-line').forEach(function(row) {
+            const pk = row.dataset.pk;
+            const salary = parseFloat(row.dataset.salary) || 0;
+            const select = row.querySelector('select[name="nationality_' + pk + '"]');
+            const expat = (select ? select.value : row.dataset.nationality) === 'expat';
+            const r = compute(salary, expat, a);
+            totals.salary += salary;
+            Object.keys(r).forEach(function(key) {
+                totals[key] = (totals[key] || 0) + r[key];
+                document.querySelectorAll('[data-pk="' + pk + '"][data-k="' + key + '"]').forEach(function(el) {
+                    show(el, key, r[key]);
+                });
+            });
+        });
+        document.querySelectorAll('[data-total]').forEach(function(el) {
+            el.textContent = fmt(totals[el.dataset.total] || 0);
+        });
+    }
+    form.addEventListener('input', recalc);
+    form.addEventListener('change', recalc);
+});
+</script>
+{% endif %}
+{% endblock %}

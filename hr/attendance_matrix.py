@@ -75,13 +75,16 @@ def build_matrix(employees, start, end, with_weekend_dates=False):
 
     # (emp_id, date) -> leave_record pk if that record is single-day (removable), else None
     leave_cell = {}
+    # (emp_id, date) -> leave type code, so the cell can tell Sick apart from other leave
+    leave_code_cell = {}
     for lr in LeaveRecord.objects.filter(
-            employee_id__in=emp_ids, start_date__lte=end, end_date__gte=start):
+            employee_id__in=emp_ids, start_date__lte=end, end_date__gte=start).select_related('leave_type'):
         removable_pk = lr.pk if lr.start_date == lr.end_date else None
         dd = max(lr.start_date, start)
         last = min(lr.end_date, end)
         while dd <= last:
             leave_cell[(lr.employee_id, dd)] = removable_pk
+            leave_code_cell[(lr.employee_id, dd)] = lr.leave_type.code
             dd += timedelta(days=1)
 
     wfh_cells = set()
@@ -129,6 +132,7 @@ def build_matrix(employees, start, end, with_weekend_dates=False):
             cells.append({
                 'date': day, 'status': status,
                 'leave_record_id': leave_pk,
+                'leave_code': leave_code_cell.get(key) if status == 'leave' else None,
                 'locked': status in ('weekend', 'holiday'),
                 'check_in': check_in, 'check_out': check_out,
                 'exception_reason': exceptions_lookup.get(key),

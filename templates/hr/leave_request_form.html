@@ -32,6 +32,10 @@
           </div>
           <div class="mb-3"><label class="form-label">Reason</label>{{ form.employee_reason }}
             {% if form.employee_reason.errors %}<div class="invalid-feedback d-block">{{ form.employee_reason.errors.0 }}</div>{% endif %}</div>
+          {# Hidden until the picked employee has a team to choose from - filled by the script below. #}
+          <div class="mb-3{% if not form.fields.replacement.queryset %} d-none{% endif %}" id="replacementWrap">
+            <label class="form-label">Replacement * <span class="text-muted small">(who covers while they're away)</span></label>{{ form.replacement }}
+            {% if form.replacement.errors %}<div class="invalid-feedback d-block">{{ form.replacement.errors.0 }}</div>{% endif %}</div>
           <div class="mb-4"><label class="form-label">Document (optional)</label>{{ form.document }}
             {% if form.document.errors %}<div class="invalid-feedback d-block">{{ form.document.errors.0 }}</div>{% endif %}</div>
           <div class="d-flex justify-content-end gap-2 border-top pt-3">
@@ -49,4 +53,33 @@
     </div>
   </div>
 </div>
+<script>
+(function () {
+    // Reload the replacement choices for whichever employee is picked. The
+    // server re-checks the pick against that same team on submit.
+    var empSelect = document.getElementById('{{ form.employee.id_for_label }}');
+    var repSelect = document.getElementById('{{ form.replacement.id_for_label }}');
+    var wrap = document.getElementById('replacementWrap');
+    if (!empSelect || !repSelect) return;
+    var URL = "{% url 'hr:leave_replacement_options' %}";
+    empSelect.addEventListener('change', function () {
+        var picked = repSelect.value;
+        repSelect.length = 1;  // keep only the "— Select replacement —" option
+        repSelect.value = '';
+        wrap.classList.add('d-none');
+        if (!empSelect.value) return;
+        fetch(URL + '?employee=' + encodeURIComponent(empSelect.value), {credentials: 'same-origin'})
+            .then(function (r) { return r.ok ? r.json() : {options: []}; })
+            .then(function (data) {
+                if (String(data.for) !== empSelect.value) return;  // a newer pick is in flight
+                data.options.forEach(function (o) {
+                    var opt = new Option(o.name, o.id);
+                    if (String(o.id) === picked) opt.selected = true;
+                    repSelect.add(opt);
+                });
+                wrap.classList.toggle('d-none', data.options.length === 0);
+            });
+    });
+})();
+</script>
 {% endblock %}

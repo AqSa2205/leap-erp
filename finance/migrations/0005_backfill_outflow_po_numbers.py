@@ -18,6 +18,14 @@ from django.db import migrations
 
 
 def fill(apps, schema_editor):
+    # Nothing to backfill on a fresh database (a test run, a new setup).
+    # Checked with the historical model on purpose: the live PurchaseOrder
+    # below may carry columns added by later procurement migrations that do
+    # not exist yet at this point, and querying it here would fail. Where
+    # this migration has already run (production), it never runs again.
+    if not apps.get_model('procurement', 'PurchaseOrder').objects.exists():
+        return
+
     # Deliberately the real implementation rather than a copy frozen at this
     # migration: the rules it enforces (never overwrite, never write a
     # placeholder, committed orders only) are the point, and a divergent copy

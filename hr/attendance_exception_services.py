@@ -177,17 +177,23 @@ def _apply_attendance_outcome(exc):
     _finalize_attendance_exception's transaction.atomic()/select_for_update()
     block (decide_/override_/expire_ paths), so the row is already locked and
     this is safe from races."""
-    if exc.status == 'approved':
+    from hr.models import LeaveRecord
+    if exc.status not in ('approved', 'rejected', 'expired', 'revoked'):
+        return  # pending — no-op
+    if LeaveRecord.objects.filter(
+            employee=exc.employee, start_date__lte=exc.event_date, end_date__gte=exc.event_date).exists():
+        # Leave outranks an exception (same order as derive_status) - a
+        # rejected/expired exception must not turn a sick day into 'absent'.
+        new_status = 'leave'
+    elif exc.status == 'approved':
         # Excused — the Wi-Fi/manual attendance-status derivation layer
         # (attendance.services.sync_hr_attendance / hr.attendance_services.
         # derive_status) is what actually determines late-vs-not from real
         # check-in time when an approved exception exists for that day; this
         # upsert just marks the day as excused/present at decision time.
         new_status = 'present'
-    elif exc.status in ('rejected', 'expired', 'revoked'):
+    else:  # rejected / expired / revoked
         new_status = 'absent'
-    else:  # pending — no-op
-        return
 
     AttendanceRecord.objects.update_or_create(
         employee=exc.employee, date=exc.event_date,
