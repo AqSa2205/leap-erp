@@ -6380,7 +6380,7 @@ class DirectManagerLeaveLoggingAccessTests(TestCase):
     def test_direct_manager_can_log_for_their_report(self):
         self.client.login(username='dmla-mgr', password='x')
         resp = self.client.post(reverse('hr:leave_request_create'), data={
-            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'employee': self.report.pk, 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-03-01', 'end_date': '2026-03-05',
         })
         self.assertEqual(resp.status_code, 302)
@@ -6453,7 +6453,7 @@ class ManagerLoggedRequestRoutingTests(TestCase):
     def test_manager_logged_request_goes_to_the_normal_approver_roster(self):
         self.client.login(username='mlrr-mgr', password='x')
         self.client.post(reverse('hr:leave_request_create'), data={
-            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'employee': self.report.pk, 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-03-01', 'end_date': '2026-03-05',
         })
         req = LeaveRequest.objects.get(employee=self.report)
@@ -6463,7 +6463,7 @@ class ManagerLoggedRequestRoutingTests(TestCase):
     def test_manager_logged_request_is_not_auto_approved(self):
         self.client.login(username='mlrr-mgr', password='x')
         self.client.post(reverse('hr:leave_request_create'), data={
-            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'employee': self.report.pk, 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-03-01', 'end_date': '2026-03-05',
         })
         req = LeaveRequest.objects.get(employee=self.report)
@@ -6472,7 +6472,7 @@ class ManagerLoggedRequestRoutingTests(TestCase):
     def test_manager_logged_over_cap_request_is_held_not_blocked(self):
         self.client.login(username='mlrr-mgr', password='x')
         resp = self.client.post(reverse('hr:leave_request_create'), data={
-            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'employee': self.report.pk, 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-01-01', 'end_date': '2026-02-15',  # 46 days, 1 over the 45-day Site baseline
         })
         self.assertEqual(resp.status_code, 302)
@@ -6487,7 +6487,7 @@ class ManagerLoggedRequestRoutingTests(TestCase):
         # never pausing on an in-page "Log Anyway" warning at all.
         self.client.login(username='mlrr-mgr', password='x')
         resp = self.client.post(reverse('hr:leave_request_create'), data={
-            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'employee': self.report.pk, 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-01-01', 'end_date': '2026-02-15',
         })
         self.assertEqual(resp.status_code, 302)
@@ -6550,7 +6550,7 @@ class ManagerSuccessRedirectTests(TestCase):
     def test_plain_manager_redirect_target_is_reachable(self):
         self.client.login(username='msr-mgr', password='x')
         resp = self.client.post(reverse('hr:leave_request_create'), data={
-            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'employee': self.report.pk, 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-03-01', 'end_date': '2026-03-05',
         }, follow=True)
         self.assertEqual(resp.status_code, 200)  # the final page in the redirect chain, not a 403
@@ -6560,7 +6560,7 @@ class ManagerSuccessRedirectTests(TestCase):
         # Unchanged behavior for anyone who could already view the queue.
         self.client.login(username='msr-hr', password='testpass123')
         resp = self.client.post(reverse('hr:leave_request_create'), data={
-            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'employee': self.report.pk, 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-03-01', 'end_date': '2026-03-05',
         }, follow=True)
         self.assertEqual(resp.status_code, 200)
@@ -6591,7 +6591,7 @@ class LoggedByManagerFlagTests(TestCase):
     def test_manager_logged_request_sets_the_flag(self):
         self.client.login(username='lbmf-mgr', password='x')
         self.client.post(reverse('hr:leave_request_create'), data={
-            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'employee': self.report.pk, 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-03-01', 'end_date': '2026-03-05',
         })
         req = LeaveRequest.objects.get(employee=self.report)
@@ -6600,7 +6600,7 @@ class LoggedByManagerFlagTests(TestCase):
     def test_hr_logged_request_does_not_set_the_flag(self):
         self.client.login(username='lbmf-hr', password='testpass123')
         self.client.post(reverse('hr:leave_request_create'), data={
-            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'employee': self.report.pk, 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-03-01', 'end_date': '2026-03-05',
         })
         req = LeaveRequest.objects.get(employee=self.report)
@@ -6612,7 +6612,7 @@ class LoggedByManagerFlagTests(TestCase):
         self.report.save(update_fields=['user'])
         self.client.login(username='lbmf-emp', password='x')
         self.client.post(reverse('hr:my_profile'), data={
-            'action': 'request_leave', 'leave_type': self.lt.pk,
+            'action': 'request_leave', 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-03-01', 'end_date': '2026-03-05',
         })
         req = LeaveRequest.objects.get(employee=self.report)
@@ -6621,7 +6621,7 @@ class LoggedByManagerFlagTests(TestCase):
     def test_badge_shows_on_queue_and_detail_pages(self):
         self.client.login(username='lbmf-mgr', password='x')
         self.client.post(reverse('hr:leave_request_create'), data={
-            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'employee': self.report.pk, 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-03-01', 'end_date': '2026-03-05',
         })
         req = LeaveRequest.objects.get(employee=self.report)
@@ -6654,7 +6654,7 @@ class ManagerSeesOnlyTheirOwnInBehalfStatusTests(TestCase):
     def test_manager_sees_status_of_a_request_they_logged(self):
         self.client.login(username='msob-mgr', password='x')
         self.client.post(reverse('hr:leave_request_create'), data={
-            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'employee': self.report.pk, 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-03-01', 'end_date': '2026-03-05',
         })
         resp = self.client.get(reverse('hr:my_profile'))
@@ -6664,7 +6664,7 @@ class ManagerSeesOnlyTheirOwnInBehalfStatusTests(TestCase):
     def test_manager_does_not_see_reports_self_submitted_request(self):
         self.client.login(username='msob-emp', password='x')
         self.client.post(reverse('hr:my_profile'), data={
-            'action': 'request_leave', 'leave_type': self.lt.pk,
+            'action': 'request_leave', 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-03-01', 'end_date': '2026-03-05',
         })
         req = LeaveRequest.objects.get(employee=self.report)
@@ -6693,11 +6693,11 @@ class ManagerSeesOnlyTheirOwnInBehalfStatusTests(TestCase):
         # most recent request per employee instead of every one of them.
         self.client.login(username='msob-mgr', password='x')
         self.client.post(reverse('hr:leave_request_create'), data={
-            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'employee': self.report.pk, 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-01-01', 'end_date': '2026-01-03',
         })
         self.client.post(reverse('hr:leave_request_create'), data={
-            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'employee': self.report.pk, 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-06-01', 'end_date': '2026-06-03',
         })
         resp = self.client.get(reverse('hr:my_profile'))
@@ -6712,7 +6712,7 @@ class ManagerSeesOnlyTheirOwnInBehalfStatusTests(TestCase):
         self.client.login(username='msob-mgr', password='x')
         for month in (1, 3, 6):
             self.client.post(reverse('hr:leave_request_create'), data={
-                'employee': self.report.pk, 'leave_type': self.lt.pk,
+                'employee': self.report.pk, 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
                 'start_date': f'2026-{month:02d}-01', 'end_date': f'2026-{month:02d}-02',
             })
         resp = self.client.get(reverse('hr:my_profile'))
@@ -6724,7 +6724,7 @@ class ManagerSeesOnlyTheirOwnInBehalfStatusTests(TestCase):
     def test_employee_sees_flag_that_manager_logged_it(self):
         self.client.login(username='msob-mgr', password='x')
         self.client.post(reverse('hr:leave_request_create'), data={
-            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'employee': self.report.pk, 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-03-01', 'end_date': '2026-03-05',
         })
         self.client.logout()
@@ -6736,7 +6736,7 @@ class ManagerSeesOnlyTheirOwnInBehalfStatusTests(TestCase):
     def test_employee_sees_no_flag_on_their_own_self_submitted_request(self):
         self.client.login(username='msob-emp', password='x')
         self.client.post(reverse('hr:my_profile'), data={
-            'action': 'request_leave', 'leave_type': self.lt.pk,
+            'action': 'request_leave', 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-03-01', 'end_date': '2026-03-05',
         })
         resp = self.client.get(reverse('hr:my_profile'))
@@ -7985,7 +7985,7 @@ class MyProfileManagerInBehalfEditCancelUITests(TestCase):
         LeaveEntitlement.objects.create(employee=self.report, leave_type=self.lt, year=2026, entitled_days=Decimal('30'))
         self.client.login(username='mpmied-mgr', password='x')
         self.client.post(reverse('hr:leave_request_create'), data={
-            'employee': self.report.pk, 'leave_type': self.lt.pk,
+            'employee': self.report.pk, 'replacement': self.manager.pk, 'leave_type': self.lt.pk,
             'start_date': '2026-03-01', 'end_date': '2026-03-05',
         })
         self.req = LeaveRequest.objects.get(employee=self.report)
@@ -11845,3 +11845,398 @@ class MonthlyLatenessReportEdgeCaseTests(TestCase):
         generate_monthly_lateness_reports(today=_date(2026, 8, 31))
         report = MonthlyLatenessReport.objects.get(employee=self.emp, month=_date(2026, 8, 1))
         self.assertEqual(report.total_lates, 2)
+
+
+class LeaveReplacementTests(TestCase):
+    """Whoever the leave is for names who covers for them - on My Profile and
+    when HR/a manager logs it on their behalf. The pick is limited to their
+    main manager, that manager's other direct reports and their own
+    secondary managers."""
+
+    def setUp(self):
+        self.boss = Employee.objects.create(iqama_number='R0', full_name='Boss')
+        self.sec = Employee.objects.create(iqama_number='R1', full_name='Second Mgr')
+        self.emp = Employee.objects.create(iqama_number='R2', full_name='Applicant', main_manager=self.boss)
+        self.emp.secondary_managers.add(self.sec)
+        self.mate = Employee.objects.create(iqama_number='R3', full_name='Teammate', main_manager=self.boss)
+        self.gone = Employee.objects.create(
+            iqama_number='R4', full_name='Left Teammate', main_manager=self.boss, is_active=False)
+        self.other_boss = Employee.objects.create(iqama_number='R5', full_name='Other Boss')
+        self.outsider = Employee.objects.create(
+            iqama_number='R6', full_name='Outsider', main_manager=self.other_boss)
+        self.marriage, _ = LeaveType.objects.get_or_create(
+            code='marriage', defaults={'name': 'Marriage', 'default_annual_days': 3, 'is_accumulative': False})
+        LeaveEntitlement.objects.create(employee=self.emp, leave_type=self.marriage, year=2026, entitled_days=3)
+        self.user = make_user('rep_user')
+        self.user.set_password('testpass123')
+        self.user.save()
+        self.emp.user = self.user
+        self.emp.save(update_fields=['user'])
+
+    def _request(self, **extra):
+        data = {'action': 'request_leave', 'leave_type': self.marriage.pk,
+                'start_date': '2026-09-10', 'end_date': '2026-09-11', 'employee_reason': 'Wedding'}
+        data.update(extra)
+        self.client.login(username='rep_user', password='testpass123')
+        return self.client.post(reverse('hr:my_profile'), data)
+
+    def test_candidates_are_manager_teammates_and_secondary_managers(self):
+        self.assertEqual(set(self.emp.replacement_candidates()), {self.boss, self.sec, self.mate})
+
+    def test_no_main_manager_means_no_candidates(self):
+        self.assertFalse(self.boss.replacement_candidates().exists())
+
+    def test_profile_form_shows_the_dropdown(self):
+        self.client.login(username='rep_user', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'name="replacement"')
+        self.assertContains(resp, 'Teammate')
+        self.assertNotContains(resp, 'Outsider')
+
+    def test_submit_saves_the_replacement(self):
+        resp = self._request(replacement=self.mate.pk)
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(LeaveRequest.objects.get(employee=self.emp).replacement, self.mate)
+
+    def test_replacement_is_required_when_there_is_a_team(self):
+        resp = self._request()
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.emp).exists())
+        self.assertContains(resp, 'Please select who will cover for you')
+
+    def test_someone_outside_the_team_is_rejected(self):
+        resp = self._request(replacement=self.outsider.pk)
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.emp).exists())
+
+    def test_no_manager_can_still_submit_without_a_replacement(self):
+        self.emp.main_manager = None
+        self.emp.save(update_fields=['main_manager'])
+        self.emp.secondary_managers.clear()
+        resp = self._request()
+        self.assertEqual(resp.status_code, 302)
+        self.assertIsNone(LeaveRequest.objects.get(employee=self.emp).replacement)
+
+    def test_editing_own_request_changes_the_replacement(self):
+        req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage, start_date=_date(2026, 9, 10),
+            end_date=_date(2026, 9, 11), created_by=self.user, replacement=self.mate)
+        self.client.login(username='rep_user', password='testpass123')
+        self.client.post(reverse('hr:my_profile'), {
+            'action': 'edit_leave_request', 'request_id': req.pk, 'leave_type': self.marriage.pk,
+            'start_date': '2026-09-10', 'end_date': '2026-09-11', 'employee_reason': 'x',
+            'replacement': self.boss.pk})
+        req.refresh_from_db()
+        self.assertEqual(req.replacement, self.boss)
+
+    def _hr(self, username='rep_hr'):
+        from accounts.models import Role
+        hr = make_user(username)
+        hr.set_password('testpass123')
+        hr.role, _ = Role.objects.get_or_create(name='super_admin')
+        hr.save()
+        self.client.login(username=username, password='testpass123')
+        return hr
+
+    def _log_on_behalf(self, **extra):
+        data = {'employee': self.emp.pk, 'leave_type': self.marriage.pk,
+                'start_date': '2026-09-10', 'end_date': '2026-09-11', 'employee_reason': 'by HR'}
+        data.update(extra)
+        return self.client.post(reverse('hr:leave_request_create'), data)
+
+    def test_log_on_behalf_saves_the_replacement(self):
+        self._hr()
+        resp = self._log_on_behalf(replacement=self.mate.pk)
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(LeaveRequest.objects.get(employee=self.emp).replacement, self.mate)
+
+    def test_log_on_behalf_requires_a_replacement_when_there_is_a_team(self):
+        self._hr()
+        resp = self._log_on_behalf()
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.emp).exists())
+        self.assertContains(resp, 'Please select who will cover')
+
+    def test_log_on_behalf_rejects_someone_outside_the_chosen_employees_team(self):
+        self._hr()
+        resp = self._log_on_behalf(replacement=self.outsider.pk)
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.emp).exists())
+
+    def test_log_on_behalf_for_someone_without_a_manager_needs_no_replacement(self):
+        LeaveEntitlement.objects.create(employee=self.boss, leave_type=self.marriage, year=2026, entitled_days=3)
+        self._hr()
+        resp = self._log_on_behalf(employee=self.boss.pk)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIsNone(LeaveRequest.objects.get(employee=self.boss).replacement)
+
+    def test_log_on_behalf_prefill_shows_that_employees_team(self):
+        self._hr()
+        resp = self.client.get(reverse('hr:leave_request_create') + f'?employee={self.emp.pk}')
+        self.assertEqual(set(resp.context['form'].fields['replacement'].queryset), {self.boss, self.sec, self.mate})
+
+    def test_options_endpoint_returns_the_picked_employees_team(self):
+        self._hr()
+        resp = self.client.get(reverse('hr:leave_replacement_options'), {'employee': self.emp.pk})
+        self.assertEqual(resp.json()['for'], str(self.emp.pk))
+        self.assertEqual({o['name'] for o in resp.json()['options']}, {'Boss', 'Second Mgr', 'Teammate'})
+
+    def test_options_endpoint_is_scoped_to_who_the_user_may_log_for(self):
+        # A plain manager may log for their own direct reports only.
+        mgr_user = make_user('rep_mgr')
+        mgr_user.set_password('testpass123')
+        mgr_user.save()
+        self.other_boss.user = mgr_user
+        self.other_boss.save(update_fields=['user'])
+        self.client.login(username='rep_mgr', password='testpass123')
+        url = reverse('hr:leave_replacement_options')
+        self.assertEqual(self.client.get(url, {'employee': self.emp.pk}).json()['options'], [])
+        own = self.client.get(url, {'employee': self.outsider.pk}).json()['options']
+        self.assertEqual([o['name'] for o in own], ['Other Boss'])
+
+    def test_options_endpoint_forbidden_for_plain_employees(self):
+        self.client.login(username='rep_user', password='testpass123')
+        resp = self.client.get(reverse('hr:leave_replacement_options'), {'employee': self.emp.pk})
+        self.assertEqual(resp.status_code, 403)
+
+    def test_editing_a_request_logged_on_behalf_can_change_its_replacement(self):
+        hr = self._hr()
+        req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage, start_date=_date(2026, 9, 10),
+            end_date=_date(2026, 9, 11), created_by=hr, replacement=self.mate)
+        resp = self.client.post(reverse('hr:leave_request_list'), {
+            'action': 'edit_leave_request', 'request_id': req.pk, 'leave_type': self.marriage.pk,
+            'start_date': '2026-09-10', 'end_date': '2026-09-11', 'employee_reason': 'by HR',
+            'replacement': self.sec.pk})
+        self.assertEqual(resp.status_code, 302)
+        self.assertNotIn('edit_error', resp.url)
+        req.refresh_from_db()
+        self.assertEqual(req.replacement, self.sec)
+
+    def test_out_of_scope_employee_does_not_reveal_their_team(self):
+        # A plain manager may log only for their own reports; posting someone
+        # else is rejected - and the re-shown form must not list that
+        # employee's team.
+        mgr_user = make_user('rep_mgr2')
+        mgr_user.set_password('testpass123')
+        mgr_user.save()
+        self.other_boss.user = mgr_user
+        self.other_boss.save(update_fields=['user'])
+        self.client.login(username='rep_mgr2', password='testpass123')
+        resp = self._log_on_behalf(replacement=self.mate.pk)
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.emp).exists())
+        self.assertFalse(resp.context['form'].fields['replacement'].queryset.exists())
+        self.assertNotContains(resp, 'Teammate')
+
+    def test_on_behalf_required_message_is_not_worded_for_the_employee(self):
+        self._hr()
+        resp = self._log_on_behalf()
+        self.assertContains(resp, "Please select who will cover for them while they")
+        self.assertNotContains(resp, 'cover for you')
+
+    def test_approvers_see_the_replacement(self):
+        from accounts.models import Role
+        hr = make_user('rep_approver')
+        hr.set_password('testpass123')
+        hr.role, _ = Role.objects.get_or_create(name='super_admin')
+        hr.save()
+        req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage, start_date=_date(2026, 9, 10),
+            end_date=_date(2026, 9, 11), replacement=self.mate)
+        self.client.login(username='rep_approver', password='testpass123')
+        self.assertContains(self.client.get(reverse('hr:leave_request_list')), 'Teammate')
+        self.assertContains(
+            self.client.get(reverse('hr:leave_request_detail', args=[req.pk])), '<strong>Replacement:</strong> Teammate')
+
+
+class SickLeaveAttendanceSyncTests(TestCase):
+    """A sick day must read as leave on the register, not absent: approval
+    re-derives rows already saved as 'absent', revoke puts them back, and no
+    other writer (Wi-Fi agent, attendance exceptions) may overwrite it."""
+
+    def setUp(self):
+        self.emp = make_employee(iqama='S1', name='Sicky')
+        self.sick, _ = LeaveType.objects.get_or_create(
+            code='sick', defaults={'name': 'Sick', 'default_annual_days': 30})
+        self.day = _date(2026, 10, 6)  # a Tuesday - a working day
+        self.revoker = make_user('sick_revoker')
+
+    def _absent_row(self):
+        return AttendanceRecord.objects.create(employee=self.emp, date=self.day, status='absent')
+
+    def _approve(self):
+        from hr.leave_approval_services import _finalize
+        req = LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.sick, start_date=self.day, end_date=self.day)
+        _finalize(req, 'approved')
+        req.refresh_from_db()
+        return req
+
+    def test_approval_turns_a_saved_absent_into_leave(self):
+        rec = self._absent_row()
+        self._approve()
+        rec.refresh_from_db()
+        self.assertEqual(rec.status, 'leave')
+
+    def test_revoke_puts_the_day_back_to_absent(self):
+        from hr.leave_approval_services import revoke_leave_request
+        rec = self._absent_row()
+        req = self._approve()
+        revoke_leave_request(req, self.revoker, 'entered by mistake')
+        rec.refresh_from_db()
+        self.assertEqual(rec.status, 'absent')
+
+    def test_revoke_of_a_day_with_a_late_check_in_goes_back_to_late(self):
+        from hr.leave_approval_services import revoke_leave_request
+        rec = AttendanceRecord.objects.create(
+            employee=self.emp, date=self.day, status='late', check_in=time(9, 10))
+        req = self._approve()
+        rec.refresh_from_db()
+        self.assertEqual(rec.status, 'leave')
+        self.assertEqual(rec.check_in, time(9, 10))  # clock times are kept
+        revoke_leave_request(req, self.revoker, 'came in after all')
+        rec.refresh_from_db()
+        self.assertEqual(rec.status, 'late')
+
+    def test_expired_attendance_exception_does_not_mark_a_sick_day_absent(self):
+        from hr.attendance_exception_services import _apply_attendance_outcome
+        from hr.models import AttendanceException
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.sick, start_date=self.day, end_date=self.day)
+        for status in ('expired', 'rejected', 'approved'):
+            _apply_attendance_outcome(AttendanceException(employee=self.emp, event_date=self.day, status=status))
+            self.assertEqual(AttendanceRecord.objects.get(employee=self.emp, date=self.day).status, 'leave')
+
+    def test_expired_attendance_exception_still_marks_a_normal_day_absent(self):
+        from hr.attendance_exception_services import _apply_attendance_outcome
+        from hr.models import AttendanceException
+        _apply_attendance_outcome(AttendanceException(employee=self.emp, event_date=self.day, status='expired'))
+        self.assertEqual(AttendanceRecord.objects.get(employee=self.emp, date=self.day).status, 'absent')
+
+    def test_wifi_heartbeat_does_not_overwrite_a_sick_day(self):
+        from datetime import datetime
+        from django.utils import timezone
+        from attendance.models import AttendanceDay
+        from attendance.services import sync_hr_attendance
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.sick, start_date=self.day, end_date=self.day)
+        day = AttendanceDay.objects.create(
+            employee=self.emp, date=self.day, is_present=True,
+            first_seen=timezone.make_aware(datetime.combine(self.day, time(9, 15))))
+        sync_hr_attendance(day)
+        self.assertFalse(AttendanceRecord.objects.filter(employee=self.emp, date=self.day).exists())
+
+    def test_admin_add_and_delete_sync_the_register(self):
+        from django.contrib.admin.sites import site
+        from django.test import RequestFactory
+        rec = self._absent_row()
+        model_admin = site._registry[LeaveRecord]
+        request = RequestFactory().post('/')
+        lr = LeaveRecord(employee=self.emp, leave_type=self.sick, start_date=self.day, end_date=self.day)
+        model_admin.save_model(request, lr, None, False)
+        rec.refresh_from_db()
+        self.assertEqual(rec.status, 'leave')
+        model_admin.delete_model(request, lr)
+        rec.refresh_from_db()
+        self.assertEqual(rec.status, 'absent')
+
+    def test_register_marks_sick_leave_cells_with_the_sick_code(self):
+        from hr.attendance_matrix import build_matrix
+        annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual'})
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.sick, start_date=self.day, end_date=self.day)
+        other_day = _date(2026, 10, 7)
+        LeaveRecord.objects.create(employee=self.emp, leave_type=annual, start_date=other_day, end_date=other_day)
+        _days, rows = build_matrix([self.emp], self.day, other_day)
+        cells = {c['date']: c for c in rows[0]['cells']}
+        self.assertEqual((cells[self.day]['status'], cells[self.day]['leave_code']), ('leave', 'sick'))
+        self.assertEqual((cells[other_day]['status'], cells[other_day]['leave_code']), ('leave', 'annual'))
+
+    def _unmark(self, leave_record_id):
+        import json
+        from accounts.models import Role
+        hr = make_user('sick_unmark_hr')
+        hr.set_password('testpass123')
+        hr.role, _ = Role.objects.get_or_create(name='super_admin')
+        hr.save()
+        self.client.login(username='sick_unmark_hr', password='testpass123')
+        return self.client.post(reverse('hr:attendance_unmark_leave'),
+                                json.dumps({'leave_record_id': leave_record_id}), content_type='application/json')
+
+    def test_register_click_cannot_remove_a_leave_approved_through_a_request(self):
+        rec = self._absent_row()
+        req = self._approve()
+        resp = self._unmark(req.leave_record_id)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('revoke it from the request', resp.json()['error'])
+        self.assertTrue(LeaveRecord.objects.filter(pk=req.leave_record_id).exists())
+        rec.refresh_from_db()
+        self.assertEqual(rec.status, 'leave')
+
+    def test_register_click_still_removes_a_leave_marked_on_the_register(self):
+        lr = LeaveRecord.objects.create(employee=self.emp, leave_type=self.sick, start_date=self.day, end_date=self.day)
+        resp = self._unmark(lr.pk)
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(LeaveRecord.objects.filter(pk=lr.pk).exists())
+
+    def _export_as_admin(self, name):
+        from accounts.models import Role
+        admin = make_user('sick_export_admin')
+        admin.role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
+        admin.save()
+        self.client.force_login(admin)
+        return self.client.get(reverse(name) + '?period=month&date=2026-10-06')
+
+    def test_excel_export_shows_sick_leave_as_pink_s(self):
+        import io
+        import openpyxl as _op
+        annual, _ = LeaveType.objects.get_or_create(code='annual', defaults={'name': 'Annual'})
+        other_day = _date(2026, 10, 7)
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.sick, start_date=self.day, end_date=self.day)
+        LeaveRecord.objects.create(employee=self.emp, leave_type=annual, start_date=other_day, end_date=other_day)
+        resp = self._export_as_admin('hr:attendance_matrix_export_excel')
+        self.assertEqual(resp.status_code, 200)
+        ws = _op.load_workbook(io.BytesIO(resp.content)).active
+        header = [c.value for c in ws[3]]
+        row = next(r for r in ws.iter_rows(min_row=4) if r[0].value == 'Sicky')
+        sick_cell = row[header.index('06-Oct')]
+        annual_cell = row[header.index('07-Oct')]
+        self.assertEqual(sick_cell.value, 'S')
+        self.assertEqual(sick_cell.fill.start_color.rgb[-6:].upper(), 'E75480')
+        self.assertEqual(annual_cell.value, 'L')
+        self.assertEqual(annual_cell.fill.start_color.rgb[-6:].upper(), 'FCE4D6')
+
+    def test_pdf_export_renders_with_sick_leave(self):
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.sick, start_date=self.day, end_date=self.day)
+        resp = self._export_as_admin('hr:attendance_matrix_export_pdf')
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.content.startswith(b'%PDF'))
+
+    def test_backfill_migration_marks_stored_days_inside_a_leave(self):
+        # 0056 fixes rows saved before approval kept the register in step -
+        # production has no shell, so this runs on deploy.
+        import importlib
+        from django.apps import apps
+        from django.core import mail
+        backfill = importlib.import_module('hr.migrations.0056_backfill_leave_attendance')
+        inside = AttendanceRecord.objects.create(
+            employee=self.emp, date=self.day, status='late', check_in=time(9, 10), hours_worked=8)
+        outside = AttendanceRecord.objects.create(employee=self.emp, date=_date(2026, 10, 7), status='absent')
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.sick, start_date=self.day, end_date=self.day)
+        backfill.mark_leave_days(apps, None)
+        backfill.mark_leave_days(apps, None)  # idempotent
+        inside.refresh_from_db()
+        outside.refresh_from_db()
+        self.assertEqual((inside.status, inside.hours_worked, inside.check_in), ('leave', None, time(9, 10)))
+        self.assertEqual(outside.status, 'absent')
+        self.assertEqual(mail.outbox, [])
+
+    def test_late_warning_description_names_the_month_it_counts(self):
+        # Revoking an old leave can tip a past month to three lates; the
+        # message must name that month, not say "this month".
+        from notifications.models import Notification
+        user = make_user('sick_late_user')
+        self.emp.user = user
+        self.emp.save(update_fields=['user'])
+        for d in (5, 6, 7):
+            AttendanceRecord.objects.create(employee=self.emp, date=_date(2026, 8, d), status='late', check_in=time(9, 0))
+        note = Notification.objects.get(recipient=user, verb='You were late 3 times this month')
+        self.assertIn('in August 2026', note.description)

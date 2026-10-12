@@ -76,3 +76,18 @@ def regenerate_attendance_record(employee, d):
         defaults={'check_in': check_in, 'check_out': check_out,
                   'status': status, 'hours_worked': hours})
     return status, hours
+
+
+def sync_attendence_with_leave(employee, start, end):
+    # A LeaveRecord is usually created after the day's attendance was already
+    # saved (sick leave is approved with its certificate days later), so the
+    # stored row still says 'absent'. Re-derive every stored row the leave
+    # covers so the register and its totals see the leave - and, on revoke,
+    # see the day as it really was. save() so a day that reverts to 'late'
+    # goes through the same 3-lates warning check as any other late.
+    from hr.models import AttendanceRecord
+    for rec in AttendanceRecord.objects.filter(employee=employee, date__range=(start, end)):
+        status, hours = derive_status(employee, rec.date, rec.check_in, rec.check_out)
+        if (rec.status, rec.hours_worked) != (status, hours):
+            rec.status, rec.hours_worked = status, hours
+            rec.save(update_fields=['status', 'hours_worked', 'updated_at'])
