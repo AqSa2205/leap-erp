@@ -42,6 +42,7 @@ from accounts.permissions import require_capability, CapabilityRequiredMixin
 from .budget_status import (approved_budgets_for, budget_status, exchange_rates,
                             RELEASED_STATUSES)
 from .budget_status import APPROVED_STAGE
+from .budget_status import commitment
 from .budget_linking import remaining as budget_remaining
 from .budget_linking import validate as validate_budget_links
 from .system_breakdown import breakdown
@@ -1429,6 +1430,17 @@ def bom_procurement_tracker(request, sheet_pk):
     # unordered, even if it already has one or more POs against it.
     rows, available_count, fully_procured_count, budget_total = _tracker_rows(sheet, rates)
 
+    # Remaining Budget = approved total - POs raised against this budget.
+    # The POs come from the rows just built (every PO linked to one of this
+    # budget's lines), so no extra queries and the same set the page lists.
+    # commitment() is the shared rule: ex-VAT, SAR, cancelled excluded;
+    # drafts are reported separately and do not reduce the figure.
+    budget_pos = {pi.purchase_order.pk: pi.purchase_order
+                  for section in rows for it in section['items']
+                  for pi in it['procured_in']}
+    spend = commitment(list(budget_pos.values()), rates)
+    remaining_budget = budget_total - spend['committed']
+
     # Eligible targets for "add to an existing PO" - see _appendable_draft_pos.
     existing_draft_pos = _appendable_draft_pos(sheet)
 
@@ -1439,6 +1451,8 @@ def bom_procurement_tracker(request, sheet_pk):
         'available_count': available_count,
         'procured_count': fully_procured_count,
         'budget_total': budget_total,
+        'remaining_budget': remaining_budget,
+        'budget_drafts': spend['draft'],
         'existing_draft_pos': existing_draft_pos,
     })
 

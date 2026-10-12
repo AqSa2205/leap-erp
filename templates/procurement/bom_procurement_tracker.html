@@ -69,11 +69,12 @@
     </div>
 
     <!-- Stats -->
-    <div class="row row-cols-1 row-cols-sm-2 row-cols-lg-5 g-3 mb-4">
+    <div class="row row-cols-1 row-cols-sm-2 row-cols-lg-6 g-3 mb-4">
         <div class="col"><div class="stat-tile tile-total"><div class="stat-label">Supply Items</div><div class="stat-value">{{ total_count|intcomma }}</div></div></div>
         <div class="col"><div class="stat-tile tile-available"><div class="stat-label">Available to Procure</div><div class="stat-value">{{ available_count|intcomma }}</div></div></div>
         <div class="col"><div class="stat-tile tile-procured"><div class="stat-label">Already on a PO</div><div class="stat-value">{{ procured_count|intcomma }}</div></div></div>
         <div class="col"><div class="stat-tile tile-budget"><div class="stat-label">Budget Total (SAR)</div><div class="stat-value">{{ budget_total|floatformat:2|intcomma }}</div></div></div>
+        <div class="col"><div class="stat-tile tile-budget"><div class="stat-label">Remaining Budget (SAR)</div><div class="stat-value {% if remaining_budget < 0 %}text-danger{% else %}text-success{% endif %}" title="Budget Total minus POs raised against this budget (ex-VAT, cancelled excluded)">{{ remaining_budget|floatformat:2|intcomma }}</div>{% if budget_drafts %}<div class="small text-muted">Drafts not counted: {{ budget_drafts|floatformat:2|intcomma }}</div>{% endif %}</div></div>
         <div class="col"><div class="stat-tile tile-selected"><div class="stat-label">Selected Total (SAR)</div><div class="stat-value" id="selectedTotal">0.00</div></div></div>
     </div>
 
