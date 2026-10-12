@@ -327,3 +327,32 @@ class ProjectPOBasicsForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         for field in self.fields.values():
             field.widget.attrs['class'] = 'form-control form-control-sm'
+
+
+class EngineerRateAssumptionsForm(forms.ModelForm):
+    """The Engineer Rate Table's editable assumptions: the same per-project
+    EmploymentCostAssumptions row the Grade Structure page edits, plus the
+    profit markup only the rate table uses. A separate form so the Grade
+    Structure page's own form (and its POSTs) stay exactly as they were."""
+
+    class Meta:
+        model = EmploymentCostAssumptions
+        fields = [
+            'overhead_pct', 'profit_markup_pct',
+            'iqama_annual', 'medical_annual', 'ticket_annual',
+            'esb_pct', 'gosi_expat_pct', 'gosi_saudi_pct',
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            field.widget = forms.NumberInput(attrs={
+                'step': '0.01', 'min': '0', 'class': 'form-control form-control-sm text-end'})
+
+    def clean(self):
+        cleaned = super().clean()
+        # list(): add_error removes the field from cleaned_data as we go.
+        for name, value in list(cleaned.items()):
+            if value is not None and value < 0:
+                self.add_error(name, 'Cannot be negative.')
+        return cleaned

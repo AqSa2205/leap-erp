@@ -25,13 +25,16 @@ from .forms import (FaultLossEntryForm, ManpowerDetailsForm, NewEmployeeManpower
                      ProjectIssueForm,
                      GradeStructureLineFormSet, DesignationManpowerLineFormSet,
                      EmploymentCostAssumptionsForm, FirstYearMaintenanceLineFormSet,
-                     ManpowerCostingHeaderForm, ProjectPOBasicsForm)
+                     ManpowerCostingHeaderForm, ProjectPOBasicsForm,
+                     EngineerRateAssumptionsForm)
 from .models import (ONE, ZERO, CommunicationMatrix, FaultLossEntry, ManpowerResource,
                       MilestoneProgressEntry, ProjectIssue, ProjectMilestone,
                       ResponsibilityMatrix, default_communication_columns,
                       default_responsibility_columns, sanitize_grid,
                       GradeStructureLine, DesignationManpowerLine, EmploymentCostAssumptions,
                       FirstYearMaintenanceLine, ManpowerCostingHeader)
+from .engineer_rates import (WORKING_DAYS_PER_MONTH, WORKING_HOURS_PER_DAY,
+                             build_rate_tables)
 from .progress import (board_row, board_rows, leaves, milestone_checklist,
                        project_completion, validate_weightages)
 from .workbook_import import (deserialise_activities, plan_workbook,
@@ -1881,13 +1884,221 @@ def mpc_grade_structure_export_excel(request, pk):
 @login_required
 @delivery_required
 def mpc_engineer_rate_table(request, pk):
+    """Engineer Rate Table: the per-discipline cost and billing-rate build-up
+    of the project's engineering grades (category E), replicating the source
+    workbook's Engineer Rate Tables sheet.
+
+    Grade, designation and base salary are read from the Grade Structure,
+    never retyped here. The assumptions are the project's own
+    EmploymentCostAssumptions row - shared with the Grade Structure page -
+    plus the profit markup; nationality is set per grade line here. Every
+    figure is calculated live (engineer_rates.rate_build_up), never stored."""
     project = _pm_visible_project_or_404(request, pk)
-    return render(request, 'pmo/mpc_placeholder.html', {
+    can_edit = can_manage_manpower_costing(request.user)
+    eca = _eca_for(project)
+    lines = list(project.grade_structure_lines.filter(
+        category=GradeStructureLine.CATEGORY_ENGINEERING))
+    valid_nationalities = {code for code, _label in GradeStructureLine.NATIONALITY_CHOICES}
+
+    if request.method == 'POST':
+        if not can_edit:
+            raise PermissionDenied('Only the Project Manager can edit the Engineer Rate Table.')
+        form = EngineerRateAssumptionsForm(request.POST, instance=eca)
+        if form.is_valid():
+            with transaction.atomic():
+                eca = form.save(commit=False)
+                eca.project = project
+                eca.updated_by = request.user
+                eca.save()
+                for line in lines:
+                    value = request.POST.get(f'nationality_{line.pk}')
+                    if value in valid_nationalities and value != line.nationality:
+                        line.nationality = value
+                        line.save(update_fields=['nationality', 'updated_at'])
+            messages.success(request, 'Engineer Rate Table saved.')
+            return redirect('pmo:mpc_engineer_rate_table', pk=project.pk)
+    else:
+        form = EngineerRateAssumptionsForm(instance=eca)
+
+    response = render(request, 'pmo/mpc_engineer_rate_table.html', {
         'project': project,
-        'title': 'Engineer Rate Table',
-        'description': 'Per-discipline rate build-up — coming in a later phase.',
-        'icon': 'bi-calculator',
+        'form': form,
+        'eca': eca,
+        'can_edit': can_edit,
+        # A Site Manager (view-only) never sees the markup or the billing rates:
+        # with cost visible, either gives the selling price away - the same
+        # rule as the bid value on First Year Maintenance.
+        'show_billing': can_edit,
+        'nationality_choices': GradeStructureLine.NATIONALITY_CHOICES,
+        'working_days': WORKING_DAYS_PER_MONTH,
+        'working_hours': WORKING_HOURS_PER_DAY,
+        **build_rate_tables(lines, eca),
     })
+    response['Cache-Control'] = 'no-store'
+    return response
+
+@login_required
+@delivery_required
+def mpc_engineer_rate_table_export_excel(request, pk):
+    """Engineer Rate Table as an .xlsx laid out like the source workbook's
+    "Engineer Rate Tables" sheet: Calibri, dark-blue (1F4E79) headers with
+    white bold text, blue input values, the pale-yellow Total Additional
+    column and a light-blue TOTAL row. Values, not formulas: exactly the
+    figures the page shows (engineer_rates.build_rate_tables)."""
+    import openpyxl
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+    from django.utils.text import slugify
+
+    project = _pm_visible_project_or_404(request, pk)
+    eca = _eca_for(project)
+    lines = list(project.grade_structure_lines.filter(
+        category=GradeStructureLine.CATEGORY_ENGINEERING))
+    data = build_rate_tables(lines, eca)
+    # Same rule as the page: no markup or billing figures for view-only users.
+    show_billing = can_manage_manpower_costing(request.user)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Engineer Rate Tables'
+    navy = '1F4E79'
+    body = Font(name='Calibri', size=11)
+    blue = Font(name='Calibri', size=11, color='0000FF')
+    bold = Font(name='Calibri', size=11, bold=True)
+    head_font = Font(name='Calibri', size=11, bold=True, color='FFFFFF')
+    head_fill = PatternFill('solid', fgColor=navy)
+    section_font = Font(name='Calibri', size=12, bold=True, color=navy)
+    table_font = Font(name='Calibri', size=11, bold=True, color=navy)
+    total_fill = PatternFill('solid', fgColor='DCE6F1')
+    extra_fill = PatternFill('solid', fgColor='FFF2CC')
+    thin = Side(style='thin', color='BFBFBF')
+    box = Border(left=thin, right=thin, top=thin, bottom=thin)
+    money = '#,##0.00;\\(#,##0.00\\);\\-'
+    pct = '0.00%'
+
+    def put(r, c, value, font=body, fmt=None, fill=None, align=None, border=True):
+        x = ws.cell(row=r, column=c, value=value)
+        x.font = font
+        if fmt:
+            x.number_format = fmt
+        if fill:
+            x.fill = fill
+        if border:
+            x.border = box
+        if align:
+            x.alignment = Alignment(horizontal=align, vertical='center', wrap_text=True)
+        return x
+
+    def header(r, titles, start=1):
+        for i, title in enumerate(titles):
+            put(r, start + i, title, head_font, fill=head_fill, align='center')
+
+    def title(r, text, font=section_font, c=1):
+        ws.cell(row=r, column=c, value=text).font = font
+
+    title(1, 'ENGINEER RATE TABLES BY DISCIPLINE \u2014 COST & BILLING RATE BUILD-UP',
+          Font(name='Calibri', size=14, bold=True, color=navy))
+    ws.cell(row=2, column=1, value=(
+        f'{project.project_name} \u2014 exported {timezone.localtime():%d %b %Y %H:%M}. '
+        'Grades, designations and salaries come from the Grade Structure; blue values are inputs.'
+    )).font = Font(name='Calibri', size=9, italic=True)
+
+    # Assumptions: rate build-up (A-B) and additional employment costs (K-M).
+    title(4, 'RATE BUILD-UP ASSUMPTIONS')
+    for r, label, value, fmt in (
+            (5, 'Working days per month', int(WORKING_DAYS_PER_MONTH), '0'),
+            (6, 'Working hours per day', int(WORKING_HOURS_PER_DAY), '0'),
+            (7, 'Other overhead % (accommodation, transport, IT, PPE)', eca.overhead_pct / 100, pct),
+            (8, 'Profit markup %', eca.profit_markup_pct / 100, pct)):
+        if r == 8 and not show_billing:
+            continue
+        put(r, 1, label)
+        put(r, 2, value, blue, fmt)
+    title(4, 'ADDITIONAL EMPLOYMENT COST ASSUMPTIONS', c=11)
+    header(5, ['Item', 'Annual / Rate', 'Monthly Equivalent'], start=11)
+    eq = data['monthly_equivalents']
+    for r, label, value, fmt, monthly in (
+            (6, 'Residence Permit (Iqama) \u2014 Annual', eca.iqama_annual, money, eq['iqama']),
+            (7, 'Medical Insurance \u2014 Annual', eca.medical_annual, money, eq['medical']),
+            (8, 'Air Tickets \u2014 Annual', eca.ticket_annual, money, eq['ticket']),
+            (9, 'ESB (End of Service) \u2014 % of monthly salary', eca.esb_pct / 100, pct, None),
+            (10, 'GOSI - Expat (occupational hazard) \u2014 %', eca.gosi_expat_pct / 100, pct, None),
+            (11, 'GOSI - Saudi (employer share) \u2014 %', eca.gosi_saudi_pct / 100, pct, None)):
+        put(r, 11, label)
+        put(r, 12, value, blue, fmt)
+        put(r, 13, monthly, body, money)
+
+    # One rate table per discipline.
+    r = 13
+    if not data['rows']:
+        title(r, 'No engineering grades yet \u2014 add E \u2014 Engineering grades on the Grade Structure page.', bold)
+        r += 2
+    rate_heads = ['Grade', 'Designation', 'Base Monthly Salary (SAR)', 'Fully Loaded Monthly Cost (SAR)',
+                  'Daily Cost (SAR)', 'Hourly Cost (SAR)', 'Monthly Billing Rate (SAR)',
+                  'Daily Billing Rate (SAR)', 'Hourly Billing Rate (SAR)']
+    bill_keys = ('bill_monthly', 'bill_daily', 'bill_hourly') if show_billing else ()
+    if not show_billing:
+        rate_heads = rate_heads[:6]
+    for table in data['tables']:
+        title(r, f"{table['discipline'].upper()} ENGINEERS \u2014 RATE TABLE", table_font)
+        header(r + 1, rate_heads)
+        r += 2
+        for row in table['rows']:
+            calc, line = row['calc'], row['line']
+            put(r, 1, line.grade_code, align='center')
+            put(r, 2, line.typical_designation or '')
+            put(r, 3, line.indicative_monthly_salary, blue, money)
+            for c, key in enumerate(('loaded', 'daily', 'hourly') + bill_keys, start=4):
+                put(r, c, calc[key], body, money)
+            r += 1
+        r += 1
+
+    # Hourly billing rate matrix (not for view-only users, see above).
+    if data['rows'] and show_billing:
+        title(r, 'HOURLY BILLING RATE MATRIX (SAR / HOUR)')
+        header(r + 1, ['Discipline'] + data['grade_codes'])
+        r += 2
+        for m in data['matrix']:
+            put(r, 1, m['discipline'])
+            for c, cell in enumerate(m['cells'], start=2):
+                put(r, c, cell['value'] if cell else None, body, money)
+            r += 1
+        r += 1
+
+    if data['rows']:
+        # Additional employment costs per engineer, with a TOTAL row.
+        title(r, 'ADDITIONAL EMPLOYMENT COSTS PER ENGINEER (MONTHLY EQUIVALENT, SAR)')
+        header(r + 1, ['Discipline', 'Grade', 'Base Monthly Salary', 'Nationality',
+                       'Residence Permit (Iqama)', 'Medical Insurance', 'Air Tickets', 'ESB',
+                       'GOSI - Expat', 'GOSI - Saudi', 'Total Additional Monthly Cost'])
+        r += 2
+        for row in data['rows']:
+            calc, line = row['calc'], row['line']
+            put(r, 1, row['discipline'])
+            put(r, 2, line.grade_code, align='center')
+            put(r, 3, line.indicative_monthly_salary, body, money)
+            put(r, 4, line.get_nationality_display(), blue, align='center')
+            for c, key in enumerate(('iqama', 'medical', 'ticket', 'esb', 'gosi_expat', 'gosi_saudi'), start=5):
+                put(r, c, calc[key], body, money)
+            put(r, 11, calc['additional'], body, money, fill=extra_fill)
+            r += 1
+        totals = data['totals']
+        put(r, 1, 'TOTAL', bold, fill=total_fill)
+        put(r, 2, None, bold, fill=total_fill)
+        put(r, 3, totals['salary'], bold, money, fill=total_fill)
+        put(r, 4, None, bold, fill=total_fill)
+        for c, key in enumerate(('iqama', 'medical', 'ticket', 'esb', 'gosi_expat', 'gosi_saudi', 'additional'), start=5):
+            put(r, c, totals[key], bold, money, fill=total_fill)
+
+    for col, width in zip('ABCDEFGHIJKLM', (35, 34, 20, 20, 18, 18, 18, 18, 18, 14, 48, 16, 18)):
+        ws.column_dimensions[col].width = width
+
+    filename = f'engineer-rate-table-{slugify(project.project_name) or project.pk}.xlsx'
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    wb.save(response)
+    return response
 
 
 @login_required
