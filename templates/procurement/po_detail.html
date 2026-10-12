@@ -241,6 +241,24 @@
                         </div>
                         <div class="col-auto">
                             <div class="d-flex align-items-center gap-2 bg-white bg-opacity-10 rounded-3 px-3 py-2">
+                                <i class="bi bi-pencil-square"></i>
+                                <div>
+                                    <div style="font-size:0.7rem;" class="opacity-75">Updated By</div>
+                                    <div class="fw-bold" style="font-size:0.9rem;">{% if po.updated_by %}{{ po.updated_by.get_full_name|default:po.updated_by.username }}{% else %}&mdash;{% endif %}</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-auto">
+                            <div class="d-flex align-items-center gap-2 bg-white bg-opacity-10 rounded-3 px-3 py-2">
+                                <i class="bi bi-clock-history"></i>
+                                <div>
+                                    <div style="font-size:0.7rem;" class="opacity-75">Updated At</div>
+                                    <div class="fw-bold" style="font-size:0.9rem;">{{ po.updated_at|date:"d M Y, H:i" }}</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-auto">
+                            <div class="d-flex align-items-center gap-2 bg-white bg-opacity-10 rounded-3 px-3 py-2">
                                 <i class="bi bi-list-ol"></i>
                                 <div>
                                     <div style="font-size:0.7rem;" class="opacity-75">Line Items</div>
